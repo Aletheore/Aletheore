@@ -138,10 +138,13 @@ def test_build_evidence_summary_shape():
     assert summary["dead_code"]["unused_dependencies"] == [{"ecosystem": "pip", "package": "unused-pkg"}]
     assert summary["security"]["vulnerabilities"]["finding_count"] == 1
     assert summary["security"]["vulnerabilities"]["findings"][0]["package"] == "certifi"
+    assert summary["security"]["vulnerabilities"]["reason"] is None
     assert summary["security"]["licenses"]["finding_count"] == 1
     assert summary["security"]["licenses"]["findings"][0]["package"] == "some-pkg"
     assert summary["security"]["licenses"]["repo_license"]["category"] == "permissive"
+    assert summary["security"]["licenses"]["reason"] is None
     assert summary["endpoints"]["checked"] is True
+    assert summary["endpoints"]["reason"] is None
     assert summary["endpoints"]["endpoints"] == [
         {
             "method": "GET",
@@ -175,6 +178,41 @@ def test_build_evidence_summary_preserves_endpoints_checked_false():
 
     assert summary["endpoints"]["checked"] is False
     assert summary["endpoints"]["endpoints"] == []
+
+
+def test_build_evidence_summary_preserves_skip_reason_for_all_three_scoped_checks():
+    # Flash Review finding on this PR: the endpoints fix above preserved
+    # "checked" but dropped "reason" - the actual skip explanation
+    # (--no-map-endpoints, --no-check-vulnerabilities, --no-check-licenses
+    # all set real "reason" strings in evidence.py) never reached the
+    # frontend, which could then only show a generic caption instead of the
+    # real one. Fixed for all three at once, since none of them preserved it
+    # - not just the one Flash Review happened to flag.
+    evidence = make_evidence("2026-07-15T12:00:00+00:00")
+    evidence["security"]["dependency_vulnerabilities"] = {
+        "checked": False,
+        "reason": "OSV.dev unreachable or timed out: connection refused",
+        "findings": [],
+    }
+    evidence["security"]["dependency_licenses"] = {
+        "checked": False,
+        "reason": "skipped (--no-check-licenses)",
+        "repo_license": {"category": "unknown", "detected_from": None},
+        "findings": [],
+    }
+    evidence["repository"]["api_endpoints"] = {
+        "checked": False,
+        "reason": "skipped (--no-map-endpoints)",
+        "endpoints": [],
+    }
+
+    summary = build_evidence_summary(evidence)
+
+    assert summary["security"]["vulnerabilities"]["reason"] == (
+        "OSV.dev unreachable or timed out: connection refused"
+    )
+    assert summary["security"]["licenses"]["reason"] == "skipped (--no-check-licenses)"
+    assert summary["endpoints"]["reason"] == "skipped (--no-map-endpoints)"
 
 
 def test_build_history_summary_reads_all_snapshots(tmp_path):

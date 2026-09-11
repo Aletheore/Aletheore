@@ -46,6 +46,7 @@ def build_evidence_summary(evidence: dict) -> dict:
             },
             "vulnerabilities": {
                 "checked": evidence["security"]["dependency_vulnerabilities"]["checked"],
+                "reason": evidence["security"]["dependency_vulnerabilities"].get("reason"),
                 "finding_count": len(
                     evidence["security"]["dependency_vulnerabilities"]["findings"]
                 ),
@@ -53,6 +54,7 @@ def build_evidence_summary(evidence: dict) -> dict:
             },
             "licenses": {
                 "checked": evidence["security"]["dependency_licenses"]["checked"],
+                "reason": evidence["security"]["dependency_licenses"].get("reason"),
                 "repo_license": evidence["security"]["dependency_licenses"]["repo_license"],
                 "finding_count": len(evidence["security"]["dependency_licenses"]["findings"]),
                 "findings": evidence["security"]["dependency_licenses"]["findings"],
@@ -70,15 +72,16 @@ def build_evidence_summary(evidence: dict) -> dict:
             "unused_dependencies": evidence["repository"]["dead_code"]["unused_dependencies"],
         },
         # Real bug found via audit: this used to flatten straight to the bare
-        # endpoints list, dropping "checked"/"reason" - unlike the
-        # vulnerabilities/licenses blocks above, which keep them specifically
-        # so the dashboard can caption a skipped scan instead of rendering it
+        # endpoints list, dropping "checked"/"reason" - matching the
+        # vulnerabilities/licenses blocks above, which keep them for the same
+        # reason: caption a skipped scan instead of rendering it
         # indistinguishably from "checked, found none". `--no-map-endpoints`
         # (or its .aletheore.json disabled_checks equivalent) is a real,
         # reachable flag that produces exactly that shape - confirmed via a
         # real scan_repository(map_endpoints=False) call.
         "endpoints": {
             "checked": evidence["repository"]["api_endpoints"]["checked"],
+            "reason": evidence["repository"]["api_endpoints"].get("reason"),
             "endpoints": evidence["repository"]["api_endpoints"]["endpoints"],
         },
     }
@@ -1029,12 +1032,17 @@ function severityLabel(severity) {
   return severity.map(s => s.type + ' ' + s.score).join(', ');
 }
 
+function skipCaption(data, fallback) {
+  if (data.checked) return '';
+  return ' (' + (data.reason || fallback) + ')';
+}
+
 function renderVulnerabilities(data) {
   const summary = document.getElementById('vulnerabilities-summary');
   const el = document.getElementById('vulnerabilities');
   const findings = data.findings;
   summary.textContent = findings.length + ' vulnerabilit' + (findings.length === 1 ? 'y' : 'ies') + ' found' +
-    (data.checked ? '' : ' (dependency scan not run)');
+    skipCaption(data, 'dependency scan not run');
 
   if (findings.length === 0) {
     el.innerHTML = '<div class="tool-row">No known vulnerabilities in pinned dependencies.</div>';
@@ -1053,7 +1061,7 @@ function renderLicenses(data) {
   const el = document.getElementById('licenses');
   const findings = data.findings;
   summary.textContent = findings.length + ' dependenc' + (findings.length === 1 ? 'y' : 'ies') +
-    ' with an unknown or non-permissive license' + (data.checked ? '' : ' (license scan not run)');
+    ' with an unknown or non-permissive license' + skipCaption(data, 'license scan not run');
   repoEl.innerHTML = '<span>Repo license</span><span>' + escapeHtml(data.repo_license.category) + '</span>';
 
   if (findings.length === 0) {
@@ -1075,7 +1083,7 @@ function renderEndpoints(data) {
   const mountCount = endpoints.length - resolvedCount;
   summary.textContent = resolvedCount + ' API endpoint' + (resolvedCount === 1 ? '' : 's') + ' mapped from source' +
     (mountCount > 0 ? ', ' + mountCount + ' router mount' + (mountCount === 1 ? '' : 's') + ' not individually resolved' : '') +
-    (data.checked ? '' : ' (endpoint mapping not run)');
+    skipCaption(data, 'endpoint mapping not run');
 
   if (endpoints.length === 0) {
     el.innerHTML = '<div class="tool-row">No API endpoints detected.</div>';
