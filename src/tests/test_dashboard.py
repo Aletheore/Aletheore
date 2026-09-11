@@ -16,7 +16,15 @@ from aletheore.evidence import EVIDENCE_VERSION
 from tests.air_fixtures import minimal_air_evidence
 
 
-def make_evidence(scanned_at: str, module_count: int = 2, secrets_count: int = 0) -> dict:
+def make_evidence(
+    scanned_at: str,
+    module_count: int = 2,
+    secrets_count: int = 0,
+    vulnerability_findings: list | None = None,
+    license_findings: list | None = None,
+) -> dict:
+    vulnerability_findings = vulnerability_findings or []
+    license_findings = license_findings or []
     return {
         "aletheore_version": EVIDENCE_VERSION,
         "scanned_at": scanned_at,
@@ -28,6 +36,21 @@ def make_evidence(scanned_at: str, module_count: int = 2, secrets_count: int = 0
             "dead_code": {
                 "unreachable_modules": [{"path": "old/unused.py", "reason": "no other module imports this file"}],
                 "unused_dependencies": [{"ecosystem": "pip", "package": "unused-pkg"}],
+            },
+            "api_endpoints": {
+                "checked": True,
+                "endpoints": [
+                    {
+                        "method": "GET",
+                        "path": "/healthz",
+                        "framework": "flask_or_fastapi",
+                        "file": "app.py",
+                        "line": 12,
+                        "handler": "healthz",
+                        "unresolved": False,
+                        "note": None,
+                    }
+                ],
             },
         },
         "git": {
@@ -53,7 +76,17 @@ def make_evidence(scanned_at: str, module_count: int = 2, secrets_count: int = 0
                 ],
                 "history_findings": [],
             },
-            "dependency_vulnerabilities": {"checked": True, "reason": None, "findings": []},
+            "dependency_vulnerabilities": {
+                "checked": True,
+                "reason": None,
+                "findings": vulnerability_findings,
+            },
+            "dependency_licenses": {
+                "checked": True,
+                "reason": None,
+                "repo_license": {"category": "permissive", "detected_from": "LICENSE"},
+                "findings": license_findings,
+            },
         },
         "architecture": {
             "clusters": [{"id": 0, "modules": ["m0.py"], "internal_edges": 0}],
@@ -63,7 +96,30 @@ def make_evidence(scanned_at: str, module_count: int = 2, secrets_count: int = 0
 
 
 def test_build_evidence_summary_shape():
-    evidence = make_evidence("2026-07-15T12:00:00+00:00", module_count=3, secrets_count=2)
+    evidence = make_evidence(
+        "2026-07-15T12:00:00+00:00",
+        module_count=3,
+        secrets_count=2,
+        vulnerability_findings=[
+            {
+                "ecosystem": "PyPI",
+                "package": "certifi",
+                "installed_version": "2024.0.0",
+                "advisory_id": "PYSEC-2024-230",
+                "summary": "Certifi root certificate issue",
+                "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N"}],
+            }
+        ],
+        license_findings=[
+            {
+                "ecosystem": "PyPI",
+                "package": "some-pkg",
+                "installed_version": "1.0",
+                "license": None,
+                "category": "unknown",
+            }
+        ],
+    )
 
     summary = build_evidence_summary(evidence)
 
@@ -80,6 +136,83 @@ def test_build_evidence_summary_shape():
         {"path": "old/unused.py", "reason": "no other module imports this file"}
     ]
     assert summary["dead_code"]["unused_dependencies"] == [{"ecosystem": "pip", "package": "unused-pkg"}]
+    assert summary["security"]["vulnerabilities"]["finding_count"] == 1
+    assert summary["security"]["vulnerabilities"]["findings"][0]["package"] == "certifi"
+    assert summary["security"]["vulnerabilities"]["reason"] is None
+    assert summary["security"]["licenses"]["finding_count"] == 1
+    assert summary["security"]["licenses"]["findings"][0]["package"] == "some-pkg"
+    assert summary["security"]["licenses"]["repo_license"]["category"] == "permissive"
+    assert summary["security"]["licenses"]["reason"] is None
+    assert summary["endpoints"]["checked"] is True
+    assert summary["endpoints"]["reason"] is None
+    assert summary["endpoints"]["endpoints"] == [
+        {
+            "method": "GET",
+            "path": "/healthz",
+            "framework": "flask_or_fastapi",
+            "file": "app.py",
+            "line": 12,
+            "handler": "healthz",
+            "unresolved": False,
+            "note": None,
+        }
+    ]
+
+
+def test_build_evidence_summary_preserves_endpoints_checked_false():
+    # Real bug found via audit: this used to flatten straight to the bare
+    # endpoints list, silently dropping "checked" - a real --no-map-endpoints
+    # scan (or its .aletheore.json disabled_checks equivalent) produces
+    # exactly this shape, and the dashboard could no longer tell "endpoint
+    # mapping was skipped" apart from "mapping ran and found nothing", unlike
+    # the vulnerabilities/licenses cards right above it in this same
+    # function, which already preserve "checked" for exactly this reason.
+    evidence = make_evidence("2026-07-15T12:00:00+00:00")
+    evidence["repository"]["api_endpoints"] = {
+        "checked": False,
+        "reason": "skipped (--no-map-endpoints)",
+        "endpoints": [],
+    }
+
+    summary = build_evidence_summary(evidence)
+
+    assert summary["endpoints"]["checked"] is False
+    assert summary["endpoints"]["endpoints"] == []
+
+
+def test_build_evidence_summary_preserves_skip_reason_for_all_three_scoped_checks():
+    # Flash Review finding on this PR: the endpoints fix above preserved
+    # "checked" but dropped "reason" - the actual skip explanation
+    # (--no-map-endpoints, --no-check-vulnerabilities, --no-check-licenses
+    # all set real "reason" strings in evidence.py) never reached the
+    # frontend, which could then only show a generic caption instead of the
+    # real one. Fixed for all three at once, since none of them preserved it
+    # - not just the one Flash Review happened to flag.
+    evidence = make_evidence("2026-07-15T12:00:00+00:00")
+    evidence["security"]["dependency_vulnerabilities"] = {
+        "checked": False,
+        "reason": "OSV.dev unreachable or timed out: connection refused",
+        "findings": [],
+    }
+    evidence["security"]["dependency_licenses"] = {
+        "checked": False,
+        "reason": "skipped (--no-check-licenses)",
+        "repo_license": {"category": "unknown", "detected_from": None},
+        "findings": [],
+    }
+    evidence["repository"]["api_endpoints"] = {
+        "checked": False,
+        "reason": "skipped (--no-map-endpoints)",
+        "endpoints": [],
+    }
+
+    summary = build_evidence_summary(evidence)
+
+    assert summary["security"]["vulnerabilities"]["reason"] == (
+        "OSV.dev unreachable or timed out: connection refused"
+    )
+    assert summary["security"]["licenses"]["reason"] == "skipped (--no-check-licenses)"
+    assert summary["endpoints"]["reason"] == "skipped (--no-map-endpoints)"
 
 
 def test_build_history_summary_reads_all_snapshots(tmp_path):

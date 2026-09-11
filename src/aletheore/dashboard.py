@@ -46,9 +46,18 @@ def build_evidence_summary(evidence: dict) -> dict:
             },
             "vulnerabilities": {
                 "checked": evidence["security"]["dependency_vulnerabilities"]["checked"],
+                "reason": evidence["security"]["dependency_vulnerabilities"].get("reason"),
                 "finding_count": len(
                     evidence["security"]["dependency_vulnerabilities"]["findings"]
                 ),
+                "findings": evidence["security"]["dependency_vulnerabilities"]["findings"],
+            },
+            "licenses": {
+                "checked": evidence["security"]["dependency_licenses"]["checked"],
+                "reason": evidence["security"]["dependency_licenses"].get("reason"),
+                "repo_license": evidence["security"]["dependency_licenses"]["repo_license"],
+                "finding_count": len(evidence["security"]["dependency_licenses"]["findings"]),
+                "findings": evidence["security"]["dependency_licenses"]["findings"],
             },
         },
         "architecture": {
@@ -61,6 +70,19 @@ def build_evidence_summary(evidence: dict) -> dict:
         "dead_code": {
             "unreachable_modules": evidence["repository"]["dead_code"]["unreachable_modules"],
             "unused_dependencies": evidence["repository"]["dead_code"]["unused_dependencies"],
+        },
+        # Real bug found via audit: this used to flatten straight to the bare
+        # endpoints list, dropping "checked"/"reason" - matching the
+        # vulnerabilities/licenses blocks above, which keep them for the same
+        # reason: caption a skipped scan instead of rendering it
+        # indistinguishably from "checked, found none". `--no-map-endpoints`
+        # (or its .aletheore.json disabled_checks equivalent) is a real,
+        # reachable flag that produces exactly that shape - confirmed via a
+        # real scan_repository(map_endpoints=False) call.
+        "endpoints": {
+            "checked": evidence["repository"]["api_endpoints"]["checked"],
+            "reason": evidence["repository"]["api_endpoints"].get("reason"),
+            "endpoints": evidence["repository"]["api_endpoints"]["endpoints"],
         },
     }
 
@@ -291,6 +313,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .tools-list { max-height: 240px; overflow-y: auto; }
   .tool-row { padding: 6px 0; border-bottom: 1px solid #1a1a1a; font-size: 13px; color: #c8c8c8; }
   .tool-name { color: #fff; font-family: monospace; }
+  .tool-detail { color: #8a8a8a; font-size: 12px; margin-top: 2px; }
   .graph-hint { font-size: 11px; color: #5a5a5a; margin-top: 6px; }
   #graph-hover-info { min-height: 18px; margin-top: 4px; font-size: 13px; color: #9a9a9a; }
   #graph-hover-info .hover-path { color: #fff; font-family: monospace; }
@@ -379,6 +402,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <h2>Dead Code</h2>
     <div id="dead-code-summary" class="stat"></div>
     <div id="dead-code" class="tools-list"></div>
+  </div>
+  <div class="grid">
+    <div class="card">
+      <h2>Vulnerability Findings</h2>
+      <div id="vulnerabilities-summary" class="stat"></div>
+      <div id="vulnerabilities" class="tools-list"></div>
+    </div>
+    <div class="card">
+      <h2>Dependency Licenses</h2>
+      <div id="licenses-summary" class="stat"></div>
+      <div id="licenses-repo" class="stat-row"></div>
+      <div id="licenses" class="tools-list"></div>
+    </div>
+  </div>
+  <div class="card">
+    <h2>API Endpoints</h2>
+    <div id="endpoints-summary" class="stat"></div>
+    <div id="endpoints" class="tools-list"></div>
   </div>
   <div class="card">
     <h2>MCP Tools Available for This Repo</h2>
@@ -986,6 +1027,81 @@ function renderDeadCode(data) {
   el.innerHTML = moduleRows.concat(depRows).join('');
 }
 
+function severityLabel(severity) {
+  if (!severity || severity.length === 0) return 'unrated';
+  return severity.map(s => s.type + ' ' + s.score).join(', ');
+}
+
+function skipCaption(data, fallback) {
+  if (data.checked) return '';
+  return ' (' + (data.reason || fallback) + ')';
+}
+
+function renderVulnerabilities(data) {
+  const summary = document.getElementById('vulnerabilities-summary');
+  const el = document.getElementById('vulnerabilities');
+  const findings = data.findings;
+  summary.textContent = findings.length + ' vulnerabilit' + (findings.length === 1 ? 'y' : 'ies') + ' found' +
+    skipCaption(data, 'dependency scan not run');
+
+  if (findings.length === 0) {
+    el.innerHTML = '<div class="tool-row">No known vulnerabilities in pinned dependencies.</div>';
+    return;
+  }
+  el.innerHTML = findings.map(f =>
+    '<div class="tool-row"><span class="tool-name">' + escapeHtml(f.package) + '@' + escapeHtml(f.installed_version) +
+    '</span> - ' + escapeHtml(f.advisory_id) + ' (' + escapeHtml(severityLabel(f.severity)) + ')' +
+    '<div class="tool-detail">' + escapeHtml(f.summary || '') + '</div></div>'
+  ).join('');
+}
+
+function renderLicenses(data) {
+  const summary = document.getElementById('licenses-summary');
+  const repoEl = document.getElementById('licenses-repo');
+  const el = document.getElementById('licenses');
+  const findings = data.findings;
+  summary.textContent = findings.length + ' dependenc' + (findings.length === 1 ? 'y' : 'ies') +
+    ' with an unknown or non-permissive license' + skipCaption(data, 'license scan not run');
+  repoEl.innerHTML = '<span>Repo license</span><span>' + escapeHtml(data.repo_license.category) + '</span>';
+
+  if (findings.length === 0) {
+    el.innerHTML = '<div class="tool-row">Every checked dependency has a known, permissive license.</div>';
+    return;
+  }
+  el.innerHTML = findings.map(f =>
+    '<div class="tool-row"><span class="tool-name">' + escapeHtml(f.package) + '</span> - ' +
+    escapeHtml(f.ecosystem) + ', license: ' + escapeHtml(f.license || 'unknown') +
+    ' (' + escapeHtml(f.category) + ')</div>'
+  ).join('');
+}
+
+function renderEndpoints(data) {
+  const summary = document.getElementById('endpoints-summary');
+  const el = document.getElementById('endpoints');
+  const endpoints = data.endpoints;
+  const resolvedCount = endpoints.filter(e => !e.unresolved).length;
+  const mountCount = endpoints.length - resolvedCount;
+  summary.textContent = resolvedCount + ' API endpoint' + (resolvedCount === 1 ? '' : 's') + ' mapped from source' +
+    (mountCount > 0 ? ', ' + mountCount + ' router mount' + (mountCount === 1 ? '' : 's') + ' not individually resolved' : '') +
+    skipCaption(data, 'endpoint mapping not run');
+
+  if (endpoints.length === 0) {
+    el.innerHTML = '<div class="tool-row">No API endpoints detected.</div>';
+    return;
+  }
+  // A null method means the scanner found a router mount/include/middleware
+  // delegation, not a concrete leaf route - labeled distinctly rather than
+  // printed as the literal string "null", which would misrepresent evidence
+  // the scanner itself flagged as unresolved.
+  el.innerHTML = endpoints.map(e => {
+    const methodLabel = e.method || 'MOUNT';
+    const noteRow = e.note ? '<div class="tool-detail">' + escapeHtml(e.note) + '</div>' : '';
+    return '<div class="tool-row"><span class="tool-name">' + escapeHtml(methodLabel) + ' ' + escapeHtml(e.path) +
+      '</span> - ' + escapeHtml(e.file) + ':' + e.line + (e.handler ? ' (' + escapeHtml(e.handler) + ')' : '') +
+      noteRow + '</div>';
+  }).join('');
+}
+
 function renderMcpTools(tools) {
   const el = document.getElementById('mcp-tools');
   el.innerHTML = tools.map(t =>
@@ -1023,6 +1139,9 @@ async function loadAll() {
   renderSecurity(evidence.security);
   renderArchitecture(evidence.architecture);
   renderDeadCode(evidence.dead_code);
+  renderVulnerabilities(evidence.security.vulnerabilities);
+  renderLicenses(evidence.security.licenses);
+  renderEndpoints(evidence.endpoints);
 
   const history = await fetchJSON('/api/history');
   renderBarChart('sparkline-modules', history.map(h => h.module_count), 'sparkline-modules-value', 'sparkline-modules-note');
