@@ -2210,6 +2210,100 @@ async def test_flash_review_reserves_only_what_is_left_when_the_balance_is_below
     assert float(remaining["topup_credit_balance_usd"]) == pytest.approx(0.00)
 
 
+@pytest.mark.asyncio
+async def test_flash_review_trueup_drains_balance_when_real_cost_exceeds_what_is_left(
+    pool, monkeypatch
+):
+    # Sibling of _IncrementalSpendBudget.record_usage's own drain-to-zero fix
+    # (PR #639), never applied to this call site's own separate true-up
+    # logic. reserve_llm_spend no-ops (mutates nothing, returns False) when
+    # the combined balance can't cover the requested amount - the true-up
+    # block at the end of _run_flash_review calls reserve_llm_spend(delta)
+    # for the delta > 0 case but never checks the return value, so a review
+    # whose real cost exceeds both the flat reservation AND whatever balance
+    # is left afterward used to leave that leftover balance untouched
+    # (overstating what the installation actually has) instead of draining
+    # it to zero, while record_llm_spend still ledgered the full real cost
+    # as if it had been collected.
+    #
+    # base_credit_remaining_usd=0.60 is comfortably above
+    # FLASH_REVIEW_SPEND_RESERVE_USD ($0.50), so the initial reservation is
+    # NOT capped by the "reserve only what's left" branch above - it reserves
+    # the full flat $0.50, leaving exactly $0.10. Token counts below are
+    # chosen so the real cost ($0.792) blows past $0.50 by more (delta =
+    # $0.292) than that remaining $0.10, so the true-up's extra reservation
+    # must fail and hit the drain path.
+    installation_id = 9402
+    await _insert_installation(
+        pool, installation_id, "a", plan="flash",
+        base_credit_allotment_usd=0.60,
+        base_credit_remaining_usd=0.60, topup_credit_balance_usd=0.00, balance_epoch=1,
+    )
+
+    monkeypatch.setenv("DATABASE_URL", TEST_DATABASE_URL)
+    monkeypatch.setattr("scan_worker.jobs.resolve_model", lambda *a, **k: "deepseek-v4-flash")
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: None)
+
+    def _fake_review_diff(diff_text, file_context="", **kwargs):
+        # 1,500,000 prompt / 100,000 completion tokens at deepseek-v4-flash
+        # rates ($0.44/M in, $1.32/M out): 1_500_000*0.44/1e6 +
+        # 100_000*1.32/1e6 = 0.66 + 0.132 = 0.792.
+        kwargs["on_usage"](1_500_000, 100_000)
+        return []
+
+    monkeypatch.setattr("scan_worker.jobs.review_diff", _fake_review_diff)
+    recorded_spend = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.record_llm_spend",
+        lambda dsn, iid, cost, **kwargs: recorded_spend.append(cost),
+    )
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None
+    )
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
+
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(installation_id, "octocat/hello-world", 42, "aaa", "bbb")
+
+    real_cost = 1_500_000 * 0.44 / 1e6 + 100_000 * 1.32 / 1e6
+    assert recorded_spend == [pytest.approx(real_cost - 0.50)]
+
+    remaining = await _get_balance(pool, installation_id)
+    # The whole point: real cost ($0.792) exceeded the entire $0.60 balance,
+    # so nothing should be left - not the untouched $0.10 the unchecked
+    # true-up reservation used to leave behind.
+    assert float(remaining["base_credit_remaining_usd"]) == pytest.approx(0.00)
+    assert float(remaining["topup_credit_balance_usd"]) == pytest.approx(0.00)
+
+
 def test_managed_audit_api_job_records_each_call_and_exposes_budget_stop(monkeypatch):
     # Real balance needed so the upfront fast-fail check (installation's
     # own combined credit balance, Task 7 of the dollar-credit-pricing
