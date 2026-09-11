@@ -3,6 +3,7 @@ import hmac
 import ipaddress
 import json
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -33,7 +34,13 @@ from app_server.paddle_pricing import (
     PLAN_INTERVAL_TO_PRICE_ID,
 )
 from app_server.webhooks.paddle import handle_paddle_webhook_event
+from scan_worker.db import list_installations_due_for_monthly_credit_reset
 from scan_worker.jobs import run_monthly_credit_reset_sweep_job
+
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql://postgres:test@localhost:55433/aletheore_test",
+)
 
 WEBHOOK_SECRET = "pdl_ntfset_test_secret"
 # Matches conftest.py's SESSION_SECRET default - the webhook handler
@@ -714,6 +721,39 @@ async def test_subscription_canceled_revokes_to_free(pool):
     installation = await get_installation(pool, 300)
     assert installation["plan"] == "free"
     fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_canceling_an_annual_air_subscription_disarms_the_monthly_credit_clock(pool):
+    # A downgrade to a monthly price already disarms next_monthly_credit_
+    # reset_at via reset_billing_period_credit's own is_annual=False write
+    # (see test_a_monthly_renewal_disarms_a_previously_armed_monthly_clock)
+    # - but a full CANCEL never reaches that function at all (it's gated
+    # on plan != "free"), so nothing else ever cleared this column on that
+    # transition. Left armed, run_monthly_credit_reset_sweep_job keeps
+    # matching this now-free installation on every sweep tick forever: no
+    # money is at risk (base_credit_for_plan("free", ...) is 0), but the
+    # clock keeps advancing and balance_epoch keeps climbing on a churned
+    # row that will never look at either again.
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan, "
+        "base_credit_remaining_usd, base_credit_allotment_usd, "
+        "next_monthly_credit_reset_at, balance_epoch) "
+        "VALUES (303, 'churn-co', 'air', 18.00, 18.00, "
+        "'2026-08-31T00:00:00Z'::timestamptz, 1)"
+    )
+    payload = _subscription_event_payload("subscription.canceled", "canceled", 303)
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    installation = await get_installation(pool, 303)
+    assert installation["plan"] == "free"
+    row = await pool.fetchrow(
+        "SELECT next_monthly_credit_reset_at FROM installations WHERE installation_id = $1", 303
+    )
+    assert row["next_monthly_credit_reset_at"] is None
+    assert 303 not in list_installations_due_for_monthly_credit_reset(TEST_DATABASE_URL)
 
 
 @pytest.mark.asyncio

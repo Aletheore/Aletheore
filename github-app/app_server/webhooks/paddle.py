@@ -15,6 +15,7 @@ from app_server.db import (
     claim_paid_setup,
     credit_extra_seat_purchase,
     credit_topup_purchase,
+    disarm_monthly_credit_reset_clock,
     get_extra_seats,
     get_installation,
     list_installation_member_emails,
@@ -322,6 +323,11 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
                     await set_paid_installation_plan(conn, installation_id, plan)
             else:
                 await set_installation_plan(conn, installation_id, plan)
+                # A cancel/pause/past-due transition is the one place a
+                # previously-armed annual-AIR monthly clock is never
+                # otherwise disarmed - see disarm_monthly_credit_reset_
+                # clock's own docstring for what leaving it armed causes.
+                await disarm_monthly_credit_reset_clock(conn, installation_id)
 
             if "id" in data and "customer_id" in data:
                 await add_paddle_ids_to_installation(conn, installation_id, data["id"], data["customer_id"])
