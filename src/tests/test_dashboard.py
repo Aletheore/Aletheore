@@ -141,7 +141,8 @@ def test_build_evidence_summary_shape():
     assert summary["security"]["licenses"]["finding_count"] == 1
     assert summary["security"]["licenses"]["findings"][0]["package"] == "some-pkg"
     assert summary["security"]["licenses"]["repo_license"]["category"] == "permissive"
-    assert summary["endpoints"] == [
+    assert summary["endpoints"]["checked"] is True
+    assert summary["endpoints"]["endpoints"] == [
         {
             "method": "GET",
             "path": "/healthz",
@@ -153,6 +154,27 @@ def test_build_evidence_summary_shape():
             "note": None,
         }
     ]
+
+
+def test_build_evidence_summary_preserves_endpoints_checked_false():
+    # Real bug found via audit: this used to flatten straight to the bare
+    # endpoints list, silently dropping "checked" - a real --no-map-endpoints
+    # scan (or its .aletheore.json disabled_checks equivalent) produces
+    # exactly this shape, and the dashboard could no longer tell "endpoint
+    # mapping was skipped" apart from "mapping ran and found nothing", unlike
+    # the vulnerabilities/licenses cards right above it in this same
+    # function, which already preserve "checked" for exactly this reason.
+    evidence = make_evidence("2026-07-15T12:00:00+00:00")
+    evidence["repository"]["api_endpoints"] = {
+        "checked": False,
+        "reason": "skipped (--no-map-endpoints)",
+        "endpoints": [],
+    }
+
+    summary = build_evidence_summary(evidence)
+
+    assert summary["endpoints"]["checked"] is False
+    assert summary["endpoints"]["endpoints"] == []
 
 
 def test_build_history_summary_reads_all_snapshots(tmp_path):

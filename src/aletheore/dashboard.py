@@ -69,7 +69,18 @@ def build_evidence_summary(evidence: dict) -> dict:
             "unreachable_modules": evidence["repository"]["dead_code"]["unreachable_modules"],
             "unused_dependencies": evidence["repository"]["dead_code"]["unused_dependencies"],
         },
-        "endpoints": evidence["repository"]["api_endpoints"]["endpoints"],
+        # Real bug found via audit: this used to flatten straight to the bare
+        # endpoints list, dropping "checked"/"reason" - unlike the
+        # vulnerabilities/licenses blocks above, which keep them specifically
+        # so the dashboard can caption a skipped scan instead of rendering it
+        # indistinguishably from "checked, found none". `--no-map-endpoints`
+        # (or its .aletheore.json disabled_checks equivalent) is a real,
+        # reachable flag that produces exactly that shape - confirmed via a
+        # real scan_repository(map_endpoints=False) call.
+        "endpoints": {
+            "checked": evidence["repository"]["api_endpoints"]["checked"],
+            "endpoints": evidence["repository"]["api_endpoints"]["endpoints"],
+        },
     }
 
 
@@ -1056,13 +1067,15 @@ function renderLicenses(data) {
   ).join('');
 }
 
-function renderEndpoints(endpoints) {
+function renderEndpoints(data) {
   const summary = document.getElementById('endpoints-summary');
   const el = document.getElementById('endpoints');
+  const endpoints = data.endpoints;
   const resolvedCount = endpoints.filter(e => !e.unresolved).length;
   const mountCount = endpoints.length - resolvedCount;
   summary.textContent = resolvedCount + ' API endpoint' + (resolvedCount === 1 ? '' : 's') + ' mapped from source' +
-    (mountCount > 0 ? ', ' + mountCount + ' router mount' + (mountCount === 1 ? '' : 's') + ' not individually resolved' : '');
+    (mountCount > 0 ? ', ' + mountCount + ' router mount' + (mountCount === 1 ? '' : 's') + ' not individually resolved' : '') +
+    (data.checked ? '' : ' (endpoint mapping not run)');
 
   if (endpoints.length === 0) {
     el.innerHTML = '<div class="tool-row">No API endpoints detected.</div>';
