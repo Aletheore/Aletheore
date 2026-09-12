@@ -390,21 +390,46 @@ def _has_spring_stereotype_annotation(repo_path: Path, path: str) -> bool:
     )
 
 
-def _nearest_csproj_root(repo_path: Path, path: str) -> str | None:
+# Sentinel for _nearest_csproj_root: more than one .csproj shares the
+# nearest ancestor directory (sibling projects flattened into one folder -
+# a real but rare layout; standard SDK/IDE tooling always gives each
+# project its own directory). Distinct from "no .csproj found at all" -
+# merging the two would still recreate the exact cross-project leak this
+# whole mechanism exists to prevent: a candidate file and the file
+# declaring the global using could sit in the very same ambiguous
+# directory, so both would land in the same "unscopeable" fallback bucket
+# and the global using would still wrongly apply to a sibling project's
+# unrelated same-named "Controller" class. Confirmed by a second, distinct
+# Flash Review finding on this same PR (#668) after the first
+# project-scoping fix - real, verified directly with a synthetic
+# same-directory two-.csproj repro before implementing this.
+_AMBIGUOUS_CSPROJ_DIR = object()
+
+
+def _nearest_csproj_root(repo_path: Path, path: str) -> str | None | object:
     """The directory (relative to repo_path, "" for the repo root itself)
     of the nearest ancestor .csproj to `path` - the real C# project
-    boundary a global using's file-scope actually respects. None if no
-    .csproj exists anywhere above it (rare for a real repo - almost every
-    C# project the SDK builds has one - and handled by the caller as an
-    unscopeable file, not silently treated as its own single-file
-    project)."""
+    boundary a global using's file-scope actually respects.
+
+    None if no .csproj exists anywhere above it (rare for a real repo -
+    almost every C# project the SDK builds has one - handled by the
+    caller as an unscopeable file, not silently treated as its own
+    single-file project). _AMBIGUOUS_CSPROJ_DIR if the nearest ancestor
+    directory contains more than one .csproj - project membership can't
+    be determined from directory alone, so the caller must not attribute
+    ANY project's global using to a file in this state, in either
+    direction (never assume it has one THAT ISN'T ITS OWN, and never
+    contribute its own declared global using to any project's set)."""
     current = (repo_path / path).parent
     while True:
         try:
-            if any(current.glob("*.csproj")):
-                return current.relative_to(repo_path).as_posix()
+            matches = list(current.glob("*.csproj"))
         except OSError:
-            pass
+            matches = []
+        if len(matches) > 1:
+            return _AMBIGUOUS_CSPROJ_DIR
+        if len(matches) == 1:
+            return current.relative_to(repo_path).as_posix()
         if current == repo_path:
             return None
         current = current.parent
@@ -457,10 +482,13 @@ def _aspnet_global_using_mvc_projects(
         if not _ASPNET_GLOBAL_USING_MVC_PATTERN.search(content):
             continue
         project_root = _nearest_csproj_root(repo_path, rel_path)
-        if project_root is not None:
-            projects.add(project_root)
-        else:
+        if project_root is None:
             unscopeable_present = True
+        elif project_root is not _AMBIGUOUS_CSPROJ_DIR:
+            projects.add(project_root)
+        # else: ambiguous directory - contribute nothing either way (see
+        # _AMBIGUOUS_CSPROJ_DIR's own docstring for why merging this into
+        # either the "projects" or "unscopeable" bucket would still leak).
     return projects, unscopeable_present
 
 
@@ -478,14 +506,15 @@ def _has_aspnet_controller_convention(
     except OSError:
         return False
     project_root = _nearest_csproj_root(repo_path, path)
-    has_global_using = (
-        (project_root in global_using_mvc_projects if global_using_mvc_projects else False)
-        if project_root is not None
+    if project_root is _AMBIGUOUS_CSPROJ_DIR:
+        has_global_using = False
+    elif project_root is not None:
+        has_global_using = project_root in global_using_mvc_projects if global_using_mvc_projects else False
+    else:
         # No discoverable .csproj for this file either - fall back to the
         # unscoped signal, since there's no project boundary to scope
         # either side to.
-        else global_using_mvc_unscopeable
-    )
+        has_global_using = global_using_mvc_unscopeable
     if not (has_global_using or _ASPNETCORE_MVC_IMPORT_PATTERN.search(content)):
         return False
     return bool(

@@ -1187,6 +1187,41 @@ def test_aspnet_global_using_falls_back_to_repo_wide_with_no_csproj_anywhere(tmp
     assert "Foo.cs" in result["entry_points_detected"]
 
 
+def test_aspnet_global_using_in_ambiguous_shared_csproj_dir_is_not_applied(tmp_path):
+    # Second, distinct Flash Review finding on #668 after the first
+    # project-scoping fix: two .csproj files sharing one directory (a
+    # real but rare layout - standard SDK/IDE tooling always gives each
+    # project its own directory) means directory alone can't determine
+    # project membership. Simply merging this into the "no .csproj found"
+    # bucket would NOT actually fix the leak, confirmed by reasoning
+    # through it directly before implementing: the declaring file and a
+    # candidate file could both sit in this same ambiguous directory, so
+    # both would land in the identical fallback bucket and the leak would
+    # reproduce exactly as before. Must instead apply NO global-using
+    # signal at all to a file in an ambiguous directory, in either
+    # direction.
+    shared_dir = tmp_path / "SharedDir"
+    shared_dir.mkdir()
+    (shared_dir / "ProjectA.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk.Web"></Project>\n'
+    )
+    (shared_dir / "ProjectB.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk"></Project>\n'
+    )
+    (shared_dir / "GlobalUsings.cs").write_text(
+        "global using Microsoft.AspNetCore.Mvc;\n"
+    )
+    (shared_dir / "Foo.cs").write_text(
+        "namespace SharedDir {\n    class Foo : Controller {}\n}\n"
+    )
+    modules = [
+        _module("SharedDir/GlobalUsings.cs"),
+        _module("SharedDir/Foo.cs"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "SharedDir/Foo.cs" in [m["path"] for m in result["unreachable_modules"]]
+
+
 def test_rails_controller_named_only_in_routes_rb_is_never_unreachable(tmp_path):
     # Real bug found via a real Discourse scan (68,183-commit clone): Rails
     # dispatches `to: "users#show"` and `resources :name` route entries to
