@@ -85,7 +85,7 @@ def _class_nodes(node):
     alongside top-level ones, a class nested inside another class/method's
     body is not mistaken for a top-level definition, and an eligible
     sibling class stays reachable even when an earlier one in the file
-    turns out to lack a name/superclass (see _class_name_and_superclass)."""
+    turns out to lack a name/superclass (see _class_names_and_superclasses)."""
     for child in node.children:
         if child.type == "class":
             yield child
@@ -95,17 +95,30 @@ def _class_nodes(node):
                 yield from _class_nodes(body)
 
 
-def _class_name_and_superclass(source: bytes) -> tuple[str, str] | None:
-    """(class name, superclass text) for this file's first class
-    definition that has both - at the top level or nested in one or more
-    `module` blocks - or None if the file has no such class definition at
-    all. An earlier class lacking a name or superclass (e.g. a plain
-    `class Foo; end` before the real model) is skipped in favor of a later
-    sibling, not treated as disqualifying the whole file."""
+def _class_names_and_superclasses(source: bytes) -> list[tuple[str, str]]:
+    """Every (class name, superclass text) pair among this file's own
+    class definitions that have both - at the top level or nested in one
+    or more `module` blocks - in document order. A class lacking a name or
+    superclass (e.g. a plain `class Foo; end`) is skipped rather than
+    disqualifying the file or any sibling class.
+
+    Returns every candidate, not just the first: a real, common Rails
+    pattern defines a small helper alongside the model in the same file
+    (e.g. a custom error class, `class PostValidationError < StandardError;
+    end` before `class Post < ApplicationRecord; end`) - only the caller,
+    after collecting every file's own direct superclass, can tell which
+    candidate (if any) is actually an ActiveRecord model, since that walk
+    needs the full corpus. Returning only the first candidate here missed
+    the real model entirely whenever an unrelated earlier class in the
+    same file also happened to have a superclass - confirmed as a real
+    gap, not hypothetical: any model file with a same-file custom error/
+    value class defined first lost its associations from the clustering
+    graph completely."""
     try:
         tree = _rb_parser().parse(source)
     except Exception:  # noqa: BLE001 - malformed/truncated source, never a guess
-        return None
+        return []
+    pairs = []
     for node in _class_nodes(tree.root_node):
         name_node = node.child_by_field_name("name")
         super_node = node.child_by_field_name("superclass")
@@ -113,23 +126,27 @@ def _class_name_and_superclass(source: bytes) -> tuple[str, str] | None:
             continue
         name = _rb_text(name_node, source)
         superclass = _rb_text(super_node, source).lstrip("<").strip()
-        return name, superclass
-    return None
+        pairs.append((name, superclass))
+    return pairs
 
 
 def _resolve_model_class_names(model_files: dict[str, bytes]) -> dict[str, str]:
-    """path -> class name, for every file whose class inherits
-    ActiveRecord::Base/ApplicationRecord directly, or transitively through
-    a chain of other classes also defined among these same files."""
-    direct: dict[str, tuple[str, str]] = {}
+    """path -> class name, for every file with at least one class that
+    inherits ActiveRecord::Base/ApplicationRecord directly, or
+    transitively through a chain of other classes also defined among
+    these same files. When a file defines more than one such class, the
+    first one (in document order) that resolves wins - matching this
+    module's existing "no guessing beyond document order" stance rather
+    than picking arbitrarily."""
+    direct: dict[str, list[tuple[str, str]]] = {}
     superclass_by_class_name: dict[str, str] = {}
     for path, source in model_files.items():
-        found = _class_name_and_superclass(source)
-        if found is None:
+        pairs = _class_names_and_superclasses(source)
+        if not pairs:
             continue
-        name, superclass = found
-        direct[path] = (name, superclass)
-        superclass_by_class_name[name] = superclass
+        direct[path] = pairs
+        for name, superclass in pairs:
+            superclass_by_class_name[name] = superclass
 
     resolved: dict[str, bool] = {}
 
@@ -153,11 +170,13 @@ def _resolve_model_class_names(model_files: dict[str, bytes]) -> dict[str, str]:
         resolved[class_name] = result
         return result
 
-    return {
-        path: name
-        for path, (name, superclass) in direct.items()
-        if superclass in _MODEL_SUPERCLASSES or _is_ar_model(superclass, frozenset())
-    }
+    resolved_class_by_path: dict[str, str] = {}
+    for path, pairs in direct.items():
+        for name, superclass in pairs:
+            if superclass in _MODEL_SUPERCLASSES or _is_ar_model(superclass, frozenset()):
+                resolved_class_by_path[path] = name
+                break
+    return resolved_class_by_path
 
 
 def _walk_association_calls(source: bytes):

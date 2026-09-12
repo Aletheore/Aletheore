@@ -383,7 +383,7 @@ def _sql_on_delete(options: list | None) -> str | None:
 
 def _sql_relation_from_reference(
     local_column: str, reference: exp.Expression, rel_path: str, line: int,
-    *, table: str | None = None, name: str | None = None,
+    *, table: str | None = None, name: str | None = None, to_column_index: int = 0,
 ) -> dict | None:
     target = reference.args.get("this")
     if target is None:
@@ -393,7 +393,20 @@ def _sql_relation_from_reference(
         return None
     to_table = table_node.name
     to_columns = target.expressions if isinstance(target, exp.Schema) else []
-    to_column = to_columns[0].name if to_columns else "id"
+    # A composite FK's `to_column_index`-th local column corresponds
+    # positionally to the `to_column_index`-th referenced column, not
+    # always the first - REFERENCES(x, y) for local columns (a, b) means
+    # a -> x and b -> y, never a -> x and b -> x. Falls back to the first
+    # (or "id") when the reference is malformed/shorter than expected
+    # (mismatched arity is invalid SQL, but this module never crashes on
+    # invalid input elsewhere either), same as the pre-existing default.
+    if to_columns:
+        if 0 <= to_column_index < len(to_columns):
+            to_column = to_columns[to_column_index].name
+        else:
+            to_column = to_columns[0].name
+    else:
+        to_column = "id"
     if not to_table:
         return None
     # An explicit `CONSTRAINT name ...` wins; otherwise `<table>_<column>_fkey`
@@ -478,9 +491,15 @@ def _sql_foreign_key_relations(
     # single-column case - `naming_table` is left unset otherwise so
     # _sql_relation_from_reference's own fallback doesn't guess one either.
     naming_table = table if (name or len(local_columns) == 1) else None
-    for local_column in local_columns:
+    for index, local_column in enumerate(local_columns):
+        # Positional: REFERENCES(x, y) pairs local_columns[i] with
+        # to_columns[i] - a real bug found via audit had every local column
+        # of a composite FK pointing at the first referenced column only
+        # (e.g. FOREIGN KEY (order_id, product_id) REFERENCES t(oid, pid)
+        # recorded BOTH order_id and product_id as referencing "oid").
         relation = _sql_relation_from_reference(
-            local_column, reference, rel_path, line, table=naming_table, name=name
+            local_column, reference, rel_path, line,
+            table=naming_table, name=name, to_column_index=index,
         )
         if relation is not None:
             relations.append(relation)

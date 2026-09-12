@@ -95,6 +95,42 @@ def test_malformed_pyproject_toml_does_not_crash(tmp_path):
     assert [m["path"] for m in result["unreachable_modules"]] == ["mytool/orphan.py"]
 
 
+def test_django_admin_py_is_never_unreachable(tmp_path):
+    # Real gap found via audit against a real repo (wagtail/wagtail):
+    # django.contrib.admin.autodiscover() (called automatically by
+    # AdminConfig.ready() in every modern Django project) dynamically
+    # imports every installed app's own admin.py by convention - never a
+    # plain top-level import anywhere in the app's own source. Confirmed:
+    # wagtail/documents/admin.py and wagtail/images/admin.py both carry
+    # real, live admin registrations and zero imported_by.
+    app_dir = tmp_path / "myapp"
+    app_dir.mkdir()
+    (app_dir / "admin.py").write_text(
+        "from django.contrib import admin\n\nfrom myapp.models import Widget\n\n"
+        "admin.site.register(Widget)\n"
+    )
+    modules = [_module("myapp/admin.py")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "myapp/admin.py" in result["entry_points_detected"]
+
+
+def test_unrelated_non_django_admin_py_is_not_exempted(tmp_path):
+    # Real false-negative risk found via peer review of this PR: "admin.py"
+    # is a common enough filename outside Django (this same module's own
+    # routes.rb addition explicitly rejected Laravel's web.php/api.php on
+    # this exact risk) that an unconditional basename match would exempt a
+    # genuinely dead, unrelated admin.py with no Django import at all.
+    app_dir = tmp_path / "myapp"
+    app_dir.mkdir()
+    (app_dir / "admin.py").write_text(
+        "def totally_unrelated_dead_function():\n    pass\n"
+    )
+    modules = [_module("myapp/admin.py")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "myapp/admin.py" in [m["path"] for m in result["unreachable_modules"]]
+
+
 def test_test_files_are_never_unreachable(tmp_path):
     modules = [
         _module("tests/test_thing.py"),
@@ -103,6 +139,49 @@ def test_test_files_are_never_unreachable(tmp_path):
     ]
     result = find_dead_code(tmp_path, modules, config=None)
     assert result["unreachable_modules"] == []
+
+
+def test_rspec_spec_files_are_never_unreachable(tmp_path):
+    # RSpec - Ruby's dominant test framework - names its files with a
+    # "_spec.rb" suffix, not a "test(s)" directory, so the generic
+    # tests?/__tests__ pattern never matched them. Real repo confirmed
+    # (discourse/discourse): 3,799 real *_spec.rb files across the main
+    # app and its plugins/migrations subprojects were completely
+    # unmatched, dwarfing the false-positive count #664/#666 fixed for
+    # the same codebase.
+    modules = [
+        _module("spec/models/user_spec.rb"),
+        _module("spec/lib/discourse/converter_spec.rb"),
+        _module("plugins/discourse-events/spec/jobs/some_job_spec.rb"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_rspec_support_files_are_never_unreachable(tmp_path):
+    # A spec/ directory also holds non-suffixed test infrastructure
+    # (spec_helper.rb, factories, shared examples, custom matchers) that
+    # is just as much test-only code as the specs themselves. Real repo
+    # confirmed (discourse/discourse): 711 such files exist alongside the
+    # 3,799 *_spec.rb files above.
+    modules = [
+        _module("spec/spec_helper.rb"),
+        _module("spec/support/matchers/have_constant.rb"),
+        _module("spec/factories/users.rb"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_ruby_file_outside_spec_directory_still_unreachable(tmp_path):
+    # The new spec/ patterns must stay scoped to the RSpec convention -
+    # a Ruby file that merely mentions "spec" in its own name outside a
+    # spec/ directory, or lives under an unrelated directory, is regular
+    # application code and must still be flagged when nothing imports it.
+    modules = [_module("app/models/inspector.rb")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    paths = [module["path"] for module in result["unreachable_modules"]]
+    assert "app/models/inspector.rb" in paths
 
 
 def test_capitalized_test_directory_is_never_unreachable(tmp_path):
@@ -1102,6 +1181,163 @@ def test_aspnet_controller_pattern_requires_aspnetcore_mvc_import(tmp_path):
     assert "Foo.cs" in [m["path"] for m in result["unreachable_modules"]]
 
 
+def test_aspnet_controller_via_project_wide_global_using_is_never_unreachable(tmp_path):
+    # Real gap found via audit against a real repo (dotnet/eShop): C# 10's
+    # `global using` (the default in every `dotnet new` template since
+    # .NET 6, almost always collected into one GlobalUsings.cs) applies
+    # project-wide from a single declaration, so a real controller file
+    # can carry neither a same-file `using Microsoft.AspNetCore.Mvc` nor
+    # any other local import at all - confirmed on eShop's own
+    # HomeController.cs/ConsentController.cs/etc, none of which declare
+    # the import locally. Without checking for a global using anywhere in
+    # the repo, this check never fired on a single real controller in a
+    # modern (.NET 6+) app.
+    (tmp_path / "GlobalUsings.cs").write_text(
+        "global using Microsoft.AspNetCore.Mvc;\n"
+    )
+    quickstart_dir = tmp_path / "Quickstart" / "Home"
+    quickstart_dir.mkdir(parents=True)
+    (quickstart_dir / "HomeController.cs").write_text(
+        "namespace IdentityServerHost.Quickstart.UI\n{\n"
+        "    public class HomeController : Controller\n    {\n"
+        "        public IActionResult Index() { return View(); }\n    }\n}\n"
+    )
+    modules = [
+        _module("GlobalUsings.cs"),
+        _module("Quickstart/Home/HomeController.cs"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "Quickstart/Home/HomeController.cs" in result["entry_points_detected"]
+
+
+def test_aspnet_global_using_in_obj_build_dir_is_ignored(tmp_path):
+    # Real bug found via peer review of this PR: .NET's `obj/` intermediate
+    # build directory fills with SDK-generated files, including a
+    # GlobalUsings.g.cs that itself declares `global using
+    # Microsoft.AspNetCore.Mvc` for every project the SDK builds - this
+    # repo's own IGNORED_DIRS already documents exactly that. Without
+    # skipping obj/ here the same way _html_script_entry_points already
+    # skips it, generated build output from ANY one project would leak
+    # this signal repo-wide and wrongly mark an unrelated same-named
+    # "Controller" class in a completely different, non-ASP.NET project as
+    # an entry point.
+    obj_dir = tmp_path / "SomeOtherProject" / "obj" / "Debug"
+    obj_dir.mkdir(parents=True)
+    (obj_dir / "GlobalUsings.g.cs").write_text(
+        "global using Microsoft.AspNetCore.Mvc;\n"
+    )
+    (tmp_path / "Foo.cs").write_text(
+        "namespace MyApp {\n    class Foo : Controller {}\n}\n"
+    )
+    modules = [_module("Foo.cs")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "Foo.cs" in [m["path"] for m in result["unreachable_modules"]]
+
+
+def test_aspnet_global_using_does_not_leak_across_csproj_projects(tmp_path):
+    # Real bug found via Flash Review on #668, confirmed directly after the
+    # obj/ fix above turned out not to address it: a single repo-wide
+    # boolean, even with generated build output excluded, still
+    # over-applies one project's own global using to a completely
+    # unrelated project sharing the same git repository - a very real
+    # shape for .NET (eShop, this fix's own real-repo test subject, is
+    # itself multi-project: Identity.API, Ordering.API, Catalog.API,
+    # Basket.API each their own project).
+    (tmp_path / "ProjectA").mkdir()
+    (tmp_path / "ProjectA" / "ProjectA.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk.Web"></Project>\n'
+    )
+    (tmp_path / "ProjectA" / "GlobalUsings.cs").write_text(
+        "global using Microsoft.AspNetCore.Mvc;\n"
+    )
+    (tmp_path / "ProjectB").mkdir()
+    (tmp_path / "ProjectB" / "ProjectB.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk"></Project>\n'
+    )
+    (tmp_path / "ProjectB" / "Foo.cs").write_text(
+        "namespace ProjectB {\n    class Foo : Controller {}\n}\n"
+    )
+    modules = [
+        _module("ProjectA/GlobalUsings.cs"),
+        _module("ProjectB/Foo.cs"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    # ProjectB has no ASP.NET Core dependency and no global using of its
+    # own - Foo.cs must stay flagged, not get swept up by ProjectA's.
+    assert "ProjectB/Foo.cs" in [m["path"] for m in result["unreachable_modules"]]
+
+
+def test_aspnet_global_using_still_applies_within_its_own_project(tmp_path):
+    (tmp_path / "ProjectA").mkdir()
+    (tmp_path / "ProjectA" / "ProjectA.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk.Web"></Project>\n'
+    )
+    (tmp_path / "ProjectA" / "GlobalUsings.cs").write_text(
+        "global using Microsoft.AspNetCore.Mvc;\n"
+    )
+    (tmp_path / "ProjectA" / "Foo.cs").write_text(
+        "namespace ProjectA {\n    class Foo : Controller {}\n}\n"
+    )
+    modules = [
+        _module("ProjectA/GlobalUsings.cs"),
+        _module("ProjectA/Foo.cs"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "ProjectA/Foo.cs" in result["entry_points_detected"]
+
+
+def test_aspnet_global_using_falls_back_to_repo_wide_with_no_csproj_anywhere(tmp_path):
+    # A repo with no .csproj at all (no discoverable project boundary for
+    # either the declaring file or the candidate file) can't be scoped to
+    # anything real - falls back to the pre-scoping repo-wide behavior for
+    # this specific case only, matching every earlier synthetic test in
+    # this file that never bothered creating a .csproj fixture.
+    (tmp_path / "GlobalUsings.cs").write_text(
+        "global using Microsoft.AspNetCore.Mvc;\n"
+    )
+    (tmp_path / "Foo.cs").write_text(
+        "namespace MyApp {\n    class Foo : Controller {}\n}\n"
+    )
+    modules = [_module("GlobalUsings.cs"), _module("Foo.cs")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "Foo.cs" in result["entry_points_detected"]
+
+
+def test_aspnet_global_using_in_ambiguous_shared_csproj_dir_is_not_applied(tmp_path):
+    # Second, distinct Flash Review finding on #668 after the first
+    # project-scoping fix: two .csproj files sharing one directory (a
+    # real but rare layout - standard SDK/IDE tooling always gives each
+    # project its own directory) means directory alone can't determine
+    # project membership. Simply merging this into the "no .csproj found"
+    # bucket would NOT actually fix the leak, confirmed by reasoning
+    # through it directly before implementing: the declaring file and a
+    # candidate file could both sit in this same ambiguous directory, so
+    # both would land in the identical fallback bucket and the leak would
+    # reproduce exactly as before. Must instead apply NO global-using
+    # signal at all to a file in an ambiguous directory, in either
+    # direction.
+    shared_dir = tmp_path / "SharedDir"
+    shared_dir.mkdir()
+    (shared_dir / "ProjectA.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk.Web"></Project>\n'
+    )
+    (shared_dir / "ProjectB.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk"></Project>\n'
+    )
+    (shared_dir / "GlobalUsings.cs").write_text(
+        "global using Microsoft.AspNetCore.Mvc;\n"
+    )
+    (shared_dir / "Foo.cs").write_text(
+        "namespace SharedDir {\n    class Foo : Controller {}\n}\n"
+    )
+    modules = [
+        _module("SharedDir/GlobalUsings.cs"),
+        _module("SharedDir/Foo.cs"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "SharedDir/Foo.cs" in [m["path"] for m in result["unreachable_modules"]]
+
+
 def test_rails_controller_named_only_in_routes_rb_is_never_unreachable(tmp_path):
     # Real bug found via a real Discourse scan (68,183-commit clone): Rails
     # dispatches `to: "users#show"` and `resources :name` route entries to
@@ -1304,6 +1540,311 @@ def test_rails_unprefixed_resource_in_a_plugin_engine_routes_file_still_resolves
     assert result["unreachable_modules"] == []
 
 
+def test_rails_model_referenced_only_by_bare_constant_is_never_unreachable(tmp_path):
+    # Real bug found via a real Discourse scan: Rails' Zeitwerk autoloader
+    # (default since Rails 6) means app/ code outside controllers is never
+    # require'd anywhere at all - it's referenced purely by bare constant
+    # name (User.find(...), never `require "user"`). rails_route_
+    # reachable_files only ever covers controllers dispatched from
+    # routes.rb; a model has no routes.rb entry to be rescued by at all.
+    # Every one of Discourse's 391 app/models files was flagged dead
+    # before this fix - not an edge case, the single most fundamental
+    # Rails convention there is.
+    models_dir = tmp_path / "app" / "models"
+    models_dir.mkdir(parents=True)
+    (models_dir / "user.rb").write_text("class User < ApplicationRecord\nend\n")
+    controllers_dir = tmp_path / "app" / "controllers"
+    controllers_dir.mkdir(parents=True)
+    (controllers_dir / "sessions_controller.rb").write_text(
+        "class SessionsController < ApplicationController\n"
+        "  def show\n    @user = User.find(params[:id])\n  end\nend\n"
+    )
+    modules = [
+        _module("app/models/user.rb"),
+        _module("app/controllers/sessions_controller.rb", imported_by=["app/controllers/sessions_controller.rb"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_rails_namespaced_file_referenced_by_bare_last_segment_resolves(tmp_path):
+    # Ruby's own lexical constant lookup lets code refer to a namespaced
+    # class by its short name alone once already inside (or alongside) the
+    # same namespace - real code commonly does this rather than always
+    # spelling out the full qualified name.
+    jobs_dir = tmp_path / "app" / "jobs" / "regular"
+    jobs_dir.mkdir(parents=True)
+    (jobs_dir / "bump_topic.rb").write_text(
+        "module Jobs\n  class BumpTopic < Jobs::Base\n  end\nend\n"
+    )
+    other_dir = tmp_path / "lib"
+    other_dir.mkdir(parents=True)
+    (other_dir / "topic_bumper.rb").write_text(
+        "class TopicBumper\n  def bump\n    BumpTopic.new.execute({})\n  end\nend\n"
+    )
+    modules = [
+        _module("app/jobs/regular/bump_topic.rb"),
+        _module("lib/topic_bumper.rb", imported_by=["lib/topic_bumper.rb"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_rails_job_dispatched_only_by_symbol_name_resolves(tmp_path):
+    # Real gap found via audit against a real repo (discourse/discourse):
+    # a custom job-dispatch layer (`Jobs.enqueue(:bump_topic, ...)`) built
+    # on top of Zeitwerk's own autoloading, common enough to be worth
+    # closing generally (any `dispatch(:snake_case_name)`-shaped call,
+    # not hardcoded to any one method name) - 87 of Discourse's 241
+    # app/jobs files were rescued by this alone, beyond what a bare
+    # constant reference check already caught.
+    jobs_dir = tmp_path / "app" / "jobs" / "regular"
+    jobs_dir.mkdir(parents=True)
+    (jobs_dir / "bump_topic.rb").write_text(
+        "module Jobs\n  class BumpTopic < Jobs::Base\n  end\nend\n"
+    )
+    caller_dir = tmp_path / "app" / "models"
+    caller_dir.mkdir(parents=True)
+    (caller_dir / "topic.rb").write_text(
+        "class Topic < ApplicationRecord\n"
+        "  def bump\n    Jobs.enqueue(:bump_topic, topic_id: id)\n  end\nend\n"
+    )
+    modules = [
+        _module("app/jobs/regular/bump_topic.rb"),
+        _module("app/models/topic.rb", imported_by=["app/models/topic.rb"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_symbol_dispatch_does_not_match_a_keyword_argument_label(tmp_path):
+    # A `key:` keyword-argument label (colon trailing the identifier) must
+    # never be mistaken for a `:key` symbol literal (colon leading it) -
+    # they look similar but mean something completely different in Ruby,
+    # and the former is far more common in ordinary code that has nothing
+    # to do with dispatch.
+    jobs_dir = tmp_path / "app" / "jobs" / "regular"
+    jobs_dir.mkdir(parents=True)
+    (jobs_dir / "bump_topic.rb").write_text(
+        "module Jobs\n  class BumpTopic < Jobs::Base\n  end\nend\n"
+    )
+    caller_dir = tmp_path / "app" / "models"
+    caller_dir.mkdir(parents=True)
+    (caller_dir / "topic.rb").write_text(
+        "class Topic < ApplicationRecord\n"
+        "  def some_unrelated_method(bump_topic: false)\n    bump_topic\n  end\nend\n"
+    )
+    modules = [
+        _module("app/jobs/regular/bump_topic.rb"),
+        _module("app/models/topic.rb", imported_by=["app/models/topic.rb"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert [m["path"] for m in result["unreachable_modules"]] == ["app/jobs/regular/bump_topic.rb"]
+
+
+def test_rake_task_dispatching_a_job_by_symbol_resolves_it(tmp_path):
+    # Real gap found via audit: .rake files are real Ruby (Rake tasks
+    # routinely dispatch a job, e.g. lib/tasks/nested_replies.rake in
+    # discourse/discourse) but aren't part of the module graph at all -
+    # invisible to the rescue passes above unless read explicitly.
+    jobs_dir = tmp_path / "app" / "jobs" / "regular"
+    jobs_dir.mkdir(parents=True)
+    (jobs_dir / "prepare_stats.rb").write_text(
+        "module Jobs\n  class PrepareStats < Jobs::Base\n  end\nend\n"
+    )
+    tasks_dir = tmp_path / "lib" / "tasks"
+    tasks_dir.mkdir(parents=True)
+    (tasks_dir / "stats.rake").write_text(
+        'task "stats:prepare" => :environment do\n'
+        "  Jobs.enqueue(:prepare_stats)\nend\n"
+    )
+    modules = [_module("app/jobs/regular/prepare_stats.rb")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_leading_double_colon_superclass_reference_resolves(tmp_path):
+    # Real bug found via a real Discourse scan: a top-level-anchored
+    # constant reference (`::Admin::UserHistory` - Ruby's own syntax for
+    # "start lookup at the absolute top-level namespace", commonly used
+    # for a superclass reference to disambiguate against a same-named
+    # nested constant) was completely invisible to the constant-token
+    # index - not just imprecisely captured, but missed entirely,
+    # including for the bare last-segment fallback, since the leading
+    # `::` blocked a match from starting anywhere inside the reference
+    # (confirmed directly: discourse/discourse's own
+    # `class CloseTopic < ::Jobs::TopicTimerBase` never registered at
+    # all before this fix).
+    base_dir = tmp_path / "app" / "models" / "admin"
+    base_dir.mkdir(parents=True)
+    (base_dir / "user_history.rb").write_text(
+        "module Admin\n  class UserHistory < ApplicationRecord\n  end\nend\n"
+    )
+    subclass_dir = tmp_path / "app" / "models" / "admin"
+    (subclass_dir / "staff_action_log.rb").write_text(
+        "module Admin\n  class StaffActionLog < ::Admin::UserHistory\n  end\nend\n"
+    )
+    modules = [
+        _module("app/models/admin/user_history.rb"),
+        _module("app/models/admin/staff_action_log.rb", imported_by=["app/models/admin/staff_action_log.rb"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_rails_model_with_no_reference_anywhere_stays_unreachable(tmp_path):
+    # The rescue must not become a rescue-everything hack - a genuinely
+    # orphaned model, referenced nowhere in the corpus, still gets flagged.
+    models_dir = tmp_path / "app" / "models"
+    models_dir.mkdir(parents=True)
+    (models_dir / "abandoned_draft.rb").write_text(
+        "class AbandonedDraft < ApplicationRecord\nend\n"
+    )
+    modules = [_module("app/models/abandoned_draft.rb")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert [m["path"] for m in result["unreachable_modules"]] == ["app/models/abandoned_draft.rb"]
+
+
+def test_ruby_constant_qualified_off_a_lowercase_expression_does_not_match(tmp_path):
+    # Flash Review finding: `registry::User` is valid Ruby (:: after any
+    # expression that evaluates to a module/class, not just a literal
+    # constant chain) and refers to whatever "User" is nested under
+    # registry's return value - NOT the top-level Zeitwerk `User`. The
+    # lookbehind alone can't tell "::" preceded by a real absolute-
+    # reference boundary from "::" preceded by a lowercase expression;
+    # only the latter must be rejected.
+    models_dir = tmp_path / "app" / "models"
+    models_dir.mkdir(parents=True)
+    (models_dir / "user.rb").write_text("class User < ApplicationRecord\nend\n")
+    other_dir = tmp_path / "lib"
+    other_dir.mkdir(parents=True)
+    (other_dir / "consumer.rb").write_text(
+        "class Consumer\n  def call\n    registry::User.new\n  end\nend\n"
+    )
+    modules = [
+        _module("app/models/user.rb"),
+        _module("lib/consumer.rb", imported_by=["lib/consumer.rb"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert [m["path"] for m in result["unreachable_modules"]] == ["app/models/user.rb"]
+
+
+def test_ruby_top_level_anchored_constant_reference_still_resolves(tmp_path):
+    # Must not regress while fixing the case above: a genuine absolute
+    # top-level reference (Ruby's own "start lookup at the top-level
+    # namespace" syntax, real and common for a superclass reference that
+    # disambiguates against a same-named nested constant - confirmed on
+    # Discourse's own `class CloseTopic < ::Jobs::TopicTimerBase`) must
+    # still resolve.
+    #
+    # Path chosen so the referenced file's own Zeitwerk-derived full name
+    # (segments after app/) is exactly "Jobs::TopicTimerBase", matching
+    # the reference verbatim - this isolates the regex fix itself (does a
+    # leading `::` reference still get indexed and matched at all) from
+    # a separate, real gap this PR doesn't address: Discourse's actual
+    # app/jobs root is registered with a custom Zeitwerk namespace
+    # (`push_dir(..., namespace: Jobs)`), which _ruby_zeitwerk_constant_
+    # candidates has no way to see from a plain file path - confirmed
+    # directly against the real repo, discourse/discourse's own
+    # app/jobs/regular/topic_timer_base.rb (candidates "Regular::
+    # TopicTimerBase"/"TopicTimerBase") still doesn't match a real
+    # "Jobs::TopicTimerBase" reference and stays unreachable even with
+    # this fix applied - a distinct, deeper limitation than what either
+    # Flash Review finding here asked for.
+    jobs_dir = tmp_path / "app" / "jobs" / "jobs"
+    jobs_dir.mkdir(parents=True)
+    (jobs_dir / "topic_timer_base.rb").write_text(
+        "module Jobs\n  class TopicTimerBase < Jobs::Base\n  end\nend\n"
+    )
+    other_dir = tmp_path / "app" / "jobs" / "regular"
+    other_dir.mkdir(parents=True)
+    (other_dir / "close_topic.rb").write_text(
+        "class CloseTopic < ::Jobs::TopicTimerBase\nend\n"
+    )
+    modules = [
+        _module("app/jobs/jobs/topic_timer_base.rb"),
+        _module(
+            "app/jobs/regular/close_topic.rb",
+            imported_by=["app/jobs/regular/close_topic.rb"],
+        ),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "app/jobs/jobs/topic_timer_base.rb" not in [
+        m["path"] for m in result["unreachable_modules"]
+    ]
+
+
+def test_ruby_symbol_as_hash_value_does_not_dispatch(tmp_path):
+    # Flash Review finding: the symbol-dispatch index matched ANY bare
+    # symbol literal anywhere in the source, not just one in a real
+    # dispatch-call position - an ordinary `{status: :active}` hash value,
+    # an `enum status: [:active, :inactive]` declaration, or any other
+    # bare `:some_word` used as plain data would register exactly like a
+    # real `Jobs.enqueue(:bump_topic, ...)` call.
+    jobs_dir = tmp_path / "app" / "jobs"
+    jobs_dir.mkdir(parents=True)
+    (jobs_dir / "active.rb").write_text("class Active < ApplicationRecord\nend\n")
+    other_dir = tmp_path / "lib"
+    other_dir.mkdir(parents=True)
+    (other_dir / "widget.rb").write_text(
+        "class Widget\n  enum status: [:active, :inactive]\n"
+        "  def describe\n    {status: :active}\n  end\nend\n"
+    )
+    modules = [
+        _module("app/jobs/active.rb"),
+        _module("lib/widget.rb", imported_by=["lib/widget.rb"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert [m["path"] for m in result["unreachable_modules"]] == ["app/jobs/active.rb"]
+
+
+def test_ruby_symbol_dispatch_call_still_resolves(tmp_path):
+    # Must not regress while fixing the case above: a genuine dispatch
+    # call (confirmed on Discourse's own `Jobs.enqueue(:bump_topic, ...)`)
+    # must still resolve, including across a multi-line call.
+    jobs_dir = tmp_path / "app" / "jobs" / "regular"
+    jobs_dir.mkdir(parents=True)
+    (jobs_dir / "bump_topic.rb").write_text(
+        "module Jobs\n  class BumpTopic < Jobs::Base\n  end\nend\n"
+    )
+    other_dir = tmp_path / "lib"
+    other_dir.mkdir(parents=True)
+    (other_dir / "bumper.rb").write_text(
+        "class Bumper\n  def call\n"
+        "    Jobs.enqueue(\n      :bump_topic,\n      topic_id: 1\n    )\n"
+        "  end\nend\n"
+    )
+    modules = [
+        _module("app/jobs/regular/bump_topic.rb"),
+        _module("lib/bumper.rb", imported_by=["lib/bumper.rb"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_ruby_zeitwerk_rescue_is_scoped_to_app_directory_only(tmp_path):
+    # lib/ is only Zeitwerk-autoloaded when an app explicitly opts in via
+    # config.autoload_paths, which this module has no way to see - so a
+    # lib/ file must NOT be rescued by this mechanism even when its own
+    # class name happens to appear as a bare word elsewhere (it should
+    # still be resolved some other way - a real `require`, or left dead -
+    # never guessed via the app/-only Zeitwerk convention).
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir(parents=True)
+    (lib_dir / "helper_util.rb").write_text("class HelperUtil\nend\n")
+    other_dir = tmp_path / "app" / "models"
+    other_dir.mkdir(parents=True)
+    (other_dir / "unrelated.rb").write_text(
+        "class Unrelated\n  def call\n    HelperUtil.new\n  end\nend\n"
+    )
+    modules = [
+        _module("lib/helper_util.rb"),
+        _module("app/models/unrelated.rb", imported_by=["app/models/unrelated.rb"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert [m["path"] for m in result["unreachable_modules"]] == ["lib/helper_util.rb"]
+
+
 def test_laravel_backslash_qualified_string_handler_resolves_a_nested_controller(tmp_path):
     # Flash Review finding on #666: the legacy string handler resolver
     # reduced every handler to its bare class name and always anchored
@@ -1326,6 +1867,134 @@ def test_laravel_backslash_qualified_string_handler_resolves_a_nested_controller
             "handler": "Admin\\UserController@index",
             "path": "/admin/users",
             "unresolved": False,
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    assert result["unreachable_modules"] == []
+
+
+def test_laravel_route_resource_controller_is_never_unreachable(tmp_path):
+    # Real gap found via audit: Route::resource()/apiResource() - Laravel's
+    # own standard CRUD-controller idiom, direct equivalent of Rails'
+    # `resources` - was completely unextracted, so any controller wired up
+    # this way (arguably Laravel's single most common controller pattern)
+    # was always flagged dead code.
+    controllers_dir = tmp_path / "app" / "Http" / "Controllers"
+    controllers_dir.mkdir(parents=True)
+    (controllers_dir / "UserController.php").write_text(
+        "<?php\nnamespace App\\Http\\Controllers;\n\nclass UserController {\n"
+        "    public function index() { return []; }\n}\n"
+    )
+    modules = [_module("app/Http/Controllers/UserController.php")]
+    api_endpoints = [
+        {
+            "framework": "laravel",
+            "handler": "UserController",
+            "path": "users",
+            "unresolved": True,
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    assert result["unreachable_modules"] == []
+
+
+def test_laravel_route_resource_namespaced_controller_resolves_uniquely(tmp_path):
+    controllers_dir = tmp_path / "app" / "Http" / "Controllers" / "Admin"
+    controllers_dir.mkdir(parents=True)
+    (controllers_dir / "UserController.php").write_text(
+        "<?php\nnamespace App\\Http\\Controllers\\Admin;\n\nclass UserController {}\n"
+    )
+    other_dir = tmp_path / "app" / "Http" / "Controllers"
+    (other_dir / "UserController.php").write_text(
+        "<?php\nnamespace App\\Http\\Controllers;\n\nclass UserController {}\n"
+    )
+    modules = [
+        _module("app/Http/Controllers/Admin/UserController.php"),
+        _module("app/Http/Controllers/UserController.php"),
+    ]
+    api_endpoints = [
+        {
+            "framework": "laravel",
+            "handler": "Admin\\UserController",
+            "path": "admin/users",
+            "unresolved": True,
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    unreachable_paths = {m["path"] for m in result["unreachable_modules"]}
+    # The namespaced one resolves via its full qualified name...
+    assert "app/Http/Controllers/Admin/UserController.php" not in unreachable_paths
+    # ...while the unrelated top-level one, never named by any route here,
+    # correctly stays flagged.
+    assert "app/Http/Controllers/UserController.php" in unreachable_paths
+
+
+def test_laravel_leading_backslash_fully_qualified_class_ref_resolves(tmp_path):
+    # Real bug found via peer review of this PR: `\App\Http\Controllers\
+    # UserController::class` (a valid, fairly common fully-root-qualified
+    # PHP class reference) parses with the leading backslash included in
+    # its text span. Splitting that on "\\" produces a leading empty
+    # string, which derails every segment after it and never matches any
+    # real path - reproduced end-to-end before the fix, both for this
+    # resolver's `unresolved` (Route::resource()) branch here and for the
+    # pre-existing legacy string-handler branch below, which shared the
+    # same bug since #666.
+    controllers_dir = tmp_path / "app" / "Http" / "Controllers"
+    controllers_dir.mkdir(parents=True)
+    (controllers_dir / "UserController.php").write_text(
+        "<?php\nnamespace App\\Http\\Controllers;\n\nclass UserController {}\n"
+    )
+    modules = [_module("app/Http/Controllers/UserController.php")]
+    api_endpoints = [
+        {
+            "framework": "laravel",
+            "handler": "\\App\\Http\\Controllers\\UserController",
+            "path": "users",
+            "unresolved": True,
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    assert result["unreachable_modules"] == []
+
+
+def test_laravel_leading_backslash_legacy_string_handler_resolves(tmp_path):
+    # Same bug, the pre-existing (#666) legacy string-handler branch.
+    controllers_dir = tmp_path / "app" / "Http" / "Controllers"
+    controllers_dir.mkdir(parents=True)
+    (controllers_dir / "UserController.php").write_text(
+        "<?php\nnamespace App\\Http\\Controllers;\n\nclass UserController {\n"
+        "    public function index() {}\n}\n"
+    )
+    modules = [_module("app/Http/Controllers/UserController.php")]
+    api_endpoints = [
+        {
+            "framework": "laravel",
+            "handler": "\\App\\Http\\Controllers\\UserController@index",
+            "path": "/users",
+            "unresolved": False,
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    assert result["unreachable_modules"] == []
+
+
+def test_rails_resources_controller_override_resolves_the_real_controller(tmp_path):
+    # End-to-end version of the config/routes.rb:356 Discourse bug: without
+    # honoring the `controller:` override, dead_code.py would look for
+    # (and fail to find) a nonexistent keys_controller.rb instead of the
+    # real api_controller.rb.
+    (tmp_path / "app" / "controllers").mkdir(parents=True)
+    (tmp_path / "app" / "controllers" / "api_controller.rb").write_text(
+        "class ApiController < ApplicationController\nend\n"
+    )
+    modules = [_module("app/controllers/api_controller.rb")]
+    api_endpoints = [
+        {
+            "framework": "rails",
+            "handler": "resources(...)",
+            "path": "api",
+            "unresolved": True,
+            "file": "config/routes.rb",
         },
     ]
     result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)

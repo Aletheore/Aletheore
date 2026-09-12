@@ -38,6 +38,16 @@ _SPRING_VERB_ANNOTATIONS = {
 _VAPOR_VERB_METHODS = {"get", "post", "put", "delete", "patch"}
 _RAILS_ROUTE_METHODS = {"get", "post", "put", "patch", "delete"}
 _LARAVEL_ROUTE_METHODS = {"get", "post", "put", "delete", "patch", "any"}
+# Laravel's direct equivalent of Rails' `resources` - generates all 7
+# RESTful actions for a controller in one call. Unlike Rails, the
+# controller is always an explicit second argument (::class reference or,
+# in older code, a bare string), never inferred from the resource name by
+# naming convention - confirmed empirically: this call form was completely
+# unextracted before, a real gap of exactly the same shape and likely
+# equal or greater real-world prevalence as the Rails `resources` gap
+# #664 fixed, since Route::resource()/apiResource() is Laravel's own
+# standard CRUD-controller idiom.
+_LARAVEL_RESOURCE_METHODS = {"resource", "apiResource"}
 _ASPNET_ATTRIBUTE_METHODS = {
     "HttpGet": "GET",
     "HttpPost": "POST",
@@ -1408,6 +1418,26 @@ def _extract_rails_routes(root: Node, source: bytes, rel_path: str) -> list[dict
                         resource_name = source[
                             named[0].start_byte : named[0].end_byte
                         ].decode().lstrip(":")
+                        # `resources :keys, controller: "api"` - a real,
+                        # live line in Discourse's own config/routes.rb
+                        # (config/routes.rb:356) - routes the "keys"
+                        # resource to ApiController, not KeysController.
+                        # Without checking for this override, the resource
+                        # name alone silently names the wrong controller.
+                        for arg in named:
+                            if arg.type != "pair":
+                                continue
+                            key = arg.child_by_field_name("key")
+                            value = arg.child_by_field_name("value")
+                            if (
+                                key is not None
+                                and key.type == "hash_key_symbol"
+                                and source[key.start_byte : key.end_byte].decode() == "controller"
+                                and value is not None
+                                and value.type == "string"
+                            ):
+                                resource_name = _ruby_string_content(value, source)
+                                break
                         module_prefix = _rails_enclosing_module_prefix(n, source)
                         if module_prefix:
                             resource_name = "/".join([*module_prefix, resource_name])
@@ -1457,6 +1487,25 @@ def _laravel_handler_label(node: Node | None, source: bytes) -> str:
     if node.type == "anonymous_function":
         return "<inline handler>"
     return "unknown"
+
+
+def _laravel_resource_controller_class(node: Node | None, source: bytes) -> str | None:
+    """The qualified controller class name from a Route::resource()/
+    apiResource() second argument - either `Admin\\UserController::class`
+    (a class_constant_access_expression whose first child is a `name` for
+    an unqualified reference or `qualified_name` for a namespaced one,
+    text already backslash-joined either way) or the older bare-string
+    form, `'UserController'`."""
+    if node is None:
+        return None
+    if node.type == "class_constant_access_expression" and node.children:
+        first = node.children[0]
+        if first.type in ("name", "qualified_name"):
+            return source[first.start_byte : first.end_byte].decode()
+        return None
+    if node.type == "string":
+        return _php_string_content(node, source)
+    return None
 
 
 def _laravel_group_note(call_node: Node, source: bytes) -> str | None:
@@ -1548,6 +1597,29 @@ def _extract_laravel_routes(root: Node, source: bytes, rel_path: str) -> list[di
                                     "line": line,
                                     "handler": handler,
                                     "unresolved": False,
+                                    "note": note,
+                                }
+                            )
+                    elif (
+                        method_name in _LARAVEL_RESOURCE_METHODS
+                        and len(arg_values) >= 2
+                        and arg_values[0] is not None
+                        and arg_values[0].type == "string"
+                    ):
+                        path = _php_string_content(arg_values[0], source)
+                        controller_class = _laravel_resource_controller_class(
+                            arg_values[1], source
+                        )
+                        if controller_class is not None:
+                            entries.append(
+                                {
+                                    "method": None,
+                                    "path": path,
+                                    "framework": "laravel",
+                                    "file": rel_path,
+                                    "line": line,
+                                    "handler": controller_class,
+                                    "unresolved": True,
                                     "note": note,
                                 }
                             )
