@@ -375,7 +375,81 @@ _RUBY_CONSTANT_TOKEN_RE = re.compile(
 _RUBY_DEFINITION_KEYWORD_RE = re.compile(r"\b(?:class|module)\s*$")
 
 
-def _ruby_zeitwerk_constant_candidates(path: str) -> list[str]:
+# One frame per class/module declaration line, capturing its own leading
+# whitespace (used to reconstruct real nesting depth - see
+# _ruby_content_derived_constant) and its name, which may itself be a
+# compact multi-segment form ("class Foo::Bar::Baz") - that still opens
+# exactly one scope, needing exactly one `end`, unlike three nested
+# `module`/`class` lines each needing their own.
+_RUBY_SCOPE_DECL_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?:module|class)\s+(?P<name>[A-Z][A-Za-z0-9_]*(?:::[A-Z][A-Za-z0-9_]*)*)"
+)
+
+
+def _ruby_content_derived_constant(basename_no_ext: str, content: str) -> str | None:
+    """The full namespaced constant this file's own source actually
+    declares for its primary class/module (the one whose innermost name
+    camelizes from the file's own basename), read directly from the
+    file's real module/class nesting - independent of what its directory
+    path alone would predict.
+
+    Real gap this closes (issue #675): Zeitwerk's own path-to-constant
+    inference (_ruby_zeitwerk_constant_candidates above) assumes every
+    subdirectory under an app/<root> autoload root is a plain, unmodified
+    namespace segment - true by default, but a real Rails app can change
+    that per-directory via a custom Zeitwerk inflector
+    (`autoloader.inflector.inflect(...)`) or a namespaced autoload root
+    (`push_dir(dir, namespace: X)`), neither of which is visible from a
+    file's path alone. Confirmed on a real repo (discourse/discourse):
+    app/jobs/regular/topic_timer_base.rb is genuinely referenced
+    elsewhere as `::Jobs::TopicTimerBase`, not `Regular::TopicTimerBase` -
+    Discourse's own config/initializers/000-zeitwerk.rb remaps the
+    "regular"/"scheduled"/"onceoff" directory basenames to camelize as
+    "Jobs" instead of their natural form, specifically so files in those
+    directories collapse into the same `Jobs` namespace as their parent
+    rather than gaining an extra nesting level - invisible from a
+    directory listing, since nothing about that remapping appears in the
+    file's own path.
+
+    Whatever the underlying mechanism, Zeitwerk's own contract guarantees
+    the file must still literally define the constant it's mapped to
+    (compact - `class Jobs::TopicTimerBase` - or nested -
+    `module Jobs; class TopicTimerBase`), so reading the file's own
+    module/class nesting directly is correct regardless of which
+    mechanism (or a future one this codebase has never seen) is
+    responsible - unlike trying to model Zeitwerk's inference rules
+    themselves, which would need a fixed set of cases to special-case.
+
+    Nesting is reconstructed from each declaration line's own leading
+    whitespace, not by tracking `end` keywords - counting every `end` in
+    the file would also count one closing a `def`/`if`/`do`/`case`/
+    `begin` block, not just a `module`/`class`, and misalign the stack
+    long before reaching the target declaration. Indentation is a
+    reliable proxy for real Ruby/Rails source, which the rubocop/standard
+    ecosystem keeps close to universally consistent.
+    """
+    expected_leaf = "".join(word.capitalize() for word in basename_no_ext.split("_"))
+    if not expected_leaf:
+        return None
+    declarations = [
+        (len(match.group("indent").expandtabs()), match.group("name"))
+        for match in (_RUBY_SCOPE_DECL_RE.match(line) for line in content.splitlines())
+        if match is not None
+    ]
+    for index, (indent, name) in enumerate(declarations):
+        if name.rsplit("::", 1)[-1] != expected_leaf:
+            continue
+        enclosing: list[str] = []
+        current_indent = indent
+        for prior_indent, prior_name in reversed(declarations[:index]):
+            if prior_indent < current_indent:
+                enclosing.insert(0, prior_name)
+                current_indent = prior_indent
+        return "::".join(enclosing + [name])
+    return None
+
+
+def _ruby_zeitwerk_constant_candidates(path: str, content: str | None = None) -> list[str]:
     """The (possibly namespaced) constant name(s) Zeitwerk - Rails' own
     autoloader, active by default since Rails 6 - would map this file to:
     app/models/admin/user_history.rb -> ["Admin::UserHistory",
@@ -401,6 +475,12 @@ def _ruby_zeitwerk_constant_candidates(path: str) -> list[str]:
     serializers) - consistent with this file's existing bias everywhere
     else toward not flagging live code dead over never missing a
     genuinely dead file.
+
+    `content`, when given, adds one more candidate read directly from the
+    file's own module/class nesting (see _ruby_content_derived_constant)
+    - for a directory whose real Zeitwerk mapping a custom inflector or a
+    namespaced autoload root has changed in a way this function's own
+    path-only inference can't see.
     """
     parts = path.split("/")
     if len(parts) < 3 or parts[0] != "app" or not path.endswith(".rb"):
@@ -411,7 +491,12 @@ def _ruby_zeitwerk_constant_candidates(path: str) -> list[str]:
     if not camelized:
         return []
     full_name = "::".join(camelized)
-    return [full_name] if len(camelized) == 1 else [full_name, camelized[-1]]
+    candidates = [full_name] if len(camelized) == 1 else [full_name, camelized[-1]]
+    if content is not None:
+        content_derived = _ruby_content_derived_constant(segments[-1], content)
+        if content_derived is not None and content_derived not in candidates:
+            candidates.append(content_derived)
+    return candidates
 
 
 def _ruby_constant_token_index(sources: dict[str, str]) -> dict[str, set[str]]:
@@ -437,8 +522,10 @@ def _ruby_constant_token_index(sources: dict[str, str]) -> dict[str, set[str]]:
     return index
 
 
-def _referenced_by_ruby_constant(path: str, token_index: dict[str, set[str]]) -> bool:
-    for candidate in _ruby_zeitwerk_constant_candidates(path):
+def _referenced_by_ruby_constant(
+    path: str, token_index: dict[str, set[str]], content: str | None = None
+) -> bool:
+    for candidate in _ruby_zeitwerk_constant_candidates(path, content):
         owners = token_index.get(candidate)
         if owners and owners - {path}:
             return True
@@ -495,7 +582,9 @@ def _ruby_symbol_token_index(sources: dict[str, str]) -> dict[str, set[str]]:
     return index
 
 
-def _referenced_by_ruby_symbol_dispatch(path: str, symbol_index: dict[str, set[str]]) -> bool:
+def _referenced_by_ruby_symbol_dispatch(
+    path: str, symbol_index: dict[str, set[str]], content: str | None = None
+) -> bool:
     """Whether some other file's bare :snake_case symbol, camelized,
     names this file's own Zeitwerk constant - the real gap this closes:
     Discourse's own `Jobs.enqueue(:bump_topic, ...)` (app/jobs/regular/
@@ -504,7 +593,7 @@ def _referenced_by_ruby_symbol_dispatch(path: str, symbol_index: dict[str, set[s
     Confirmed on a real repo (discourse/discourse): 87 additional
     app/jobs files rescued beyond what the bare-constant check alone
     found, on top of the 20 it already caught."""
-    for candidate in _ruby_zeitwerk_constant_candidates(path):
+    for candidate in _ruby_zeitwerk_constant_candidates(path, content):
         owners = symbol_index.get(candidate)
         if owners and owners - {path}:
             return True
@@ -1543,9 +1632,17 @@ def find_dead_code(
         ruby_symbol_index = _ruby_symbol_token_index(rb_sources)
         still_unreachable = []
         for entry in unreachable_modules:
+            # The candidate's own content (when available - always is here,
+            # since app/*.rb entries are always in `modules` and so always
+            # read into rb_sources above) lets the content-derived candidate
+            # (see _ruby_content_derived_constant) catch a file whose real
+            # Zeitwerk namespace, per a custom inflector or a namespaced
+            # autoload root, diverges from what its directory path alone
+            # would predict.
+            own_content = rb_sources.get(entry["path"])
             if entry["path"].startswith("app/") and entry["path"].endswith(".rb") and (
-                _referenced_by_ruby_constant(entry["path"], ruby_token_index)
-                or _referenced_by_ruby_symbol_dispatch(entry["path"], ruby_symbol_index)
+                _referenced_by_ruby_constant(entry["path"], ruby_token_index, own_content)
+                or _referenced_by_ruby_symbol_dispatch(entry["path"], ruby_symbol_index, own_content)
             ):
                 entry_points_detected.append(entry["path"])
             else:

@@ -1,6 +1,11 @@
 import re
 
-from aletheore.dead_code import _dotted_path_candidates, _raw_external_import_roots, find_dead_code
+from aletheore.dead_code import (
+    _dotted_path_candidates,
+    _raw_external_import_roots,
+    _ruby_content_derived_constant,
+    find_dead_code,
+)
 
 
 def _module(path, imported_by=None):
@@ -1774,15 +1779,13 @@ def test_ruby_top_level_anchored_constant_reference_still_resolves(tmp_path):
     # the reference verbatim - this isolates the regex fix itself (does a
     # leading `::` reference still get indexed and matched at all) from
     # a separate, real gap this PR doesn't address: Discourse's actual
-    # app/jobs root is registered with a custom Zeitwerk namespace
-    # (`push_dir(..., namespace: Jobs)`), which _ruby_zeitwerk_constant_
-    # candidates has no way to see from a plain file path - confirmed
-    # directly against the real repo, discourse/discourse's own
-    # app/jobs/regular/topic_timer_base.rb (candidates "Regular::
-    # TopicTimerBase"/"TopicTimerBase") still doesn't match a real
-    # "Jobs::TopicTimerBase" reference and stays unreachable even with
-    # this fix applied - a distinct, deeper limitation than what either
-    # Flash Review finding here asked for.
+    # app/jobs root has a custom Zeitwerk inflector remapping "regular"/
+    # "scheduled"/"onceoff" to collapse into the same "Jobs" namespace as
+    # their parent, invisible to _ruby_zeitwerk_constant_candidates from
+    # a plain file path alone. See
+    # test_ruby_content_derived_candidate_rescues_a_custom_zeitwerk_namespace
+    # below (issue #675) for that gap closed via the file's own module/
+    # class nesting instead of its path.
     jobs_dir = tmp_path / "app" / "jobs" / "jobs"
     jobs_dir.mkdir(parents=True)
     (jobs_dir / "topic_timer_base.rb").write_text(
@@ -1875,6 +1878,102 @@ def test_ruby_zeitwerk_rescue_is_scoped_to_app_directory_only(tmp_path):
     ]
     result = find_dead_code(tmp_path, modules, config=None)
     assert [m["path"] for m in result["unreachable_modules"]] == ["lib/helper_util.rb"]
+
+
+def test_ruby_content_derived_candidate_rescues_a_custom_zeitwerk_namespace(tmp_path):
+    # Issue #675: Discourse's own config/initializers/000-zeitwerk.rb
+    # remaps the "regular"/"scheduled"/"onceoff" directory basenames to
+    # camelize as "Jobs" instead of their natural form, so files under
+    # those directories collapse into the same "Jobs" namespace as their
+    # app/jobs parent rather than gaining an extra "Regular"/"Scheduled"/
+    # "Onceoff" nesting level - invisible from the directory path alone.
+    # Confirmed directly against the real repo: app/jobs/regular/
+    # topic_timer_base.rb is genuinely referenced elsewhere as
+    # `::Jobs::TopicTimerBase`, and neither of the path-derived candidates
+    # ("Regular::TopicTimerBase", "TopicTimerBase") matches that - the
+    # file's own module/class nesting (`module Jobs; class
+    # TopicTimerBase`) does, and is exactly what Zeitwerk's own contract
+    # guarantees the file must literally declare, regardless of which
+    # mechanism (a custom inflector here, a namespaced autoload root
+    # elsewhere) is responsible.
+    jobs_dir = tmp_path / "app" / "jobs" / "regular"
+    jobs_dir.mkdir(parents=True)
+    (jobs_dir / "topic_timer_base.rb").write_text(
+        "module Jobs\n  class TopicTimerBase < Jobs::Base\n  end\nend\n"
+    )
+    (jobs_dir / "close_topic.rb").write_text(
+        "module Jobs\n  class CloseTopic < ::Jobs::TopicTimerBase\n  end\nend\n"
+    )
+    modules = [
+        _module("app/jobs/regular/topic_timer_base.rb"),
+        _module(
+            "app/jobs/regular/close_topic.rb",
+            imported_by=["app/jobs/regular/close_topic.rb"],
+        ),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "app/jobs/regular/topic_timer_base.rb" not in [
+        m["path"] for m in result["unreachable_modules"]
+    ]
+
+
+def test_ruby_content_derived_constant_reads_nested_module_wrapper():
+    content = "module Jobs\n  class TopicTimerBase < Jobs::Base\n  end\nend\n"
+    assert _ruby_content_derived_constant("topic_timer_base", content) == "Jobs::TopicTimerBase"
+
+
+def test_ruby_content_derived_constant_reads_compact_form():
+    content = "class Jobs::TopicTimerBase < Jobs::Base\nend\n"
+    assert _ruby_content_derived_constant("topic_timer_base", content) == "Jobs::TopicTimerBase"
+
+
+def test_ruby_content_derived_constant_with_no_wrapping_module_returns_the_bare_name():
+    # A bare top-level class has no enclosing namespace to report, so this
+    # returns just the leaf name - identical to (and thus harmlessly
+    # redundant with) the path-derived bare-leaf candidate
+    # _ruby_zeitwerk_constant_candidates already returns on its own.
+    content = "class Widget < ApplicationRecord\nend\n"
+    assert _ruby_content_derived_constant("widget", content) == "Widget"
+
+
+def test_ruby_content_derived_constant_ignores_method_and_block_ends():
+    # Real risk this guards against: naively counting every "end" in the
+    # file (rather than reconstructing nesting from each declaration's own
+    # indentation) would pop the enclosing-module stack on a method body's
+    # own "end" long before reaching the target class, misattributing (or
+    # entirely missing) the real enclosing namespace. A def/if/each block
+    # sits between the module and the target class here specifically to
+    # exercise that.
+    content = (
+        "module Jobs\n"
+        "  def self.some_helper\n"
+        "    if true\n"
+        "      [1, 2].each { |x| x }\n"
+        "    end\n"
+        "  end\n"
+        "\n"
+        "  class TopicTimerBase < Jobs::Base\n"
+        "  end\n"
+        "end\n"
+    )
+    assert _ruby_content_derived_constant("topic_timer_base", content) == "Jobs::TopicTimerBase"
+
+
+def test_ruby_content_derived_constant_picks_nearest_enclosing_not_an_unrelated_sibling():
+    # A same-indentation, earlier module that has already closed (its own
+    # "end" already accounted for by the indentation-based reconstruction)
+    # must not be mistaken for the real enclosing scope of a later,
+    # unrelated module at the same depth.
+    content = (
+        "module Unrelated\n"
+        "end\n"
+        "\n"
+        "module Jobs\n"
+        "  class TopicTimerBase < Jobs::Base\n"
+        "  end\n"
+        "end\n"
+    )
+    assert _ruby_content_derived_constant("topic_timer_base", content) == "Jobs::TopicTimerBase"
 
 
 def test_laravel_backslash_qualified_string_handler_resolves_a_nested_controller(tmp_path):
