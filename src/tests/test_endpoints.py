@@ -1179,6 +1179,21 @@ def test_extract_rails_resources_is_unresolved():
     ]
 
 
+def test_extract_rails_resources_controller_override():
+    # Real, live bug confirmed at Discourse's own config/routes.rb:356 -
+    # "resources :keys, controller: 'api'" routes the "keys" resource to
+    # ApiController, not KeysController. Without checking for this
+    # override, the resource name alone silently named the wrong
+    # controller for dead-code resolution purposes.
+    root, source = parse_ruby(
+        'resources :keys, controller: "api", only: %i[index show]\n'
+    )
+
+    entries = _extract_rails_routes(root, source, "config/routes.rb")
+
+    assert entries[0]["path"] == "api"
+
+
 def test_extract_rails_ignores_unrelated_calls():
     root, source = parse_ruby('puts "hello"\n')
 
@@ -1368,6 +1383,68 @@ def test_extract_laravel_legacy_string_handler():
     entries = _extract_laravel_routes(root, source, "routes/web.php")
 
     assert entries[0]["handler"] == "UserController@index"
+
+
+def test_extract_laravel_route_resource_class_reference():
+    # Real gap found via audit: Route::resource()/apiResource() - Laravel's
+    # direct equivalent of Rails' `resources`, generating all 7 RESTful
+    # actions for a controller - was completely unextracted before. Unlike
+    # Rails, the controller is always an explicit ::class reference here,
+    # never inferred from the resource name by convention.
+    root, source = parse_php(
+        "<?php\nRoute::resource('users', UserController::class);\n"
+    )
+
+    entries = _extract_laravel_routes(root, source, "routes/web.php")
+
+    assert entries == [
+        {
+            "method": None,
+            "path": "users",
+            "framework": "laravel",
+            "file": "routes/web.php",
+            "line": 2,
+            "handler": "UserController",
+            "unresolved": True,
+            "note": None,
+        }
+    ]
+
+
+def test_extract_laravel_api_resource_class_reference():
+    root, source = parse_php(
+        "<?php\nRoute::apiResource('posts', PostController::class);\n"
+    )
+
+    entries = _extract_laravel_routes(root, source, "routes/web.php")
+
+    assert entries[0]["handler"] == "PostController"
+
+
+def test_extract_laravel_resource_legacy_string_controller():
+    # The pre-::class form is also valid for Route::resource(), same as
+    # the plain-verb methods above.
+    root, source = parse_php(
+        "<?php\nRoute::resource('items', 'ItemController');\n"
+    )
+
+    entries = _extract_laravel_routes(root, source, "routes/web.php")
+
+    assert entries[0]["handler"] == "ItemController"
+
+
+def test_extract_laravel_resource_namespaced_class_reference():
+    # A namespaced ::class reference (Admin\UserController::class) keeps
+    # its full qualified name, not just the bare class - dead_code.py's
+    # resolver needs the namespace segments to disambiguate a nested
+    # controller from an unrelated same-named top-level one.
+    root, source = parse_php(
+        "<?php\nRoute::resource('admin/users', Admin\\UserController::class);\n"
+    )
+
+    entries = _extract_laravel_routes(root, source, "routes/web.php")
+
+    assert entries[0]["handler"] == "Admin\\UserController"
 
 
 def test_extract_aspnet_httpget_attribute():

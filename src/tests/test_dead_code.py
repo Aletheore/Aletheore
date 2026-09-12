@@ -22,6 +22,42 @@ def test_recognized_entry_point_is_never_unreachable(tmp_path):
     assert set(result["entry_points_detected"]) == {"main.py", "app/__main__.py", "index.js"}
 
 
+def test_django_admin_py_is_never_unreachable(tmp_path):
+    # Real gap found via audit against a real repo (wagtail/wagtail):
+    # django.contrib.admin.autodiscover() (called automatically by
+    # AdminConfig.ready() in every modern Django project) dynamically
+    # imports every installed app's own admin.py by convention - never a
+    # plain top-level import anywhere in the app's own source. Confirmed:
+    # wagtail/documents/admin.py and wagtail/images/admin.py both carry
+    # real, live admin registrations and zero imported_by.
+    app_dir = tmp_path / "myapp"
+    app_dir.mkdir()
+    (app_dir / "admin.py").write_text(
+        "from django.contrib import admin\n\nfrom myapp.models import Widget\n\n"
+        "admin.site.register(Widget)\n"
+    )
+    modules = [_module("myapp/admin.py")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "myapp/admin.py" in result["entry_points_detected"]
+
+
+def test_unrelated_non_django_admin_py_is_not_exempted(tmp_path):
+    # Real false-negative risk found via peer review of this PR: "admin.py"
+    # is a common enough filename outside Django (this same module's own
+    # routes.rb addition explicitly rejected Laravel's web.php/api.php on
+    # this exact risk) that an unconditional basename match would exempt a
+    # genuinely dead, unrelated admin.py with no Django import at all.
+    app_dir = tmp_path / "myapp"
+    app_dir.mkdir()
+    (app_dir / "admin.py").write_text(
+        "def totally_unrelated_dead_function():\n    pass\n"
+    )
+    modules = [_module("myapp/admin.py")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "myapp/admin.py" in [m["path"] for m in result["unreachable_modules"]]
+
+
 def test_test_files_are_never_unreachable(tmp_path):
     modules = [
         _module("tests/test_thing.py"),
@@ -1029,6 +1065,163 @@ def test_aspnet_controller_pattern_requires_aspnetcore_mvc_import(tmp_path):
     assert "Foo.cs" in [m["path"] for m in result["unreachable_modules"]]
 
 
+def test_aspnet_controller_via_project_wide_global_using_is_never_unreachable(tmp_path):
+    # Real gap found via audit against a real repo (dotnet/eShop): C# 10's
+    # `global using` (the default in every `dotnet new` template since
+    # .NET 6, almost always collected into one GlobalUsings.cs) applies
+    # project-wide from a single declaration, so a real controller file
+    # can carry neither a same-file `using Microsoft.AspNetCore.Mvc` nor
+    # any other local import at all - confirmed on eShop's own
+    # HomeController.cs/ConsentController.cs/etc, none of which declare
+    # the import locally. Without checking for a global using anywhere in
+    # the repo, this check never fired on a single real controller in a
+    # modern (.NET 6+) app.
+    (tmp_path / "GlobalUsings.cs").write_text(
+        "global using Microsoft.AspNetCore.Mvc;\n"
+    )
+    quickstart_dir = tmp_path / "Quickstart" / "Home"
+    quickstart_dir.mkdir(parents=True)
+    (quickstart_dir / "HomeController.cs").write_text(
+        "namespace IdentityServerHost.Quickstart.UI\n{\n"
+        "    public class HomeController : Controller\n    {\n"
+        "        public IActionResult Index() { return View(); }\n    }\n}\n"
+    )
+    modules = [
+        _module("GlobalUsings.cs"),
+        _module("Quickstart/Home/HomeController.cs"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "Quickstart/Home/HomeController.cs" in result["entry_points_detected"]
+
+
+def test_aspnet_global_using_in_obj_build_dir_is_ignored(tmp_path):
+    # Real bug found via peer review of this PR: .NET's `obj/` intermediate
+    # build directory fills with SDK-generated files, including a
+    # GlobalUsings.g.cs that itself declares `global using
+    # Microsoft.AspNetCore.Mvc` for every project the SDK builds - this
+    # repo's own IGNORED_DIRS already documents exactly that. Without
+    # skipping obj/ here the same way _html_script_entry_points already
+    # skips it, generated build output from ANY one project would leak
+    # this signal repo-wide and wrongly mark an unrelated same-named
+    # "Controller" class in a completely different, non-ASP.NET project as
+    # an entry point.
+    obj_dir = tmp_path / "SomeOtherProject" / "obj" / "Debug"
+    obj_dir.mkdir(parents=True)
+    (obj_dir / "GlobalUsings.g.cs").write_text(
+        "global using Microsoft.AspNetCore.Mvc;\n"
+    )
+    (tmp_path / "Foo.cs").write_text(
+        "namespace MyApp {\n    class Foo : Controller {}\n}\n"
+    )
+    modules = [_module("Foo.cs")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "Foo.cs" in [m["path"] for m in result["unreachable_modules"]]
+
+
+def test_aspnet_global_using_does_not_leak_across_csproj_projects(tmp_path):
+    # Real bug found via Flash Review on #668, confirmed directly after the
+    # obj/ fix above turned out not to address it: a single repo-wide
+    # boolean, even with generated build output excluded, still
+    # over-applies one project's own global using to a completely
+    # unrelated project sharing the same git repository - a very real
+    # shape for .NET (eShop, this fix's own real-repo test subject, is
+    # itself multi-project: Identity.API, Ordering.API, Catalog.API,
+    # Basket.API each their own project).
+    (tmp_path / "ProjectA").mkdir()
+    (tmp_path / "ProjectA" / "ProjectA.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk.Web"></Project>\n'
+    )
+    (tmp_path / "ProjectA" / "GlobalUsings.cs").write_text(
+        "global using Microsoft.AspNetCore.Mvc;\n"
+    )
+    (tmp_path / "ProjectB").mkdir()
+    (tmp_path / "ProjectB" / "ProjectB.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk"></Project>\n'
+    )
+    (tmp_path / "ProjectB" / "Foo.cs").write_text(
+        "namespace ProjectB {\n    class Foo : Controller {}\n}\n"
+    )
+    modules = [
+        _module("ProjectA/GlobalUsings.cs"),
+        _module("ProjectB/Foo.cs"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    # ProjectB has no ASP.NET Core dependency and no global using of its
+    # own - Foo.cs must stay flagged, not get swept up by ProjectA's.
+    assert "ProjectB/Foo.cs" in [m["path"] for m in result["unreachable_modules"]]
+
+
+def test_aspnet_global_using_still_applies_within_its_own_project(tmp_path):
+    (tmp_path / "ProjectA").mkdir()
+    (tmp_path / "ProjectA" / "ProjectA.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk.Web"></Project>\n'
+    )
+    (tmp_path / "ProjectA" / "GlobalUsings.cs").write_text(
+        "global using Microsoft.AspNetCore.Mvc;\n"
+    )
+    (tmp_path / "ProjectA" / "Foo.cs").write_text(
+        "namespace ProjectA {\n    class Foo : Controller {}\n}\n"
+    )
+    modules = [
+        _module("ProjectA/GlobalUsings.cs"),
+        _module("ProjectA/Foo.cs"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "ProjectA/Foo.cs" in result["entry_points_detected"]
+
+
+def test_aspnet_global_using_falls_back_to_repo_wide_with_no_csproj_anywhere(tmp_path):
+    # A repo with no .csproj at all (no discoverable project boundary for
+    # either the declaring file or the candidate file) can't be scoped to
+    # anything real - falls back to the pre-scoping repo-wide behavior for
+    # this specific case only, matching every earlier synthetic test in
+    # this file that never bothered creating a .csproj fixture.
+    (tmp_path / "GlobalUsings.cs").write_text(
+        "global using Microsoft.AspNetCore.Mvc;\n"
+    )
+    (tmp_path / "Foo.cs").write_text(
+        "namespace MyApp {\n    class Foo : Controller {}\n}\n"
+    )
+    modules = [_module("GlobalUsings.cs"), _module("Foo.cs")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "Foo.cs" in result["entry_points_detected"]
+
+
+def test_aspnet_global_using_in_ambiguous_shared_csproj_dir_is_not_applied(tmp_path):
+    # Second, distinct Flash Review finding on #668 after the first
+    # project-scoping fix: two .csproj files sharing one directory (a
+    # real but rare layout - standard SDK/IDE tooling always gives each
+    # project its own directory) means directory alone can't determine
+    # project membership. Simply merging this into the "no .csproj found"
+    # bucket would NOT actually fix the leak, confirmed by reasoning
+    # through it directly before implementing: the declaring file and a
+    # candidate file could both sit in this same ambiguous directory, so
+    # both would land in the identical fallback bucket and the leak would
+    # reproduce exactly as before. Must instead apply NO global-using
+    # signal at all to a file in an ambiguous directory, in either
+    # direction.
+    shared_dir = tmp_path / "SharedDir"
+    shared_dir.mkdir()
+    (shared_dir / "ProjectA.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk.Web"></Project>\n'
+    )
+    (shared_dir / "ProjectB.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk"></Project>\n'
+    )
+    (shared_dir / "GlobalUsings.cs").write_text(
+        "global using Microsoft.AspNetCore.Mvc;\n"
+    )
+    (shared_dir / "Foo.cs").write_text(
+        "namespace SharedDir {\n    class Foo : Controller {}\n}\n"
+    )
+    modules = [
+        _module("SharedDir/GlobalUsings.cs"),
+        _module("SharedDir/Foo.cs"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "SharedDir/Foo.cs" in [m["path"] for m in result["unreachable_modules"]]
+
+
 def test_rails_controller_named_only_in_routes_rb_is_never_unreachable(tmp_path):
     # Real bug found via a real Discourse scan (68,183-commit clone): Rails
     # dispatches `to: "users#show"` and `resources :name` route entries to
@@ -1253,6 +1446,134 @@ def test_laravel_backslash_qualified_string_handler_resolves_a_nested_controller
             "handler": "Admin\\UserController@index",
             "path": "/admin/users",
             "unresolved": False,
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    assert result["unreachable_modules"] == []
+
+
+def test_laravel_route_resource_controller_is_never_unreachable(tmp_path):
+    # Real gap found via audit: Route::resource()/apiResource() - Laravel's
+    # own standard CRUD-controller idiom, direct equivalent of Rails'
+    # `resources` - was completely unextracted, so any controller wired up
+    # this way (arguably Laravel's single most common controller pattern)
+    # was always flagged dead code.
+    controllers_dir = tmp_path / "app" / "Http" / "Controllers"
+    controllers_dir.mkdir(parents=True)
+    (controllers_dir / "UserController.php").write_text(
+        "<?php\nnamespace App\\Http\\Controllers;\n\nclass UserController {\n"
+        "    public function index() { return []; }\n}\n"
+    )
+    modules = [_module("app/Http/Controllers/UserController.php")]
+    api_endpoints = [
+        {
+            "framework": "laravel",
+            "handler": "UserController",
+            "path": "users",
+            "unresolved": True,
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    assert result["unreachable_modules"] == []
+
+
+def test_laravel_route_resource_namespaced_controller_resolves_uniquely(tmp_path):
+    controllers_dir = tmp_path / "app" / "Http" / "Controllers" / "Admin"
+    controllers_dir.mkdir(parents=True)
+    (controllers_dir / "UserController.php").write_text(
+        "<?php\nnamespace App\\Http\\Controllers\\Admin;\n\nclass UserController {}\n"
+    )
+    other_dir = tmp_path / "app" / "Http" / "Controllers"
+    (other_dir / "UserController.php").write_text(
+        "<?php\nnamespace App\\Http\\Controllers;\n\nclass UserController {}\n"
+    )
+    modules = [
+        _module("app/Http/Controllers/Admin/UserController.php"),
+        _module("app/Http/Controllers/UserController.php"),
+    ]
+    api_endpoints = [
+        {
+            "framework": "laravel",
+            "handler": "Admin\\UserController",
+            "path": "admin/users",
+            "unresolved": True,
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    unreachable_paths = {m["path"] for m in result["unreachable_modules"]}
+    # The namespaced one resolves via its full qualified name...
+    assert "app/Http/Controllers/Admin/UserController.php" not in unreachable_paths
+    # ...while the unrelated top-level one, never named by any route here,
+    # correctly stays flagged.
+    assert "app/Http/Controllers/UserController.php" in unreachable_paths
+
+
+def test_laravel_leading_backslash_fully_qualified_class_ref_resolves(tmp_path):
+    # Real bug found via peer review of this PR: `\App\Http\Controllers\
+    # UserController::class` (a valid, fairly common fully-root-qualified
+    # PHP class reference) parses with the leading backslash included in
+    # its text span. Splitting that on "\\" produces a leading empty
+    # string, which derails every segment after it and never matches any
+    # real path - reproduced end-to-end before the fix, both for this
+    # resolver's `unresolved` (Route::resource()) branch here and for the
+    # pre-existing legacy string-handler branch below, which shared the
+    # same bug since #666.
+    controllers_dir = tmp_path / "app" / "Http" / "Controllers"
+    controllers_dir.mkdir(parents=True)
+    (controllers_dir / "UserController.php").write_text(
+        "<?php\nnamespace App\\Http\\Controllers;\n\nclass UserController {}\n"
+    )
+    modules = [_module("app/Http/Controllers/UserController.php")]
+    api_endpoints = [
+        {
+            "framework": "laravel",
+            "handler": "\\App\\Http\\Controllers\\UserController",
+            "path": "users",
+            "unresolved": True,
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    assert result["unreachable_modules"] == []
+
+
+def test_laravel_leading_backslash_legacy_string_handler_resolves(tmp_path):
+    # Same bug, the pre-existing (#666) legacy string-handler branch.
+    controllers_dir = tmp_path / "app" / "Http" / "Controllers"
+    controllers_dir.mkdir(parents=True)
+    (controllers_dir / "UserController.php").write_text(
+        "<?php\nnamespace App\\Http\\Controllers;\n\nclass UserController {\n"
+        "    public function index() {}\n}\n"
+    )
+    modules = [_module("app/Http/Controllers/UserController.php")]
+    api_endpoints = [
+        {
+            "framework": "laravel",
+            "handler": "\\App\\Http\\Controllers\\UserController@index",
+            "path": "/users",
+            "unresolved": False,
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    assert result["unreachable_modules"] == []
+
+
+def test_rails_resources_controller_override_resolves_the_real_controller(tmp_path):
+    # End-to-end version of the config/routes.rb:356 Discourse bug: without
+    # honoring the `controller:` override, dead_code.py would look for
+    # (and fail to find) a nonexistent keys_controller.rb instead of the
+    # real api_controller.rb.
+    (tmp_path / "app" / "controllers").mkdir(parents=True)
+    (tmp_path / "app" / "controllers" / "api_controller.rb").write_text(
+        "class ApiController < ApplicationController\nend\n"
+    )
+    modules = [_module("app/controllers/api_controller.rb")]
+    api_endpoints = [
+        {
+            "framework": "rails",
+            "handler": "resources(...)",
+            "path": "api",
+            "unresolved": True,
+            "file": "config/routes.rb",
         },
     ]
     result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)

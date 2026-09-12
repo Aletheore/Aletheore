@@ -174,6 +174,19 @@ _SPRING_STEREOTYPE_ANNOTATION_PATTERN = re.compile(
 # attribute/base-class signal avoids matching an unrelated project-defined
 # "Controller" base class that has nothing to do with ASP.NET Core.
 _ASPNETCORE_MVC_IMPORT_PATTERN = re.compile(r"^\s*using\s+Microsoft\.AspNetCore\.Mvc\b", re.MULTILINE)
+# C# 10's `global using` (the default in every `dotnet new` template since
+# .NET 6, almost always collected into one GlobalUsings.cs) applies the
+# import project-wide from a single declaration - a controller file itself
+# then carries no local `using Microsoft.AspNetCore.Mvc` at all. Confirmed
+# on a real repo (dotnet/eShop): every one of its MVC-style controllers
+# (HomeController.cs, ConsentController.cs, ...) declares neither a
+# same-file `using` nor the attribute/base-class import any other way -
+# the project's GlobalUsings.cs is the only place it's declared - so
+# without also checking for a project-wide `global using`, this check
+# never fired on a single real controller in a modern (.NET 6+) app.
+_ASPNET_GLOBAL_USING_MVC_PATTERN = re.compile(
+    r"^\s*global\s+using\s+Microsoft\.AspNetCore\.Mvc\b", re.MULTILINE
+)
 _ASPNET_API_CONTROLLER_ATTRIBUTE_PATTERN = re.compile(r"^\s*\[ApiController\]", re.MULTILINE)
 _ASPNET_CONTROLLER_BASE_CLASS_PATTERN = re.compile(
     r"\bclass\s+\w+\s*:\s*(?:[\w.]+\.)?(?:Controller|ControllerBase)\b"
@@ -331,6 +344,39 @@ def _has_csharp_main_method(repo_path: Path, path: str) -> bool:
     return bool(_CSHARP_MAIN_METHOD_PATTERN.search(content))
 
 
+# django.contrib.admin.autodiscover() (called automatically by
+# AdminConfig.ready() in every modern Django project) dynamically imports
+# every installed app's own admin.py by convention - never a plain
+# top-level import anywhere in the app's own source. Confirmed on a real
+# repo (wagtail/wagtail): wagtail/documents/admin.py and
+# wagtail/images/admin.py both carry a real, live admin registration and
+# zero imported_by. Gated on a same-file Django admin import rather than
+# added to ENTRY_POINT_FILENAMES as a bare basename - "admin.py" is a
+# common enough filename outside Django (this module's own routes.rb
+# addition explicitly rejected Laravel's web.php/api.php on that same
+# risk) that an unconditional basename match would exempt a genuinely
+# dead, unrelated admin.py in any non-Django repo from ever being
+# flagged. Confirmed via a real repo audit (peer session review of this
+# PR).
+_DJANGO_CONTRIB_ADMIN_MODULE_PATTERN = re.compile(r"\bdjango\.contrib\.admin\b")
+_DJANGO_CONTRIB_IMPORT_ADMIN_PATTERN = re.compile(
+    r"^\s*from\s+django\.contrib\s+import\s+.*\badmin\b", re.MULTILINE
+)
+
+
+def _has_django_admin_import(repo_path: Path, path: str) -> bool:
+    if path.rsplit("/", 1)[-1] != "admin.py":
+        return False
+    try:
+        content = (repo_path / path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    return bool(
+        _DJANGO_CONTRIB_ADMIN_MODULE_PATTERN.search(content)
+        or _DJANGO_CONTRIB_IMPORT_ADMIN_PATTERN.search(content)
+    )
+
+
 def _has_spring_stereotype_annotation(repo_path: Path, path: str) -> bool:
     if not path.endswith((".java", ".kt", ".kts")):
         return False
@@ -344,14 +390,132 @@ def _has_spring_stereotype_annotation(repo_path: Path, path: str) -> bool:
     )
 
 
-def _has_aspnet_controller_convention(repo_path: Path, path: str) -> bool:
+# Sentinel for _nearest_csproj_root: more than one .csproj shares the
+# nearest ancestor directory (sibling projects flattened into one folder -
+# a real but rare layout; standard SDK/IDE tooling always gives each
+# project its own directory). Distinct from "no .csproj found at all" -
+# merging the two would still recreate the exact cross-project leak this
+# whole mechanism exists to prevent: a candidate file and the file
+# declaring the global using could sit in the very same ambiguous
+# directory, so both would land in the same "unscopeable" fallback bucket
+# and the global using would still wrongly apply to a sibling project's
+# unrelated same-named "Controller" class. Confirmed by a second, distinct
+# Flash Review finding on this same PR (#668) after the first
+# project-scoping fix - real, verified directly with a synthetic
+# same-directory two-.csproj repro before implementing this.
+_AMBIGUOUS_CSPROJ_DIR = object()
+
+
+def _nearest_csproj_root(repo_path: Path, path: str) -> str | None | object:
+    """The directory (relative to repo_path, "" for the repo root itself)
+    of the nearest ancestor .csproj to `path` - the real C# project
+    boundary a global using's file-scope actually respects.
+
+    None if no .csproj exists anywhere above it (rare for a real repo -
+    almost every C# project the SDK builds has one - handled by the
+    caller as an unscopeable file, not silently treated as its own
+    single-file project). _AMBIGUOUS_CSPROJ_DIR if the nearest ancestor
+    directory contains more than one .csproj - project membership can't
+    be determined from directory alone, so the caller must not attribute
+    ANY project's global using to a file in this state, in either
+    direction (never assume it has one THAT ISN'T ITS OWN, and never
+    contribute its own declared global using to any project's set)."""
+    current = (repo_path / path).parent
+    while True:
+        try:
+            matches = list(current.glob("*.csproj"))
+        except OSError:
+            matches = []
+        if len(matches) > 1:
+            return _AMBIGUOUS_CSPROJ_DIR
+        if len(matches) == 1:
+            return current.relative_to(repo_path).as_posix()
+        if current == repo_path:
+            return None
+        current = current.parent
+
+
+def _aspnet_global_using_mvc_projects(
+    repo_path: Path, ignored_paths: list[str] | None = None
+) -> tuple[set[str], bool]:
+    """(project roots that declare `global using Microsoft.AspNetCore.Mvc`
+    in one of their own .cs files, whether any *unscopeable* .cs file -
+    no discoverable .csproj above it at all - declares it).
+
+    Real bug found via Flash Review on #668, confirmed directly against a
+    synthetic two-project repro (ProjectA declares the global using,
+    ProjectB doesn't and has no ASP.NET Core dependency at all) after the
+    first fix attempt (obj/ IGNORED_DIRS only) turned out not to address
+    it: a single repo-wide boolean, even with generated build output
+    correctly excluded, still over-applies one real project's own global
+    using to every unrelated project sharing the same git repository - a
+    very real shape for .NET (eShop, this fix's own real-repo test
+    subject, is itself a multi-project microservices repo: Identity.API,
+    Ordering.API, Catalog.API, Basket.API each their own project).
+
+    Scoping to the nearest .csproj (the real project boundary a global
+    using's file-scope respects) instead of the whole repo closes that
+    gap. The rare .csproj-less file (no SDK project structure at all
+    above it) can't be scoped to anything, so it still applies repo-wide
+    for other similarly-unscopeable files only - not to files that DO
+    have their own, different, csproj that simply doesn't declare it.
+    """
+    patterns = ignored_paths or []
+    projects: set[str] = set()
+    unscopeable_present = False
+    for cs_path in repo_path.rglob("*.cs"):
+        rel_path = cs_path.relative_to(repo_path).as_posix()
+        rel_parts = cs_path.relative_to(repo_path).parts
+        # Same IGNORED_DIRS check _html_script_entry_points already makes
+        # above - critical here specifically, not just for consistency:
+        # this module's own IGNORED_DIRS comment documents that .NET's
+        # `obj/` build directory fills with SDK-generated files, including
+        # a GlobalUsings.g.cs that itself declares `global using
+        # Microsoft.AspNetCore.Mvc`. Confirmed via a real repo audit (peer
+        # session review of this PR).
+        if any(part in IGNORED_DIRS for part in rel_parts) or is_ignored(rel_path, patterns):
+            continue
+        try:
+            content = cs_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if not _ASPNET_GLOBAL_USING_MVC_PATTERN.search(content):
+            continue
+        project_root = _nearest_csproj_root(repo_path, rel_path)
+        if project_root is None:
+            unscopeable_present = True
+        elif project_root is not _AMBIGUOUS_CSPROJ_DIR:
+            projects.add(project_root)
+        # else: ambiguous directory - contribute nothing either way (see
+        # _AMBIGUOUS_CSPROJ_DIR's own docstring for why merging this into
+        # either the "projects" or "unscopeable" bucket would still leak).
+    return projects, unscopeable_present
+
+
+def _has_aspnet_controller_convention(
+    repo_path: Path,
+    path: str,
+    *,
+    global_using_mvc_projects: set[str] | None = None,
+    global_using_mvc_unscopeable: bool = False,
+) -> bool:
     if not path.endswith(".cs"):
         return False
     try:
         content = (repo_path / path).read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return False
-    if not _ASPNETCORE_MVC_IMPORT_PATTERN.search(content):
+    project_root = _nearest_csproj_root(repo_path, path)
+    if project_root is _AMBIGUOUS_CSPROJ_DIR:
+        has_global_using = False
+    elif project_root is not None:
+        has_global_using = project_root in global_using_mvc_projects if global_using_mvc_projects else False
+    else:
+        # No discoverable .csproj for this file either - fall back to the
+        # unscoped signal, since there's no project boundary to scope
+        # either side to.
+        has_global_using = global_using_mvc_unscopeable
+    if not (has_global_using or _ASPNETCORE_MVC_IMPORT_PATTERN.search(content)):
         return False
     return bool(
         _ASPNET_API_CONTROLLER_ATTRIBUTE_PATTERN.search(content)
@@ -710,9 +874,19 @@ def _laravel_route_reachable_files(
         handler = entry.get("handler")
         if not handler:
             continue
-        match = _LARAVEL_STRING_HANDLER_PATTERN.match(handler)
-        if not match:
-            continue
+        if entry.get("unresolved"):
+            # Route::resource()/apiResource() - handler is already the
+            # qualified controller class name straight from the route
+            # declaration (Laravel requires it explicit, unlike Rails'
+            # `resources`, which infers a controller name from the
+            # resource name by convention - no naming-convention guessing
+            # needed here at all).
+            controller_class = handler
+        else:
+            match = _LARAVEL_STRING_HANDLER_PATTERN.match(handler)
+            if not match:
+                continue
+            controller_class = match.group(1)
         # "Admin\UserController" -> ["Admin", "UserController.php"] - a
         # fully backslash-qualified handler already names its own
         # namespace segments; preserve them for a precise multi-segment
@@ -727,7 +901,31 @@ def _laravel_route_reachable_files(
         # does. Confirmed by Flash Review on #666: without this, a real
         # nested controller like app/Http/Controllers/Admin/User.php named
         # by "Admin\User@index" was wrongly left flagged as dead code.
-        segments = match.group(1).split("\\")
+        #
+        # A leading backslash (`\App\Http\Controllers\UserController`, a
+        # valid, fairly common fully-root-qualified PHP class reference)
+        # must be stripped before splitting - otherwise the leading empty
+        # string it produces derails every segment after it, so the query
+        # never matches any real path. Confirmed via a real repo audit
+        # (peer session review of this PR): reproduced end-to-end for both
+        # this resolver's `unresolved` branch and the pre-existing legacy
+        # string-handler branch above (`_LARAVEL_STRING_HANDLER_PATTERN`
+        # already permitted a leading backslash on that form too, since
+        # #666 - a shared bug in this one resolver, not specific to either
+        # branch).
+        segments = controller_class.lstrip("\\").split("\\")
+        # Laravel's own default composer.json PSR-4 mapping is
+        # "App\\": "app/" - the namespace root stays capitalized ("App")
+        # while the directory it maps to is lowercase ("app/"), confirmed
+        # against a real repo's actual composer.json (koel/koel). Every
+        # other segment matches its directory/file name exactly
+        # case-sensitively; only this one, near-universal root mapping
+        # needs normalizing - caught by this PR's own new leading-backslash
+        # regression tests still failing after the lstrip fix alone, since
+        # a fully-qualified "App\Http\Controllers\UserController" produces
+        # segment "App", which no real path (lowercase "app/...") matches.
+        if segments and segments[0] == "App":
+            segments[0] = "app"
         segments[-1] = f"{segments[-1]}.php"
         matches = _controller_suffix_matches(
             controller_paths, segments, anchor_single_segment=False
@@ -915,6 +1113,9 @@ def find_dead_code(
     swift_reachable_files = _swift_target_reachable_files(repo_path, modules, ignored_paths)
     rails_route_reachable_files = _rails_route_reachable_files(modules, api_endpoints)
     laravel_route_reachable_files = _laravel_route_reachable_files(modules, api_endpoints)
+    aspnet_global_using_mvc_projects, aspnet_global_using_mvc_unscopeable = (
+        _aspnet_global_using_mvc_projects(repo_path, ignored_paths)
+    )
 
     unreachable_modules = []
     entry_points_detected = []
@@ -937,9 +1138,15 @@ def find_dead_code(
                 path in html_script_entry_points
                 or path in android_manifest_entry_points
                 or _has_main_guard(repo_path, path)
+                or _has_django_admin_import(repo_path, path)
                 or _has_hilt_dagger_annotation(repo_path, path)
                 or _has_spring_stereotype_annotation(repo_path, path)
-                or _has_aspnet_controller_convention(repo_path, path)
+                or _has_aspnet_controller_convention(
+                    repo_path,
+                    path,
+                    global_using_mvc_projects=aspnet_global_using_mvc_projects,
+                    global_using_mvc_unscopeable=aspnet_global_using_mvc_unscopeable,
+                )
                 or _has_go_main_function(repo_path, path)
                 or _has_rust_main_function(repo_path, path)
                 or _has_java_main_method(repo_path, path)
