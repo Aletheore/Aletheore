@@ -266,12 +266,30 @@ def _referenced_by_dotted_string(path: str, token_index: dict[str, set[str]]) ->
 
 
 # A bare CamelCase constant reference, optionally namespaced with `::`
-# (User, Admin::UserHistory) - Ruby's own constant-reference syntax, no
-# quoting involved (unlike the dotted-string mechanism above, which exists
-# for languages that load modules by a quoted dotted string). The negative
-# lookbehind keeps a match from starting mid-reference (`Admin::User`
-# should never also register a spurious standalone `User` match starting
-# at its own `::`).
+# (User, Admin::UserHistory), and optionally anchored with a LEADING `::`
+# (::Jobs::TopicTimerBase - Ruby's own "start lookup at the absolute
+# top-level namespace" syntax, real and common enough that a superclass
+# reference is routinely written this way to disambiguate against a
+# same-named nested constant). The leading `(?:::)?` is consumed but not
+# captured - group(1) is always just the constant name itself, with no
+# leading colons in the stored token.
+#
+# Real bug found via a real Discourse scan (68,183-commit clone): every
+# one of its own job-hierarchy superclass references
+# (`class CloseTopic < ::Jobs::TopicTimerBase`) uses this exact leading-
+# `::` form, and the OLD regex's `(?<![:\w])` lookbehind rejected a match
+# starting right after the leading `::`'s own second colon - not just for
+# the whole "Jobs::TopicTimerBase" run, but for EVERY position inside it
+# (including a later attempt at the bare "TopicTimerBase" tail, since
+# that position is also colon-preceded) - so a real superclass reference
+# written this way was completely invisible to this index, not just
+# imprecisely captured. The lookbehind's only remaining job is
+# preventing a match from starting mid-identifier (`_word` after a
+# `.`/etc.) - `(?<!\w)` alone still does that; dropping `:` from it does
+# not reopen the "spurious standalone User inside Admin::User" case this
+# was originally written to prevent, since finditer's greedy, non-
+# overlapping scan already consumes "Admin::User" as one run before
+# ever revisiting "User" on its own.
 #
 # Known, deliberate limitation: this is a plain text scan, not a real
 # parse - a class name mentioned only inside a `#` comment or a string
@@ -280,7 +298,7 @@ def _referenced_by_dotted_string(path: str, token_index: dict[str, set[str]]) ->
 # everywhere else (favor not flagging live code dead over precision), and
 # a real parse for every unreachable file's own repo would cost far more
 # than this rescue pass is worth - left as a known tradeoff, not silently.
-_RUBY_CONSTANT_TOKEN_RE = re.compile(r"(?<![:\w])[A-Z][A-Za-z0-9_]*(?:::[A-Z][A-Za-z0-9_]*)*")
+_RUBY_CONSTANT_TOKEN_RE = re.compile(r"(?<!\w)(?:::)?([A-Z][A-Za-z0-9_]*(?:::[A-Z][A-Za-z0-9_]*)*)")
 # Whether a token match sits right after `class`/`module` (its own
 # declaration, e.g. "class WidgetsController" or "module Admin") rather
 # than a genuine reference to it. Real bug caught by this file's own
@@ -344,16 +362,63 @@ def _ruby_constant_token_index(sources: dict[str, str]) -> dict[str, set[str]]:
     index: dict[str, set[str]] = {}
     for path, content in sources.items():
         for match in _RUBY_CONSTANT_TOKEN_RE.finditer(content):
-            window = content[max(0, match.start() - 24) : match.start()]
+            # Window before the actual identifier (group 1), not before
+            # an optional leading `::` - `class ::Foo` is not idiomatic
+            # Ruby, but checking here rather than at match.start(0) keeps
+            # this correct even in that unusual case.
+            window = content[max(0, match.start(1) - 24) : match.start(1)]
             if _RUBY_DEFINITION_KEYWORD_RE.search(window):
                 continue
-            index.setdefault(match.group(0), set()).add(path)
+            index.setdefault(match.group(1), set()).add(path)
     return index
 
 
 def _referenced_by_ruby_constant(path: str, token_index: dict[str, set[str]]) -> bool:
     for candidate in _ruby_zeitwerk_constant_candidates(path):
         owners = token_index.get(candidate)
+        if owners and owners - {path}:
+            return True
+    return False
+
+
+# A bare symbol literal (:bump_topic) - deliberately NOT a `key:` keyword-
+# argument label, which this shape excludes on its own since the colon
+# there trails the identifier instead of leading it. Symbols are Ruby's
+# own idiomatic way to name-then-camelize-and-constantize a class from a
+# snake_case identifier - real, common code beyond any one framework
+# (`"#{name}".classify.constantize`, an STI/polymorphic type column, a
+# registry keyed by symbol) - not just Discourse's own `Jobs.enqueue
+# (:bump_topic, ...)`, the case that surfaced this gap. Left as a
+# genuinely separate index from _RUBY_CONSTANT_TOKEN_RE's, rather than
+# merged into the same one, since a symbol literal is never itself a
+# class/module declaration site the way a CamelCase token can be -
+# keeping them apart avoids complicating that exclusion for no benefit.
+_RUBY_SYMBOL_LITERAL_RE = re.compile(r"(?<![:\w]):([a-z_][a-z0-9_]*)\b")
+
+
+def _ruby_symbol_token_index(sources: dict[str, str]) -> dict[str, set[str]]:
+    """Camelized symbol literal -> set of file paths containing it
+    (:bump_topic -> "BumpTopic") - same O(total source size) shape as
+    _ruby_constant_token_index above."""
+    index: dict[str, set[str]] = {}
+    for path, content in sources.items():
+        for match in _RUBY_SYMBOL_LITERAL_RE.finditer(content):
+            camelized = "".join(word.capitalize() for word in match.group(1).split("_"))
+            index.setdefault(camelized, set()).add(path)
+    return index
+
+
+def _referenced_by_ruby_symbol_dispatch(path: str, symbol_index: dict[str, set[str]]) -> bool:
+    """Whether some other file's bare :snake_case symbol, camelized,
+    names this file's own Zeitwerk constant - the real gap this closes:
+    Discourse's own `Jobs.enqueue(:bump_topic, ...)` (app/jobs/regular/
+    bump_topic.rb) is dispatched by symbol name, never a class reference
+    anywhere, so _referenced_by_ruby_constant alone never rescues it.
+    Confirmed on a real repo (discourse/discourse): 87 additional
+    app/jobs files rescued beyond what the bare-constant check alone
+    found, on top of the 20 it already caught."""
+    for candidate in _ruby_zeitwerk_constant_candidates(path):
+        owners = symbol_index.get(candidate)
         if owners and owners - {path}:
             return True
     return False
@@ -1089,13 +1154,34 @@ def find_dead_code(
                 )
             except OSError:
                 continue
+        # .rake files are real Ruby (Rake tasks routinely dispatch a job
+        # by symbol, e.g. `Jobs.enqueue(:prepare_nested_reply_stats, ...)`
+        # - confirmed on a real repo, lib/tasks/nested_replies.rake in
+        # discourse/discourse) but aren't part of `modules` at all - the
+        # scanner's dependency graph doesn't track them as a language unit
+        # the way .rb files are, so they're invisible to both indexes
+        # below unless read here explicitly. They're a reference SOURCE
+        # only, never a rescue TARGET (they can never appear in
+        # unreachable_modules to begin with), so adding their content to
+        # rb_sources is safe with no risk of a .rake file "rescuing
+        # itself."
+        rake_patterns = ignored_paths or []
+        for rake_file in repo_path.rglob("*.rake"):
+            rel_path = rake_file.relative_to(repo_path).as_posix()
+            rel_parts = rake_file.relative_to(repo_path).parts
+            if any(part in IGNORED_DIRS for part in rel_parts) or is_ignored(rel_path, rake_patterns):
+                continue
+            try:
+                rb_sources[rel_path] = rake_file.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
         ruby_token_index = _ruby_constant_token_index(rb_sources)
+        ruby_symbol_index = _ruby_symbol_token_index(rb_sources)
         still_unreachable = []
         for entry in unreachable_modules:
-            if (
-                entry["path"].startswith("app/")
-                and entry["path"].endswith(".rb")
-                and _referenced_by_ruby_constant(entry["path"], ruby_token_index)
+            if entry["path"].startswith("app/") and entry["path"].endswith(".rb") and (
+                _referenced_by_ruby_constant(entry["path"], ruby_token_index)
+                or _referenced_by_ruby_symbol_dispatch(entry["path"], ruby_symbol_index)
             ):
                 entry_points_detected.append(entry["path"])
             else:

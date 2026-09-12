@@ -1281,6 +1281,108 @@ def test_rails_namespaced_file_referenced_by_bare_last_segment_resolves(tmp_path
     assert result["unreachable_modules"] == []
 
 
+def test_rails_job_dispatched_only_by_symbol_name_resolves(tmp_path):
+    # Real gap found via audit against a real repo (discourse/discourse):
+    # a custom job-dispatch layer (`Jobs.enqueue(:bump_topic, ...)`) built
+    # on top of Zeitwerk's own autoloading, common enough to be worth
+    # closing generally (any `dispatch(:snake_case_name)`-shaped call,
+    # not hardcoded to any one method name) - 87 of Discourse's 241
+    # app/jobs files were rescued by this alone, beyond what a bare
+    # constant reference check already caught.
+    jobs_dir = tmp_path / "app" / "jobs" / "regular"
+    jobs_dir.mkdir(parents=True)
+    (jobs_dir / "bump_topic.rb").write_text(
+        "module Jobs\n  class BumpTopic < Jobs::Base\n  end\nend\n"
+    )
+    caller_dir = tmp_path / "app" / "models"
+    caller_dir.mkdir(parents=True)
+    (caller_dir / "topic.rb").write_text(
+        "class Topic < ApplicationRecord\n"
+        "  def bump\n    Jobs.enqueue(:bump_topic, topic_id: id)\n  end\nend\n"
+    )
+    modules = [
+        _module("app/jobs/regular/bump_topic.rb"),
+        _module("app/models/topic.rb", imported_by=["app/models/topic.rb"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_symbol_dispatch_does_not_match_a_keyword_argument_label(tmp_path):
+    # A `key:` keyword-argument label (colon trailing the identifier) must
+    # never be mistaken for a `:key` symbol literal (colon leading it) -
+    # they look similar but mean something completely different in Ruby,
+    # and the former is far more common in ordinary code that has nothing
+    # to do with dispatch.
+    jobs_dir = tmp_path / "app" / "jobs" / "regular"
+    jobs_dir.mkdir(parents=True)
+    (jobs_dir / "bump_topic.rb").write_text(
+        "module Jobs\n  class BumpTopic < Jobs::Base\n  end\nend\n"
+    )
+    caller_dir = tmp_path / "app" / "models"
+    caller_dir.mkdir(parents=True)
+    (caller_dir / "topic.rb").write_text(
+        "class Topic < ApplicationRecord\n"
+        "  def some_unrelated_method(bump_topic: false)\n    bump_topic\n  end\nend\n"
+    )
+    modules = [
+        _module("app/jobs/regular/bump_topic.rb"),
+        _module("app/models/topic.rb", imported_by=["app/models/topic.rb"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert [m["path"] for m in result["unreachable_modules"]] == ["app/jobs/regular/bump_topic.rb"]
+
+
+def test_rake_task_dispatching_a_job_by_symbol_resolves_it(tmp_path):
+    # Real gap found via audit: .rake files are real Ruby (Rake tasks
+    # routinely dispatch a job, e.g. lib/tasks/nested_replies.rake in
+    # discourse/discourse) but aren't part of the module graph at all -
+    # invisible to the rescue passes above unless read explicitly.
+    jobs_dir = tmp_path / "app" / "jobs" / "regular"
+    jobs_dir.mkdir(parents=True)
+    (jobs_dir / "prepare_stats.rb").write_text(
+        "module Jobs\n  class PrepareStats < Jobs::Base\n  end\nend\n"
+    )
+    tasks_dir = tmp_path / "lib" / "tasks"
+    tasks_dir.mkdir(parents=True)
+    (tasks_dir / "stats.rake").write_text(
+        'task "stats:prepare" => :environment do\n'
+        "  Jobs.enqueue(:prepare_stats)\nend\n"
+    )
+    modules = [_module("app/jobs/regular/prepare_stats.rb")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_leading_double_colon_superclass_reference_resolves(tmp_path):
+    # Real bug found via a real Discourse scan: a top-level-anchored
+    # constant reference (`::Admin::UserHistory` - Ruby's own syntax for
+    # "start lookup at the absolute top-level namespace", commonly used
+    # for a superclass reference to disambiguate against a same-named
+    # nested constant) was completely invisible to the constant-token
+    # index - not just imprecisely captured, but missed entirely,
+    # including for the bare last-segment fallback, since the leading
+    # `::` blocked a match from starting anywhere inside the reference
+    # (confirmed directly: discourse/discourse's own
+    # `class CloseTopic < ::Jobs::TopicTimerBase` never registered at
+    # all before this fix).
+    base_dir = tmp_path / "app" / "models" / "admin"
+    base_dir.mkdir(parents=True)
+    (base_dir / "user_history.rb").write_text(
+        "module Admin\n  class UserHistory < ApplicationRecord\n  end\nend\n"
+    )
+    subclass_dir = tmp_path / "app" / "models" / "admin"
+    (subclass_dir / "staff_action_log.rb").write_text(
+        "module Admin\n  class StaffActionLog < ::Admin::UserHistory\n  end\nend\n"
+    )
+    modules = [
+        _module("app/models/admin/user_history.rb"),
+        _module("app/models/admin/staff_action_log.rb", imported_by=["app/models/admin/staff_action_log.rb"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
 def test_rails_model_with_no_reference_anywhere_stays_unreachable(tmp_path):
     # The rescue must not become a rescue-everything hack - a genuinely
     # orphaned model, referenced nowhere in the corpus, still gets flagged.
