@@ -22,14 +22,6 @@ ENTRY_POINT_FILENAMES = {
     "manage.py",
     "server.py",
     "wsgi.py",
-    # django.contrib.admin.autodiscover() (called automatically by
-    # AdminConfig.ready() in every modern Django project) dynamically
-    # imports every installed app's own admin.py by convention - never a
-    # plain top-level import anywhere in the app's own source. Confirmed
-    # on a real repo (wagtail/wagtail): wagtail/documents/admin.py and
-    # wagtail/images/admin.py both carry a real, live @admin.register()-
-    # equivalent Django admin customization and zero imported_by.
-    "admin.py",
     # SwiftPM's build manifest - always this exact name, read by the swift
     # toolchain itself, never imported by the repo's own application code.
     "Package.swift",
@@ -352,6 +344,39 @@ def _has_csharp_main_method(repo_path: Path, path: str) -> bool:
     return bool(_CSHARP_MAIN_METHOD_PATTERN.search(content))
 
 
+# django.contrib.admin.autodiscover() (called automatically by
+# AdminConfig.ready() in every modern Django project) dynamically imports
+# every installed app's own admin.py by convention - never a plain
+# top-level import anywhere in the app's own source. Confirmed on a real
+# repo (wagtail/wagtail): wagtail/documents/admin.py and
+# wagtail/images/admin.py both carry a real, live admin registration and
+# zero imported_by. Gated on a same-file Django admin import rather than
+# added to ENTRY_POINT_FILENAMES as a bare basename - "admin.py" is a
+# common enough filename outside Django (this module's own routes.rb
+# addition explicitly rejected Laravel's web.php/api.php on that same
+# risk) that an unconditional basename match would exempt a genuinely
+# dead, unrelated admin.py in any non-Django repo from ever being
+# flagged. Confirmed via a real repo audit (peer session review of this
+# PR).
+_DJANGO_CONTRIB_ADMIN_MODULE_PATTERN = re.compile(r"\bdjango\.contrib\.admin\b")
+_DJANGO_CONTRIB_IMPORT_ADMIN_PATTERN = re.compile(
+    r"^\s*from\s+django\.contrib\s+import\s+.*\badmin\b", re.MULTILINE
+)
+
+
+def _has_django_admin_import(repo_path: Path, path: str) -> bool:
+    if path.rsplit("/", 1)[-1] != "admin.py":
+        return False
+    try:
+        content = (repo_path / path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    return bool(
+        _DJANGO_CONTRIB_ADMIN_MODULE_PATTERN.search(content)
+        or _DJANGO_CONTRIB_IMPORT_ADMIN_PATTERN.search(content)
+    )
+
+
 def _has_spring_stereotype_annotation(repo_path: Path, path: str) -> bool:
     if not path.endswith((".java", ".kt", ".kts")):
         return False
@@ -381,7 +406,19 @@ def _aspnet_global_using_mvc_present(repo_path: Path, ignored_paths: list[str] |
     patterns = ignored_paths or []
     for cs_path in repo_path.rglob("*.cs"):
         rel_path = cs_path.relative_to(repo_path).as_posix()
-        if is_ignored(rel_path, patterns):
+        rel_parts = cs_path.relative_to(repo_path).parts
+        # Same IGNORED_DIRS check _html_script_entry_points already makes
+        # above - critical here specifically, not just for consistency:
+        # this module's own IGNORED_DIRS comment documents that .NET's
+        # `obj/` build directory fills with SDK-generated files, including
+        # a GlobalUsings.g.cs that itself declares `global using
+        # Microsoft.AspNetCore.Mvc`. Without this check, real,
+        # SDK-generated build output from ANY one project would leak this
+        # signal repo-wide (this function has no per-project scoping - see
+        # its docstring) and wrongly mark an unrelated Controller class in
+        # a completely different project as an entry point. Confirmed via
+        # a real repo audit (peer session review of this PR).
+        if any(part in IGNORED_DIRS for part in rel_parts) or is_ignored(rel_path, patterns):
             continue
         try:
             content = cs_path.read_text(encoding="utf-8", errors="ignore")
@@ -787,7 +824,31 @@ def _laravel_route_reachable_files(
         # does. Confirmed by Flash Review on #666: without this, a real
         # nested controller like app/Http/Controllers/Admin/User.php named
         # by "Admin\User@index" was wrongly left flagged as dead code.
-        segments = controller_class.split("\\")
+        #
+        # A leading backslash (`\App\Http\Controllers\UserController`, a
+        # valid, fairly common fully-root-qualified PHP class reference)
+        # must be stripped before splitting - otherwise the leading empty
+        # string it produces derails every segment after it, so the query
+        # never matches any real path. Confirmed via a real repo audit
+        # (peer session review of this PR): reproduced end-to-end for both
+        # this resolver's `unresolved` branch and the pre-existing legacy
+        # string-handler branch above (`_LARAVEL_STRING_HANDLER_PATTERN`
+        # already permitted a leading backslash on that form too, since
+        # #666 - a shared bug in this one resolver, not specific to either
+        # branch).
+        segments = controller_class.lstrip("\\").split("\\")
+        # Laravel's own default composer.json PSR-4 mapping is
+        # "App\\": "app/" - the namespace root stays capitalized ("App")
+        # while the directory it maps to is lowercase ("app/"), confirmed
+        # against a real repo's actual composer.json (koel/koel). Every
+        # other segment matches its directory/file name exactly
+        # case-sensitively; only this one, near-universal root mapping
+        # needs normalizing - caught by this PR's own new leading-backslash
+        # regression tests still failing after the lstrip fix alone, since
+        # a fully-qualified "App\Http\Controllers\UserController" produces
+        # segment "App", which no real path (lowercase "app/...") matches.
+        if segments and segments[0] == "App":
+            segments[0] = "app"
         segments[-1] = f"{segments[-1]}.php"
         matches = _controller_suffix_matches(
             controller_paths, segments, anchor_single_segment=False
@@ -998,6 +1059,7 @@ def find_dead_code(
                 path in html_script_entry_points
                 or path in android_manifest_entry_points
                 or _has_main_guard(repo_path, path)
+                or _has_django_admin_import(repo_path, path)
                 or _has_hilt_dagger_annotation(repo_path, path)
                 or _has_spring_stereotype_annotation(repo_path, path)
                 or _has_aspnet_controller_convention(

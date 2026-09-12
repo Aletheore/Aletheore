@@ -30,10 +30,32 @@ def test_django_admin_py_is_never_unreachable(tmp_path):
     # plain top-level import anywhere in the app's own source. Confirmed:
     # wagtail/documents/admin.py and wagtail/images/admin.py both carry
     # real, live admin registrations and zero imported_by.
+    app_dir = tmp_path / "myapp"
+    app_dir.mkdir()
+    (app_dir / "admin.py").write_text(
+        "from django.contrib import admin\n\nfrom myapp.models import Widget\n\n"
+        "admin.site.register(Widget)\n"
+    )
     modules = [_module("myapp/admin.py")]
     result = find_dead_code(tmp_path, modules, config=None)
     assert result["unreachable_modules"] == []
     assert "myapp/admin.py" in result["entry_points_detected"]
+
+
+def test_unrelated_non_django_admin_py_is_not_exempted(tmp_path):
+    # Real false-negative risk found via peer review of this PR: "admin.py"
+    # is a common enough filename outside Django (this same module's own
+    # routes.rb addition explicitly rejected Laravel's web.php/api.php on
+    # this exact risk) that an unconditional basename match would exempt a
+    # genuinely dead, unrelated admin.py with no Django import at all.
+    app_dir = tmp_path / "myapp"
+    app_dir.mkdir()
+    (app_dir / "admin.py").write_text(
+        "def totally_unrelated_dead_function():\n    pass\n"
+    )
+    modules = [_module("myapp/admin.py")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "myapp/admin.py" in [m["path"] for m in result["unreachable_modules"]]
 
 
 def test_test_files_are_never_unreachable(tmp_path):
@@ -1072,6 +1094,30 @@ def test_aspnet_controller_via_project_wide_global_using_is_never_unreachable(tm
     assert "Quickstart/Home/HomeController.cs" in result["entry_points_detected"]
 
 
+def test_aspnet_global_using_in_obj_build_dir_is_ignored(tmp_path):
+    # Real bug found via peer review of this PR: .NET's `obj/` intermediate
+    # build directory fills with SDK-generated files, including a
+    # GlobalUsings.g.cs that itself declares `global using
+    # Microsoft.AspNetCore.Mvc` for every project the SDK builds - this
+    # repo's own IGNORED_DIRS already documents exactly that. Without
+    # skipping obj/ here the same way _html_script_entry_points already
+    # skips it, generated build output from ANY one project would leak
+    # this signal repo-wide and wrongly mark an unrelated same-named
+    # "Controller" class in a completely different, non-ASP.NET project as
+    # an entry point.
+    obj_dir = tmp_path / "SomeOtherProject" / "obj" / "Debug"
+    obj_dir.mkdir(parents=True)
+    (obj_dir / "GlobalUsings.g.cs").write_text(
+        "global using Microsoft.AspNetCore.Mvc;\n"
+    )
+    (tmp_path / "Foo.cs").write_text(
+        "namespace MyApp {\n    class Foo : Controller {}\n}\n"
+    )
+    modules = [_module("Foo.cs")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "Foo.cs" in [m["path"] for m in result["unreachable_modules"]]
+
+
 def test_rails_controller_named_only_in_routes_rb_is_never_unreachable(tmp_path):
     # Real bug found via a real Discourse scan (68,183-commit clone): Rails
     # dispatches `to: "users#show"` and `resources :name` route entries to
@@ -1356,6 +1402,55 @@ def test_laravel_route_resource_namespaced_controller_resolves_uniquely(tmp_path
     # ...while the unrelated top-level one, never named by any route here,
     # correctly stays flagged.
     assert "app/Http/Controllers/UserController.php" in unreachable_paths
+
+
+def test_laravel_leading_backslash_fully_qualified_class_ref_resolves(tmp_path):
+    # Real bug found via peer review of this PR: `\App\Http\Controllers\
+    # UserController::class` (a valid, fairly common fully-root-qualified
+    # PHP class reference) parses with the leading backslash included in
+    # its text span. Splitting that on "\\" produces a leading empty
+    # string, which derails every segment after it and never matches any
+    # real path - reproduced end-to-end before the fix, both for this
+    # resolver's `unresolved` (Route::resource()) branch here and for the
+    # pre-existing legacy string-handler branch below, which shared the
+    # same bug since #666.
+    controllers_dir = tmp_path / "app" / "Http" / "Controllers"
+    controllers_dir.mkdir(parents=True)
+    (controllers_dir / "UserController.php").write_text(
+        "<?php\nnamespace App\\Http\\Controllers;\n\nclass UserController {}\n"
+    )
+    modules = [_module("app/Http/Controllers/UserController.php")]
+    api_endpoints = [
+        {
+            "framework": "laravel",
+            "handler": "\\App\\Http\\Controllers\\UserController",
+            "path": "users",
+            "unresolved": True,
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    assert result["unreachable_modules"] == []
+
+
+def test_laravel_leading_backslash_legacy_string_handler_resolves(tmp_path):
+    # Same bug, the pre-existing (#666) legacy string-handler branch.
+    controllers_dir = tmp_path / "app" / "Http" / "Controllers"
+    controllers_dir.mkdir(parents=True)
+    (controllers_dir / "UserController.php").write_text(
+        "<?php\nnamespace App\\Http\\Controllers;\n\nclass UserController {\n"
+        "    public function index() {}\n}\n"
+    )
+    modules = [_module("app/Http/Controllers/UserController.php")]
+    api_endpoints = [
+        {
+            "framework": "laravel",
+            "handler": "\\App\\Http\\Controllers\\UserController@index",
+            "path": "/users",
+            "unresolved": False,
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    assert result["unreachable_modules"] == []
 
 
 def test_rails_resources_controller_override_resolves_the_real_controller(tmp_path):
