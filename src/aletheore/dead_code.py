@@ -295,6 +295,204 @@ def _referenced_by_dotted_string(path: str, token_index: dict[str, set[str]]) ->
     return False
 
 
+# A bare CamelCase constant reference, optionally namespaced with `::`
+# (User, Admin::UserHistory), and optionally anchored with a LEADING `::`
+# (::Jobs::TopicTimerBase - Ruby's own "start lookup at the absolute
+# top-level namespace" syntax, real and common enough that a superclass
+# reference is routinely written this way to disambiguate against a
+# same-named nested constant). The leading `(?:::)?` is consumed but not
+# captured - group(1) is always just the constant name itself, with no
+# leading colons in the stored token.
+#
+# Real bug found via a real Discourse scan (68,183-commit clone): every
+# one of its own job-hierarchy superclass references
+# (`class CloseTopic < ::Jobs::TopicTimerBase`) uses this exact leading-
+# `::` form, and the original `(?<![:\w])` lookbehind rejected a match
+# starting right after the leading `::`'s own second colon - not just for
+# the whole "Jobs::TopicTimerBase" run, but for EVERY position inside it
+# (including a later attempt at the bare "TopicTimerBase" tail, since
+# that position is also colon-preceded) - so a real superclass reference
+# written this way was completely invisible to this index, not just
+# imprecisely captured.
+#
+# Flash Review finding on this same fix's first attempt (which simply
+# dropped `:` from the lookbehind everywhere, not just before a genuine
+# leading `::`): reproduced directly - "registry::User" (a lowercase
+# expression, itself never matching `[A-Z]`, "::"-qualified into a
+# constant that is NOT the top-level Zeitwerk `User`) let the lookbehind
+# alone accept a match starting right at "User", since a colon isn't a
+# `\w` character either. That first attempt's own comment claimed
+# finditer's greedy scan already prevented this the way it does for
+# "Admin::User" - true only when the qualifying prefix is itself
+# `[A-Z]`-starting and so gets absorbed into one earlier match; false
+# here, since "registry" never matches `[A-Z]` at all and so is never
+# consumed by anything, leaving "User" free to start its own match.
+#
+# Fixed with two distinct alternatives instead of one shared lookbehind:
+# a leading `::` is allowed ONLY when it is itself not preceded by a word
+# character (a genuine absolute-top-level reference, `(?<!\w)::` followed
+# by the constant) - not just anywhere a colon happens to precede an
+# uppercase letter. Every other position keeps the original, stricter
+# `(?<![:\w])` rule with no leading `::` consumed at all.
+#
+# Known, deliberate limitation: this is a plain text scan, not a real
+# parse - a class name mentioned only inside a `#` comment or a string
+# literal (a log message, an error string) counts as a "reference" the
+# same as real code would. Consistent with this file's existing bias
+# everywhere else (favor not flagging live code dead over precision), and
+# a real parse for every unreachable file's own repo would cost far more
+# than this rescue pass is worth - left as a known tradeoff, not silently.
+_RUBY_CONSTANT_TOKEN_RE = re.compile(
+    r"(?:(?<!\w)::(?=[A-Z])|(?<![:\w]))([A-Z][A-Za-z0-9_]*(?:::[A-Z][A-Za-z0-9_]*)*)"
+)
+# Whether a token match sits right after `class`/`module` (its own
+# declaration, e.g. "class WidgetsController" or "module Admin") rather
+# than a genuine reference to it. Real bug caught by this file's own
+# existing ambiguous-basename test: two unrelated plugins/engines each
+# defining their own same-named WidgetsController falsely "referenced"
+# each other, since each file's own declaration line contains its own
+# class name as a token like any other use would - without excluding the
+# declaration site, any two files sharing a bare name always looked
+# mutually reachable regardless of whether anything actually used either.
+_RUBY_DEFINITION_KEYWORD_RE = re.compile(r"\b(?:class|module)\s*$")
+
+
+def _ruby_zeitwerk_constant_candidates(path: str) -> list[str]:
+    """The (possibly namespaced) constant name(s) Zeitwerk - Rails' own
+    autoloader, active by default since Rails 6 - would map this file to:
+    app/models/admin/user_history.rb -> ["Admin::UserHistory",
+    "UserHistory"]. Every immediate subdirectory of app/ is its own
+    autoload root by Rails convention regardless of what it's named
+    (models, jobs, mailers, services, serializers, channels, policies,
+    ... - no fixed directory allowlist needed, unlike the framework-
+    specific entry-point heuristics elsewhere in this file), so only
+    app/<root>/... is handled - lib/ is autoloaded only when an app
+    explicitly opts in via config.autoload_paths, which this module has no
+    way to see.
+
+    The full namespaced name is the precise match; the bare last segment
+    is a deliberately permissive fallback for Ruby's own lexical constant
+    lookup, where code already nested under (or sitting alongside) the
+    same namespace commonly refers to a sibling by its short name alone
+    (Ruby itself would resolve it the same way) - e.g. code inside
+    `module Admin` referring to `UserHistory` without ever spelling out
+    `Admin::`. This trades a narrow false-negative risk (an unrelated
+    class elsewhere in the app happening to share the same bare name)
+    for closing a false-positive rate that was 100% on every real Rails
+    app/ subdirectory tested (Discourse: models, jobs, mailers, services,
+    serializers) - consistent with this file's existing bias everywhere
+    else toward not flagging live code dead over never missing a
+    genuinely dead file.
+    """
+    parts = path.split("/")
+    if len(parts) < 3 or parts[0] != "app" or not path.endswith(".rb"):
+        return []
+    segments = parts[2:]
+    segments[-1] = segments[-1][: -len(".rb")]
+    camelized = ["".join(word.capitalize() for word in segment.split("_")) for segment in segments if segment]
+    if not camelized:
+        return []
+    full_name = "::".join(camelized)
+    return [full_name] if len(camelized) == 1 else [full_name, camelized[-1]]
+
+
+def _ruby_constant_token_index(sources: dict[str, str]) -> dict[str, set[str]]:
+    """Constant token -> set of file paths whose content contains it as a
+    genuine reference (excludes the token's own class/module declaration
+    site - see _RUBY_DEFINITION_KEYWORD_RE) - built once for the whole
+    corpus, same O(total source size) shape as _dotted_string_token_index
+    above, for the same reason (avoids an O(candidates x total source
+    size) rescan). The trailing-window slice before each match is
+    bounded (not `content[:match.start()]`) so this stays O(1) per match
+    rather than O(file size) per match."""
+    index: dict[str, set[str]] = {}
+    for path, content in sources.items():
+        for match in _RUBY_CONSTANT_TOKEN_RE.finditer(content):
+            # Window before the actual identifier (group 1), not before
+            # an optional leading `::` - `class ::Foo` is not idiomatic
+            # Ruby, but checking here rather than at match.start(0) keeps
+            # this correct even in that unusual case.
+            window = content[max(0, match.start(1) - 24) : match.start(1)]
+            if _RUBY_DEFINITION_KEYWORD_RE.search(window):
+                continue
+            index.setdefault(match.group(1), set()).add(path)
+    return index
+
+
+def _referenced_by_ruby_constant(path: str, token_index: dict[str, set[str]]) -> bool:
+    for candidate in _ruby_zeitwerk_constant_candidates(path):
+        owners = token_index.get(candidate)
+        if owners and owners - {path}:
+            return True
+    return False
+
+
+# A bare symbol literal used as the first argument of what looks like a
+# method call (`Jobs.enqueue(:bump_topic, ...)`, a bare `enqueue(:x)`,
+# a namespaced `SomeModule::Jobs.enqueue(:x)`) - deliberately NOT a `key:`
+# keyword-argument label (the colon there trails the identifier instead
+# of leading it) and, just as deliberately, NOT a bare symbol appearing
+# anywhere else in the source. Symbols are Ruby's own idiomatic way to
+# name-then-camelize-and-constantize a class from a snake_case identifier
+# - real, common code beyond any one framework (a registry keyed by
+# symbol, an STI/polymorphic type column) - not just Discourse's own
+# `Jobs.enqueue(:bump_topic, ...)`, the case that surfaced this gap.
+#
+# Flash Review finding on this fix's first attempt (`(?<![:\w]):([a-z_]
+# [a-z0-9_]*)\b` alone, no call-shape requirement at all despite this
+# comment's own earlier claim of being scoped to "dispatch-shaped"
+# calls): reproduced directly - an ordinary `{status: :active}` hash
+# value, a `enum status: [:active, :inactive]` declaration, or any other
+# bare `:some_common_word` symbol used as plain data (not a dispatch
+# target at all) registered exactly the same as a real
+# `Jobs.enqueue(:bump_topic, ...)` call, since nothing in the old pattern
+# actually required call-argument position - only the trailing "keyword-
+# label" shape was excluded, not every other place a bare symbol can
+# legally appear. Fixed by requiring the symbol to be the first thing
+# after a call's opening parenthesis, preceded by what looks like a
+# method reference (an identifier, optionally `.`/`::`-chained) -
+# verified this still matches every real shape confirmed on Discourse
+# (`Jobs.enqueue(:x, ...)`, multi-line-formatted calls) while correctly
+# excluding a symbol used as a hash value/enum member/anything else not
+# in that specific syntactic position.
+#
+# Left as a genuinely separate index from _RUBY_CONSTANT_TOKEN_RE's,
+# rather than merged into the same one, since a symbol literal is never
+# itself a class/module declaration site the way a CamelCase token can be
+# - keeping them apart avoids complicating that exclusion for no benefit.
+_RUBY_SYMBOL_LITERAL_RE = re.compile(
+    r"\b[A-Za-z_][A-Za-z0-9_]*(?:(?:\.|::)[A-Za-z_][A-Za-z0-9_]*)*\(\s*:([a-z_][a-z0-9_]*)\b"
+)
+
+
+def _ruby_symbol_token_index(sources: dict[str, str]) -> dict[str, set[str]]:
+    """Camelized symbol literal -> set of file paths containing it
+    (:bump_topic -> "BumpTopic") - same O(total source size) shape as
+    _ruby_constant_token_index above."""
+    index: dict[str, set[str]] = {}
+    for path, content in sources.items():
+        for match in _RUBY_SYMBOL_LITERAL_RE.finditer(content):
+            camelized = "".join(word.capitalize() for word in match.group(1).split("_"))
+            index.setdefault(camelized, set()).add(path)
+    return index
+
+
+def _referenced_by_ruby_symbol_dispatch(path: str, symbol_index: dict[str, set[str]]) -> bool:
+    """Whether some other file's bare :snake_case symbol, camelized,
+    names this file's own Zeitwerk constant - the real gap this closes:
+    Discourse's own `Jobs.enqueue(:bump_topic, ...)` (app/jobs/regular/
+    bump_topic.rb) is dispatched by symbol name, never a class reference
+    anywhere, so _referenced_by_ruby_constant alone never rescues it.
+    Confirmed on a real repo (discourse/discourse): 87 additional
+    app/jobs files rescued beyond what the bare-constant check alone
+    found, on top of the 20 it already caught."""
+    for candidate in _ruby_zeitwerk_constant_candidates(path):
+        owners = symbol_index.get(candidate)
+        if owners and owners - {path}:
+            return True
+    return False
+
+
 def _is_entry_point(path: str, custom_entry_points: set[str]) -> bool:
     if path in custom_entry_points:
         return True
@@ -1190,6 +1388,64 @@ def find_dead_code(
         still_unreachable = []
         for entry in unreachable_modules:
             if entry["path"].endswith(".py") and _referenced_by_dotted_string(entry["path"], token_index):
+                entry_points_detected.append(entry["path"])
+            else:
+                still_unreachable.append(entry)
+        unreachable_modules = still_unreachable
+
+    # Rails' Zeitwerk autoloader (default since Rails 6) means idiomatic
+    # app/ code is essentially never require'd anywhere - it's referenced
+    # purely by constant name, autoloaded on first use. rails_route_
+    # reachable_files above only covers controllers (dispatched from
+    # routes.rb); everything else under app/ - models, jobs, mailers,
+    # services, serializers, channels, policies - had no reachability
+    # signal at all beyond "does some other file import this," which is
+    # never true for Zeitwerk-autoloaded code. Confirmed on a real repo
+    # (discourse/discourse): every one of app/models' 391, app/jobs' 241,
+    # app/mailers' 10, app/services' 245, and app/serializers' 242 files
+    # was flagged dead code-wide before this fix - 100% false positive
+    # rate on the most fundamental Rails conventions there are, not an
+    # edge case.
+    if any(entry["path"].startswith("app/") and entry["path"].endswith(".rb") for entry in unreachable_modules):
+        rb_sources = {}
+        for module in modules:
+            if not module["path"].endswith(".rb"):
+                continue
+            try:
+                rb_sources[module["path"]] = (repo_path / module["path"]).read_text(
+                    encoding="utf-8", errors="ignore"
+                )
+            except OSError:
+                continue
+        # .rake files are real Ruby (Rake tasks routinely dispatch a job
+        # by symbol, e.g. `Jobs.enqueue(:prepare_nested_reply_stats, ...)`
+        # - confirmed on a real repo, lib/tasks/nested_replies.rake in
+        # discourse/discourse) but aren't part of `modules` at all - the
+        # scanner's dependency graph doesn't track them as a language unit
+        # the way .rb files are, so they're invisible to both indexes
+        # below unless read here explicitly. They're a reference SOURCE
+        # only, never a rescue TARGET (they can never appear in
+        # unreachable_modules to begin with), so adding their content to
+        # rb_sources is safe with no risk of a .rake file "rescuing
+        # itself."
+        rake_patterns = ignored_paths or []
+        for rake_file in repo_path.rglob("*.rake"):
+            rel_path = rake_file.relative_to(repo_path).as_posix()
+            rel_parts = rake_file.relative_to(repo_path).parts
+            if any(part in IGNORED_DIRS for part in rel_parts) or is_ignored(rel_path, rake_patterns):
+                continue
+            try:
+                rb_sources[rel_path] = rake_file.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+        ruby_token_index = _ruby_constant_token_index(rb_sources)
+        ruby_symbol_index = _ruby_symbol_token_index(rb_sources)
+        still_unreachable = []
+        for entry in unreachable_modules:
+            if entry["path"].startswith("app/") and entry["path"].endswith(".rb") and (
+                _referenced_by_ruby_constant(entry["path"], ruby_token_index)
+                or _referenced_by_ruby_symbol_dispatch(entry["path"], ruby_symbol_index)
+            ):
                 entry_points_detected.append(entry["path"])
             else:
                 still_unreachable.append(entry)
