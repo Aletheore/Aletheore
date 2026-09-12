@@ -173,9 +173,34 @@ def _glob_segments_match(pattern_segments: list[str], path_segments: list[str]) 
 
 
 def _codeowners_matches(pattern: str, file_path: str) -> bool:
+    # CODEOWNERS explicitly follows gitignore anchoring rules (GitHub's own
+    # docs): a "/" anywhere in the pattern except as a lone trailing
+    # character anchors it to the repo root; a bare name does not and can
+    # match at any depth. GitHub's own documented example makes this
+    # concrete: "apps/" (no leading slash) "owns any file in an apps
+    # directory anywhere in your repository", while "/docs/" (leading
+    # slash) is anchored to the repo root only. Stripping the leading "/"
+    # before checking threw this distinction away, silently treating every
+    # bare directory-name pattern ("apps/", "tests/") as if it had been
+    # written "/apps/" - matching only at the repo root and missing every
+    # nested directory of that name, the opposite of GitHub's documented
+    # behavior.
+    body = pattern[:-1] if pattern.endswith("/") else pattern
+    anchored = pattern.startswith("/") or "/" in body
     normalized = pattern.lstrip("/")
     if normalized.endswith("/"):
-        return file_path.startswith(normalized)
+        if anchored:
+            return file_path.startswith(normalized)
+        # A trailing "/" means "directory", never "a regular file at this
+        # path" - GitHub's own docs: "apps/" owns files *in* an apps
+        # directory, not a plain file literally named "apps". Flash Review
+        # finding: the `file_path == dir_name` clause this line used to
+        # carry matched exactly that non-existent case. Confirmed directly
+        # (_codeowners_matches("apps/", "apps") returned True before this
+        # fix, for a bare file named "apps" with no such directory
+        # involved at all).
+        dir_name = normalized.rstrip("/")
+        return file_path.startswith(f"{dir_name}/") or f"/{dir_name}/" in f"/{file_path}"
     if "/" not in normalized:
         return fnmatch.fnmatch(Path(file_path).name, normalized)
     # A single "*"/"?" in a gitignore-style (and thus CODEOWNERS-style,

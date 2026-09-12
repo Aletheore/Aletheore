@@ -176,6 +176,51 @@ def test_resolve_owner_returns_unavailable_without_codeowners(tmp_path):
     assert result["owner_status"] == "unavailable"
 
 
+def test_resolve_owner_matches_unanchored_directory_pattern_at_any_depth(tmp_path):
+    # CODEOWNERS follows gitignore anchoring rules, and GitHub's own docs
+    # give this exact example: "apps/" (no leading slash) "owns any file
+    # in an apps directory anywhere in your repository" - not just an
+    # "apps" directory at the repo root.
+    repo = tmp_path
+    (repo / ".github").mkdir()
+    (repo / ".github" / "CODEOWNERS").write_text("apps/ @octocat\n")
+
+    result = resolve_owner(repo, "src/apps/main.py")
+
+    assert result["owner"] == ["@octocat"]
+
+
+def test_resolve_owner_leading_slash_directory_pattern_stays_anchored_to_root(tmp_path):
+    # The counterpart to the unanchored case above (GitHub's own docs,
+    # same page): "/docs/" (leading slash) "owns any file in the `/docs`
+    # directory in the root of your repository and any of its
+    # subdirectories" - explicitly NOT any docs/ directory at any depth.
+    repo = tmp_path
+    (repo / ".github").mkdir()
+    (repo / ".github" / "CODEOWNERS").write_text("/docs/ @doctocat\n")
+
+    nested = resolve_owner(repo, "src/docs/readme.md")
+    root = resolve_owner(repo, "docs/readme.md")
+
+    assert nested["owner"] is None
+    assert root["owner"] == ["@doctocat"]
+
+
+def test_resolve_owner_unanchored_directory_pattern_does_not_match_a_bare_file(tmp_path):
+    # Flash Review finding: an earlier fix's `file_path == dir_name` clause
+    # made "apps/" (a directory-only pattern per its trailing slash) match
+    # a plain FILE literally named "apps" - no such directory involved at
+    # all. A trailing slash in CODEOWNERS means "directory", never "a
+    # regular file at this exact path".
+    repo = tmp_path
+    (repo / ".github").mkdir()
+    (repo / ".github" / "CODEOWNERS").write_text("apps/ @octocat\n")
+
+    result = resolve_owner(repo, "apps")
+
+    assert result["owner"] is None
+
+
 def test_resolve_owner_glob_star_does_not_cross_a_path_separator(tmp_path):
     # GitHub's own CODEOWNERS docs give this exact example: "docs/*"
     # matches "docs/getting-started.md" but explicitly NOT a further
