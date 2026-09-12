@@ -534,10 +534,28 @@ def _sql_apply_table_constraint(
     elif isinstance(node, exp.UniqueColumnConstraint):
         target = node.args.get("this")
         names = target.expressions if isinstance(target, exp.Schema) else []
-        for identifier in names:
-            column = by_name.get(identifier.name)
+        # Real bug found via audit: a composite UNIQUE (a, b) constrains
+        # the PAIR, not either column alone - a very common real pattern
+        # (UNIQUE (tenant_id, email), scoping uniqueness per-tenant, the
+        # same email legitimately reusable across different tenants).
+        # Marking each individual column column["unique"] = True fabricates
+        # a materially stronger, wrong claim (that email alone has no
+        # duplicates table-wide) - unlike PRIMARY KEY, whose per-column
+        # "is this column part of the [possibly composite] key" flag is
+        # already a defensible membership fact regardless of arity, this
+        # module's "unique" flag has no such composite-safe interpretation
+        # anywhere else it's read. Single-column UNIQUE (the common case)
+        # is unaffected; only 2+ columns falls through to unsupported
+        # rather than fabricating a false single-column guarantee.
+        if len(names) == 1:
+            column = by_name.get(names[0].name)
             if column is not None:
                 column["unique"] = True
+        elif len(names) > 1:
+            unsupported.append(
+                {"file": rel_path, "line": line,
+                 "statement": _summarize(f"{label} {node.sql(dialect=_SQL_DIALECT)}")}
+            )
     elif isinstance(node, exp.ForeignKey):
         relations.extend(
             _sql_foreign_key_relations(node, rel_path, line, table=table, name=constraint_name)
@@ -799,10 +817,22 @@ def _sql_alter_table_events(stmt: exp.Alter, rel_path: str, line: int) -> list[d
                     elif isinstance(inner, exp.UniqueColumnConstraint):
                         target = inner.args.get("this")
                         names = target.expressions if isinstance(target, exp.Schema) else []
-                        for identifier in names:
+                        # Same real bug, ADD CONSTRAINT shape: a composite
+                        # UNIQUE (a, b) constrains the pair, not either
+                        # column alone - see the matching fix/comment in
+                        # _sql_apply_table_constraint for the CREATE TABLE
+                        # shape of this same constraint.
+                        if len(names) == 1:
                             events.append(
-                                {"kind": "alter_column", "table": table, "name": identifier.name,
+                                {"kind": "alter_column", "table": table, "name": names[0].name,
                                  "changes": {"unique": True}, "file": rel_path, "line": line}
+                            )
+                        elif len(names) > 1:
+                            events.append(
+                                {"kind": "unsupported", "file": rel_path, "line": line,
+                                 "statement": _summarize(
+                                     f"ALTER TABLE {table} ADD CONSTRAINT {inner.sql(dialect=_SQL_DIALECT)}"
+                                 )}
                             )
                     elif isinstance(inner, (exp.PrimaryKeyColumnConstraint, exp.PrimaryKey)):
                         names = inner.expressions if isinstance(inner, exp.PrimaryKey) else []

@@ -453,6 +453,56 @@ def test_composite_primary_key_and_table_level_unique(tmp_path):
     assert columns["user_id"]["unique"] is True
 
 
+def test_composite_unique_constraint_does_not_mark_either_column_unique(tmp_path):
+    # Real bug found via audit: a composite UNIQUE (a, b) constrains the
+    # PAIR, not either column alone - a common real pattern (UNIQUE
+    # (tenant_id, email), scoping uniqueness per-tenant, the same email
+    # legitimately reusable across different tenants). Marking each
+    # individual column unique=True fabricated a materially stronger,
+    # wrong claim (email alone has no duplicates table-wide).
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE memberships (
+                tenant_id BIGINT NOT NULL,
+                email TEXT NOT NULL,
+                UNIQUE (tenant_id, email)
+            );
+            """
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+    columns = {c["name"]: c for c in result["tables"][0]["columns"]}
+    assert columns["tenant_id"]["unique"] is False
+    assert columns["email"]["unique"] is False
+    assert any(
+        "UNIQUE (tenant_id, email)" in u["statement"] for u in result["unsupported"]
+    )
+
+
+def test_composite_unique_via_add_constraint_does_not_mark_either_column_unique(tmp_path):
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE memberships (
+                tenant_id BIGINT NOT NULL,
+                email TEXT NOT NULL
+            );
+            ALTER TABLE memberships ADD CONSTRAINT uq_tenant_email UNIQUE (tenant_id, email);
+            """
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+    columns = {c["name"]: c for c in result["tables"][0]["columns"]}
+    assert columns["tenant_id"]["unique"] is False
+    assert columns["email"]["unique"] is False
+    assert any(
+        "UNIQUE (tenant_id, email)" in u["statement"] for u in result["unsupported"]
+    )
+
+
 def test_column_level_check_constraint_is_modeled(tmp_path):
     repo = write_migrations(
         tmp_path,
