@@ -516,7 +516,14 @@ def _django_model_operations(
                 for f in fields_node.named_children:
                     text = _py_string_text(f, source)
                     if text:
-                        field_names.append(text)
+                        # A real, documented Django Index feature: a
+                        # leading "-" sorts that column descending within
+                        # the index (`models.Index(fields=['-created_at',
+                        # 'title'])`) - it's DSL syntax for sort
+                        # direction, not part of the real column name.
+                        # Left unstripped, the recorded "column" doesn't
+                        # match anything in the table's own real schema.
+                        field_names.append(text.lstrip("-"))
             name_node = _py_kwarg(index_args, "name", source)
             index_name = _py_string_text(name_node, source) if name_node else None
             if not index_name:

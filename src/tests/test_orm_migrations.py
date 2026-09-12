@@ -384,6 +384,41 @@ class Migration(migrations.Migration):
     assert result["dialect"] == ["django"]
 
 
+def test_django_add_index_strips_descending_field_prefix(tmp_path):
+    # Real bug found via audit: a leading "-" in models.Index(fields=[...])
+    # is real, documented Django syntax for sorting that column descending
+    # WITHIN the index - it's DSL notation, not part of the real column
+    # name. Left unstripped, the recorded index column ("-created_at")
+    # never matches the table's own real column ("created_at").
+    repo = write_files(
+        tmp_path,
+        {
+            "blog/migrations/0001_initial.py": """
+from django.db import migrations, models
+
+class Migration(migrations.Migration):
+    operations = [
+        migrations.CreateModel(
+            name='Post',
+            fields=[
+                ('id', models.AutoField(primary_key=True)),
+                ('created_at', models.DateTimeField()),
+                ('title', models.CharField(max_length=200)),
+            ],
+        ),
+        migrations.AddIndex(
+            model_name='post',
+            index=models.Index(fields=['-created_at', 'title'], name='post_recent_idx'),
+        ),
+    ]
+"""
+        },
+    )
+    result = extract_schema(repo, ["blog/migrations"])
+    index = result["indexes"][0]
+    assert index["columns"] == ["created_at", "title"]
+
+
 def test_django_remove_field_alter_field_rename_field_delete_model(tmp_path):
     repo = write_files(
         tmp_path,
