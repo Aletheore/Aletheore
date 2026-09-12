@@ -1187,6 +1187,75 @@ def test_extract_rails_ignores_unrelated_calls():
     assert entries == []
 
 
+def test_extract_rails_resources_inside_namespace_gets_module_prefix():
+    # Real gap found via a real Discourse scan: a `resources :badges`
+    # nested in `namespace :admin do ... end` previously recorded resource
+    # name "badges" - identical to an unrelated top-level `resources
+    # :badges` elsewhere in the same routes.rb, which made dead_code.py's
+    # resolver correctly refuse to guess between the two real controllers
+    # and leave both flagged dead code.
+    root, source = parse_ruby(
+        "namespace :admin do\n  resources :badges\nend\n"
+    )
+
+    entries = _extract_rails_routes(root, source, "config/routes.rb")
+
+    assert entries == [
+        {
+            "method": None,
+            "path": "admin/badges",
+            "framework": "rails",
+            "file": "config/routes.rb",
+            "line": 2,
+            "handler": "resources(...)",
+            "unresolved": True,
+            "note": None,
+        }
+    ]
+
+
+def test_extract_rails_to_route_inside_namespace_gets_module_prefix():
+    root, source = parse_ruby(
+        'namespace :admin do\n  get "users", to: "users#index"\nend\n'
+    )
+
+    entries = _extract_rails_routes(root, source, "config/routes.rb")
+
+    assert entries[0]["handler"] == "admin/users#index"
+
+
+def test_extract_rails_nested_namespace_and_scope_module_compose_in_order():
+    # Arbitrary nesting depth (namespace inside scope inside namespace, ...)
+    # falls out of the upward-walk design for free - no separate stack
+    # needed, just each enclosing do_block's owning call checked in turn.
+    root, source = parse_ruby(
+        'namespace :admin do\n'
+        '  scope module: "extra" do\n'
+        '    resources :widgets\n'
+        "  end\n"
+        "end\n"
+    )
+
+    entries = _extract_rails_routes(root, source, "config/routes.rb")
+
+    assert entries[0]["path"] == "admin/extra/widgets"
+
+
+def test_extract_rails_bare_scope_does_not_add_a_module_prefix():
+    # A bare `scope "/logs" do ... end` (or `scope path: "..." do`) changes
+    # only the URL, never the controller module - confirmed on Discourse's
+    # own routes.rb, where this form outnumbers `namespace` 20 to 3 and
+    # none of those 20 renamespace their contents' controllers. Must NOT
+    # be treated the same as `namespace`/`scope module:`.
+    root, source = parse_ruby(
+        'scope "/logs" do\n  resources :items\nend\n'
+    )
+
+    entries = _extract_rails_routes(root, source, "config/routes.rb")
+
+    assert entries[0]["path"] == "items"
+
+
 def test_extract_rails_hash_rocket_route():
     # Real gap found via a real Discourse scan: config/routes.rb uses this
     # "path" => "controller#action" form 819 times vs only 15 uses of the

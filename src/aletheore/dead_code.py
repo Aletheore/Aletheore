@@ -556,16 +556,66 @@ def _swift_target_reachable_files(
     return reachable_files
 
 
-def _controller_suffix_matches(controller_paths: set[str], suffix: str) -> set[str]:
-    """Every path in controller_paths whose final path segment(s) equal
-    suffix - e.g. suffix "admin/users_controller.rb" matches
-    "app/controllers/admin/users_controller.rb" and, for a plugin/engine
-    that keeps its own controllers dir, "plugins/x/app/controllers/admin/
-    users_controller.rb" too. Deliberately a suffix match rather than
-    assuming a fixed "app/controllers/" prefix - real repos scatter
-    controllers across multiple roots (Rails engines, Discourse plugins)
-    that a hardcoded prefix would miss entirely."""
-    return {p for p in controller_paths if p == suffix or p.endswith(f"/{suffix}")}
+def _controller_suffix_matches(
+    controller_paths: set[str], segments: list[str], *, anchor_single_segment: bool = True
+) -> set[str]:
+    """Every path in controller_paths whose final path segments exactly
+    equal `segments`.
+
+    When `anchor_single_segment` and `segments` is a single (unprefixed)
+    name, matches are additionally anchored at a real controllers-directory
+    boundary - the whole path is just that one segment, or the segment
+    immediately before it is a "controllers" directory (case-insensitive:
+    Rails lowercases it, Laravel's convention capitalizes it
+    "Controllers"). Confirmed by a real end-to-end test: without this, an
+    unprefixed lookup for "badges" also matched
+    "app/controllers/admin/badges_controller.rb" two levels down, colliding
+    with the real top-level app/controllers/badges_controller.rb - Rails'
+    own unqualified `resources :badges`, declared directly in
+    config/routes.rb outside any namespace, can only ever mean the
+    controller sitting directly in a controllers/ dir, never a nested one.
+
+    `anchor_single_segment=False` (see the config/routes.rb-only gating in
+    _rails_route_reachable_files) skips that anchor even for a single
+    segment - needed for exactly the opposite real reason, also confirmed
+    end-to-end against Discourse: an unprefixed `resources :workflows`
+    declared inside a PLUGIN's own routes file (mounted under
+    `SomeEngine.routes.draw do ... end`) does NOT mean the top-level
+    controller - Rails engines implicitly namespace every controller under
+    the engine's own module (isolate_namespace) regardless of anything the
+    routes file itself says, a segment this extractor has no way to see
+    since it isn't a namespace/scope call at all. Anchoring there would
+    wrongly reject the one real controller (e.g.
+    plugins/discourse-workflows/app/controllers/discourse_workflows/
+    workflows_controller.rb) an unprefixed plugin route already uniquely
+    identifies, just because that untracked engine-module segment sits
+    between "controllers/" and it.
+
+    A multi-segment (prefixed) query is always a plain tail match with no
+    adjacency requirement, for the same untracked-engine-segment reason -
+    e.g. a `namespace :api do resources :channels end` inside the chat
+    plugin's own engine-mounted routes file records "api/channels", but the
+    real file is .../controllers/chat/api/channels_controller.rb with an
+    extra untracked "chat" engine-module segment before "api".
+    """
+    n = len(segments)
+    matches = {p for p in controller_paths if p.split("/")[-n:] == segments}
+    if n == 1 and anchor_single_segment:
+        matches = {
+            p for p in matches
+            if len(p.split("/")) == 1 or p.split("/")[-2].lower() == "controllers"
+        }
+    return matches
+
+
+def _controller_path_segments(controller_part: str) -> list[str]:
+    """"admin/badges" -> ["admin", "badges_controller.rb"]; "badges" ->
+    ["badges_controller.rb"] - controller_part may already carry a
+    namespace/module prefix (see _rails_enclosing_module_prefix in
+    endpoints.py), only the final segment names the controller itself."""
+    parts = controller_part.split("/")
+    parts[-1] = f"{parts[-1]}_controller.rb"
+    return parts
 
 
 def _rails_route_reachable_files(
@@ -585,16 +635,18 @@ def _rails_route_reachable_files(
     map_api_endpoints for the API Endpoints feature) instead of re-parsing
     routes.rb here - same data, no second tree-sitter pass over the repo.
 
-    A route nested in a `namespace :admin do ... end` block is invisible
-    to this function today - the Rails route extractor in endpoints.py
-    doesn't track enclosing namespace/scope blocks, so a bare `resources
-    :badges` inside one records resource name "badges", not "admin/
-    badges". The suffix match above still resolves these correctly
-    whenever the base controller name is unique repo-wide (the common
-    case), and safely leaves an ambiguous one unresolved rather than
-    guessing - but a namespaced route whose base name collides with
-    another controller elsewhere in the repo stays a false positive until
-    endpoints.py itself learns to track namespace scope.
+    A `resources :badges` nested in a `namespace :admin do ... end` block
+    now resolves as "admin/badges" (endpoints.py's Rails extractor tracks
+    enclosing namespace/`scope module:` blocks - see
+    _rails_enclosing_module_prefix), so it no longer collides with an
+    unrelated top-level `badges` resource the way it used to. A route
+    inside a bare `scope "/logs" do ... end` (URL-only, no module change -
+    the far more common form on a real repo, 20 to 3 on Discourse's own
+    routes.rb) still isn't prefixed here, correctly, since Rails itself
+    doesn't remodule those. The suffix match above still safely leaves a
+    genuinely ambiguous name (same controller basename reused across two
+    unrelated engines/plugins, not a namespace collision) unresolved
+    rather than guessing.
     """
     if not api_endpoints:
         return set()
@@ -616,7 +668,18 @@ def _rails_route_reachable_files(
             continue
         if not controller_part:
             continue
-        matches = _controller_suffix_matches(controller_paths, f"{controller_part}_controller.rb")
+        # Only a route declared directly in the app's own top-level
+        # config/routes.rb executes with no implicit engine module wrapping
+        # it - a route from any other file (a plugin/gem's own routes file,
+        # almost always mounted via `SomeEngine.routes.draw do ... end`)
+        # can't safely assume an unprefixed name means "the top-level
+        # controller" the way _controller_suffix_matches' anchor does.
+        anchor = entry.get("file") == "config/routes.rb"
+        matches = _controller_suffix_matches(
+            controller_paths,
+            _controller_path_segments(controller_part),
+            anchor_single_segment=anchor,
+        )
         if len(matches) == 1:
             reachable.update(matches)
     return reachable
@@ -651,7 +714,7 @@ def _laravel_route_reachable_files(
         if not match:
             continue
         controller_class = match.group(1).rsplit("\\", 1)[-1]
-        matches = _controller_suffix_matches(controller_paths, f"{controller_class}.php")
+        matches = _controller_suffix_matches(controller_paths, [f"{controller_class}.php"])
         if len(matches) == 1:
             reachable.update(matches)
     return reachable
