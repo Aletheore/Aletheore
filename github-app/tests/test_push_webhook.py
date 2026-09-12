@@ -41,6 +41,13 @@ async def test_push_to_default_branch_enqueues_scan_job(pool):
 
 @pytest.mark.asyncio
 async def test_truncated_push_payload_uses_compare_api_for_complete_changed_files(pool, monkeypatch):
+    # GitHub's own compare-commits docs: "the list of changed files is
+    # only shown on the first page of results" - page/per_page paginate
+    # the commits in the response, not the files, so this must be a
+    # single request, not a page-number loop (a prior version of this
+    # test modeled the loop the production code used to have, which
+    # doesn't match how the real API behaves - see push.py's
+    # GITHUB_COMPARE_FILES_HARD_CAP for the fix).
     payload_commits = [
         {"added": [f"payload-{i}.py"], "removed": [], "modified": []} for i in range(20)
     ]
@@ -53,14 +60,7 @@ async def test_truncated_push_payload_uses_compare_api_for_complete_changed_file
         assert request.url.path == "/repos/octocat/hello-world/compare/base123...head123"
         assert request.headers["Authorization"] == "Bearer installation-token"
         seen_params.append(dict(request.url.params))
-        page = int(request.url.params["page"])
-        assert request.url.params["per_page"] == "100"
-        start = (page - 1) * 100
-        return httpx.Response(
-            200,
-            json={"files": compare_files[start:start + 100]},
-            request=request,
-        )
+        return httpx.Response(200, json={"files": compare_files}, request=request)
 
     client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
     monkeypatch.setattr("app_server.webhooks.push.generate_app_jwt", lambda *a, **k: "app-jwt")
@@ -77,7 +77,44 @@ async def test_truncated_push_payload_uses_compare_api_for_complete_changed_file
     _, kwargs = fake_queue.enqueue.call_args
     assert kwargs["changed_files"] == sorted(file_info["filename"] for file_info in compare_files)
     assert "payload-0.py" not in kwargs["changed_files"]
-    assert seen_params == [{"per_page": "100", "page": "1"}, {"per_page": "100", "page": "2"}]
+    assert seen_params == [{}]
+
+
+@pytest.mark.asyncio
+async def test_truncated_push_payload_logs_when_compare_api_hits_the_300_file_cap(
+    pool, monkeypatch, caplog
+):
+    # Real gap found via audit: GitHub's compare API hard-caps its files
+    # list at 300 with no documented way to retrieve more - a prior
+    # version of this code silently returned only those 300 with no
+    # signal anything was missing. This confirms the fix logs a warning
+    # instead, on exactly the boundary (300 files back) that trips it.
+    payload_commits = [
+        {"added": [f"payload-{i}.py"], "removed": [], "modified": []} for i in range(20)
+    ]
+    payload = _payload(commits=payload_commits)
+    payload["size"] = 101
+    compare_files = [{"filename": f"compare-{i}.py"} for i in range(300)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"files": compare_files}, request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    monkeypatch.setattr("app_server.webhooks.push.generate_app_jwt", lambda *a, **k: "app-jwt")
+    monkeypatch.setattr(
+        "app_server.webhooks.push.get_installation_token",
+        lambda installation_id, app_jwt: "installation-token",
+    )
+    monkeypatch.setattr("app_server.webhooks.push.get_github_api_client", lambda: client)
+
+    fake_queue = MagicMock()
+    with caplog.at_level("WARNING", logger="app_server.webhooks.push"):
+        await handle_push_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    assert any("300-file cap" in record.message for record in caplog.records)
+    fake_queue.enqueue.assert_called_once()
+    _, kwargs = fake_queue.enqueue.call_args
+    assert len(kwargs["changed_files"]) == 300
 
 
 @pytest.mark.asyncio
