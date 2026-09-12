@@ -102,15 +102,60 @@ def parse_repo_config(raw_text: str | None) -> dict:
     return result
 
 
+def _segments_match(pattern_segments: list[str], candidate_segments: list[str]) -> bool:
+    """True if pattern_segments matches a PREFIX of candidate_segments - so a
+    directory-shaped pattern excludes everything beneath it (the pattern is
+    allowed to run out before the candidate does; the reverse isn't a
+    match). "**" is the one construct allowed to cross a "/" boundary
+    (matches zero or more whole segments); a plain "*"/"?" stays scoped to
+    one segment via fnmatch, matching real gitignore semantics rather than
+    fnmatch's own no-path-awareness "*" (which matches straight through
+    "/" - confirmed directly: the old whole-string fnmatch call made
+    "docs/*" match "docs/sub/x.md" too, when gitignore's "*" doesn't cross
+    directory boundaries)."""
+    if not pattern_segments:
+        return True
+    head, rest = pattern_segments[0], pattern_segments[1:]
+    if head == "**":
+        return any(_segments_match(rest, candidate_segments[i:]) for i in range(len(candidate_segments) + 1))
+    if not candidate_segments:
+        return False
+    return fnmatch.fnmatch(candidate_segments[0], head) and _segments_match(rest, candidate_segments[1:])
+
+
 def is_ignored(rel_path: str, patterns: list[str]) -> bool:
     """rel_path is repo-root-relative, forward-slash separated (as_posix()).
-    A pattern matches if it matches the whole path, OR if it matches any
-    parent-directory prefix of the path - so "vendor/**" (or even plain
-    "vendor") excludes everything under vendor/ without every file inside
-    needing to match the pattern individually.
+
+    Gitignore-style anchoring (per this module's own design spec, which
+    calls these "gitignore-style glob patterns"): a pattern containing a
+    "/" anywhere but a lone trailing character is anchored to the repo
+    root and only ever checked from position 0; a bare pattern with no
+    "/" (or only a trailing one) is unanchored and matches at any depth,
+    not just at the repo root.
+
+    Real bug found via audit: the previous implementation always anchored
+    every pattern to the root regardless of whether it contained a "/" -
+    confirmed directly, a plain "vendor" pattern (this function's own
+    docstring's example of something that should "exclude everything
+    under vendor/") excluded a root-level vendor/ directory but not a
+    nested one (e.g. "packages/some-lib/vendor/file.go"), the opposite of
+    gitignore's own documented unanchored-bare-name behavior this module
+    is explicitly designed to follow. A pattern matches if it equals the
+    whole path, or a parent-directory prefix of it (from the root for an
+    anchored pattern, from anywhere for an unanchored one) - so "vendor/**"
+    (anchored) or plain "vendor" (unanchored) both exclude everything
+    under a vendor/ directory without every file inside needing to match
+    individually, "vendor/**" only at the repo root, "vendor" at any
+    depth.
     """
     if not patterns:
         return False
-    parts = rel_path.split("/")
-    candidates = [rel_path] + ["/".join(parts[: i + 1]) for i in range(len(parts) - 1)]
-    return any(fnmatch.fnmatch(candidate, pattern) for candidate in candidates for pattern in patterns)
+    path_segments = rel_path.split("/")
+    for pattern in patterns:
+        body = pattern[:-1] if pattern.endswith("/") else pattern
+        anchored = pattern.startswith("/") or "/" in body
+        pattern_segments = pattern.strip("/").split("/")
+        starts = (0,) if anchored else range(len(path_segments))
+        if any(_segments_match(pattern_segments, path_segments[start:]) for start in starts):
+            return True
+    return False
