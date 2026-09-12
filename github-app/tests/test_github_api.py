@@ -678,6 +678,58 @@ def test_fetch_pr_changed_files_with_no_ignored_paths_includes_every_file():
     assert result == ["vendor/lib.js"]
 
 
+def test_fetch_pr_changed_files_logs_when_compare_api_hits_the_300_file_cap(caplog):
+    # Real gap found via audit (backward-audit sweep, same session as
+    # app_server/webhooks/push.py's GITHUB_COMPARE_FILES_HARD_CAP fix):
+    # this function hits the identical compare API endpoint and has the
+    # identical documented 300-file cap, but had zero cap handling at
+    # all - not even a warning, unlike the push-webhook path. A PR
+    # changing 300+ files had every file past the cap silently invisible
+    # to Flash Review's changed-files list (schema/endpoint context,
+    # ignored_paths filtering, full-file-content fetch all key off it)
+    # with no signal anywhere.
+    compare_files = [{"filename": f"file-{i}.py"} for i in range(300)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"files": compare_files})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    with caplog.at_level("WARNING", logger="scan_worker.github_api"):
+        result = fetch_pr_changed_files(client, "tok", "octocat/hello-world", "aaa", "bbb")
+
+    assert len(result) == 300
+    assert any("300-file cap" in record.message for record in caplog.records)
+
+
+def test_fetch_pr_diff_logs_when_compare_api_hits_the_300_file_cap(caplog):
+    # Same gap as above, in fetch_pr_diff - the primary diff-fetching
+    # function Flash Review's actual review generation reads from.
+    compare_files = [
+        {"filename": f"file-{i}.py", "patch": f"@@ -1,1 +1,1 @@\n-old{i}\n+new{i}"} for i in range(300)
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"files": compare_files})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    with caplog.at_level("WARNING", logger="scan_worker.github_api"):
+        diff_text = fetch_pr_diff(client, "tok", "octocat/hello-world", "aaa", "bbb")
+
+    assert len(diff_text.patches) == 300
+    assert any("300-file cap" in record.message for record in caplog.records)
+
+
+def test_fetch_pr_diff_does_not_log_under_the_300_file_cap():
+    # Guards against a false-positive warning on an ordinary PR.
+    compare_files = [{"filename": "app.py", "patch": "@@ -1,1 +1,1 @@\n-old\n+new"}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"files": compare_files})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    fetch_pr_diff(client, "tok", "octocat/hello-world", "aaa", "bbb")
+
+
 def test_fetch_file_content_decodes_base64():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/repos/octocat/hello-world/contents/app.py"
