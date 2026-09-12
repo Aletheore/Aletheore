@@ -1295,6 +1295,102 @@ def upgrade():
     assert result["indexes"] == []
 
 
+def test_alembic_alter_column_new_column_name_renames_it(tmp_path):
+    # Real bug found via audit: alter_column's new_column_name kwarg is a
+    # real, documented Alembic idiom for renaming a column - the only way
+    # op.* offers to rename one at all (there is no op.rename_column). A
+    # pure rename (no type_/nullable/server_default alongside it)
+    # produced no event whatsoever before this fix - not just imprecise,
+    # completely invisible, so the column kept its old name in the
+    # tracked schema forever.
+    repo = write_files(
+        tmp_path,
+        {
+            "alembic/versions/abc123_init.py": """
+from alembic import op
+import sqlalchemy as sa
+
+revision = "abc123"
+down_revision = None
+
+def upgrade():
+    op.create_table('users',
+        sa.Column('id', sa.Integer(), primary_key=True),
+        sa.Column('old_email', sa.String(length=100)),
+    )
+    op.alter_column('users', 'old_email', new_column_name='email')
+"""
+        },
+    )
+    result = extract_schema(repo, ["alembic/versions"])
+    users = next(t for t in result["tables"] if t["name"] == "users")
+    names = [c["name"] for c in users["columns"]]
+    assert "email" in names
+    assert "old_email" not in names
+
+
+def test_alembic_alter_column_rename_combined_with_another_change(tmp_path):
+    # A rename combined with a real change (nullable=False here) must
+    # apply that change to the column's NEW name, not silently keep
+    # applying it to (and leaving the column tracked under) the old one.
+    repo = write_files(
+        tmp_path,
+        {
+            "alembic/versions/abc123_init.py": """
+from alembic import op
+import sqlalchemy as sa
+
+revision = "abc123"
+down_revision = None
+
+def upgrade():
+    op.create_table('users',
+        sa.Column('id', sa.Integer(), primary_key=True),
+        sa.Column('old_phone', sa.String(length=20), nullable=True),
+    )
+    op.alter_column('users', 'old_phone', new_column_name='phone', nullable=False)
+"""
+        },
+    )
+    result = extract_schema(repo, ["alembic/versions"])
+    users = next(t for t in result["tables"] if t["name"] == "users")
+    names = [c["name"] for c in users["columns"]]
+    assert "phone" in names
+    assert "old_phone" not in names
+    phone_col = next(c for c in users["columns"] if c["name"] == "phone")
+    assert phone_col["nullable"] is False
+
+
+def test_alembic_batch_alter_table_new_column_name_renames_it(tmp_path):
+    # Same bug, reached through the batch_op form (SQLite's ALTER TABLE
+    # workaround) rather than a top-level op.alter_column call.
+    repo = write_files(
+        tmp_path,
+        {
+            "alembic/versions/abc123_init.py": """
+from alembic import op
+import sqlalchemy as sa
+
+revision = "abc123"
+down_revision = None
+
+def upgrade():
+    op.create_table('users',
+        sa.Column('id', sa.Integer(), primary_key=True),
+        sa.Column('old_email', sa.String(length=100)),
+    )
+    with op.batch_alter_table('users') as batch_op:
+        batch_op.alter_column('old_email', new_column_name='email')
+"""
+        },
+    )
+    result = extract_schema(repo, ["alembic/versions"])
+    users = next(t for t in result["tables"] if t["name"] == "users")
+    names = [c["name"] for c in users["columns"]]
+    assert "email" in names
+    assert "old_email" not in names
+
+
 def test_alembic_drop_constraint_stays_unsupported(tmp_path):
     repo = write_files(
         tmp_path,
