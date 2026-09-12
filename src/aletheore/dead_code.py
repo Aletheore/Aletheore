@@ -61,6 +61,23 @@ TEST_PATH_PATTERNS = [
     # "androidTest" isn't matched by the tests?/__tests__ pattern above
     # since it's one fused word, not "test" as its own path segment.
     re.compile(r"(^|/)(androidTest|test)/.+\.(kt|kts|java)$"),
+    # RSpec - Ruby's dominant test framework and the one actually in play
+    # for #664/#666's own Rails dead-code work - was never added here.
+    # Its spec files don't live under a directory named "test(s)" (the
+    # generic pattern above), so every *_spec.rb was silently treated as
+    # production code. Confirmed against a real Rails app (Discourse):
+    # 3,799 real *_spec.rb files across the main app and its plugins/
+    # migrations subprojects were completely unmatched by every existing
+    # pattern, dwarfing the false-positive count #664/#666 actually fixed.
+    re.compile(r"(^|/)[^/]+_spec\.rb$"),
+    # A spec/ directory also holds non-suffixed test infrastructure (spec_
+    # helper.rb, factories, shared examples, custom matchers) that is just
+    # as much test-only code as the specs themselves - same reasoning as
+    # the generic tests?/__tests__ directory rule above, scoped to Ruby's
+    # own directory name for it. Confirmed against Discourse: 711 such
+    # files (spec_helper.rb, spec/support/**, spec/factories/**) exist
+    # alongside the 3,799 *_spec.rb files above.
+    re.compile(r"(^|/)spec/.+\.rb$"),
 ]
 
 PACKAGE_IMPORT_ALIASES = {
