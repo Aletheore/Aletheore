@@ -206,6 +206,21 @@ def test_resolve_owner_leading_slash_directory_pattern_stays_anchored_to_root(tm
     assert root["owner"] == ["@doctocat"]
 
 
+def test_resolve_owner_unanchored_directory_pattern_does_not_match_a_bare_file(tmp_path):
+    # Flash Review finding: an earlier fix's `file_path == dir_name` clause
+    # made "apps/" (a directory-only pattern per its trailing slash) match
+    # a plain FILE literally named "apps" - no such directory involved at
+    # all. A trailing slash in CODEOWNERS means "directory", never "a
+    # regular file at this exact path".
+    repo = tmp_path
+    (repo / ".github").mkdir()
+    (repo / ".github" / "CODEOWNERS").write_text("apps/ @octocat\n")
+
+    result = resolve_owner(repo, "apps")
+
+    assert result["owner"] is None
+
+
 def test_resolve_recent_commit_returns_file_commit(tmp_path):
     repo = tmp_path
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)

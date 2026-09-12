@@ -178,8 +178,16 @@ def _codeowners_matches(pattern: str, file_path: str) -> bool:
     if normalized.endswith("/"):
         if anchored:
             return file_path.startswith(normalized)
+        # A trailing "/" means "directory", never "a regular file at this
+        # path" - GitHub's own docs: "apps/" owns files *in* an apps
+        # directory, not a plain file literally named "apps". Flash Review
+        # finding: the `file_path == dir_name` clause this line used to
+        # carry matched exactly that non-existent case. Confirmed directly
+        # (_codeowners_matches("apps/", "apps") returned True before this
+        # fix, for a bare file named "apps" with no such directory
+        # involved at all).
         dir_name = normalized.rstrip("/")
-        return file_path == dir_name or file_path.startswith(f"{dir_name}/") or f"/{dir_name}/" in f"/{file_path}"
+        return file_path.startswith(f"{dir_name}/") or f"/{dir_name}/" in f"/{file_path}"
     if "/" not in normalized:
         return fnmatch.fnmatch(Path(file_path).name, normalized)
     return fnmatch.fnmatch(file_path, normalized)
