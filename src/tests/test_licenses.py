@@ -59,6 +59,43 @@ def test_categorize_license_recognizes_mpl_as_weak_copyleft():
     assert categorize_license("MPL-2.0") == "copyleft-weak"
 
 
+def test_categorize_license_spdx_or_expression_uses_most_permissive_alternative():
+    # Real bug found via audit: an SPDX "OR" expression is a CHOICE - the
+    # licensee may comply under whichever alternative they prefer - a
+    # real, common idiom offered verbatim as the `license` field by npm's
+    # package.json, Cargo.toml, and PEP 639 pyproject.toml. The old
+    # marker-scan always returned the MOST restrictive category found
+    # anywhere in the string regardless of "OR" or alternative order -
+    # "GPL-3.0-only OR MIT" and "MIT OR GPL-3.0-only" both came back
+    # "copyleft-strong" even though either is legitimately usable under
+    # MIT alone.
+    assert categorize_license("MIT OR GPL-3.0-only") == "permissive"
+    assert categorize_license("GPL-3.0-only OR MIT") == "permissive"
+    assert categorize_license("(MIT OR Apache-2.0)") == "permissive"
+    assert categorize_license("MIT OR GPL-3.0-only OR BSD-3-Clause") == "permissive"
+    assert categorize_license("AGPL-3.0 OR LGPL-2.1") == "copyleft-weak"
+
+
+def test_categorize_license_or_split_does_not_false_match_hyphenated_or_later_suffix():
+    # A real SPDX id's own "-or-later" suffix (GPL-2.0-or-later,
+    # LGPL-3.0-or-later - both real, common identifiers) has no
+    # surrounding whitespace around "or", so it must not be mistaken for
+    # an OR-expression split point.
+    assert categorize_license("GPL-2.0-or-later") == "copyleft-strong"
+    assert categorize_license("LGPL-3.0-or-later") == "copyleft-weak"
+
+
+def test_categorize_license_and_expression_still_uses_most_restrictive_component():
+    # An "AND" expression means compliance is required with BOTH
+    # components simultaneously, the opposite of "OR" - the existing
+    # restrictive-first marker scan already gets this right (a real
+    # restriction can't be opted out of just because a permissive
+    # component is also present), so this locks in that this fix didn't
+    # change AND's own, already-correct behavior.
+    assert categorize_license("GPL-3.0-only AND MIT") == "copyleft-strong"
+    assert categorize_license("MIT AND Apache-2.0") == "permissive"
+
+
 def test_categorize_license_unknown_for_none_or_unrecognized():
     assert categorize_license(None) == "unknown"
     assert categorize_license("") == "unknown"
@@ -151,6 +188,25 @@ def test_detect_repo_license_from_composer_json_dual_license_array(tmp_path):
 
     assert result["category"] == "permissive"
     assert "composer.json" in result["detected_from"]
+
+
+def test_detect_repo_license_from_composer_json_dual_license_array_is_order_independent(tmp_path):
+    # Real bug found via audit: the test right above this one only ever
+    # exercised ["MIT", "GPL-2.0"] (permissive first) and passed for the
+    # wrong reason - the old code took array[0] unconditionally, not
+    # "whichever is most permissive". Reversing the array order used to
+    # flip the result to "copyleft-strong" even though the exact same
+    # licensing choice is being offered either way - fixed by joining
+    # the array into an SPDX "A OR B" expression and letting
+    # categorize_license's own OR-resolution (most permissive wins,
+    # order-independent) handle it.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "composer.json").write_text(json.dumps({"name": "vendor/app", "license": ["GPL-2.0", "MIT"]}))
+
+    result = detect_repo_license(repo)
+
+    assert result["category"] == "permissive"
 
 
 def test_detect_repo_license_from_gemspec(tmp_path):
@@ -834,6 +890,23 @@ def test_fetch_rubygems_license_reads_licenses_array():
     assert result == "MIT"
 
 
+def test_fetch_rubygems_license_joins_a_dual_license_array_as_an_or_expression(tmp_path):
+    # Real bug found via audit: a dual/multi-licensed gem's `licenses`
+    # array is the same real "you may comply under whichever you
+    # prefer" choice an SPDX "OR" expression represents - taking
+    # licenses[0] picked whichever the gem's own author happened to
+    # list first, not the most permissive option actually available.
+    from aletheore.licenses import _fetch_rubygems_license, categorize_license
+
+    response = _mock_response({"licenses": ["GPL-2.0", "MIT"]})
+
+    with patch("aletheore.licenses.urllib.request.urlopen", return_value=response):
+        result = _fetch_rubygems_license("somegem", "1.0.0", timeout=10)
+
+    assert result == "GPL-2.0 OR MIT"
+    assert categorize_license(result) == "permissive"
+
+
 def test_check_dependency_licenses_reports_a_ruby_dependency(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -869,6 +942,28 @@ def test_fetch_packagist_license_matches_exact_version():
         result = _fetch_packagist_license("laravel/framework", "11.30.0", timeout=10)
 
     assert result == "MIT"
+
+
+def test_fetch_packagist_license_joins_a_dual_license_array_as_an_or_expression():
+    # Same real gap as RubyGems above, for Packagist's own identical
+    # dual/multi-license array shape.
+    from aletheore.licenses import _fetch_packagist_license, categorize_license
+
+    response = _mock_response(
+        {
+            "packages": {
+                "vendor/pkg": [
+                    {"version": "1.0.0", "license": ["GPL-2.0", "MIT"]},
+                ]
+            }
+        }
+    )
+
+    with patch("aletheore.licenses.urllib.request.urlopen", return_value=response):
+        result = _fetch_packagist_license("vendor/pkg", "1.0.0", timeout=10)
+
+    assert result == "GPL-2.0 OR MIT"
+    assert categorize_license(result) == "permissive"
 
 
 def test_check_dependency_licenses_reports_a_php_dependency(tmp_path):
