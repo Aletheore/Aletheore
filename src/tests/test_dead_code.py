@@ -22,6 +22,20 @@ def test_recognized_entry_point_is_never_unreachable(tmp_path):
     assert set(result["entry_points_detected"]) == {"main.py", "app/__main__.py", "index.js"}
 
 
+def test_django_admin_py_is_never_unreachable(tmp_path):
+    # Real gap found via audit against a real repo (wagtail/wagtail):
+    # django.contrib.admin.autodiscover() (called automatically by
+    # AdminConfig.ready() in every modern Django project) dynamically
+    # imports every installed app's own admin.py by convention - never a
+    # plain top-level import anywhere in the app's own source. Confirmed:
+    # wagtail/documents/admin.py and wagtail/images/admin.py both carry
+    # real, live admin registrations and zero imported_by.
+    modules = [_module("myapp/admin.py")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "myapp/admin.py" in result["entry_points_detected"]
+
+
 def test_test_files_are_never_unreachable(tmp_path):
     modules = [
         _module("tests/test_thing.py"),
@@ -1029,6 +1043,35 @@ def test_aspnet_controller_pattern_requires_aspnetcore_mvc_import(tmp_path):
     assert "Foo.cs" in [m["path"] for m in result["unreachable_modules"]]
 
 
+def test_aspnet_controller_via_project_wide_global_using_is_never_unreachable(tmp_path):
+    # Real gap found via audit against a real repo (dotnet/eShop): C# 10's
+    # `global using` (the default in every `dotnet new` template since
+    # .NET 6, almost always collected into one GlobalUsings.cs) applies
+    # project-wide from a single declaration, so a real controller file
+    # can carry neither a same-file `using Microsoft.AspNetCore.Mvc` nor
+    # any other local import at all - confirmed on eShop's own
+    # HomeController.cs/ConsentController.cs/etc, none of which declare
+    # the import locally. Without checking for a global using anywhere in
+    # the repo, this check never fired on a single real controller in a
+    # modern (.NET 6+) app.
+    (tmp_path / "GlobalUsings.cs").write_text(
+        "global using Microsoft.AspNetCore.Mvc;\n"
+    )
+    quickstart_dir = tmp_path / "Quickstart" / "Home"
+    quickstart_dir.mkdir(parents=True)
+    (quickstart_dir / "HomeController.cs").write_text(
+        "namespace IdentityServerHost.Quickstart.UI\n{\n"
+        "    public class HomeController : Controller\n    {\n"
+        "        public IActionResult Index() { return View(); }\n    }\n}\n"
+    )
+    modules = [
+        _module("GlobalUsings.cs"),
+        _module("Quickstart/Home/HomeController.cs"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "Quickstart/Home/HomeController.cs" in result["entry_points_detected"]
+
+
 def test_rails_controller_named_only_in_routes_rb_is_never_unreachable(tmp_path):
     # Real bug found via a real Discourse scan (68,183-commit clone): Rails
     # dispatches `to: "users#show"` and `resources :name` route entries to
@@ -1253,6 +1296,85 @@ def test_laravel_backslash_qualified_string_handler_resolves_a_nested_controller
             "handler": "Admin\\UserController@index",
             "path": "/admin/users",
             "unresolved": False,
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    assert result["unreachable_modules"] == []
+
+
+def test_laravel_route_resource_controller_is_never_unreachable(tmp_path):
+    # Real gap found via audit: Route::resource()/apiResource() - Laravel's
+    # own standard CRUD-controller idiom, direct equivalent of Rails'
+    # `resources` - was completely unextracted, so any controller wired up
+    # this way (arguably Laravel's single most common controller pattern)
+    # was always flagged dead code.
+    controllers_dir = tmp_path / "app" / "Http" / "Controllers"
+    controllers_dir.mkdir(parents=True)
+    (controllers_dir / "UserController.php").write_text(
+        "<?php\nnamespace App\\Http\\Controllers;\n\nclass UserController {\n"
+        "    public function index() { return []; }\n}\n"
+    )
+    modules = [_module("app/Http/Controllers/UserController.php")]
+    api_endpoints = [
+        {
+            "framework": "laravel",
+            "handler": "UserController",
+            "path": "users",
+            "unresolved": True,
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    assert result["unreachable_modules"] == []
+
+
+def test_laravel_route_resource_namespaced_controller_resolves_uniquely(tmp_path):
+    controllers_dir = tmp_path / "app" / "Http" / "Controllers" / "Admin"
+    controllers_dir.mkdir(parents=True)
+    (controllers_dir / "UserController.php").write_text(
+        "<?php\nnamespace App\\Http\\Controllers\\Admin;\n\nclass UserController {}\n"
+    )
+    other_dir = tmp_path / "app" / "Http" / "Controllers"
+    (other_dir / "UserController.php").write_text(
+        "<?php\nnamespace App\\Http\\Controllers;\n\nclass UserController {}\n"
+    )
+    modules = [
+        _module("app/Http/Controllers/Admin/UserController.php"),
+        _module("app/Http/Controllers/UserController.php"),
+    ]
+    api_endpoints = [
+        {
+            "framework": "laravel",
+            "handler": "Admin\\UserController",
+            "path": "admin/users",
+            "unresolved": True,
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    unreachable_paths = {m["path"] for m in result["unreachable_modules"]}
+    # The namespaced one resolves via its full qualified name...
+    assert "app/Http/Controllers/Admin/UserController.php" not in unreachable_paths
+    # ...while the unrelated top-level one, never named by any route here,
+    # correctly stays flagged.
+    assert "app/Http/Controllers/UserController.php" in unreachable_paths
+
+
+def test_rails_resources_controller_override_resolves_the_real_controller(tmp_path):
+    # End-to-end version of the config/routes.rb:356 Discourse bug: without
+    # honoring the `controller:` override, dead_code.py would look for
+    # (and fail to find) a nonexistent keys_controller.rb instead of the
+    # real api_controller.rb.
+    (tmp_path / "app" / "controllers").mkdir(parents=True)
+    (tmp_path / "app" / "controllers" / "api_controller.rb").write_text(
+        "class ApiController < ApplicationController\nend\n"
+    )
+    modules = [_module("app/controllers/api_controller.rb")]
+    api_endpoints = [
+        {
+            "framework": "rails",
+            "handler": "resources(...)",
+            "path": "api",
+            "unresolved": True,
+            "file": "config/routes.rb",
         },
     ]
     result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)

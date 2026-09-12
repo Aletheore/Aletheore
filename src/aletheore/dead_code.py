@@ -22,6 +22,14 @@ ENTRY_POINT_FILENAMES = {
     "manage.py",
     "server.py",
     "wsgi.py",
+    # django.contrib.admin.autodiscover() (called automatically by
+    # AdminConfig.ready() in every modern Django project) dynamically
+    # imports every installed app's own admin.py by convention - never a
+    # plain top-level import anywhere in the app's own source. Confirmed
+    # on a real repo (wagtail/wagtail): wagtail/documents/admin.py and
+    # wagtail/images/admin.py both carry a real, live @admin.register()-
+    # equivalent Django admin customization and zero imported_by.
+    "admin.py",
     # SwiftPM's build manifest - always this exact name, read by the swift
     # toolchain itself, never imported by the repo's own application code.
     "Package.swift",
@@ -174,6 +182,19 @@ _SPRING_STEREOTYPE_ANNOTATION_PATTERN = re.compile(
 # attribute/base-class signal avoids matching an unrelated project-defined
 # "Controller" base class that has nothing to do with ASP.NET Core.
 _ASPNETCORE_MVC_IMPORT_PATTERN = re.compile(r"^\s*using\s+Microsoft\.AspNetCore\.Mvc\b", re.MULTILINE)
+# C# 10's `global using` (the default in every `dotnet new` template since
+# .NET 6, almost always collected into one GlobalUsings.cs) applies the
+# import project-wide from a single declaration - a controller file itself
+# then carries no local `using Microsoft.AspNetCore.Mvc` at all. Confirmed
+# on a real repo (dotnet/eShop): every one of its MVC-style controllers
+# (HomeController.cs, ConsentController.cs, ...) declares neither a
+# same-file `using` nor the attribute/base-class import any other way -
+# the project's GlobalUsings.cs is the only place it's declared - so
+# without also checking for a project-wide `global using`, this check
+# never fired on a single real controller in a modern (.NET 6+) app.
+_ASPNET_GLOBAL_USING_MVC_PATTERN = re.compile(
+    r"^\s*global\s+using\s+Microsoft\.AspNetCore\.Mvc\b", re.MULTILINE
+)
 _ASPNET_API_CONTROLLER_ATTRIBUTE_PATTERN = re.compile(r"^\s*\[ApiController\]", re.MULTILINE)
 _ASPNET_CONTROLLER_BASE_CLASS_PATTERN = re.compile(
     r"\bclass\s+\w+\s*:\s*(?:[\w.]+\.)?(?:Controller|ControllerBase)\b"
@@ -344,14 +365,43 @@ def _has_spring_stereotype_annotation(repo_path: Path, path: str) -> bool:
     )
 
 
-def _has_aspnet_controller_convention(repo_path: Path, path: str) -> bool:
+def _aspnet_global_using_mvc_present(repo_path: Path, ignored_paths: list[str] | None = None) -> bool:
+    """Whether ANY .cs file anywhere in the repo declares `global using
+    Microsoft.AspNetCore.Mvc` - computed once repo-wide (mirroring
+    _android_manifest_entry_points/_html_script_entry_points above) rather
+    than per-file, since a global using's whole point is that it isn't
+    local to any one file. Not scoped to a single .csproj's file set (this
+    codebase has no general C# project-boundary model to scope it to) -
+    a multi-project repo where only one project declares the global using
+    could over-apply it to another project's unrelated same-named
+    "Controller" class, the same narrow false-positive risk every other
+    heuristic in this file already accepts in exchange for not missing the
+    common case entirely.
+    """
+    patterns = ignored_paths or []
+    for cs_path in repo_path.rglob("*.cs"):
+        rel_path = cs_path.relative_to(repo_path).as_posix()
+        if is_ignored(rel_path, patterns):
+            continue
+        try:
+            content = cs_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if _ASPNET_GLOBAL_USING_MVC_PATTERN.search(content):
+            return True
+    return False
+
+
+def _has_aspnet_controller_convention(
+    repo_path: Path, path: str, *, global_using_mvc: bool = False
+) -> bool:
     if not path.endswith(".cs"):
         return False
     try:
         content = (repo_path / path).read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return False
-    if not _ASPNETCORE_MVC_IMPORT_PATTERN.search(content):
+    if not (global_using_mvc or _ASPNETCORE_MVC_IMPORT_PATTERN.search(content)):
         return False
     return bool(
         _ASPNET_API_CONTROLLER_ATTRIBUTE_PATTERN.search(content)
@@ -710,9 +760,19 @@ def _laravel_route_reachable_files(
         handler = entry.get("handler")
         if not handler:
             continue
-        match = _LARAVEL_STRING_HANDLER_PATTERN.match(handler)
-        if not match:
-            continue
+        if entry.get("unresolved"):
+            # Route::resource()/apiResource() - handler is already the
+            # qualified controller class name straight from the route
+            # declaration (Laravel requires it explicit, unlike Rails'
+            # `resources`, which infers a controller name from the
+            # resource name by convention - no naming-convention guessing
+            # needed here at all).
+            controller_class = handler
+        else:
+            match = _LARAVEL_STRING_HANDLER_PATTERN.match(handler)
+            if not match:
+                continue
+            controller_class = match.group(1)
         # "Admin\UserController" -> ["Admin", "UserController.php"] - a
         # fully backslash-qualified handler already names its own
         # namespace segments; preserve them for a precise multi-segment
@@ -727,7 +787,7 @@ def _laravel_route_reachable_files(
         # does. Confirmed by Flash Review on #666: without this, a real
         # nested controller like app/Http/Controllers/Admin/User.php named
         # by "Admin\User@index" was wrongly left flagged as dead code.
-        segments = match.group(1).split("\\")
+        segments = controller_class.split("\\")
         segments[-1] = f"{segments[-1]}.php"
         matches = _controller_suffix_matches(
             controller_paths, segments, anchor_single_segment=False
@@ -915,6 +975,7 @@ def find_dead_code(
     swift_reachable_files = _swift_target_reachable_files(repo_path, modules, ignored_paths)
     rails_route_reachable_files = _rails_route_reachable_files(modules, api_endpoints)
     laravel_route_reachable_files = _laravel_route_reachable_files(modules, api_endpoints)
+    aspnet_global_using_mvc = _aspnet_global_using_mvc_present(repo_path, ignored_paths)
 
     unreachable_modules = []
     entry_points_detected = []
@@ -939,7 +1000,9 @@ def find_dead_code(
                 or _has_main_guard(repo_path, path)
                 or _has_hilt_dagger_annotation(repo_path, path)
                 or _has_spring_stereotype_annotation(repo_path, path)
-                or _has_aspnet_controller_convention(repo_path, path)
+                or _has_aspnet_controller_convention(
+                    repo_path, path, global_using_mvc=aspnet_global_using_mvc
+                )
                 or _has_go_main_function(repo_path, path)
                 or _has_rust_main_function(repo_path, path)
                 or _has_java_main_method(repo_path, path)
