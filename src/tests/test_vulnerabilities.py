@@ -572,6 +572,60 @@ def test_parse_pip_pins_reads_pep621_pyproject_dependencies(tmp_path):
     assert ("tzdata", "*", "PyPI") in pins
 
 
+def test_parse_pip_pins_reads_pep621_optional_dependencies(tmp_path):
+    # Real gap found via audit: [project.optional-dependencies] (PEP 621
+    # extras, e.g. a "test"/"dev" group) is a real, direct, first-party
+    # declared dependency set - not a transitive one - yet was never read
+    # at all. This function's own two real callers are CVE scanning and
+    # license checking: a genuinely vulnerable pinned package declared
+    # only under a dev/test extras group was invisible to CVE scanning
+    # entirely, regardless of how out of date or risky it actually was.
+    from aletheore.vulnerabilities import _parse_pip_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text(
+        "[project]\n"
+        'dependencies = ["requests>=2.0"]\n\n'
+        "[project.optional-dependencies]\n"
+        'test = ["pytest==6.0.0"]\n'
+        'dev = ["black==20.8b0"]\n'
+    )
+
+    pins = _parse_pip_pins(repo)
+
+    assert ("requests", "2.0", "PyPI") in pins
+    assert ("pytest", "6.0.0", "PyPI") in pins
+    assert ("black", "20.8b0", "PyPI") in pins
+
+
+def test_parse_pip_pins_reads_poetry_dependency_groups_and_legacy_dev_dependencies(tmp_path):
+    # Same gap, Poetry's own two forms of the same thing: [tool.poetry.
+    # group.<name>.dependencies] (1.2+) and [tool.poetry.dev-dependencies]
+    # (the older, pre-1.2 shape) - both real, direct dependency
+    # declarations, neither read at all before this fix.
+    from aletheore.vulnerabilities import _parse_pip_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text(
+        "[tool.poetry.dependencies]\n"
+        'python = "^3.12"\n'
+        'django = "^5.1.0"\n\n'
+        "[tool.poetry.group.dev.dependencies]\n"
+        'pytest = "6.0.0"\n\n'
+        "[tool.poetry.dev-dependencies]\n"
+        'black = "20.8b0"\n'
+    )
+
+    pins = _parse_pip_pins(repo)
+
+    assert ("django", "5.1.0", "PyPI") in pins
+    assert ("pytest", "6.0.0", "PyPI") in pins
+    assert ("black", "20.8b0", "PyPI") in pins
+    assert not any(pin[0] == "python" for pin in pins)
+
+
 def test_parse_pip_pins_keeps_compound_compatible_and_unpinned_pep508_dependencies(tmp_path):
     from aletheore.vulnerabilities import _parse_pip_pins
 
