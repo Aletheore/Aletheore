@@ -950,3 +950,195 @@ def test_dotted_string_detection_real_corpus_full_parity(tmp_path):
 
     actually_rescued = {p for p in unreachable_candidates if p in result["entry_points_detected"]}
     assert actually_rescued == expected_rescued
+
+
+def test_spring_boot_rest_controller_is_never_unreachable(tmp_path):
+    # Real bug confirmed via a real Discourse-scale repo audit (this class
+    # of bug generalizes the Rails/Zeitwerk finding below to Java): Spring
+    # discovers @RestController classes by classpath component-scanning
+    # (@SpringBootApplication's @ComponentScan), never a plain import, so a
+    # controller referenced by nothing else in the repo always looked
+    # unreachable before this.
+    pkg_dir = tmp_path / "src" / "main" / "java" / "com" / "example" / "api"
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "UserController.java").write_text(
+        "package com.example.api;\n"
+        "import org.springframework.web.bind.annotation.GetMapping;\n"
+        "import org.springframework.web.bind.annotation.RestController;\n\n"
+        "@RestController\n"
+        "public class UserController {\n"
+        "    @GetMapping(\"/users\")\n"
+        "    public String listUsers() { return \"users\"; }\n"
+        "}\n"
+    )
+    modules = [_module("src/main/java/com/example/api/UserController.java")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "src/main/java/com/example/api/UserController.java" in result["entry_points_detected"]
+
+
+def test_spring_stereotype_annotation_requires_springframework_import(tmp_path):
+    # A project's own unrelated @Service/@Component class (nothing to do
+    # with Spring) must not be swept up just because the annotation name
+    # matches - the same corroborating-import requirement as the Dagger
+    # @Module + @InstallIn pairing elsewhere in this file.
+    pkg_dir = tmp_path / "src" / "main" / "java" / "com" / "example"
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "NotSpring.java").write_text(
+        "package com.example;\n\n@Service\npublic class NotSpring {}\n"
+    )
+    modules = [_module("src/main/java/com/example/NotSpring.java")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "src/main/java/com/example/NotSpring.java" in [
+        m["path"] for m in result["unreachable_modules"]
+    ]
+
+
+def test_aspnet_core_api_controller_is_never_unreachable(tmp_path):
+    # Real bug, same shape as Spring above: ASP.NET Core's AddControllers()
+    # discovers [ApiController]/ControllerBase types by assembly scanning
+    # at startup, never a plain C# reference.
+    controllers_dir = tmp_path / "Controllers"
+    controllers_dir.mkdir()
+    (controllers_dir / "UsersController.cs").write_text(
+        "using Microsoft.AspNetCore.Mvc;\n\n"
+        "namespace MyApp.Controllers {\n"
+        "    [ApiController]\n"
+        "    [Route(\"api/[controller]\")]\n"
+        "    public class UsersController : ControllerBase {\n"
+        "        [HttpGet]\n"
+        "        public IActionResult Get() { return Ok(); }\n"
+        "    }\n"
+        "}\n"
+    )
+    modules = [_module("Controllers/UsersController.cs")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "Controllers/UsersController.cs" in result["entry_points_detected"]
+
+
+def test_aspnet_controller_pattern_requires_aspnetcore_mvc_import(tmp_path):
+    # A project's own unrelated "class Foo : Controller" (a base class with
+    # nothing to do with ASP.NET Core MVC) must not be swept up just
+    # because the base-class name matches.
+    (tmp_path / "Foo.cs").write_text(
+        "namespace MyApp {\n    class Foo : Controller {}\n}\n"
+    )
+    modules = [_module("Foo.cs")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "Foo.cs" in [m["path"] for m in result["unreachable_modules"]]
+
+
+def test_rails_controller_named_only_in_routes_rb_is_never_unreachable(tmp_path):
+    # Real bug found via a real Discourse scan (68,183-commit clone): Rails
+    # dispatches `to: "users#show"` and `resources :name` route entries to
+    # controllers by Zeitwerk constant-name autoloading, never a plain
+    # `require` - config/routes.rb is the only place either controller
+    # below is ever named. 13,261 files (the overwhelming majority of them
+    # controllers exactly like these two) were misflagged as dead code on
+    # that real repo before this.
+    controllers_dir = tmp_path / "app" / "controllers" / "admin"
+    controllers_dir.mkdir(parents=True)
+    (tmp_path / "app" / "controllers" / "users_controller.rb").write_text(
+        "class UsersController < ApplicationController\n  def show; end\nend\n"
+    )
+    (controllers_dir / "badges_controller.rb").write_text(
+        "class Admin::BadgesController < Admin::AdminController\n  def index; end\nend\n"
+    )
+    modules = [
+        _module("app/controllers/users_controller.rb"),
+        _module("app/controllers/admin/badges_controller.rb"),
+        _module("config/routes.rb"),
+    ]
+    api_endpoints = [
+        {
+            "framework": "rails",
+            "handler": "users#show",
+            "path": "/users/:id",
+            "unresolved": False,
+        },
+        {
+            "framework": "rails",
+            "handler": "resources(...)",
+            "path": "badges",
+            "unresolved": True,
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    assert result["unreachable_modules"] == []
+    # routes.rb itself is a filename-recognized entry point (Rails' router
+    # loads it by convention), not resolved via the route-handler path -
+    # confirm it separately so this test also locks that in.
+    assert "config/routes.rb" in result["entry_points_detected"]
+
+
+def test_rails_ambiguous_controller_basename_is_left_unresolved(tmp_path):
+    # Two controllers with the same base name in different Rails engines/
+    # plugins (a real shape - Discourse plugins each keep their own
+    # app/controllers/): resolving "widgets" must not guess which one
+    # routes.rb meant, so both stay unresolved rather than one being
+    # silently (and possibly wrongly) marked reachable.
+    (tmp_path / "app" / "controllers").mkdir(parents=True)
+    (tmp_path / "plugins" / "a" / "app" / "controllers").mkdir(parents=True)
+    (tmp_path / "app" / "controllers" / "widgets_controller.rb").write_text(
+        "class WidgetsController < ApplicationController\nend\n"
+    )
+    (tmp_path / "plugins" / "a" / "app" / "controllers" / "widgets_controller.rb").write_text(
+        "class WidgetsController < ApplicationController\nend\n"
+    )
+    modules = [
+        _module("app/controllers/widgets_controller.rb"),
+        _module("plugins/a/app/controllers/widgets_controller.rb"),
+    ]
+    api_endpoints = [
+        {"framework": "rails", "handler": "resources(...)", "path": "widgets", "unresolved": True},
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    unreachable_paths = {m["path"] for m in result["unreachable_modules"]}
+    assert "app/controllers/widgets_controller.rb" in unreachable_paths
+    assert "plugins/a/app/controllers/widgets_controller.rb" in unreachable_paths
+
+
+def test_laravel_legacy_string_handler_controller_is_never_unreachable(tmp_path):
+    # Real gap: the legacy "'UserController@index'" route-handler string
+    # has no accompanying `use` import anywhere in the file (unlike the
+    # newer [Controller::class, 'method'] array form, which does and is
+    # already resolved correctly by the ordinary PHP import graph).
+    controllers_dir = tmp_path / "app" / "Http" / "Controllers"
+    controllers_dir.mkdir(parents=True)
+    (controllers_dir / "UserController.php").write_text(
+        "<?php\nnamespace App\\Http\\Controllers;\n\nclass UserController {\n"
+        "    public function index() { return []; }\n}\n"
+    )
+    modules = [
+        _module("app/Http/Controllers/UserController.php"),
+        _module("routes/web.php"),
+    ]
+    api_endpoints = [
+        {
+            "framework": "laravel",
+            "handler": "UserController@index",
+            "path": "/users",
+            "unresolved": False,
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    assert "app/Http/Controllers/UserController.php" not in [
+        m["path"] for m in result["unreachable_modules"]
+    ]
+
+
+def test_laravel_array_class_handler_method_name_is_not_mistaken_for_a_controller(tmp_path):
+    # [Controller::class, 'method'] entries record just the method name
+    # ("index") as their handler, per _laravel_handler_label - this must
+    # not be matched by the legacy "Controller@method" resolver (it has no
+    # "@"), since that array form's controller reference is already a real
+    # import the ordinary PHP import graph resolves on its own.
+    modules = [_module("app/Http/Controllers/UserController.php")]
+    api_endpoints = [
+        {"framework": "laravel", "handler": "index", "path": "/users", "unresolved": False},
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    assert "app/Http/Controllers/UserController.php" in [
+        m["path"] for m in result["unreachable_modules"]
+    ]

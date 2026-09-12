@@ -31,6 +31,13 @@ ENTRY_POINT_FILENAMES = {
     # in, by both language rule and universal convention its entry point.
     # Confirmed on a real repo (vapor/api-template): Sources/Run/main.swift.
     "main.swift",
+    # Rails' own router loads this file by convention (config/routes.rb) -
+    # nothing in the app ever requires it, same category as manage.py/wsgi.py
+    # above. An unambiguous, Rails-specific basename, unlike Laravel's
+    # routes/web.php or routes/api.php (generic enough names elsewhere that
+    # matching on basename alone risks false negatives), so only this one
+    # is added here.
+    "routes.rb",
 }
 
 TEST_PATH_PATTERNS = [
@@ -140,6 +147,36 @@ _JAVA_MAIN_METHOD_PATTERN = re.compile(
 # separate instance `void Main()`.
 _CSHARP_MAIN_METHOD_PATTERN = re.compile(
     r"^\s*(?=[^;{}\n]*\bstatic\b)[\w\s<>]*\bMain\s*\(", re.MULTILINE
+)
+
+# Spring (Boot/MVC) stereotype annotations mark a class for classpath
+# component-scanning (@ComponentScan/@SpringBootApplication find it by
+# scanning .class files at startup), never a plain Java/Kotlin import -
+# same category as the Hilt/Dagger annotations above, just Spring's own
+# DI container instead of Android's. Confirmed empirically: a synthetic
+# @RestController with a single @GetMapping method and zero references
+# anywhere else in the repo looked completely unreachable without this.
+# Requiring a same-file org.springframework import alongside the bare
+# annotation name (mirroring the Dagger @Module + @InstallIn pairing
+# above) avoids matching an unrelated project-defined @Service/@Component
+# of the same name that has nothing to do with Spring.
+_SPRINGFRAMEWORK_IMPORT_PATTERN = re.compile(r"^\s*import\s+org\.springframework\b", re.MULTILINE)
+_SPRING_STEREOTYPE_ANNOTATION_PATTERN = re.compile(
+    r"^\s*@(?:RestController|Controller|Service|Repository|Component|Configuration|SpringBootApplication)\b",
+    re.MULTILINE,
+)
+
+# ASP.NET Core discovers MVC controllers by assembly scanning
+# (services.AddControllers() at startup finds every ControllerBase
+# subclass/[ApiController]-attributed class), never a plain C# reference -
+# same "framework-owned reflection/scanning" category as Spring above.
+# Requiring a same-file Microsoft.AspNetCore.Mvc import alongside the
+# attribute/base-class signal avoids matching an unrelated project-defined
+# "Controller" base class that has nothing to do with ASP.NET Core.
+_ASPNETCORE_MVC_IMPORT_PATTERN = re.compile(r"^\s*using\s+Microsoft\.AspNetCore\.Mvc\b", re.MULTILINE)
+_ASPNET_API_CONTROLLER_ATTRIBUTE_PATTERN = re.compile(r"^\s*\[ApiController\]", re.MULTILINE)
+_ASPNET_CONTROLLER_BASE_CLASS_PATTERN = re.compile(
+    r"\bclass\s+\w+\s*:\s*(?:[\w.]+\.)?(?:Controller|ControllerBase)\b"
 )
 
 _HTML_SCRIPT_SRC_PATTERN = re.compile(r'<script[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE)
@@ -292,6 +329,34 @@ def _has_csharp_main_method(repo_path: Path, path: str) -> bool:
     except OSError:
         return False
     return bool(_CSHARP_MAIN_METHOD_PATTERN.search(content))
+
+
+def _has_spring_stereotype_annotation(repo_path: Path, path: str) -> bool:
+    if not path.endswith((".java", ".kt", ".kts")):
+        return False
+    try:
+        content = (repo_path / path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    return bool(
+        _SPRINGFRAMEWORK_IMPORT_PATTERN.search(content)
+        and _SPRING_STEREOTYPE_ANNOTATION_PATTERN.search(content)
+    )
+
+
+def _has_aspnet_controller_convention(repo_path: Path, path: str) -> bool:
+    if not path.endswith(".cs"):
+        return False
+    try:
+        content = (repo_path / path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    if not _ASPNETCORE_MVC_IMPORT_PATTERN.search(content):
+        return False
+    return bool(
+        _ASPNET_API_CONTROLLER_ATTRIBUTE_PATTERN.search(content)
+        or _ASPNET_CONTROLLER_BASE_CLASS_PATTERN.search(content)
+    )
 
 
 def _has_hilt_dagger_annotation(repo_path: Path, path: str) -> bool:
@@ -491,6 +556,107 @@ def _swift_target_reachable_files(
     return reachable_files
 
 
+def _controller_suffix_matches(controller_paths: set[str], suffix: str) -> set[str]:
+    """Every path in controller_paths whose final path segment(s) equal
+    suffix - e.g. suffix "admin/users_controller.rb" matches
+    "app/controllers/admin/users_controller.rb" and, for a plugin/engine
+    that keeps its own controllers dir, "plugins/x/app/controllers/admin/
+    users_controller.rb" too. Deliberately a suffix match rather than
+    assuming a fixed "app/controllers/" prefix - real repos scatter
+    controllers across multiple roots (Rails engines, Discourse plugins)
+    that a hardcoded prefix would miss entirely."""
+    return {p for p in controller_paths if p == suffix or p.endswith(f"/{suffix}")}
+
+
+def _rails_route_reachable_files(
+    modules: list[dict], api_endpoints: list[dict] | None
+) -> set[str]:
+    """Controller files named only in config/routes.rb ("to: 'users#show'",
+    "resources :users") - Rails dispatches to them by Zeitwerk
+    constant-name autoloading, never a plain `require`/import, so the
+    import graph can never show an edge into them no matter how well
+    Ruby import resolution works. Confirmed on a real repo (Discourse):
+    every one of its ~250 app/controllers/**/*.rb files looked unreachable
+    without this - 13,261 files flagged dead code-wide, the overwhelming
+    majority of them controllers whose only reference anywhere in the repo
+    is their own routes.rb entry.
+
+    Deliberately reuses api_endpoints (already extracted once by
+    map_api_endpoints for the API Endpoints feature) instead of re-parsing
+    routes.rb here - same data, no second tree-sitter pass over the repo.
+
+    A route nested in a `namespace :admin do ... end` block is invisible
+    to this function today - the Rails route extractor in endpoints.py
+    doesn't track enclosing namespace/scope blocks, so a bare `resources
+    :badges` inside one records resource name "badges", not "admin/
+    badges". The suffix match above still resolves these correctly
+    whenever the base controller name is unique repo-wide (the common
+    case), and safely leaves an ambiguous one unresolved rather than
+    guessing - but a namespaced route whose base name collides with
+    another controller elsewhere in the repo stays a false positive until
+    endpoints.py itself learns to track namespace scope.
+    """
+    if not api_endpoints:
+        return set()
+    controller_paths = {m["path"] for m in modules if m["path"].endswith("_controller.rb")}
+    if not controller_paths:
+        return set()
+    reachable: set[str] = set()
+    for entry in api_endpoints:
+        if entry.get("framework") != "rails":
+            continue
+        handler = entry.get("handler")
+        if not handler:
+            continue
+        if handler == "resources(...)":
+            controller_part = entry.get("path")
+        elif "#" in handler:
+            controller_part = handler.split("#", 1)[0]
+        else:
+            continue
+        if not controller_part:
+            continue
+        matches = _controller_suffix_matches(controller_paths, f"{controller_part}_controller.rb")
+        if len(matches) == 1:
+            reachable.update(matches)
+    return reachable
+
+
+# Laravel's legacy "'Controller@method'" route-handler string (still valid
+# alongside the newer [Controller::class, 'method'] array form) never
+# accompanies a `use` import of that controller - the array form does
+# (PHP requires importing App\Http\Controllers\UserController to reference
+# UserController::class), so the existing PHP import graph already
+# resolves that shape correctly and only the bare-string legacy form needs
+# this dedicated resolver.
+_LARAVEL_STRING_HANDLER_PATTERN = re.compile(r"^([\w\\]+)@\w+$")
+
+
+def _laravel_route_reachable_files(
+    modules: list[dict], api_endpoints: list[dict] | None
+) -> set[str]:
+    if not api_endpoints:
+        return set()
+    controller_paths = {m["path"] for m in modules if m["path"].endswith(".php")}
+    if not controller_paths:
+        return set()
+    reachable: set[str] = set()
+    for entry in api_endpoints:
+        if entry.get("framework") != "laravel":
+            continue
+        handler = entry.get("handler")
+        if not handler:
+            continue
+        match = _LARAVEL_STRING_HANDLER_PATTERN.match(handler)
+        if not match:
+            continue
+        controller_class = match.group(1).rsplit("\\", 1)[-1]
+        matches = _controller_suffix_matches(controller_paths, f"{controller_class}.php")
+        if len(matches) == 1:
+            reachable.update(matches)
+    return reachable
+
+
 def _html_script_entry_points(repo_path: Path, ignored_paths: list[str] | None = None) -> set[str]:
     # Plain <script src="..."> tags (no bundler, no ES module imports) are
     # invisible to the JS import graph - confirmed on this repo's website/:
@@ -653,6 +819,7 @@ def find_dead_code(
     modules: list[dict],
     config: dict | None,
     ignored_paths: list[str] | None = None,
+    api_endpoints: list[dict] | None = None,
 ) -> dict:
     custom_entry_points = set()
     if isinstance(config, dict):
@@ -666,6 +833,8 @@ def find_dead_code(
         repo_path, modules, android_manifest_entry_points
     )
     swift_reachable_files = _swift_target_reachable_files(repo_path, modules, ignored_paths)
+    rails_route_reachable_files = _rails_route_reachable_files(modules, api_endpoints)
+    laravel_route_reachable_files = _laravel_route_reachable_files(modules, api_endpoints)
 
     unreachable_modules = []
     entry_points_detected = []
@@ -676,7 +845,12 @@ def find_dead_code(
             continue
         if is_test_file(path):
             continue
-        if path in swift_reachable_files or path in jvm_package_reachable_files:
+        if (
+            path in swift_reachable_files
+            or path in jvm_package_reachable_files
+            or path in rails_route_reachable_files
+            or path in laravel_route_reachable_files
+        ):
             continue
         if not module.get("imported_by", []):
             if (
@@ -684,6 +858,8 @@ def find_dead_code(
                 or path in android_manifest_entry_points
                 or _has_main_guard(repo_path, path)
                 or _has_hilt_dagger_annotation(repo_path, path)
+                or _has_spring_stereotype_annotation(repo_path, path)
+                or _has_aspnet_controller_convention(repo_path, path)
                 or _has_go_main_function(repo_path, path)
                 or _has_rust_main_function(repo_path, path)
                 or _has_java_main_method(repo_path, path)
