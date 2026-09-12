@@ -160,16 +160,52 @@ def _parse_codeowners_line(line: str) -> tuple[str, list[str]] | None:
 
 
 def _glob_segments_match(pattern_segments: list[str], path_segments: list[str]) -> bool:
-    if not pattern_segments:
-        return not path_segments
-    head, rest = pattern_segments[0], pattern_segments[1:]
-    if head == "**":
-        # gitignore/CODEOWNERS "**" matches zero or more whole path
-        # segments - the one construct that IS meant to cross "/".
-        return any(_glob_segments_match(rest, path_segments[i:]) for i in range(len(path_segments) + 1))
-    if not path_segments:
-        return False
-    return fnmatch.fnmatch(path_segments[0], head) and _glob_segments_match(rest, path_segments[1:])
+    """True if pattern_segments matches path_segments exactly (both fully
+    consumed together) - unlike repo_config.py's sibling _segments_match,
+    which matches a PREFIX (a directory-shaped ignored_paths pattern
+    excludes everything beneath it), a CODEOWNERS pattern attributes one
+    specific file, so nothing is allowed to remain on either side once
+    matching finishes. "**" is the one construct allowed to cross a "/"
+    boundary (matches zero or more whole path segments); a plain "*"/"?"
+    stays scoped to one segment via fnmatch.
+
+    Real bug found via audit (same class already fixed in repo_config.py's
+    _segments_match, same session): a naive recursive "**" branch with no
+    memoization forks into len(path_segments)+1 calls at every "**"
+    segment, exponential in the number of "**" segments a pattern has. A
+    CODEOWNERS file (CODEOWNERS, .github/CODEOWNERS, or docs/CODEOWNERS)
+    lives inside the scanned repo itself - untrusted input by design, the
+    same threat model ignored_paths already has - so a crafted pattern is
+    a real, currently-live denial-of-service vector: confirmed directly,
+    a pattern with ten "**" segments against a 25-segment path took ~65s
+    before this fix. Memoized by (pattern index, path index), scoped to
+    this one call (not a module-level cache, so it can't grow across
+    unrelated calls), bounding the whole match to
+    O(len(pattern_segments) * len(path_segments)) states.
+    """
+    memo: dict[tuple[int, int], bool] = {}
+
+    def match(pi: int, ci: int) -> bool:
+        key = (pi, ci)
+        cached = memo.get(key)
+        if cached is not None:
+            return cached
+        if pi == len(pattern_segments):
+            result = ci == len(path_segments)
+        else:
+            head = pattern_segments[pi]
+            if head == "**":
+                result = any(
+                    match(pi + 1, ci + skip) for skip in range(len(path_segments) - ci + 1)
+                )
+            elif ci == len(path_segments):
+                result = False
+            else:
+                result = fnmatch.fnmatch(path_segments[ci], head) and match(pi + 1, ci + 1)
+        memo[key] = result
+        return result
+
+    return match(0, 0)
 
 
 def _codeowners_matches(pattern: str, file_path: str) -> bool:

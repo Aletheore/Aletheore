@@ -237,6 +237,36 @@ def test_resolve_owner_glob_star_does_not_cross_a_path_separator(tmp_path):
     assert nested["owner"] is None
 
 
+def test_codeowners_multiple_wildcard_segments_does_not_blow_up(tmp_path):
+    # Real bug found via audit (backward-audit sweep re-verifying #686/
+    # #687): the naive recursive "**" branch in _glob_segments_match
+    # forks into len(path_segments)+1 calls with no memoization, and a
+    # pattern with several "**" segments multiplies that branching at
+    # every level - exponential in the number of "**" segments. A
+    # CODEOWNERS file lives inside the scanned repo itself - untrusted
+    # input by design, the same threat model repo_config.py's
+    # ignored_paths already has (see its own
+    # test_is_ignored_multiple_wildcard_segments_does_not_blow_up) - so a
+    # crafted CODEOWNERS pattern is a real denial-of-service vector, not
+    # a theoretical one. Confirmed directly: this exact shape took ~65s
+    # pre-fix. Bounded here to well under a second as the regression
+    # guard.
+    import time
+
+    repo = tmp_path
+    (repo / ".github").mkdir()
+    pattern = "/".join(["**"] * 10) + "/nomatch"
+    (repo / ".github" / "CODEOWNERS").write_text(f"{pattern} @doctocat\n")
+    path = "/".join(f"seg{i}" for i in range(25)) + "/file.py"
+
+    start = time.monotonic()
+    result = resolve_owner(repo, path)
+    elapsed = time.monotonic() - start
+
+    assert result["owner"] is None
+    assert elapsed < 1.0
+
+
 def test_resolve_recent_commit_returns_file_commit(tmp_path):
     repo = tmp_path
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
