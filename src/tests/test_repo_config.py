@@ -188,3 +188,27 @@ def test_is_ignored_directory_glob_still_excludes_everything_beneath_a_wildcard_
     # rewrite above.
     assert is_ignored("docs/x.md", ["docs/*"]) is True
     assert is_ignored("docs/sub/x.md", ["docs/*"]) is True
+
+
+def test_is_ignored_multiple_wildcard_segments_does_not_blow_up():
+    # Real bug found via Flash Review on this same PR: the naive recursive
+    # "**" branch in _segments_match forks into
+    # len(candidate_segments)+1 calls with no memoization, and a pattern
+    # with several "**" segments multiplies that branching at every level -
+    # exponential in the number of "**" segments. ignored_paths comes from
+    # the scanned repo's own .aletheore.json, untrusted input by design (
+    # that's the entire threat model this module exists under), so a
+    # crafted config is a real denial-of-service vector, not a theoretical
+    # one - confirmed directly: this exact shape took ~60s pre-fix.
+    # Bounded here to well under a second as the regression guard.
+    import time
+
+    pattern = "/".join(["**"] * 10) + "/nomatch"
+    path = "/".join(f"seg{i}" for i in range(25))
+
+    start = time.monotonic()
+    result = is_ignored(path, [pattern])
+    elapsed = time.monotonic() - start
+
+    assert result is False
+    assert elapsed < 1.0

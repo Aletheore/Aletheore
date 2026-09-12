@@ -112,15 +112,44 @@ def _segments_match(pattern_segments: list[str], candidate_segments: list[str]) 
     fnmatch's own no-path-awareness "*" (which matches straight through
     "/" - confirmed directly: the old whole-string fnmatch call made
     "docs/*" match "docs/sub/x.md" too, when gitignore's "*" doesn't cross
-    directory boundaries)."""
-    if not pattern_segments:
-        return True
-    head, rest = pattern_segments[0], pattern_segments[1:]
-    if head == "**":
-        return any(_segments_match(rest, candidate_segments[i:]) for i in range(len(candidate_segments) + 1))
-    if not candidate_segments:
-        return False
-    return fnmatch.fnmatch(candidate_segments[0], head) and _segments_match(rest, candidate_segments[1:])
+    directory boundaries).
+
+    Real bug found via Flash Review on this same change: a naive recursive
+    "**" branch with no memoization forks into len(candidate_segments)+1
+    calls, and a pattern with several "**" segments multiplies that
+    branching at every level - exponential in the number of "**" segments.
+    ignored_paths comes from the scanned repo's own .aletheore.json,
+    untrusted input by design, so a crafted config is a real
+    denial-of-service vector - confirmed directly, a 10x"**" pattern
+    against a 25-segment path took ~60s before this fix. Memoizing by
+    (pattern index, candidate index) - scoped to this one call, not a
+    module-level cache, so it can't grow across unrelated calls - bounds
+    the whole match to O(len(pattern_segments) * len(candidate_segments))
+    states.
+    """
+    memo: dict[tuple[int, int], bool] = {}
+
+    def match(pi: int, ci: int) -> bool:
+        key = (pi, ci)
+        cached = memo.get(key)
+        if cached is not None:
+            return cached
+        if pi == len(pattern_segments):
+            result = True
+        else:
+            head = pattern_segments[pi]
+            if head == "**":
+                result = any(
+                    match(pi + 1, ci + skip) for skip in range(len(candidate_segments) - ci + 1)
+                )
+            elif ci == len(candidate_segments):
+                result = False
+            else:
+                result = fnmatch.fnmatch(candidate_segments[ci], head) and match(pi + 1, ci + 1)
+        memo[key] = result
+        return result
+
+    return match(0, 0)
 
 
 def is_ignored(rel_path: str, patterns: list[str]) -> bool:
