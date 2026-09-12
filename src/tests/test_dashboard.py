@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import tempfile
 from pathlib import Path
 
@@ -574,3 +575,27 @@ def test_browser_icon_requests_are_served_rather_than_404(tmp_path):
         "/favicon.ico", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png", "/logo.png",
     ):
         assert client.get(path).status_code == 200, path
+
+
+def test_render_mcp_tools_escapes_name_and_description():
+    # Real gap found via audit: renderMcpTools was the one render function
+    # in this file inserting evidence-derived text (a tool's name/
+    # description, from /api/mcp-tools) into innerHTML without calling
+    # escapeHtml first - every other render function here (renderDeadCode,
+    # renderClusters, renderVulnerabilities, etc.) consistently does.
+    # Not reachable through a malicious repo today (every registered
+    # tool's name/description is a static, first-party string - see
+    # mcp_server.py), but nothing enforces that staying true, and this
+    # regression test pins the same escaping discipline the rest of the
+    # file already has.
+    from aletheore.dashboard import DASHBOARD_HTML
+
+    match = re.search(r"function renderMcpTools\(tools\) \{.*?\n\}", DASHBOARD_HTML, re.DOTALL)
+    assert match is not None, "renderMcpTools function not found in DASHBOARD_HTML"
+    body = match.group(0)
+
+    assert "escapeHtml(t.name)" in body
+    assert "escapeHtml(t.description" in body
+    # Guards against a regression back to the original unescaped shape:
+    # `t.name` concatenated directly with no escapeHtml() wrapping it.
+    assert "+ t.name +" not in body
