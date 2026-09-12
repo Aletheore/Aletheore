@@ -387,11 +387,23 @@ def _django_column_from_field(
         # check as resolved_name above, same reason: an explicit
         # db_column="" must not be treated as absent via truthiness.
         column["name"] = f"{field_name}_id" if db_column is None else db_column
+        # to_field (real bug found via audit, same shape as db_column's
+        # own fix above but on the TARGET side instead of the source
+        # side): a real, documented Django option for referencing a
+        # unique field other than the target model's primary key - a
+        # slug/username/UUID-based FK, a real and common pattern, not a
+        # rare one. Was hardcoded to "id" unconditionally, so any such FK
+        # got a to_column that doesn't exist in the real target table's
+        # own schema for that role. Same `is None` reasoning as
+        # db_column: an explicit to_field="" must not be treated as
+        # absent via truthiness.
+        to_field_node = _py_kwarg(args, "to_field", source)
+        to_field = _py_string_text(to_field_node, source) if to_field_node is not None else None
         if target_text is not None:
             relation = {
                 "from_column": column["name"],
                 "to_table": target_text,
-                "to_column": "id",
+                "to_column": "id" if to_field is None else to_field,
                 "on_delete": on_delete,
                 "file": rel_path,
                 "line": line,

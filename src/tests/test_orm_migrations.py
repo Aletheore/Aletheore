@@ -251,6 +251,67 @@ class Migration(migrations.Migration):
     assert relation["to_table"] == "accounts_user"
 
 
+def test_django_foreign_key_to_field_overrides_the_target_column(tmp_path):
+    # Real bug found via audit: to_field=... is a real, documented Django
+    # option for referencing a unique field other than the target
+    # model's primary key (a slug/username/UUID-based FK - a common
+    # pattern, not a rare one). to_column was hardcoded to "id"
+    # unconditionally, so any such FK got a to_column that doesn't exist
+    # in the real target table's own schema for that role.
+    repo = write_files(
+        tmp_path,
+        {
+            "blog/migrations/0001_initial.py": """
+from django.db import migrations, models
+
+class Migration(migrations.Migration):
+    operations = [
+        migrations.CreateModel(
+            name='Post',
+            fields=[
+                ('id', models.AutoField(primary_key=True)),
+                ('author', models.ForeignKey(
+                    to='accounts.User', to_field='username', on_delete=models.CASCADE,
+                )),
+            ],
+        ),
+    ]
+"""
+        },
+    )
+    events, _ = extract_django_migrations(repo, ["blog/migrations"])
+    create = next(e for e in events if e["kind"] == "create_table")
+    relation = create["relations"][0]
+    assert relation["from_column"] == "author_id"
+    assert relation["to_table"] == "accounts_user"
+    assert relation["to_column"] == "username"
+
+
+def test_django_foreign_key_without_to_field_still_defaults_to_id(tmp_path):
+    repo = write_files(
+        tmp_path,
+        {
+            "blog/migrations/0001_initial.py": """
+from django.db import migrations, models
+
+class Migration(migrations.Migration):
+    operations = [
+        migrations.CreateModel(
+            name='Post',
+            fields=[
+                ('id', models.AutoField(primary_key=True)),
+                ('author', models.ForeignKey(to='accounts.User', on_delete=models.CASCADE)),
+            ],
+        ),
+    ]
+"""
+        },
+    )
+    events, _ = extract_django_migrations(repo, ["blog/migrations"])
+    create = next(e for e in events if e["kind"] == "create_table")
+    assert create["relations"][0]["to_column"] == "id"
+
+
 def test_django_db_column_empty_string_is_not_treated_as_absent(tmp_path):
     # Real bug found via Flash Review's own dogfooded review of the PR
     # that introduced db_column support: `db_column or field_name` uses
