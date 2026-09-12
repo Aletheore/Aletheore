@@ -1,5 +1,8 @@
 import os
+import threading
+import time
 from datetime import datetime
+from unittest.mock import patch
 
 import pytest
 
@@ -171,6 +174,127 @@ async def test_different_branches_are_isolated(pool):
 
     assert store.load("unused", "main").ownership.keys() == {"a@example.com"}
     assert store.load("unused", "feature").ownership.keys() == {"b@example.com"}
+
+
+@pytest.mark.asyncio
+async def test_concurrent_apply_commits_does_not_lose_either_writers_commits(pool):
+    # Real bug found via audit: apply_commits used to read the current
+    # snapshot (self.load, its own separate connection) before opening the
+    # connection that deletes and re-inserts the merged result, with
+    # nothing serializing two concurrent callers for the same
+    # (installation_id, repo_full_name, branch). Nothing upstream prevents
+    # that in production either - no webhook handler enqueues a scan job
+    # with a dedup key. Whichever writer's DELETE+INSERT committed last
+    # won outright; the other writer's merged commits were not merged with
+    # it, they were gone.
+    #
+    # Reproduced deterministically here by widening the real read-to-write
+    # window with an artificial delay inside _load_with_cursor (the read
+    # step) - on the pre-fix code this reliably made the second thread's
+    # own read start while the first thread was still "working" (i.e.
+    # before the first thread had written anything), the exact interleaving
+    # that loses an update. On the fix, apply_commits holds the advisory
+    # lock across this same delay, so the second thread's read cannot start
+    # until the first thread's write has already committed and the lock
+    # is released.
+    await _insert_installation(pool, 609, "org")
+    store = PostgresRepoGraphStore(TEST_DATABASE_URL, 609, "org/repo")
+    store.apply_commits(
+        "unused",
+        "main",
+        [_touch("s0", "Root", "root@example.com", "2026-06-01T00:00:00", ("root.txt",))],
+        new_sync_sha="s0",
+        new_sync_at=datetime(2026, 6, 1),
+        reset=True,
+    )
+
+    original_load = PostgresRepoGraphStore._load_with_cursor
+
+    def _slow_load(self, cur, branch):
+        result = original_load(self, cur, branch)
+        time.sleep(0.3)
+        return result
+
+    results: dict[str, Exception] = {}
+
+    def _apply(sha, author, email, filename):
+        try:
+            store.apply_commits(
+                "unused",
+                "main",
+                [_touch(sha, author, email, "2026-06-02T00:00:00", (filename,))],
+                new_sync_sha=sha,
+                new_sync_at=datetime(2026, 6, 2),
+                reset=False,
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced via `results` below
+            results[sha] = exc
+
+    with patch.object(PostgresRepoGraphStore, "_load_with_cursor", _slow_load):
+        thread_a = threading.Thread(target=_apply, args=("sa", "Alice", "a@example.com", "a.txt"))
+        thread_b = threading.Thread(target=_apply, args=("sb", "Bob", "b@example.com", "b.txt"))
+        thread_a.start()
+        time.sleep(0.05)  # let thread_a acquire the lock and start its (slow) read first
+        thread_b.start()
+        thread_a.join(timeout=5)
+        thread_b.join(timeout=5)
+
+    assert not results, f"apply_commits raised: {results}"
+    snapshot = store.load("unused", "main")
+    # Both concurrent writers' commits must survive - neither is a lost update.
+    assert "a@example.com" in snapshot.ownership
+    assert "b@example.com" in snapshot.ownership
+    assert "a.txt" in snapshot.file_churn
+    assert "b.txt" in snapshot.file_churn
+
+
+@pytest.mark.asyncio
+async def test_apply_commits_lock_does_not_serialize_different_repos(pool):
+    # The fix must not accidentally serialize every scan globally - only
+    # concurrent callers for the SAME (installation_id, repo_full_name,
+    # branch) should ever wait on each other.
+    await _insert_installation(pool, 610, "org-x")
+    await _insert_installation(pool, 611, "org-y")
+    store_a = PostgresRepoGraphStore(TEST_DATABASE_URL, 610, "org-x/repo")
+    store_b = PostgresRepoGraphStore(TEST_DATABASE_URL, 611, "org-y/repo")
+
+    original_write = PostgresRepoGraphStore._write_merged
+
+    def _slow_write(self, cur, branch, merged, new_sync_sha, new_sync_at):
+        if self._repo_full_name == "org-x/repo":
+            time.sleep(0.3)
+        return original_write(self, cur, branch, merged, new_sync_sha, new_sync_at)
+
+    with patch.object(PostgresRepoGraphStore, "_write_merged", _slow_write):
+        thread_a = threading.Thread(
+            target=lambda: store_a.apply_commits(
+                "unused",
+                "main",
+                [_touch("s1", "Alice", "a@example.com", "2026-06-01T00:00:00", ("a.txt",))],
+                new_sync_sha="s1",
+                new_sync_at=datetime(2026, 6, 1),
+                reset=True,
+            )
+        )
+        thread_a.start()
+        time.sleep(0.05)  # let thread_a acquire its lock and enter the slow write first
+
+        start = time.monotonic()
+        store_b.apply_commits(
+            "unused",
+            "main",
+            [_touch("s2", "Bob", "b@example.com", "2026-06-01T00:00:00", ("b.txt",))],
+            new_sync_sha="s2",
+            new_sync_at=datetime(2026, 6, 1),
+            reset=True,
+        )
+        elapsed = time.monotonic() - start
+        thread_a.join(timeout=5)
+
+    # store_b's own call was never patched to be slow, and a different repo
+    # must not be blocked by store_a's in-flight lock - it should return
+    # well under store_a's own artificial 0.3s delay.
+    assert elapsed < 0.2
 
 
 @pytest.mark.asyncio
