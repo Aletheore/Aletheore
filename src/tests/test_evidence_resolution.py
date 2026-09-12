@@ -176,6 +176,36 @@ def test_resolve_owner_returns_unavailable_without_codeowners(tmp_path):
     assert result["owner_status"] == "unavailable"
 
 
+def test_resolve_owner_matches_unanchored_directory_pattern_at_any_depth(tmp_path):
+    # CODEOWNERS follows gitignore anchoring rules, and GitHub's own docs
+    # give this exact example: "apps/" (no leading slash) "owns any file
+    # in an apps directory anywhere in your repository" - not just an
+    # "apps" directory at the repo root.
+    repo = tmp_path
+    (repo / ".github").mkdir()
+    (repo / ".github" / "CODEOWNERS").write_text("apps/ @octocat\n")
+
+    result = resolve_owner(repo, "src/apps/main.py")
+
+    assert result["owner"] == ["@octocat"]
+
+
+def test_resolve_owner_leading_slash_directory_pattern_stays_anchored_to_root(tmp_path):
+    # The counterpart to the unanchored case above (GitHub's own docs,
+    # same page): "/docs/" (leading slash) "owns any file in the `/docs`
+    # directory in the root of your repository and any of its
+    # subdirectories" - explicitly NOT any docs/ directory at any depth.
+    repo = tmp_path
+    (repo / ".github").mkdir()
+    (repo / ".github" / "CODEOWNERS").write_text("/docs/ @doctocat\n")
+
+    nested = resolve_owner(repo, "src/docs/readme.md")
+    root = resolve_owner(repo, "docs/readme.md")
+
+    assert nested["owner"] is None
+    assert root["owner"] == ["@doctocat"]
+
+
 def test_resolve_recent_commit_returns_file_commit(tmp_path):
     repo = tmp_path
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
