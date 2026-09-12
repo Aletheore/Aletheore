@@ -259,12 +259,21 @@ def detect_repo_license(repo_path: Path) -> dict:
             data = {}
         license_field = data.get("license")
         # Composer's schema allows a bare string or a dual/multi-license
-        # array ("license": ["MIT", "GPL-2.0"]) - matches how
-        # _fetch_packagist_license already treats the identical shape from
-        # Packagist's own API response (licenses[0] if licenses else None).
+        # array ("license": ["MIT", "GPL-2.0"]) - the same real "you may
+        # comply under whichever you prefer" choice an SPDX "OR"
+        # expression represents, just spelled as a JSON array instead of
+        # a string. Real bug found via audit: this used to just take
+        # array[0] - not "most permissive", genuinely arbitrary, entirely
+        # dependent on how the package's own author happened to order the
+        # array. Joining into an "A OR B" string and handing it to
+        # categorize_license (which now resolves an OR expression to its
+        # most permissive alternative, see that function's own fix) makes
+        # this order-independent instead of order-dependent, and matches
+        # _fetch_packagist_license's identical fix below for the same
+        # shape from Packagist's own API response.
         if isinstance(license_field, list) and license_field:
-            license_field = license_field[0]
-        if isinstance(license_field, str):
+            license_field = " OR ".join(x for x in license_field if isinstance(x, str))
+        if isinstance(license_field, str) and license_field:
             return {
                 "category": categorize_license(license_field),
                 "detected_from": f"composer.json: {license_field}",
@@ -441,7 +450,14 @@ def _fetch_rubygems_license(name: str, version: str, timeout: int) -> str | None
     with urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT) as response:
         data = json.loads(response.read())
     licenses = data.get("licenses") or []
-    return licenses[0] if licenses else None
+    # Real bug found via audit: a dual/multi-licensed gem's `licenses`
+    # array is the same real "you may comply under whichever you
+    # prefer" choice as an SPDX "OR" expression - taking licenses[0]
+    # picked whichever the gem's own author happened to list first, not
+    # the most permissive option actually available. Joined into an
+    # "A OR B" string, categorize_license (see its own OR-expression
+    # fix) resolves this order-independently instead.
+    return " OR ".join(l for l in licenses if isinstance(l, str)) or None
 
 
 def _fetch_packagist_license(name: str, version: str, timeout: int) -> str | None:
@@ -451,7 +467,10 @@ def _fetch_packagist_license(name: str, version: str, timeout: int) -> str | Non
     for entry in data.get("packages", {}).get(name, []):
         if entry.get("version") == version:
             licenses = entry.get("license") or []
-            return licenses[0] if licenses else None
+            # Same fix as _fetch_rubygems_license above, for the
+            # identical dual/multi-license array shape Packagist's own
+            # API returns.
+            return " OR ".join(l for l in licenses if isinstance(l, str)) or None
     return None
 
 

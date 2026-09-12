@@ -190,6 +190,25 @@ def test_detect_repo_license_from_composer_json_dual_license_array(tmp_path):
     assert "composer.json" in result["detected_from"]
 
 
+def test_detect_repo_license_from_composer_json_dual_license_array_is_order_independent(tmp_path):
+    # Real bug found via audit: the test right above this one only ever
+    # exercised ["MIT", "GPL-2.0"] (permissive first) and passed for the
+    # wrong reason - the old code took array[0] unconditionally, not
+    # "whichever is most permissive". Reversing the array order used to
+    # flip the result to "copyleft-strong" even though the exact same
+    # licensing choice is being offered either way - fixed by joining
+    # the array into an SPDX "A OR B" expression and letting
+    # categorize_license's own OR-resolution (most permissive wins,
+    # order-independent) handle it.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "composer.json").write_text(json.dumps({"name": "vendor/app", "license": ["GPL-2.0", "MIT"]}))
+
+    result = detect_repo_license(repo)
+
+    assert result["category"] == "permissive"
+
+
 def test_detect_repo_license_from_gemspec(tmp_path):
     # Real bug found via audit: same gap for Ruby.
     repo = tmp_path / "repo"
@@ -871,6 +890,23 @@ def test_fetch_rubygems_license_reads_licenses_array():
     assert result == "MIT"
 
 
+def test_fetch_rubygems_license_joins_a_dual_license_array_as_an_or_expression(tmp_path):
+    # Real bug found via audit: a dual/multi-licensed gem's `licenses`
+    # array is the same real "you may comply under whichever you
+    # prefer" choice an SPDX "OR" expression represents - taking
+    # licenses[0] picked whichever the gem's own author happened to
+    # list first, not the most permissive option actually available.
+    from aletheore.licenses import _fetch_rubygems_license, categorize_license
+
+    response = _mock_response({"licenses": ["GPL-2.0", "MIT"]})
+
+    with patch("aletheore.licenses.urllib.request.urlopen", return_value=response):
+        result = _fetch_rubygems_license("somegem", "1.0.0", timeout=10)
+
+    assert result == "GPL-2.0 OR MIT"
+    assert categorize_license(result) == "permissive"
+
+
 def test_check_dependency_licenses_reports_a_ruby_dependency(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -906,6 +942,28 @@ def test_fetch_packagist_license_matches_exact_version():
         result = _fetch_packagist_license("laravel/framework", "11.30.0", timeout=10)
 
     assert result == "MIT"
+
+
+def test_fetch_packagist_license_joins_a_dual_license_array_as_an_or_expression():
+    # Same real gap as RubyGems above, for Packagist's own identical
+    # dual/multi-license array shape.
+    from aletheore.licenses import _fetch_packagist_license, categorize_license
+
+    response = _mock_response(
+        {
+            "packages": {
+                "vendor/pkg": [
+                    {"version": "1.0.0", "license": ["GPL-2.0", "MIT"]},
+                ]
+            }
+        }
+    )
+
+    with patch("aletheore.licenses.urllib.request.urlopen", return_value=response):
+        result = _fetch_packagist_license("vendor/pkg", "1.0.0", timeout=10)
+
+    assert result == "GPL-2.0 OR MIT"
+    assert categorize_license(result) == "permissive"
 
 
 def test_check_dependency_licenses_reports_a_php_dependency(tmp_path):
