@@ -1396,6 +1396,123 @@ def test_rails_model_with_no_reference_anywhere_stays_unreachable(tmp_path):
     assert [m["path"] for m in result["unreachable_modules"]] == ["app/models/abandoned_draft.rb"]
 
 
+def test_ruby_constant_qualified_off_a_lowercase_expression_does_not_match(tmp_path):
+    # Flash Review finding: `registry::User` is valid Ruby (:: after any
+    # expression that evaluates to a module/class, not just a literal
+    # constant chain) and refers to whatever "User" is nested under
+    # registry's return value - NOT the top-level Zeitwerk `User`. The
+    # lookbehind alone can't tell "::" preceded by a real absolute-
+    # reference boundary from "::" preceded by a lowercase expression;
+    # only the latter must be rejected.
+    models_dir = tmp_path / "app" / "models"
+    models_dir.mkdir(parents=True)
+    (models_dir / "user.rb").write_text("class User < ApplicationRecord\nend\n")
+    other_dir = tmp_path / "lib"
+    other_dir.mkdir(parents=True)
+    (other_dir / "consumer.rb").write_text(
+        "class Consumer\n  def call\n    registry::User.new\n  end\nend\n"
+    )
+    modules = [
+        _module("app/models/user.rb"),
+        _module("lib/consumer.rb", imported_by=["lib/consumer.rb"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert [m["path"] for m in result["unreachable_modules"]] == ["app/models/user.rb"]
+
+
+def test_ruby_top_level_anchored_constant_reference_still_resolves(tmp_path):
+    # Must not regress while fixing the case above: a genuine absolute
+    # top-level reference (Ruby's own "start lookup at the top-level
+    # namespace" syntax, real and common for a superclass reference that
+    # disambiguates against a same-named nested constant - confirmed on
+    # Discourse's own `class CloseTopic < ::Jobs::TopicTimerBase`) must
+    # still resolve.
+    #
+    # Path chosen so the referenced file's own Zeitwerk-derived full name
+    # (segments after app/) is exactly "Jobs::TopicTimerBase", matching
+    # the reference verbatim - this isolates the regex fix itself (does a
+    # leading `::` reference still get indexed and matched at all) from
+    # a separate, real gap this PR doesn't address: Discourse's actual
+    # app/jobs root is registered with a custom Zeitwerk namespace
+    # (`push_dir(..., namespace: Jobs)`), which _ruby_zeitwerk_constant_
+    # candidates has no way to see from a plain file path - confirmed
+    # directly against the real repo, discourse/discourse's own
+    # app/jobs/regular/topic_timer_base.rb (candidates "Regular::
+    # TopicTimerBase"/"TopicTimerBase") still doesn't match a real
+    # "Jobs::TopicTimerBase" reference and stays unreachable even with
+    # this fix applied - a distinct, deeper limitation than what either
+    # Flash Review finding here asked for.
+    jobs_dir = tmp_path / "app" / "jobs" / "jobs"
+    jobs_dir.mkdir(parents=True)
+    (jobs_dir / "topic_timer_base.rb").write_text(
+        "module Jobs\n  class TopicTimerBase < Jobs::Base\n  end\nend\n"
+    )
+    other_dir = tmp_path / "app" / "jobs" / "regular"
+    other_dir.mkdir(parents=True)
+    (other_dir / "close_topic.rb").write_text(
+        "class CloseTopic < ::Jobs::TopicTimerBase\nend\n"
+    )
+    modules = [
+        _module("app/jobs/jobs/topic_timer_base.rb"),
+        _module(
+            "app/jobs/regular/close_topic.rb",
+            imported_by=["app/jobs/regular/close_topic.rb"],
+        ),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "app/jobs/jobs/topic_timer_base.rb" not in [
+        m["path"] for m in result["unreachable_modules"]
+    ]
+
+
+def test_ruby_symbol_as_hash_value_does_not_dispatch(tmp_path):
+    # Flash Review finding: the symbol-dispatch index matched ANY bare
+    # symbol literal anywhere in the source, not just one in a real
+    # dispatch-call position - an ordinary `{status: :active}` hash value,
+    # an `enum status: [:active, :inactive]` declaration, or any other
+    # bare `:some_word` used as plain data would register exactly like a
+    # real `Jobs.enqueue(:bump_topic, ...)` call.
+    jobs_dir = tmp_path / "app" / "jobs"
+    jobs_dir.mkdir(parents=True)
+    (jobs_dir / "active.rb").write_text("class Active < ApplicationRecord\nend\n")
+    other_dir = tmp_path / "lib"
+    other_dir.mkdir(parents=True)
+    (other_dir / "widget.rb").write_text(
+        "class Widget\n  enum status: [:active, :inactive]\n"
+        "  def describe\n    {status: :active}\n  end\nend\n"
+    )
+    modules = [
+        _module("app/jobs/active.rb"),
+        _module("lib/widget.rb", imported_by=["lib/widget.rb"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert [m["path"] for m in result["unreachable_modules"]] == ["app/jobs/active.rb"]
+
+
+def test_ruby_symbol_dispatch_call_still_resolves(tmp_path):
+    # Must not regress while fixing the case above: a genuine dispatch
+    # call (confirmed on Discourse's own `Jobs.enqueue(:bump_topic, ...)`)
+    # must still resolve, including across a multi-line call.
+    jobs_dir = tmp_path / "app" / "jobs" / "regular"
+    jobs_dir.mkdir(parents=True)
+    (jobs_dir / "bump_topic.rb").write_text(
+        "module Jobs\n  class BumpTopic < Jobs::Base\n  end\nend\n"
+    )
+    other_dir = tmp_path / "lib"
+    other_dir.mkdir(parents=True)
+    (other_dir / "bumper.rb").write_text(
+        "class Bumper\n  def call\n"
+        "    Jobs.enqueue(\n      :bump_topic,\n      topic_id: 1\n    )\n"
+        "  end\nend\n"
+    )
+    modules = [
+        _module("app/jobs/regular/bump_topic.rb"),
+        _module("lib/bumper.rb", imported_by=["lib/bumper.rb"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
 def test_ruby_zeitwerk_rescue_is_scoped_to_app_directory_only(tmp_path):
     # lib/ is only Zeitwerk-autoloaded when an app explicitly opts in via
     # config.autoload_paths, which this module has no way to see - so a

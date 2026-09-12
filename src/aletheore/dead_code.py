@@ -277,19 +277,33 @@ def _referenced_by_dotted_string(path: str, token_index: dict[str, set[str]]) ->
 # Real bug found via a real Discourse scan (68,183-commit clone): every
 # one of its own job-hierarchy superclass references
 # (`class CloseTopic < ::Jobs::TopicTimerBase`) uses this exact leading-
-# `::` form, and the OLD regex's `(?<![:\w])` lookbehind rejected a match
+# `::` form, and the original `(?<![:\w])` lookbehind rejected a match
 # starting right after the leading `::`'s own second colon - not just for
 # the whole "Jobs::TopicTimerBase" run, but for EVERY position inside it
 # (including a later attempt at the bare "TopicTimerBase" tail, since
 # that position is also colon-preceded) - so a real superclass reference
 # written this way was completely invisible to this index, not just
-# imprecisely captured. The lookbehind's only remaining job is
-# preventing a match from starting mid-identifier (`_word` after a
-# `.`/etc.) - `(?<!\w)` alone still does that; dropping `:` from it does
-# not reopen the "spurious standalone User inside Admin::User" case this
-# was originally written to prevent, since finditer's greedy, non-
-# overlapping scan already consumes "Admin::User" as one run before
-# ever revisiting "User" on its own.
+# imprecisely captured.
+#
+# Flash Review finding on this same fix's first attempt (which simply
+# dropped `:` from the lookbehind everywhere, not just before a genuine
+# leading `::`): reproduced directly - "registry::User" (a lowercase
+# expression, itself never matching `[A-Z]`, "::"-qualified into a
+# constant that is NOT the top-level Zeitwerk `User`) let the lookbehind
+# alone accept a match starting right at "User", since a colon isn't a
+# `\w` character either. That first attempt's own comment claimed
+# finditer's greedy scan already prevented this the way it does for
+# "Admin::User" - true only when the qualifying prefix is itself
+# `[A-Z]`-starting and so gets absorbed into one earlier match; false
+# here, since "registry" never matches `[A-Z]` at all and so is never
+# consumed by anything, leaving "User" free to start its own match.
+#
+# Fixed with two distinct alternatives instead of one shared lookbehind:
+# a leading `::` is allowed ONLY when it is itself not preceded by a word
+# character (a genuine absolute-top-level reference, `(?<!\w)::` followed
+# by the constant) - not just anywhere a colon happens to precede an
+# uppercase letter. Every other position keeps the original, stricter
+# `(?<![:\w])` rule with no leading `::` consumed at all.
 #
 # Known, deliberate limitation: this is a plain text scan, not a real
 # parse - a class name mentioned only inside a `#` comment or a string
@@ -298,7 +312,9 @@ def _referenced_by_dotted_string(path: str, token_index: dict[str, set[str]]) ->
 # everywhere else (favor not flagging live code dead over precision), and
 # a real parse for every unreachable file's own repo would cost far more
 # than this rescue pass is worth - left as a known tradeoff, not silently.
-_RUBY_CONSTANT_TOKEN_RE = re.compile(r"(?<!\w)(?:::)?([A-Z][A-Za-z0-9_]*(?:::[A-Z][A-Za-z0-9_]*)*)")
+_RUBY_CONSTANT_TOKEN_RE = re.compile(
+    r"(?:(?<!\w)::(?=[A-Z])|(?<![:\w]))([A-Z][A-Za-z0-9_]*(?:::[A-Z][A-Za-z0-9_]*)*)"
+)
 # Whether a token match sits right after `class`/`module` (its own
 # declaration, e.g. "class WidgetsController" or "module Admin") rather
 # than a genuine reference to it. Real bug caught by this file's own
@@ -381,19 +397,42 @@ def _referenced_by_ruby_constant(path: str, token_index: dict[str, set[str]]) ->
     return False
 
 
-# A bare symbol literal (:bump_topic) - deliberately NOT a `key:` keyword-
-# argument label, which this shape excludes on its own since the colon
-# there trails the identifier instead of leading it. Symbols are Ruby's
-# own idiomatic way to name-then-camelize-and-constantize a class from a
-# snake_case identifier - real, common code beyond any one framework
-# (`"#{name}".classify.constantize`, an STI/polymorphic type column, a
-# registry keyed by symbol) - not just Discourse's own `Jobs.enqueue
-# (:bump_topic, ...)`, the case that surfaced this gap. Left as a
-# genuinely separate index from _RUBY_CONSTANT_TOKEN_RE's, rather than
-# merged into the same one, since a symbol literal is never itself a
-# class/module declaration site the way a CamelCase token can be -
-# keeping them apart avoids complicating that exclusion for no benefit.
-_RUBY_SYMBOL_LITERAL_RE = re.compile(r"(?<![:\w]):([a-z_][a-z0-9_]*)\b")
+# A bare symbol literal used as the first argument of what looks like a
+# method call (`Jobs.enqueue(:bump_topic, ...)`, a bare `enqueue(:x)`,
+# a namespaced `SomeModule::Jobs.enqueue(:x)`) - deliberately NOT a `key:`
+# keyword-argument label (the colon there trails the identifier instead
+# of leading it) and, just as deliberately, NOT a bare symbol appearing
+# anywhere else in the source. Symbols are Ruby's own idiomatic way to
+# name-then-camelize-and-constantize a class from a snake_case identifier
+# - real, common code beyond any one framework (a registry keyed by
+# symbol, an STI/polymorphic type column) - not just Discourse's own
+# `Jobs.enqueue(:bump_topic, ...)`, the case that surfaced this gap.
+#
+# Flash Review finding on this fix's first attempt (`(?<![:\w]):([a-z_]
+# [a-z0-9_]*)\b` alone, no call-shape requirement at all despite this
+# comment's own earlier claim of being scoped to "dispatch-shaped"
+# calls): reproduced directly - an ordinary `{status: :active}` hash
+# value, a `enum status: [:active, :inactive]` declaration, or any other
+# bare `:some_common_word` symbol used as plain data (not a dispatch
+# target at all) registered exactly the same as a real
+# `Jobs.enqueue(:bump_topic, ...)` call, since nothing in the old pattern
+# actually required call-argument position - only the trailing "keyword-
+# label" shape was excluded, not every other place a bare symbol can
+# legally appear. Fixed by requiring the symbol to be the first thing
+# after a call's opening parenthesis, preceded by what looks like a
+# method reference (an identifier, optionally `.`/`::`-chained) -
+# verified this still matches every real shape confirmed on Discourse
+# (`Jobs.enqueue(:x, ...)`, multi-line-formatted calls) while correctly
+# excluding a symbol used as a hash value/enum member/anything else not
+# in that specific syntactic position.
+#
+# Left as a genuinely separate index from _RUBY_CONSTANT_TOKEN_RE's,
+# rather than merged into the same one, since a symbol literal is never
+# itself a class/module declaration site the way a CamelCase token can be
+# - keeping them apart avoids complicating that exclusion for no benefit.
+_RUBY_SYMBOL_LITERAL_RE = re.compile(
+    r"\b[A-Za-z_][A-Za-z0-9_]*(?:(?:\.|::)[A-Za-z_][A-Za-z0-9_]*)*\(\s*:([a-z_][a-z0-9_]*)\b"
+)
 
 
 def _ruby_symbol_token_index(sources: dict[str, str]) -> dict[str, set[str]]:
