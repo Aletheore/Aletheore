@@ -1064,6 +1064,41 @@ end
     assert views["default"] == "0"
 
 
+def test_rails_change_column_default_reversible_from_to_form(tmp_path):
+    # Real bug found via audit: change_column_default(table, column,
+    # from: ..., to: ...) is Rails' own officially recommended form for
+    # this operation specifically because a plain value has no way to be
+    # reversed on rollback - Rails' own migration guides push this form,
+    # not a rare alternative. `to:` is a keyword pair, not a 3rd
+    # positional argument, so a `len(positional) < 3` check made this
+    # whole call invisible - not just imprecise, no event at all.
+    repo = write_files(
+        tmp_path,
+        {
+            "db/migrate/20230101000000_create_posts.rb": """
+class CreatePosts < ActiveRecord::Migration[7.0]
+  def change
+    create_table :posts do |t|
+      t.string :status
+    end
+  end
+end
+""",
+            "db/migrate/20230102000000_alter_posts.rb": """
+class AlterPosts < ActiveRecord::Migration[7.0]
+  def change
+    change_column_default :posts, :status, from: nil, to: "draft"
+  end
+end
+""",
+        },
+    )
+    result = extract_schema(repo, ["db/migrate"])
+    table = next(t for t in result["tables"] if t["name"] == "posts")
+    status = next(c for c in table["columns"] if c["name"] == "status")
+    assert status["default"] == '"draft"'
+
+
 def test_rails_execute_replays_through_sql_parser(tmp_path):
     repo = write_files(
         tmp_path,

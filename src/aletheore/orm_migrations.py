@@ -1847,17 +1847,34 @@ def _rails_top_level_events(call: Node, source: bytes, rel_path: str) -> list[di
                                "(relations are not individually addressable for removal)"}]
 
     if method in ("change_column_null", "change_column_default"):
-        if len(positional) < 3:
+        if len(positional) < 2:
             return []
         table = _rb_symbol_text(positional[0], source)
         col_name = _rb_symbol_text(positional[1], source)
         if not table or not col_name:
             return []
-        value_node = positional[2]
         if method == "change_column_null":
-            changes = {"nullable": value_node.type == "true"}
+            if len(positional) < 3:
+                return []
+            changes = {"nullable": positional[2].type == "true"}
         else:
-            changes = {"default": _rb_text(value_node, source)}
+            # change_column_default(table, column, value) - the plain
+            # form - OR Rails' own officially recommended reversible
+            # form, change_column_default(table, column, from: ...,
+            # to: ...) (a plain value has no way to be reversed on
+            # rollback, so Rails' own migration guides push this form
+            # specifically). `to:` is a keyword pair, not a 3rd
+            # positional arg, so it was invisible to a len(positional) <
+            # 3 check - not just imprecise, this whole call produced no
+            # event at all. Confirmed by direct execution against the
+            # real function before fixing.
+            if len(positional) >= 3:
+                changes = {"default": _rb_text(positional[2], source)}
+            else:
+                to_kwarg = _rb_kwarg(args, "to", source)
+                if to_kwarg is None:
+                    return []
+                changes = {"default": _rb_text(to_kwarg, source)}
         return [{"kind": "alter_column", "table": table, "name": col_name, "changes": changes,
                  "file": rel_path, "line": line}]
 
