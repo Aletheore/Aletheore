@@ -906,6 +906,26 @@ def _alembic_batch_op_events(
         col_name = _py_string_text(positional[0], source)
         if not col_name:
             return []
+        events: list[dict] = []
+        # A real, documented Alembic idiom - alter_column's new_column_name
+        # kwarg renames a column, the same operation as a standalone
+        # op.rename_column would be if Alembic had one (it doesn't; this
+        # is the only way to rename via op.*). Without checking for it,
+        # a pure rename (new_column_name with no type_/nullable/
+        # server_default change alongside it) produced zero events at
+        # all - not just an imprecise one, completely invisible - and a
+        # rename combined with another real change (e.g. nullable=False)
+        # still applied that other change but silently kept the column
+        # under its old name in the tracked schema forever. Confirmed by
+        # direct execution against the real function before fixing.
+        new_name_kw = _py_kwarg(args, "new_column_name", source)
+        new_name = _py_string_text(new_name_kw, source) if new_name_kw is not None else None
+        if new_name:
+            events.append(
+                {"kind": "rename_column", "table": table, "old_name": col_name,
+                 "new_name": new_name, "file": rel_path, "line": line}
+            )
+            col_name = new_name
         changes: dict = {}
         type_kw = _py_kwarg(args, "type_", source)
         if type_kw is not None and type_kw.type == "call":
@@ -916,10 +936,12 @@ def _alembic_batch_op_events(
         default_kw = _py_kwarg(args, "server_default", source)
         if default_kw is not None:
             changes["default"] = _py_scalar_default(default_kw, source)
-        if not changes:
-            return []
-        return [{"kind": "alter_column", "table": table, "name": col_name,
-                 "changes": changes, "file": rel_path, "line": line}]
+        if changes:
+            events.append(
+                {"kind": "alter_column", "table": table, "name": col_name,
+                 "changes": changes, "file": rel_path, "line": line}
+            )
+        return events
 
     if method == "create_index":
         if not positional:
@@ -1161,6 +1183,19 @@ def _alembic_upgrade_events(upgrade_body: Node, source: bytes, rel_path: str) ->
             col_name = _py_string_text(positional[1], source)
             if not table or not col_name:
                 continue
+            # See the matching comment in _alembic_batch_op_events - a
+            # pure rename via new_column_name (no type_/nullable/
+            # server_default alongside it) previously produced no event
+            # at all, and a rename combined with another change silently
+            # kept the column under its old name.
+            new_name_kw = _py_kwarg(args, "new_column_name", source)
+            new_name = _py_string_text(new_name_kw, source) if new_name_kw is not None else None
+            if new_name:
+                events.append(
+                    {"kind": "rename_column", "table": table, "old_name": col_name,
+                     "new_name": new_name, "file": rel_path, "line": line}
+                )
+                col_name = new_name
             changes: dict = {}
             type_kw = _py_kwarg(args, "type_", source)
             if type_kw is not None and type_kw.type == "call":
