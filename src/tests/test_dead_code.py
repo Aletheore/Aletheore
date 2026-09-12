@@ -32,6 +32,49 @@ def test_test_files_are_never_unreachable(tmp_path):
     assert result["unreachable_modules"] == []
 
 
+def test_rspec_spec_files_are_never_unreachable(tmp_path):
+    # RSpec - Ruby's dominant test framework - names its files with a
+    # "_spec.rb" suffix, not a "test(s)" directory, so the generic
+    # tests?/__tests__ pattern never matched them. Real repo confirmed
+    # (discourse/discourse): 3,799 real *_spec.rb files across the main
+    # app and its plugins/migrations subprojects were completely
+    # unmatched, dwarfing the false-positive count #664/#666 fixed for
+    # the same codebase.
+    modules = [
+        _module("spec/models/user_spec.rb"),
+        _module("spec/lib/discourse/converter_spec.rb"),
+        _module("plugins/discourse-events/spec/jobs/some_job_spec.rb"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_rspec_support_files_are_never_unreachable(tmp_path):
+    # A spec/ directory also holds non-suffixed test infrastructure
+    # (spec_helper.rb, factories, shared examples, custom matchers) that
+    # is just as much test-only code as the specs themselves. Real repo
+    # confirmed (discourse/discourse): 711 such files exist alongside the
+    # 3,799 *_spec.rb files above.
+    modules = [
+        _module("spec/spec_helper.rb"),
+        _module("spec/support/matchers/have_constant.rb"),
+        _module("spec/factories/users.rb"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_ruby_file_outside_spec_directory_still_unreachable(tmp_path):
+    # The new spec/ patterns must stay scoped to the RSpec convention -
+    # a Ruby file that merely mentions "spec" in its own name outside a
+    # spec/ directory, or lives under an unrelated directory, is regular
+    # application code and must still be flagged when nothing imports it.
+    modules = [_module("app/models/inspector.rb")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    paths = [module["path"] for module in result["unreachable_modules"]]
+    assert "app/models/inspector.rb" in paths
+
+
 def test_capitalized_test_directory_is_never_unreachable(tmp_path):
     # SwiftPM/Xcode universally capitalize the test directory ("Tests/") -
     # real repo confirmed: every test file in apple/swift-algorithms lives
