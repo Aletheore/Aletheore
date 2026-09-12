@@ -540,8 +540,30 @@ def scan_repository(
             "reason": "skipped (architecture analysis disabled)",
         }
 
+    if map_endpoints:
+        report("Mapping API endpoints")
+        api_endpoints_data = map_api_endpoints(
+            repo_path, unchanged_endpoints=unchanged_endpoints, ignored_paths=ignored_paths
+        )
+    else:
+        api_endpoints_data = {
+            "checked": False,
+            "reason": "skipped (--no-map-endpoints)",
+            "endpoints": [],
+        }
+
     report("Detecting dead code")
-    dead_code_data = find_dead_code(repo_path, modules, architecture_config, ignored_paths)
+    # api_endpoints computed just above (not re-parsed here) - dead code's
+    # Rails/Laravel route-handler resolvers reuse the same extracted route
+    # data the API Endpoints feature already produced, rather than paying
+    # for a second tree-sitter pass over every route file in the repo.
+    dead_code_data = find_dead_code(
+        repo_path,
+        modules,
+        architecture_config,
+        ignored_paths,
+        api_endpoints=api_endpoints_data["endpoints"],
+    )
 
     if check_hotspots and git_data.get("available"):
         report("Computing git hotspots")
@@ -577,18 +599,6 @@ def scan_repository(
         ])
     else:
         schema_data = skipped_schema(map_schema_skip_reason)
-
-    if map_endpoints:
-        report("Mapping API endpoints")
-        api_endpoints_data = map_api_endpoints(
-            repo_path, unchanged_endpoints=unchanged_endpoints, ignored_paths=ignored_paths
-        )
-    else:
-        api_endpoints_data = {
-            "checked": False,
-            "reason": "skipped (--no-map-endpoints)",
-            "endpoints": [],
-        }
 
     if not using_hosted_cache and not local_cache_disabled:
         # --no-map-endpoints leaves api_endpoints_data["endpoints"] empty for

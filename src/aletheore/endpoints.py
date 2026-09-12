@@ -1281,8 +1281,24 @@ def _rails_path_and_to(
             path = _ruby_string_content(arg, source)
         elif arg.type == "pair":
             key = arg.child_by_field_name("key")
-            if key is not None and source[key.start_byte : key.end_byte].decode() == "to":
-                value = arg.child_by_field_name("value")
+            value = arg.child_by_field_name("value")
+            if key is None:
+                continue
+            if key.type == "string":
+                # The hash-rocket route form ("/404-body" => "exceptions#not_found_body")
+                # - a single `pair` argument whose key IS the path, not a
+                # `to:`/`hash_key_symbol` keyword arg. Confirmed on a real
+                # repo (Discourse's own config/routes.rb): this form
+                # outnumbers `to:` 819 to 15, so every hash-rocket route
+                # was previously invisible to this extractor entirely -
+                # neither branch matched a bare string-keyed pair, since
+                # the top-level `arg.type == "string"` check only sees a
+                # standalone string argument, not one bundled inside a pair.
+                if path is None:
+                    path = _ruby_string_content(key, source)
+                if value is not None and value.type == "string":
+                    to_value = _ruby_string_content(value, source)
+            elif source[key.start_byte : key.end_byte].decode() == "to":
                 if value is not None and value.type == "string":
                     to_value = _ruby_string_content(value, source)
     return path, to_value
@@ -1349,6 +1365,14 @@ def _php_argument_value(arg_wrapper: Node) -> Node | None:
 def _laravel_handler_label(node: Node | None, source: bytes) -> str:
     if node is None:
         return "unknown"
+    if node.type == "string":
+        # The legacy "'UserController@index'" form - still valid Laravel
+        # syntax alongside the newer [Controller::class, 'method'] array
+        # below, and the only one of the two with no accompanying `use`
+        # import anywhere in the file (the array form requires importing
+        # the ::class reference), so it's the shape dead_code.py's Laravel
+        # route resolver actually needs captured here.
+        return _php_string_content(node, source)
     if node.type == "array_creation_expression":
         elements = [c for c in node.named_children if c.type == "array_element_initializer"]
         if elements:

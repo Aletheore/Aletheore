@@ -1187,6 +1187,33 @@ def test_extract_rails_ignores_unrelated_calls():
     assert entries == []
 
 
+def test_extract_rails_hash_rocket_route():
+    # Real gap found via a real Discourse scan: config/routes.rb uses this
+    # "path" => "controller#action" form 819 times vs only 15 uses of the
+    # `to:` keyword form this extractor already handled - every one of
+    # those 819 was previously invisible here entirely, since a hash-
+    # rocket route is a single `pair` argument whose key is itself the
+    # path (a plain string), not a separate standalone string argument
+    # the way `get "users", to: "users#index"` splits path and handler
+    # into two arguments.
+    root, source = parse_ruby('get "/404-body" => "exceptions#not_found_body"\n')
+
+    entries = _extract_rails_routes(root, source, "config/routes.rb")
+
+    assert entries == [
+        {
+            "method": "GET",
+            "path": "/404-body",
+            "framework": "rails",
+            "file": "config/routes.rb",
+            "line": 1,
+            "handler": "exceptions#not_found_body",
+            "unresolved": False,
+            "note": None,
+        }
+    ]
+
+
 def test_extract_laravel_get_route():
     root, source = parse_php(
         "<?php\nRoute::get('/users', [UserController::class, 'index']);\n"
@@ -1242,6 +1269,22 @@ def test_extract_laravel_inline_closure_handler():
     entries = _extract_laravel_routes(root, source, "routes/web.php")
 
     assert entries[0]["handler"] == "<inline handler>"
+
+
+def test_extract_laravel_legacy_string_handler():
+    # The pre-::class Laravel syntax, still valid today - unlike the array
+    # form (which requires a `use` import of the ::class reference this
+    # extractor already captures fine), a bare "'Controller@method'"
+    # string has no accompanying import anywhere in the file. Previously
+    # fell through every branch in _laravel_handler_label and silently
+    # came back "unknown".
+    root, source = parse_php(
+        "<?php\nRoute::get('/users', 'UserController@index');\n"
+    )
+
+    entries = _extract_laravel_routes(root, source, "routes/web.php")
+
+    assert entries[0]["handler"] == "UserController@index"
 
 
 def test_extract_aspnet_httpget_attribute():
