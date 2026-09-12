@@ -1314,8 +1314,17 @@ function renderEndpoints(data) {
 
 function renderMcpTools(tools) {
   const el = document.getElementById('mcp-tools');
+  // Real gap found via audit: every other render function in this file
+  // (renderDeadCode, renderClusters, etc.) escapes evidence-derived text
+  // before it reaches innerHTML - this was the one exception, inserting
+  // t.name/t.description raw. Every tool registered by build_server today
+  // has a static, first-party name/description (see mcp_server.py), so
+  // this isn't reachable through a malicious repo right now - but nothing
+  // enforces that staying true, and a reviewer skimming this file would
+  // reasonably assume the escaping discipline is uniform given how
+  // consistently every other function here follows it.
   el.innerHTML = tools.map(t =>
-    '<div class="tool-row"><span class="tool-name">' + t.name + '</span> - ' + (t.description || '') + '</div>'
+    '<div class="tool-row"><span class="tool-name">' + escapeHtml(t.name) + '</span> - ' + escapeHtml(t.description || '') + '</div>'
   ).join('');
 }
 
