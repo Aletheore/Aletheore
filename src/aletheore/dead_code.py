@@ -41,6 +41,23 @@ ENTRY_POINT_FILENAMES = {
     "routes.rb",
 }
 
+# Django's own management-command loader (django.core.management,
+# invoked by `python manage.py <name>` or programmatically via
+# call_command) discovers every file directly under an app's
+# management/commands/ directory purely by walking that directory -
+# never a plain `import` anywhere in the app's own source, the same
+# convention-over-reference blind spot as ENTRY_POINT_FILENAMES above.
+# Confirmed on a real repo (wagtail/wagtail): 17 of its 20 real
+# management commands (move_pages.py, publish_scheduled_pages.py,
+# rebuild_references_index.py, ...) were flagged dead code before this -
+# not a Wagtail-specific quirk, this is true of any Django app's command
+# directory. `management/commands/` is specific enough to Django (unlike
+# "admin.py") that no corroborating import check is needed, matching the
+# same reasoning as "routes.rb" above. Also matches a stray
+# management/commands/__init__.py, already its own entry point via
+# ENTRY_POINT_FILENAMES - harmless overlap, not worth excluding.
+_DJANGO_MANAGEMENT_COMMAND_RE = re.compile(r"(^|/)management/commands/[^/]+\.py$")
+
 TEST_PATH_PATTERNS = [
     re.compile(r"(^|/)test_[^/]+\.py$"),
     re.compile(r"(^|/)[^/]+_test\.py$"),
@@ -497,7 +514,9 @@ def _referenced_by_ruby_symbol_dispatch(path: str, symbol_index: dict[str, set[s
 def _is_entry_point(path: str, custom_entry_points: set[str]) -> bool:
     if path in custom_entry_points:
         return True
-    return path.rsplit("/", 1)[-1] in ENTRY_POINT_FILENAMES
+    if path.rsplit("/", 1)[-1] in ENTRY_POINT_FILENAMES:
+        return True
+    return bool(_DJANGO_MANAGEMENT_COMMAND_RE.search(path))
 
 
 def _has_main_guard(repo_path: Path, path: str) -> bool:

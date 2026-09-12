@@ -584,6 +584,68 @@ end
     assert create["relations"] == []
 
 
+def test_rails_reference_foreign_key_to_table_override_is_honored(tmp_path):
+    # Real bug found via audit: `foreign_key: { to_table: :users }` -
+    # needed whenever a reference's own name doesn't match its real
+    # target table (approved_by/assigned_to/reviewer all pointing at
+    # users, not a table named "approved_bies") - was treated identically
+    # to `foreign_key: false` by the old code: `_rb_bool_kwarg`'s
+    # `value.type == "true"` check is false for a hash value just as much
+    # as for the literal `false`, so a real, explicit FK relationship was
+    # silently dropped entirely rather than just pointed at the wrong
+    # table. Covers both the create_table-block form and the standalone
+    # add_reference form, which duplicate this same logic.
+    repo = write_files(
+        tmp_path,
+        {
+            "db/migrate/20230101000000_create_posts.rb": """
+class CreatePosts < ActiveRecord::Migration[7.0]
+  def change
+    create_table :posts do |t|
+      t.references :approved_by, foreign_key: { to_table: :users }
+    end
+    add_reference :posts, :last_editor, foreign_key: { to_table: :users }
+  end
+end
+"""
+        },
+    )
+    events, _ = extract_rails_migrations(repo, ["db/migrate"])
+    create = next(e for e in events if e["kind"] == "create_table")
+    assert len(create["relations"]) == 1
+    block_relation = create["relations"][0]
+    assert block_relation["from_column"] == "approved_by_id"
+    assert block_relation["to_table"] == "users"
+
+    standalone_relation = next(e for e in events if e["kind"] == "add_relation")["relation"]
+    assert standalone_relation["from_column"] == "last_editor_id"
+    assert standalone_relation["to_table"] == "users"
+
+
+def test_rails_reference_foreign_key_hash_without_to_table_still_defaults(tmp_path):
+    # `foreign_key: { ... }` with no to_table: key still enables the FK
+    # (any truthy value does, per Rails' own semantics) and falls back to
+    # the pluralized reference name, same as bare `foreign_key: true`.
+    repo = write_files(
+        tmp_path,
+        {
+            "db/migrate/20230101000000_create_posts.rb": """
+class CreatePosts < ActiveRecord::Migration[7.0]
+  def change
+    create_table :posts do |t|
+      t.references :author, foreign_key: { on_delete: :cascade }
+    end
+  end
+end
+"""
+        },
+    )
+    events, _ = extract_rails_migrations(repo, ["db/migrate"])
+    create = next(e for e in events if e["kind"] == "create_table")
+    assert len(create["relations"]) == 1
+    assert create["relations"][0]["to_table"] == "authors"
+
+
 def test_rails_up_down_migration_only_reads_up_not_down(tmp_path):
     # Real bug, found via a real Discourse migration from 2012
     # (db/migrate/20120423151548_remove_last_post_id.rb): older Rails

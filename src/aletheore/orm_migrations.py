@@ -1396,6 +1396,38 @@ def _pluralize(word: str) -> str:
     return lower + "s"
 
 
+def _rails_reference_foreign_key_target_table(args: list[Node], source: bytes, ref_name: str) -> str | None:
+    """The real target table for a `references`/`belongs_to`/`add_reference`/
+    `add_belongs_to` column's foreign key, or None if no FK is declared at
+    all - `foreign_key:` bare `true` means "on, target the pluralized
+    reference name" (Rails' own default), but `foreign_key: { to_table:
+    :users }` (needed whenever the reference name itself doesn't match its
+    real target table, e.g. `approved_by`/`assigned_to`/`reviewer` all
+    pointing at `users`) was treated identically to `foreign_key: false` -
+    `_rb_bool_kwarg`'s `value.type == "true"` check is false for a hash
+    node just as much as for the literal `false`, silently dropping a
+    real, explicit FK relationship rather than just getting its target
+    table wrong. Real, common enough to matter: any "who did this" style
+    reference (approver, assignee, reviewer, last-modified-by) needs
+    exactly this override, since none of those names pluralize to their
+    real target table.
+    """
+    value = _rb_kwarg(args, "foreign_key", source)
+    if value is None or value.type == "false":
+        return None
+    if value.type == "true":
+        return _pluralize(ref_name)
+    if value.type == "hash":
+        hash_pairs = [c for c in value.named_children if c.type == "pair"]
+        to_table_node = _rb_kwarg(hash_pairs, "to_table", source)
+        if to_table_node is not None:
+            explicit = _rb_symbol_text(to_table_node, source)
+            if explicit:
+                return explicit
+        return _pluralize(ref_name)
+    return None
+
+
 def _rails_column_from_typed_call(
     call: Node, source: bytes, rel_path: str, line: int
 ) -> tuple[dict | None, dict | None]:
@@ -1409,7 +1441,6 @@ def _rails_column_from_typed_call(
         ref_name = _rb_symbol_text(positional[0], source)
         if not ref_name:
             return None, None
-        fk_flag = _rb_bool_kwarg(args, "foreign_key", source)
         column = {
             "name": f"{ref_name}_id", "type": "BIGINT", "primary_key": False,
             "nullable": _rb_bool_kwarg(args, "null", source) is not False,
@@ -1418,14 +1449,17 @@ def _rails_column_from_typed_call(
         relation = None
         # Rails' own default for foreign_key: on a reference/belongs_to
         # column is false - unlike `null:` (nullable by default), a real
-        # FK constraint is opt-in, only added when foreign_key: true is
+        # FK constraint is opt-in, only added when foreign_key: true (or
+        # an options hash, e.g. `foreign_key: { to_table: :users }`) is
         # explicit. Treating a missing kwarg as "assume true" (this
-        # module's behavior until this fix) fabricated a constraint that
-        # does not exist in the real schema for the common, undecorated
-        # `t.references :author` / `add_reference :posts, :author` shape.
-        if fk_flag is True:
+        # module's behavior until an earlier fix) fabricated a constraint
+        # that does not exist in the real schema for the common,
+        # undecorated `t.references :author` / `add_reference :posts,
+        # :author` shape.
+        target_table = _rails_reference_foreign_key_target_table(args, source, ref_name)
+        if target_table is not None:
             relation = {
-                "from_column": column["name"], "to_table": _pluralize(ref_name),
+                "from_column": column["name"], "to_table": target_table,
                 "to_column": "id", "on_delete": None, "file": rel_path, "line": line,
             }
         return column, relation
@@ -1693,7 +1727,6 @@ def _rails_top_level_events(call: Node, source: bytes, rel_path: str) -> list[di
         ref_name = _rb_symbol_text(positional[1], source)
         if not table or not ref_name:
             return []
-        fk_flag = _rb_bool_kwarg(args, "foreign_key", source)
         column = {
             "name": f"{ref_name}_id", "type": "BIGINT", "primary_key": False,
             "nullable": _rb_bool_kwarg(args, "null", source) is not False,
@@ -1701,10 +1734,11 @@ def _rails_top_level_events(call: Node, source: bytes, rel_path: str) -> list[di
         }
         events = [{"kind": "add_column", "table": table, "file": rel_path, "line": line,
                    "column": column, "relation": None}]
-        if fk_flag is True:
+        target_table = _rails_reference_foreign_key_target_table(args, source, ref_name)
+        if target_table is not None:
             events.append(
                 {"kind": "add_relation", "table": table, "file": rel_path, "line": line,
-                 "relation": {"from_column": column["name"], "to_table": _pluralize(ref_name),
+                 "relation": {"from_column": column["name"], "to_table": target_table,
                               "to_column": "id", "on_delete": None,
                               "file": rel_path, "line": line}}
             )
