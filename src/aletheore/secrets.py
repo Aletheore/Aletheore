@@ -94,6 +94,33 @@ _LOW_ENTROPY_THRESHOLD = 3.0
 # threshold leaves real margin on both sides of that measurement.
 _SYNTHETIC_REPETITION_RATIO_THRESHOLD = 1.1
 
+# Real bug found via audit: the 1.1 threshold above was only ever
+# validated within the "16-44 chars" range its own comment names -
+# generic_credential_assignment's value group has NO upper length bound
+# at all (`{16,}`), so a long real secret (a JWT, a long API token, any
+# base64 blob 100+ chars) also reaches this same check. Compression
+# ratio isn't actually measuring "synthetic repetition" past a certain
+# length - it's measuring the value's own alphabet size (a ~64-94
+# symbol charset has under 8 bits of entropy per byte, so DEFLATE finds
+# real, unavoidable compression headroom in ANY sufficiently long
+# string over that alphabet, genuinely random or not - basic
+# information theory, not a repetition signal). Measured directly
+# (2,000 random trials per length, the same charset generic_credential_
+# assignment's value class matches): zero false positives through
+# length 60, but real ones start appearing at 64 and grow with length
+# (24/2000 by length 76) - exactly the "no real secret should ever
+# trip this" guarantee the threshold comment above claims, silently
+# violated the moment a value runs past what was actually tested.
+# Without this cap, every sufficiently long, genuinely random real
+# secret this pattern can match - a JWT, a long API token - was
+# misclassified likely_placeholder=True and silently excluded from
+# every consumer of that flag (the dashboard, PR comments, MCP tool
+# results, CLI/history reporting all filter on it - see cli.py,
+# dashboard.py, history.py, mcp_server.py, pr_comment.py, scan_worker/
+# jobs.py, and the github-app frontend). Capped with real margin below
+# the first observed false positive (64), not right up against it.
+_SYNTHETIC_REPETITION_MAX_LENGTH = 48
+
 # Each entry's third element is the regex group index holding the actual secret value to
 # redact. Most patterns match the credential directly, so group 0 (the whole match) IS the
 # value. generic_credential_assignment is different: it matches "KEYWORD=value" syntax, so
@@ -237,6 +264,16 @@ def _value_looks_synthetically_repeated(value: str) -> bool:
     # the cutoff. Real credential generators don't emit repeated
     # substrings; a hand-typed or padded-out fake example often does.
     if not value:
+        return False
+    # See _SYNTHETIC_REPETITION_MAX_LENGTH: past this length, a genuinely
+    # random value's own alphabet-entropy compression floor drops below
+    # the threshold too, making this check unreliable exactly where a
+    # false "looks synthetic" verdict matters most (a long value is the
+    # more valuable secret to actually catch). A long value simply isn't
+    # judged by this signal at all past this point - it still gets
+    # every other placeholder signal (marker words, truncation,
+    # identifier-reference, path+entropy), just not this one.
+    if len(value) > _SYNTHETIC_REPETITION_MAX_LENGTH:
         return False
     compressed_length = len(zlib.compress(value.encode("utf-8"), level=9))
     return (compressed_length / len(value)) < _SYNTHETIC_REPETITION_RATIO_THRESHOLD

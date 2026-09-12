@@ -221,6 +221,22 @@ def test_resolve_owner_unanchored_directory_pattern_does_not_match_a_bare_file(t
     assert result["owner"] is None
 
 
+def test_resolve_owner_glob_star_does_not_cross_a_path_separator(tmp_path):
+    # GitHub's own CODEOWNERS docs give this exact example: "docs/*"
+    # matches "docs/getting-started.md" but explicitly NOT a further
+    # nested file like "docs/build-app/troubleshooting.md" - a single
+    # "*" matches within one path segment only, gitignore-style.
+    repo = tmp_path
+    (repo / ".github").mkdir()
+    (repo / ".github" / "CODEOWNERS").write_text("docs/* @doctocat\n")
+
+    direct_child = resolve_owner(repo, "docs/getting-started.md")
+    nested = resolve_owner(repo, "docs/build-app/troubleshooting.md")
+
+    assert direct_child["owner"] == ["@doctocat"]
+    assert nested["owner"] is None
+
+
 def test_resolve_recent_commit_returns_file_commit(tmp_path):
     repo = tmp_path
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)

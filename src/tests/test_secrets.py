@@ -122,8 +122,15 @@ def test_find_secrets_flags_a_hand_typed_repeated_pattern_as_placeholder(tmp_pat
     # as far from a real credential generator's output as a value can get.
     repo = tmp_path / "repo"
     repo.mkdir()
+    # 48 chars total (at, not past, _SYNTHETIC_REPETITION_MAX_LENGTH) -
+    # long enough to demonstrate the repetition signal, short enough to
+    # stay within the length range that signal is actually reliable for
+    # (see that constant's own comment: past it, a genuinely random
+    # value's own alphabet-entropy compression floor drops below the
+    # threshold too, on real values this same length-unbounded pattern
+    # can just as easily match).
     (repo / "README.md").write_text(
-        "OPENAI_API_KEY=sk-proj-abcdefghij1234567890abcdefghij1234567890abcd\n"
+        "OPENAI_API_KEY=sk-proj-abcdefghij1234567890abcdefghij1234567890\n"
     )
 
     result = find_secrets(repo)
@@ -145,6 +152,53 @@ def test_find_secrets_does_not_flag_a_genuinely_random_secret_as_repeated(tmp_pa
     result = find_secrets(repo)
 
     assert result["findings"][0]["likely_placeholder"] is False
+
+
+def test_find_secrets_does_not_flag_a_long_genuinely_random_secret_as_repeated(tmp_path):
+    # Real bug found via audit: _SYNTHETIC_REPETITION_RATIO_THRESHOLD was
+    # only ever empirically validated for the 16-44 char range its own
+    # comment names. generic_credential_assignment's value group has no
+    # upper length bound at all, so a long real secret (a JWT, a long
+    # API token, any base64 blob 100+ chars) reaches the same
+    # compression-ratio check. Past a certain length, ANY genuinely
+    # random value's own alphabet-entropy compression floor drops below
+    # the 1.1 threshold too - basic information theory (a ~64-94 symbol
+    # charset carries under 8 bits of entropy per byte), nothing to do
+    # with actual repetition. Confirmed directly: every one of 500
+    # independently-generated 120-char random values tripped the old
+    # check, every one of them a false "looks synthetic" verdict that
+    # would have hidden a real secret from every consumer of
+    # likely_placeholder (the dashboard, PR comments, MCP tool results,
+    # CLI/history reporting all filter findings on this flag).
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    long_random_secret = (
+        "aZ9x7Qm3Lp2Nv8Rk1Wt4Yb6Hc0Fd5Jg7Ke9Ma2Ni4Ob6Pq8Sr1Tu3Vw5Xy7"
+        "Za9Bc1De3Fg5Hi7Jk9Lm1No3Pq5Rs7Tu9Vw1Xy3Za5Bc7De9Fg1Hi3Jk5Lm7"
+    )
+    repo_file = repo / "config.py"
+    repo_file.write_text(f'API_TOKEN = "{long_random_secret}"\n')
+
+    result = find_secrets(repo)
+
+    assert result["findings"][0]["likely_placeholder"] is False
+
+
+def test_value_looks_synthetically_repeated_is_scoped_to_a_validated_length_range():
+    # Direct unit-level check of the fix: the genuinely-repeated 48-char
+    # value from the hand-typed-pattern test above still trips the
+    # check (within the validated range), but the same repeated unit
+    # extended well past _SYNTHETIC_REPETITION_MAX_LENGTH no longer
+    # does - past that length this signal isn't reliable enough to
+    # trust either way, so it defers to every other placeholder signal
+    # instead of guessing.
+    from aletheore.secrets import _value_looks_synthetically_repeated
+
+    short_repeated = "abcdefghij1234567890abcdefghij1234567890"  # 41 chars
+    assert _value_looks_synthetically_repeated(short_repeated) is True
+
+    long_repeated = "abcdefghij1234567890" * 10  # 210 chars, same repeated unit
+    assert _value_looks_synthetically_repeated(long_repeated) is False
 
 
 def test_find_secrets_recognizes_stripes_own_published_test_key(tmp_path):
