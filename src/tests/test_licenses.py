@@ -59,6 +59,43 @@ def test_categorize_license_recognizes_mpl_as_weak_copyleft():
     assert categorize_license("MPL-2.0") == "copyleft-weak"
 
 
+def test_categorize_license_spdx_or_expression_uses_most_permissive_alternative():
+    # Real bug found via audit: an SPDX "OR" expression is a CHOICE - the
+    # licensee may comply under whichever alternative they prefer - a
+    # real, common idiom offered verbatim as the `license` field by npm's
+    # package.json, Cargo.toml, and PEP 639 pyproject.toml. The old
+    # marker-scan always returned the MOST restrictive category found
+    # anywhere in the string regardless of "OR" or alternative order -
+    # "GPL-3.0-only OR MIT" and "MIT OR GPL-3.0-only" both came back
+    # "copyleft-strong" even though either is legitimately usable under
+    # MIT alone.
+    assert categorize_license("MIT OR GPL-3.0-only") == "permissive"
+    assert categorize_license("GPL-3.0-only OR MIT") == "permissive"
+    assert categorize_license("(MIT OR Apache-2.0)") == "permissive"
+    assert categorize_license("MIT OR GPL-3.0-only OR BSD-3-Clause") == "permissive"
+    assert categorize_license("AGPL-3.0 OR LGPL-2.1") == "copyleft-weak"
+
+
+def test_categorize_license_or_split_does_not_false_match_hyphenated_or_later_suffix():
+    # A real SPDX id's own "-or-later" suffix (GPL-2.0-or-later,
+    # LGPL-3.0-or-later - both real, common identifiers) has no
+    # surrounding whitespace around "or", so it must not be mistaken for
+    # an OR-expression split point.
+    assert categorize_license("GPL-2.0-or-later") == "copyleft-strong"
+    assert categorize_license("LGPL-3.0-or-later") == "copyleft-weak"
+
+
+def test_categorize_license_and_expression_still_uses_most_restrictive_component():
+    # An "AND" expression means compliance is required with BOTH
+    # components simultaneously, the opposite of "OR" - the existing
+    # restrictive-first marker scan already gets this right (a real
+    # restriction can't be opted out of just because a permissive
+    # component is also present), so this locks in that this fix didn't
+    # change AND's own, already-correct behavior.
+    assert categorize_license("GPL-3.0-only AND MIT") == "copyleft-strong"
+    assert categorize_license("MIT AND Apache-2.0") == "permissive"
+
+
 def test_categorize_license_unknown_for_none_or_unrecognized():
     assert categorize_license(None) == "unknown"
     assert categorize_license("") == "unknown"

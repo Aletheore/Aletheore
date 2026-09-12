@@ -132,9 +132,44 @@ def _contains_marker(text: str, marker: str) -> bool:
     return re.search(r"\b" + re.escape(marker) + r"\b", text) is not None
 
 
+# A real, common SPDX license-expression idiom - "MIT OR Apache-2.0",
+# "(MIT OR Apache-2.0)" - offered as the repo/dependency's own `license`
+# field verbatim by npm's package.json, Cargo.toml, and PEP 639
+# pyproject.toml, all of which document SPDX expression syntax as a
+# real, first-class shape for that field, not just a bare identifier.
+# Whitespace-delimited and case-insensitive so it never matches the
+# unrelated, hyphenated "-or-later" suffix inside real SPDX ids like
+# "GPL-2.0-or-later"/"LGPL-3.0-or-later" (confirmed directly - those
+# have no surrounding whitespace around "or" to match).
+_SPDX_OR_SPLIT_RE = re.compile(r"\s+OR\s+", re.IGNORECASE)
+
+# Real bug found via audit: an SPDX "OR" expression is a CHOICE - the
+# licensee may comply under whichever alternative they prefer - so the
+# correct category is the most PERMISSIVE alternative offered, the one
+# a compliant downstream user would actually elect to use. The old
+# marker-scan (checking copyleft markers before permissive ones,
+# unconditionally) always returned the MOST restrictive category found
+# anywhere in the string regardless of "OR" - "GPL-3.0-only OR MIT" and
+# "MIT OR GPL-3.0-only" both came back "copyleft-strong" even though
+# either one is legitimately usable under MIT alone. Ranked low-to-high
+# restrictiveness; "unknown" ranks last (least preferred) since a real,
+# identified category from any other alternative is more useful than
+# reporting "we don't know" when at least one alternative IS known.
+_PERMISSIVENESS_RANK = {
+    "permissive": 0,
+    "copyleft-weak": 1,
+    "copyleft-strong": 2,
+    "unknown": 3,
+}
+
+
 def categorize_license(license_text: str | None) -> str:
     if not license_text:
         return "unknown"
+    alternatives = _SPDX_OR_SPLIT_RE.split(license_text)
+    if len(alternatives) > 1:
+        results = [categorize_license(alt) for alt in alternatives]
+        return min(results, key=lambda category: _PERMISSIVENESS_RANK[category])
     text = license_text.lower()
     if any(_contains_marker(text, marker) for marker in _AGPL_MARKERS):
         return "copyleft-strong"
