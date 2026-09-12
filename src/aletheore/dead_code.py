@@ -713,8 +713,25 @@ def _laravel_route_reachable_files(
         match = _LARAVEL_STRING_HANDLER_PATTERN.match(handler)
         if not match:
             continue
-        controller_class = match.group(1).rsplit("\\", 1)[-1]
-        matches = _controller_suffix_matches(controller_paths, [f"{controller_class}.php"])
+        # "Admin\UserController" -> ["Admin", "UserController.php"] - a
+        # fully backslash-qualified handler already names its own
+        # namespace segments; preserve them for a precise multi-segment
+        # match instead of discarding them down to the bare class name.
+        # Never anchored to a controllers/ boundary even for the bare
+        # (single-segment) case, unlike Rails' config/routes.rb: Laravel's
+        # legacy string handler can equally sit inside an enclosing
+        # `Route::group(['namespace' => 'Admin'], function () {...})`,
+        # invisible from the handler string alone, so an unqualified name
+        # here carries none of the "this really is top-level" guarantee a
+        # bare Rails `resources` call declared directly in config/routes.rb
+        # does. Confirmed by Flash Review on #666: without this, a real
+        # nested controller like app/Http/Controllers/Admin/User.php named
+        # by "Admin\User@index" was wrongly left flagged as dead code.
+        segments = match.group(1).split("\\")
+        segments[-1] = f"{segments[-1]}.php"
+        matches = _controller_suffix_matches(
+            controller_paths, segments, anchor_single_segment=False
+        )
         if len(matches) == 1:
             reachable.update(matches)
     return reachable

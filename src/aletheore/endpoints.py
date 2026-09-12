@@ -1343,14 +1343,24 @@ def _rails_enclosing_module_prefix(call_node: Node, source: bytes) -> list[str]:
                                 continue
                             key = arg.child_by_field_name("key")
                             value = arg.child_by_field_name("value")
-                            if (
+                            if not (
                                 key is not None
                                 and key.type == "hash_key_symbol"
                                 and source[key.start_byte : key.end_byte].decode() == "module"
                                 and value is not None
-                                and value.type == "string"
                             ):
+                                continue
+                            if value.type == "string":
                                 segment = _ruby_string_content(value, source)
+                            elif value.type == "simple_symbol":
+                                # `scope module: :admin do` - equally valid
+                                # Rails syntax alongside `module: "admin"`,
+                                # confirmed by Flash Review on #666 and
+                                # missed entirely before: only the string
+                                # form was handled.
+                                segment = (
+                                    source[value.start_byte : value.end_byte].decode().lstrip(":")
+                                )
                     if segment:
                         segments.append(segment)
         node = node.parent

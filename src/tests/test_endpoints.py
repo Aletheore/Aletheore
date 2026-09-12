@@ -1256,6 +1256,20 @@ def test_extract_rails_bare_scope_does_not_add_a_module_prefix():
     assert entries[0]["path"] == "items"
 
 
+def test_extract_rails_scope_module_symbol_value_gets_module_prefix():
+    # Flash Review finding on #666: `scope module: :admin do` (a symbol
+    # value) is equally valid Rails syntax alongside `module: "admin"` (a
+    # string) - only the string form was handled, so this variant silently
+    # produced no module prefix at all.
+    root, source = parse_ruby(
+        "scope module: :admin do\n  resources :badges\nend\n"
+    )
+
+    entries = _extract_rails_routes(root, source, "config/routes.rb")
+
+    assert entries[0]["path"] == "admin/badges"
+
+
 def test_extract_rails_hash_rocket_route():
     # Real gap found via a real Discourse scan: config/routes.rb uses this
     # "path" => "controller#action" form 819 times vs only 15 uses of the

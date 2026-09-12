@@ -1229,3 +1229,31 @@ def test_rails_unprefixed_resource_in_a_plugin_engine_routes_file_still_resolves
     ]
     result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
     assert result["unreachable_modules"] == []
+
+
+def test_laravel_backslash_qualified_string_handler_resolves_a_nested_controller(tmp_path):
+    # Flash Review finding on #666: the legacy string handler resolver
+    # reduced every handler to its bare class name and always anchored
+    # single-segment queries to a controllers/-directory boundary, so a
+    # real, fully-qualified handler like "Admin\UserController@index"
+    # naming a controller under app/Http/Controllers/Admin/ was wrongly
+    # left flagged as dead code - anchoring assumes an unqualified name
+    # means "top level", which doesn't apply here since the handler
+    # string already names its own namespace segment.
+    controllers_dir = tmp_path / "app" / "Http" / "Controllers" / "Admin"
+    controllers_dir.mkdir(parents=True)
+    (controllers_dir / "UserController.php").write_text(
+        "<?php\nnamespace App\\Http\\Controllers\\Admin;\n\nclass UserController {\n"
+        "    public function index() { return []; }\n}\n"
+    )
+    modules = [_module("app/Http/Controllers/Admin/UserController.php")]
+    api_endpoints = [
+        {
+            "framework": "laravel",
+            "handler": "Admin\\UserController@index",
+            "path": "/admin/users",
+            "unresolved": False,
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    assert result["unreachable_modules"] == []
