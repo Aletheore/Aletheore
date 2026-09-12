@@ -122,6 +122,31 @@ def _parse_pip_pins(repo_path: Path) -> list[tuple[str, str, str]]:
         if pin:
             pins.append(pin)
 
+    # Real gap found via audit: [project.optional-dependencies] (PEP 621
+    # extras, e.g. a "test"/"dev" group) and Poetry's own
+    # [tool.poetry.group.<name>.dependencies] (1.2+) / [tool.poetry.
+    # dev-dependencies] (the older, pre-1.2 form of the same thing) are
+    # all real, direct, first-party declared dependencies - not
+    # transitive ones (see _parse_npm_direct_pins' own docstring on why
+    # transitive deps are deliberately excluded; that reasoning doesn't
+    # apply here) - yet none of them were read at all. This function's
+    # own two real callers are dependency-vulnerability scanning and
+    # license checking: a genuinely vulnerable pinned package declared
+    # only under a dev/test extras group (`pytest-xdist==1.0` with a
+    # real, published CVE) was invisible to CVE scanning entirely,
+    # regardless of how out of date or risky it actually was.
+    optional_deps = data.get("project", {}).get("optional-dependencies", {})
+    if isinstance(optional_deps, dict):
+        for group in optional_deps.values():
+            if not isinstance(group, list):
+                continue
+            for dependency in group:
+                if not isinstance(dependency, str):
+                    continue
+                pin = _parse_pep508_dependency(dependency)
+                if pin:
+                    pins.append(pin)
+
     poetry_deps = data.get("tool", {}).get("poetry", {}).get("dependencies", {})
     for name, value in poetry_deps.items():
         if name.lower() == "python":
@@ -129,6 +154,29 @@ def _parse_pip_pins(repo_path: Path) -> list[tuple[str, str, str]]:
         pin = _parse_python_dependency_value(name, value)
         if pin:
             pins.append(pin)
+
+    poetry_dev_deps = data.get("tool", {}).get("poetry", {}).get("dev-dependencies", {})
+    for name, value in poetry_dev_deps.items():
+        if name.lower() == "python":
+            continue
+        pin = _parse_python_dependency_value(name, value)
+        if pin:
+            pins.append(pin)
+
+    poetry_groups = data.get("tool", {}).get("poetry", {}).get("group", {})
+    if isinstance(poetry_groups, dict):
+        for group_config in poetry_groups.values():
+            if not isinstance(group_config, dict):
+                continue
+            group_deps = group_config.get("dependencies", {})
+            if not isinstance(group_deps, dict):
+                continue
+            for name, value in group_deps.items():
+                if name.lower() == "python":
+                    continue
+                pin = _parse_python_dependency_value(name, value)
+                if pin:
+                    pins.append(pin)
 
     return pins
 
