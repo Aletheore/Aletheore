@@ -22,6 +22,38 @@ def test_recognized_entry_point_is_never_unreachable(tmp_path):
     assert set(result["entry_points_detected"]) == {"main.py", "app/__main__.py", "index.js"}
 
 
+def test_django_management_command_is_never_unreachable(tmp_path):
+    # Real gap found via audit against a real repo (wagtail/wagtail):
+    # Django's management-command loader (`python manage.py <name>`,
+    # django.core.management.call_command) discovers every file directly
+    # under an app's management/commands/ directory purely by walking
+    # that directory - never a plain `import` anywhere in the app's own
+    # source. 17 of Wagtail's 20 real management commands (move_pages.py,
+    # publish_scheduled_pages.py, rebuild_references_index.py, ...) were
+    # flagged dead code before this - not a Wagtail quirk, true of any
+    # Django app's command directory.
+    modules = [
+        _module("myapp/management/commands/do_thing.py"),
+        _module("blog/management/commands/publish_scheduled.py"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert set(result["entry_points_detected"]) == {
+        "myapp/management/commands/do_thing.py",
+        "blog/management/commands/publish_scheduled.py",
+    }
+
+
+def test_python_file_merely_named_commands_is_still_unreachable(tmp_path):
+    # The management/commands/ pattern must stay scoped to Django's own
+    # directory shape - an unrelated file that just happens to sit in a
+    # directory named "commands" (no "management/" parent) is regular
+    # application code and must still be flagged when nothing imports it.
+    modules = [_module("app/commands/do_thing.py")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert [m["path"] for m in result["unreachable_modules"]] == ["app/commands/do_thing.py"]
+
+
 def test_test_files_are_never_unreachable(tmp_path):
     modules = [
         _module("tests/test_thing.py"),
