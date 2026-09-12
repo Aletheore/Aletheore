@@ -159,13 +159,39 @@ def _parse_codeowners_line(line: str) -> tuple[str, list[str]] | None:
     return parts[0], parts[1:]
 
 
+def _glob_segments_match(pattern_segments: list[str], path_segments: list[str]) -> bool:
+    if not pattern_segments:
+        return not path_segments
+    head, rest = pattern_segments[0], pattern_segments[1:]
+    if head == "**":
+        # gitignore/CODEOWNERS "**" matches zero or more whole path
+        # segments - the one construct that IS meant to cross "/".
+        return any(_glob_segments_match(rest, path_segments[i:]) for i in range(len(path_segments) + 1))
+    if not path_segments:
+        return False
+    return fnmatch.fnmatch(path_segments[0], head) and _glob_segments_match(rest, path_segments[1:])
+
+
 def _codeowners_matches(pattern: str, file_path: str) -> bool:
     normalized = pattern.lstrip("/")
     if normalized.endswith("/"):
         return file_path.startswith(normalized)
     if "/" not in normalized:
         return fnmatch.fnmatch(Path(file_path).name, normalized)
-    return fnmatch.fnmatch(file_path, normalized)
+    # A single "*"/"?" in a gitignore-style (and thus CODEOWNERS-style,
+    # per GitHub's own docs) pattern matches within one path segment
+    # only - it does not cross a "/". fnmatch.fnmatch has no concept of
+    # path segments at all: it translates "*" to ".*", which happily
+    # matches straight through slashes. GitHub's own documented example
+    # makes the intended behavior concrete: "docs/*" matches
+    # "docs/getting-started.md" but explicitly NOT the further-nested
+    # "docs/build-app/troubleshooting.md" - confirmed directly that
+    # fnmatch.fnmatch("docs/build-app/troubleshooting.md", "docs/*")
+    # returns True, the opposite of the documented behavior. Matching
+    # segment-by-segment (with "**" as the one construct allowed to
+    # cross "/") fixes this without losing "*"'s existing behavior
+    # within a single segment.
+    return _glob_segments_match(normalized.split("/"), file_path.split("/"))
 
 
 def resolve_owner(repo_path: Path, file_path: str) -> dict:
