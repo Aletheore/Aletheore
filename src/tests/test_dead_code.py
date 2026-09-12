@@ -1118,6 +1118,75 @@ def test_aspnet_global_using_in_obj_build_dir_is_ignored(tmp_path):
     assert "Foo.cs" in [m["path"] for m in result["unreachable_modules"]]
 
 
+def test_aspnet_global_using_does_not_leak_across_csproj_projects(tmp_path):
+    # Real bug found via Flash Review on #668, confirmed directly after the
+    # obj/ fix above turned out not to address it: a single repo-wide
+    # boolean, even with generated build output excluded, still
+    # over-applies one project's own global using to a completely
+    # unrelated project sharing the same git repository - a very real
+    # shape for .NET (eShop, this fix's own real-repo test subject, is
+    # itself multi-project: Identity.API, Ordering.API, Catalog.API,
+    # Basket.API each their own project).
+    (tmp_path / "ProjectA").mkdir()
+    (tmp_path / "ProjectA" / "ProjectA.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk.Web"></Project>\n'
+    )
+    (tmp_path / "ProjectA" / "GlobalUsings.cs").write_text(
+        "global using Microsoft.AspNetCore.Mvc;\n"
+    )
+    (tmp_path / "ProjectB").mkdir()
+    (tmp_path / "ProjectB" / "ProjectB.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk"></Project>\n'
+    )
+    (tmp_path / "ProjectB" / "Foo.cs").write_text(
+        "namespace ProjectB {\n    class Foo : Controller {}\n}\n"
+    )
+    modules = [
+        _module("ProjectA/GlobalUsings.cs"),
+        _module("ProjectB/Foo.cs"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    # ProjectB has no ASP.NET Core dependency and no global using of its
+    # own - Foo.cs must stay flagged, not get swept up by ProjectA's.
+    assert "ProjectB/Foo.cs" in [m["path"] for m in result["unreachable_modules"]]
+
+
+def test_aspnet_global_using_still_applies_within_its_own_project(tmp_path):
+    (tmp_path / "ProjectA").mkdir()
+    (tmp_path / "ProjectA" / "ProjectA.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk.Web"></Project>\n'
+    )
+    (tmp_path / "ProjectA" / "GlobalUsings.cs").write_text(
+        "global using Microsoft.AspNetCore.Mvc;\n"
+    )
+    (tmp_path / "ProjectA" / "Foo.cs").write_text(
+        "namespace ProjectA {\n    class Foo : Controller {}\n}\n"
+    )
+    modules = [
+        _module("ProjectA/GlobalUsings.cs"),
+        _module("ProjectA/Foo.cs"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "ProjectA/Foo.cs" in result["entry_points_detected"]
+
+
+def test_aspnet_global_using_falls_back_to_repo_wide_with_no_csproj_anywhere(tmp_path):
+    # A repo with no .csproj at all (no discoverable project boundary for
+    # either the declaring file or the candidate file) can't be scoped to
+    # anything real - falls back to the pre-scoping repo-wide behavior for
+    # this specific case only, matching every earlier synthetic test in
+    # this file that never bothered creating a .csproj fixture.
+    (tmp_path / "GlobalUsings.cs").write_text(
+        "global using Microsoft.AspNetCore.Mvc;\n"
+    )
+    (tmp_path / "Foo.cs").write_text(
+        "namespace MyApp {\n    class Foo : Controller {}\n}\n"
+    )
+    modules = [_module("GlobalUsings.cs"), _module("Foo.cs")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "Foo.cs" in result["entry_points_detected"]
+
+
 def test_rails_controller_named_only_in_routes_rb_is_never_unreachable(tmp_path):
     # Real bug found via a real Discourse scan (68,183-commit clone): Rails
     # dispatches `to: "users#show"` and `resources :name` route entries to

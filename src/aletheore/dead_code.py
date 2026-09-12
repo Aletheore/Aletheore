@@ -390,20 +390,54 @@ def _has_spring_stereotype_annotation(repo_path: Path, path: str) -> bool:
     )
 
 
-def _aspnet_global_using_mvc_present(repo_path: Path, ignored_paths: list[str] | None = None) -> bool:
-    """Whether ANY .cs file anywhere in the repo declares `global using
-    Microsoft.AspNetCore.Mvc` - computed once repo-wide (mirroring
-    _android_manifest_entry_points/_html_script_entry_points above) rather
-    than per-file, since a global using's whole point is that it isn't
-    local to any one file. Not scoped to a single .csproj's file set (this
-    codebase has no general C# project-boundary model to scope it to) -
-    a multi-project repo where only one project declares the global using
-    could over-apply it to another project's unrelated same-named
-    "Controller" class, the same narrow false-positive risk every other
-    heuristic in this file already accepts in exchange for not missing the
-    common case entirely.
+def _nearest_csproj_root(repo_path: Path, path: str) -> str | None:
+    """The directory (relative to repo_path, "" for the repo root itself)
+    of the nearest ancestor .csproj to `path` - the real C# project
+    boundary a global using's file-scope actually respects. None if no
+    .csproj exists anywhere above it (rare for a real repo - almost every
+    C# project the SDK builds has one - and handled by the caller as an
+    unscopeable file, not silently treated as its own single-file
+    project)."""
+    current = (repo_path / path).parent
+    while True:
+        try:
+            if any(current.glob("*.csproj")):
+                return current.relative_to(repo_path).as_posix()
+        except OSError:
+            pass
+        if current == repo_path:
+            return None
+        current = current.parent
+
+
+def _aspnet_global_using_mvc_projects(
+    repo_path: Path, ignored_paths: list[str] | None = None
+) -> tuple[set[str], bool]:
+    """(project roots that declare `global using Microsoft.AspNetCore.Mvc`
+    in one of their own .cs files, whether any *unscopeable* .cs file -
+    no discoverable .csproj above it at all - declares it).
+
+    Real bug found via Flash Review on #668, confirmed directly against a
+    synthetic two-project repro (ProjectA declares the global using,
+    ProjectB doesn't and has no ASP.NET Core dependency at all) after the
+    first fix attempt (obj/ IGNORED_DIRS only) turned out not to address
+    it: a single repo-wide boolean, even with generated build output
+    correctly excluded, still over-applies one real project's own global
+    using to every unrelated project sharing the same git repository - a
+    very real shape for .NET (eShop, this fix's own real-repo test
+    subject, is itself a multi-project microservices repo: Identity.API,
+    Ordering.API, Catalog.API, Basket.API each their own project).
+
+    Scoping to the nearest .csproj (the real project boundary a global
+    using's file-scope respects) instead of the whole repo closes that
+    gap. The rare .csproj-less file (no SDK project structure at all
+    above it) can't be scoped to anything, so it still applies repo-wide
+    for other similarly-unscopeable files only - not to files that DO
+    have their own, different, csproj that simply doesn't declare it.
     """
     patterns = ignored_paths or []
+    projects: set[str] = set()
+    unscopeable_present = False
     for cs_path in repo_path.rglob("*.cs"):
         rel_path = cs_path.relative_to(repo_path).as_posix()
         rel_parts = cs_path.relative_to(repo_path).parts
@@ -412,25 +446,30 @@ def _aspnet_global_using_mvc_present(repo_path: Path, ignored_paths: list[str] |
         # this module's own IGNORED_DIRS comment documents that .NET's
         # `obj/` build directory fills with SDK-generated files, including
         # a GlobalUsings.g.cs that itself declares `global using
-        # Microsoft.AspNetCore.Mvc`. Without this check, real,
-        # SDK-generated build output from ANY one project would leak this
-        # signal repo-wide (this function has no per-project scoping - see
-        # its docstring) and wrongly mark an unrelated Controller class in
-        # a completely different project as an entry point. Confirmed via
-        # a real repo audit (peer session review of this PR).
+        # Microsoft.AspNetCore.Mvc`. Confirmed via a real repo audit (peer
+        # session review of this PR).
         if any(part in IGNORED_DIRS for part in rel_parts) or is_ignored(rel_path, patterns):
             continue
         try:
             content = cs_path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
-        if _ASPNET_GLOBAL_USING_MVC_PATTERN.search(content):
-            return True
-    return False
+        if not _ASPNET_GLOBAL_USING_MVC_PATTERN.search(content):
+            continue
+        project_root = _nearest_csproj_root(repo_path, rel_path)
+        if project_root is not None:
+            projects.add(project_root)
+        else:
+            unscopeable_present = True
+    return projects, unscopeable_present
 
 
 def _has_aspnet_controller_convention(
-    repo_path: Path, path: str, *, global_using_mvc: bool = False
+    repo_path: Path,
+    path: str,
+    *,
+    global_using_mvc_projects: set[str] | None = None,
+    global_using_mvc_unscopeable: bool = False,
 ) -> bool:
     if not path.endswith(".cs"):
         return False
@@ -438,7 +477,16 @@ def _has_aspnet_controller_convention(
         content = (repo_path / path).read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return False
-    if not (global_using_mvc or _ASPNETCORE_MVC_IMPORT_PATTERN.search(content)):
+    project_root = _nearest_csproj_root(repo_path, path)
+    has_global_using = (
+        (project_root in global_using_mvc_projects if global_using_mvc_projects else False)
+        if project_root is not None
+        # No discoverable .csproj for this file either - fall back to the
+        # unscoped signal, since there's no project boundary to scope
+        # either side to.
+        else global_using_mvc_unscopeable
+    )
+    if not (has_global_using or _ASPNETCORE_MVC_IMPORT_PATTERN.search(content)):
         return False
     return bool(
         _ASPNET_API_CONTROLLER_ATTRIBUTE_PATTERN.search(content)
@@ -1036,7 +1084,9 @@ def find_dead_code(
     swift_reachable_files = _swift_target_reachable_files(repo_path, modules, ignored_paths)
     rails_route_reachable_files = _rails_route_reachable_files(modules, api_endpoints)
     laravel_route_reachable_files = _laravel_route_reachable_files(modules, api_endpoints)
-    aspnet_global_using_mvc = _aspnet_global_using_mvc_present(repo_path, ignored_paths)
+    aspnet_global_using_mvc_projects, aspnet_global_using_mvc_unscopeable = (
+        _aspnet_global_using_mvc_projects(repo_path, ignored_paths)
+    )
 
     unreachable_modules = []
     entry_points_detected = []
@@ -1063,7 +1113,10 @@ def find_dead_code(
                 or _has_hilt_dagger_annotation(repo_path, path)
                 or _has_spring_stereotype_annotation(repo_path, path)
                 or _has_aspnet_controller_convention(
-                    repo_path, path, global_using_mvc=aspnet_global_using_mvc
+                    repo_path,
+                    path,
+                    global_using_mvc_projects=aspnet_global_using_mvc_projects,
+                    global_using_mvc_unscopeable=aspnet_global_using_mvc_unscopeable,
                 )
                 or _has_go_main_function(repo_path, path)
                 or _has_rust_main_function(repo_path, path)
