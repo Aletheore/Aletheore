@@ -272,6 +272,14 @@ def _referenced_by_dotted_string(path: str, token_index: dict[str, set[str]]) ->
 # lookbehind keeps a match from starting mid-reference (`Admin::User`
 # should never also register a spurious standalone `User` match starting
 # at its own `::`).
+#
+# Known, deliberate limitation: this is a plain text scan, not a real
+# parse - a class name mentioned only inside a `#` comment or a string
+# literal (a log message, an error string) counts as a "reference" the
+# same as real code would. Consistent with this file's existing bias
+# everywhere else (favor not flagging live code dead over precision), and
+# a real parse for every unreachable file's own repo would cost far more
+# than this rescue pass is worth - left as a known tradeoff, not silently.
 _RUBY_CONSTANT_TOKEN_RE = re.compile(r"(?<![:\w])[A-Z][A-Za-z0-9_]*(?:::[A-Z][A-Za-z0-9_]*)*")
 # Whether a token match sits right after `class`/`module` (its own
 # declaration, e.g. "class WidgetsController" or "module Admin") rather
