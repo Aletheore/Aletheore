@@ -1253,7 +1253,25 @@ def _extract_vapor_routes(root: Node, source: bytes, rel_path: str) -> list[dict
                     # must-start-with-"/" guard doesn't work here: unlike
                     # Express, real Vapor path segments never carry a leading
                     # "/" in source, so that signal isn't available.
-                    if path_segments and (trailing_closure is not None or handler_label is not None):
+                    #
+                    # Real bug found via audit: `path_segments` was ALSO
+                    # required to be non-empty, which drops a route
+                    # registered with no additional path segment at all -
+                    # `users.get(use: index)` for the idiomatic REST
+                    # "index" action living at a group's own base path
+                    # (`GET /users`, contrasted with `users.get(":id", use:
+                    # show)` for `GET /users/:id`), or even the simplest
+                    # possible case with no grouping at all,
+                    # `app.get(use: index)` (the literal application
+                    # root). Confirmed directly: both produced zero
+                    # entries, not just an imprecise path - the whole
+                    # route vanished, contradicting this function's own
+                    # "still caught" claim above. An empty path_segments
+                    # list is a valid state (root path relative to
+                    # whatever prefix applies), not "no route here" -
+                    # "/" + "/".join([]) already correctly produces "/"
+                    # on its own, so only the guard was wrong.
+                    if trailing_closure is not None or handler_label is not None:
                         entries.append(
                             {
                                 "method": method_name.upper(),

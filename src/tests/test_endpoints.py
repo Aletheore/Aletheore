@@ -1019,6 +1019,32 @@ def test_extract_vapor_route_with_use_labeled_handler_and_multi_segment_path():
     ]
 
 
+def test_extract_vapor_route_with_no_additional_path_segment():
+    # Real bug found via audit: a route registered with no additional path
+    # segment at all - the idiomatic REST "index"/"create" action living
+    # at a group's own base path (GET /users via `users.get(use: index)`,
+    # contrasted with GET /users/:id via `users.get(":id", use: show)`) -
+    # produced zero entries, not just an imprecise path. An empty
+    # path_segments list is a valid state (the route's own root, relative
+    # to whatever prefix applies), not "no route here".
+    root, source = parse_swift('app.get(use: index)\n')
+
+    entries = _extract_vapor_routes(root, source, "routes.swift")
+
+    assert entries == [
+        {
+            "method": "GET",
+            "path": "/",
+            "framework": "vapor",
+            "file": "routes.swift",
+            "line": 1,
+            "handler": "index",
+            "unresolved": False,
+            "note": None,
+        }
+    ]
+
+
 def test_extract_vapor_route_on_grouped_sub_router():
     # A route group ("api.get(...)" where api = app.grouped("api")) is
     # caught the same way Express's mounted sub-routers are: by matching
