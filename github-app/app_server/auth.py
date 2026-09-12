@@ -149,6 +149,19 @@ def _fetch_primary_verified_email(access_token: str) -> str | None:
     return verified["email"] if verified else None
 
 
+class GitHubOAuthError(Exception):
+    """GitHub's own /login/oauth/access_token endpoint returns HTTP 200
+    with an {"error": ...} body (never a 4xx) for an invalid, expired, or
+    already-used authorization code - refresh_github_access_token already
+    documents and handles this exact quirk for this same endpoint's
+    grant_type=refresh_token form. Confirmed the code-exchange form has the
+    identical failure mode: a double-clicked "Authorize" button, a browser
+    back-button resubmission, or a slow network racing GitHub's code expiry
+    are all routine, real ways to hit it - not a bug, so it must not reach
+    main.py's global exception handler (a raw 500 plus an internal error
+    alert email for an entirely ordinary user action)."""
+
+
 def _exchange_code_and_fetch_user(
     code: str, client_id: str, client_secret: str
 ) -> tuple[str, str | None, dict, str | None]:
@@ -162,6 +175,10 @@ def _exchange_code_and_fetch_user(
     )
     token_response.raise_for_status()
     token_data = token_response.json()
+    if "access_token" not in token_data:
+        raise GitHubOAuthError(
+            token_data.get("error_description") or token_data.get("error") or "code exchange failed"
+        )
     access_token = token_data["access_token"]
     # Only present when the GitHub App has "Expire user authorization
     # tokens" turned on - absent (None) otherwise, and stored as such.
@@ -411,9 +428,18 @@ async def callback(code: str, request: Request, state: str | None = None, instal
     ):
         raise HTTPException(status_code=400, detail="invalid oauth state")
 
-    access_token, refresh_token, user, email = await asyncio.to_thread(
-        _exchange_code_and_fetch_user, code, settings.github_client_id, settings.github_client_secret
-    )
+    try:
+        access_token, refresh_token, user, email = await asyncio.to_thread(
+            _exchange_code_and_fetch_user, code, settings.github_client_id, settings.github_client_secret
+        )
+    except GitHubOAuthError as exc:
+        # A used-up, expired, or otherwise invalid authorization code - a
+        # routine, retryable condition (see GitHubOAuthError's own
+        # docstring), not a real error worth an internal alert or a raw
+        # 500. The code itself is single-use and already spent either way,
+        # so there's nothing to retry but a fresh /auth/login round-trip.
+        logger.info("github oauth code exchange failed (%s); redirecting to retry", exc)
+        return RedirectResponse(url="/auth/login", status_code=307)
 
     session_id = secrets.token_urlsafe(32)
     await create_session(

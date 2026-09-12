@@ -768,3 +768,47 @@ def test_checkout_installation_id_and_oauth_state_do_not_cross_purposes():
     server."""
     oauth_token = sign_oauth_state("some-state-value", "a-secret")
     assert unsign_checkout_installation_id(oauth_token, "a-secret") is None
+
+
+@pytest.mark.asyncio
+async def test_callback_handles_github_200_with_error_body_gracefully(pool, monkeypatch):
+    # GitHub's own /login/oauth/access_token endpoint returns HTTP 200 with
+    # an {"error": ...} body (not a 4xx) when the authorization code is
+    # invalid, expired, or already used - the exact same quirk
+    # refresh_github_access_token already documents and handles for this
+    # same endpoint's grant_type=refresh_token form. A double-clicked
+    # "Authorize" button, a browser back-button resubmission, or a slow
+    # network racing GitHub's ~10-minute code expiry are all routine, real
+    # ways a user hits this - not a bug, but the sign-in flow previously
+    # had no handling for it at all on the code-exchange side, so it fell
+    # through to `token_data["access_token"]` raising an uncaught KeyError:
+    # a raw 500 plus main.py's global handler firing an internal error
+    # alert email for an entirely ordinary user action.
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login/oauth/access_token":
+            return httpx.Response(200, json={"error": "bad_verification_code"})
+        return httpx.Response(404)
+
+    monkeypatch.setattr(
+        "app_server.auth._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+    monkeypatch.setattr(
+        "app_server.auth._github_oauth_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://github.com"),
+    )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="https://test") as client:
+        login_response = await client.get("/auth/login", follow_redirects=False)
+        state = login_response.headers["location"].split("state=")[1]
+        response = await client.get(
+            f"/auth/callback?code=bad-code&state={state}", follow_redirects=False
+        )
+
+    # A clean redirect back to sign-in, not a raw 500.
+    assert response.status_code == 307
+    assert response.headers["location"] == "/auth/login"
