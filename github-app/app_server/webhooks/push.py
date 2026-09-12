@@ -8,7 +8,23 @@ from app_server.http_client import get_github_api_client
 
 logger = logging.getLogger(__name__)
 
-COMPARE_FILES_PER_PAGE = 100
+# GitHub's own compare-commits docs are explicit: "the list of changed
+# files is only shown on the first page of results, and it includes up
+# to 300 changed files for the entire comparison." page/per_page paginate
+# the COMMITS in the response, not the files - confirmed directly against
+# GitHub's docs (fetched twice, consistent both times). A prior version of
+# this function looped page numbers expecting each page to carry the next
+# slice of files, the way a normal paginated list endpoint works; in
+# reality every page past the first comes back with no files at all, so
+# the loop always terminated after page 1 regardless - it just silently
+# capped at 300 changed files with no signal that more existed, on
+# exactly the payloads (a mass rebase, a bulk import, a huge squash) most
+# likely to actually exceed that cap. There is no documented way to
+# retrieve file 301+ from this endpoint at all, so the fix here is a
+# single request plus an honest, logged truncation warning - the same
+# "silent truncation is not acceptable" standard this codebase applies
+# everywhere else - not a way to actually retrieve the rest.
+GITHUB_COMPARE_FILES_HARD_CAP = 300
 
 
 def _changed_files_from_commits(commits: list[dict]) -> set[str]:
@@ -37,27 +53,27 @@ def _fetch_compare_changed_files_sync(
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
     }
+    response = client.get(
+        f"/repos/{repo_full_name}/compare/{before_sha}...{after_sha}",
+        headers=headers,
+    )
+    response.raise_for_status()
+    files = response.json().get("files", [])
     changed_files: set[str] = set()
-    page = 1
+    for file_info in files:
+        filename = file_info.get("filename")
+        if filename:
+            changed_files.add(filename)
+        previous_filename = file_info.get("previous_filename")
+        if previous_filename:
+            changed_files.add(previous_filename)
 
-    while True:
-        response = client.get(
-            f"/repos/{repo_full_name}/compare/{before_sha}...{after_sha}",
-            headers=headers,
-            params={"per_page": COMPARE_FILES_PER_PAGE, "page": page},
+    if len(files) >= GITHUB_COMPARE_FILES_HARD_CAP:
+        logger.warning(
+            "push webhook compare %s...%s for %s hit the compare API's %d-file cap; "
+            "changed files beyond this are not visible to this scan",
+            before_sha, after_sha, repo_full_name, GITHUB_COMPARE_FILES_HARD_CAP,
         )
-        response.raise_for_status()
-        files = response.json().get("files", [])
-        for file_info in files:
-            filename = file_info.get("filename")
-            if filename:
-                changed_files.add(filename)
-            previous_filename = file_info.get("previous_filename")
-            if previous_filename:
-                changed_files.add(previous_filename)
-        if len(files) < COMPARE_FILES_PER_PAGE:
-            break
-        page += 1
 
     return changed_files
 
