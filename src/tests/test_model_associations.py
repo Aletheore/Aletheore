@@ -88,6 +88,23 @@ def test_auxiliary_class_before_the_real_model_does_not_hide_it():
     assert edges == [("app/models/post.rb", "app/models/user.rb")]
 
 
+def test_auxiliary_class_with_an_unrelated_superclass_does_not_hide_the_model():
+    # Different from the plain-class case above: a real, common Rails
+    # pattern defines a small custom error class alongside its model in
+    # the same file - unlike PostValidator above, this auxiliary class
+    # DOES have a superclass, just not an ActiveRecord one. The old code
+    # returned only the file's first (name, superclass) pair found, so a
+    # file shaped like this lost its real model - and every one of its
+    # associations - entirely, with zero edges in either direction.
+    files = _files(
+        post="class PostValidationError < StandardError\nend\n\n"
+        "class Post < ActiveRecord::Base\n  belongs_to :user\nend\n",
+        user="class User < ActiveRecord::Base\nend\n",
+    )
+    edges = rails_model_association_edges(files)
+    assert edges == [("app/models/post.rb", "app/models/user.rb")]
+
+
 def test_polymorphic_belongs_to_is_skipped():
     files = _files(
         bookmark="class Bookmark < ActiveRecord::Base\n"
