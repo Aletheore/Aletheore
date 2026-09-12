@@ -1,4 +1,5 @@
 import re
+import tomllib
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -1169,6 +1170,85 @@ def _laravel_route_reachable_files(
     return reachable
 
 
+def _python_console_script_entry_points(repo_path: Path) -> set[str]:
+    """Every file a pyproject.toml [project.scripts]/[project.gui-scripts]
+    or [tool.poetry.scripts] entry points at ("name = "pkg.mod:func"") -
+    pip/setuptools/poetry dispatch these by installing a generated wrapper
+    that imports the target via importlib.metadata at install time, never
+    a plain `import` anywhere in the repo's own source, the same
+    convention-over-reference blind spot ENTRY_POINT_FILENAMES exists for.
+
+    Genuinely rare in practice, not common - measured, not assumed: of 85
+    real console_scripts entries sampled from a conda environment's own
+    entry_points.txt files, 42 (49%) point at a module name outside
+    ENTRY_POINT_FILENAMES, but checking a random sample of those 42
+    against every OTHER existing heuristic in this file found only 1 in
+    18 actually depended on this fix - most well-designed CLI entry
+    modules also carry their own `if __name__ == "__main__":` guard, a
+    sibling __main__.py, or get imported by their own test suite, so the
+    console_scripts declaration is usually a second, redundant signal
+    rather than the only one. Worth having regardless: the one confirmed
+    case (jupyter_client's real jupyter-kernel = jupyter_client.
+    kernelapp:main - no __main__.py, no main guard, no other importer
+    anywhere in that real, currently-installed package) is exactly the
+    shape this exists for, and the fix is simple enough that a lower hit
+    rate doesn't argue against having it.
+
+    Tries both a flat layout (module directly under the repo root) and a
+    src/ layout (this very project's own layout - pyproject.toml at the
+    root, packages under src/) since both are common and mutually
+    exclusive per project; never guesses a location that doesn't exist.
+    Only the repo-root pyproject.toml is read, matching
+    _parse_pip_pins' own existing scope (no recursive search for a
+    nested one in a monorepo)."""
+    pyproject = repo_path / "pyproject.toml"
+    if not pyproject.exists():
+        return set()
+    try:
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8", errors="ignore"))
+    except tomllib.TOMLDecodeError:
+        return set()
+
+    targets: list[str] = []
+    project = data.get("project", {})
+    if isinstance(project, dict):
+        for table_name in ("scripts", "gui-scripts"):
+            table = project.get(table_name, {})
+            if isinstance(table, dict):
+                targets.extend(value for value in table.values() if isinstance(value, str))
+
+    poetry_scripts = data.get("tool", {}).get("poetry", {}).get("scripts", {})
+    if isinstance(poetry_scripts, dict):
+        for value in poetry_scripts.values():
+            if isinstance(value, str):
+                targets.append(value)
+            elif isinstance(value, dict) and isinstance(value.get("reference"), str):
+                # Poetry 1.2+'s extras-gated script form:
+                # {reference = "pkg.mod:func", extras = [...]} - only the
+                # reference is a real dotted-path target this can resolve.
+                targets.append(value["reference"])
+
+    search_roots = [repo_path, repo_path / "src"]
+    entry_points: set[str] = set()
+    for target in targets:
+        if ":" not in target:
+            continue
+        module_path = target.split(":", 1)[0].strip()
+        if not module_path:
+            continue
+        rel_parts = module_path.split(".")
+        for root in search_roots:
+            module_file = root.joinpath(*rel_parts).with_suffix(".py")
+            package_init = root.joinpath(*rel_parts, "__init__.py")
+            if module_file.is_file():
+                entry_points.add(module_file.relative_to(repo_path).as_posix())
+                break
+            if package_init.is_file():
+                entry_points.add(package_init.relative_to(repo_path).as_posix())
+                break
+    return entry_points
+
+
 def _html_script_entry_points(repo_path: Path, ignored_paths: list[str] | None = None) -> set[str]:
     # Plain <script src="..."> tags (no bundler, no ES module imports) are
     # invisible to the JS import graph - confirmed on this repo's website/:
@@ -1340,6 +1420,7 @@ def find_dead_code(
             custom_entry_points = {path for path in raw_entry_points if isinstance(path, str)}
 
     html_script_entry_points = _html_script_entry_points(repo_path, ignored_paths)
+    python_console_script_entry_points = _python_console_script_entry_points(repo_path)
     android_manifest_entry_points = _android_manifest_entry_points(repo_path, ignored_paths)
     jvm_package_reachable_files = _jvm_package_reachable_files(
         repo_path, modules, android_manifest_entry_points
@@ -1370,6 +1451,7 @@ def find_dead_code(
         if not module.get("imported_by", []):
             if (
                 path in html_script_entry_points
+                or path in python_console_script_entry_points
                 or path in android_manifest_entry_points
                 or _has_main_guard(repo_path, path)
                 or _has_django_admin_import(repo_path, path)

@@ -22,6 +22,79 @@ def test_recognized_entry_point_is_never_unreachable(tmp_path):
     assert set(result["entry_points_detected"]) == {"main.py", "app/__main__.py", "index.js"}
 
 
+def test_pyproject_console_script_at_a_non_standard_module_name_resolves(tmp_path):
+    # Real gap found via audit: pip/setuptools dispatch a
+    # [project.scripts] entry by installing a generated wrapper that
+    # imports the target via importlib.metadata at install time, never a
+    # plain `import` anywhere in the repo's own source - the same
+    # convention-over-reference blind spot ENTRY_POINT_FILENAMES exists
+    # for. Verified against real installed packages (jupyter_client's own
+    # `jupyter-kernel = jupyter_client.kernelapp:main`): kernelapp.py has
+    # no __main__.py sibling, no main guard, and nothing else in the
+    # package imports it - console_scripts is its only reachability
+    # signal at all.
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "mytool"\n\n'
+        '[project.scripts]\n'
+        'mytool = "mytool.runner:main"\n'
+    )
+    pkg_dir = tmp_path / "mytool"
+    pkg_dir.mkdir()
+    (pkg_dir / "runner.py").write_text("def main():\n    pass\n")
+    modules = [_module("mytool/runner.py")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "mytool/runner.py" in result["entry_points_detected"]
+
+
+def test_pyproject_console_script_resolves_under_a_src_layout(tmp_path):
+    # A src/ layout (module under src/<package>/..., pyproject.toml at
+    # the repo root) is common - this very project uses it - and mutually
+    # exclusive with the flat layout above per project, so both must
+    # resolve independently rather than only whichever is tried first.
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "mytool"\n\n'
+        '[project.scripts]\n'
+        'mytool = "mytool.runner:main"\n'
+    )
+    pkg_dir = tmp_path / "src" / "mytool"
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "runner.py").write_text("def main():\n    pass\n")
+    modules = [_module("src/mytool/runner.py")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "src/mytool/runner.py" in result["entry_points_detected"]
+
+
+def test_poetry_style_scripts_table_resolves(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.poetry]\nname = "mytool"\n\n'
+        '[tool.poetry.scripts]\n'
+        'mytool = "mytool.cmdline:entry"\n'
+    )
+    pkg_dir = tmp_path / "mytool"
+    pkg_dir.mkdir()
+    (pkg_dir / "cmdline.py").write_text("def entry():\n    pass\n")
+    modules = [_module("mytool/cmdline.py")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "mytool/cmdline.py" in result["entry_points_detected"]
+
+
+def test_pyproject_without_a_scripts_table_does_not_crash(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "mytool"\n')
+    modules = [_module("mytool/orphan.py")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert [m["path"] for m in result["unreachable_modules"]] == ["mytool/orphan.py"]
+
+
+def test_malformed_pyproject_toml_does_not_crash(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("this is not [ valid toml")
+    modules = [_module("mytool/orphan.py")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert [m["path"] for m in result["unreachable_modules"]] == ["mytool/orphan.py"]
+
+
 def test_django_management_command_is_never_unreachable(tmp_path):
     # Real gap found via audit against a real repo (wagtail/wagtail):
     # Django's management-command loader (`python manage.py <name>`,
