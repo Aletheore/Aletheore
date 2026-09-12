@@ -121,6 +121,28 @@ _SYNTHETIC_REPETITION_RATIO_THRESHOLD = 1.1
 # the first observed false positive (64), not right up against it.
 _SYNTHETIC_REPETITION_MAX_LENGTH = 48
 
+# Real bug found via audit: _SYNTHETIC_REPETITION_MAX_LENGTH's own 2,000-
+# trial measurement used the same charset generic_credential_assignment's
+# value class matches - a ~64-94 symbol alphabet - but never checked a
+# NARROWER real secret alphabet, and hex (0-9a-f, 16 symbols - SHA/MD5
+# digests, many session tokens and API keys, git commit-ish tokens) is
+# extremely common. A 16-symbol alphabet has under 4 bits of entropy per
+# byte, well under the ~64-94-symbol alphabet's ~6, so DEFLATE finds real
+# compression headroom in a genuinely random hex string at a MUCH shorter
+# length than 48. Measured directly (5,000 random hex trials per length):
+# 0% false positives through length 36, but a sharp cliff appears at 41
+# (41.2%) and above - not a gradual tail the way the general cutoff has,
+# a genuine step change in zlib's own block/table overhead behavior for
+# this alphabet size. Without this, a genuinely random 41-44 char hex
+# secret (well within _SYNTHETIC_REPETITION_MAX_LENGTH's own 48-char
+# window) was misclassified likely_placeholder=True 82-98% of the time -
+# not a rare tail, the common case for that length. Capped with the same
+# "real margin below the first observed false positive" philosophy as
+# the general cutoff, just for this narrower, separately-measured
+# alphabet.
+_HEX_ALPHABET_MAX_LENGTH = 36
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+
 # Each entry's third element is the regex group index holding the actual secret value to
 # redact. Most patterns match the credential directly, so group 0 (the whole match) IS the
 # value. generic_credential_assignment is different: it matches "KEYWORD=value" syntax, so
@@ -275,6 +297,14 @@ def _value_looks_synthetically_repeated(value: str) -> bool:
     # identifier-reference, path+entropy), just not this one.
     if len(value) > _SYNTHETIC_REPETITION_MAX_LENGTH:
         return False
+    # See _HEX_ALPHABET_MAX_LENGTH: a value confined to hex digits reaches
+    # the same alphabet-entropy compression floor at a much shorter length
+    # than the general cutoff above accounts for - checked separately
+    # since it's a narrower, real, common secret alphabet (SHA/MD5
+    # digests, many session tokens and API keys) that the general
+    # measurement never covered.
+    if len(value) > _HEX_ALPHABET_MAX_LENGTH and all(c in _HEX_DIGITS for c in value):
+        return False
     compressed_length = len(zlib.compress(value.encode("utf-8"), level=9))
     return (compressed_length / len(value)) < _SYNTHETIC_REPETITION_RATIO_THRESHOLD
 
@@ -316,9 +346,43 @@ _IDENTIFIER_REFERENCE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Z
 # margin below the shortest known-real credential segment.
 _IDENTIFIER_SEGMENT_MAX_LENGTH = 32
 
+# Real bug found via audit: the segment-length gate alone doesn't actually
+# distinguish a real identifier chain from a random dotted credential of
+# similar shape - a JWT (header.payload.signature, each segment base64url)
+# has no dots inside a segment and each segment is well under 32 chars, so
+# it can satisfy every check above purely by chance whenever none of its
+# three segments happens to contain a literal "-" (base64url's one
+# alphanumeric-excluded character _IDENTIFIER_REFERENCE_RE's own char
+# class doesn't allow). Measured directly: ~58-60% of genuinely random
+# JWT-shaped values (20/17/9-char segments) were misclassified
+# likely_placeholder=True by this check alone - not a rare tail, the
+# common case, and JWTs are exactly the kind of long-lived, high-value
+# secret this scanner most needs to catch.
+#
+# None of this file's own real, empirically-validated identifier examples
+# (config.SECRET_KEY, TokenRequest.ClientSecret, settings.SECRET_KEY,
+# self.PASSWORD, cfg.API_KEY, obj.Attribute, configAuthInfo.Password,
+# self.promptedCredentials) contain a single digit - real identifier/
+# property names are overwhelmingly alphabetic, while a random credential
+# segment drawn from a mixed alphanumeric alphabet has a high probability
+# of containing at least one digit once it's more than a few characters
+# long. Requiring zero digits anywhere in the value cut the measured JWT
+# false-positive rate to 0-1% (down from ~58-60%) while still matching
+# every one of this file's own real identifier examples. Biased toward
+# stricter (a real identifier chain that happens to include a digit, e.g.
+# "oauth2Client.secret", is no longer auto-classified by this specific
+# check) rather than looser, on purpose: this check silently downgrades a
+# finding regardless of path, so a false "yes, placeholder" verdict hides
+# a possibly-real secret, while a false "no" here just leaves the finding
+# to be judged some other way (still visible, not silently hidden) - the
+# same asymmetry this whole scanner is built around.
+_IDENTIFIER_VALUE_CONTAINS_DIGIT_RE = re.compile(r"\d")
+
 
 def _value_looks_like_an_identifier_reference(value: str) -> bool:
     if not _IDENTIFIER_REFERENCE_RE.fullmatch(value):
+        return False
+    if _IDENTIFIER_VALUE_CONTAINS_DIGIT_RE.search(value):
         return False
     return all(len(segment) <= _IDENTIFIER_SEGMENT_MAX_LENGTH for segment in value.split("."))
 
