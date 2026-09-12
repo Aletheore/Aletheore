@@ -1304,6 +1304,77 @@ def _rails_path_and_to(
     return path, to_value
 
 
+def _rails_enclosing_module_prefix(call_node: Node, source: bytes) -> list[str]:
+    """Every `namespace :x do ... end` / `scope module: "x" do ... end`
+    block enclosing call_node, outermost first - Rails' *module* (not URL-
+    path) namespacing, which is what determines a route's real controller
+    file. `namespace :x` affects both the controller module and the URL
+    path; a bare `scope "/logs" do` or `scope path: "..." do` affects only
+    the URL and must NOT contribute a module segment - confirmed on
+    Discourse's own routes.rb, where bare/path-only `scope` outnumbers
+    `namespace` 20 to 3, and none of those 20 renamespace their contents'
+    controllers.
+
+    Walks upward from call_node rather than a push/pop descent - each
+    do_block's owning `call` is checked in turn, so arbitrary nesting depth
+    (namespace inside scope inside namespace, ...) falls out for free
+    without a separate stateful traversal."""
+    segments: list[str] = []
+    node = call_node.parent
+    while node is not None:
+        if node.type == "do_block":
+            enclosing_call = node.parent
+            if enclosing_call is not None and enclosing_call.type == "call":
+                method_node = enclosing_call.child_by_field_name("method")
+                block_args = enclosing_call.child_by_field_name("arguments")
+                if method_node is not None and block_args is not None:
+                    block_method = source[method_node.start_byte : method_node.end_byte].decode()
+                    segment = None
+                    if block_method == "namespace":
+                        first = next(
+                            (a for a in block_args.named_children if a.type == "simple_symbol"),
+                            None,
+                        )
+                        if first is not None:
+                            segment = source[first.start_byte : first.end_byte].decode().lstrip(":")
+                    elif block_method == "scope":
+                        for arg in block_args.named_children:
+                            if arg.type != "pair":
+                                continue
+                            key = arg.child_by_field_name("key")
+                            value = arg.child_by_field_name("value")
+                            if not (
+                                key is not None
+                                and key.type == "hash_key_symbol"
+                                and source[key.start_byte : key.end_byte].decode() == "module"
+                                and value is not None
+                            ):
+                                continue
+                            if value.type == "string":
+                                segment = _ruby_string_content(value, source)
+                            elif value.type == "simple_symbol":
+                                # `scope module: :admin do` - equally valid
+                                # Rails syntax alongside `module: "admin"`,
+                                # confirmed by Flash Review on #666 and
+                                # missed entirely before: only the string
+                                # form was handled.
+                                segment = (
+                                    source[value.start_byte : value.end_byte].decode().lstrip(":")
+                                )
+                    if segment:
+                        segments.append(segment)
+        node = node.parent
+    segments.reverse()
+    return segments
+
+
+def _apply_rails_module_prefix(to_value: str, module_prefix: list[str]) -> str:
+    if not module_prefix or "#" not in to_value:
+        return to_value
+    controller_part, action = to_value.split("#", 1)
+    return "/".join([*module_prefix, controller_part]) + "#" + action
+
+
 def _extract_rails_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
@@ -1318,6 +1389,7 @@ def _extract_rails_routes(root: Node, source: bytes, rel_path: str) -> list[dict
                         args, source, is_root=(method_name == "root")
                     )
                     if to_value is not None and path is not None:
+                        module_prefix = _rails_enclosing_module_prefix(n, source)
                         entries.append(
                             {
                                 "method": "GET" if method_name == "root" else method_name.upper(),
@@ -1325,7 +1397,7 @@ def _extract_rails_routes(root: Node, source: bytes, rel_path: str) -> list[dict
                                 "framework": "rails",
                                 "file": rel_path,
                                 "line": n.start_point[0] + 1,
-                                "handler": to_value,
+                                "handler": _apply_rails_module_prefix(to_value, module_prefix),
                                 "unresolved": False,
                                 "note": None,
                             }
@@ -1336,6 +1408,9 @@ def _extract_rails_routes(root: Node, source: bytes, rel_path: str) -> list[dict
                         resource_name = source[
                             named[0].start_byte : named[0].end_byte
                         ].decode().lstrip(":")
+                        module_prefix = _rails_enclosing_module_prefix(n, source)
+                        if module_prefix:
+                            resource_name = "/".join([*module_prefix, resource_name])
                         entries.append(
                             {
                                 "method": None,

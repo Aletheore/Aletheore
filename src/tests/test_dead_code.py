@@ -1056,12 +1056,20 @@ def test_rails_controller_named_only_in_routes_rb_is_never_unreachable(tmp_path)
             "handler": "users#show",
             "path": "/users/:id",
             "unresolved": False,
+            "file": "config/routes.rb",
         },
         {
+            # "admin/badges", not bare "badges" - this controller sits under
+            # app/controllers/admin/, and endpoints.py's Rails extractor
+            # tracks the enclosing `namespace :admin do` block (see
+            # _rails_enclosing_module_prefix) precisely so this resolves to
+            # the right one of two same-named controllers instead of
+            # colliding with an unrelated top-level `badges_controller.rb`.
             "framework": "rails",
             "handler": "resources(...)",
-            "path": "badges",
+            "path": "admin/badges",
             "unresolved": True,
+            "file": "config/routes.rb",
         },
     ]
     result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
@@ -1091,7 +1099,13 @@ def test_rails_ambiguous_controller_basename_is_left_unresolved(tmp_path):
         _module("plugins/a/app/controllers/widgets_controller.rb"),
     ]
     api_endpoints = [
-        {"framework": "rails", "handler": "resources(...)", "path": "widgets", "unresolved": True},
+        {
+            "framework": "rails",
+            "handler": "resources(...)",
+            "path": "widgets",
+            "unresolved": True,
+            "file": "config/routes.rb",
+        },
     ]
     result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
     unreachable_paths = {m["path"] for m in result["unreachable_modules"]}
@@ -1142,3 +1156,104 @@ def test_laravel_array_class_handler_method_name_is_not_mistaken_for_a_controlle
     assert "app/Http/Controllers/UserController.php" in [
         m["path"] for m in result["unreachable_modules"]
     ]
+
+
+def test_rails_namespaced_and_top_level_same_named_controllers_both_resolve(tmp_path):
+    # Follow-up to test_rails_ambiguous_controller_basename_is_left_unresolved
+    # above: once endpoints.py's Rails extractor tracks namespace/scope
+    # module prefixes (see _rails_enclosing_module_prefix), the two real
+    # "badges" entries carry distinct scoped names ("badges" vs
+    # "admin/badges") instead of colliding, so both controllers resolve
+    # correctly instead of both being left unreachable.
+    (tmp_path / "app" / "controllers" / "admin").mkdir(parents=True)
+    (tmp_path / "app" / "controllers" / "badges_controller.rb").write_text(
+        "class BadgesController < ApplicationController\nend\n"
+    )
+    (tmp_path / "app" / "controllers" / "admin" / "badges_controller.rb").write_text(
+        "class Admin::BadgesController < Admin::AdminController\nend\n"
+    )
+    modules = [
+        _module("app/controllers/badges_controller.rb"),
+        _module("app/controllers/admin/badges_controller.rb"),
+    ]
+    api_endpoints = [
+        {
+            "framework": "rails",
+            "handler": "resources(...)",
+            "path": "badges",
+            "unresolved": True,
+            "file": "config/routes.rb",
+        },
+        {
+            "framework": "rails",
+            "handler": "resources(...)",
+            "path": "admin/badges",
+            "unresolved": True,
+            "file": "config/routes.rb",
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    assert result["unreachable_modules"] == []
+
+
+def test_rails_unprefixed_resource_in_a_plugin_engine_routes_file_still_resolves(tmp_path):
+    # Real regression caught by a real end-to-end check against Discourse:
+    # a plugin's own routes file (mounted via `SomeEngine.routes.draw do
+    # ... end`, not config/routes.rb) implicitly namespaces every
+    # controller under the engine's own module (isolate_namespace) even
+    # for an unprefixed `resources :workflows` - so the real controller
+    # lives at plugins/.../app/controllers/discourse_workflows/
+    # workflows_controller.rb, one level deeper than an unprefixed
+    # config/routes.rb resource would ever be. Anchoring an unprefixed
+    # name to "must be a direct child of controllers/" (correct for
+    # config/routes.rb - see the namespace-collision test above) would
+    # wrongly leave this real, uniquely-identified controller unresolved.
+    controllers_dir = tmp_path / "plugins" / "discourse-workflows" / "app" / "controllers" / "discourse_workflows"
+    controllers_dir.mkdir(parents=True)
+    (controllers_dir / "workflows_controller.rb").write_text(
+        "class DiscourseWorkflows::WorkflowsController < DiscourseWorkflows::AdminController\nend\n"
+    )
+    modules = [
+        _module(
+            "plugins/discourse-workflows/app/controllers/discourse_workflows/workflows_controller.rb"
+        ),
+    ]
+    api_endpoints = [
+        {
+            "framework": "rails",
+            "handler": "resources(...)",
+            "path": "workflows",
+            "unresolved": True,
+            "file": "plugins/discourse-workflows/config/routes.rb",
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    assert result["unreachable_modules"] == []
+
+
+def test_laravel_backslash_qualified_string_handler_resolves_a_nested_controller(tmp_path):
+    # Flash Review finding on #666: the legacy string handler resolver
+    # reduced every handler to its bare class name and always anchored
+    # single-segment queries to a controllers/-directory boundary, so a
+    # real, fully-qualified handler like "Admin\UserController@index"
+    # naming a controller under app/Http/Controllers/Admin/ was wrongly
+    # left flagged as dead code - anchoring assumes an unqualified name
+    # means "top level", which doesn't apply here since the handler
+    # string already names its own namespace segment.
+    controllers_dir = tmp_path / "app" / "Http" / "Controllers" / "Admin"
+    controllers_dir.mkdir(parents=True)
+    (controllers_dir / "UserController.php").write_text(
+        "<?php\nnamespace App\\Http\\Controllers\\Admin;\n\nclass UserController {\n"
+        "    public function index() { return []; }\n}\n"
+    )
+    modules = [_module("app/Http/Controllers/Admin/UserController.php")]
+    api_endpoints = [
+        {
+            "framework": "laravel",
+            "handler": "Admin\\UserController@index",
+            "path": "/admin/users",
+            "unresolved": False,
+        },
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, api_endpoints=api_endpoints)
+    assert result["unreachable_modules"] == []
