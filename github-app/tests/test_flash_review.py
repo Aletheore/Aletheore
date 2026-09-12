@@ -133,6 +133,53 @@ def test_genuine_two_file_diff_with_blank_line_separators_still_works():
     assert 10 in result["b.py"]
 
 
+def test_structured_patches_do_not_count_no_newline_marker_as_a_real_line():
+    # Real bug found via audit: git emits "\ No newline at end of file"
+    # immediately after a +/- line whenever that version of the file has
+    # no trailing newline - the same shape github_api.py's
+    # _trim_patch_context already has a dedicated fix for. Editing a
+    # file's final line when the file has no trailing newline carries
+    # this marker twice (once for the removed old content, once for the
+    # added new content). Before the fix, each marker line was treated
+    # as real content: added to the valid set as a phantom entry with no
+    # corresponding source line, and (since its own line doesn't start
+    # with "-") advanced current_line too - shifting every real line
+    # number that follows within the same hunk.
+    patch = (
+        "@@ -8,2 +8,2 @@ def foo():\n"
+        " def foo():\n"
+        "-    return old_value\n"
+        "\\ No newline at end of file\n"
+        "+    return new_value\n"
+        "\\ No newline at end of file"
+    )
+
+    result = _diff_valid_lines("", (("app.py", patch),))
+
+    # Line 8 is the context line; line 9 is the real new-file line the
+    # addition lands on. Nothing past that (10, 11 - the two marker
+    # lines miscounted as content) should appear.
+    assert result == {"app.py": {8, 9}}
+
+
+def test_diff_valid_lines_text_fallback_does_not_count_no_newline_marker_as_a_real_line():
+    # Same fix, exercised through the text-only fallback path (patches=None)
+    # for symmetry with _patch_valid_lines above.
+    diff_text = (
+        "--- app.py ---\n"
+        "@@ -8,2 +8,2 @@\n"
+        " def foo():\n"
+        "-    return old_value\n"
+        "\\ No newline at end of file\n"
+        "+    return new_value\n"
+        "\\ No newline at end of file"
+    )
+
+    result = _diff_valid_lines(diff_text)
+
+    assert result == {"app.py": {8, 9}}
+
+
 def test_lookup_valid_lines_falls_back_to_unambiguous_path_suffix():
     valid_lines = {"benchmark-sandbox/case-1/pkg/module.py": {5, 6, 7}}
     assert _lookup_valid_lines("pkg/module.py", valid_lines) == {5, 6, 7}

@@ -930,7 +930,27 @@ def _patch_valid_lines(patch: str) -> set[int]:
         if hunk_match:
             current_line = int(hunk_match.group(1))
             continue
-        if line == "":
+        if line == "" or line == r"\ No newline at end of file":
+            # Real bug found via audit: git emits this literal marker line
+            # immediately after a +/- line whenever that version of the
+            # file has no trailing newline - the same shape github_api.py's
+            # _trim_patch_context already has a dedicated fix and comment
+            # for, but this second, independent line-number parser (fed
+            # GitHub's raw, untrimmed patch text via diff_patches, unlike
+            # _diff_valid_lines' own text-only fallback below, which only
+            # ever sees _trim_patch_context's already-stripped output) had
+            # the identical gap. Its tag ("\\") matches neither "-" nor a
+            # real content line, so without this it fell through to the
+            # "any other line" branch: recorded as a real valid line (a
+            # phantom entry with no corresponding source line at all) and,
+            # since it doesn't start with "-", advanced current_line too -
+            # shifting every real line number after it within the same
+            # hunk. Confirmed directly: a hunk changing a file's final line
+            # when that file has no trailing newline carries this marker
+            # twice (once for the old content, once for the new), and the
+            # real new-file line recorded for that change came out one
+            # higher than its actual position, with two phantom entries
+            # (line numbers with no real content at all) added alongside it.
             continue
         if current_line is None:
             continue
@@ -983,6 +1003,18 @@ def _diff_valid_lines(
             continue
         if line == "":
             prev_blank = True
+            continue
+        if line == r"\ No newline at end of file":
+            # Same fix as _patch_valid_lines above, for symmetry - this
+            # branch only runs on diff_text built by github_api.py's
+            # _trim_patch_context, which already strips this marker before
+            # producing that text, so it's not reachable through the
+            # current production call path. Kept in sync anyway: nothing
+            # here guarantees a future caller always pre-strips it, and a
+            # text-based fallback silently re-introducing the identical
+            # bug the moment that assumption changes is exactly the kind
+            # of gap that goes unnoticed until a real citation is dropped.
+            prev_blank = False
             continue
         prev_blank = False
         if current_file is None or current_line is None:
