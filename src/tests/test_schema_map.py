@@ -121,6 +121,55 @@ def test_table_level_foreign_key_constraint_is_captured(tmp_path):
     assert result["relations"][0]["to_table"] == "parents"
 
 
+def test_composite_foreign_key_maps_columns_positionally(tmp_path):
+    # Real bug found via audit: a composite (multi-column) FK was decomposed
+    # into one relation per local column, but every one of them pointed at
+    # the FIRST referenced column only - REFERENCES(x, y) recorded BOTH
+    # order_id -> x and product_id -> x, never product_id -> y. Positional
+    # pairing (order_id <-> x, product_id <-> y) is what the SQL itself
+    # actually declares.
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE order_line_targets (oid BIGINT, pid BIGINT);
+            CREATE TABLE order_items (
+                order_id BIGINT,
+                product_id BIGINT,
+                FOREIGN KEY (order_id, product_id) REFERENCES order_line_targets(oid, pid)
+            );
+            """
+        },
+    )
+    relations = extract_schema(repo, ["migrations"])["relations"]
+
+    assert len(relations) == 2
+    by_column = {r["from_column"]: r for r in relations}
+    assert by_column["order_id"]["to_column"] == "oid"
+    assert by_column["product_id"]["to_column"] == "pid"
+
+
+def test_composite_foreign_key_via_add_constraint_maps_columns_positionally(tmp_path):
+    # Same bug, reached through ALTER TABLE ... ADD CONSTRAINT ... FOREIGN
+    # KEY rather than a table-level constraint in CREATE TABLE.
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE a (x BIGINT, y BIGINT);
+            CREATE TABLE b (aid BIGINT, bid BIGINT);
+            ALTER TABLE b ADD CONSTRAINT fk_ab FOREIGN KEY (aid, bid) REFERENCES a(x, y);
+            """
+        },
+    )
+    relations = extract_schema(repo, ["migrations"])["relations"]
+
+    assert len(relations) == 2
+    by_column = {r["from_column"]: r for r in relations}
+    assert by_column["aid"]["to_column"] == "x"
+    assert by_column["bid"]["to_column"] == "y"
+
+
 def test_references_inside_a_comment_is_not_a_relation(tmp_path):
     """Found on the real repo: a naive grep counted 43 REFERENCES where only
     42 were real, because one sat inside a `--` comment explaining why the
