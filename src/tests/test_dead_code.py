@@ -1231,6 +1231,92 @@ def test_rails_unprefixed_resource_in_a_plugin_engine_routes_file_still_resolves
     assert result["unreachable_modules"] == []
 
 
+def test_rails_model_referenced_only_by_bare_constant_is_never_unreachable(tmp_path):
+    # Real bug found via a real Discourse scan: Rails' Zeitwerk autoloader
+    # (default since Rails 6) means app/ code outside controllers is never
+    # require'd anywhere at all - it's referenced purely by bare constant
+    # name (User.find(...), never `require "user"`). rails_route_
+    # reachable_files only ever covers controllers dispatched from
+    # routes.rb; a model has no routes.rb entry to be rescued by at all.
+    # Every one of Discourse's 391 app/models files was flagged dead
+    # before this fix - not an edge case, the single most fundamental
+    # Rails convention there is.
+    models_dir = tmp_path / "app" / "models"
+    models_dir.mkdir(parents=True)
+    (models_dir / "user.rb").write_text("class User < ApplicationRecord\nend\n")
+    controllers_dir = tmp_path / "app" / "controllers"
+    controllers_dir.mkdir(parents=True)
+    (controllers_dir / "sessions_controller.rb").write_text(
+        "class SessionsController < ApplicationController\n"
+        "  def show\n    @user = User.find(params[:id])\n  end\nend\n"
+    )
+    modules = [
+        _module("app/models/user.rb"),
+        _module("app/controllers/sessions_controller.rb", imported_by=["app/controllers/sessions_controller.rb"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_rails_namespaced_file_referenced_by_bare_last_segment_resolves(tmp_path):
+    # Ruby's own lexical constant lookup lets code refer to a namespaced
+    # class by its short name alone once already inside (or alongside) the
+    # same namespace - real code commonly does this rather than always
+    # spelling out the full qualified name.
+    jobs_dir = tmp_path / "app" / "jobs" / "regular"
+    jobs_dir.mkdir(parents=True)
+    (jobs_dir / "bump_topic.rb").write_text(
+        "module Jobs\n  class BumpTopic < Jobs::Base\n  end\nend\n"
+    )
+    other_dir = tmp_path / "lib"
+    other_dir.mkdir(parents=True)
+    (other_dir / "topic_bumper.rb").write_text(
+        "class TopicBumper\n  def bump\n    BumpTopic.new.execute({})\n  end\nend\n"
+    )
+    modules = [
+        _module("app/jobs/regular/bump_topic.rb"),
+        _module("lib/topic_bumper.rb", imported_by=["lib/topic_bumper.rb"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_rails_model_with_no_reference_anywhere_stays_unreachable(tmp_path):
+    # The rescue must not become a rescue-everything hack - a genuinely
+    # orphaned model, referenced nowhere in the corpus, still gets flagged.
+    models_dir = tmp_path / "app" / "models"
+    models_dir.mkdir(parents=True)
+    (models_dir / "abandoned_draft.rb").write_text(
+        "class AbandonedDraft < ApplicationRecord\nend\n"
+    )
+    modules = [_module("app/models/abandoned_draft.rb")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert [m["path"] for m in result["unreachable_modules"]] == ["app/models/abandoned_draft.rb"]
+
+
+def test_ruby_zeitwerk_rescue_is_scoped_to_app_directory_only(tmp_path):
+    # lib/ is only Zeitwerk-autoloaded when an app explicitly opts in via
+    # config.autoload_paths, which this module has no way to see - so a
+    # lib/ file must NOT be rescued by this mechanism even when its own
+    # class name happens to appear as a bare word elsewhere (it should
+    # still be resolved some other way - a real `require`, or left dead -
+    # never guessed via the app/-only Zeitwerk convention).
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir(parents=True)
+    (lib_dir / "helper_util.rb").write_text("class HelperUtil\nend\n")
+    other_dir = tmp_path / "app" / "models"
+    other_dir.mkdir(parents=True)
+    (other_dir / "unrelated.rb").write_text(
+        "class Unrelated\n  def call\n    HelperUtil.new\n  end\nend\n"
+    )
+    modules = [
+        _module("lib/helper_util.rb"),
+        _module("app/models/unrelated.rb", imported_by=["app/models/unrelated.rb"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert [m["path"] for m in result["unreachable_modules"]] == ["lib/helper_util.rb"]
+
+
 def test_laravel_backslash_qualified_string_handler_resolves_a_nested_controller(tmp_path):
     # Flash Review finding on #666: the legacy string handler resolver
     # reduced every handler to its bare class name and always anchored

@@ -265,6 +265,92 @@ def _referenced_by_dotted_string(path: str, token_index: dict[str, set[str]]) ->
     return False
 
 
+# A bare CamelCase constant reference, optionally namespaced with `::`
+# (User, Admin::UserHistory) - Ruby's own constant-reference syntax, no
+# quoting involved (unlike the dotted-string mechanism above, which exists
+# for languages that load modules by a quoted dotted string). The negative
+# lookbehind keeps a match from starting mid-reference (`Admin::User`
+# should never also register a spurious standalone `User` match starting
+# at its own `::`).
+_RUBY_CONSTANT_TOKEN_RE = re.compile(r"(?<![:\w])[A-Z][A-Za-z0-9_]*(?:::[A-Z][A-Za-z0-9_]*)*")
+# Whether a token match sits right after `class`/`module` (its own
+# declaration, e.g. "class WidgetsController" or "module Admin") rather
+# than a genuine reference to it. Real bug caught by this file's own
+# existing ambiguous-basename test: two unrelated plugins/engines each
+# defining their own same-named WidgetsController falsely "referenced"
+# each other, since each file's own declaration line contains its own
+# class name as a token like any other use would - without excluding the
+# declaration site, any two files sharing a bare name always looked
+# mutually reachable regardless of whether anything actually used either.
+_RUBY_DEFINITION_KEYWORD_RE = re.compile(r"\b(?:class|module)\s*$")
+
+
+def _ruby_zeitwerk_constant_candidates(path: str) -> list[str]:
+    """The (possibly namespaced) constant name(s) Zeitwerk - Rails' own
+    autoloader, active by default since Rails 6 - would map this file to:
+    app/models/admin/user_history.rb -> ["Admin::UserHistory",
+    "UserHistory"]. Every immediate subdirectory of app/ is its own
+    autoload root by Rails convention regardless of what it's named
+    (models, jobs, mailers, services, serializers, channels, policies,
+    ... - no fixed directory allowlist needed, unlike the framework-
+    specific entry-point heuristics elsewhere in this file), so only
+    app/<root>/... is handled - lib/ is autoloaded only when an app
+    explicitly opts in via config.autoload_paths, which this module has no
+    way to see.
+
+    The full namespaced name is the precise match; the bare last segment
+    is a deliberately permissive fallback for Ruby's own lexical constant
+    lookup, where code already nested under (or sitting alongside) the
+    same namespace commonly refers to a sibling by its short name alone
+    (Ruby itself would resolve it the same way) - e.g. code inside
+    `module Admin` referring to `UserHistory` without ever spelling out
+    `Admin::`. This trades a narrow false-negative risk (an unrelated
+    class elsewhere in the app happening to share the same bare name)
+    for closing a false-positive rate that was 100% on every real Rails
+    app/ subdirectory tested (Discourse: models, jobs, mailers, services,
+    serializers) - consistent with this file's existing bias everywhere
+    else toward not flagging live code dead over never missing a
+    genuinely dead file.
+    """
+    parts = path.split("/")
+    if len(parts) < 3 or parts[0] != "app" or not path.endswith(".rb"):
+        return []
+    segments = parts[2:]
+    segments[-1] = segments[-1][: -len(".rb")]
+    camelized = ["".join(word.capitalize() for word in segment.split("_")) for segment in segments if segment]
+    if not camelized:
+        return []
+    full_name = "::".join(camelized)
+    return [full_name] if len(camelized) == 1 else [full_name, camelized[-1]]
+
+
+def _ruby_constant_token_index(sources: dict[str, str]) -> dict[str, set[str]]:
+    """Constant token -> set of file paths whose content contains it as a
+    genuine reference (excludes the token's own class/module declaration
+    site - see _RUBY_DEFINITION_KEYWORD_RE) - built once for the whole
+    corpus, same O(total source size) shape as _dotted_string_token_index
+    above, for the same reason (avoids an O(candidates x total source
+    size) rescan). The trailing-window slice before each match is
+    bounded (not `content[:match.start()]`) so this stays O(1) per match
+    rather than O(file size) per match."""
+    index: dict[str, set[str]] = {}
+    for path, content in sources.items():
+        for match in _RUBY_CONSTANT_TOKEN_RE.finditer(content):
+            window = content[max(0, match.start() - 24) : match.start()]
+            if _RUBY_DEFINITION_KEYWORD_RE.search(window):
+                continue
+            index.setdefault(match.group(0), set()).add(path)
+    return index
+
+
+def _referenced_by_ruby_constant(path: str, token_index: dict[str, set[str]]) -> bool:
+    for candidate in _ruby_zeitwerk_constant_candidates(path):
+        owners = token_index.get(candidate)
+        if owners and owners - {path}:
+            return True
+    return False
+
+
 def _is_entry_point(path: str, custom_entry_points: set[str]) -> bool:
     if path in custom_entry_points:
         return True
@@ -966,6 +1052,43 @@ def find_dead_code(
         still_unreachable = []
         for entry in unreachable_modules:
             if entry["path"].endswith(".py") and _referenced_by_dotted_string(entry["path"], token_index):
+                entry_points_detected.append(entry["path"])
+            else:
+                still_unreachable.append(entry)
+        unreachable_modules = still_unreachable
+
+    # Rails' Zeitwerk autoloader (default since Rails 6) means idiomatic
+    # app/ code is essentially never require'd anywhere - it's referenced
+    # purely by constant name, autoloaded on first use. rails_route_
+    # reachable_files above only covers controllers (dispatched from
+    # routes.rb); everything else under app/ - models, jobs, mailers,
+    # services, serializers, channels, policies - had no reachability
+    # signal at all beyond "does some other file import this," which is
+    # never true for Zeitwerk-autoloaded code. Confirmed on a real repo
+    # (discourse/discourse): every one of app/models' 391, app/jobs' 241,
+    # app/mailers' 10, app/services' 245, and app/serializers' 242 files
+    # was flagged dead code-wide before this fix - 100% false positive
+    # rate on the most fundamental Rails conventions there are, not an
+    # edge case.
+    if any(entry["path"].startswith("app/") and entry["path"].endswith(".rb") for entry in unreachable_modules):
+        rb_sources = {}
+        for module in modules:
+            if not module["path"].endswith(".rb"):
+                continue
+            try:
+                rb_sources[module["path"]] = (repo_path / module["path"]).read_text(
+                    encoding="utf-8", errors="ignore"
+                )
+            except OSError:
+                continue
+        ruby_token_index = _ruby_constant_token_index(rb_sources)
+        still_unreachable = []
+        for entry in unreachable_modules:
+            if (
+                entry["path"].startswith("app/")
+                and entry["path"].endswith(".rb")
+                and _referenced_by_ruby_constant(entry["path"], ruby_token_index)
+            ):
                 entry_points_detected.append(entry["path"])
             else:
                 still_unreachable.append(entry)
