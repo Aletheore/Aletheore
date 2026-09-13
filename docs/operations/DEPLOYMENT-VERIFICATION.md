@@ -4,11 +4,28 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-09-11
-**Snapshot Freshness:** CURRENT as of 2026-09-11 - production was redeployed to `master` (commit
-`6451c41`, tagged `github-app-deploy-2026-09-11`) and re-verified live via SSH the same session. 4
-commits since the previous deploy tag (`github-app-deploy-2026-09-10-3`), all real credit/billing
-and AIRview-caching bug fixes, no migrations: an out-of-order Paddle webhook could reset a newer
+**Last Updated:** 2026-09-13
+**Snapshot Freshness:** CURRENT as of 2026-09-13 - production was redeployed to `master` (commit
+`4a5d808`, tagged `github-app-deploy-2026-09-13`) and re-verified live via SSH the same session. 8
+commits since the previous deploy tag (`github-app-deploy-2026-09-11`), no migrations - see
+`github-app/CHANGELOG.md`'s 2026-09-13 entry for the full per-fix writeup covering PRs 688, 689,
+690, 692, 695, 700, 701, and 702. Highlights: a real cross-scan-worker-replica race in the git
+graph store closed with a Postgres advisory lock (#690); a GitHub OAuth quirk (200 status with an
+error body)
+that surfaced as an unhandled 500 on code exchange, mirroring a fix the refresh-token path already
+had (#692); the entire unused GitHub Marketplace webhook path removed after confirming live on
+GitHub that no listing has ever existed for this App (#702). All six services rebuilt and
+force-recreated (`app-server`; the shared `scan-worker` image backing `scan-worker`/
+`scan-worker-2`/`health-worker`/`scheduler`; `jina-embed`); confirmed healthy via `docker ps` and
+`/healthz` (both the container-internal check and the public `app.aletheore.com` endpoint), zero
+errors in `app-server`'s logs since restart, and each of the eight fixes confirmed present in the
+running containers' actual source via `inspect.getsource` - not re-read from the repo - checking a
+marker specific to each (see the CHANGELOG entry for the exact list).
+
+**Previous:** CURRENT as of 2026-09-11 - production was redeployed to `master` (commit `6451c41`,
+tagged `github-app-deploy-2026-09-11`) and re-verified live via SSH the same session. 4 commits
+since the previous deploy tag (`github-app-deploy-2026-09-10-3`), all real credit/billing and
+AIRview-caching bug fixes, no migrations: an out-of-order Paddle webhook could reset a newer
 billing period's credit back to a stale allotment (#656); Flash Review's own true-up path never
 drained the balance to zero on an insufficient-overage reservation failure (#657); cancelling an
 annual AIR subscription never disarmed its synthetic monthly credit-reset clock, so a cancelled

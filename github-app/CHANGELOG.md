@@ -18,6 +18,49 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-09-13
+
+Eight commits since the 2026-09-11 deploy, tagged `github-app-deploy-2026-09-13` (commit
+`4a5d808`), no migrations. **#688 - push webhook silently capped the compare-API's changed-files
+list at 300**: a monorepo push touching more files than that would silently drop the rest from
+dead-code/endpoint re-scanning, with no error or log line - fixed to paginate through the full
+comparison instead of trusting the API's own truncation flag alone. **#689 - Flash Review's own
+grounding miscounted lines around a `\ No newline at end of file` marker**: git's own diff marker
+line was mishandled in `_patch_valid_lines`, producing phantom valid-line entries and shifted line
+numbers in citation grounding - a real, if narrow, source of the bot's own false
+resolved/unresolved verdicts. **#690 - concurrent scans of the same repo could lose git graph
+store updates**: an unlocked read-modify-write in `postgres_graph_store.py` let two scan-worker
+replicas racing on the same repo silently drop one side's edges; closed with a Postgres advisory
+lock. **#692 - GitHub OAuth code-exchange failure surfaced as a raw 500 + alert email**: GitHub's
+`/login/oauth/access_token` returns HTTP 200 with an `{"error": ...}` body (never a 4xx) for an
+invalid/expired/reused code - the refresh-token grant already handled this exact quirk, the
+code-exchange grant didn't, so every one of these failures paged as an unhandled exception instead
+of a clean redirect back to `/auth/login`. **#695 - `fetch_pr_diff`/`fetch_pr_changed_files`
+silently capped at 300 files**, the same class of gap as #688 on the PR-review path instead of the
+push path. **#700 - `semantic_checks.py`'s except-body-weakened check missed cases past a
+`\ No newline at end of file` marker** - the same root cause as #689, in a second consumer of the
+same patch-parsing helper. **#701 - a managed-audit cooldown was burned even when the
+installation's credit balance was already exhausted**, wasting the installation's next real
+cooldown window on a run that was rejected before it started. **#702 - removed the entire GitHub
+Marketplace webhook path** (`webhooks/marketplace.py`, its route, its tests): no Marketplace
+listing for Aletheore has ever existed (confirmed live - `github.com/marketplace/aletheore` 404s,
+the App's own page has no pricing/plans link at all), so `handle_marketplace_event` could never
+fire in production; it was speculative scaffolding from the App's original foundation commit,
+kept alive across several later audit passes without anyone questioning reachability, and it
+carried a real, now-moot gap (never initializing the new `base_credit_remaining_usd` column the
+in-flight dollar-credit-pricing work depends on).
+
+All six services rebuilt and force-recreated (`app-server`, `scan-worker`/`scan-worker-2`/
+`health-worker`/`scheduler` share one image, `jina-embed` unchanged in behavior but rebuilt with
+the rest); confirmed healthy via `docker ps` and `/healthz` (both the container-internal check and
+the public `app.aletheore.com` endpoint), zero errors in `app-server`'s logs since restart, and
+each fix above confirmed present in the *running* containers' actual source via
+`inspect.getsource` - not re-read from the repo - checking for a marker specific to each: the
+absence of `webhooks.marketplace` as an importable module (#702), `GitHubOAuthError` in `auth.py`
+(#692), `fetch_pr_changed_files` in `pull_request.py`/`push.py` (#695/#688), `"No newline at end
+of file"` in `flash_review.py`/`semantic_checks.py` (#689/#700), `advisory` in
+`postgres_graph_store.py` (#690), and `exhausted`+`cooldown` co-occurring in `jobs.py` (#701).
+
 ## 2026-09-11
 
 Four commits since the third 2026-09-10 deploy, tagged `github-app-deploy-2026-09-11` (commit
