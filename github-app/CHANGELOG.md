@@ -18,6 +18,64 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-09-13 (second deploy)
+
+6 commits since the first 2026-09-13 deploy, tagged `github-app-deploy-2026-09-13-2` (commit
+`47ee0ab`), no migrations. Two substantive changes plus a version bump and a docs-only PR
+recording the first deploy of the day:
+
+- **#707 - Flash Review suggestions now render as real, one-click GitHub "Suggested change"
+  blocks** instead of an inert plain code fence, closing a real gap found by installing 4
+  benchmark competitors on a scratch repo and comparing output side by side (Sourcery already
+  rendered a clickable suggestion for a bug ours only described in prose). Because GitHub's
+  suggestion feature does a literal, unreviewed text substitution the instant someone clicks
+  Apply, this shipped with defense in depth rather than a single mechanical check: `flash_review.py`'s
+  `_clickable_suggestion` gate requires an exact single-line match to a real diff line, re-indents
+  deterministically rather than trusting the model's own whitespace, rejects a no-op or a
+  suspiciously-similar-but-wrong-line match (`SequenceMatcher` similarity gate), and confirms the
+  substitution parses cleanly via tree-sitter before ever considering it - two real bugs were
+  found and fixed against real, non-mocked model output before merge (indentation reliably
+  omitted despite the prompt asking for it; a suggestion matching a *different* real line's own
+  text passing every check until the no-op/similarity gate existed) plus one critical bug an
+  independent adversarial peer review caught: indexing by `str.splitlines()` instead of `"\n"`
+  could silently misalign every line number after a stray `\v`/`\f`/NEL/LS/PS character earlier in
+  the file, validating and "correcting" the wrong line entirely. On top of the mechanical gate, a
+  second, adversarially-framed `deepseek-v4-flash` call (`_verify_suggestion_correctness`) now
+  independently judges whether the exact one-line replacement is semantically correct before
+  `suggestion_clickable` is ever set true - added specifically because tree-sitter's parse check
+  catches syntax errors, never a confidently-wrong single-token flip (an inverted boolean, an
+  off-by-one comparison, an equality flip) of the same shape as a correct fix. Runs on both Flash
+  and AIR (deliberately not coupled to the AIR-only grounding recheck - Flash's solo-Luna
+  generation already skips dual-agent verification, making it *more* exposed to this risk, not
+  less) but explicitly excluded for free tier via a new `verify_suggestions` flag, since it always
+  calls a real, non-free model and the existing `on_verification_usage` cost callback carries a
+  documented "never called for free tier" assumption that would otherwise have been silently
+  broken. A second peer-review pass on this layer itself found one more real gap before merge:
+  `_verify_suggestion_correctness` touched `finding["issue"]`/`["file"]`/`["line"]`/`["suggestion"]`
+  and indexed the file's lines *before* its own try/except, so a malformed finding could crash the
+  whole batch (via the ThreadPoolExecutor's `pool.map()`) instead of failing closed on just that
+  one suggestion - fixed by moving the entire body inside the try block.
+- **#708 - the aletheore MCP server's instructions now ask agents to file a GitHub issue** on a
+  genuine tool-side gap (a call failing unexpectedly, results clearly wrong against the codebase's
+  real state, a documented capability not working as described) rather than silently working
+  around it - scoped to exclude user error, with a dedup check and a concrete-repro requirement so
+  a filed issue is actually actionable.
+- **#703/#704** - `aletheore` 0.9.17 released to PyPI (unrelated to this backend, ships
+  independently via its own OIDC-trusted-publish workflow); `#704` recorded the first 2026-09-13
+  deploy in this file after the fact.
+
+All six services rebuilt and force-recreated; confirmed healthy via `docker compose ps` (all
+`healthy`) and zero errors/`no pending migrations` in `app-server`'s logs since restart. Both
+substantive fixes confirmed present in the *running* containers' actual source via
+`inspect.getsource` - not re-read from the repo: `scan-worker` shows
+`SUGGESTION_CORRECTNESS_SYSTEM_PROMPT` and a `verify_suggestions` parameter on `review_diff`, with
+the try/except now wrapping `finding["file"]` access in `_verify_suggestion_correctness`;
+`app-server` shows the new issue-reporting paragraph, including the real
+`github.com/Aletheore/Aletheore/issues` URL, in `SERVER_INSTRUCTIONS`. The website (`#706`, a
+copy-only fix correcting an "open source" claim to "source-available") deploys independently via
+Vercel's own git integration and was separately confirmed live at `www.aletheore.com` - not part
+of this docker stack at all.
+
 ## 2026-09-13
 
 Eight commits since the 2026-09-11 deploy, tagged `github-app-deploy-2026-09-13` (commit
