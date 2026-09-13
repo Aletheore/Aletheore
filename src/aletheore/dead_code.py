@@ -385,6 +385,45 @@ _RUBY_SCOPE_DECL_RE = re.compile(
     r"^(?P<indent>[ \t]*)(?:module|class)\s+(?P<name>[A-Z][A-Za-z0-9_]*(?:::[A-Z][A-Za-z0-9_]*)*)"
 )
 
+# Matches a heredoc opener anywhere on a line (`sql = <<~SQL`, `<<-EOS`,
+# bare `<<EOS`), capturing the modifier (used to decide whether the
+# terminator line may be indented) and the terminator identifier itself
+# (quotes around it, if any, don't change what closes it).
+_RUBY_HEREDOC_START_RE = re.compile(r"<<([-~]?)([\"']?)([A-Za-z_]\w*)\2")
+
+
+def _ruby_lines_outside_heredocs(content: str):
+    """Yields each line of content except those inside a heredoc body.
+
+    Real bug found via audit: _RUBY_SCOPE_DECL_RE's plain text scan has
+    no awareness that Ruby source can embed arbitrary text (SQL, example
+    code, another language entirely) inside a heredoc - a heredoc body
+    line that happens to textually resemble a class/module declaration
+    (common in a job/model file building a SQL string, or a comment-block
+    example) was read as a real one, and since
+    _ruby_content_derived_constant returns on the first leaf-matching
+    declaration in file order, a fabricated declaration appearing before
+    the real one could hijack the result entirely - not just miss the
+    real namespace, but report a WRONG one, which (since a content-
+    derived candidate is only ever added, never used to override a
+    reference-based rescue) can only ever cause a false RESCUE: a
+    genuinely dead file kept alive because something elsewhere
+    coincidentally references the fabricated name.
+    """
+    terminator: str | None = None
+    terminator_can_be_indented = False
+    for line in content.splitlines():
+        if terminator is not None:
+            candidate = line.strip() if terminator_can_be_indented else line
+            if candidate == terminator:
+                terminator = None
+            continue
+        match = _RUBY_HEREDOC_START_RE.search(line)
+        if match:
+            terminator_can_be_indented = match.group(1) in ("-", "~")
+            terminator = match.group(3)
+        yield line
+
 
 def _ruby_content_derived_constant(basename_no_ext: str, content: str) -> str | None:
     """The full namespaced constant this file's own source actually
@@ -427,15 +466,48 @@ def _ruby_content_derived_constant(basename_no_ext: str, content: str) -> str | 
     long before reaching the target declaration. Indentation is a
     reliable proxy for real Ruby/Rails source, which the rubocop/standard
     ecosystem keeps close to universally consistent.
+
+    Real bug found via audit, two parts:
+
+    1. Heredoc bodies (SQL, example code, anything a job/model file might
+       build as a string) are skipped before this scan even sees them
+       (_ruby_lines_outside_heredocs) - without it, heredoc content that
+       textually resembles a class/module declaration was read as real
+       Ruby syntax, and since this function used to return on the first
+       leaf-matching declaration in file order, a fabricated declaration
+       appearing before the real one could hijack the result with a
+       WRONG constant, not just a missing one - the one way this
+       function's otherwise-additive design (a bad candidate can only
+       ever add a spurious rescue, never cause a false-dead) could
+       actually misfire.
+
+    2. Real Ruby lets a class be reopened (adding to it from more than
+       one place) - a leaf-matching declaration is no longer accepted on
+       first sight; every one in the file is considered, and the one with
+       the MOST enclosing context wins. A bare, unnamespaced stub
+       (`class TopicTimerBase; end`) appearing before the file's real,
+       namespaced definition used to win by virtue of coming first,
+       silently dropping the namespace a later reopening actually
+       supplies.
+
+    Indent comparison uses each line's raw, unexpanded whitespace length
+    (not .expandtabs()) - expanding to a fixed 8-column tab stop made a
+    single real tab (len 8 once expanded) look deeper than two real
+    spaces (len 2), inverting a genuinely shallower tab-indented
+    enclosing line's own position in the stack. Raw length has no such
+    inversion for any single consistent indent unit, tabs or spaces.
     """
     expected_leaf = "".join(word.capitalize() for word in basename_no_ext.split("_"))
     if not expected_leaf:
         return None
     declarations = [
-        (len(match.group("indent").expandtabs()), match.group("name"))
-        for match in (_RUBY_SCOPE_DECL_RE.match(line) for line in content.splitlines())
+        (len(match.group("indent")), match.group("name"))
+        for match in (
+            _RUBY_SCOPE_DECL_RE.match(line) for line in _ruby_lines_outside_heredocs(content)
+        )
         if match is not None
     ]
+    best: tuple[int, str] | None = None
     for index, (indent, name) in enumerate(declarations):
         if name.rsplit("::", 1)[-1] != expected_leaf:
             continue
@@ -445,8 +517,9 @@ def _ruby_content_derived_constant(basename_no_ext: str, content: str) -> str | 
             if prior_indent < current_indent:
                 enclosing.insert(0, prior_name)
                 current_indent = prior_indent
-        return "::".join(enclosing + [name])
-    return None
+        if best is None or len(enclosing) > best[0]:
+            best = (len(enclosing), "::".join(enclosing + [name]))
+    return best[1] if best is not None else None
 
 
 def _ruby_zeitwerk_constant_candidates(path: str, content: str | None = None) -> list[str]:

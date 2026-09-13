@@ -1976,6 +1976,56 @@ def test_ruby_content_derived_constant_picks_nearest_enclosing_not_an_unrelated_
     assert _ruby_content_derived_constant("topic_timer_base", content) == "Jobs::TopicTimerBase"
 
 
+def test_ruby_content_derived_constant_skips_declarations_inside_a_heredoc_body():
+    # Real bug found via audit: a heredoc body building a SQL string (or any
+    # other embedded text) can textually resemble a class/module declaration.
+    # Before this fix, such a fabricated declaration - appearing earlier in
+    # the file than the real one - would hijack the result with a WRONG
+    # constant, since the old code returned on the first leaf-matching
+    # declaration in file order. The heredoc body here declares a decoy
+    # "Billing::TopicTimerBase" that must be ignored in favor of the real,
+    # differently-namespaced declaration that follows it.
+    content = (
+        "module Reports\n"
+        "  SQL = <<~SQL\n"
+        "module Billing\n"
+        "  class TopicTimerBase\n"
+        "  end\n"
+        "end\n"
+        "  SQL\n"
+        "\n"
+        "  module Jobs\n"
+        "    class TopicTimerBase < Jobs::Base\n"
+        "    end\n"
+        "  end\n"
+        "end\n"
+    )
+    assert (
+        _ruby_content_derived_constant("topic_timer_base", content)
+        == "Reports::Jobs::TopicTimerBase"
+    )
+
+
+def test_ruby_content_derived_constant_prefers_the_more_specific_reopened_class():
+    # Real Ruby allows reopening a class from more than one place. A bare,
+    # unnamespaced stub appearing before the file's real, namespaced
+    # definition must not win just because it comes first - the more
+    # specific (more deeply enclosed) declaration should be preferred.
+    content = "class TopicTimerBase\nend\n\nmodule Jobs\n  class TopicTimerBase < Jobs::Base\n  end\nend\n"
+    assert _ruby_content_derived_constant("topic_timer_base", content) == "Jobs::TopicTimerBase"
+
+
+def test_ruby_content_derived_constant_compares_raw_indentation_not_expanded_tabs():
+    # Real bug found via audit: expandtabs() normalizes a tab to an 8-column
+    # tab stop by default, so a single-tab outer indent (length 8 once
+    # expanded) numerically looked deeper than a 2-space inner indent,
+    # breaking the monotonic nesting comparison and dropping the enclosing
+    # "Jobs" namespace entirely. Comparing raw (unexpanded) indentation
+    # length avoids this for any single, internally-consistent indent unit.
+    content = "\tmodule Jobs\n  class TopicTimerBase < Jobs::Base\n  end\nend\n"
+    assert _ruby_content_derived_constant("topic_timer_base", content) == "Jobs::TopicTimerBase"
+
+
 def test_laravel_backslash_qualified_string_handler_resolves_a_nested_controller(tmp_path):
     # Flash Review finding on #666: the legacy string handler resolver
     # reduced every handler to its bare class name and always anchored
