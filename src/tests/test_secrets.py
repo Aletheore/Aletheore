@@ -201,6 +201,101 @@ def test_value_looks_synthetically_repeated_is_scoped_to_a_validated_length_rang
     assert _value_looks_synthetically_repeated(long_repeated) is False
 
 
+def test_find_secrets_does_not_flag_a_genuinely_random_hex_secret_as_repeated(tmp_path):
+    # Real bug found via audit: _SYNTHETIC_REPETITION_MAX_LENGTH's own
+    # measurement used a ~64-94 symbol alphabet, but hex (0-9a-f, 16
+    # symbols - SHA/MD5 digests, many session tokens and API keys) is a
+    # much narrower, extremely common real secret alphabet with under 4
+    # bits of entropy per byte. A genuinely random hex string reaches the
+    # same alphabet-entropy compression floor at a far shorter length -
+    # confirmed directly, 82-98% of genuinely random 42-44 char hex
+    # values (well within the general 48-char cutoff) tripped the old
+    # check, not a rare tail.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    # 44 hex chars, real hex digits only (no g-z letters) - a plausible
+    # SHA1-adjacent token length.
+    random_hex_secret = "3f8a92cd15b607e4a1d9884fbc02e77fa6819d3c5b0e2481"[:44]
+    (repo / "config.py").write_text(f'API_TOKEN = "{random_hex_secret}"\n')
+
+    result = find_secrets(repo)
+
+    assert result["findings"][0]["likely_placeholder"] is False
+
+
+def test_value_looks_synthetically_repeated_hex_is_scoped_to_a_shorter_validated_range():
+    from aletheore.secrets import _value_looks_synthetically_repeated
+
+    # A genuinely repeated hex unit at exactly the hex-specific cutoff
+    # (36 chars) must still be caught.
+    short_repeated_hex = "abc123" * 6  # 36 chars, repeated unit
+    assert _value_looks_synthetically_repeated(short_repeated_hex) is True
+
+    # The same repeated unit extended past _HEX_ALPHABET_MAX_LENGTH defers
+    # to every other placeholder signal instead of guessing from a
+    # compression ratio that's no longer reliable for this alphabet.
+    long_repeated_hex = "abc123" * 10  # 60 chars, same repeated unit
+    assert _value_looks_synthetically_repeated(long_repeated_hex) is False
+
+    # A non-hex value of the same length is unaffected by the hex-specific
+    # cutoff - it's still judged against the general 48-char one.
+    long_repeated_non_hex = "abcxyz" * 10  # 60 chars, contains non-hex letters
+    assert _value_looks_synthetically_repeated(long_repeated_non_hex) is False
+
+
+def test_find_secrets_does_not_flag_a_genuinely_random_jwt_shaped_secret(tmp_path):
+    # Real bug found via audit: the segment-length gate in
+    # _value_looks_like_an_identifier_reference doesn't actually
+    # distinguish a real identifier chain (config.SECRET_KEY) from a
+    # random dotted credential of similar shape - a JWT
+    # (header.payload.signature) has no dots inside a segment and each
+    # segment is well under the 32-char cap, so it satisfies every
+    # existing check purely by chance whenever none of its segments
+    # happens to contain a "-" (the one base64url character this check's
+    # own regex excludes). Confirmed directly: ~58-60% of genuinely
+    # random JWT-shaped values were misclassified likely_placeholder=True
+    # by this check alone - the common case, not a rare tail, for
+    # exactly the kind of long-lived credential this scanner most needs
+    # to catch.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    # Alphanumeric-only segments (no "-"), each at most
+    # _IDENTIFIER_SEGMENT_MAX_LENGTH (32) chars - this is the exact
+    # vulnerable shape: short enough that the pre-existing segment-length
+    # gate alone doesn't exclude it (a longer, more claim-heavy real JWT
+    # payload segment would already fail that check regardless of this
+    # fix, and so wouldn't actually exercise the gap).
+    jwt_shaped_secret = (
+        "eyJhbGciOiJIUzI1NiJ9"
+        ".eyJzdWIiOiJ1c2VyMTIzIn0"
+        ".a1B2c3D4e5F6g7H8i9J0kLmNoPqRsTuV"
+    )
+    (repo / "config.py").write_text(f'ACCESS_TOKEN = "{jwt_shaped_secret}"\n')
+
+    result = find_secrets(repo)
+
+    assert result["findings"][0]["likely_placeholder"] is False
+
+
+def test_value_looks_like_an_identifier_reference_still_matches_real_examples():
+    # Must not regress while fixing the case above: every one of this
+    # file's own real, empirically-validated false-positive examples
+    # (RestSharp's OAuth2 authenticators, client-go's kubeconfig merging,
+    # Django's own salted_hmac()) must still be recognized - none of them
+    # contain a digit, so the new digit check doesn't touch them.
+    from aletheore.secrets import _value_looks_like_an_identifier_reference
+
+    assert _value_looks_like_an_identifier_reference("config.SECRET_KEY") is True
+    assert _value_looks_like_an_identifier_reference("TokenRequest.ClientSecret") is True
+    assert _value_looks_like_an_identifier_reference("settings.SECRET_KEY") is True
+    assert _value_looks_like_an_identifier_reference("configAuthInfo.Password") is True
+
+    # A dotted value containing a digit anywhere is no longer classified
+    # as an identifier reference by this check - biased toward stricter,
+    # since this check silently downgrades a finding regardless of path.
+    assert _value_looks_like_an_identifier_reference("oauth2Client.secret") is False
+
+
 def test_find_secrets_recognizes_stripes_own_published_test_key(tmp_path):
     # sk_test_4eC39HqLyjWDarjtT1zdp7dc is Stripe's own documentation
     # example key (developer docs, countless tutorials) - genuinely
