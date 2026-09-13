@@ -2725,6 +2725,52 @@ def test_semantic_checker_finds_a_weakened_body_under_an_unchanged_except_header
     assert findings[0]["line"] == 4
 
 
+def test_semantic_checker_finds_a_weakened_body_past_a_no_newline_marker():
+    """Real bug found via audit: git emits a literal "\\ No newline at end
+    of file" line immediately after a +/- line whenever that version of
+    the file has no trailing newline - the same shape flash_review.py's
+    _patch_valid_lines/_diff_valid_lines already have a dedicated fix for,
+    unfixed here. _unchanged_except_body_weakened's forward walk read that
+    marker's own one-space indent as real body content and, since it's
+    shallower than the except header's indent (true for any except nested
+    in a function - the common case), broke out of the walk right there -
+    before ever reaching the hunk's real "+pass"/"+return True" lines that
+    follow it. That meant the walk stopped with an empty new_body instead
+    of ["pass"], so the mismatch check silently declined to report a
+    genuine "except body weakened to bare pass" case. This shape is
+    realistic, not contrived: the old file lacked a trailing newline, and
+    the same edit that weakens the handler also appends more code after
+    it (restoring a trailing newline in the process) - confirmed directly
+    that the pre-fix parser missed this exact case."""
+    source = (
+        "def close_quietly(self):\n"
+        "    try:\n"
+        "        self.conn.close()\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "    return True\n"
+    )
+    diff = (
+        "--- sessions.py ---\n"
+        "@@ -1,6 +1,6 @@\n"
+        " def close_quietly(self):\n"
+        "     try:\n"
+        "         self.conn.close()\n"
+        "     except Exception:\n"
+        "-        self.failed = True\n"
+        "-        logger.warning('close failed')\n"
+        "\\ No newline at end of file\n"
+        "+        pass\n"
+        "+    return True"
+    )
+
+    findings = find_semantic_regressions(diff, {"sessions.py": source}, "")
+
+    assert len(findings) == 1
+    assert "bare `pass`" in findings[0]["issue"]
+    assert findings[0]["line"] == 4
+
+
 def test_semantic_checker_does_not_flag_an_unchanged_except_already_pass():
     """An except block that was ALREADY `pass` before this hunk, with only
     unrelated surrounding code changing nearby, must not be flagged -

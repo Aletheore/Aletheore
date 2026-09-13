@@ -125,6 +125,29 @@ def _diff_hunks_by_file(diff_text: str) -> dict[str, list[_Hunk]]:
         if line == "":
             prev_blank = True
             continue
+        if line == r"\ No newline at end of file":
+            # Real bug found via audit: git emits this literal marker line
+            # immediately after a +/- line whenever that version of the
+            # file has no trailing newline - the identical shape
+            # flash_review.py's _patch_valid_lines/_diff_valid_lines
+            # already have a dedicated fix and comment for, unfixed here.
+            # Its own tag ("\\") matches neither " ", "-", nor "+", so
+            # unguarded it was appended to raw_body as a phantom entry.
+            # _unchanged_except_body_weakened's forward walk treats that
+            # entry's incidental one-space indent (" No newline...") as
+            # real body content: whenever it's shallower than or equal to
+            # the except header's own indent (true for any except nested
+            # inside a function, the overwhelmingly common case), the walk
+            # reads it as the dedent marking the end of the block and
+            # breaks - before ever reaching the hunk's real "+" content
+            # that comes after it. That skips this file's own documented
+            # bail-out path (running out of hunk without a real dedent),
+            # silently treating an incomplete reconstruction as a complete
+            # one instead - confirmed directly, a genuine "except body
+            # weakened to bare pass" case went unreported because the walk
+            # broke on the marker before ever seeing the new "pass" line.
+            prev_blank = False
+            continue
         prev_blank = False
         if current_hunk is None or not current_file:
             continue
