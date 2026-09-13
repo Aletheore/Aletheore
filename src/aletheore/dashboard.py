@@ -338,6 +338,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   #cluster-graph { height: 620px; }
   #cluster-graph-hover-info { min-height: 18px; margin-top: 8px; font-size: 13px; color: #9a9a9a; }
   #cluster-graph-hover-info .hover-path { color: #fff; font-family: monospace; }
+  /* Hover/cluster-filter highlighting on a large graph (Discourse: 15,000+ modules) used
+     to set opacity/stroke on every single circle and line via setAttribute on every mouse
+     event - real, measured lag on a graph that size. These rules let setFilterState below
+     touch only the handful of elements whose highlighted state actually changed (bounded by
+     a node's degree or a cluster's membership, not total graph size): the CSS default here
+     dims everything the moment .filtering is present, and .gf-active on a specific element
+     is the only thing JS still has to add or remove per interaction. */
+  .interactive-graph.filtering circle { opacity: 0.08; }
+  .interactive-graph.filtering circle.gf-active { opacity: 1; }
+  .interactive-graph.filtering line { opacity: 0; }
+  .interactive-graph.filtering line.gf-active { opacity: 0.9; stroke: #fff; }
+  .interactive-graph.filtering line.gf-active.gf-ambiguous { opacity: 0.5; }
 </style>
 </head>
 <body>
@@ -659,6 +671,23 @@ function attachZoomPan(svg, initialViewBox, maxZoomOutW) {
 
   let isPanning = false;
   let panStart = null;
+  // Coalesces pan updates to one viewBox write per animation frame instead of one per
+  // raw mousemove - mousemove fires far faster than the browser can usefully repaint a
+  // large SVG (thousands of circles/lines on a repo like Discourse), so applying every
+  // single event was queuing up more paint work than the frame budget could absorb,
+  // which is what made dragging feel laggy independent of any per-element JS cost.
+  let pendingMove = null;
+  let rafScheduled = false;
+  function flushPendingMove() {
+    rafScheduled = false;
+    if (!pendingMove) return;
+    const e = pendingMove;
+    pendingMove = null;
+    const rect = svg.getBoundingClientRect();
+    vb.x = panStart.vb.x - (e.clientX - panStart.x) * (vb.w / rect.width);
+    vb.y = panStart.vb.y - (e.clientY - panStart.y) * (vb.h / rect.height);
+    apply();
+  }
   svg.addEventListener('mousedown', (e) => {
     if (e.target.tagName === 'circle') return;
     isPanning = true;
@@ -667,10 +696,11 @@ function attachZoomPan(svg, initialViewBox, maxZoomOutW) {
   });
   window.addEventListener('mousemove', (e) => {
     if (!isPanning) return;
-    const rect = svg.getBoundingClientRect();
-    vb.x = panStart.vb.x - (e.clientX - panStart.x) * (vb.w / rect.width);
-    vb.y = panStart.vb.y - (e.clientY - panStart.y) * (vb.h / rect.height);
-    apply();
+    pendingMove = e;
+    if (!rafScheduled) {
+      rafScheduled = true;
+      requestAnimationFrame(flushPendingMove);
+    }
   });
   window.addEventListener('mouseup', () => { isPanning = false; svg.style.cursor = 'grab'; });
   svg.style.cursor = 'grab';
@@ -799,12 +829,22 @@ async function renderGraph(data) {
 
   graphState = { nodeById, neighborsOf, edges };
 
+  // Built once here, not re-queried per hover - setFilterState below looks elements up
+  // in O(1) by id/edge-key instead of re-scanning the whole SVG on every mouse event.
+  const circleEls = new Map();
+  const lineEls = new Map();
+  svg.querySelectorAll('circle').forEach(el => circleEls.set(el.getAttribute('data-id'), el));
+  svg.querySelectorAll('line').forEach(el =>
+    lineEls.set(edgeKey(el.getAttribute('data-source'), el.getAttribute('data-target')), el)
+  );
+  svg.__circleEls = circleEls;
+  svg.__lineEls = lineEls;
+
   hoverInfo.textContent = 'Hover a node to see its dependencies.';
-  svg.querySelectorAll('circle').forEach(circle => {
-    const id = circle.getAttribute('data-id');
+  circleEls.forEach((circle, id) => {
     circle.addEventListener('mouseenter', () => {
       const neighbors = neighborsOf[id] || new Set();
-      highlightNodes(new Set([id, ...neighbors]), id);
+      highlightNodes(svg, new Set([id, ...neighbors]), id);
       const importsCount = edges.filter(e => e.source === id).length;
       const importedByCount = edges.filter(e => e.target === id).length;
       hoverInfo.innerHTML = '<span class="hover-path">' + escapeHtml(id) + '</span> - imports ' +
@@ -821,26 +861,48 @@ async function renderGraph(data) {
   });
 }
 
-function highlightNodes(highlightSet, focusId) {
-  const svg = document.getElementById('graph');
-  svg.querySelectorAll('circle').forEach(circle => {
-    const id = circle.getAttribute('data-id');
-    circle.setAttribute('opacity', highlightSet.has(id) ? '1' : '0.08');
-    circle.setAttribute('r', id === focusId ? '8' : '6');
+// A module id can itself legally contain any character a real filesystem path allows,
+// pipe included, so joining source/target with a bare '|' and splitting on the first one
+// misparses an edge whose source or target contains that character - JSON.stringify escapes
+// both strings unambiguously and JSON.parse recovers the exact pair regardless of content.
+function edgeKey(source, target) {
+  return JSON.stringify([source, target]);
+}
+function decodeEdgeKey(key) {
+  return JSON.parse(key);
+}
+
+// Highlights highlightSet's members (and, when focusId is set, only the edges directly
+// touching it) within one interactive-graph SVG - touches only the elements whose
+// highlighted state actually changes between calls, via setFilterState below, rather than
+// every circle and line in the graph. Real bug this replaces: on a repo the size of
+// Discourse (15,000+ modules), the old version's full-graph setAttribute sweep on every
+// single mouseover was the actual cause of hover lag, not the layout simulation itself
+// (which was already optimized for large graphs - see accumulateRepulsion/isLarge above).
+function highlightNodes(svg, highlightSet, focusId) {
+  if (svg.__focusCircleEl && svg.__focusCircleEl.getAttribute('data-id') !== focusId) {
+    svg.__focusCircleEl.setAttribute('r', svg.__focusCircleEl.getAttribute('data-base-r') || '6');
+    svg.__focusCircleEl = null;
+  }
+  if (focusId) {
+    const focusEl = svg.__circleEls.get(focusId);
+    if (focusEl) {
+      focusEl.setAttribute('r', '8');
+      svg.__focusCircleEl = focusEl;
+    }
+  }
+  const activeLineKeys = new Set();
+  svg.__lineEls.forEach((_el, key) => {
+    const [source, target] = decodeEdgeKey(key);
+    // Unrelated edges go fully invisible (not just dim) while hovering - with thousands of
+    // edges rendered at once, even a low dim opacity reads as "many connections" purely
+    // from unrelated lines visually crossing near the hovered node's screen position.
+    const connectedToFocus = focusId
+      ? (source === focusId || target === focusId)
+      : (highlightSet.has(source) && highlightSet.has(target));
+    if (connectedToFocus) activeLineKeys.add(key);
   });
-  svg.querySelectorAll('line').forEach(line => {
-    const source = line.getAttribute('data-source');
-    const target = line.getAttribute('data-target');
-    const connectedToFocus = focusId ? (source === focusId || target === focusId) : (highlightSet.has(source) && highlightSet.has(target));
-    const ambiguous = line.getAttribute('data-ambiguous') === '1';
-    // Unrelated edges go fully invisible (not just dim) while hovering - with ~1700 edges
-    // rendered at once, even a low dim opacity reads as "many connections" purely from
-    // unrelated lines visually crossing near the hovered node's screen position. An
-    // ambiguous edge stays visibly less certain even while focused, rather than
-    // reading as equally solid as every other highlighted connection.
-    line.setAttribute('opacity', connectedToFocus ? (ambiguous ? '0.5' : '0.9') : '0');
-    line.setAttribute('stroke', connectedToFocus ? '#fff' : '#333');
-  });
+  setFilterState(svg, highlightSet, activeLineKeys);
 }
 
 let activeClusterId = null;
@@ -849,25 +911,96 @@ function forEachInteractiveSvg(fn) {
   document.querySelectorAll('.interactive-graph').forEach(fn);
 }
 
+// Adds/removes only the .gf-active elements whose membership changed since the previous
+// call on this SVG (tracked on the svg element itself) - the .filtering/.gf-active CSS
+// rules above dim everything else for free, so the DOM cost here is bounded by however
+// many elements are actually entering or leaving the highlighted set (a node's degree, or
+// a cluster's membership), never the total graph size. Shared by highlightNodes
+// (single-node hover) and applyClusterFilter (whole-cluster membership) - both are the
+// same "dim everything, light up this subset" operation over a different membership set.
+function setFilterState(svg, activeCircleIds, activeLineKeys) {
+  svg.classList.add('filtering');
+  const prevCircleIds = svg.__activeCircleIds || new Set();
+  const prevLineKeys = svg.__activeLineKeys || new Set();
+  prevCircleIds.forEach(id => {
+    if (!activeCircleIds.has(id)) {
+      const el = svg.__circleEls.get(id);
+      if (el) el.classList.remove('gf-active');
+    }
+  });
+  activeCircleIds.forEach(id => {
+    if (!prevCircleIds.has(id)) {
+      const el = svg.__circleEls.get(id);
+      if (el) el.classList.add('gf-active');
+    }
+  });
+  prevLineKeys.forEach(key => {
+    if (!activeLineKeys.has(key)) {
+      const el = svg.__lineEls.get(key);
+      if (el) el.classList.remove('gf-active', 'gf-ambiguous');
+    }
+  });
+  activeLineKeys.forEach(key => {
+    if (!prevLineKeys.has(key)) {
+      const el = svg.__lineEls.get(key);
+      if (el) {
+        el.classList.add('gf-active');
+        if (el.getAttribute('data-ambiguous') === '1') el.classList.add('gf-ambiguous');
+      }
+    }
+  });
+  svg.__activeCircleIds = activeCircleIds;
+  svg.__activeLineKeys = activeLineKeys;
+}
+
+// Reverts an SVG to its fully-visible resting state. Real bug found via manual testing:
+// removing .gf-active was skipped here on the theory that it goes inert the moment
+// .filtering comes off, since the CSS rule needs both classes to match - true only until
+// the NEXT hover re-adds .filtering, at which point every element left wearing a stale
+// .gf-active class from every past hover since the last clear lights up again too, because
+// setFilterState's diff compares against __activeCircleIds/__activeLineKeys (correctly
+// emptied below) rather than the DOM's actual classList state. Only the previous call's own
+// active set needs clearing here - still O(k) in whatever was last highlighted, not O(N).
+function clearFilterState(svg) {
+  svg.classList.remove('filtering');
+  const prevCircleIds = svg.__activeCircleIds;
+  const prevLineKeys = svg.__activeLineKeys;
+  if (prevCircleIds) {
+    prevCircleIds.forEach(id => {
+      const el = svg.__circleEls.get(id);
+      if (el) el.classList.remove('gf-active');
+    });
+  }
+  if (prevLineKeys) {
+    prevLineKeys.forEach(key => {
+      const el = svg.__lineEls.get(key);
+      if (el) el.classList.remove('gf-active', 'gf-ambiguous');
+    });
+  }
+  svg.__activeCircleIds = new Set();
+  svg.__activeLineKeys = new Set();
+  if (svg.__focusCircleEl) {
+    svg.__focusCircleEl.setAttribute('r', svg.__focusCircleEl.getAttribute('data-base-r') || '6');
+    svg.__focusCircleEl = null;
+  }
+}
+
 function applyClusterFilter(clusterId) {
   const cluster = (window.__aletheoreClusters || []).find(c => c.id === clusterId);
   if (!cluster) return;
   const memberSet = new Set(cluster.modules);
   forEachInteractiveSvg(svg => {
-    svg.querySelectorAll('circle').forEach(circle => {
-      const id = circle.getAttribute('data-id');
-      const baseR = circle.getAttribute('data-base-r') || '6';
-      circle.setAttribute('opacity', memberSet.has(id) ? '1' : '0.08');
-      circle.setAttribute('r', baseR);
+    if (!svg.__circleEls) return;
+    const activeCircleIds = new Set();
+    svg.__circleEls.forEach((_el, id) => {
+      if (memberSet.has(id)) activeCircleIds.add(id);
     });
-    svg.querySelectorAll('line').forEach(line => {
-      const source = line.getAttribute('data-source');
-      const target = line.getAttribute('data-target');
-      const inCluster = memberSet.has(source) && memberSet.has(target);
-      const ambiguous = line.getAttribute('data-ambiguous') === '1';
-      line.setAttribute('opacity', inCluster ? (ambiguous ? '0.5' : '0.9') : '0');
-      line.setAttribute('stroke', inCluster ? '#fff' : '#333');
+    const activeLineKeys = new Set();
+    svg.__lineEls.forEach((_el, key) => {
+      const [source, target] = decodeEdgeKey(key);
+      if (memberSet.has(source) && memberSet.has(target)) activeLineKeys.add(key);
     });
+    setFilterState(svg, activeCircleIds, activeLineKeys);
   });
 }
 
@@ -889,16 +1022,7 @@ function toggleClusterExpand(clusterId) {
 }
 
 function clearGraphFilter() {
-  forEachInteractiveSvg(svg => {
-    svg.querySelectorAll('circle').forEach(circle => {
-      circle.setAttribute('opacity', '1');
-      circle.setAttribute('r', circle.getAttribute('data-base-r') || '6');
-    });
-    svg.querySelectorAll('line').forEach(line => {
-      line.setAttribute('opacity', line.getAttribute('data-ambiguous') === '1' ? '0.35' : '1');
-      line.setAttribute('stroke', '#333');
-    });
-  });
+  forEachInteractiveSvg(svg => clearFilterState(svg));
   activeClusterId = null;
   document.querySelectorAll('.cluster-row').forEach(row => row.classList.remove('active'));
 }
@@ -1172,6 +1296,17 @@ async function renderClusterGraph(data) {
 
   svg.innerHTML = svgContent;
 
+  // See renderGraph's identical setup - built once so applyClusterFilter/clearGraphFilter
+  // can look elements up in O(1) by id/edge-key instead of re-scanning the whole SVG.
+  const circleEls = new Map();
+  const lineEls = new Map();
+  svg.querySelectorAll('circle').forEach(el => circleEls.set(el.getAttribute('data-id'), el));
+  svg.querySelectorAll('line').forEach(el =>
+    lineEls.set(edgeKey(el.getAttribute('data-source'), el.getAttribute('data-target')), el)
+  );
+  svg.__circleEls = circleEls;
+  svg.__lineEls = lineEls;
+
   // With many distinct clusters, a handful of small/loosely-connected ones can end up far
   // from the main mass under pure repulsion - fitting the initial view to the absolute
   // extent would shrink everything else to near-invisibility around a mostly-empty box.
@@ -1191,8 +1326,7 @@ async function renderClusterGraph(data) {
   );
 
   const hoverInfo = document.getElementById('cluster-graph-hover-info');
-  svg.querySelectorAll('circle[data-id]').forEach(circle => {
-    const id = circle.getAttribute('data-id');
+  circleEls.forEach((circle, id) => {
     const clusterId = nodeToClusterId[id];
     circle.addEventListener('mouseenter', () => {
       if (clusterId === null || clusterId === undefined) {
