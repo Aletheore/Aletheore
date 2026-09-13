@@ -1,4 +1,5 @@
 import fnmatch
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -208,6 +209,22 @@ def _glob_segments_match(pattern_segments: list[str], path_segments: list[str]) 
     return match(0, 0)
 
 
+_GLOB_BRACKET_RE = re.compile(r"[\[\]]")
+
+
+def _escape_unsupported_bracket_syntax(segment: str) -> str:
+    # GitHub's own docs list this as one of CODEOWNERS' explicit deviations
+    # from gitignore syntax: "[ ]" character-range/class syntax is not
+    # supported, so a pattern like "[Dd]ocs" names a literal file called
+    # "[Dd]ocs", not "Docs" or "docs". fnmatch.fnmatch doesn't know this and
+    # treats "[Dd]" as a character class regardless, over-matching relative
+    # to what GitHub itself would resolve for the same CODEOWNERS file.
+    # "[[]"/"[]]" are themselves valid fnmatch character classes containing
+    # only "[" or "]", which is how fnmatch spells "match this bracket
+    # literally" - the identical trick used to escape "[" in shell globs.
+    return _GLOB_BRACKET_RE.sub(lambda m: "[[]" if m.group() == "[" else "[]]", segment)
+
+
 def _codeowners_matches(pattern: str, file_path: str) -> bool:
     # CODEOWNERS explicitly follows gitignore anchoring rules (GitHub's own
     # docs): a "/" anywhere in the pattern except as a lone trailing
@@ -238,7 +255,7 @@ def _codeowners_matches(pattern: str, file_path: str) -> bool:
         dir_name = normalized.rstrip("/")
         return file_path.startswith(f"{dir_name}/") or f"/{dir_name}/" in f"/{file_path}"
     if "/" not in normalized:
-        return fnmatch.fnmatch(Path(file_path).name, normalized)
+        return fnmatch.fnmatch(Path(file_path).name, _escape_unsupported_bracket_syntax(normalized))
     # A single "*"/"?" in a gitignore-style (and thus CODEOWNERS-style,
     # per GitHub's own docs) pattern matches within one path segment
     # only - it does not cross a "/". fnmatch.fnmatch has no concept of
@@ -252,7 +269,10 @@ def _codeowners_matches(pattern: str, file_path: str) -> bool:
     # segment-by-segment (with "**" as the one construct allowed to
     # cross "/") fixes this without losing "*"'s existing behavior
     # within a single segment.
-    return _glob_segments_match(normalized.split("/"), file_path.split("/"))
+    return _glob_segments_match(
+        [_escape_unsupported_bracket_syntax(segment) for segment in normalized.split("/")],
+        file_path.split("/"),
+    )
 
 
 def resolve_owner(repo_path: Path, file_path: str) -> dict:

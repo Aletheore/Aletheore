@@ -237,6 +237,24 @@ def test_resolve_owner_glob_star_does_not_cross_a_path_separator(tmp_path):
     assert nested["owner"] is None
 
 
+def test_resolve_owner_bracket_syntax_is_treated_as_a_literal_filename(tmp_path):
+    # GitHub's own CODEOWNERS docs list this as an explicit deviation from
+    # gitignore syntax: "[ ]" character-range/class syntax is not
+    # supported. A pattern "[Dd]ocs" names a literal file called "[Dd]ocs",
+    # not "Docs" or "docs" - but fnmatch.fnmatch doesn't know that and
+    # treats "[Dd]" as a character class regardless, matching files GitHub
+    # itself would never attribute to this pattern.
+    repo = tmp_path
+    (repo / ".github").mkdir()
+    (repo / ".github" / "CODEOWNERS").write_text("[Dd]ocs @doctocat\n")
+
+    expanded = resolve_owner(repo, "Docs")
+    literal = resolve_owner(repo, "[Dd]ocs")
+
+    assert expanded["owner"] is None
+    assert literal["owner"] == ["@doctocat"]
+
+
 def test_codeowners_multiple_wildcard_segments_does_not_blow_up(tmp_path):
     # Real bug found via audit (backward-audit sweep re-verifying #686/
     # #687): the naive recursive "**" branch in _glob_segments_match
