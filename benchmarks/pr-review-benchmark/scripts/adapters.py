@@ -41,13 +41,40 @@ def deepsource_adapter(checkout_dir, case, fetch_pr_comments):
 
 
 def pr_agent_adapter(checkout_dir, case, fetch_review, runner=subprocess.run):
+    """Real model-parity bug found and fixed 2026-09-13: this used to
+    invoke PR-Agent on deepseek-v4-flash "for parity with Aletheore's
+    Flash Review" - true when this benchmark was first written
+    (2026-07-26), false since 2026-08-09, when production Flash Review
+    switched to gpt-5.6-luna (OpenAI) as its primary model for every
+    writing surface, specifically because DeepSeek V4 Flash wasn't
+    catching enough real issues on PR review (see model_tiers.py's own
+    header comment) - DeepSeek is now only Flash Review's fallback (no
+    OPENAI_API_KEY) or, on the AIR tier, a second-model verification
+    pass, never the primary generator a real customer's comment comes
+    from. Comparing PR-Agent-on-DeepSeek against Aletheore-on-Luna
+    wasn't isolating grounding architecture as the "model parity"
+    framing claimed - it was confounding architecture with model choice,
+    and not even a neutral confound, since Luna was deliberately chosen
+    over DeepSeek for being the stronger PR reviewer.
+
+    gpt-5.6-luna is a real OpenAI model (see model_tiers.py's
+    writing_adapter_for: base_url=https://api.openai.com/v1, no special
+    routing), not an internal alias, so no provider prefix here - unlike
+    the old deepseek/deepseek-v4-flash config, which needed LiteLLM's
+    "deepseek/" prefix to route through DeepSeek's own OpenAI-compatible
+    endpoint. Also cheaper on input than DeepSeek's own model
+    (llm_cost.py: $0.20/1M input, $1.20/1M output for Luna vs. $0.44/
+    $1.32 for deepseek-v4-flash) - nowhere near PR-Agent's own default
+    model (GPT-5.5), which this project already measured at $6-7 for a
+    25-PR run and rejected specifically for that cost.
+    """
     pr_url = case["repo"]["pr_url"]
     runner(
         [
             sys.executable, "-m", "pr_agent.cli",
             "--pr_url", pr_url,
             "review",
-            "--config.model=deepseek/deepseek-v4-flash",
+            "--config.model=gpt-5.6-luna",
         ],
         capture_output=True, text=True, check=True,
     )

@@ -21,7 +21,7 @@ See the full design spec in `docs/superpowers/specs/2026-07-26-aletheore-pr-revi
 - Sourcery's GitHub App ([github.com/marketplace/sourcery-ai](https://github.com/marketplace/sourcery-ai)) installed on the scratch repo
 - Greptile's GitHub App ([greptile.com](https://www.greptile.com/)) installed on the scratch repo
 - PR-Agent installed (`python -m pr_agent.cli`) — see PR-Agent setup section below
-- DeepSeek API key (`DEEPSEEK_API_KEY` environment variable) — see model parity section below
+- OpenAI API key (`OPENAI_API_KEY` environment variable) — see model parity section below
 - GitHub API token for accessing the scratch repo (typically `gh` auto-handles this)
 
 ## Step 0: Prepare Test Cases (One-Time Setup)
@@ -64,29 +64,32 @@ For each case in the corpus:
 
 Re-running `scripts.open_case_pr` for a case already opened force-pushes both branches with the same content and is a safe no-op against an already-open PR (GitHub just shows "up to date" for it) — use this to re-open a case whose corpus source (`pr.diff`, `ground_truth.yaml`) changed after its PR was first opened.
 
-## Step 2: Set Up Models — Model Parity (DeepSeek)
+## Step 2: Set Up Models — Model Parity (Luna)
 
-The benchmark aims for **model parity** between Aletheore and PR-Agent: both use the same underlying LLM so the comparison isolates grounding architecture, not which LLM is smarter. This run uses **DeepSeek** as the shared backend — specifically `deepseek-v4-flash`.
+The benchmark aims for **model parity** between Aletheore and PR-Agent: both use the same underlying LLM so the comparison isolates grounding architecture, not which LLM is smarter. This run uses **`gpt-5.6-luna`** (OpenAI) as the shared backend — Aletheore's own real, current primary model.
+
+**Real bug fixed 2026-09-13:** this section used to point PR-Agent at DeepSeek (`deepseek-v4-flash`), true when this benchmark was first written (2026-07-26) but false since 2026-08-09, when production Flash Review switched to Luna as its primary model for every writing surface — specifically because DeepSeek V4 Flash wasn't catching enough real issues on PR review (see `model_tiers.py`'s own header comment). DeepSeek is now only Flash Review's fallback (no `OPENAI_API_KEY` configured) or, on the AIR tier, a second-model verification pass — never the model a real customer's Flash Review comment actually comes from. Comparing PR-Agent-on-DeepSeek against Aletheore-on-Luna wasn't isolating grounding architecture as this section's own framing claimed; it was confounding architecture with model choice, and not even a neutral confound, since Luna was deliberately chosen over DeepSeek for being the stronger PR reviewer.
+
+**Do not point PR-Agent at its own default model (GPT-5.5) instead** — already tried, already measured at $6-7 for a 25-PR run, and rejected for that cost. Luna is not just more representative, it's cheaper too: $0.20/1M input, $1.20/1M output (`llm_cost.py`) against DeepSeek's own $0.44/$1.32.
 
 ### Environment Variables
 
 Set once in your shell, or add to `.env` and `source` it:
 
 ```bash
-export DEEPSEEK_API_KEY="<your-deepseek-api-key>"
+export OPENAI_API_KEY="<your-real-openai-api-key>"
 ```
 
 ### Aletheore Configuration
 
-**Nothing to configure.** Aletheore's comparable feature in this benchmark is the hosted GitHub App's Flash Review, not the CLI's `audit` command — it runs automatically the moment a PR is opened on a repo with the app installed. Its model routing is `gpt-5.6-luna` primary (OpenAI), with `deepseek-v4-flash` as fallback and, on the AIR tier, as a verification pass (see `github-app/scan_worker/model_tiers.py`) — it was hardcoded to `deepseek-v4-flash` as of 2026-07-26 when this doc was first written, but that changed weeks before this repo's later runs. There is no BYOK model config for it. Model parity with PR-Agent is achieved by pointing PR-Agent at Aletheore's actual current model, below.
+**Nothing to configure.** Aletheore's comparable feature in this benchmark is the hosted GitHub App's Flash Review, not the CLI's `audit` command — it runs automatically the moment a PR is opened on a repo with the app installed. Its model routing is `gpt-5.6-luna` primary (OpenAI), with `deepseek-v4-flash` as fallback and, on the AIR tier, as a verification pass (see `github-app/scan_worker/model_tiers.py`). There is no BYOK model config for it. Model parity with PR-Agent is achieved by pointing PR-Agent at this same real model, below.
 
 ### PR-Agent Configuration
 
-`scripts/adapters.py`'s `pr_agent_adapter()` already invokes PR-Agent with `--config.model=deepseek/deepseek-v4-flash` for parity with Aletheore's Flash Review. PR-Agent still needs the DeepSeek key available as its OpenAI-compatible credential:
+`scripts/adapters.py`'s `pr_agent_adapter()` already invokes PR-Agent with `--config.model=gpt-5.6-luna` for parity with Aletheore's Flash Review. `gpt-5.6-luna` is a real OpenAI model (see `model_tiers.py`'s `writing_adapter_for`: `base_url=https://api.openai.com/v1`, no special routing), not an internal alias, so no provider prefix and no `OPENAI_API_BASE` override are needed — PR-Agent's default OpenAI endpoint is already the right one:
 
 ```bash
-export OPENAI_API_KEY="$DEEPSEEK_API_KEY"
-export OPENAI_API_BASE="https://api.deepseek.com/v1"
+export OPENAI_API_KEY="<your-real-openai-api-key>"
 ```
 
 Refer to PR-Agent's official documentation if `--config.model` needs a different key format for your installed version.
@@ -480,8 +483,8 @@ Before publishing, record runtime values in `benchmarks/pr-review-benchmark/METH
 
 ```markdown
 - **Run date:** YYYY-MM-DD at HH:MM UTC
-- **Aletheore version/model:** git commit hash (github-app deployment), `deepseek-v4-flash` (Flash Review, hardcoded server-side)
-- **PR-Agent version/model:** pip freeze output, `deepseek/deepseek-v4-flash`
+- **Aletheore version/model:** git commit hash (github-app deployment), `gpt-5.6-luna` primary / `deepseek-v4-flash` fallback (Flash Review, see `model_tiers.py` — confirm which one actually ran per `OPENAI_API_KEY` availability at run time)
+- **PR-Agent version/model:** pip freeze output, `gpt-5.6-luna`
 - **DeepSource plan/version:** as displayed in Settings (e.g., "Team plan, v2026-07-26")
 - **LLM judge model:** Claude (subagent dispatch, no separate API key)
 - **Corpus:** 25 cases — 15 real bug-fix reconstructions, 6 injected bugs, 4 clean PRs

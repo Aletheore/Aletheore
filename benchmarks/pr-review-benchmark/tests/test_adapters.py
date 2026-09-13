@@ -49,7 +49,13 @@ def test_deepsource_adapter_filters_pr_comments_to_deepsource_bot(tmp_path):
     ]
 
 
-def test_pr_agent_adapter_invokes_cli_with_deepseek_flash_model_and_fetches_review(tmp_path):
+def test_pr_agent_adapter_invokes_cli_with_the_luna_model_and_fetches_review(tmp_path):
+    # Real model-parity bug fixed 2026-09-13: production Flash Review's
+    # primary model is gpt-5.6-luna (OpenAI), not deepseek-v4-flash, since
+    # 2026-08-09 - see adapters.py's own docstring on pr_agent_adapter for
+    # the full history. This locks in the real parity model so a future
+    # edit can't silently drift back to comparing PR-Agent against a model
+    # Aletheore's real Flash Review doesn't actually generate with.
     calls = []
 
     def fake_runner(args, **kwargs):
@@ -69,7 +75,7 @@ def test_pr_agent_adapter_invokes_cli_with_deepseek_flash_model_and_fetches_revi
         sys.executable, "-m", "pr_agent.cli",
         "--pr_url", "https://github.com/example/repo/pull/1",
         "review",
-        "--config.model=deepseek/deepseek-v4-flash",
+        "--config.model=gpt-5.6-luna",
     ]]
     assert captured["pr_url"] == "https://github.com/example/repo/pull/1"
     assert result == {"comment_body": "## PR Reviewer Guide", "changed_files": ["src/flask/cli.py"]}
