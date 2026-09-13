@@ -14,6 +14,7 @@ from scan_worker.flash_review import (
     _quoted_strings,
     _validate_findings,
     _verify_findings_with_second_model,
+    _verify_suggestion_correctness,
     build_change_impact_context,
     build_code_evidence_context,
     build_dependency_impact_context,
@@ -1077,6 +1078,10 @@ def test_review_diff_parses_optional_suggestion_field(mock_adapter_class):
 
     findings = review_diff("--- a.py ---\n@@ -1,1 +3,1 @@\n+thing")
 
+    # suggestion_clickable is False here because no file_contents was passed -
+    # _suggestion_is_clickable fails closed with nothing to verify indentation
+    # or parse-safety against, not because this suggestion is actually unsafe.
+    # See test_flash_review_suggestion_safety.py for the real accept/reject cases.
     assert findings == [
         {
             "file": "a.py",
@@ -1084,6 +1089,7 @@ def test_review_diff_parses_optional_suggestion_field(mock_adapter_class):
             "issue": "off-by-one",
             "suggestion": "for i in range(n):",
             "source": "llm",
+            "suggestion_clickable": False,
         }
     ]
 
@@ -1099,6 +1105,44 @@ def test_review_diff_suggestion_field_is_optional(mock_adapter_class):
     findings = review_diff("--- a.py ---\n@@ -1,1 +3,1 @@\n+thing")
 
     assert findings == [{"file": "a.py", "line": 3, "issue": "off-by-one", "source": "llm"}]
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+@patch("scan_worker.flash_review.writing_adapter_for")
+def test_review_diff_runs_suggestion_correctness_check_even_without_second_model_verification(
+    mock_writing_adapter_for, mock_verification_adapter,
+):
+    # The suggestion-correctness gate must fire on the Flash tier too, not
+    # just when verify_with_second_model=True (AIR-only grounding recheck)
+    # - Flash tier's own solo-Luna-generation design (see
+    # MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH's comment) makes it *more*
+    # exposed to a wrong-direction clickable suggestion than AIR, not less.
+    mock_generation_adapter = MagicMock()
+    mock_generation_adapter.simple_completion.return_value = (
+        '[{"file": "check.py", "line": 2, "issue": "off by one", '
+        '"suggestion": "return a + b"}]'
+    )
+    mock_writing_adapter_for.return_value = mock_generation_adapter
+
+    mock_correctness_adapter = MagicMock()
+    mock_correctness_adapter.is_available.return_value = True
+    mock_correctness_adapter.simple_completion.return_value = (
+        '{"verdict": "REJECT", "reason": "wrong direction"}'
+    )
+    mock_verification_adapter.return_value = mock_correctness_adapter
+
+    findings = review_diff(
+        "--- check.py ---\n@@ -1,2 +1,2 @@\n def add(a, b):\n+    return a + b + 1\n",
+        file_contents={"check.py": "def add(a, b):\n    return a + b + 1\n"},
+        verify_with_second_model=False,
+    )
+
+    assert len(findings) == 1
+    # REJECT flips clickability off; the finding and its (re-indented)
+    # suggestion text still post, just as an inert plain fence.
+    assert findings[0]["suggestion_clickable"] is False
+    assert findings[0]["suggestion"] == "    return a + b"
+    mock_correctness_adapter.simple_completion.assert_called_once()
 
 
 def test_names_referenced_in_diff_extracts_identifiers_from_added_and_context_lines():
@@ -3529,6 +3573,159 @@ def test_verify_findings_threads_on_usage_to_the_adapter(mock_verification_adapt
 
     on_usage = MagicMock()
     _verify_findings_with_second_model(_ONE_FINDING, "diff", on_usage=on_usage)
+
+    mock_verification_adapter.assert_called_once_with(on_usage=on_usage)
+
+
+_SUGGESTION_FINDING = {
+    "file": "check.py",
+    "line": 2,
+    "issue": "off by one",
+    "suggestion": "    return a + b",
+}
+_SUGGESTION_FILE_CONTENTS = {"check.py": "def add(a, b):\n    return a + b + 1\n"}
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_verify_suggestion_correctness_accepts_a_correct_fix(mock_verification_adapter):
+    mock_adapter = MagicMock()
+    mock_adapter.is_available.return_value = True
+    mock_adapter.simple_completion.return_value = '{"verdict": "ACCEPT", "reason": "correct fix"}'
+    mock_verification_adapter.return_value = mock_adapter
+
+    result = _verify_suggestion_correctness(_SUGGESTION_FINDING, _SUGGESTION_FILE_CONTENTS)
+
+    assert result is True
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_verify_suggestion_correctness_rejects_a_wrong_direction_fix(mock_verification_adapter):
+    mock_adapter = MagicMock()
+    mock_adapter.is_available.return_value = True
+    mock_adapter.simple_completion.return_value = '{"verdict": "REJECT", "reason": "wrong direction"}'
+    mock_verification_adapter.return_value = mock_adapter
+
+    result = _verify_suggestion_correctness(_SUGGESTION_FINDING, _SUGGESTION_FILE_CONTENTS)
+
+    assert result is False
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_verify_suggestion_correctness_fails_closed_when_deepseek_key_missing(mock_verification_adapter):
+    # Opposite default from _verify_findings_with_second_model's fail-open:
+    # this gate decides whether to hand out a one-click Apply button, so an
+    # unavailable verifier must default to NOT clickable, not to clickable.
+    mock_adapter = MagicMock()
+    mock_adapter.is_available.return_value = False
+    mock_verification_adapter.return_value = mock_adapter
+
+    result = _verify_suggestion_correctness(_SUGGESTION_FINDING, _SUGGESTION_FILE_CONTENTS)
+
+    assert result is False
+    mock_adapter.simple_completion.assert_not_called()
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_verify_suggestion_correctness_fails_closed_on_malformed_response(mock_verification_adapter):
+    mock_adapter = MagicMock()
+    mock_adapter.is_available.return_value = True
+    mock_adapter.simple_completion.return_value = "not json at all"
+    mock_verification_adapter.return_value = mock_adapter
+
+    result = _verify_suggestion_correctness(_SUGGESTION_FINDING, _SUGGESTION_FILE_CONTENTS)
+
+    assert result is False
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_verify_suggestion_correctness_fails_closed_when_adapter_raises(mock_verification_adapter):
+    mock_adapter = MagicMock()
+    mock_adapter.is_available.return_value = True
+    mock_adapter.simple_completion.side_effect = RuntimeError("network error")
+    mock_verification_adapter.return_value = mock_adapter
+
+    result = _verify_suggestion_correctness(_SUGGESTION_FINDING, _SUGGESTION_FILE_CONTENTS)
+
+    assert result is False
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_verify_suggestion_correctness_fails_closed_when_file_contents_missing(mock_verification_adapter):
+    mock_adapter = MagicMock()
+    mock_adapter.is_available.return_value = True
+    mock_verification_adapter.return_value = mock_adapter
+
+    result = _verify_suggestion_correctness(_SUGGESTION_FINDING, {})
+
+    assert result is False
+    mock_adapter.simple_completion.assert_not_called()
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_verify_suggestion_correctness_fails_closed_on_a_malformed_finding(mock_verification_adapter):
+    # Real gap found by independent peer review: finding["issue"] (and
+    # file/line/suggestion) used to be accessed, and `lines` indexed,
+    # BEFORE the try/except - a missing key or surprising shape raised
+    # straight out of this function instead of failing closed like every
+    # other error case here. That matters beyond this one finding: this
+    # runs inside _validate_findings' ThreadPoolExecutor pool.map(), so an
+    # uncaught exception here would have propagated out of list(pool.map())
+    # and crashed _validate_findings entirely - losing the WHOLE review's
+    # findings, not just this one suggestion's clickability.
+    mock_adapter = MagicMock()
+    mock_adapter.is_available.return_value = True
+    mock_verification_adapter.return_value = mock_adapter
+
+    malformed_finding = {"file": "check.py", "line": 2, "suggestion": "return a + b"}  # no "issue"
+
+    result = _verify_suggestion_correctness(malformed_finding, _SUGGESTION_FILE_CONTENTS)
+
+    assert result is False
+    mock_adapter.simple_completion.assert_not_called()
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_validate_findings_does_not_lose_other_findings_when_one_suggestion_is_malformed(
+    mock_verification_adapter,
+):
+    # End-to-end version of the same gap: a batch with one well-formed
+    # clickable candidate and one malformed one must not let the malformed
+    # one's crash take down the whole batch's return value.
+    mock_adapter = MagicMock()
+    mock_adapter.is_available.return_value = True
+    mock_adapter.simple_completion.return_value = '{"verdict": "ACCEPT", "reason": "correct fix"}'
+    mock_verification_adapter.return_value = mock_adapter
+
+    diff_text = (
+        "--- check.py ---\n@@ -1,2 +1,2 @@\n def add(a, b):\n+    return a + b + 1\n"
+        "\n"
+        "--- other.py ---\n@@ -1,1 +1,1 @@\n+broken\n"
+    )
+    file_contents = {
+        "check.py": "def add(a, b):\n    return a + b + 1\n",
+        "other.py": "broken\n",
+    }
+    findings = [
+        {"file": "check.py", "line": 2, "issue": "off by one", "suggestion": "return a + b"},
+        {"file": "other.py", "line": 1, "suggestion": "fixed"},  # missing "issue" - malformed
+    ]
+
+    kept = _validate_findings(findings, diff_text, file_contents)
+
+    assert len(kept) == 2
+    good = next(f for f in kept if f["file"] == "check.py")
+    assert good["suggestion_clickable"] is True
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_verify_suggestion_correctness_threads_on_usage_to_the_adapter(mock_verification_adapter):
+    mock_adapter = MagicMock()
+    mock_adapter.is_available.return_value = True
+    mock_adapter.simple_completion.return_value = '{"verdict": "ACCEPT", "reason": "confirmed"}'
+    mock_verification_adapter.return_value = mock_adapter
+
+    on_usage = MagicMock()
+    _verify_suggestion_correctness(_SUGGESTION_FINDING, _SUGGESTION_FILE_CONTENTS, on_usage=on_usage)
 
     mock_verification_adapter.assert_called_once_with(on_usage=on_usage)
 

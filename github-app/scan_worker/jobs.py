@@ -1937,7 +1937,15 @@ def _flash_review_comment_body(finding: dict) -> str:
     lines = [f"**`{symbol}`**\n\n{finding['issue']}" if symbol else finding["issue"]]
     suggestion = finding.get("suggestion")
     if suggestion:
-        lines.append(f"```\n{suggestion}\n```")
+        # "```suggestion" only when flash_review.py's _suggestion_is_clickable
+        # has independently verified it's safe to render as a real GitHub
+        # one-click Apply button (exact diff line, matching indentation,
+        # single line, and a clean tree-sitter parse before and after) -
+        # any other case (including simply not having been checked) falls
+        # back to today's inert plain fence, never guessed into a clickable
+        # one. See that function's own docstring for why this fails closed.
+        fence = "```suggestion" if finding.get("suggestion_clickable") else "```"
+        lines.append(f"{fence}\n{suggestion}\n```")
     lines.append(
         "\n_Reply `/dismiss` (optionally with a reason) if this isn't helpful - Aletheore won't "
         "raise it again on this repo._"
@@ -2279,9 +2287,15 @@ def _run_flash_review(
             # verification_adapter), so its cost is priced at that model's
             # rate specifically - never flash_review_model's, which would be
             # wrong whenever generation ran on Luna. Never called for free
-            # tier: this closure is only ever passed to review_diff when
-            # verify_with_second_model=True, which is gated to paid plans
-            # below.
+            # tier - but as of the suggestion-correctness verifier below,
+            # that's no longer because this closure is only passed to
+            # review_diff when verify_with_second_model=True (that flag is
+            # AIR-only, but this closure is ALSO the on_verification_usage
+            # the suggestion-correctness check uses, and that one runs on
+            # Flash too). It's free tier's own explicit verify_suggestions=
+            # not is_free_tier at this function's review_diff call site
+            # below that keeps this closure from ever firing there - see
+            # that call site's own comment for why.
             #
             # Findings are verified concurrently on a bounded thread pool
             # (see flash_review._verify_findings_with_second_model), so this
@@ -2383,6 +2397,20 @@ def _run_flash_review(
             # doesn't touch either way.
             verify_with_second_model=verify_with_second_model,
             on_verification_usage=_on_verification_usage,
+            # Independent of verify_with_second_model above (Flash tier
+            # needs this even though it skips dual-agent grounding - see
+            # flash_review._validate_findings' own comment) but still
+            # excluded for free tier specifically: this check always calls
+            # verification_adapter() (real deepseek-v4-flash), and
+            # _on_verification_usage is commented "Never called for free
+            # tier" because nothing invoked it there before this feature -
+            # unconditionally calling it now would write a real dollar cost
+            # into free tier's spend accounting for the first time, which
+            # is a correctness bug in the ledger, not a design choice to
+            # make casually. Free tier's suggestions simply stay
+            # non-clickable (an inert plain fence) until that's a real
+            # decision someone makes on purpose.
+            verify_suggestions=not is_free_tier,
         )
     # Every free-tier provider failed mid-review (see
     # _on_free_tier_exhausted above) - this review never actually ran, the
