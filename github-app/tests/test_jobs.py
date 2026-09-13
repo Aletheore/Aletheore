@@ -4618,6 +4618,9 @@ def test_flash_review_job_requests_second_model_verification_on_paid_plan(monkey
 
     assert captured["verify_with_second_model"] is True
     assert callable(captured["on_verification_usage"])
+    # Suggestion-correctness verification runs on every paid plan
+    # regardless of verify_with_second_model - AIR gets both.
+    assert captured["verify_suggestions"] is True
 
     # And that callback must price at the verification model's own rate
     # (deepseek-v4-flash), never flash_review_model's - wrong whenever
@@ -4684,6 +4687,11 @@ def test_flash_review_job_does_not_request_second_model_verification_on_flash_ti
     assert captured["verify_with_second_model"] is False
     assert reserve_calls == [MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH]
     assert MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH == 800
+    # Unlike verify_with_second_model, suggestion-correctness verification
+    # is NOT plan-gated to AIR - Flash tier's solo-Luna-generation design
+    # (no dual-agent grounding check) makes it more exposed to a
+    # wrong-direction one-click suggestion than AIR, not less.
+    assert captured["verify_suggestions"] is True
 
 
 def test_flash_review_job_does_not_request_second_model_verification_on_free_tier(monkeypatch):
@@ -4749,6 +4757,12 @@ def test_flash_review_job_does_not_request_second_model_verification_on_free_tie
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert captured["verify_with_second_model"] is False
+    # Free tier is the one exclusion: the correctness verifier always
+    # calls a real, non-free deepseek-v4-flash - jobs.py's own
+    # _on_verification_usage closure assumes it is "never called for free
+    # tier", so this must stay False here or a real dollar cost would land
+    # in free tier's spend accounting for the first time.
+    assert captured["verify_suggestions"] is False
 
 
 def test_flash_review_job_never_sends_the_raw_file_context_blob_to_review_diff(monkeypatch):

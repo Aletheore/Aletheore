@@ -11,7 +11,19 @@ string a human reads before acting on. Every test below either confirms a
 genuinely safe case is accepted (and, where relevant, correctly
 re-indented), or confirms one specific way a suggestion can be unsafe is
 caught - see each test's own docstring for which.
+
+A mechanically-accepted suggestion also has to clear
+_verify_suggestion_correctness (a second, adversarially-framed model
+call) before ending up clickable - see test_flash_review.py for that
+gate's own dedicated tests (accept/reject/fail-closed/plan-independence).
+Tests here that exercise _validate_findings end-to-end and expect
+suggestion_clickable=True mock scan_worker.model_tiers.verification_adapter
+to a deterministic ACCEPT so they don't make a real network call; tests
+where the mechanical gate alone already rejects (wrong line, multi-line,
+etc.) never reach the model call and need no mock.
 """
+from unittest.mock import MagicMock, patch
+
 from scan_worker.flash_review import (
     _clickable_suggestion,
     _substitution_parses_cleanly,
@@ -211,13 +223,21 @@ def test_accepts_real_model_generated_fixes_across_four_languages():
         assert result == expected, f"real fix wrongly rejected/mis-corrected: {filename} line {line} -> {result!r}"
 
 
-def test_validate_findings_marks_a_real_suggestion_clickable_and_reindents_it_end_to_end():
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_validate_findings_marks_a_real_suggestion_clickable_and_reindents_it_end_to_end(
+    mock_verification_adapter,
+):
     # Exercises the actual integration point in _validate_findings, not
     # just the isolated _clickable_suggestion unit above - confirms the
     # diff_text -> valid_lines -> exact-line-check wiring is really
     # connected, and that the corrected (re-indented) text is written back
     # into finding["suggestion"] itself so the rendered comment and the
     # real one-click substitution are always the same string.
+    mock_adapter = MagicMock()
+    mock_adapter.is_available.return_value = True
+    mock_adapter.simple_completion.return_value = '{"verdict": "ACCEPT", "reason": "correct fix"}'
+    mock_verification_adapter.return_value = mock_adapter
+
     diff_text = "--- check.py ---\n@@ -1,2 +1,2 @@\n def add(a, b):\n+    return a + b + 1\n"
     file_contents = {"check.py": _ADD_FUNCTION_SOURCE}
     findings = [{
@@ -230,6 +250,34 @@ def test_validate_findings_marks_a_real_suggestion_clickable_and_reindents_it_en
     assert len(kept) == 1
     assert kept[0]["suggestion_clickable"] is True
     assert kept[0]["suggestion"] == "    return a + b"
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_validate_findings_with_verify_suggestions_false_never_calls_the_verifier(
+    mock_verification_adapter,
+):
+    # Free tier's own opt-out (see jobs.py's review_diff call site): the
+    # correctness verifier always uses a real, non-free deepseek-v4-flash
+    # call, and free tier must never place one - verify_suggestions=False
+    # has to force every mechanically-clickable candidate back to
+    # non-clickable WITHOUT ever constructing the adapter, not just ignore
+    # its result, or free tier would still be charged for a call whose
+    # verdict is then discarded.
+    diff_text = "--- check.py ---\n@@ -1,2 +1,2 @@\n def add(a, b):\n+    return a + b + 1\n"
+    file_contents = {"check.py": _ADD_FUNCTION_SOURCE}
+    findings = [{
+        "file": "check.py", "line": 2, "issue": "off by one",
+        "suggestion": "return a + b",
+    }]
+
+    kept = _validate_findings(findings, diff_text, file_contents, verify_suggestions=False)
+
+    assert len(kept) == 1
+    assert kept[0]["suggestion_clickable"] is False
+    # Still re-indented for the plain-fence rendering - only clickability
+    # is affected, not the mechanical correction itself.
+    assert kept[0]["suggestion"] == "    return a + b"
+    mock_verification_adapter.assert_not_called()
 
 
 def test_validate_findings_marks_a_wrong_line_suggestion_not_clickable_end_to_end():

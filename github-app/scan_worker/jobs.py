@@ -2391,6 +2391,20 @@ def _run_flash_review(
             # doesn't touch either way.
             verify_with_second_model=verify_with_second_model,
             on_verification_usage=_on_verification_usage,
+            # Independent of verify_with_second_model above (Flash tier
+            # needs this even though it skips dual-agent grounding - see
+            # flash_review._validate_findings' own comment) but still
+            # excluded for free tier specifically: this check always calls
+            # verification_adapter() (real deepseek-v4-flash), and
+            # _on_verification_usage is commented "Never called for free
+            # tier" because nothing invoked it there before this feature -
+            # unconditionally calling it now would write a real dollar cost
+            # into free tier's spend accounting for the first time, which
+            # is a correctness bug in the ledger, not a design choice to
+            # make casually. Free tier's suggestions simply stay
+            # non-clickable (an inert plain fence) until that's a real
+            # decision someone makes on purpose.
+            verify_suggestions=not is_free_tier,
         )
     # Every free-tier provider failed mid-review (see
     # _on_free_tier_exhausted above) - this review never actually ran, the
