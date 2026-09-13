@@ -13,6 +13,7 @@ from scan_worker.flash_review import (
     _names_referenced_in_diff,
     _quoted_strings,
     _validate_findings,
+    _verification_user_prompt,
     _verify_findings_with_second_model,
     _verify_suggestion_correctness,
     build_change_impact_context,
@@ -3575,6 +3576,111 @@ def test_verify_findings_threads_on_usage_to_the_adapter(mock_verification_adapt
     _verify_findings_with_second_model(_ONE_FINDING, "diff", on_usage=on_usage)
 
     mock_verification_adapter.assert_called_once_with(on_usage=on_usage)
+
+
+def test_verification_user_prompt_includes_surrounding_context_when_given():
+    prompt = _verification_user_prompt("diff text", _ONE_FINDING[0], context="def f():\n    pass")
+
+    assert "Surrounding file context" in prompt
+    assert "def f():\n    pass" in prompt
+
+
+def test_verification_user_prompt_omits_context_section_when_none():
+    prompt = _verification_user_prompt("diff text", _ONE_FINDING[0], context=None)
+
+    assert "Surrounding file context" not in prompt
+
+
+# Real bug fixed 2026-09-14: _verify_findings_with_second_model used to hand
+# the verifier ONLY the diff hunk - a finding whose consequence depends on
+# code outside that hunk (an enclosing loop, a caller) was structurally
+# unconfirmable from what the verifier saw, and its own prompt told it to
+# REJECT exactly that case. These tests pin the fix: file_contents, when
+# given, must reach the verifier as surrounding context around the cited
+# line, and must degrade to the old diff-only behavior when unavailable.
+_LOOP_FINDING = [{
+    "file": "parse.go",
+    "line": 5,
+    "issue": "break here silently drops every remaining loop iteration",
+}]
+_LOOP_FILE_CONTENTS = {
+    "parse.go": (
+        "func parseFlags() {\n"
+        "\tfor _, arg := range args {\n"
+        "\t\tif len(arg) == 0 {\n"
+        "\t\t\t// bug lives here\n"
+        "\t\t\tbreak\n"
+        "\t\t}\n"
+        "\t\tconsume(arg)\n"
+        "\t}\n"
+        "}\n"
+    )
+}
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_verify_findings_passes_surrounding_context_to_the_adapter(mock_verification_adapter):
+    mock_adapter = MagicMock()
+    mock_adapter.is_available.return_value = True
+
+    def _respond(system_prompt, user_prompt, cwd):
+        assert "for _, arg := range args" in user_prompt, (
+            "the enclosing loop lives outside the diff hunk - the verifier can only "
+            "confirm this finding if the surrounding file context reached it"
+        )
+        return '{"verdict": "ACCEPT", "reason": "loop confirmed"}'
+
+    mock_adapter.simple_completion.side_effect = _respond
+    mock_verification_adapter.return_value = mock_adapter
+
+    kept = _verify_findings_with_second_model(
+        _LOOP_FINDING, "diff", file_contents=_LOOP_FILE_CONTENTS
+    )
+
+    assert kept == _LOOP_FINDING
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_verify_findings_falls_back_to_diff_only_when_file_missing_from_file_contents(
+    mock_verification_adapter,
+):
+    mock_adapter = MagicMock()
+    mock_adapter.is_available.return_value = True
+
+    def _respond(system_prompt, user_prompt, cwd):
+        assert "Surrounding file context" not in user_prompt
+        return '{"verdict": "ACCEPT", "reason": "confirmed from diff alone"}'
+
+    mock_adapter.simple_completion.side_effect = _respond
+    mock_verification_adapter.return_value = mock_adapter
+
+    kept = _verify_findings_with_second_model(
+        _LOOP_FINDING, "diff", file_contents={"other.go": "package other\n"}
+    )
+
+    assert kept == _LOOP_FINDING
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_verify_findings_falls_back_to_diff_only_when_cited_line_out_of_bounds(
+    mock_verification_adapter,
+):
+    mock_adapter = MagicMock()
+    mock_adapter.is_available.return_value = True
+
+    def _respond(system_prompt, user_prompt, cwd):
+        assert "Surrounding file context" not in user_prompt
+        return '{"verdict": "ACCEPT", "reason": "confirmed from diff alone"}'
+
+    mock_adapter.simple_completion.side_effect = _respond
+    mock_verification_adapter.return_value = mock_adapter
+
+    out_of_bounds_finding = [{"file": "parse.go", "line": 999, "issue": "whatever"}]
+    kept = _verify_findings_with_second_model(
+        out_of_bounds_finding, "diff", file_contents=_LOOP_FILE_CONTENTS
+    )
+
+    assert kept == out_of_bounds_finding
 
 
 _SUGGESTION_FINDING = {
