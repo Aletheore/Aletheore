@@ -359,14 +359,12 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
             if affiliate is not None:
                 await record_referral(pool, installation_id, affiliate["id"])
 
-        # One-time Live Wiki + Docs build, mirroring the GitHub Marketplace
-        # path in webhooks/marketplace.py - fires exactly once, on the
+        # One-time Live Wiki + Docs build - fires exactly once, on the
         # free -> paid transition. Without this, installations upgraded
-        # through Paddle (the actual live payment path) never get an
-        # initial AIRview build at all: only the Marketplace webhook used
-        # to trigger it, so a Paddle installation's wiki stayed limited to
-        # whatever clusters an incremental push happened to touch after
-        # the fact.
+        # through Paddle (the only real payment path this app has - see
+        # claim_paid_setup) never get an initial AIRview build at all, and
+        # the wiki would stay limited to whatever clusters an incremental
+        # push happened to touch after the fact.
         #
         # AIR-exclusive (plan == "air"), unlike the affiliate credit above
         # - AIRview and Docs are not part of the flash tier. Real bug this

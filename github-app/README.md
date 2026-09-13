@@ -37,9 +37,8 @@ install `requirements.txt` alone, so test tooling never ships to prod.
 1. Register the GitHub App with webhook URL `https://aletheore.com/webhook`.
 2. Grant `contents: read`, `pull_requests: write`, and `checks: write`.
 3. Subscribe to `pull_request` only - `installation`/`installation_repositories`
-   are delivered automatically for any App with repository permissions and
-   `marketplace_purchase` is tied to the separate Marketplace listing. For
-   paid managed audits, also subscribe to `issue_comment`.
+   are delivered automatically for any App with repository permissions.
+   For paid managed audits, also subscribe to `issue_comment`.
 4. Copy `.env.example` to `.env` on the server and fill the GitHub App ID,
    webhook secret, and Postgres values.
 5. Place the downloaded private key at `github-app/app-private-key.pem` -
