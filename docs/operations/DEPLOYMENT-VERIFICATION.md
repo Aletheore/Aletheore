@@ -8,9 +8,10 @@
 **Snapshot Freshness:** CURRENT as of 2026-09-13 - production was redeployed to `master` (commit
 `4a5d808`, tagged `github-app-deploy-2026-09-13`) and re-verified live via SSH the same session. 8
 commits since the previous deploy tag (`github-app-deploy-2026-09-11`), no migrations - see
-`github-app/CHANGELOG.md`'s 2026-09-13 entry for the full per-fix writeup (#688, #689, #690, #692,
-#695, #700, #701, #702). Highlights: a real cross-scan-worker-replica race in the git graph store
-closed with a Postgres advisory lock (#690); a GitHub OAuth quirk (200 status with an error body)
+`github-app/CHANGELOG.md`'s 2026-09-13 entry for the full per-fix writeup covering PRs 688, 689,
+690, 692, 695, 700, 701, and 702. Highlights: a real cross-scan-worker-replica race in the git
+graph store closed with a Postgres advisory lock (#690); a GitHub OAuth quirk (200 status with an
+error body)
 that surfaced as an unhandled 500 on code exchange, mirroring a fix the refresh-token path already
 had (#692); the entire unused GitHub Marketplace webhook path removed after confirming live on
 GitHub that no listing has ever existed for this App (#702). All six services rebuilt and
