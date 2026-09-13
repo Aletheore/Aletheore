@@ -2,6 +2,10 @@ from scripts.normalize import (
     normalize_aletheore,
     normalize_pr_agent,
     normalize_deepsource,
+    normalize_bito,
+    normalize_korbit,
+    normalize_sourcery,
+    normalize_greptile,
 )
 
 
@@ -160,3 +164,151 @@ def test_normalize_deepsource_falls_back_to_original_line():
     assert findings[0]["line"] == 9
 
 
+
+
+def test_normalize_bito_extracts_title_and_detail_from_real_finding():
+    # Real captured excerpt from https://github.com/apache/superset/
+    # pull/43729 (an unrelated, real public PR checked while verifying
+    # Bito's actual comment format for this benchmark - Bito is not yet
+    # installed on this project's own scratch repo).
+    body = (
+        "<div>\n\n\n<div id=\"suggestion\">\n"
+        "<div id=\"issue\"><b>Nested describe in test</b></div>\n"
+        "<div id=\"fix\">\n\n"
+        "This `describe` block is nested inside the `test('boundary label "
+        "alignment is dropped...')` callback (which opens at line 2843 and "
+        "closes at line 2955). jest-circus throws `Cannot nest describe "
+        "inside a test`, so this file fails to run. Move the block to "
+        "module scope and relocate the `monthData` fixture it references "
+        "(currently scoped to the callback).\n</div>\n\n\n</div>\n\n\n\n\n"
+        "<small><i>Code Review Run #ea91a1</i></small>\n</div>\n\n---\n"
+        "Should Bito avoid suggestions like this for future reviews? "
+        "(<a href=https://alpha.bito.ai/home/ai-agents/review-rules>Manage "
+        "Rules</a>)\n- [ ] Yes, avoid them"
+    )
+    raw_comments = [{
+        "path": "superset-frontend/plugins/plugin-chart-echarts/test/Timeseries/transformProps.test.ts",
+        "line": 3216,
+        "body": body,
+    }]
+    findings = normalize_bito(raw_comments)
+    assert len(findings) == 1
+    assert findings[0]["file"] == (
+        "superset-frontend/plugins/plugin-chart-echarts/test/Timeseries/transformProps.test.ts"
+    )
+    assert findings[0]["line"] == 3216
+    assert findings[0]["message"].startswith("Nested describe in test:")
+    assert "Move the block to module scope" in findings[0]["message"]
+
+
+def test_normalize_bito_excludes_its_own_reply_comments():
+    # Bito posts a second comment per finding, on the same path/line,
+    # elaborating on its own suggestion - marked with this HTML comment.
+    # Real excerpt from the same PR as the finding above.
+    reply_body = (
+        "<!-- Bito Reply -->\nMoving the `describe` block to the module "
+        "scope is the correct approach to resolve the nesting error."
+    )
+    raw_comments = [{"path": "x.ts", "line": 1, "body": reply_body}]
+    assert normalize_bito(raw_comments) == []
+
+
+def test_normalize_korbit_extracts_title_and_category_from_real_finding():
+    # Real captured excerpt from https://github.com/apache/superset/
+    # pull/35832 (an unrelated, real public PR checked while verifying
+    # Korbit's actual comment format - `line` was null on every real
+    # finding sampled, hence the fallback to `original_line` tested below
+    # rather than here).
+    body = (
+        "### Missing limit validation constraints "
+        '<sub>![category Security](https://img.shields.io/badge/'
+        "Security-e11d48)</sub>\n\n<details>\n  <summary>Tell me more"
+        "</summary>\n\n###### What is the issue?\nThe limit field has a "
+        "default value in the JSON schema but lacks validation "
+        "constraints to prevent potential abuse or system overload.\n"
+    )
+    raw_comments = [{"path": "superset/reports/schemas.py", "body": body}]
+    findings = normalize_korbit(raw_comments)
+    assert findings == [{
+        "file": "superset/reports/schemas.py",
+        "line": None,
+        "message": "Missing limit validation constraints",
+        "severity": "Security",
+    }]
+
+
+def test_normalize_korbit_falls_back_to_original_line():
+    body = "### Some title <sub>![category Performance](url)</sub>"
+    raw_comments = [{"path": "app.py", "original_line": 12, "body": body}]
+    findings = normalize_korbit(raw_comments)
+    assert findings[0]["line"] == 12
+
+
+def test_normalize_sourcery_extracts_category_and_message_from_real_finding():
+    # Real captured excerpt from https://github.com/genomehubs/kinfin/
+    # pull/116 (an unrelated, real public PR checked while verifying
+    # Sourcery's actual comment format - most real PRs sampled while
+    # verifying this had Sourcery either rate-limited or reporting a clean
+    # "Approved" review with no per-line comments at all, which is why
+    # this fixture is the one real finding found, not a representative
+    # sample of Sourcery's full range of category labels).
+    body = (
+        "**nitpick:** The updated README documents partition ID "
+        "`fb1a511e4761d2e9`, but the example clustering configuration and "
+        "status fixture use `804b707a77993f0b`; following the documented "
+        "resolve result or status commands therefore returns a missing "
+        "status instead of the provided example data.\n\n"
+        "**Triggers:** When users follow the README examples against the "
+        "checked-in example dataset."
+    )
+    raw_comments = [{"path": "src/api/examples/README.md", "body": body}]
+    findings = normalize_sourcery(raw_comments)
+    assert len(findings) == 1
+    assert findings[0]["file"] == "src/api/examples/README.md"
+    assert findings[0]["line"] is None
+    assert findings[0]["severity"] == "nitpick"
+    assert findings[0]["message"].startswith("nitpick: The updated README")
+
+
+def test_normalize_sourcery_falls_back_to_raw_body_without_category_prefix():
+    raw_comments = [{"path": "x.py", "line": 5, "body": "Just a plain comment, no category prefix."}]
+    findings = normalize_sourcery(raw_comments)
+    assert findings == [{
+        "file": "x.py",
+        "line": 5,
+        "message": "Just a plain comment, no category prefix.",
+        "severity": None,
+    }]
+
+
+def test_normalize_greptile_extracts_priority_and_title_from_review_comments():
+    # Real captured excerpt from https://github.com/moltis-org/moltis/
+    # pull/1266 (an unrelated, real public PR checked while verifying
+    # Greptile's actual comment format).
+    body = (
+        '<a href="#"><img alt="P1" src="https://greptile-static-assets.'
+        's3.amazonaws.com/badges/p1.svg?v=9" align="top"></a> '
+        "**Restoration Overwrites New Selection**\n\n"
+        "During session restoration, this disables only the reasoning "
+        "button while the model selector remains active."
+    )
+    raw = {"review_comments": [{
+        "path": "crates/web/ui/src/reasoning-toggle.ts", "line": 112, "body": body,
+    }]}
+    findings = normalize_greptile(raw)
+    assert findings == [{
+        "file": "crates/web/ui/src/reasoning-toggle.ts",
+        "line": 112,
+        "message": "Restoration Overwrites New Selection",
+        "severity": "P1",
+    }]
+
+
+def test_normalize_greptile_ignores_the_issue_comment_summary():
+    # The prose summary (issue_comments) is deliberately not turned into
+    # findings - see normalize_greptile's own docstring for why.
+    raw = {
+        "issue_comments": [{"body": "<h3>Greptile Summary</h3>\n\nThis PR does X."}],
+        "review_comments": [],
+    }
+    assert normalize_greptile(raw) == []

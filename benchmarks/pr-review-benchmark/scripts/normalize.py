@@ -92,3 +92,130 @@ def normalize_deepsource(raw_comments: list[dict]) -> list[dict]:
             "severity": severity_match.group(1) if severity_match else None,
         })
     return findings
+
+
+# Bito's finding title/detail sit in two adjacent divs with fixed ids -
+# confirmed against a real finding on apache/superset#43729 (see
+# scripts/adapters.py's bito_adapter docstring). Bito also posts a second,
+# unrelated comment per finding on the same path/line - its own automated
+# reply elaborating on the suggestion, marked with this HTML comment - which
+# must be excluded here or every real finding is double-counted.
+_BITO_REPLY_MARKER = "<!-- Bito Reply -->"
+_BITO_TITLE_PATTERN = re.compile(r'<div id="issue"><b>(.*?)</b></div>', re.DOTALL)
+_BITO_DETAIL_PATTERN = re.compile(r'<div id="fix">\s*\n*(.*?)\n*</div>', re.DOTALL)
+
+
+def normalize_bito(raw_comments: list[dict]) -> list[dict]:
+    """`raw_comments` is a list of GitHub PR-review-comment dicts (path/
+    line/body) authored by Bito's GitHub App, already filtered to real
+    findings (not its own reply-to-itself comments) by bito_adapter's
+    caller filtering plus the reply-marker check below."""
+    findings = []
+    for comment in raw_comments:
+        body = comment.get("body", "")
+        if _BITO_REPLY_MARKER in body:
+            continue
+        title_match = _BITO_TITLE_PATTERN.search(body)
+        detail_match = _BITO_DETAIL_PATTERN.search(body)
+        message = title_match.group(1).strip() if title_match else body.strip()
+        if detail_match:
+            message = f"{message}: {detail_match.group(1).strip()}"
+        findings.append({
+            "file": comment.get("path"),
+            "line": comment.get("line") or comment.get("original_line"),
+            "message": message,
+            "severity": None,
+        })
+    return findings
+
+
+# Korbit's finding title carries a category badge (Security/Performance/
+# etc, as shields.io badge alt text) rather than a numeric severity -
+# confirmed against real findings on apache/superset#35832. `line` was
+# null on every real finding sampled (Korbit attaches to a hunk, not
+# always a specific line), same fallback as DeepSource above.
+_KORBIT_TITLE_PATTERN = re.compile(r"^### (.+?)\s*<sub>", re.MULTILINE)
+_KORBIT_CATEGORY_PATTERN = re.compile(r"!\[category (\w+)\]")
+
+
+def normalize_korbit(raw_comments: list[dict]) -> list[dict]:
+    """`raw_comments` is a list of GitHub PR-review-comment dicts (path/
+    line/body) authored by Korbit's GitHub App, already filtered to
+    korbit-ai[bot] by korbit_adapter."""
+    findings = []
+    for comment in raw_comments:
+        body = comment.get("body", "")
+        title_match = _KORBIT_TITLE_PATTERN.search(body)
+        category_match = _KORBIT_CATEGORY_PATTERN.search(body)
+        findings.append({
+            "file": comment.get("path"),
+            "line": comment.get("line") or comment.get("original_line"),
+            "message": title_match.group(1).strip() if title_match else body.strip(),
+            "severity": category_match.group(1) if category_match else None,
+        })
+    return findings
+
+
+# Sourcery's real per-line findings open with a bold category label
+# ("**nitpick:**", "**issue (bug_risk):**" per Sourcery's own docs, though
+# only "nitpick" was seen in the real finding sampled -
+# genomehubs/kinfin#116) followed by the finding text on the same line.
+# `line` was null on that finding too, same fallback as DeepSource/Korbit
+# above.
+_SOURCERY_TITLE_PATTERN = re.compile(r"^\*\*([\w\s()]+?):\*\*\s*(.*)", re.DOTALL)
+
+
+def normalize_sourcery(raw_comments: list[dict]) -> list[dict]:
+    """`raw_comments` is a list of GitHub PR-review-comment dicts (path/
+    line/body) authored by Sourcery's GitHub App, already filtered to
+    sourcery-ai[bot] by sourcery_adapter. Does not consume Sourcery's
+    separate review-level summary (see sourcery_adapter's docstring for
+    why) - only these per-line comments carry gradeable findings."""
+    findings = []
+    for comment in raw_comments:
+        body = comment.get("body", "")
+        title_match = _SOURCERY_TITLE_PATTERN.match(body)
+        if title_match:
+            category, rest = title_match.groups()
+            message = f"{category.strip()}: {rest.strip()}"
+            severity = category.strip()
+        else:
+            message = body.strip()
+            severity = None
+        findings.append({
+            "file": comment.get("path"),
+            "line": comment.get("line") or comment.get("original_line"),
+            "message": message,
+            "severity": severity,
+        })
+    return findings
+
+
+# Greptile's per-line findings open with a priority badge image (P1-P4,
+# most to least severe) then a bold title on the same line - confirmed
+# against real findings on moltis-org/moltis#1266.
+_GREPTILE_PRIORITY_PATTERN = re.compile(r'alt="(P\d)"')
+_GREPTILE_TITLE_PATTERN = re.compile(r"\*\*(.+?)\*\*")
+
+
+def normalize_greptile(raw: dict) -> list[dict]:
+    """`raw` is {"issue_comments": [...], "review_comments": [...]} from
+    greptile_adapter. Only review_comments (path/line-anchored) are turned
+    into findings - the issue comment is a prose PR-level summary with no
+    per-location claim to check against ground truth, so including it here
+    would need a different, unverified shape than every other tool's
+    per-finding entries. See greptile_adapter's docstring for why both are
+    still fetched and returned rather than discarding the summary
+    entirely - a manual reviewer may still want it as context."""
+    findings = []
+    for comment in raw.get("review_comments", []):
+        body = comment.get("body", "")
+        priority_match = _GREPTILE_PRIORITY_PATTERN.search(body)
+        title_match = _GREPTILE_TITLE_PATTERN.search(body)
+        findings.append({
+            "file": comment.get("path"),
+            "line": comment.get("line") or comment.get("original_line"),
+            "message": title_match.group(1).strip() if title_match else body.strip(),
+            "severity": priority_match.group(1) if priority_match else None,
+        })
+    return findings
