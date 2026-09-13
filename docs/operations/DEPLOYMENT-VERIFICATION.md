@@ -5,22 +5,43 @@
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
 **Last Updated:** 2026-09-13
-**Snapshot Freshness:** CURRENT as of 2026-09-13 - production was redeployed to `master` (commit
-`4a5d808`, tagged `github-app-deploy-2026-09-13`) and re-verified live via SSH the same session. 8
-commits since the previous deploy tag (`github-app-deploy-2026-09-11`), no migrations - see
-`github-app/CHANGELOG.md`'s 2026-09-13 entry for the full per-fix writeup covering PRs 688, 689,
-690, 692, 695, 700, 701, and 702. Highlights: a real cross-scan-worker-replica race in the git
-graph store closed with a Postgres advisory lock (#690); a GitHub OAuth quirk (200 status with an
-error body)
-that surfaced as an unhandled 500 on code exchange, mirroring a fix the refresh-token path already
-had (#692); the entire unused GitHub Marketplace webhook path removed after confirming live on
-GitHub that no listing has ever existed for this App (#702). All six services rebuilt and
-force-recreated (`app-server`; the shared `scan-worker` image backing `scan-worker`/
-`scan-worker-2`/`health-worker`/`scheduler`; `jina-embed`); confirmed healthy via `docker ps` and
-`/healthz` (both the container-internal check and the public `app.aletheore.com` endpoint), zero
-errors in `app-server`'s logs since restart, and each of the eight fixes confirmed present in the
-running containers' actual source via `inspect.getsource` - not re-read from the repo - checking a
-marker specific to each (see the CHANGELOG entry for the exact list).
+**Snapshot Freshness:** CURRENT as of 2026-09-13 (second deploy) - production was redeployed to
+`master` (commit `47ee0ab`, tagged `github-app-deploy-2026-09-13-2`) and re-verified live via SSH
+the same session. 6 commits since the first 2026-09-13 deploy tag (`github-app-deploy-2026-09-13`),
+no migrations - see `github-app/CHANGELOG.md`'s "2026-09-13 (second deploy)" entry for the full
+writeup. Two substantive changes: Flash Review suggestions now render as real, one-click GitHub
+"Suggested change" blocks (#707) behind a mechanical safety gate (exact single-line match,
+deterministic re-indentation, no-op/similarity rejection, tree-sitter parse confirmation) plus a
+second, adversarially-framed `deepseek-v4-flash` call judging the suggestion's semantic
+correctness before it's ever rendered clickable - runs on Flash and AIR, explicitly excluded for
+free tier via a new `verify_suggestions` flag to avoid silently breaking an existing "never called
+for free tier" cost-accounting assumption; the aletheore MCP server's instructions now ask
+connecting agents to file a GitHub issue on a genuine tool-side gap instead of silently working
+around it (#708). All six services rebuilt and force-recreated; confirmed healthy via
+`docker compose ps` (all `healthy`) and `no pending migrations`/zero errors in `app-server`'s logs
+since restart, and both fixes confirmed present in the *running* containers' actual source via
+`inspect.getsource` - not re-read from the repo: `scan-worker` shows
+`SUGGESTION_CORRECTNESS_SYSTEM_PROMPT` and a `verify_suggestions` parameter on `review_diff`;
+`app-server` shows the real `github.com/Aletheore/Aletheore/issues` URL in `SERVER_INSTRUCTIONS`.
+The website's own copy fix (#706) deploys independently via Vercel and was separately confirmed
+live at `www.aletheore.com` - not part of this docker stack.
+
+**Previous:** CURRENT as of 2026-09-13 (first deploy) - production was redeployed to `master`
+(commit `4a5d808`, tagged `github-app-deploy-2026-09-13`) and re-verified live via SSH the same
+session. 8 commits since the previous deploy tag (`github-app-deploy-2026-09-11`), no migrations -
+see `github-app/CHANGELOG.md`'s 2026-09-13 entry for the full per-fix writeup covering PRs 688,
+689, 690, 692, 695, 700, 701, and 702. Highlights: a real cross-scan-worker-replica race in the
+git graph store closed with a Postgres advisory lock (#690); a GitHub OAuth quirk (200 status with
+an error body) that surfaced as an unhandled 500 on code exchange, mirroring a fix the
+refresh-token path already had (#692); the entire unused GitHub Marketplace webhook path removed
+after confirming live on GitHub that no listing has ever existed for this App (#702). All six
+services rebuilt and force-recreated (`app-server`; the shared `scan-worker` image backing
+`scan-worker`/`scan-worker-2`/`health-worker`/`scheduler`; `jina-embed`); confirmed healthy via
+`docker ps` and `/healthz` (both the container-internal check and the public
+`app.aletheore.com` endpoint), zero errors in `app-server`'s logs since restart, and each of the
+eight fixes confirmed present in the running containers' actual source via `inspect.getsource` -
+not re-read from the repo - checking a marker specific to each (see the CHANGELOG entry for the
+exact list).
 
 **Previous:** CURRENT as of 2026-09-11 - production was redeployed to `master` (commit `6451c41`,
 tagged `github-app-deploy-2026-09-11`) and re-verified live via SSH the same session. 4 commits
