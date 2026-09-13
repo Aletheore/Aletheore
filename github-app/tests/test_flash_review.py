@@ -353,6 +353,43 @@ def test_line_citation_content_matches_false_when_line_out_of_bounds():
     assert _line_citation_content_matches(finding, file_contents) is False
 
 
+def test_line_citation_content_matches_indexes_by_real_newline_lines_not_splitlines_line_boundaries():
+    # Same real bug as _clickable_suggestion's own regression test (see
+    # test_flash_review_suggestion_safety.py), present here too since both
+    # functions used to share the same content.splitlines() line-indexing
+    # approach: Python's splitlines() also breaks on \v, \f, \x1c-\x1e,
+    # NEL, LS, and PS, none of which GitHub or git treat as a line
+    # boundary (they only ever split on "\n"). finding["line"] is a real,
+    # \n-based line number from the diff GitHub itself generated, so
+    # indexing it into a splitlines()-produced list silently checks the
+    # citation against the wrong line the moment one of those characters
+    # appears anywhere earlier in the file.
+    #
+    # Ten standalone form-feed characters (each one, on its own, is its
+    # own line boundary under splitlines() - confirmed directly: 10 of
+    # them produce 10 extra empty-string entries splitlines() sees that
+    # split("\n") does not) shift every subsequent splitlines()-index by
+    # 10 relative to real \n-based counting - deliberately more than
+    # LINE_CITATION_CONTEXT_WINDOW's own +/-8 tolerance (that tolerance
+    # exists for the model's own small line-counting variance, not for an
+    # indexing bug this size, so a smaller shift wouldn't actually prove
+    # anything here: the window would absorb it either way). Real line 3
+    # by \n counting is "target line here" (where the finding's quoted
+    # text really is); by splitlines() it would have been index 12, 9
+    # rows past the window's own edge - a correctly-cited, correctly-
+    # quoted finding silently rejected as unverifiable, not because the
+    # citation was wrong, but because our own indexing was.
+    content = "header\n" + ("\x0c" * 10) + "\ntarget line here\nafter\n"
+    assert content.split("\n")[2] == "target line here"
+    assert content.splitlines()[2] == ""  # what the bug would have checked against instead
+    assert content.splitlines()[12] == "target line here"  # where splitlines() actually puts it
+
+    finding = {"file": "a.py", "line": 3, "issue": 'contains "target line here" bug'}
+    file_contents = {"a.py": content}
+
+    assert _line_citation_content_matches(finding, file_contents) is True
+
+
 def test_files_missing_from_review_context_lists_unread_changed_files():
     changed = ["a.py", "big.py", "c.py"]
     contents = {"a.py": "x", "c.py": "y"}
