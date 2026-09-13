@@ -3,6 +3,19 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.18 — 2026-09-13
+
+**MCP server now asks agents to report real gaps (#708)**
+
+The `aletheore` MCP server's own instructions (surfaced to every connecting agent in the MCP
+`initialize` handshake) now tell an agent that hits a genuine tool-side gap — a call failing
+unexpectedly, results clearly wrong or incomplete against the codebase's real state, a documented
+capability not working as described — to file a GitHub issue rather than only working around it
+silently. Scoped to exclude user error (a bad path, a skipped scan/index step), and asks for a
+dedup check plus a concrete repro so a filed issue is actionable. Real usage across many users and
+agents is a far better bug-finding surface than one user occasionally relaying a problem by hand —
+this just gives that surface somewhere durable to land.
+
 ## 0.9.16 — 2026-09-11
 
 Two changes to `aletheore dashboard`, the local web dashboard `aletheore dashboard` serves for a
