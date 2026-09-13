@@ -1,8 +1,8 @@
 # Aletheore PR-Review Benchmark — Runbook
 
-This benchmark measures Aletheore's grounding claim ("every finding traces back to evidence") against real competitors on real and reconstructed bugs, scored blind. This is a **named, 7-way comparison**: Aletheore (hosted Flash Review) vs. Qodo/PR-Agent vs. DeepSource vs. Bito vs. Korbit vs. Sourcery vs. Greptile. This is a semi-automated, otherwise manual process; the runbook below describes every step.
+This benchmark measures Aletheore's grounding claim ("every finding traces back to evidence") against real competitors on real and reconstructed bugs, scored blind. This is a **named, 5-way comparison**: Aletheore (hosted Flash Review) vs. Qodo/PR-Agent vs. DeepSource vs. Sourcery vs. Greptile. This is a semi-automated, otherwise manual process; the runbook below describes every step.
 
-CodeRabbit, Snyk Code, and Semgrep are excluded from this comparison entirely: each publishes a ToS clause barring benchmarking and/or publishing comparison results without prior written consent (confirmed by reading the actual ToS documents — Section 4.2(iv) for CodeRabbit, MSA Section 3.1(i) for Snyk Code, Section 2.3 for Semgrep — not a search summary, on 2026-09-13). CodeRabbit's Free-plan rate limits also made a fair, repeatable comparison impractical on their own. Bito, Korbit, Sourcery, and Greptile were checked the same way against their own published ToS and carry no such restriction. Since none of the tools in this comparison need their output anonymized for legal reasons, this comparison runs **named, not blind-labeled** — every tool's output is scored under its real name. (Blind manual scoring of the ground-truth *judgment* — recall/false-positives/actionability — is still a good practice on its own merits, but tool identity no longer needs to be hidden from the scorer.)
+CodeRabbit, Snyk Code, and Semgrep are excluded from this comparison entirely: each publishes a ToS clause barring benchmarking and/or publishing comparison results without prior written consent (confirmed by reading the actual ToS documents — Section 4.2(iv) for CodeRabbit, MSA Section 3.1(i) for Snyk Code, Section 2.3 for Semgrep — not a search summary, on 2026-09-13). CodeRabbit's Free-plan rate limits also made a fair, repeatable comparison impractical on their own. Sourcery and Greptile were checked the same way against their own published ToS and carry no such restriction. Bito and Korbit were included briefly (both cleared the same ToS check) but dropped again shortly after — not for a legal reason, but because both proved unreliable enough in practice (inconsistent PR-triggering behavior, dashboard failures) to undermine a fair, repeatable comparison. Since none of the remaining tools in this comparison need their output anonymized for legal reasons, this comparison runs **named, not blind-labeled** — every tool's output is scored under its real name. (Blind manual scoring of the ground-truth *judgment* — recall/false-positives/actionability — is still a good practice on its own merits, but tool identity no longer needs to be hidden from the scorer.)
 
 Aletheore's real comparable feature is its hosted GitHub App's **Flash Review**, which posts findings as a PR comment from `aletheore[bot]` — not the CLI's whole-repo `aletheore audit` command, which is a different, non-comparable feature. Flash Review's model routing is `gpt-5.6-luna` primary (OpenAI), with `deepseek-v4-flash` as fallback and, on the AIR tier only, as a second-model verification pass over Luna's own output (see `github-app/scan_worker/model_tiers.py`) — not the single hardcoded DeepSeek model this doc originally described.
 
@@ -16,8 +16,6 @@ See the full design spec in `docs/superpowers/specs/2026-07-26-aletheore-pr-revi
 - `git`, `gh` (GitHub CLI)
 - Aletheore's GitHub App installed (paid plan) on the scratch repo, so Flash Review runs automatically on each PR
 - DeepSource's GitHub App installed and configured on the scratch repo
-- Bito's GitHub App ([github.com/marketplace/bito-s-ai-code-review-agent](https://github.com/marketplace/bito-s-ai-code-review-agent)) installed on the scratch repo
-- Korbit's GitHub App ([github.com/apps/korbit-ai](https://github.com/apps/korbit-ai)) installed on the scratch repo
 - Sourcery's GitHub App ([github.com/marketplace/sourcery-ai](https://github.com/marketplace/sourcery-ai)) installed on the scratch repo
 - Greptile's GitHub App ([greptile.com](https://www.greptile.com/)) installed on the scratch repo
 - PR-Agent installed (`python -m pr_agent.cli`) — see PR-Agent setup section below
@@ -185,18 +183,6 @@ def fetch_issue_comments(pr_url):
        return json.loads(result.stdout)
    ```
 
-#### Bito
-
-1. **Bito's GitHub App is already installed** on the scratch repo and will post reviews to each PR automatically. Bito skips PRs it thinks are bot-authored by default — if the scratch repo's PR-opening account is ever flagged as a bot, comment `/review full` on the PR to force one.
-
-2. **Fetch Bito's PR review comments**: Bito posts a run-summary as a plain issue comment (file/skip counts, a usage guide — no real findings) and its actual findings as GitHub PR *review* comments (path/line/body), confirmed against a real public PR. Reuse `fetch_review_comments` from the DeepSource section above and let `bito_adapter()` filter to the bot's own comments (`bito-code-review[bot]`), excluding Bito's own reply-to-itself comments (marked `<!-- Bito Reply -->`) — see `normalize_bito()`.
-
-#### Korbit
-
-1. **Korbit's GitHub App is already installed** on the scratch repo and will post reviews to each PR automatically. Korbit skips PRs it thinks are bot-authored too, by default (comment `/korbit-review` to force one) — same caveat as Bito above.
-
-2. **Fetch Korbit's PR review comments**: Korbit's real findings are GitHub PR *review* comments (path present, `line` frequently null even on a genuine finding — confirmed against real public PRs). Reuse `fetch_review_comments` and let `korbit_adapter()` filter to `korbit-ai[bot]`.
-
 #### Sourcery
 
 1. **Sourcery's GitHub App is already installed** on the scratch repo. Sourcery has its own per-installation review-budget rate limit (diff characters per rolling 7 days) independent of this benchmark's own pacing — if a case's Sourcery review comes back empty, check the PR for a budget-exhausted message before treating it as a true negative.
@@ -230,11 +216,11 @@ from pathlib import Path
 from scripts.run_case import run_case
 from scripts.adapters import (
     aletheore_adapter, pr_agent_adapter, deepsource_adapter,
-    bito_adapter, korbit_adapter, sourcery_adapter, greptile_adapter,
+    sourcery_adapter, greptile_adapter,
 )
 from scripts.normalize import (
     normalize_aletheore, normalize_pr_agent, normalize_deepsource,
-    normalize_bito, normalize_korbit, normalize_sourcery, normalize_greptile,
+    normalize_sourcery, normalize_greptile,
 )
 
 def _pr_number_and_repo(pr_url):
@@ -287,10 +273,8 @@ adapters = {
     "aletheore": lambda checkout_dir, case: aletheore_adapter(checkout_dir, case, fetch_pr_comments=fetch_issue_comments),
     "pr_agent": lambda checkout_dir, case: pr_agent_adapter(checkout_dir, case, fetch_review=fetch_pr_agent_review),
     "deepsource": lambda checkout_dir, case: deepsource_adapter(checkout_dir, case, fetch_pr_comments=fetch_review_comments),
-    # Bito/Korbit/Sourcery all post their real findings as PR review comments,
-    # same endpoint as DeepSource - reuses fetch_review_comments as-is.
-    "bito": lambda checkout_dir, case: bito_adapter(checkout_dir, case, fetch_pr_review_comments=fetch_review_comments),
-    "korbit": lambda checkout_dir, case: korbit_adapter(checkout_dir, case, fetch_pr_review_comments=fetch_review_comments),
+    # Sourcery posts its real findings as PR review comments, same endpoint
+    # as DeepSource - reuses fetch_review_comments as-is.
     "sourcery": lambda checkout_dir, case: sourcery_adapter(checkout_dir, case, fetch_pr_review_comments=fetch_review_comments),
     # Greptile posts to both surfaces on the same PR - see its README
     # subsection above for why both fetchers are needed here.
@@ -303,8 +287,6 @@ normalizers = {
     "aletheore": normalize_aletheore,
     "pr_agent": normalize_pr_agent,
     "deepsource": normalize_deepsource,
-    "bito": normalize_bito,
-    "korbit": normalize_korbit,
     "sourcery": normalize_sourcery,
     "greptile": normalize_greptile,
 }
