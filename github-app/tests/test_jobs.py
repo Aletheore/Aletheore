@@ -2827,7 +2827,21 @@ def test_managed_audit_pr_job_skips_llm_call_when_spend_cap_reached(monkeypatch,
     assert posted["marker"] == AUDIT_COMMENT_MARKER
 
 
-def test_managed_audit_pr_job_skips_llm_call_when_rate_limited(monkeypatch, tmp_path):
+def test_managed_audit_pr_job_does_not_burn_the_cooldown_when_balance_is_exhausted(
+    monkeypatch, tmp_path
+):
+    """Real bug found via audit: check_and_reserve_managed_audit
+    unconditionally commits the repo's next-eligible-audit timestamp the
+    moment it returns True, with no rollback path. Before this fix, it
+    was called and its reservation committed BEFORE the credit balance
+    was even checked - so a request that arrived with an already-
+    exhausted balance still burned the cooldown for a run that produced
+    no audit content at all. A customer who topped up their balance
+    immediately after couldn't get a real audit on that repo until the
+    full cooldown elapsed anyway. The fix checks the balance (a plain
+    read, no side effect) before ever calling
+    check_and_reserve_managed_audit, so an exhausted balance no longer
+    consumes the reservation."""
     work = tmp_path / "work"
     work.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=work, check=True)
@@ -2853,6 +2867,77 @@ def test_managed_audit_pr_job_skips_llm_call_when_rate_limited(monkeypatch, tmp_
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
+    )
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: str(bare))
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    reserve_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.check_and_reserve_managed_audit",
+        lambda *a, **k: reserve_calls.append(True) or True,
+    )
+    monkeypatch.setattr("scan_worker.jobs.managed_audit_definitely_still_cooling_down", lambda *a, **k: False)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+
+    llm_called = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.run_managed_audit", lambda *a, **k: llm_called.append(True)
+    )
+    posted = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.upsert_pr_comment",
+        lambda client, token, repo_full_name, pr_number, body, **kwargs: posted.update(
+            body=body, marker=kwargs.get("marker")
+        ),
+    )
+    from scan_worker.jobs import AUDIT_COMMENT_MARKER, run_managed_audit_pr_job
+
+    run_managed_audit_pr_job(1, "octocat/hello-world", 42)
+
+    assert llm_called == []
+    assert "credit balance exhausted" in posted["body"].lower()
+    assert posted["marker"] == AUDIT_COMMENT_MARKER
+    # The crux of the fix: an exhausted balance must never reach the
+    # reservation call at all - the cooldown slot stays untouched, so a
+    # customer who tops up right after can get a real audit immediately.
+    assert reserve_calls == []
+
+
+def test_managed_audit_pr_job_skips_llm_call_when_rate_limited(monkeypatch, tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=work, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=work, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=work, check=True)
+    (work / "app.py").write_text("print('hello')\n")
+    subprocess.run(["git", "add", "."], cwd=work, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "commit"], cwd=work, check=True)
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=work,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    bare = tmp_path / "bare.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(work), str(bare)], check=True)
+    subprocess.run(
+        ["git", "--git-dir", str(bare), "update-ref", "refs/pull/42/head", head_sha],
+        check=True,
+    )
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        # A real positive balance, not the $0 default a bare {"plan": ...}
+        # mock leaves - this test exercises the rate-limit path
+        # specifically, and (following the fix moving the balance check
+        # before the cooldown reservation) a $0 balance would report
+        # "credit balance exhausted" instead of ever reaching the rate
+        # limit at all, same as it would for a real customer.
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 5.0},
     )
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: str(bare))
