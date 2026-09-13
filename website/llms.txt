@@ -9,7 +9,7 @@ The free tier is genuinely free: `scan`, `query`, `diff`, the MCP server, and th
 - Repository: https://github.com/Aletheore/Aletheore
 - Benchmarks (separate repo, reproducible): https://github.com/Aletheore/aletheore-benchmarks
 - Install: `pip install aletheore`
-- License: open source
+- License: PolyForm Noncommercial 1.0.0 (source-available; commercial use requires a separate license)
 
 ## The deterministic scanner
 
