@@ -1140,7 +1140,21 @@ def _clickable_suggestion(
     content = file_contents.get(finding["file"])
     if content is None:
         return None
-    lines = content.splitlines()
+    # split("\n"), never splitlines() - real bug found via adversarial
+    # review, proven with a concrete repro: Python's str.splitlines() also
+    # breaks on \v, \f, \x1c-\x1e, NEL, LS, and PS, none of which GitHub or
+    # git treat as a line boundary (they only ever split on "\n"). finding
+    # ["line"] comes straight from the diff GitHub itself generated - real,
+    # \n-based line numbers - so indexing it into a splitlines()-produced
+    # list silently diverges the moment any of those characters appears
+    # anywhere earlier in the file (a form-feed page-break comment, however
+    # rare, is real and legacy in some codebases). Every check below would
+    # still have run and still have passed, just against the WRONG line -
+    # internally consistent and confidently wrong, which is worse than an
+    # obvious crash: a demonstrated repro showed this validating and
+    # accepting a suggestion for one line while GitHub's own Apply would
+    # have silently overwritten a completely different one.
+    lines = content.split("\n")
     line_no = finding["line"]
     if line_no < 1 or line_no > len(lines):
         return None

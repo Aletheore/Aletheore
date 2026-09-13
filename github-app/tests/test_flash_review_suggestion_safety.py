@@ -257,3 +257,30 @@ def test_validate_findings_leaves_findings_without_a_suggestion_unannotated():
 
     assert kept == [{"file": "check.py", "line": 2, "issue": "off by one"}]
     assert "suggestion_clickable" not in kept[0]
+
+
+def test_indexes_by_real_newline_lines_not_splitlines_line_boundaries():
+    # Real, demonstrated bug found via adversarial peer review: Python's
+    # str.splitlines() also breaks on \v, \f, \x1c-\x1e, NEL, LS, and PS -
+    # none of which GitHub or git treat as a line boundary (they only ever
+    # split on "\n"). finding["line"] is a real, \n-based line number from
+    # the diff GitHub itself generated, so indexing it into a
+    # splitlines()-produced list silently targets the wrong line the
+    # moment one of those characters appears anywhere earlier in the file.
+    # A form-feed (\x0c) is a real, if legacy, "page break" convention
+    # still seen in some codebases' comments - not a contrived edge case.
+    #
+    # Concretely: content.splitlines() collapses the "\x0c\n" pair below
+    # into a single line-break, shifting every subsequent 1-indexed line
+    # up by one relative to real \n-based counting. Line 5 by real \n
+    # counting is "    return a + b + 1" (the actual bug); by
+    # splitlines() it would have been "" (an empty line two rows earlier
+    # in the file) - a suggestion validated and accepted against the
+    # wrong line entirely, silently overwriting unrelated real content on
+    # Apply.
+    content = "def add(a, b):\n\x0c\n\n\n    return a + b + 1\n"
+    assert content.split("\n")[4] == "    return a + b + 1"
+    assert content.splitlines()[4] == ""  # what the bug would have validated against instead
+
+    finding = {"file": "calc.py", "line": 5, "suggestion": "return a + b"}
+    assert _clickable_suggestion(finding, {"calc.py": content}, exact_valid_lines={5}) == "    return a + b"
