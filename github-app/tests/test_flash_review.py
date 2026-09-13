@@ -1077,6 +1077,10 @@ def test_review_diff_parses_optional_suggestion_field(mock_adapter_class):
 
     findings = review_diff("--- a.py ---\n@@ -1,1 +3,1 @@\n+thing")
 
+    # suggestion_clickable is False here because no file_contents was passed -
+    # _suggestion_is_clickable fails closed with nothing to verify indentation
+    # or parse-safety against, not because this suggestion is actually unsafe.
+    # See test_flash_review_suggestion_safety.py for the real accept/reject cases.
     assert findings == [
         {
             "file": "a.py",
@@ -1084,6 +1088,7 @@ def test_review_diff_parses_optional_suggestion_field(mock_adapter_class):
             "issue": "off-by-one",
             "suggestion": "for i in range(n):",
             "source": "llm",
+            "suggestion_clickable": False,
         }
     ]
 

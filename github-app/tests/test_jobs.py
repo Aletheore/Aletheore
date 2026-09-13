@@ -3701,6 +3701,35 @@ def test_flash_review_comment_body_omits_the_symbol_line_when_none():
     assert body.startswith("real problem")
 
 
+def test_flash_review_comment_body_renders_a_real_suggestion_block_when_clickable():
+    from scan_worker.jobs import _flash_review_comment_body
+
+    body = _flash_review_comment_body({
+        "file": "app.py", "line": 12, "issue": "off by one",
+        "suggestion": "    return a + b", "suggestion_clickable": True,
+    })
+    assert "```suggestion\n    return a + b\n```" in body
+
+
+def test_flash_review_comment_body_falls_back_to_a_plain_fence_when_not_clickable():
+    # Covers both explicit False (flash_review.py checked and rejected it)
+    # and the field simply being absent (never checked, e.g. an older
+    # cached finding from before this field existed) - both must render
+    # exactly as they always have, never guessed into a clickable fence.
+    from scan_worker.jobs import _flash_review_comment_body
+
+    rejected = _flash_review_comment_body({
+        "file": "app.py", "line": 12, "issue": "off by one",
+        "suggestion": "    return a + b", "suggestion_clickable": False,
+    })
+    never_checked = _flash_review_comment_body({
+        "file": "app.py", "line": 12, "issue": "off by one", "suggestion": "    return a + b",
+    })
+    for body in (rejected, never_checked):
+        assert "```suggestion" not in body
+        assert "```\n    return a + b\n```" in body
+
+
 def test_flash_review_job_attaches_symbol_attribution_from_deterministic_evidence(monkeypatch):
     # Build B: the symbol shown in the posted comment must come from the
     # same deterministic module-graph evidence every other blast-radius/

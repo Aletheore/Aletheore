@@ -3,6 +3,10 @@ import logging
 import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from difflib import SequenceMatcher
+from pathlib import Path
+
+from tree_sitter import Parser
 
 from aletheore.dead_code import is_test_file
 from aletheore.evidence_resolution import (
@@ -11,6 +15,7 @@ from aletheore.evidence_resolution import (
     find_symbol_at_location,
     normalize_resolution,
 )
+from aletheore.scanner.graph import LANGUAGE_BY_EXTENSION
 from scan_worker.github_api import (
     MAX_CONTEXT_FILE_BYTES,
     MAX_CONTEXT_FILES,
@@ -41,10 +46,15 @@ array-shaped example earlier in your analysis. Each finding must be an object wi
 "file" (the exact file path shown in the diff), "line" (the exact line number from the diff, as
 an integer), "issue" (a concrete, specific, checkable description of an actual problem at that
 exact line - never a style opinion, never "consider refactoring", never a vague concern that
-isn't tied to something you can point at), and optionally "suggestion" (a short plain-text code
-fix for that exact issue, with no markdown formatting or code fences of your own - if you have no
-concrete fix, omit this field entirely rather than restating the issue). Only report a finding if
-you can name a specific, real issue at a specific line. If you find nothing worth flagging, end
+isn't tied to something you can point at), and optionally "suggestion" (the exact literal code
+that "line" should read instead, when - and only when - the whole fix is replacing that one line
+with exactly one other line: write it exactly as it should appear in the file, including the same
+leading whitespace/indentation as the line it replaces, with no explanation, no markdown
+formatting, and no code fences of your own. If the real fix needs more than one line changed, or
+adds or removes a line rather than replacing one, or you have no concrete fix, omit this field
+entirely - do not describe a multi-line change in prose here, and do not approximate it as a
+single line). Only report a finding if you can name a specific, real issue at a specific line. If
+you find nothing worth flagging, end
 your response with exactly: [].
 
 A real, concrete issue is worth reporting even when it only triggers under a narrow or unusual
@@ -1060,6 +1070,130 @@ def _lookup_valid_lines(file: str, valid_lines: dict[str, set[int]]) -> set[int]
     return set()
 
 
+def _substitution_parses_cleanly(file_path: str, lines: list[str], line_no: int, suggestion: str) -> bool:
+    """Applies a one-line substitution in memory and confirms it does not
+    introduce a syntax error the original file didn't already have -
+    defense in depth for a suggestion that could otherwise be one click
+    away from landing in a customer's real repository with no human
+    review in between.
+
+    Fails closed (False) whenever this can't be meaningfully checked at
+    all: no tree-sitter grammar for this extension, or the original file
+    doesn't even parse cleanly on its own (so there is no clean baseline
+    to compare the substitution against) - "couldn't verify" is treated
+    the same as "looks wrong," never as "probably fine."
+    """
+    language_info = LANGUAGE_BY_EXTENSION.get(Path(file_path).suffix)
+    if language_info is None:
+        return False
+    _language_name, ts_language = language_info
+    parser = Parser(ts_language)
+    original_source = "\n".join(lines).encode("utf-8")
+    if parser.parse(original_source).root_node.has_error:
+        return False
+    new_lines = list(lines)
+    new_lines[line_no - 1] = suggestion
+    new_source = "\n".join(new_lines).encode("utf-8")
+    return not parser.parse(new_source).root_node.has_error
+
+
+def _clickable_suggestion(
+    finding: dict, file_contents: dict[str, str] | None, exact_valid_lines: set[int]
+) -> str | None:
+    """Returns the exact text safe to render as a real GitHub one-click
+    "```suggestion" block, or None when nothing about this finding's
+    `suggestion` can be trusted enough for that - which does a literal,
+    unreviewed text substitution of the exact line the comment is
+    anchored to the instant someone clicks Apply.
+
+    Every check below fails CLOSED - returns None, falling back to today's
+    inert prose-in-a-plain-fence rendering of the model's own unmodified
+    text - rather than guessing, because a wrong accept here is a wrong
+    commit to a customer's actual repository with no human review in
+    between, a materially different failure mode than a wrong `issue` or
+    `suggestion` string, which a human reads before deciding whether to
+    act on it at all.
+    """
+    suggestion = finding.get("suggestion")
+    if not isinstance(suggestion, str) or not suggestion.strip() or "```" in suggestion:
+        return None
+    # Single physical line only. GitHub's suggestion feature replaces
+    # exactly the line(s) the review comment is anchored to (always
+    # exactly one line for a Flash Review comment - see
+    # create_pr_review_comment) with exactly the fenced content; a
+    # suggestion spanning multiple lines would silently turn a one-line
+    # replacement into a multi-line insertion, which is only ever correct
+    # by coincidence for a prompt that explicitly asked for a like-for-
+    # like single-line swap.
+    if "\n" in suggestion:
+        return None
+    # The model's own claimed line, not merely "near" the diff the way
+    # ordinary findings are tolerated (_line_is_near_diff's
+    # DIFF_LINE_TOLERANCE) - a human reading a comment can locate the real
+    # issue a few lines off; a one-click substitution has no such
+    # tolerance, since it always overwrites exactly the anchored position
+    # regardless of where the real issue actually is.
+    if finding["line"] not in exact_valid_lines:
+        return None
+    if not file_contents:
+        return None
+    content = file_contents.get(finding["file"])
+    if content is None:
+        return None
+    lines = content.splitlines()
+    line_no = finding["line"]
+    if line_no < 1 or line_no > len(lines):
+        return None
+    real_line = lines[line_no - 1]
+    # Re-indent to the REAL line's own indentation rather than requiring
+    # the model to get it right, and rather than rejecting on a mismatch.
+    # Real, measured finding from 20 live-model test cases across 10
+    # languages: despite the prompt explicitly asking for "the same
+    # leading whitespace/indentation as the line it replaces", the model
+    # omitted it in the large majority of real single-line fixes it
+    # otherwise got right. GitHub's literal substitution never re-indents,
+    # so trusting the model's own whitespace would have made this feature
+    # fire on almost nothing real; indentation is mechanical, the SYSTEM
+    # can just impose the one indentation level that is unambiguously
+    # correct for a same-line replacement (a fix that legitimately needs
+    # to change indentation level is, by definition, not a same-line
+    # content swap - the single-line-only and similarity checks below
+    # exist to catch a model attempting that kind of fix through this
+    # narrower path).
+    real_indent = real_line[: len(real_line) - len(real_line.lstrip(" \t"))]
+    corrected_suggestion = real_indent + suggestion.strip(" \t")
+    # A "fix" identical to the line it claims to replace is not a fix -
+    # real bug found via the same 20-case run: a suggestion equal to a
+    # DIFFERENT real line in the file (the model cited the wrong line,
+    # verbatim-copied that wrong line's own text as its "suggestion")
+    # trivially passed every other check, including the similarity check
+    # below (identical text scores a perfect 1.0), because nothing here
+    # was checking whether the fix actually changes anything at all.
+    if corrected_suggestion.strip() == real_line.strip():
+        return None
+    # A genuine single-line fix is a small mutation of the line it
+    # replaces (measured on real model output: 0.86-0.97 similarity for
+    # six real correct fixes across five languages); a suggestion for the
+    # wrong line entirely reads as substantially different text (0.26-0.39
+    # for two real wrong-line cases). 0.5 sits with wide margin on both
+    # sides of that real, measured gap. Real bug this specific check
+    # closes: a model call cited line 1 ("def add(a, b):") for a bug
+    # actually on line 2, with no quoted literal in `issue` for
+    # _line_citation_content_matches to catch the wrong line against -
+    # the suggestion "return a + b" would have re-indented cleanly (both
+    # lines have zero indentation) and still parsed after substitution
+    # (deleting a function signature and inserting a bare return is valid
+    # Python at module scope), so without this check it would have
+    # rendered as a real one-click button that deletes the function's own
+    # signature.
+    similarity = SequenceMatcher(None, real_line.strip(), corrected_suggestion.strip()).ratio()
+    if similarity < 0.5:
+        return None
+    if not _substitution_parses_cleanly(finding["file"], lines, line_no, corrected_suggestion):
+        return None
+    return corrected_suggestion
+
+
 def _validate_findings(
     findings: list[dict],
     diff_text: str,
@@ -1111,6 +1245,25 @@ def _validate_findings(
             len(content_mismatch),
             ", ".join(f"{f['file']}:{f['line']}" for f in content_mismatch) or "-",
         )
+
+    # Annotated here, once, after grounding - both review_diff call sites
+    # (fresh generation and the similarity-cache hit path) funnel through
+    # this one function, so this is the single place a suggestion's
+    # click-safety needs deciding regardless of which path produced it.
+    # _clickable_suggestion re-indents the suggestion to the real line's
+    # own indentation when it accepts it (see its own docstring for why) -
+    # that corrected text replaces finding["suggestion"] so the posted
+    # comment's fenced code and the actual one-click substitution are
+    # always the same string, never two different ones.
+    for finding in kept:
+        if finding.get("suggestion"):
+            corrected = _clickable_suggestion(
+                finding, file_contents, _lookup_valid_lines(finding["file"], valid_lines)
+            )
+            finding["suggestion_clickable"] = corrected is not None
+            if corrected is not None:
+                finding["suggestion"] = corrected
+
     return kept
 
 

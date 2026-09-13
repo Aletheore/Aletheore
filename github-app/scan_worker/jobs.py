@@ -1937,7 +1937,15 @@ def _flash_review_comment_body(finding: dict) -> str:
     lines = [f"**`{symbol}`**\n\n{finding['issue']}" if symbol else finding["issue"]]
     suggestion = finding.get("suggestion")
     if suggestion:
-        lines.append(f"```\n{suggestion}\n```")
+        # "```suggestion" only when flash_review.py's _suggestion_is_clickable
+        # has independently verified it's safe to render as a real GitHub
+        # one-click Apply button (exact diff line, matching indentation,
+        # single line, and a clean tree-sitter parse before and after) -
+        # any other case (including simply not having been checked) falls
+        # back to today's inert plain fence, never guessed into a clickable
+        # one. See that function's own docstring for why this fails closed.
+        fence = "```suggestion" if finding.get("suggestion_clickable") else "```"
+        lines.append(f"{fence}\n{suggestion}\n```")
     lines.append(
         "\n_Reply `/dismiss` (optionally with a reason) if this isn't helpful - Aletheore won't "
         "raise it again on this repo._"
