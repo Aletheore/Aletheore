@@ -1,11 +1,32 @@
 import base64
 import difflib
+import logging
 import re
 
 import httpx
 
 from aletheore.pr_comment import COMMENT_MARKER
 from aletheore.repo_config import is_ignored
+
+logger = logging.getLogger(__name__)
+
+# GitHub's own compare-commits docs are explicit: "the list of changed
+# files is only shown on the first page of results, and it includes up
+# to 300 changed files for the entire comparison." There is no
+# documented way to retrieve file 301+ from this endpoint at all (see
+# app_server/webhooks/push.py's own GITHUB_COMPARE_FILES_HARD_CAP,
+# fixed first for the push-webhook path). Real gap found via audit:
+# fetch_pr_diff and fetch_pr_changed_files below both hit this exact
+# same endpoint and both silently accepted whatever `files` GitHub
+# returned with no signal when the response was capped - unlike every
+# other truncation boundary in this file (MAX_CONTEXT_FILE_BYTES,
+# MAX_DIFF_TOTAL_BYTES), which are all honestly tracked
+# (omitted_files/budget_omitted_files). A PR changing 300+ files had
+# every file past the cap silently invisible to both Flash Review's
+# diff/context building AND the changed-files list ignored_paths
+# filtering and schema/endpoint context build off of - with nothing
+# logged, unlike the push-webhook path.
+GITHUB_COMPARE_FILES_HARD_CAP = 300
 
 MAX_CONTEXT_FILES = 30
 # Raised from 80_000 to 100_000 (1.25x, deliberately not the full 2x the
@@ -404,9 +425,16 @@ def fetch_pr_diff(
         headers=headers,
     )
     response.raise_for_status()
+    compare_files = response.json().get("files", [])
+    if len(compare_files) >= GITHUB_COMPARE_FILES_HARD_CAP:
+        logger.warning(
+            "fetch_pr_diff: compare %s...%s for %s hit the compare API's %d-file cap; "
+            "changed files beyond this are invisible to this review",
+            base_ref, head_ref, repo_full_name, GITHUB_COMPARE_FILES_HARD_CAP,
+        )
     all_patches: list[tuple[str, str]] = []
     omitted_files = []
-    for file in response.json().get("files", []):
+    for file in compare_files:
         # A file matching .aletheore.json's own ignored_paths must never
         # reach Flash Review at all - the deterministic `aletheore scan`
         # path already excludes ignored paths at the source (see
@@ -493,7 +521,14 @@ def fetch_pr_changed_files(
         headers=headers,
     )
     response.raise_for_status()
-    filenames = [file["filename"] for file in response.json().get("files", [])]
+    compare_files = response.json().get("files", [])
+    if len(compare_files) >= GITHUB_COMPARE_FILES_HARD_CAP:
+        logger.warning(
+            "fetch_pr_changed_files: compare %s...%s for %s hit the compare API's %d-file "
+            "cap; changed files beyond this are invisible to this review",
+            base_ref, head_ref, repo_full_name, GITHUB_COMPARE_FILES_HARD_CAP,
+        )
+    filenames = [file["filename"] for file in compare_files]
     # Same exclusion fetch_pr_diff already applies to diff text - without
     # it here too, Flash Review's schema/endpoint context and full-file-
     # content fetch (both built from this list, see _run_flash_review)
