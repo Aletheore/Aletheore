@@ -129,7 +129,7 @@ Runs locally via `subprocess.run()`, but its `review` command posts its output a
 
 #### Aletheore
 
-Aletheore's Flash Review posts as a plain PR comment (not a per-line review comment) from `aletheore[bot]`, containing inline `file:line` citations in its prose. Fetch it via the **issue comments** endpoint (PRs are issues in the GitHub API) and let `aletheore_adapter()` filter to the bot's own comments:
+**Real bug fixed 2026-09-13:** this section used to say Flash Review "posts as a plain PR comment (not a per-line review comment)... containing inline `file:line` citations in its prose" - true when this benchmark was first written, false now. A real finding posts as a per-line PR **review** comment (path/line - the same shape DeepSource/Sourcery/Greptile already use, and the clickable-suggestion-capable surface), with the issue comment reduced to a summary ("N finding(s) posted as inline review comment(s) below." or "No issues found in this diff."). Fetching only the issue-comments endpoint (the old behavior) silently scored every real finding as a miss - measured directly on this benchmark's own run: 6 of 7 sampled cases had a real finding sitting in a review comment, none of them counted. `aletheore_adapter()` fetches **both** surfaces, matching Greptile's own dual-surface pattern - see that adapter's own docstring:
 
 ```python
 import re
@@ -141,6 +141,15 @@ def fetch_issue_comments(pr_url):
     owner, repo, number = match.groups()
     result = subprocess.run(
         ["gh", "api", f"repos/{owner}/{repo}/issues/{number}/comments"],
+        capture_output=True, text=True, check=True
+    )
+    return json.loads(result.stdout)
+
+def fetch_review_comments(pr_url):
+    match = re.match(r"https://github.com/(.+)/(.+)/pull/(\d+)", pr_url)
+    owner, repo, number = match.groups()
+    result = subprocess.run(
+        ["gh", "api", f"repos/{owner}/{repo}/pulls/{number}/comments"],
         capture_output=True, text=True, check=True
     )
     return json.loads(result.stdout)
@@ -262,7 +271,9 @@ workdir = Path("/tmp/pr-review-benchmark/work")
 results_dir = Path("benchmarks/pr-review-benchmark/results")
 
 adapters = {
-    "aletheore": lambda checkout_dir, case: aletheore_adapter(checkout_dir, case, fetch_pr_comments=fetch_issue_comments),
+    "aletheore": lambda checkout_dir, case: aletheore_adapter(
+        checkout_dir, case, fetch_pr_comments=fetch_issue_comments, fetch_pr_review_comments=fetch_review_comments
+    ),
     "pr_agent": lambda checkout_dir, case: pr_agent_adapter(checkout_dir, case, fetch_review=fetch_pr_agent_review),
     "deepsource": lambda checkout_dir, case: deepsource_adapter(checkout_dir, case, fetch_pr_comments=fetch_review_comments),
     # Bito/Korbit/Sourcery all post their real findings as PR review comments,

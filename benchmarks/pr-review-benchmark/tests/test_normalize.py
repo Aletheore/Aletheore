@@ -9,23 +9,64 @@ from scripts.normalize import (
 )
 
 
-def test_normalize_aletheore_extracts_citations_from_bot_pr_comments():
-    # Aletheore's hosted Flash Review posts findings as a GitHub PR comment
-    # from aletheore[bot] (fetched and bot-filtered the same way as
-    # DeepSource's, in scripts/adapters.py), not a whole CLI `audit` report.
-    # As of 2026-07-26 real PRs have only produced a scan-timeout error
-    # comment from this bot, not yet a successful finding-bearing one --
-    # this citation-extraction approach (carried over from the old
-    # whole-report-text parsing) needs re-verification against a real
-    # successful comment before it's fully trusted.
-    raw_comments = [{
-        "body": (
-            "This endpoint has no auth check at `app/routes.py:42`, which allows "
-            "unauthenticated access.\n\n"
-            "Unrelated paragraph with no citation."
-        ),
-    }]
-    findings = normalize_aletheore(raw_comments)
+def test_normalize_aletheore_reads_findings_from_review_comments():
+    # Real bug found and fixed 2026-09-13: a genuine Aletheore finding
+    # posts as a per-line PR review comment (path/line, same shape as
+    # every other tool in this benchmark), not as inline citations in the
+    # issue comment's prose - the issue comment is reduced to a summary
+    # ("N finding(s) posted as inline review comment(s) below."). Real
+    # excerpt captured from this benchmark's own 2026-09-13 run (case
+    # 009-cobra-completions-args-mutation, PR #309) - the old
+    # issue-comments-only adapter silently scored this as 0 findings.
+    raw = {
+        "issue_comments": [{
+            "body": "1 finding(s) posted as inline review comment(s) below.",
+        }],
+        "review_comments": [{
+            "path": "benchmark-sandbox/009-cobra-completions-args-mutation/completions.go",
+            "line": 320,
+            "body": (
+                "trimmedArgs used to be a defensive copy of args; the changed code "
+                "aliases it directly instead, so a later mutation of trimmedArgs can "
+                "corrupt args's backing array.\n\n"
+                "```\n"
+                "Restore the copy (allocate trimmedArgs and `copy(trimmedArgs, args)`) "
+                "before mutating trimmedArgs.\n"
+                "```\n\n"
+                "_Reply `/dismiss` (optionally with a reason) if this isn't helpful - "
+                "Aletheore won't raise it again on this repo._"
+            ),
+        }],
+    }
+    findings = normalize_aletheore(raw)
+    assert len(findings) == 1
+    assert findings[0]["file"] == "benchmark-sandbox/009-cobra-completions-args-mutation/completions.go"
+    assert findings[0]["line"] == 320
+    assert "aliases it directly instead" in findings[0]["message"]
+    # The suggestion's replacement code must not end up in `message`, or
+    # check_citations.py's content-grounding check quote-verifies it
+    # against the *current* (different) code and fails by construction.
+    assert "Restore the copy" not in findings[0]["message"]
+
+
+def test_normalize_aletheore_falls_back_to_issue_comment_citations():
+    # Defensive fallback, not the real current path: a citation embedded
+    # directly in the issue comment's own prose (the format this benchmark
+    # was originally built around) is still picked up if review_comments
+    # is empty - so a future format change reverting to prose citations
+    # doesn't silently go invisible here the way the review-comment
+    # format change did.
+    raw = {
+        "issue_comments": [{
+            "body": (
+                "This endpoint has no auth check at `app/routes.py:42`, which allows "
+                "unauthenticated access.\n\n"
+                "Unrelated paragraph with no citation."
+            ),
+        }],
+        "review_comments": [],
+    }
+    findings = normalize_aletheore(raw)
     assert findings == [{
         "file": "app/routes.py",
         "line": 42,
@@ -37,39 +78,32 @@ def test_normalize_aletheore_extracts_citations_from_bot_pr_comments():
     }]
 
 
-def test_normalize_aletheore_excludes_suggestion_from_message():
-    # Real captured excerpt from https://github.com/ArihantK15/
-    # proctor-browser/pull/214 (case 016-flask-sql-injection-user-lookup).
-    # The suggestion's quoted replacement query ("...WHERE username = ?")
-    # must not end up in `message`, or check_citations.py's content-
-    # grounding check quote-verifies it against the *current* (different,
-    # unparameterized) code and fails by construction -- see
-    # scripts/check_citations.py's own docstring on this exact trap.
-    raw_comments = [{
-        "body": (
-            "- `benchmark-sandbox/016-flask-sql-injection-user-lookup/"
-            "src/flask/helpers.py:655` — SQL injection vulnerability: "
-            "user-supplied username is concatenated directly into the SQL "
-            "query string without parameterization. An attacker can "
-            "inject arbitrary SQL.\n"
-            "  ```\n"
-            "  Use a parameterized query, e.g.: return \"SELECT id, "
-            "username, email FROM users WHERE username = ?\" and pass "
-            "username as a parameter to the database cursor.\n"
-            "  ```"
-        ),
-    }]
-    findings = normalize_aletheore(raw_comments)
+def test_normalize_aletheore_does_not_double_count_the_same_location():
+    # If a location somehow appears in both surfaces (not the real current
+    # shape, but not guaranteed to stay that way), it must be counted once.
+    raw = {
+        "issue_comments": [{
+            "body": "Also flagged at `app/routes.py:42` in this paragraph.",
+        }],
+        "review_comments": [{
+            "path": "app/routes.py", "line": 42, "body": "Real per-line finding.",
+        }],
+    }
+    findings = normalize_aletheore(raw)
     assert len(findings) == 1
-    assert findings[0]["file"] == (
-        "benchmark-sandbox/016-flask-sql-injection-user-lookup/src/flask/helpers.py"
-    )
-    assert findings[0]["line"] == 655
-    assert (
-        "SELECT id, username, email FROM users WHERE username = ?"
-        not in findings[0]["message"]
-    )
-    assert "SQL injection vulnerability" in findings[0]["message"]
+    assert findings[0]["message"] == "Real per-line finding."
+
+
+def test_normalize_aletheore_returns_no_findings_when_nothing_was_flagged():
+    # "No issues found in this diff." (the real message for a genuine
+    # zero-finding review) has no review comments and no citation to
+    # extract from the issue comment - must produce an empty list, not
+    # crash on either source being absent/empty.
+    raw = {
+        "issue_comments": [{"body": "No issues found in this diff."}],
+        "review_comments": [],
+    }
+    assert normalize_aletheore(raw) == []
 
 
 def test_normalize_pr_agent_reads_recommended_focus_areas_from_real_comment():

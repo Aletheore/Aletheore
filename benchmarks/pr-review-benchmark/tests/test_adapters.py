@@ -16,22 +16,43 @@ class _FakeCompletedProcess:
         self.stdout = stdout
 
 
-def test_aletheore_adapter_filters_pr_comments_to_aletheore_bot(tmp_path):
+def test_aletheore_adapter_fetches_and_filters_both_comment_surfaces(tmp_path):
+    # Real bug found and fixed 2026-09-13: a genuine Aletheore finding now
+    # posts as a per-line PR review comment (same shape as DeepSource/
+    # Sourcery/Greptile), with the issue comment reduced to a summary -
+    # fetching only the issue-comments endpoint (the old behavior) missed
+    # every real finding. Matches greptile_adapter's own dual-surface test
+    # shape.
     case = {"repo": {"pr_url": "https://github.com/example/repo/pull/1"}}
     captured = {}
 
-    def fake_fetch(pr_url):
-        captured["pr_url"] = pr_url
+    def fake_fetch_issue(pr_url):
+        captured["issue_pr_url"] = pr_url
+        return [
+            {"body": "1 finding(s) posted as inline review comment(s) below.", "user": {"login": "aletheore[bot]"}},
+            {"body": "unrelated", "user": {"login": "someone-else"}},
+        ]
+
+    def fake_fetch_review(pr_url):
+        captured["review_pr_url"] = pr_url
         return [
             {"path": "x.py", "line": 1, "body": "aletheore finding", "user": {"login": "aletheore[bot]"}},
             {"path": "y.py", "line": 2, "body": "other bot", "user": {"login": "deepsource-io[bot]"}},
         ]
 
-    result = aletheore_adapter(tmp_path, case, fetch_pr_comments=fake_fetch)
-    assert captured["pr_url"] == "https://github.com/example/repo/pull/1"
-    assert result == [
-        {"path": "x.py", "line": 1, "body": "aletheore finding", "user": {"login": "aletheore[bot]"}},
-    ]
+    result = aletheore_adapter(
+        tmp_path, case, fetch_pr_comments=fake_fetch_issue, fetch_pr_review_comments=fake_fetch_review
+    )
+    assert captured["issue_pr_url"] == "https://github.com/example/repo/pull/1"
+    assert captured["review_pr_url"] == "https://github.com/example/repo/pull/1"
+    assert result == {
+        "issue_comments": [
+            {"body": "1 finding(s) posted as inline review comment(s) below.", "user": {"login": "aletheore[bot]"}},
+        ],
+        "review_comments": [
+            {"path": "x.py", "line": 1, "body": "aletheore finding", "user": {"login": "aletheore[bot]"}},
+        ],
+    }
 
 
 def test_deepsource_adapter_filters_pr_comments_to_deepsource_bot(tmp_path):

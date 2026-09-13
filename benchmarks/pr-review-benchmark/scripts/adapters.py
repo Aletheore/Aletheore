@@ -30,9 +30,44 @@ SOURCERY_BOT_LOGIN = "sourcery-ai[bot]"
 GREPTILE_BOT_LOGIN = "greptile-apps[bot]"
 
 
-def aletheore_adapter(checkout_dir, case, fetch_pr_comments):
-    comments = fetch_pr_comments(case["repo"]["pr_url"])
-    return [c for c in comments if c.get("user", {}).get("login") == ALETHEORE_BOT_LOGIN]
+def aletheore_adapter(checkout_dir, case, fetch_pr_comments, fetch_pr_review_comments):
+    """Real bug found and fixed 2026-09-13: this used to fetch only the
+    issue-comments endpoint, matching the README's original description
+    of Flash Review ("posts as a plain PR comment... containing inline
+    file:line citations in its prose"). That's no longer how it posts a
+    real finding - confirmed directly against this benchmark's own live
+    run: a finding now goes out as a real per-line PR *review* comment
+    (path/line, exactly the same shape DeepSource/Sourcery/Greptile
+    already use, and the same clickable-suggestion-capable surface this
+    session built and verified tonight), with the issue comment reduced
+    to a summary ("N finding(s) posted as inline review comment(s)
+    below" or "No issues found in this diff.") that carries no citations
+    of its own to extract.
+
+    Real, measured impact of the old fetch-only-issue-comments code:
+    sampled 7 consecutive real cases from this exact run - 6 of 7 had a
+    genuine Aletheore finding sitting in a review comment, all silently
+    scored as 0 findings ("miss") because the old adapter never looked
+    there. Only the 1 case that genuinely found nothing ("No issues
+    found in this diff.", no review comment to have) was ever scored
+    correctly by accident. Every prior benchmark run measuring Aletheore
+    likely undercounted its real recall the same way.
+
+    Matches greptile_adapter's own dual-surface pattern (issue comments
+    are prose/summary, review comments are the gradeable findings) -
+    normalize_aletheore treats the review comments as the real findings
+    and the issue comment as supplementary context, not a second source
+    of the same citations.
+    """
+    pr_url = case["repo"]["pr_url"]
+    issue_comments = [
+        c for c in fetch_pr_comments(pr_url) if c.get("user", {}).get("login") == ALETHEORE_BOT_LOGIN
+    ]
+    review_comments = [
+        c for c in fetch_pr_review_comments(pr_url)
+        if c.get("user", {}).get("login") == ALETHEORE_BOT_LOGIN
+    ]
+    return {"issue_comments": issue_comments, "review_comments": review_comments}
 
 
 def deepsource_adapter(checkout_dir, case, fetch_pr_comments):
