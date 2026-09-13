@@ -3662,6 +3662,62 @@ def test_verify_suggestion_correctness_fails_closed_when_file_contents_missing(m
 
 
 @patch("scan_worker.model_tiers.verification_adapter")
+def test_verify_suggestion_correctness_fails_closed_on_a_malformed_finding(mock_verification_adapter):
+    # Real gap found by independent peer review: finding["issue"] (and
+    # file/line/suggestion) used to be accessed, and `lines` indexed,
+    # BEFORE the try/except - a missing key or surprising shape raised
+    # straight out of this function instead of failing closed like every
+    # other error case here. That matters beyond this one finding: this
+    # runs inside _validate_findings' ThreadPoolExecutor pool.map(), so an
+    # uncaught exception here would have propagated out of list(pool.map())
+    # and crashed _validate_findings entirely - losing the WHOLE review's
+    # findings, not just this one suggestion's clickability.
+    mock_adapter = MagicMock()
+    mock_adapter.is_available.return_value = True
+    mock_verification_adapter.return_value = mock_adapter
+
+    malformed_finding = {"file": "check.py", "line": 2, "suggestion": "return a + b"}  # no "issue"
+
+    result = _verify_suggestion_correctness(malformed_finding, _SUGGESTION_FILE_CONTENTS)
+
+    assert result is False
+    mock_adapter.simple_completion.assert_not_called()
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_validate_findings_does_not_lose_other_findings_when_one_suggestion_is_malformed(
+    mock_verification_adapter,
+):
+    # End-to-end version of the same gap: a batch with one well-formed
+    # clickable candidate and one malformed one must not let the malformed
+    # one's crash take down the whole batch's return value.
+    mock_adapter = MagicMock()
+    mock_adapter.is_available.return_value = True
+    mock_adapter.simple_completion.return_value = '{"verdict": "ACCEPT", "reason": "correct fix"}'
+    mock_verification_adapter.return_value = mock_adapter
+
+    diff_text = (
+        "--- check.py ---\n@@ -1,2 +1,2 @@\n def add(a, b):\n+    return a + b + 1\n"
+        "\n"
+        "--- other.py ---\n@@ -1,1 +1,1 @@\n+broken\n"
+    )
+    file_contents = {
+        "check.py": "def add(a, b):\n    return a + b + 1\n",
+        "other.py": "broken\n",
+    }
+    findings = [
+        {"file": "check.py", "line": 2, "issue": "off by one", "suggestion": "return a + b"},
+        {"file": "other.py", "line": 1, "suggestion": "fixed"},  # missing "issue" - malformed
+    ]
+
+    kept = _validate_findings(findings, diff_text, file_contents)
+
+    assert len(kept) == 2
+    good = next(f for f in kept if f["file"] == "check.py")
+    assert good["suggestion_clickable"] is True
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
 def test_verify_suggestion_correctness_threads_on_usage_to_the_adapter(mock_verification_adapter):
     mock_adapter = MagicMock()
     mock_adapter.is_available.return_value = True

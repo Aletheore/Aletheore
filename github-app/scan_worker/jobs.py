@@ -2287,9 +2287,15 @@ def _run_flash_review(
             # verification_adapter), so its cost is priced at that model's
             # rate specifically - never flash_review_model's, which would be
             # wrong whenever generation ran on Luna. Never called for free
-            # tier: this closure is only ever passed to review_diff when
-            # verify_with_second_model=True, which is gated to paid plans
-            # below.
+            # tier - but as of the suggestion-correctness verifier below,
+            # that's no longer because this closure is only passed to
+            # review_diff when verify_with_second_model=True (that flag is
+            # AIR-only, but this closure is ALSO the on_verification_usage
+            # the suggestion-correctness check uses, and that one runs on
+            # Flash too). It's free tier's own explicit verify_suggestions=
+            # not is_free_tier at this function's review_diff call site
+            # below that keeps this closure from ever firing there - see
+            # that call site's own comment for why.
             #
             # Findings are verified concurrently on a bounded thread pool
             # (see flash_review._verify_findings_with_second_model), so this

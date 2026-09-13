@@ -1561,21 +1561,34 @@ def _verify_suggestion_correctness(
         )
         return False
 
-    file_path = finding["file"]
-    content = (file_contents or {}).get(file_path)
-    if content is None:
-        return False
-    lines = content.split("\n")  # not splitlines() - see _clickable_suggestion's own history
-    line_no = finding["line"]
-    if not (1 <= line_no <= len(lines)):
-        return False
-    real_line = lines[line_no - 1]
-    context = _suggestion_context_window(lines, line_no)
-    user_prompt = _suggestion_correctness_user_prompt(
-        file_path, context, real_line, finding["issue"], finding["suggestion"]
-    )
-
+    # Everything below - including building the prompt itself, not just the
+    # network call - lives inside this one try/except. Real gap found by
+    # independent peer review: an earlier version of this function accessed
+    # finding["file"]/["line"]/["issue"]/["suggestion"] and indexed `lines`
+    # BEFORE the try block, so a malformed finding (a missing key, a
+    # surprising type) raised an uncaught exception straight out of this
+    # function - and since this runs inside _validate_findings' own
+    # ThreadPoolExecutor pool.map(), that exception would propagate out of
+    # list(pool.map(...)) and crash _validate_findings entirely, silently
+    # losing the WHOLE review's findings, not just this one suggestion's
+    # clickability. That's a strictly bigger blast radius than the
+    # fail-closed guarantee this function documents above, so every
+    # exception shape in this stretch must land in the same per-finding
+    # fail-closed path as a bad network response does.
     try:
+        file_path = finding["file"]
+        content = (file_contents or {}).get(file_path)
+        if content is None:
+            return False
+        lines = content.split("\n")  # not splitlines() - see _clickable_suggestion's own history
+        line_no = finding["line"]
+        if not (1 <= line_no <= len(lines)):
+            return False
+        real_line = lines[line_no - 1]
+        context = _suggestion_context_window(lines, line_no)
+        user_prompt = _suggestion_correctness_user_prompt(
+            file_path, context, real_line, finding["issue"], finding["suggestion"]
+        )
         raw = adapter.simple_completion(SUGGESTION_CORRECTNESS_SYSTEM_PROMPT, user_prompt, cwd=".")
         parsed = json.loads(raw)
         verdict = parsed.get("verdict") if isinstance(parsed, dict) else None
@@ -1584,9 +1597,9 @@ def _verify_suggestion_correctness(
         return verdict == "ACCEPT"
     except Exception as exc:
         logger.warning(
-            "flash review suggestion-correctness verification failed for %s:%s (%s); "
+            "flash review suggestion-correctness verification failed for %s (%s); "
             "failing closed (suggestion stays as a plain fence)",
-            file_path, line_no, type(exc).__name__,
+            finding.get("file"), type(exc).__name__,
         )
         return False
 
