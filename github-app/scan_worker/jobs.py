@@ -1611,7 +1611,38 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
         evidence = json.loads(evidence_path.read_text())
         cooldown_seconds = cooldown_seconds_for_loc(total_loc_from_evidence(evidence))
         client = get_github_api_client()
-        if not check_and_reserve_managed_audit(
+
+        # Checked before reserving the cooldown slot below - real bug found
+        # via audit: check_and_reserve_managed_audit unconditionally commits
+        # the reservation the instant it returns True, with no rollback
+        # path. Checking the balance first (a plain read, no side effect)
+        # meant a request that arrives with an already-exhausted balance no
+        # longer burns this repo's next-eligible-audit timestamp for a run
+        # that produces no audit content at all - before this fix, even
+        # topping up the balance immediately after couldn't unblock a real
+        # audit on that repo until the full cooldown elapsed. This is still
+        # only a fast-fail hint, not the real enforcement - real enforcement
+        # is spend_budget.can_start_next_call() below, reserving atomically
+        # against the live total before every real LLM call this (possibly
+        # multi-call) audit makes. Same discipline as run_managed_audit_api_job
+        # - a stale read here has no financial-integrity consequence, just a
+        # possibly-later-than-ideal rejection.
+        balance_row = get_installation_row(settings.database_url, installation_id)
+        combined_balance = (
+            float(balance_row.get("base_credit_remaining_usd", 0))
+            + float(balance_row.get("topup_credit_balance_usd", 0))
+            if balance_row is not None else 0.0
+        )
+        cap_reached = combined_balance <= 0
+
+        if cap_reached:
+            body = (
+                f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n"
+                f"Credit balance exhausted for this installation (${combined_balance:.2f} "
+                "remaining). Resumes next billing period, or email support@aletheore.com "
+                "to top up sooner."
+            )
+        elif not check_and_reserve_managed_audit(
             settings.database_url, installation_id, repo_full_name, cooldown_seconds
         ):
             body = (
@@ -1620,78 +1651,53 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
                 f"{cooldown_seconds // 3600} hours. Try again later."
             )
         else:
-            # No lock: this is a fast-fail hint (skip straight to a clear PR
-            # comment when the balance is obviously already exhausted), not
-            # the enforcement itself - real enforcement is spend_budget.
-            # can_start_next_call() below, reserving atomically against the
-            # live total before every real LLM call this (possibly
-            # multi-call) audit makes. Same discipline as
-            # run_managed_audit_api_job - a stale read here has no
-            # financial-integrity consequence, just a possibly-later-than-
-            # ideal rejection.
-            balance_row = get_installation_row(settings.database_url, installation_id)
-            combined_balance = (
-                float(balance_row.get("base_credit_remaining_usd", 0))
-                + float(balance_row.get("topup_credit_balance_usd", 0))
-                if balance_row is not None else 0.0
+            # run_managed_audit can make several sequential LLM calls and
+            # has been observed to take minutes. The old
+            # installation_spend_lock check-then-record pair around the
+            # whole call left a real window: two concurrent managed
+            # audits for the same installation (different repos -
+            # check_and_reserve_managed_audit above is scoped per-repo,
+            # not per-installation) could both pass this check before
+            # either recorded a cost, and even a single run had no gate
+            # between its own individual LLM calls.
+            # _IncrementalSpendBudget closes both - the same atomic
+            # reserve-per-call primitive run_managed_audit_api_job
+            # already uses (see its own comment at this same call).
+            spend_budget = _IncrementalSpendBudget(
+                settings.database_url,
+                installation_id,
+                MANAGED_AUDIT_MODEL,
+                next_call_reserve_usd=MANAGED_AUDIT_LLM_RESERVE_USD,
+                feature="managed_audit",
             )
-            cap_reached = combined_balance <= 0
-
-            if cap_reached:
+            report_text = run_managed_audit(
+                repo_dir,
+                on_usage=spend_budget.record_usage,
+                before_llm_call=spend_budget.can_start_next_call,
+                allow_partial_report=True,
+                include_llm_suggestions=include_suggestions,
+            )
+            verification_token = _sign_and_persist_audit_report(
+                settings,
+                installation_id,
+                repo_full_name,
+                report_text,
+            )
+            if verification_token is not None:
+                verify_url = f"{settings.public_base_url}/v1/audit/{verification_token}/verify"
                 body = (
                     f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n"
-                    f"Credit balance exhausted for this installation (${combined_balance:.2f} "
-                    "remaining). Resumes next billing period, or email support@aletheore.com "
-                    "to top up sooner."
+                    f"{report_text}\n\n[Verify this report]({verify_url})"
+                )
+                _maybe_create_audit_certificate_check_run(
+                    client,
+                    token,
+                    repo_full_name,
+                    _git_rev_parse_head(repo_dir),
+                    verify_url,
                 )
             else:
-                # run_managed_audit can make several sequential LLM calls and
-                # has been observed to take minutes. The old
-                # installation_spend_lock check-then-record pair around the
-                # whole call left a real window: two concurrent managed
-                # audits for the same installation (different repos -
-                # check_and_reserve_managed_audit above is scoped per-repo,
-                # not per-installation) could both pass this check before
-                # either recorded a cost, and even a single run had no gate
-                # between its own individual LLM calls.
-                # _IncrementalSpendBudget closes both - the same atomic
-                # reserve-per-call primitive run_managed_audit_api_job
-                # already uses (see its own comment at this same call).
-                spend_budget = _IncrementalSpendBudget(
-                    settings.database_url,
-                    installation_id,
-                    MANAGED_AUDIT_MODEL,
-                    next_call_reserve_usd=MANAGED_AUDIT_LLM_RESERVE_USD,
-                    feature="managed_audit",
-                )
-                report_text = run_managed_audit(
-                    repo_dir,
-                    on_usage=spend_budget.record_usage,
-                    before_llm_call=spend_budget.can_start_next_call,
-                    allow_partial_report=True,
-                    include_llm_suggestions=include_suggestions,
-                )
-                verification_token = _sign_and_persist_audit_report(
-                    settings,
-                    installation_id,
-                    repo_full_name,
-                    report_text,
-                )
-                if verification_token is not None:
-                    verify_url = f"{settings.public_base_url}/v1/audit/{verification_token}/verify"
-                    body = (
-                        f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n"
-                        f"{report_text}\n\n[Verify this report]({verify_url})"
-                    )
-                    _maybe_create_audit_certificate_check_run(
-                        client,
-                        token,
-                        repo_full_name,
-                        _git_rev_parse_head(repo_dir),
-                        verify_url,
-                    )
-                else:
-                    body = f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n{report_text}"
+                body = f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n{report_text}"
         upsert_pr_comment(
             client,
             token,
