@@ -835,7 +835,7 @@ async function renderGraph(data) {
   const lineEls = new Map();
   svg.querySelectorAll('circle').forEach(el => circleEls.set(el.getAttribute('data-id'), el));
   svg.querySelectorAll('line').forEach(el =>
-    lineEls.set(el.getAttribute('data-source') + '|' + el.getAttribute('data-target'), el)
+    lineEls.set(edgeKey(el.getAttribute('data-source'), el.getAttribute('data-target')), el)
   );
   svg.__circleEls = circleEls;
   svg.__lineEls = lineEls;
@@ -861,6 +861,17 @@ async function renderGraph(data) {
   });
 }
 
+// A module id can itself legally contain any character a real filesystem path allows,
+// pipe included, so joining source/target with a bare '|' and splitting on the first one
+// misparses an edge whose source or target contains that character - JSON.stringify escapes
+// both strings unambiguously and JSON.parse recovers the exact pair regardless of content.
+function edgeKey(source, target) {
+  return JSON.stringify([source, target]);
+}
+function decodeEdgeKey(key) {
+  return JSON.parse(key);
+}
+
 // Highlights highlightSet's members (and, when focusId is set, only the edges directly
 // touching it) within one interactive-graph SVG - touches only the elements whose
 // highlighted state actually changes between calls, via setFilterState below, rather than
@@ -882,8 +893,7 @@ function highlightNodes(svg, highlightSet, focusId) {
   }
   const activeLineKeys = new Set();
   svg.__lineEls.forEach((_el, key) => {
-    const sepIndex = key.indexOf('|');
-    const source = key.slice(0, sepIndex), target = key.slice(sepIndex + 1);
+    const [source, target] = decodeEdgeKey(key);
     // Unrelated edges go fully invisible (not just dim) while hovering - with thousands of
     // edges rendered at once, even a low dim opacity reads as "many connections" purely
     // from unrelated lines visually crossing near the hovered node's screen position.
@@ -987,8 +997,7 @@ function applyClusterFilter(clusterId) {
     });
     const activeLineKeys = new Set();
     svg.__lineEls.forEach((_el, key) => {
-      const sepIndex = key.indexOf('|');
-      const source = key.slice(0, sepIndex), target = key.slice(sepIndex + 1);
+      const [source, target] = decodeEdgeKey(key);
       if (memberSet.has(source) && memberSet.has(target)) activeLineKeys.add(key);
     });
     setFilterState(svg, activeCircleIds, activeLineKeys);
@@ -1293,7 +1302,7 @@ async function renderClusterGraph(data) {
   const lineEls = new Map();
   svg.querySelectorAll('circle').forEach(el => circleEls.set(el.getAttribute('data-id'), el));
   svg.querySelectorAll('line').forEach(el =>
-    lineEls.set(el.getAttribute('data-source') + '|' + el.getAttribute('data-target'), el)
+    lineEls.set(edgeKey(el.getAttribute('data-source'), el.getAttribute('data-target')), el)
   );
   svg.__circleEls = circleEls;
   svg.__lineEls = lineEls;
