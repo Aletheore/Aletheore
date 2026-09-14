@@ -840,14 +840,16 @@ def _sql_injection_findings(file: str, source: str, hunks: list[_Hunk]) -> list[
     return findings
 
 
-# A double-quote character inside well-formed prose almost always appears
-# in pairs - opening a nested quoted phrase, then closing it - so a real
-# edit of the same string whose total count flips from even to odd is a
-# strong signal one of those closing quotes got dropped along the way.
-# Below this, two texts that just happen to differ in quote parity for
-# unrelated reasons (a whole different string swapped in) aren't good
-# evidence of anything - the similarity gate below is what keeps this to
-# "the same string, edited" rather than "any two strings, compared".
+# A double-quote-delimited pair, content bounded to a realistic nested-
+# phrase length (not a whole paragraph) so this can't accidentally span
+# across what are really two separate phrases on the same line.
+_QUOTED_PHRASE_RE = re.compile(r'"([^"\n]{1,80})"')
+
+# Below this, two texts that just happen to share a quoted phrase for
+# unrelated reasons (a whole different string swapped in, coincidentally
+# reusing the same short flag name) aren't good evidence of anything - this
+# gate is what keeps the check to "the same string, edited" rather than
+# "any two strings that happen to mention the same phrase".
 _BROKEN_QUOTED_PHRASE_SIMILARITY_THRESHOLD = 0.6
 
 
@@ -872,8 +874,37 @@ def _broken_quoted_phrase_findings(file: str, source: str, hunks: list[_Hunk]) -
     Deliberately scoped to a real EDIT (both hunk.removed and hunk.added
     non-empty) with high textual similarity between the two sides - a hunk
     that adds a brand new string or deletes one wholesale is a different
-    situation this isn't evidence about, and two genuinely different
-    strings that happen to differ in quote parity are unremarkable.
+    situation this isn't evidence about.
+
+    Real bug found and fixed via this project's own Flash Review dogfood
+    review of this exact PR (#717), twice over:
+
+    1. The first version counted raw `"` characters across the WHOLE hunk
+       and compared even/odd parity - so an edit to one string's content
+       could get smeared together with an unrelated quote-containing
+       change elsewhere in the same hunk (a separate string, a trailing
+       comment with a stray `"`), flipping the aggregate parity for a
+       reason that had nothing to do with any actual phrase losing its
+       closing quote.
+    2. A line-level SequenceMatcher.get_opcodes() re-scoping (tried next,
+       during this same fix) only separates edits when an EXACTLY
+       matching line sits between them in the diff - two adjacent but
+       unrelated changed lines with nothing identical between them still
+       land in one merged "replace" block, so it didn't actually close
+       the gap in the general case.
+
+    Fixed properly by checking PHRASE PRESENCE instead of counting
+    anything: for each complete `"phrase"` in the hunk's removed text,
+    check whether that exact phrase's opening quote survives in the added
+    text without its closing quote following it (a negative lookahead
+    excluding another quote or a word character, so `"foo"`
+    edited into `"foobar"` - a real, harmless content change, not a
+    broken phrase - correctly does NOT match, since "foo" is immediately
+    followed by the word character "b" in "foobar"). This is immune to
+    unrelated quotes anywhere else in the hunk by construction: it never
+    counts or aggregates anything, it only asks "did THIS specific phrase
+    that used to be complete lose its closing quote", which no unrelated
+    string or comment elsewhere can answer differently.
     """
     findings: list[dict] = []
     for hunk in hunks:
@@ -881,30 +912,28 @@ def _broken_quoted_phrase_findings(file: str, source: str, hunks: list[_Hunk]) -
             continue
         removed_text = "\n".join(hunk.removed)
         added_text = "\n".join(hunk.added)
-        if removed_text.count('"') % 2 != 0 or added_text.count('"') % 2 == 0:
-            continue  # only a flip from balanced to broken counts - not the reverse, not already-broken
-        if (
-            SequenceMatcher(None, removed_text, added_text).ratio()
-            < _BROKEN_QUOTED_PHRASE_SIMILARITY_THRESHOLD
-        ):
+        if SequenceMatcher(None, removed_text, added_text).ratio() < _BROKEN_QUOTED_PHRASE_SIMILARITY_THRESHOLD:
             continue
-        # Sum-of-parities argument: if the whole hunk's added text has an
-        # odd total, at least one individual added line must itself have
-        # an odd local count (a sum of only-even addends can't be odd) -
-        # so this search always finds a real line to cite, never falls
-        # through to the hunk.added[0] fallback on a genuine flip.
-        broken_line = next((line for line in hunk.added if line.count('"') % 2 == 1), hunk.added[0])
-        findings.append(
-            _finding(
-                file,
-                _line_number_near_hunk(source, broken_line.strip(), hunk) or hunk.new_start,
-                "This edit leaves an odd number of double-quote characters where the equivalent "
-                "removed text had an even number - a nested quoted phrase inside this string "
-                "likely lost its closing quote during the edit.",
-                "Check this string's content for a quoted phrase (e.g. \"--flag\") that's missing "
-                "its closing double-quote.",
+        # dict.fromkeys: dedupe while preserving first-seen order, so a
+        # phrase repeated verbatim in removed_text isn't checked twice.
+        for phrase in dict.fromkeys(_QUOTED_PHRASE_RE.findall(removed_text)):
+            if f'"{phrase}"' in added_text:
+                continue  # still complete somewhere in the added text - not broken
+            broken_re = re.compile(r'"' + re.escape(phrase) + r'(?!["\w])')
+            broken_line = next((line for line in hunk.added if broken_re.search(line)), None)
+            if broken_line is None:
+                continue
+            findings.append(
+                _finding(
+                    file,
+                    _line_number_near_hunk(source, broken_line.strip(), hunk) or hunk.new_start,
+                    f'The quoted phrase "{phrase}" appears in the removed text but its closing quote '
+                    "is missing from the corresponding added text - a nested quoted phrase inside "
+                    "this string likely lost its closing quote during the edit.",
+                    f'Restore the closing double-quote after "{phrase}".',
+                )
             )
-        )
+            break  # one finding per hunk is enough; a message with several broken phrases is one bug
     return findings
 
 

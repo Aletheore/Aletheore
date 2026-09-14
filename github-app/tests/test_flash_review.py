@@ -3128,6 +3128,55 @@ def test_semantic_checker_does_not_flag_when_both_sides_already_have_odd_quotes(
     assert findings == []
 
 
+def test_semantic_checker_does_not_flag_a_phrase_extended_with_more_content():
+    """Real gap found via this project's own Flash Review dogfood review of
+    the PR that introduced this check (#717): the first (count-based)
+    implementation would have flagged "foo" edited into "foobar" as a
+    broken quote, since the raw " count still flips from even to odd. It
+    isn't broken - the phrase just grew - and the phrase-presence
+    implementation must not match "foo's opening quote against unrelated
+    text like "foobar" that merely happens to start with the same
+    characters."""
+    source = 'def f():\n    log("foobar")\n'
+    diff = (
+        "--- f.py ---\n"
+        "@@ -1,2 +1,2 @@\n"
+        " def f():\n"
+        '-    log("foo")\n'
+        '+    log("foobar")\n'
+    )
+
+    findings = find_semantic_regressions(diff, {"f.py": source}, "")
+
+    assert findings == []
+
+
+def test_semantic_checker_does_not_flag_an_unrelated_quote_elsewhere_in_the_same_hunk():
+    """Real gap found via this project's own Flash Review dogfood review of
+    the PR that introduced this check (#717): the first (whole-hunk,
+    count-based) implementation aggregated every " in the hunk together,
+    so an unrelated stray quote in a trailing comment on a DIFFERENT line
+    could flip the aggregate parity and produce a false positive about a
+    string that was never actually broken. The phrase-presence
+    implementation checks each removed phrase's own continued presence
+    directly, which a stray, unrelated quote character elsewhere can't
+    affect."""
+    source = 'def f():\n    log("first message")\n    log("second message")  # legacy format was "x\n'
+    diff = (
+        "--- f.py ---\n"
+        "@@ -1,3 +1,3 @@\n"
+        " def f():\n"
+        '-    log("first message")\n'
+        '-    log("second message")\n'
+        '+    log("first message")\n'
+        '+    log("second message")  # legacy format was "x\n'
+    )
+
+    findings = find_semantic_regressions(diff, {"f.py": source}, "")
+
+    assert findings == []
+
+
 # ── blast-radius context tests ──────────────────────────────────────────
 
 
