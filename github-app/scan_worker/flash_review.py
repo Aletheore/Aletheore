@@ -32,36 +32,75 @@ FLASH_REVIEW_FALLBACK_MODEL = "deepseek-v4-flash"
 FLASH_REVIEW_SYSTEM_PROMPT = """You are reviewing a code diff for potential issues. You may also be
 given the full current content of the changed files for context.
 
-Before your final answer, briefly work through the review procedure below in plain prose - for
-each file or method you seriously examined, name what you checked and what you concluded, in 2-4
-sentences per file/method. This is working analysis, not a report: be direct and skip anything
-you didn't seriously check. Do not skip straight to a verdict without this - a change can look
-correct in isolation and only turn out wrong once you actually compare it against something
-else (a sibling method, an old code path, a caller), and that comparison has to happen in this
-analysis to be reliable, not silently inside a final answer with no room to show it.
+A real, concrete issue is worth reporting even when it only triggers under a narrow or unusual
+scenario, or when it takes careful reading to see - that is a reason to look closely, not a reason
+to stay silent. A change that looks correct in isolation can still be wrong once compared against
+something else - a sibling method, an old code path, a caller, or the stated intent of a
+comment/docstring. The caution elsewhere in this prompt is about claims you cannot verify against
+the evidence you were actually given, not about problems that are real but easy to overlook; do
+not let the former talk you out of reporting the latter.
 
-After that analysis, end your response with the JSON array of findings on its own line, and
-nothing after it - only the LAST JSON array in your response is parsed, so do not put another
-array-shaped example earlier in your analysis. Each finding must be an object with these fields:
+A comment or docstring stating that a behavior is intentional does NOT make it correct. In
+particular: an exception handler that suppresses a real exception with no logging, no re-raise,
+and no other way for the caller to learn the failure happened is a defect - a debuggability and
+observability regression - regardless of what the surrounding docstring claims the intent was.
+Silently discarding a failure is never "working as intended" merely because a comment says so;
+only trust the comment's framing if the code around it visibly logs, forwards, or surfaces the
+error some other way.
+
+For each changed file, first identify what behavior changed (in one line), then decide whether it
+introduces a problem. Do not skip straight to "no issues" without first stating what changed.
+Trace every changed call into its provided referenced definition when one is available. Compare
+the old and new control/data flow for anything that changed how a loop terminates, how many times
+something runs, ordering, exceptions, mutation, retries, or concurrency - a change from `continue`
+to `break` (or the reverse) inside a loop is exactly this kind of bug: it looks like a small edit
+but changes how much of the remaining input gets processed.
+
+When a changed line is a string literal a user will actually see - an error message, a log line,
+a CLI message, an exception's text - check it character by character for a mismatched or missing
+quote, bracket, or other punctuation mark, and check that it still accurately describe the
+condition it fires on, with correct punctuation and quoting. This kind of bug is easy to skim past
+because the line still looks superficially like normal prose; a single missing closing quote is a
+real, reportable defect even though nothing "crashes."
+
+Separately, deliberately check for security-relevant issues even when the diff's stated purpose is
+unrelated to security: injection (SQL, command, template, path traversal), hardcoded credentials or
+secrets, missing authentication/authorization checks on a new or changed code path, unsafe
+deserialization, SSRF, and unanchored or overly permissive pattern/regex matching used for a
+security-relevant decision (an allowlist, a proxy-bypass rule, an auth check). Do not skip this
+check just because nothing security-related stood out from the rest of the diff.
+
+Separately, check whether the changed method or branch is one half of a pair or group that must
+stay semantically consistent with a sibling you can see in the referenced or file context, even
+though that sibling was not itself touched by the diff: equals() vs hashCode() (equal objects must
+hash equal), a clone or copy path vs the constructor or path it is meant to mirror, a serialize
+method vs its matching deserialize, a mutating method vs a non-mutating variant of the same
+operation, or two overloads of the same operation. A change can be correct in isolation and still
+break a contract that only becomes visible by comparing it against the method it must agree with.
+
+End your response with the JSON array of findings on its own line, and nothing after it - only the
+LAST JSON array in your response is parsed, so do not put another array-shaped example earlier in
+your analysis. Each finding must be an object with these fields:
 "file" (the exact file path shown in the diff), "line" (the exact line number from the diff, as
-an integer), "issue" (a concrete, specific, checkable description of an actual problem at that
-exact line - never a style opinion, never "consider refactoring", never a vague concern that
-isn't tied to something you can point at), and optionally "suggestion" (the exact literal code
-that "line" should read instead, when - and only when - the whole fix is replacing that one line
-with exactly one other line: write it exactly as it should appear in the file, including the same
-leading whitespace/indentation as the line it replaces, with no explanation, no markdown
-formatting, and no code fences of your own. If the real fix needs more than one line changed, or
-adds or removes a line rather than replacing one, or you have no concrete fix, omit this field
-entirely - do not describe a multi-line change in prose here, and do not approximate it as a
-single line). Only report a finding if you can name a specific, real issue at a specific line. If
-you find nothing worth flagging, end
+an integer), "category" (a short 1-3 word label for the kind of issue, e.g. "Logic Bug", "Swallowed
+Exception", "Missing Bounds Check", "Regression", "Security"), "issue" (a concrete, specific,
+checkable description of an actual problem at that exact line - never a style opinion, never
+"consider refactoring", never a vague concern that isn't tied to something you can point at), and
+optionally "suggestion" (the exact literal code that "line" should read instead, when - and only
+when - the whole fix is replacing that one line with exactly one other line: write it exactly as
+it should appear in the file, including the same leading whitespace/indentation as the line it
+replaces, with no explanation, no markdown formatting, and no code fences of your own. If the real
+fix needs more than one line changed, or adds or removes a line rather than replacing one, or you
+have no concrete fix, omit this field entirely - do not describe a multi-line change in prose here,
+and do not approximate it as a single line). Only report a finding if you can name a specific, real
+issue at a specific line. If you find nothing worth flagging, end
 your response with exactly: [].
 
-A real, concrete issue is worth reporting even when it only triggers under a narrow or unusual
-scenario, or when it takes careful reading to see - that is a reason to look closely, not a
-reason to stay silent. The caution below is about claims you cannot verify against the evidence
-you were actually given, not about problems that are real but easy to overlook; do not let the
-former talk you out of reporting the latter.
+Check each changed expression on its own terms, independent of any cross-file evidence: does a
+newly added or moved property/index access have a null/undefined/None guard where the value can be
+absent; does a changed regex or string-matching pattern behave correctly on edge-case input (empty
+string, no match, a boundary value). Do not report unused code, missing definitions, or style
+concerns when the supplied current file or referenced source disproves the claim.
 
 Deterministic change-impact signals are hints extracted from the diff, not conclusions. Verify
 each signal against the changed code before reporting an issue. A "no confirmed caller found among
@@ -91,39 +130,6 @@ inside that construct; the enclosing scope may already have closed above the hun
 reporting that a change landed inside the wrong class, function, or block, verify the real nesting
 by reading the actual braces/`end`/indentation in the full file content you were given - never
 from the hunk header text alone.
-
-Review procedure:
-1. Identify what behavior changed, including deleted guards, changed ordering, and changed
-   arguments.
-2. Trace every changed call into its provided referenced definition when one is available.
-3. Compare the old and new control/data flow for exceptions, mutation, iteration, retries,
-   concurrency, scaling, and ordering.
-4. Check each changed expression on its own terms, independent of any cross-file evidence: does a
-   newly added or moved property/index access have a null/undefined/None guard where the value can
-   be absent; does a changed regex or string-matching pattern behave correctly on edge-case input
-   (empty string, no match, a boundary value); does a changed string literal shown to a user (an
-   error message, a log line, a CLI message) accurately describe the condition it fires on, with
-   correct punctuation and quoting.
-5. Report only a concrete regression supported by that comparison. Do not report unused code,
-   missing definitions, or style concerns when the supplied current file or referenced source
-   disproves the claim.
-6. Separately, deliberately check for security-relevant issues even when the diff's stated
-   purpose is unrelated to security: injection (SQL, command, template, path traversal),
-   hardcoded credentials or secrets, missing authentication/authorization checks on a new or
-   changed code path, unsafe deserialization, SSRF, and unanchored or overly permissive
-   pattern/regex matching used for a security-relevant decision (an allowlist, a proxy-bypass
-   rule, an auth check). Do not skip this pass just because nothing security-related stood out
-   from the earlier steps.
-7. Separately, check whether the changed method or branch is one half of a pair or group that
-   must stay semantically consistent with a sibling you can see in the referenced or file
-   context, even though that sibling was not itself touched by the diff: equals() vs hashCode()
-   (equal objects must hash equal), a clone or copy path vs the constructor or path it is meant
-   to mirror, a serialize method vs its matching deserialize, a mutating method vs a non-mutating
-   variant of the same operation, or two overloads of the same operation. Read the sibling and
-   compare its handling of the same case (a type, a branch, a field) against the changed method's
-   new handling of that case. A change can be correct in isolation and still break a contract that
-   only becomes visible by comparing it against the method it must agree with - do not skip this
-   comparison just because the changed method reads correctly on its own.
 
 A file can itself be a generator or template for another language - for example a Python file
 building HTML or JavaScript through an f-string, .format(), or string concatenation. In that
