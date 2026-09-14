@@ -294,6 +294,26 @@ MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH = 150
 # model_tiers.py's plan-specific adapter choice and the real worst-case
 # cost figures that number was checked against before committing to it.
 MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH = 800
+
+# Kill switch, disabled 2026-09-14: AIR-tier's second-model (DeepSeek)
+# verification pass was found to reject a real, correctly-grounded Luna
+# finding on a live production PR (pr-review-benchmark case 012 - a Go
+# `continue`->`break` bug whose consequence depends on the enclosing loop,
+# which sits outside the diff hunk the verifier was shown) that Greptile,
+# Sourcery, and PR-Agent all independently caught from the same diff. A
+# follow-up fix (giving the verifier real surrounding file context, same
+# windowed slice the suggestion-correctness verifier already used - see
+# flash_review.py's _verify_findings_with_second_model) is out for review,
+# but a live real-model replay of that exact case didn't cleanly prove it
+# resolves the rejection (DeepSeek's verdict isn't perfectly deterministic
+# call to call, and the original rejected finding's exact text was never
+# persisted to replay byte-for-byte). Until that's confirmed with more
+# than one anecdote, second-model verification is off entirely rather than
+# still exposed to a proven-possible false rejection - a missed second
+# opinion is a worse failure mode than an unverified one on the SAME
+# finding Luna already grounded once. Flip back to
+# `installation["plan"] == "air"` once the context fix is validated.
+SECOND_MODEL_VERIFICATION_ENABLED = False
 DEFAULT_LLM_NEXT_CALL_RESERVE_USD = 0.001
 
 # Real bug found via independent audit of PR #562: DEFAULT_LLM_NEXT_CALL_
@@ -1891,7 +1911,7 @@ def run_flash_review_job(
         review_ran = _run_flash_review(
             settings, installation_id, repo_full_name, pr_number, base_sha, head_sha,
             reserved_spend, is_free_tier=is_free_tier,
-            verify_with_second_model=(installation["plan"] == "air"),
+            verify_with_second_model=(SECOND_MODEL_VERIFICATION_ENABLED and installation["plan"] == "air"),
         )
     except Exception as exc:  # noqa: BLE001
         try:

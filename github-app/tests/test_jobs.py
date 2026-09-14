@@ -4567,7 +4567,93 @@ def test_flash_review_job_passes_changed_file_contents_to_review_diff(monkeypatc
     assert captured["file_contents"] == {"app.py": "real content of app.py"}
 
 
-def test_flash_review_job_requests_second_model_verification_on_paid_plan(monkeypatch):
+def test_flash_review_job_does_not_request_second_model_verification_while_kill_switch_is_off(
+    monkeypatch,
+):
+    # SECOND_MODEL_VERIFICATION_ENABLED was flipped off 2026-09-14 (see its
+    # own comment in jobs.py): DeepSeek verification demonstrably rejected
+    # a real, correctly-grounded finding on a live production case, and a
+    # context-quality fix for that isn't yet confirmed to resolve it with
+    # more than one anecdote. This test pins the kill switch's effect on
+    # the AIR plan specifically - the one plan that would otherwise request
+    # verification. See the paired test below for the gate's own AND logic
+    # still working correctly once the switch is flipped back on.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n@@ -1,1 +1,1 @@\n+broken"
+    )
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    captured = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda diff_text, file_context="", **kwargs: captured.update(kwargs) or [],
+    )
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    from scan_worker.jobs import run_flash_review_job
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert captured["verify_with_second_model"] is False
+    assert callable(captured["on_verification_usage"])
+    # Suggestion-correctness verification runs on every paid plan
+    # regardless of verify_with_second_model - AIR gets both.
+    assert captured["verify_suggestions"] is True
+
+    # on_verification_usage is still wired through and still prices at the
+    # verification model's own rate (deepseek-v4-flash) even with the kill
+    # switch off - it's also the suggestion-correctness verifier's usage
+    # callback (see jobs.py's own comment on this closure), which is NOT
+    # gated by SECOND_MODEL_VERIFICATION_ENABLED and still runs on AIR.
+    cost_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.cost_for_usage", lambda model, p, c: cost_calls.append(model) or 0.001
+    )
+    captured["on_verification_usage"](100, 50)
+    assert cost_calls == ["deepseek-v4-flash"]
+
+
+def test_flash_review_job_requests_second_model_verification_on_paid_plan_when_kill_switch_is_on(
+    monkeypatch,
+):
+    # Pins the gate's own AND logic (SECOND_MODEL_VERIFICATION_ENABLED and
+    # installation["plan"] == "air") independent of the kill switch's
+    # current off position - confirms flipping the switch back on (the
+    # documented path once the context-quality fix is validated) actually
+    # re-enables verification for AIR, not just that it's off today.
+    monkeypatch.setattr("scan_worker.jobs.SECOND_MODEL_VERIFICATION_ENABLED", True)
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
@@ -4640,7 +4726,9 @@ def test_flash_review_job_does_not_request_second_model_verification_on_flash_ti
     # value - flash's real cost/recall validation was run on solo
     # generation only, and has no room in its cap for that. Also confirms
     # flash gets its own, separately-validated review-count cap (800),
-    # not AIR's 500.
+    # not AIR's 500. Independent of SECOND_MODEL_VERIFICATION_ENABLED - the
+    # kill switch's AND only matters for the plan that would otherwise
+    # pass, and flash never did.
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "flash"})
     monkeypatch.setattr(
