@@ -40,6 +40,7 @@ narrow slice of real bugs, however precise its logic is once it does run.
 from __future__ import annotations
 
 import re
+from difflib import SequenceMatcher
 
 _REFERENCE_RE = re.compile(
     r"^--- referenced definition \(not part of this diff\): (?P<path>.+?):(?P<name>[^: ]+) ---\n"
@@ -839,6 +840,74 @@ def _sql_injection_findings(file: str, source: str, hunks: list[_Hunk]) -> list[
     return findings
 
 
+# A double-quote character inside well-formed prose almost always appears
+# in pairs - opening a nested quoted phrase, then closing it - so a real
+# edit of the same string whose total count flips from even to odd is a
+# strong signal one of those closing quotes got dropped along the way.
+# Below this, two texts that just happen to differ in quote parity for
+# unrelated reasons (a whole different string swapped in) aren't good
+# evidence of anything - the similarity gate below is what keeps this to
+# "the same string, edited" rather than "any two strings, compared".
+_BROKEN_QUOTED_PHRASE_SIMILARITY_THRESHOLD = 0.6
+
+
+def _broken_quoted_phrase_findings(file: str, source: str, hunks: list[_Hunk]) -> list[dict]:
+    """A hunk that edits a string literal's own content (not adds or
+    removes a whole one) sometimes drops one closing double-quote off a
+    nested quoted phrase inside it - real example: pallets/flask PR #5344
+    (this project's own benchmark case 001), where a multi-line error-
+    message call got reformatted onto one line and `"--key"` lost its
+    closing `"` along the way, producing the malformed literal text
+    `"--key is not used.` instead of `"--key" is not used.`. The string
+    itself still parses fine either way - the OUTER Python/Go/JS string
+    delimiter is untouched, only the message's own nested quoted phrase
+    breaks - so nothing about this is a syntax error a linter or the
+    language's own parser would catch. It also survived three different
+    LLM prompt variants tried against this exact case, including an
+    explicit character-by-character quote-check instruction (see PR #716's
+    "Known open gap" and case 001's own scoring history) - the miss isn't
+    a prompt-wording problem, it's a case for exactly this kind of
+    deterministic, code-verified check.
+
+    Deliberately scoped to a real EDIT (both hunk.removed and hunk.added
+    non-empty) with high textual similarity between the two sides - a hunk
+    that adds a brand new string or deletes one wholesale is a different
+    situation this isn't evidence about, and two genuinely different
+    strings that happen to differ in quote parity are unremarkable.
+    """
+    findings: list[dict] = []
+    for hunk in hunks:
+        if not hunk.removed or not hunk.added:
+            continue
+        removed_text = "\n".join(hunk.removed)
+        added_text = "\n".join(hunk.added)
+        if removed_text.count('"') % 2 != 0 or added_text.count('"') % 2 == 0:
+            continue  # only a flip from balanced to broken counts - not the reverse, not already-broken
+        if (
+            SequenceMatcher(None, removed_text, added_text).ratio()
+            < _BROKEN_QUOTED_PHRASE_SIMILARITY_THRESHOLD
+        ):
+            continue
+        # Sum-of-parities argument: if the whole hunk's added text has an
+        # odd total, at least one individual added line must itself have
+        # an odd local count (a sum of only-even addends can't be odd) -
+        # so this search always finds a real line to cite, never falls
+        # through to the hunk.added[0] fallback on a genuine flip.
+        broken_line = next((line for line in hunk.added if line.count('"') % 2 == 1), hunk.added[0])
+        findings.append(
+            _finding(
+                file,
+                _line_number_near_hunk(source, broken_line.strip(), hunk) or hunk.new_start,
+                "This edit leaves an odd number of double-quote characters where the equivalent "
+                "removed text had an even number - a nested quoted phrase inside this string "
+                "likely lost its closing quote during the edit.",
+                "Check this string's content for a quoted phrase (e.g. \"--flag\") that's missing "
+                "its closing double-quote.",
+            )
+        )
+    return findings
+
+
 def find_semantic_regressions(
     diff_text: str,
     file_contents: dict[str, str] | None,
@@ -885,6 +954,7 @@ def find_semantic_regressions(
         findings.extend(_sql_injection_findings(file, source, hunks))
         findings.extend(_swallowed_exception_findings(file, source, hunks))
         findings.extend(_shell_injection_findings(file, source, hunks))
+        findings.extend(_broken_quoted_phrase_findings(file, source, hunks))
 
     unique: list[dict] = []
     seen: set[tuple[str, int, str]] = set()

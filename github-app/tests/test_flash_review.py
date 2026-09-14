@@ -3013,6 +3013,121 @@ def test_semantic_checker_does_not_flag_a_hardcoded_shell_command():
     assert findings == []
 
 
+def test_semantic_checker_finds_a_dropped_closing_quote_in_an_edited_message():
+    """Real shape: pallets/flask PR #5344 (this project's own benchmark
+    case 001) - a multi-line error-message call gets reformatted onto one
+    line, and the nested `"--key"` phrase loses its closing quote along
+    the way. Every LLM prompt variant tried against this exact case missed
+    it (see PR #716's "Known open gap") - this is the deterministic check
+    that replaces further prompt engineering for it."""
+    source = (
+        "def _validate_key(ctx, param, value):\n"
+        "    if is_context:\n"
+        "        raise click.BadParameter(\n"
+        '            \'When "--cert" is an SSLContext object, "--key is not used.\', ctx, param\n'
+        "        )\n"
+    )
+    diff = (
+        "--- cli.py ---\n"
+        "@@ -1,5 +1,4 @@\n"
+        " def _validate_key(ctx, param, value):\n"
+        "     if is_context:\n"
+        "         raise click.BadParameter(\n"
+        '-            \'When "--cert" is an SSLContext object, "--key" is not used.\',\n'
+        "-            ctx,\n"
+        "-            param,\n"
+        '+            \'When "--cert" is an SSLContext object, "--key is not used.\', ctx, param\n'
+        "         )\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"cli.py": source}, "")
+
+    assert len(findings) == 1
+    assert "closing quote" in findings[0]["issue"]
+    assert findings[0]["line"] == 4
+
+
+def test_semantic_checker_does_not_flag_a_pure_addition_of_a_new_quoted_phrase():
+    source = 'def f():\n    log("added a new \\"flag\\" here")\n'
+    diff = (
+        "--- f.py ---\n"
+        "@@ -1,1 +1,2 @@\n"
+        " def f():\n"
+        '+    log("added a new \\"flag\\" here")\n'
+    )
+
+    findings = find_semantic_regressions(diff, {"f.py": source}, "")
+
+    assert findings == []
+
+
+def test_semantic_checker_does_not_flag_a_pure_deletion():
+    source = "def f():\n    pass\n"
+    diff = (
+        "--- f.py ---\n"
+        "@@ -1,2 +1,1 @@\n"
+        " def f():\n"
+        '-    log("removed the \\"flag\\" message")\n'
+        "     pass\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"f.py": source}, "")
+
+    assert findings == []
+
+
+def test_semantic_checker_does_not_flag_a_fix_that_restores_quote_balance():
+    """The reverse direction of the real bug - odd removed, even added -
+    is a genuine fix landing, not a regression, and must not be flagged."""
+    source = 'def f():\n    log(\'the "flag" is set\')\n'
+    diff = (
+        "--- f.py ---\n"
+        "@@ -1,2 +1,2 @@\n"
+        " def f():\n"
+        "-    log('the \"flag is set')\n"
+        "+    log('the \"flag\" is set')\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"f.py": source}, "")
+
+    assert findings == []
+
+
+def test_semantic_checker_does_not_flag_two_unrelated_strings_with_different_quote_parity():
+    """Low textual similarity between removed and added text means this is
+    a different string being swapped in, not an edit of the same one -
+    quote-parity differing between two unrelated strings is unremarkable."""
+    source = 'def f():\n    log("brand new unrelated message here")\n'
+    diff = (
+        "--- f.py ---\n"
+        "@@ -1,2 +1,2 @@\n"
+        " def f():\n"
+        '-    log("old totally different text")\n'
+        '+    log("brand new unrelated message here")\n'
+    )
+
+    findings = find_semantic_regressions(diff, {"f.py": source}, "")
+
+    assert findings == []
+
+
+def test_semantic_checker_does_not_flag_when_both_sides_already_have_odd_quotes():
+    """Already-broken on the removed side too isn't a regression this diff
+    introduced - only a flip from balanced to broken counts as evidence."""
+    source = 'def f():\n    log(\'still "broken text\')\n'
+    diff = (
+        "--- f.py ---\n"
+        "@@ -1,2 +1,2 @@\n"
+        " def f():\n"
+        "-    log('already \"broken text')\n"
+        "+    log('still \"broken text')\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"f.py": source}, "")
+
+    assert findings == []
+
+
 # ── blast-radius context tests ──────────────────────────────────────────
 
 
