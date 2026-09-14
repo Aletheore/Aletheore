@@ -836,7 +836,16 @@ def _line_citation_content_matches(finding: dict, file_contents: dict[str, str])
     content = file_contents.get(finding["file"])
     if content is None:
         return True
-    lines = content.splitlines()
+    # Not splitlines(): it also breaks on \v/\f/\x1c-\x1e/NEL/LS/PS, none of
+    # which GitHub or git treat as a line boundary (they only ever split on
+    # "\n"). finding["line"] is a real, \n-based line number from the diff
+    # GitHub itself generated, so indexing it into a splitlines()-produced
+    # list silently targets the wrong line the moment one of those
+    # characters appears anywhere earlier in the file - the same bug found
+    # and fixed in this file's _clickable_suggestion (see PR #707's second
+    # commit), present here too since both functions used to share the same
+    # line-splitting approach.
+    lines = content.split("\n")
     line = finding["line"]
     if line < 1 or line > len(lines):
         return False
