@@ -106,16 +106,39 @@ def _changed_files_from_diff(diff_text: str) -> list[str]:
 
 def _diff_patches_from_diff(diff_text: str) -> tuple[tuple[str, str], ...]:
     # Splits pr.diff into (file_path, patch_text) pairs at each "diff --git"
-    # boundary - the shape build_hunk_scope_correction_context expects,
-    # without needing GitHub's PR-files API response this script has no
-    # live PR to fetch.
+    # boundary, then strips each section down to its pure hunk body (first
+    # "@@" line onward) - matching the real shape GitHub's PR-files API
+    # returns in its own "patch" field (no "diff --git"/"index"/"--- a/"/
+    # "+++ b/" header lines), which is what production's diff_patches
+    # (jobs.py's diff_result.patches, built from that same API field) and
+    # find_semantic_regressions's file-marker parser both actually expect.
+    # Real bug found investigating cases 001/005 "missing" from this
+    # script's own comparison runs: passing the git-header-included raw
+    # section here (and the equally raw combined diff_text below) meant
+    # _FILE_MARKER_RE (r"^--- (.+) ---$") never matched anything, so every
+    # deterministic semantic check silently returned zero findings on
+    # every case this script has ever run - not a detection gap, a harness
+    # format bug.
     sections = re.split(r"(?=^diff --git )", diff_text, flags=re.MULTILINE)
     patches = []
     for section in sections:
         match = re.match(r"^diff --git a/(.+?) b/(.+)$", section, re.MULTILINE)
-        if match:
-            patches.append((match.group(2), section))
+        if not match:
+            continue
+        lines = section.splitlines()
+        body_start = next((i for i, line in enumerate(lines) if line.startswith("@@")), None)
+        body = "\n".join(lines[body_start:]) if body_start is not None else ""
+        patches.append((match.group(2), body))
     return tuple(patches)
+
+
+def _production_diff_text(diff_patches: tuple[tuple[str, str], ...]) -> str:
+    # Reconstructs the exact diff_text shape production's real
+    # github_api.py builds (f"--- {file} ---\n{patch}" per file, joined
+    # with a blank line - see fetch_pr_diff, "\n\n".join(parts)) from the
+    # now-header-stripped diff_patches, instead of ever passing a raw git
+    # diff into review_diff()/find_semantic_regressions().
+    return "\n\n".join(f"--- {file} ---\n{patch}" for file, patch in diff_patches)
 
 
 def _file_contents_for(checkout_dir: Path, changed_files: list[str]) -> dict[str, str]:
@@ -182,15 +205,23 @@ def run_case(
 ) -> dict:
     case_dir = CASES_DIR / case_id
     diff_path = case_dir / "pr.diff"
-    diff_text = diff_path.read_text()
+    raw_diff_text = diff_path.read_text()
     repo_pointer = _read_repo_pointer(case_dir)
 
     case_workdir = workdir / case_id
     case_workdir.mkdir(parents=True, exist_ok=True)
     checkout_dir = prepare_case_checkout(repo_pointer, diff_path, case_workdir)
 
-    changed_files = _changed_files_from_diff(diff_text)
-    diff_patches = _diff_patches_from_diff(diff_text)
+    # changed_files still parses the raw git diff (needs its "diff --git
+    # a/... b/..." headers); diff_patches is now header-stripped to
+    # production's real per-file patch shape, and diff_text below is
+    # rebuilt from that into production's real combined shape - neither
+    # review_diff() nor find_semantic_regressions() ever sees a raw git
+    # diff now (see _diff_patches_from_diff's docstring for why that
+    # silently disabled every deterministic semantic check).
+    changed_files = _changed_files_from_diff(raw_diff_text)
+    diff_patches = _diff_patches_from_diff(raw_diff_text)
+    diff_text = _production_diff_text(diff_patches)
     file_contents = _file_contents_for(checkout_dir, changed_files)
 
     print(f"  scanning {checkout_dir} ...", file=sys.stderr)
