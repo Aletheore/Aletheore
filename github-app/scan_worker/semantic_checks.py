@@ -40,6 +40,7 @@ narrow slice of real bugs, however precise its logic is once it does run.
 from __future__ import annotations
 
 import re
+from difflib import SequenceMatcher
 
 _REFERENCE_RE = re.compile(
     r"^--- referenced definition \(not part of this diff\): (?P<path>.+?):(?P<name>[^: ]+) ---\n"
@@ -839,6 +840,103 @@ def _sql_injection_findings(file: str, source: str, hunks: list[_Hunk]) -> list[
     return findings
 
 
+# A double-quote-delimited pair, content bounded to a realistic nested-
+# phrase length (not a whole paragraph) so this can't accidentally span
+# across what are really two separate phrases on the same line.
+_QUOTED_PHRASE_RE = re.compile(r'"([^"\n]{1,80})"')
+
+# Below this, two texts that just happen to share a quoted phrase for
+# unrelated reasons (a whole different string swapped in, coincidentally
+# reusing the same short flag name) aren't good evidence of anything - this
+# gate is what keeps the check to "the same string, edited" rather than
+# "any two strings that happen to mention the same phrase".
+_BROKEN_QUOTED_PHRASE_SIMILARITY_THRESHOLD = 0.6
+
+
+def _broken_quoted_phrase_findings(file: str, source: str, hunks: list[_Hunk]) -> list[dict]:
+    """A hunk that edits a string literal's own content (not adds or
+    removes a whole one) sometimes drops one closing double-quote off a
+    nested quoted phrase inside it - real example: pallets/flask PR #5344
+    (this project's own benchmark case 001), where a multi-line error-
+    message call got reformatted onto one line and `"--key"` lost its
+    closing `"` along the way, producing the malformed literal text
+    `"--key is not used.` instead of `"--key" is not used.`. The string
+    itself still parses fine either way - the OUTER Python/Go/JS string
+    delimiter is untouched, only the message's own nested quoted phrase
+    breaks - so nothing about this is a syntax error a linter or the
+    language's own parser would catch. It also survived three different
+    LLM prompt variants tried against this exact case, including an
+    explicit character-by-character quote-check instruction (see PR #716's
+    "Known open gap" and case 001's own scoring history) - the miss isn't
+    a prompt-wording problem, it's a case for exactly this kind of
+    deterministic, code-verified check.
+
+    Deliberately scoped to a real EDIT (both hunk.removed and hunk.added
+    non-empty) with high textual similarity between the two sides - a hunk
+    that adds a brand new string or deletes one wholesale is a different
+    situation this isn't evidence about.
+
+    Real bug found and fixed via this project's own Flash Review dogfood
+    review of this exact PR (#717), twice over:
+
+    1. The first version counted raw `"` characters across the WHOLE hunk
+       and compared even/odd parity - so an edit to one string's content
+       could get smeared together with an unrelated quote-containing
+       change elsewhere in the same hunk (a separate string, a trailing
+       comment with a stray `"`), flipping the aggregate parity for a
+       reason that had nothing to do with any actual phrase losing its
+       closing quote.
+    2. A line-level SequenceMatcher.get_opcodes() re-scoping (tried next,
+       during this same fix) only separates edits when an EXACTLY
+       matching line sits between them in the diff - two adjacent but
+       unrelated changed lines with nothing identical between them still
+       land in one merged "replace" block, so it didn't actually close
+       the gap in the general case.
+
+    Fixed properly by checking PHRASE PRESENCE instead of counting
+    anything: for each complete `"phrase"` in the hunk's removed text,
+    check whether that exact phrase's opening quote survives in the added
+    text without its closing quote following it (a negative lookahead
+    excluding another quote or a word character, so `"foo"`
+    edited into `"foobar"` - a real, harmless content change, not a
+    broken phrase - correctly does NOT match, since "foo" is immediately
+    followed by the word character "b" in "foobar"). This is immune to
+    unrelated quotes anywhere else in the hunk by construction: it never
+    counts or aggregates anything, it only asks "did THIS specific phrase
+    that used to be complete lose its closing quote", which no unrelated
+    string or comment elsewhere can answer differently.
+    """
+    findings: list[dict] = []
+    for hunk in hunks:
+        if not hunk.removed or not hunk.added:
+            continue
+        removed_text = "\n".join(hunk.removed)
+        added_text = "\n".join(hunk.added)
+        if SequenceMatcher(None, removed_text, added_text).ratio() < _BROKEN_QUOTED_PHRASE_SIMILARITY_THRESHOLD:
+            continue
+        # dict.fromkeys: dedupe while preserving first-seen order, so a
+        # phrase repeated verbatim in removed_text isn't checked twice.
+        for phrase in dict.fromkeys(_QUOTED_PHRASE_RE.findall(removed_text)):
+            if f'"{phrase}"' in added_text:
+                continue  # still complete somewhere in the added text - not broken
+            broken_re = re.compile(r'"' + re.escape(phrase) + r'(?!["\w])')
+            broken_line = next((line for line in hunk.added if broken_re.search(line)), None)
+            if broken_line is None:
+                continue
+            findings.append(
+                _finding(
+                    file,
+                    _line_number_near_hunk(source, broken_line.strip(), hunk) or hunk.new_start,
+                    f'The quoted phrase "{phrase}" appears in the removed text but its closing quote '
+                    "is missing from the corresponding added text - a nested quoted phrase inside "
+                    "this string likely lost its closing quote during the edit.",
+                    f'Restore the closing double-quote after "{phrase}".',
+                )
+            )
+            break  # one finding per hunk is enough; a message with several broken phrases is one bug
+    return findings
+
+
 def find_semantic_regressions(
     diff_text: str,
     file_contents: dict[str, str] | None,
@@ -885,6 +983,7 @@ def find_semantic_regressions(
         findings.extend(_sql_injection_findings(file, source, hunks))
         findings.extend(_swallowed_exception_findings(file, source, hunks))
         findings.extend(_shell_injection_findings(file, source, hunks))
+        findings.extend(_broken_quoted_phrase_findings(file, source, hunks))
 
     unique: list[dict] = []
     seen: set[tuple[str, int, str]] = set()
