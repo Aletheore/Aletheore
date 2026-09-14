@@ -311,8 +311,10 @@ MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH = 800
 # than one anecdote, second-model verification is off entirely rather than
 # still exposed to a proven-possible false rejection - a missed second
 # opinion is a worse failure mode than an unverified one on the SAME
-# finding Luna already grounded once. Flip back to
-# `installation["plan"] == "air"` once the context fix is validated.
+# finding Luna already grounded once. Set this back to True (the AND
+# below then re-gates verification to AIR only, exactly as before) once
+# the context fix is validated with a real reject-rate comparison, not a
+# single anecdote.
 SECOND_MODEL_VERIFICATION_ENABLED = False
 DEFAULT_LLM_NEXT_CALL_RESERVE_USD = 0.001
 
