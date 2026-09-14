@@ -4,8 +4,6 @@ from scripts.adapters import (
     aletheore_adapter,
     pr_agent_adapter,
     deepsource_adapter,
-    bito_adapter,
-    korbit_adapter,
     sourcery_adapter,
     greptile_adapter,
 )
@@ -100,39 +98,6 @@ def test_pr_agent_adapter_invokes_cli_with_the_luna_model_and_fetches_review(tmp
     ]]
     assert captured["pr_url"] == "https://github.com/example/repo/pull/1"
     assert result == {"comment_body": "## PR Reviewer Guide", "changed_files": ["src/flask/cli.py"]}
-
-
-def test_bito_adapter_filters_review_comments_to_bito_bot(tmp_path):
-    case = {"repo": {"pr_url": "https://github.com/example/repo/pull/1"}}
-    captured = {}
-
-    def fake_fetch(pr_url):
-        captured["pr_url"] = pr_url
-        return [
-            {"path": "x.py", "line": 1, "body": "bito finding", "user": {"login": "bito-code-review[bot]"}},
-            {"path": "y.py", "line": 2, "body": "other bot", "user": {"login": "korbit-ai[bot]"}},
-        ]
-
-    result = bito_adapter(tmp_path, case, fetch_pr_review_comments=fake_fetch)
-    assert captured["pr_url"] == "https://github.com/example/repo/pull/1"
-    assert result == [
-        {"path": "x.py", "line": 1, "body": "bito finding", "user": {"login": "bito-code-review[bot]"}},
-    ]
-
-
-def test_korbit_adapter_filters_review_comments_to_korbit_bot(tmp_path):
-    case = {"repo": {"pr_url": "https://github.com/example/repo/pull/1"}}
-
-    def fake_fetch(pr_url):
-        return [
-            {"path": "x.py", "line": 1, "body": "bito finding", "user": {"login": "bito-code-review[bot]"}},
-            {"path": "y.py", "line": 2, "body": "korbit finding", "user": {"login": "korbit-ai[bot]"}},
-        ]
-
-    result = korbit_adapter(tmp_path, case, fetch_pr_review_comments=fake_fetch)
-    assert result == [
-        {"path": "y.py", "line": 2, "body": "korbit finding", "user": {"login": "korbit-ai[bot]"}},
-    ]
 
 
 def test_sourcery_adapter_filters_review_comments_to_sourcery_bot(tmp_path):
