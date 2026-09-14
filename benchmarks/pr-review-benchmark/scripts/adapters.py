@@ -30,9 +30,44 @@ SOURCERY_BOT_LOGIN = "sourcery-ai[bot]"
 GREPTILE_BOT_LOGIN = "greptile-apps[bot]"
 
 
-def aletheore_adapter(checkout_dir, case, fetch_pr_comments):
-    comments = fetch_pr_comments(case["repo"]["pr_url"])
-    return [c for c in comments if c.get("user", {}).get("login") == ALETHEORE_BOT_LOGIN]
+def aletheore_adapter(checkout_dir, case, fetch_pr_comments, fetch_pr_review_comments):
+    """Real bug found and fixed 2026-09-13: this used to fetch only the
+    issue-comments endpoint, matching the README's original description
+    of Flash Review ("posts as a plain PR comment... containing inline
+    file:line citations in its prose"). That's no longer how it posts a
+    real finding - confirmed directly against this benchmark's own live
+    run: a finding now goes out as a real per-line PR *review* comment
+    (path/line, exactly the same shape DeepSource/Sourcery/Greptile
+    already use, and the same clickable-suggestion-capable surface this
+    session built and verified tonight), with the issue comment reduced
+    to a summary ("N finding(s) posted as inline review comment(s)
+    below" or "No issues found in this diff.") that carries no citations
+    of its own to extract.
+
+    Real, measured impact of the old fetch-only-issue-comments code:
+    sampled 7 consecutive real cases from this exact run - 6 of 7 had a
+    genuine Aletheore finding sitting in a review comment, all silently
+    scored as 0 findings ("miss") because the old adapter never looked
+    there. Only the 1 case that genuinely found nothing ("No issues
+    found in this diff.", no review comment to have) was ever scored
+    correctly by accident. Every prior benchmark run measuring Aletheore
+    likely undercounted its real recall the same way.
+
+    Matches greptile_adapter's own dual-surface pattern (issue comments
+    are prose/summary, review comments are the gradeable findings) -
+    normalize_aletheore treats the review comments as the real findings
+    and the issue comment as supplementary context, not a second source
+    of the same citations.
+    """
+    pr_url = case["repo"]["pr_url"]
+    issue_comments = [
+        c for c in fetch_pr_comments(pr_url) if c.get("user", {}).get("login") == ALETHEORE_BOT_LOGIN
+    ]
+    review_comments = [
+        c for c in fetch_pr_review_comments(pr_url)
+        if c.get("user", {}).get("login") == ALETHEORE_BOT_LOGIN
+    ]
+    return {"issue_comments": issue_comments, "review_comments": review_comments}
 
 
 def deepsource_adapter(checkout_dir, case, fetch_pr_comments):
@@ -41,13 +76,40 @@ def deepsource_adapter(checkout_dir, case, fetch_pr_comments):
 
 
 def pr_agent_adapter(checkout_dir, case, fetch_review, runner=subprocess.run):
+    """Real model-parity bug found and fixed 2026-09-13: this used to
+    invoke PR-Agent on deepseek-v4-flash "for parity with Aletheore's
+    Flash Review" - true when this benchmark was first written
+    (2026-07-26), false since 2026-08-09, when production Flash Review
+    switched to gpt-5.6-luna (OpenAI) as its primary model for every
+    writing surface, specifically because DeepSeek V4 Flash wasn't
+    catching enough real issues on PR review (see model_tiers.py's own
+    header comment) - DeepSeek is now only Flash Review's fallback (no
+    OPENAI_API_KEY) or, on the AIR tier, a second-model verification
+    pass, never the primary generator a real customer's comment comes
+    from. Comparing PR-Agent-on-DeepSeek against Aletheore-on-Luna
+    wasn't isolating grounding architecture as the "model parity"
+    framing claimed - it was confounding architecture with model choice,
+    and not even a neutral confound, since Luna was deliberately chosen
+    over DeepSeek for being the stronger PR reviewer.
+
+    gpt-5.6-luna is a real OpenAI model (see model_tiers.py's
+    writing_adapter_for: base_url=https://api.openai.com/v1, no special
+    routing), not an internal alias, so no provider prefix here - unlike
+    the old deepseek/deepseek-v4-flash config, which needed LiteLLM's
+    "deepseek/" prefix to route through DeepSeek's own OpenAI-compatible
+    endpoint. Also cheaper on input than DeepSeek's own model
+    (llm_cost.py: $0.20/1M input, $1.20/1M output for Luna vs. $0.44/
+    $1.32 for deepseek-v4-flash) - nowhere near PR-Agent's own default
+    model (GPT-5.5), which this project already measured at $6-7 for a
+    25-PR run and rejected specifically for that cost.
+    """
     pr_url = case["repo"]["pr_url"]
     runner(
         [
             sys.executable, "-m", "pr_agent.cli",
             "--pr_url", pr_url,
             "review",
-            "--config.model=deepseek/deepseek-v4-flash",
+            "--config.model=gpt-5.6-luna",
         ],
         capture_output=True, text=True, check=True,
     )

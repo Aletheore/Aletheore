@@ -5,15 +5,49 @@ import re
 from aletheore.citation_verifier import extract_citations
 
 
-def normalize_aletheore(raw_comments: list[dict]) -> list[dict]:
-    """`raw_comments` is a list of GitHub PR-comment dicts (already filtered
-    to aletheore[bot] by scripts/adapters.py's aletheore_adapter) posted by
-    Aletheore's hosted Flash Review -- not a whole-repo CLI `audit` report."""
+def normalize_aletheore(raw: dict) -> list[dict]:
+    """`raw` is {"issue_comments": [...], "review_comments": [...]} from
+    aletheore_adapter - see that function's own docstring for the real
+    bug this replaces (a finding now posts as a real per-line PR review
+    comment, same shape as DeepSource/Sourcery/Greptile, not as inline
+    citations in the issue comment's prose).
+
+    Primary source is review_comments (path/line-anchored, exactly like
+    every other tool's per-finding entries). Also still runs citation
+    extraction over the issue comments' own text as a second, defensive
+    pass - not because the current format needs it (a real Flash Review
+    issue comment is just a summary now, with no citations of its own to
+    find), but because trusting a comment-format description that had
+    already gone stale once, silently, is exactly the failure mode this
+    fix exists to close - a future format change reintroducing prose
+    citations must not silently go back to being invisible here. Findings
+    are de-duplicated by (file, line) so a location present in both
+    sources is never double-counted.
+    """
     findings = []
-    for comment in raw_comments:
+    seen = set()
+    for comment in raw.get("review_comments", []):
+        body = comment.get("body", "")
+        file = comment.get("path")
+        line = comment.get("line") or comment.get("original_line")
+        key = (file, line)
+        if key in seen:
+            continue
+        seen.add(key)
+        findings.append({
+            "file": file,
+            "line": line,
+            "message": body.split("```", 1)[0].strip(),
+            "severity": None,
+        })
+    for comment in raw.get("issue_comments", []):
         body = comment.get("body", "")
         for paragraph in body.split("\n\n"):
             for citation in extract_citations(paragraph):
+                key = (citation["file"], citation["line"])
+                if key in seen:
+                    continue
+                seen.add(key)
                 findings.append({
                     "file": citation["file"],
                     "line": citation["line"],

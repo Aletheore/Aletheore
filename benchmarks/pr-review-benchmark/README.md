@@ -21,7 +21,7 @@ See the full design spec in `docs/superpowers/specs/2026-07-26-aletheore-pr-revi
 - Sourcery's GitHub App ([github.com/marketplace/sourcery-ai](https://github.com/marketplace/sourcery-ai)) installed on the scratch repo
 - Greptile's GitHub App ([greptile.com](https://www.greptile.com/)) installed on the scratch repo
 - PR-Agent installed (`python -m pr_agent.cli`) — see PR-Agent setup section below
-- DeepSeek API key (`DEEPSEEK_API_KEY` environment variable) — see model parity section below
+- OpenAI API key (`OPENAI_API_KEY` environment variable) — see model parity section below
 - GitHub API token for accessing the scratch repo (typically `gh` auto-handles this)
 
 ## Step 0: Prepare Test Cases (One-Time Setup)
@@ -44,74 +44,52 @@ The benchmark runs against real PRs opened on a **scratch repo** that you contro
 
 All 25 cases share this **one** scratch repo, so each case's files are nested under `benchmark-sandbox/<case-id>/` within it — this avoids collisions between concurrently-open case PRs (two cases could otherwise both touch `src/flask/cli.py` in the scratch repo's root and step on each other). Because of this nesting, every tool's cited file paths for a case come back prefixed with `benchmark-sandbox/<case-id>/` — `scripts/run_case.py`'s `_strip_sandbox_prefix()` strips it back off before the grounding check runs against the case's own standalone checkout.
 
+**Each case PR needs its own base branch, not the scratch repo's default branch.** Real bug found via a Sourcery/Greptile pilot run (2026-09-13): opening the PR against the scratch repo's default branch means the PR's diff is the case's *entire* repo tree (100+ files on every real case checked — confirmed 103/131/150/213 on four different cases), not the real 1-file bug/fix `pr.diff` represents. That silently broke three separate things: Greptile hard-caps review at 100 changed files and skips the case entirely; Sourcery's own per-installation review-budget degrades a diff that size into a content-free "Approved" with no real findings; and `normalize_pr_agent`'s file attribution falls back to `None` whenever the PR's changed-file count isn't exactly 1 (silently true for every case under the old construction). `scripts/open_case_pr.py` fixes this by giving each case PR a real base branch of its own — a `seed/<case-id>` branch holding the case's full tree at `base_commit` (the "before" state), and a `fix/<case-id>` branch on top holding `base_commit` + `pr.diff` applied (the state under test) — so the PR's visible diff is exactly `pr.diff`, regardless of category.
+
 For each case in the corpus:
 
-1. Check out the case's base commit in a scratch clone (separate from the `proctor-browser` scratch repo — this is just to materialize the case's real repo tree):
-   ```bash
-   git clone <case repo_url> /tmp/case-source
-   cd /tmp/case-source
-   git checkout <base_commit>
-   git apply <path-to-benchmarks/pr-review-benchmark/cases/<case-id>/pr.diff>
-   ```
-
-   Then expand corpus fixture placeholders in the resulting tree — some cases (e.g. `020-express-hardcoded-webhook-secret`) deliberately store a placeholder instead of a real-looking credential, because storing one made this branch unpushable under GitHub's secret-scanning push protection. `scripts/build_case_repo.py` does this automatically for the grounding-check checkout, but this manual step needs it too, or the tools will review a literal `__BENCHMARK_FAKE_STRIPE_KEY__` and the case will test nothing:
-
-   ```bash
-   python3 -c "
-   import sys; sys.path.insert(0, '<path-to>/benchmarks/pr-review-benchmark')
-   from scripts.fixtures import expand_placeholders_in_tree
-   print(expand_placeholders_in_tree('/tmp/case-source'))
-   "
-   ```
-
-   See `scripts/fixtures.py` for why the corpus stores placeholders rather than the values themselves.
-
-2. Copy the resulting tree into the scratch repo under `benchmark-sandbox/<case-id>/`:
+1. Clone the scratch repo once (reuse this clone across cases):
    ```bash
    git clone https://github.com/ArihantK15/proctor-browser /tmp/proctor-browser
-   cd /tmp/proctor-browser
-   git checkout -b case-<case-id>
-   mkdir -p benchmark-sandbox/<case-id>
-   rsync -a --exclude='.git' /tmp/case-source/ benchmark-sandbox/<case-id>/
-   git add benchmark-sandbox/<case-id>
-   git commit -m "test case: <case-id>"
-   git push -u origin case-<case-id>
    ```
 
-3. Open a PR on the scratch repo via `gh`:
+2. Run `scripts/open_case_pr.py` for the case:
    ```bash
-   gh pr create --repo ArihantK15/proctor-browser --base main --head ArihantK15:case-<case-id> \
-     --title "[benchmark] <case-id>" \
-     --body "Benchmark case from pr-review-benchmark; see ground_truth.md for the real issue."
+   cd benchmarks/pr-review-benchmark
+   python3 -m scripts.open_case_pr cases/<case-id> /tmp/proctor-browser
    ```
+   This materializes the case's `seed`/`fix` trees (checking out `base_commit`, then applying `pr.diff` on top — corpus fixture placeholders, e.g. case `020-express-hardcoded-webhook-secret`'s hardcoded-secret stand-in, are expanded in both trees automatically; see `scripts/fixtures.py` for why the corpus stores placeholders rather than the values themselves), pushes `seed/<case-id>` and `fix/<case-id>` to the scratch repo, opens the PR (`base=seed/<case-id>`, `head=fix/<case-id>`), and prints the PR URL. Append that URL to the case's own `repo.txt` as a third `pr_url=` line.
 
-   Note the PR URL from the output; you'll need it for the Aletheore, PR-Agent, and DeepSource steps below.
+3. Wait for Aletheore's Flash Review, DeepSource, Sourcery, and Greptile to post their reviews (all four are hosted GitHub Apps that react to the PR automatically; may take a minute or two — Greptile in particular can take noticeably longer on a real diff than it did skip-checking an oversized one).
 
-4. Wait for Aletheore's Flash Review and DeepSource to post their reviews (both GitHub Apps do this automatically; may take a minute or two).
+Re-running `scripts.open_case_pr` for a case already opened force-pushes both branches with the same content and is a safe no-op against an already-open PR (GitHub just shows "up to date" for it) — use this to re-open a case whose corpus source (`pr.diff`, `ground_truth.yaml`) changed after its PR was first opened.
 
-## Step 2: Set Up Models — Model Parity (DeepSeek)
+## Step 2: Set Up Models — Model Parity (Luna)
 
-The benchmark aims for **model parity** between Aletheore and PR-Agent: both use the same underlying LLM so the comparison isolates grounding architecture, not which LLM is smarter. This run uses **DeepSeek** as the shared backend — specifically `deepseek-v4-flash`.
+The benchmark aims for **model parity** between Aletheore and PR-Agent: both use the same underlying LLM so the comparison isolates grounding architecture, not which LLM is smarter. This run uses **`gpt-5.6-luna`** (OpenAI) as the shared backend — Aletheore's own real, current primary model.
+
+**Real bug fixed 2026-09-13:** this section used to point PR-Agent at DeepSeek (`deepseek-v4-flash`), true when this benchmark was first written (2026-07-26) but false since 2026-08-09, when production Flash Review switched to Luna as its primary model for every writing surface — specifically because DeepSeek V4 Flash wasn't catching enough real issues on PR review (see `model_tiers.py`'s own header comment). DeepSeek is now only Flash Review's fallback (no `OPENAI_API_KEY` configured) or, on the AIR tier, a second-model verification pass — never the model a real customer's Flash Review comment actually comes from. Comparing PR-Agent-on-DeepSeek against Aletheore-on-Luna wasn't isolating grounding architecture as this section's own framing claimed; it was confounding architecture with model choice, and not even a neutral confound, since Luna was deliberately chosen over DeepSeek for being the stronger PR reviewer.
+
+**Do not point PR-Agent at its own default model (GPT-5.5) instead** — already tried, already measured at $6-7 for a 25-PR run, and rejected for that cost. Luna is not just more representative, it's cheaper too: $0.20/1M input, $1.20/1M output (`llm_cost.py`) against DeepSeek's own $0.44/$1.32.
 
 ### Environment Variables
 
 Set once in your shell, or add to `.env` and `source` it:
 
 ```bash
-export DEEPSEEK_API_KEY="<your-deepseek-api-key>"
+export OPENAI_API_KEY="<your-real-openai-api-key>"
 ```
 
 ### Aletheore Configuration
 
-**Nothing to configure.** Aletheore's comparable feature in this benchmark is the hosted GitHub App's Flash Review, not the CLI's `audit` command — it runs automatically the moment a PR is opened on a repo with the app installed. Its model routing is `gpt-5.6-luna` primary (OpenAI), with `deepseek-v4-flash` as fallback and, on the AIR tier, as a verification pass (see `github-app/scan_worker/model_tiers.py`) — it was hardcoded to `deepseek-v4-flash` as of 2026-07-26 when this doc was first written, but that changed weeks before this repo's later runs. There is no BYOK model config for it. Model parity with PR-Agent is achieved by pointing PR-Agent at Aletheore's actual current model, below.
+**Nothing to configure.** Aletheore's comparable feature in this benchmark is the hosted GitHub App's Flash Review, not the CLI's `audit` command — it runs automatically the moment a PR is opened on a repo with the app installed. Its model routing is `gpt-5.6-luna` primary (OpenAI), with `deepseek-v4-flash` as fallback and, on the AIR tier, as a verification pass (see `github-app/scan_worker/model_tiers.py`). There is no BYOK model config for it. Model parity with PR-Agent is achieved by pointing PR-Agent at this same real model, below.
 
 ### PR-Agent Configuration
 
-`scripts/adapters.py`'s `pr_agent_adapter()` already invokes PR-Agent with `--config.model=deepseek/deepseek-v4-flash` for parity with Aletheore's Flash Review. PR-Agent still needs the DeepSeek key available as its OpenAI-compatible credential:
+`scripts/adapters.py`'s `pr_agent_adapter()` already invokes PR-Agent with `--config.model=gpt-5.6-luna` for parity with Aletheore's Flash Review. `gpt-5.6-luna` is a real OpenAI model (see `model_tiers.py`'s `writing_adapter_for`: `base_url=https://api.openai.com/v1`, no special routing), not an internal alias, so no provider prefix and no `OPENAI_API_BASE` override are needed — PR-Agent's default OpenAI endpoint is already the right one:
 
 ```bash
-export OPENAI_API_KEY="$DEEPSEEK_API_KEY"
-export OPENAI_API_BASE="https://api.deepseek.com/v1"
+export OPENAI_API_KEY="<your-real-openai-api-key>"
 ```
 
 Refer to PR-Agent's official documentation if `--config.model` needs a different key format for your installed version.
@@ -151,7 +129,7 @@ Runs locally via `subprocess.run()`, but its `review` command posts its output a
 
 #### Aletheore
 
-Aletheore's Flash Review posts as a plain PR comment (not a per-line review comment) from `aletheore[bot]`, containing inline `file:line` citations in its prose. Fetch it via the **issue comments** endpoint (PRs are issues in the GitHub API) and let `aletheore_adapter()` filter to the bot's own comments:
+**Real bug fixed 2026-09-13:** this section used to say Flash Review "posts as a plain PR comment (not a per-line review comment)... containing inline `file:line` citations in its prose" - true when this benchmark was first written, false now. A real finding posts as a per-line PR **review** comment (path/line - the same shape DeepSource/Sourcery/Greptile already use, and the clickable-suggestion-capable surface), with the issue comment reduced to a summary ("N finding(s) posted as inline review comment(s) below." or "No issues found in this diff."). Fetching only the issue-comments endpoint (the old behavior) silently scored every real finding as a miss - measured directly on this benchmark's own run: 6 of 7 sampled cases had a real finding sitting in a review comment, none of them counted. `aletheore_adapter()` fetches **both** surfaces, matching Greptile's own dual-surface pattern - see that adapter's own docstring:
 
 ```python
 import re
@@ -163,6 +141,15 @@ def fetch_issue_comments(pr_url):
     owner, repo, number = match.groups()
     result = subprocess.run(
         ["gh", "api", f"repos/{owner}/{repo}/issues/{number}/comments"],
+        capture_output=True, text=True, check=True
+    )
+    return json.loads(result.stdout)
+
+def fetch_review_comments(pr_url):
+    match = re.match(r"https://github.com/(.+)/(.+)/pull/(\d+)", pr_url)
+    owner, repo, number = match.groups()
+    result = subprocess.run(
+        ["gh", "api", f"repos/{owner}/{repo}/pulls/{number}/comments"],
         capture_output=True, text=True, check=True
     )
     return json.loads(result.stdout)
@@ -284,7 +271,9 @@ workdir = Path("/tmp/pr-review-benchmark/work")
 results_dir = Path("benchmarks/pr-review-benchmark/results")
 
 adapters = {
-    "aletheore": lambda checkout_dir, case: aletheore_adapter(checkout_dir, case, fetch_pr_comments=fetch_issue_comments),
+    "aletheore": lambda checkout_dir, case: aletheore_adapter(
+        checkout_dir, case, fetch_pr_comments=fetch_issue_comments, fetch_pr_review_comments=fetch_review_comments
+    ),
     "pr_agent": lambda checkout_dir, case: pr_agent_adapter(checkout_dir, case, fetch_review=fetch_pr_agent_review),
     "deepsource": lambda checkout_dir, case: deepsource_adapter(checkout_dir, case, fetch_pr_comments=fetch_review_comments),
     # Bito/Korbit/Sourcery all post their real findings as PR review comments,
@@ -505,8 +494,8 @@ Before publishing, record runtime values in `benchmarks/pr-review-benchmark/METH
 
 ```markdown
 - **Run date:** YYYY-MM-DD at HH:MM UTC
-- **Aletheore version/model:** git commit hash (github-app deployment), `deepseek-v4-flash` (Flash Review, hardcoded server-side)
-- **PR-Agent version/model:** pip freeze output, `deepseek/deepseek-v4-flash`
+- **Aletheore version/model:** git commit hash (github-app deployment), `gpt-5.6-luna` primary / `deepseek-v4-flash` fallback (Flash Review, see `model_tiers.py` — confirm which one actually ran per `OPENAI_API_KEY` availability at run time)
+- **PR-Agent version/model:** pip freeze output, `gpt-5.6-luna`
 - **DeepSource plan/version:** as displayed in Settings (e.g., "Team plan, v2026-07-26")
 - **LLM judge model:** Claude (subagent dispatch, no separate API key)
 - **Corpus:** 25 cases — 15 real bug-fix reconstructions, 6 injected bugs, 4 clean PRs
