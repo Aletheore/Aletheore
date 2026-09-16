@@ -220,6 +220,32 @@ def test_java_exception_handler_that_still_matches_is_not_flagged():
     assert findings == []
 
 
+def test_java_catch_of_a_broader_supertype_is_not_flagged():
+    # Real false positive caught by Aletheore's own Flash Review on the PR
+    # that introduced this check (Aletheore/Aletheore#725): catching
+    # Exception or Throwable is never wrong, since both are universal
+    # supertypes of every exception type - a superclass catch still
+    # handles whatever the dependency raises.
+    diff = (
+        "--- Caller.java ---\n@@ -1,1 +1,1 @@\n"
+        "-    try { opOne(key); } catch (IOException e) { log.warn(\"a\", e); }\n"
+        "+    try { opOne(key); } catch (Exception e) { log.warn(\"a\", e); }\n"
+    )
+    refs = (
+        "--- referenced definition (not part of this diff): Callee.java:opOne ---\n"
+        "void opOne(String key) throws IOException { ... }"
+    )
+    file_contents = {
+        "Caller.java": (
+            "void handler() {\n"
+            "    try { opOne(key); } catch (Exception e) { log.warn(\"a\", e); }\n"
+            "}\n"
+        )
+    }
+    findings = find_semantic_regressions(diff, file_contents, refs)
+    assert findings == []
+
+
 def test_java_mutates_input_with_removed_defensive_copy_is_flagged():
     diff = (
         "--- Caller.java ---\n@@ -1,1 +1,1 @@\n"
@@ -318,7 +344,7 @@ def test_java_retry_loop_mutation_is_flagged():
     assert any("retry loop" in f["issue"] for f in findings)
 
 
-def test_java_shell_injection_with_runtime_exec_is_flagged():
+def test_java_runtime_exec_with_concatenation_is_flagged():
     diff = (
         "--- Runner.java ---\n@@ -1,1 +1,1 @@\n"
         "-    // no-op\n"
@@ -326,16 +352,29 @@ def test_java_shell_injection_with_runtime_exec_is_flagged():
     )
     file_contents = {"Runner.java": "void run() {\n    Runtime.getRuntime().exec(\"ping \" + host);\n}\n"}
     findings = find_semantic_regressions(diff, file_contents, "")
-    assert any("shell-injection" in f["issue"] for f in findings)
+    assert any("inject extra arguments" in f["issue"] for f in findings)
+    # Real false positive caught by Aletheore's own Flash Review on the PR
+    # that introduced this check (Aletheore/Aletheore#725): Runtime.exec
+    # never invokes a shell, so the finding must not claim shell injection
+    # or shell metacharacters - it may still correctly say it does NOT
+    # invoke a shell, which is why this checks the specific wrong claim
+    # rather than the bare word "shell".
+    assert not any("shell injection" in f["issue"].lower() or "shell metacharacter" in f["issue"].lower() for f in findings)
 
 
-def test_java_process_builder_without_concatenation_is_not_flagged():
+def test_java_process_builder_is_never_flagged_even_with_concatenation():
+    # Real false positive caught by Aletheore's own Flash Review on the PR
+    # that introduced this check (Aletheore/Aletheore#725): ProcessBuilder
+    # never invokes a shell, and passing one concatenated string as its
+    # sole argument doesn't correspond to a real exploitable shape at all
+    # (it just names one literal program with a space in it) - dropped
+    # from this check entirely rather than kept with a corrected message.
     diff = (
         "--- Runner.java ---\n@@ -1,1 +1,1 @@\n"
         "-    // no-op\n"
-        "+    new ProcessBuilder(\"ping\", host).start();\n"
+        "+    new ProcessBuilder(\"ping \" + host).start();\n"
     )
-    file_contents = {"Runner.java": "void run() {\n    new ProcessBuilder(\"ping\", host).start();\n}\n"}
+    file_contents = {"Runner.java": "void run() {\n    new ProcessBuilder(\"ping \" + host).start();\n}\n"}
     findings = find_semantic_regressions(diff, file_contents, "")
     assert findings == []
 

@@ -389,15 +389,28 @@ def _check_reference_at_call_java(
                         f"Restore a catch for {raised[0]} or declare it on the enclosing method.",
                     )
                 caught = [t.strip() for t in added_catch.group(1).split("|")]
-                wrong = [c for c in caught if c not in raised]
-                if wrong:
-                    return _finding(
-                        file,
-                        _line_number_near_hunk(source, f"catch ({wrong[0]}", hunk) or call_line,
-                        f"{name} throws {', '.join(raised)}, but the changed handler catches "
-                        f"{wrong[0]} instead.",
-                        f"Catch {raised[0]} instead of {wrong[0]}.",
-                    )
+                # Catching Exception or Throwable is never wrong - both are
+                # universal supertypes of every exception type, checked or
+                # unchecked, so a superclass catch still handles whatever
+                # the dependency raises. Real false positive, caught by
+                # Aletheore's own Flash Review on the PR that introduced
+                # this check (github.com/Aletheore/Aletheore/pull/725):
+                # replacing `catch (IOException e)` with `catch (Exception
+                # e)` was flagged as "catches Exception instead" even
+                # though the broader catch is still correct. No attempt to
+                # recognize other real supertype relationships (e.g. a
+                # custom exception hierarchy) without real type
+                # information - that would be guessing, not evidence.
+                if not any(c in ("Exception", "Throwable") for c in caught):
+                    wrong = [c for c in caught if c not in raised]
+                    if wrong:
+                        return _finding(
+                            file,
+                            _line_number_near_hunk(source, f"catch ({wrong[0]}", hunk) or call_line,
+                            f"{name} throws {', '.join(raised)}, but the changed handler catches "
+                            f"{wrong[0]} instead.",
+                            f"Catch {raised[0]} instead of {wrong[0]}.",
+                        )
 
     if _JAVA_MUTATES_RE.search(dependency):
         copied = re.search(r"\b(\w+)\s*=\s*new\s+ArrayList<>\s*\(\s*(\w+)\s*\)", removed_text)
@@ -922,22 +935,35 @@ def _shell_injection_findings(file: str, source: str, hunks: list[_Hunk]) -> lis
 
 
 # Java sibling of _shell_injection_findings above - same risk shape (a
-# variable concatenated directly into a shell command), Java's own two
-# real shell-invoking APIs instead of Python's os.system/subprocess. No
+# variable concatenated directly into a command string), but the real
+# risk here is narrower and differently shaped than the Python/Go
+# versions - a genuine false positive caught by Aletheore's own Flash
+# Review on the PR that introduced this check
+# (github.com/Aletheore/Aletheore/pull/725). Runtime.exec(String) and
+# ProcessBuilder never invoke a shell at all (unlike os.system/subprocess
+# with shell=True, or Go's exec.Command("sh", "-c", ...)) - so "shell
+# injection"/"shell metacharacters" is factually wrong for either. Two
+# real consequences: (1) ProcessBuilder is dropped from this check
+# entirely - passing one concatenated string as its sole argument doesn't
+# correspond to a real exploitable shape at all (it names one literal
+# program with a space in it, which just fails to launch, since
+# ProcessBuilder never shell-splits); (2) Runtime.exec(String command)
+# does have a real, different, narrower risk worth flagging - it
+# naively splits the command on whitespace and executes the pieces
+# directly (no shell metacharacter interpretation), so a value that adds
+# extra whitespace-separated tokens can inject additional arguments
+# (CWE-88, argument injection) even though it can't inject a `;`/`|`/
+# backtick shell command the way the Python/Go checks' targets can. No
 # real corpus case or CVE citation for this exact Java shape yet (same
-# honesty note as the Java empty-catch check) - shipped on the strength of
-# the underlying "concatenated command text" logic already being proven by
-# the Python check it mirrors.
-_JAVA_SHELL_CALL_RE = re.compile(
-    r"\bRuntime\.getRuntime\(\)\.exec\s*\(|\bnew\s+ProcessBuilder\s*\("
-)
+# honesty note as the Java empty-catch check).
+_JAVA_EXEC_CALL_RE = re.compile(r"\bRuntime\.getRuntime\(\)\.exec\s*\(")
 
 
 def _shell_injection_findings_java(file: str, source: str, hunks: list[_Hunk]) -> list[dict]:
     findings: list[dict] = []
     for hunk in hunks:
         for added_line in hunk.added:
-            if not _JAVA_SHELL_CALL_RE.search(added_line):
+            if not _JAVA_EXEC_CALL_RE.search(added_line):
                 continue
             if not _STRING_CONCAT_RE.search(added_line):
                 continue
@@ -945,10 +971,11 @@ def _shell_injection_findings_java(file: str, source: str, hunks: list[_Hunk]) -
                 _finding(
                     file,
                     _line_number_near_hunk(source, added_line.strip(), hunk) or hunk.new_start,
-                    "This runs a shell command built by concatenating a variable directly into the "
-                    "command text - a shell-injection risk if that value can be influenced by a caller.",
-                    "Avoid Runtime.exec/ProcessBuilder with concatenated input - pass arguments as a "
-                    "String[] (or List<String>) instead of building one command string.",
+                    "Runtime.exec(String) splits this concatenated command on whitespace and runs "
+                    "the pieces directly (it does not invoke a shell) - a value that can be "
+                    "influenced by a caller could inject extra arguments this way.",
+                    "Use Runtime.exec(String[]) or ProcessBuilder with separate arguments instead of "
+                    "one command string.",
                 )
             )
     return findings
