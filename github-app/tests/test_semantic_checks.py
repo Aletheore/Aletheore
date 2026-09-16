@@ -49,6 +49,49 @@ def test_java_empty_catch_multiline_with_comment_only_body_is_flagged():
     assert "empty body" in findings[0]["issue"]
 
 
+def test_java_empty_catch_inline_block_comment_body_is_flagged():
+    # Real false-negative gap found independently by GLM-5.3-Flash
+    # reviewing PR #725 with PR-Agent's own prompt structure: only `//`
+    # line comments were stripped before judging inline emptiness, so a
+    # `/* ... */` block comment body was misjudged as real content.
+    diff = (
+        "--- Service.java ---\n@@ -1,1 +1,1 @@\n"
+        "-    doWork();\n"
+        "+    try { doWork(); } catch (IOException e) { /* handled upstream */ }\n"
+    )
+    file_contents = {
+        "Service.java": "void run() {\n    try { doWork(); } catch (IOException e) { /* handled upstream */ }\n}\n"
+    }
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert len(findings) == 1
+    assert "empty body" in findings[0]["issue"]
+
+
+def test_java_empty_catch_multiline_with_block_comment_is_flagged():
+    diff = (
+        "--- Service.java ---\n@@ -1,2 +1,5 @@\n"
+        "+    try {\n"
+        "+        doWork();\n"
+        "+    } catch (IOException e) {\n"
+        "+        /* ignore */\n"
+        "+    }\n"
+    )
+    file_contents = {
+        "Service.java": (
+            "void run() {\n"
+            "    try {\n"
+            "        doWork();\n"
+            "    } catch (IOException e) {\n"
+            "        /* ignore */\n"
+            "    }\n"
+            "}\n"
+        )
+    }
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert len(findings) == 1
+    assert "empty body" in findings[0]["issue"]
+
+
 def test_java_catch_with_real_handling_is_not_flagged():
     diff = (
         "--- Service.java ---\n@@ -1,2 +1,5 @@\n"
@@ -484,5 +527,51 @@ def test_go_direct_exec_command_is_not_flagged():
         '+\texec.Command("ping", host)\n'
     )
     file_contents = {"runner.go": 'func run() {\n\texec.Command("ping", host)\n}\n'}
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert findings == []
+
+
+def test_java_shaped_text_in_a_python_docstring_is_not_flagged():
+    # Real false positive found independently by GLM-5.3-Flash reviewing
+    # PR #725 with PR-Agent's own prompt structure (a genuinely different
+    # finding class than the Aletheore-prompt run caught): none of the
+    # Java/Go-specific checks were gated by file extension, so a Python
+    # docstring showing a Java code example as documentation produced a
+    # real "empty catch block" finding on a .py file. Confirmed directly
+    # before fixing.
+    diff = (
+        "--- docs_example.py ---\n@@ -1,2 +1,4 @@\n"
+        ' def foo():\n'
+        '     """Example:\n'
+        "+    try {\n"
+        "+        risky();\n"
+        "+    } catch (IOException e) {\n"
+        "+    }\n"
+        '     """\n'
+    )
+    file_contents = {
+        "docs_example.py": (
+            'def foo():\n'
+            '    """Example:\n'
+            "    try {\n"
+            "        risky();\n"
+            "    } catch (IOException e) {\n"
+            "    }\n"
+            '    """\n'
+        )
+    }
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert findings == []
+
+
+def test_go_shaped_text_in_a_javascript_file_is_not_flagged():
+    diff = (
+        "--- example.js ---\n@@ -1,1 +1,1 @@\n"
+        "-    // no-op\n"
+        '+    const example = \'exec.Command("sh", "-c", "ping " + host)\';\n'
+    )
+    file_contents = {
+        "example.js": 'function foo() {\n    const example = \'exec.Command("sh", "-c", "ping " + host)\';\n}\n'
+    }
     findings = find_semantic_regressions(diff, file_contents, "")
     assert findings == []

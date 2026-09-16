@@ -884,7 +884,14 @@ def _swallowed_exception_findings_java(file: str, source: str, hunks: list[_Hunk
             if not match:
                 continue
 
-            inline = re.sub(r"//.*$", "", match.group("inline")).strip()
+            # Real false-negative gap found independently by GLM-5.3-Flash
+            # reviewing PR #725 with PR-Agent's own prompt structure: only
+            # `//` line comments were stripped, so a catch body containing
+            # only a `/* ... */` block comment was misjudged as real
+            # content and missed. Strip both comment styles the same way
+            # before judging emptiness.
+            inline = re.sub(r"/\*.*?\*/", "", match.group("inline"))
+            inline = re.sub(r"//.*$", "", inline).strip()
             if inline == "}":
                 body_empty = True
             elif inline == "":
@@ -899,12 +906,21 @@ def _swallowed_exception_findings_java(file: str, source: str, hunks: list[_Hunk
                     if stripped == "}":
                         closed = True
                         break
-                    if "{" in stripped or "}" in stripped:
+                    # A complete single-line block comment is recognized
+                    # here, before the nested-brace bail-out below, so a
+                    # comment merely mentioning a brace character (e.g.
+                    # "/* closes with } */") is judged as the comment it
+                    # is rather than tripping the nested-brace guard.
+                    is_block_comment = bool(re.match(r"^/\*.*\*/$", stripped))
+                    if not is_block_comment and ("{" in stripped or "}" in stripped):
                         break  # nested brace - outside this check's scope
                     body_lines.append(stripped)
                 if not closed:
                     continue  # closing brace isn't in this hunk - nothing to judge
-                non_comment = [b for b in body_lines if b and not b.startswith("//")]
+                non_comment = [
+                    b for b in body_lines
+                    if b and not b.startswith("//") and not re.match(r"^/\*.*\*/$", b)
+                ]
                 body_empty = not non_comment
             else:
                 body_empty = False  # real inline statement
@@ -1263,13 +1279,31 @@ def find_semantic_regressions(
         if not hunks:
             continue
 
+        # Real false positive found independently by GLM-5.3-Flash reviewing
+        # PR #725 with PR-Agent's own prompt structure (a different prompt
+        # from Aletheore's, catching a different bug class than the
+        # Aletheore-prompt run did): none of the Java/Go-specific checks
+        # below were gated by file extension, so their regexes could match
+        # Java/Go-shaped text sitting in a comment, docstring, or string
+        # literal inside an unrelated Python/JS file. Confirmed directly: a
+        # Python docstring showing a Java code example (`try { ... } catch
+        # (IOException e) {}`) produced a real "empty catch block" finding
+        # on a .py file. The pre-existing Python checks below have the same
+        # theoretical gap (not something introduced here, not fixed here -
+        # out of scope for this pass) but Python's `except`/`raise` keyword
+        # syntax is far less likely to collide with example code sitting in
+        # a Java/Go/JS file than Java/Go's brace-and-paren syntax is with
+        # exactly this kind of cross-language documentation.
+        is_java = file.endswith(".java")
+        is_go = file.endswith(".go")
+
         for name, (_path, dependency) in references.items():
             for call_line in _call_lines(source, name):
                 hunk = _nearest_hunk(hunks, call_line)
                 if hunk is None:
                     continue
                 finding = _check_reference_at_call(file, source, call_line, hunk, name, dependency)
-                if finding is None:
+                if finding is None and is_java:
                     finding = _check_reference_at_call_java(file, source, call_line, hunk, name, dependency)
                 if finding is not None:
                     findings.append(finding)
@@ -1282,10 +1316,12 @@ def find_semantic_regressions(
         findings.extend(_off_by_one_loop_findings(file, source, hunks))
         findings.extend(_sql_injection_findings(file, source, hunks))
         findings.extend(_swallowed_exception_findings(file, source, hunks))
-        findings.extend(_swallowed_exception_findings_java(file, source, hunks))
+        if is_java:
+            findings.extend(_swallowed_exception_findings_java(file, source, hunks))
+            findings.extend(_shell_injection_findings_java(file, source, hunks))
+        if is_go:
+            findings.extend(_shell_injection_findings_go(file, source, hunks))
         findings.extend(_shell_injection_findings(file, source, hunks))
-        findings.extend(_shell_injection_findings_java(file, source, hunks))
-        findings.extend(_shell_injection_findings_go(file, source, hunks))
         findings.extend(_broken_quoted_phrase_findings(file, source, hunks))
 
     unique: list[dict] = []
