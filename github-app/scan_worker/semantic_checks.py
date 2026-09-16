@@ -899,29 +899,46 @@ def _swallowed_exception_findings_java(file: str, source: str, hunks: list[_Hunk
                 # lines until a lone closing brace - any nested brace or
                 # real statement bails out with no finding (see module
                 # comment above - conservative on purpose).
+                #
+                # in_block_comment tracks a /* ... */ that genuinely spans
+                # multiple lines - a real gap Aletheore's own Flash Review
+                # found on the single-line-only version of this fix (PR
+                # #726): matching only `^/\*.*\*/$` left a comment's own
+                # opening ("/* explanation") and closing ("more text */")
+                # lines unrecognized, so a real multi-line block comment
+                # left the body looking non-empty. While inside one, a
+                # line's content (including a stray brace character in the
+                # comment's own text) is never treated as real code or as
+                # the catch's closing brace - only "*/" ends the tracked
+                # state.
                 body_lines: list[str] = []
                 closed = False
+                in_block_comment = False
                 for later in added[idx + 1 :]:
                     stripped = later.strip()
+
+                    if in_block_comment:
+                        if "*/" in stripped:
+                            in_block_comment = False
+                        body_lines.append("")
+                        continue
                     if stripped == "}":
                         closed = True
                         break
-                    # A complete single-line block comment is recognized
-                    # here, before the nested-brace bail-out below, so a
-                    # comment merely mentioning a brace character (e.g.
-                    # "/* closes with } */") is judged as the comment it
-                    # is rather than tripping the nested-brace guard.
-                    is_block_comment = bool(re.match(r"^/\*.*\*/$", stripped))
-                    if not is_block_comment and ("{" in stripped or "}" in stripped):
+                    if stripped.startswith("/*"):
+                        if "*/" not in stripped[2:]:
+                            in_block_comment = True
+                        body_lines.append("")
+                        continue
+                    if stripped.startswith("//"):
+                        body_lines.append("")
+                        continue
+                    if "{" in stripped or "}" in stripped:
                         break  # nested brace - outside this check's scope
                     body_lines.append(stripped)
                 if not closed:
                     continue  # closing brace isn't in this hunk - nothing to judge
-                non_comment = [
-                    b for b in body_lines
-                    if b and not b.startswith("//") and not re.match(r"^/\*.*\*/$", b)
-                ]
-                body_empty = not non_comment
+                body_empty = not any(body_lines)
             else:
                 body_empty = False  # real inline statement
 

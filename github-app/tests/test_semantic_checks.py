@@ -92,6 +92,41 @@ def test_java_empty_catch_multiline_with_block_comment_is_flagged():
     assert "empty body" in findings[0]["issue"]
 
 
+def test_java_empty_catch_with_a_genuine_multiline_block_comment_is_flagged():
+    # Real gap found by Aletheore's own Flash Review on PR #726 (the
+    # single-line-only version of this fix): a block comment that
+    # genuinely spans multiple lines - its opening line has no closing
+    # "*/", and the closing line has no opening "/*" - was left
+    # unrecognized by a regex requiring both on the same line, so the
+    # body looked non-empty and no finding was produced.
+    diff = (
+        "--- Service.java ---\n@@ -1,2 +1,7 @@\n"
+        "+    try {\n"
+        "+        doWork();\n"
+        "+    } catch (IOException e) {\n"
+        "+        /* This failure is expected during\n"
+        "+           normal shutdown and can be\n"
+        "+           safely ignored here. */\n"
+        "+    }\n"
+    )
+    file_contents = {
+        "Service.java": (
+            "void run() {\n"
+            "    try {\n"
+            "        doWork();\n"
+            "    } catch (IOException e) {\n"
+            "        /* This failure is expected during\n"
+            "           normal shutdown and can be\n"
+            "           safely ignored here. */\n"
+            "    }\n"
+            "}\n"
+        )
+    }
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert len(findings) == 1
+    assert "empty body" in findings[0]["issue"]
+
+
 def test_java_catch_with_real_handling_is_not_flagged():
     diff = (
         "--- Service.java ---\n@@ -1,2 +1,5 @@\n"
