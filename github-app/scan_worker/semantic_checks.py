@@ -338,6 +338,146 @@ def _check_reference_at_call(
     return None
 
 
+# Java sibling of _check_reference_at_call above. Same reasoning shape -
+# one reference, one call site, one nearby hunk - but Java has a real
+# signal Python lacks: a method's `throws` clause is a formal declaration,
+# not just body-scanning. Checked first; falls back to scanning the
+# referenced dependency's own body for a real `throw new X(...)` when no
+# `throws` clause is present (unchecked exceptions, e.g. RuntimeException
+# subclasses, are commonly thrown without one).
+_JAVA_THROWS_RE = re.compile(r"\bthrows\s+([\w.]+(?:\s*,\s*[\w.]+)*)")
+_JAVA_THROW_NEW_RE = re.compile(r"\bthrow\s+new\s+([\w.]+)\s*\(")
+# Deliberately a bare `catch (...)` clause, NOT anchored to a preceding
+# `try {...}` on the same removed/added text - a real, more severe defect
+# found independently by GLM-5.3-Flash reviewing this same PR (Aletheore/
+# Aletheore#725), verified directly against this file's own diff parser:
+# the overwhelmingly common real diff shape only touches the catch line
+# itself (`try {` and the try body stay as unchanged context, so they
+# never appear in hunk.removed/hunk.added at all), which an
+# try-block-anchored regex can never match regardless of DOTALL - it only
+# ever matched a whole try/catch block removed-and-readded as one unit,
+# an unusual diff shape. Confirmed: a synthetic diff changing only
+# `catch (ErrorA e)` to `catch (ErrorB e)` produced zero match with the
+# try-anchored version and a correct match with this one.
+_JAVA_CALL_CATCH_RE = re.compile(
+    r"\bcatch\s*\(\s*(?:final\s+)?([\w.]+(?:\s*\|\s*[\w.]+)*)\s+\w+\s*\)"
+)
+_JAVA_MUTATES_RE = re.compile(r"\.(?:add|addAll|remove|removeAll|set|sort|clear)\s*\(")
+_JAVA_CONCURRENCY_RE = re.compile(r"\b(?:ExecutorService|CompletableFuture|Executors\.\w+)\b")
+_JAVA_SYNCHRONIZED_RE = re.compile(r"\bsynchronized\b")
+
+
+def _java_declared_exceptions(dependency: str) -> list[str]:
+    throws_match = _JAVA_THROWS_RE.search(dependency)
+    if throws_match:
+        return [t.strip() for t in throws_match.group(1).split(",")]
+    return sorted(set(_JAVA_THROW_NEW_RE.findall(dependency)))
+
+
+def _check_reference_at_call_java(
+    file: str,
+    source: str,
+    call_line: int,
+    hunk: _Hunk,
+    name: str,
+    dependency: str,
+) -> dict | None:
+    removed_text = "\n".join(hunk.removed)
+    added_text = "\n".join(hunk.added)
+
+    raised = _java_declared_exceptions(dependency)
+    if raised:
+        removed_catch = _JAVA_CALL_CATCH_RE.search(removed_text)
+        added_catch = _JAVA_CALL_CATCH_RE.search(added_text)
+
+        if removed_catch:
+            removed_types = [t.strip() for t in removed_catch.group(1).split("|")]
+            if any(t in raised for t in removed_types):
+                if not added_catch:
+                    return _finding(
+                        file, call_line,
+                        f"{name} throws {', '.join(raised)}, but the changed code removed its "
+                        "exception handler.",
+                        f"Restore a catch for {raised[0]} or declare it on the enclosing method.",
+                    )
+                caught = [t.strip() for t in added_catch.group(1).split("|")]
+                # A multi-catch (`catch (A | B e)`) or a broader supertype
+                # (Exception/Throwable - universal supertypes of every
+                # exception type, checked or unchecked) still handles
+                # whatever the dependency raises as long as ANY caught type
+                # covers it - matching the same `any(...)` semantics already
+                # used above for the removed side. The original version here
+                # flagged whenever ANY caught type wasn't in `raised`,
+                # which is the wrong direction: two real false positives
+                # found independently on the PR that introduced this check
+                # (Aletheore/Aletheore#725) - Aletheore's own Flash Review
+                # caught the Exception/Throwable case, GLM-5.3-Flash caught
+                # the multi-catch case (`catch (IOException | SQLException
+                # e)` replacing `catch (IOException e)` was flagged as
+                # "catches SQLException instead" even though IOException is
+                # still handled). No attempt to recognize other real
+                # supertype relationships (e.g. a custom exception
+                # hierarchy) without real type information - that would be
+                # guessing, not evidence.
+                covers_raised = any(c in raised or c in ("Exception", "Throwable") for c in caught)
+                if not covers_raised:
+                    return _finding(
+                        file,
+                        _line_number_near_hunk(source, f"catch ({caught[0]}", hunk) or call_line,
+                        f"{name} throws {', '.join(raised)}, but the changed handler catches "
+                        f"{', '.join(caught)} instead.",
+                        f"Catch {raised[0]} instead of {', '.join(caught)}.",
+                    )
+
+    if _JAVA_MUTATES_RE.search(dependency):
+        copied = re.search(r"\b(\w+)\s*=\s*new\s+ArrayList<>\s*\(\s*(\w+)\s*\)", removed_text)
+        if copied and re.search(rf"\b{re.escape(name)}\s*\(\s*{re.escape(copied.group(2))}\b", added_text):
+            return _finding(
+                file, call_line,
+                f"{name} mutates its input, but the changed code removed the defensive copy.",
+                f"Pass `new ArrayList<>({copied.group(2)})` instead of {copied.group(2)} directly.",
+            )
+
+    # Real bug found independently by GLM-5.3-Flash reviewing this same PR
+    # (Aletheore/Aletheore#725), confirmed directly: bare `=` matches the
+    # first `=` of `==`, so a dependency body that only COMPARES instance
+    # state (`if (this.count == expected)`) satisfied this "mutates shared
+    # instance state" premise. `=(?!=)` keeps `+=` and assignment `=`
+    # while excluding equality.
+    if (
+        re.search(r"\bthis\.[A-Za-z_]\w*\s*(?:\+=|=(?!=))", dependency)
+        and _JAVA_CONCURRENCY_RE.search(added_text)
+        and not _JAVA_SYNCHRONIZED_RE.search(added_text)
+    ):
+        return _finding(
+            file, call_line,
+            f"{name} mutates shared instance state while the changed code calls it concurrently.",
+            "Synchronize the shared state or use an isolated instance per task.",
+        )
+
+    if (
+        re.search(r"\b(?:store|cache|db)\s*\.\s*put\s*\(", dependency)
+        and f"{name}(" in added_text
+        and re.search(r"\b(?:for|while)\b", added_text)
+    ):
+        # Message softened from the original's flat assertion, per a fair
+        # precision critique from GLM-5.3-Flash reviewing this same PR
+        # (Aletheore/Aletheore#725): the trigger conditions (a mutating
+        # dependency call inside any added loop) don't actually establish
+        # a retry-after-failure scenario - an ordinary batch loop over
+        # unrelated items matches just as well - so the message should not
+        # assert that specific narrative as fact.
+        return _finding(
+            file, call_line,
+            f"{name} mutates a store/cache inside the changed loop - if this loop can retry the "
+            "same key after a failure, that mutation could run more than once.",
+            "Verify whether this loop can re-run for the same key; if so, make the mutation "
+            "idempotent or stop before repeating it.",
+        )
+
+    return None
+
+
 def _moved_record_findings(
     file: str,
     source: str,
@@ -709,6 +849,85 @@ def _swallowed_exception_findings(file: str, source: str, hunks: list[_Hunk]) ->
     return findings
 
 
+# A newly-added Java catch block whose body is empty (or only a comment) -
+# the direct structural analog of the Python swallowed-exception check
+# above (same "newly-added block, no logging, no re-raise" semantics),
+# just Java's brace-delimited catch instead of Python's colon-indented
+# except. CWE-390 (Detection of Error Condition Without Action) names this
+# exact anti-pattern; unlike this file's other checks, there is no real
+# corpus case or CVE citation backing this one yet - it ships on the
+# pattern being unambiguous and the underlying "empty handler swallows the
+# error" logic already being proven by the Python check it mirrors, not on
+# a verified real-bug example. Replace this comment with a real citation
+# if/when one turns up (none of this project's own 25 benchmark cases or
+# the Keycloak martian corpus had this exact shape as of 2026-09-16).
+#
+# Deliberately conservative like every other check here: only recognizes a
+# catch body with no nested braces at all (an inline `{}`, or a run of
+# blank/comment-only lines between the opening `{` and a lone closing `}`)
+# - any real statement, or any nested block, and the check backs off
+# rather than risk a false positive from mis-tracked brace depth.
+_JAVA_CATCH_OPEN_RE = re.compile(
+    r"\bcatch\s*\(\s*(?:final\s+)?[\w.]+(?:\s*\|\s*[\w.]+)*\s+\w+\s*\)\s*\{(?P<inline>.*)$"
+)
+_JAVA_RETHROW_OR_LOG_RE = re.compile(
+    r"\bthrow\b|\b(?:log|logger)\.\w+\s*\(|\bSystem\.(?:out|err)\.print\w*\s*\("
+)
+
+
+def _swallowed_exception_findings_java(file: str, source: str, hunks: list[_Hunk]) -> list[dict]:
+    findings: list[dict] = []
+    for hunk in hunks:
+        added = hunk.added
+        for idx, line in enumerate(added):
+            match = _JAVA_CATCH_OPEN_RE.search(line)
+            if not match:
+                continue
+
+            inline = re.sub(r"//.*$", "", match.group("inline")).strip()
+            if inline == "}":
+                body_empty = True
+            elif inline == "":
+                # Multi-line block: collect contiguous blank/comment-only
+                # lines until a lone closing brace - any nested brace or
+                # real statement bails out with no finding (see module
+                # comment above - conservative on purpose).
+                body_lines: list[str] = []
+                closed = False
+                for later in added[idx + 1 :]:
+                    stripped = later.strip()
+                    if stripped == "}":
+                        closed = True
+                        break
+                    if "{" in stripped or "}" in stripped:
+                        break  # nested brace - outside this check's scope
+                    body_lines.append(stripped)
+                if not closed:
+                    continue  # closing brace isn't in this hunk - nothing to judge
+                non_comment = [b for b in body_lines if b and not b.startswith("//")]
+                body_empty = not non_comment
+            else:
+                body_empty = False  # real inline statement
+
+            if not body_empty:
+                continue
+            if _JAVA_RETHROW_OR_LOG_RE.search(line):
+                continue  # defensive - the opening line itself logs/rethrows
+
+            findings.append(
+                _finding(
+                    file,
+                    _line_number_near_hunk(source, line.strip(), hunk) or hunk.new_start,
+                    "This newly-added catch block discards the exception with an empty body - no "
+                    "logging, no re-throw. If the wrapped call ever fails, the failure is silently "
+                    "swallowed and there's no way to diagnose what went wrong.",
+                    "Log the exception (e.g. `logger.warn(...)`) or re-throw it instead of leaving "
+                    "the catch block empty.",
+                )
+            )
+    return findings
+
+
 # os.system() always runs through a shell; subprocess.{call,run,Popen,
 # check_call,check_output}() only does when explicitly given shell=True -
 # hence the two-branch pattern rather than one. Same STRING_CONCAT_RE
@@ -742,6 +961,85 @@ def _shell_injection_findings(file: str, source: str, hunks: list[_Hunk]) -> lis
                     "command text - a shell-injection risk if that value can be influenced by a caller.",
                     "Avoid shell=True/os.system with concatenated input - pass arguments as a list "
                     "(e.g. subprocess.run([...], shell=False)) instead.",
+                )
+            )
+    return findings
+
+
+# Java sibling of _shell_injection_findings above - same risk shape (a
+# variable concatenated directly into a command string), but the real
+# risk here is narrower and differently shaped than the Python/Go
+# versions - a genuine false positive caught by Aletheore's own Flash
+# Review on the PR that introduced this check
+# (github.com/Aletheore/Aletheore/pull/725). Runtime.exec(String) and
+# ProcessBuilder never invoke a shell at all (unlike os.system/subprocess
+# with shell=True, or Go's exec.Command("sh", "-c", ...)) - so "shell
+# injection"/"shell metacharacters" is factually wrong for either. Two
+# real consequences: (1) ProcessBuilder is dropped from this check
+# entirely - passing one concatenated string as its sole argument doesn't
+# correspond to a real exploitable shape at all (it names one literal
+# program with a space in it, which just fails to launch, since
+# ProcessBuilder never shell-splits); (2) Runtime.exec(String command)
+# does have a real, different, narrower risk worth flagging - it
+# naively splits the command on whitespace and executes the pieces
+# directly (no shell metacharacter interpretation), so a value that adds
+# extra whitespace-separated tokens can inject additional arguments
+# (CWE-88, argument injection) even though it can't inject a `;`/`|`/
+# backtick shell command the way the Python/Go checks' targets can. No
+# real corpus case or CVE citation for this exact Java shape yet (same
+# honesty note as the Java empty-catch check).
+_JAVA_EXEC_CALL_RE = re.compile(r"\bRuntime\.getRuntime\(\)\.exec\s*\(")
+
+
+def _shell_injection_findings_java(file: str, source: str, hunks: list[_Hunk]) -> list[dict]:
+    findings: list[dict] = []
+    for hunk in hunks:
+        for added_line in hunk.added:
+            if not _JAVA_EXEC_CALL_RE.search(added_line):
+                continue
+            if not _STRING_CONCAT_RE.search(added_line):
+                continue
+            findings.append(
+                _finding(
+                    file,
+                    _line_number_near_hunk(source, added_line.strip(), hunk) or hunk.new_start,
+                    "Runtime.exec(String) splits this concatenated command on whitespace and runs "
+                    "the pieces directly (it does not invoke a shell) - a value that can be "
+                    "influenced by a caller could inject extra arguments this way.",
+                    "Use Runtime.exec(String[]) or ProcessBuilder with separate arguments instead of "
+                    "one command string.",
+                )
+            )
+    return findings
+
+
+# Go sibling of the same check. Go has no generic "shell=True" flag - the
+# risk is only present when the command being run is itself a shell
+# (`sh -c`/`bash -c`), with the actual work passed as a string argument
+# built from a variable. Different enough from the Python/Java shape
+# (there is no equivalent of subprocess's shell= kwarg to gate on) that it
+# needs its own regex rather than sharing _SHELL_CALL_RE/_JAVA_SHELL_CALL_RE.
+_GO_SHELL_CALL_RE = re.compile(
+    r'\bexec\.Command\s*\(\s*"(?:sh|bash)"\s*,\s*"-c"\s*,'
+)
+
+
+def _shell_injection_findings_go(file: str, source: str, hunks: list[_Hunk]) -> list[dict]:
+    findings: list[dict] = []
+    for hunk in hunks:
+        for added_line in hunk.added:
+            if not _GO_SHELL_CALL_RE.search(added_line):
+                continue
+            if not (_STRING_CONCAT_RE.search(added_line) or "fmt.Sprintf" in added_line):
+                continue
+            findings.append(
+                _finding(
+                    file,
+                    _line_number_near_hunk(source, added_line.strip(), hunk) or hunk.new_start,
+                    "This runs `sh -c`/`bash -c` with a command string built from a variable - a "
+                    "shell-injection risk if that value can be influenced by a caller.",
+                    "Call the target binary directly via exec.Command with separate arguments "
+                    "instead of building a shell command string.",
                 )
             )
     return findings
@@ -971,6 +1269,8 @@ def find_semantic_regressions(
                 if hunk is None:
                     continue
                 finding = _check_reference_at_call(file, source, call_line, hunk, name, dependency)
+                if finding is None:
+                    finding = _check_reference_at_call_java(file, source, call_line, hunk, name, dependency)
                 if finding is not None:
                     findings.append(finding)
                     break
@@ -982,7 +1282,10 @@ def find_semantic_regressions(
         findings.extend(_off_by_one_loop_findings(file, source, hunks))
         findings.extend(_sql_injection_findings(file, source, hunks))
         findings.extend(_swallowed_exception_findings(file, source, hunks))
+        findings.extend(_swallowed_exception_findings_java(file, source, hunks))
         findings.extend(_shell_injection_findings(file, source, hunks))
+        findings.extend(_shell_injection_findings_java(file, source, hunks))
+        findings.extend(_shell_injection_findings_go(file, source, hunks))
         findings.extend(_broken_quoted_phrase_findings(file, source, hunks))
 
     unique: list[dict] = []
