@@ -246,6 +246,93 @@ def test_java_catch_of_a_broader_supertype_is_not_flagged():
     assert findings == []
 
 
+def test_java_removed_handler_detected_when_only_the_catch_line_changes():
+    # Real bug found independently by GLM-5.3-Flash reviewing this same PR
+    # (Aletheore/Aletheore#725), more severe than it first looked: the
+    # overwhelmingly common real diff shape only touches the catch clause
+    # itself - `try {` and the try body stay as unchanged context lines,
+    # so they never appear in hunk.removed/hunk.added at all. The original
+    # _JAVA_CALL_CATCH_RE required a literal `try {...} catch(...)`
+    # sequence within the same removed/added text, which this realistic
+    # shape can never satisfy regardless of DOTALL - it only ever matched
+    # a whole try/catch block removed-and-readded as one unit (rare) or
+    # written entirely on one line (unusual Java style). Confirmed
+    # directly against this file's own diff parser before fixing.
+    diff = (
+        "--- Caller.java ---\n@@ -1,5 +1,4 @@\n"
+        " void handler() {\n"
+        "     try {\n"
+        "         opOne(key);\n"
+        "-    } catch (ErrorA e) {\n"
+        "-        log.warn(\"failed\", e);\n"
+        "-    }\n"
+        "+    }\n"
+    )
+    refs = (
+        "--- referenced definition (not part of this diff): Callee.java:opOne ---\n"
+        "void opOne(String key) throws ErrorA { ... }"
+    )
+    file_contents = {
+        "Caller.java": "void handler() {\n    try {\n        opOne(key);\n    }\n}\n"
+    }
+    findings = find_semantic_regressions(diff, file_contents, refs)
+    assert any("removed its exception handler" in f["issue"] for f in findings)
+
+
+def test_java_multicatch_that_still_covers_the_raised_exception_is_not_flagged():
+    # Real false positive found independently by GLM-5.3-Flash reviewing
+    # this same PR (Aletheore/Aletheore#725): replacing `catch
+    # (IOException e)` with the multi-catch `catch (IOException |
+    # SQLException e)` was flagged as "catches SQLException instead" even
+    # though IOException is still handled - the added-handler check used
+    # to require EVERY caught type to be in `raised`, instead of the
+    # correct "does ANY caught type cover it" test already used on the
+    # removed side.
+    diff = (
+        "--- Caller.java ---\n@@ -1,1 +1,1 @@\n"
+        "-    try { opOne(key); } catch (IOException e) { log.warn(\"a\", e); }\n"
+        "+    try { opOne(key); } catch (IOException | SQLException e) { log.warn(\"a\", e); }\n"
+    )
+    refs = (
+        "--- referenced definition (not part of this diff): Callee.java:opOne ---\n"
+        "void opOne(String key) throws IOException { ... }"
+    )
+    file_contents = {
+        "Caller.java": (
+            "void handler() {\n"
+            "    try { opOne(key); } catch (IOException | SQLException e) { log.warn(\"a\", e); }\n"
+            "}\n"
+        )
+    }
+    findings = find_semantic_regressions(diff, file_contents, refs)
+    assert findings == []
+
+
+def test_java_equality_comparison_on_instance_field_is_not_flagged_as_mutation():
+    # Real bug found independently by GLM-5.3-Flash reviewing this same PR
+    # (Aletheore/Aletheore#725), confirmed directly: bare `=` in the old
+    # regex matched the first `=` of `==`, so a dependency body that only
+    # COMPARES instance state satisfied the "mutates shared instance
+    # state" premise.
+    diff = (
+        "--- Caller.java ---\n@@ -1,1 +1,2 @@\n"
+        "-    worker(x);\n"
+        "+    ExecutorService pool = Executors.newFixedThreadPool(4);\n"
+        "+    pool.submit(() -> worker(x));\n"
+    )
+    refs = "--- referenced definition (not part of this diff): Worker.java:worker ---\nif (this.count == expected) { return; }"
+    file_contents = {
+        "Caller.java": (
+            "void run() {\n"
+            "    ExecutorService pool = Executors.newFixedThreadPool(4);\n"
+            "    pool.submit(() -> worker(x));\n"
+            "}\n"
+        )
+    }
+    findings = find_semantic_regressions(diff, file_contents, refs)
+    assert findings == []
+
+
 def test_java_mutates_input_with_removed_defensive_copy_is_flagged():
     diff = (
         "--- Caller.java ---\n@@ -1,1 +1,1 @@\n"
@@ -341,7 +428,7 @@ def test_java_retry_loop_mutation_is_flagged():
         )
     }
     findings = find_semantic_regressions(diff, file_contents, refs)
-    assert any("retry loop" in f["issue"] for f in findings)
+    assert any("could run more than once" in f["issue"] for f in findings)
 
 
 def test_java_runtime_exec_with_concatenation_is_flagged():

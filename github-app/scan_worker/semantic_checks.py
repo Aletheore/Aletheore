@@ -347,8 +347,20 @@ def _check_reference_at_call(
 # subclasses, are commonly thrown without one).
 _JAVA_THROWS_RE = re.compile(r"\bthrows\s+([\w.]+(?:\s*,\s*[\w.]+)*)")
 _JAVA_THROW_NEW_RE = re.compile(r"\bthrow\s+new\s+([\w.]+)\s*\(")
+# Deliberately a bare `catch (...)` clause, NOT anchored to a preceding
+# `try {...}` on the same removed/added text - a real, more severe defect
+# found independently by GLM-5.3-Flash reviewing this same PR (Aletheore/
+# Aletheore#725), verified directly against this file's own diff parser:
+# the overwhelmingly common real diff shape only touches the catch line
+# itself (`try {` and the try body stay as unchanged context, so they
+# never appear in hunk.removed/hunk.added at all), which an
+# try-block-anchored regex can never match regardless of DOTALL - it only
+# ever matched a whole try/catch block removed-and-readded as one unit,
+# an unusual diff shape. Confirmed: a synthetic diff changing only
+# `catch (ErrorA e)` to `catch (ErrorB e)` produced zero match with the
+# try-anchored version and a correct match with this one.
 _JAVA_CALL_CATCH_RE = re.compile(
-    r"\btry\s*\{.*?\}\s*catch\s*\(\s*(?:final\s+)?([\w.]+(?:\s*\|\s*[\w.]+)*)\s+\w+\s*\)"
+    r"\bcatch\s*\(\s*(?:final\s+)?([\w.]+(?:\s*\|\s*[\w.]+)*)\s+\w+\s*\)"
 )
 _JAVA_MUTATES_RE = re.compile(r"\.(?:add|addAll|remove|removeAll|set|sort|clear)\s*\(")
 _JAVA_CONCURRENCY_RE = re.compile(r"\b(?:ExecutorService|CompletableFuture|Executors\.\w+)\b")
@@ -389,28 +401,33 @@ def _check_reference_at_call_java(
                         f"Restore a catch for {raised[0]} or declare it on the enclosing method.",
                     )
                 caught = [t.strip() for t in added_catch.group(1).split("|")]
-                # Catching Exception or Throwable is never wrong - both are
-                # universal supertypes of every exception type, checked or
-                # unchecked, so a superclass catch still handles whatever
-                # the dependency raises. Real false positive, caught by
-                # Aletheore's own Flash Review on the PR that introduced
-                # this check (github.com/Aletheore/Aletheore/pull/725):
-                # replacing `catch (IOException e)` with `catch (Exception
-                # e)` was flagged as "catches Exception instead" even
-                # though the broader catch is still correct. No attempt to
-                # recognize other real supertype relationships (e.g. a
-                # custom exception hierarchy) without real type
-                # information - that would be guessing, not evidence.
-                if not any(c in ("Exception", "Throwable") for c in caught):
-                    wrong = [c for c in caught if c not in raised]
-                    if wrong:
-                        return _finding(
-                            file,
-                            _line_number_near_hunk(source, f"catch ({wrong[0]}", hunk) or call_line,
-                            f"{name} throws {', '.join(raised)}, but the changed handler catches "
-                            f"{wrong[0]} instead.",
-                            f"Catch {raised[0]} instead of {wrong[0]}.",
-                        )
+                # A multi-catch (`catch (A | B e)`) or a broader supertype
+                # (Exception/Throwable - universal supertypes of every
+                # exception type, checked or unchecked) still handles
+                # whatever the dependency raises as long as ANY caught type
+                # covers it - matching the same `any(...)` semantics already
+                # used above for the removed side. The original version here
+                # flagged whenever ANY caught type wasn't in `raised`,
+                # which is the wrong direction: two real false positives
+                # found independently on the PR that introduced this check
+                # (Aletheore/Aletheore#725) - Aletheore's own Flash Review
+                # caught the Exception/Throwable case, GLM-5.3-Flash caught
+                # the multi-catch case (`catch (IOException | SQLException
+                # e)` replacing `catch (IOException e)` was flagged as
+                # "catches SQLException instead" even though IOException is
+                # still handled). No attempt to recognize other real
+                # supertype relationships (e.g. a custom exception
+                # hierarchy) without real type information - that would be
+                # guessing, not evidence.
+                covers_raised = any(c in raised or c in ("Exception", "Throwable") for c in caught)
+                if not covers_raised:
+                    return _finding(
+                        file,
+                        _line_number_near_hunk(source, f"catch ({caught[0]}", hunk) or call_line,
+                        f"{name} throws {', '.join(raised)}, but the changed handler catches "
+                        f"{', '.join(caught)} instead.",
+                        f"Catch {raised[0]} instead of {', '.join(caught)}.",
+                    )
 
     if _JAVA_MUTATES_RE.search(dependency):
         copied = re.search(r"\b(\w+)\s*=\s*new\s+ArrayList<>\s*\(\s*(\w+)\s*\)", removed_text)
@@ -421,8 +438,14 @@ def _check_reference_at_call_java(
                 f"Pass `new ArrayList<>({copied.group(2)})` instead of {copied.group(2)} directly.",
             )
 
+    # Real bug found independently by GLM-5.3-Flash reviewing this same PR
+    # (Aletheore/Aletheore#725), confirmed directly: bare `=` matches the
+    # first `=` of `==`, so a dependency body that only COMPARES instance
+    # state (`if (this.count == expected)`) satisfied this "mutates shared
+    # instance state" premise. `=(?!=)` keeps `+=` and assignment `=`
+    # while excluding equality.
     if (
-        re.search(r"\bthis\.[A-Za-z_]\w*\s*(?:\+=|=)", dependency)
+        re.search(r"\bthis\.[A-Za-z_]\w*\s*(?:\+=|=(?!=))", dependency)
         and _JAVA_CONCURRENCY_RE.search(added_text)
         and not _JAVA_SYNCHRONIZED_RE.search(added_text)
     ):
@@ -437,10 +460,19 @@ def _check_reference_at_call_java(
         and f"{name}(" in added_text
         and re.search(r"\b(?:for|while)\b", added_text)
     ):
+        # Message softened from the original's flat assertion, per a fair
+        # precision critique from GLM-5.3-Flash reviewing this same PR
+        # (Aletheore/Aletheore#725): the trigger conditions (a mutating
+        # dependency call inside any added loop) don't actually establish
+        # a retry-after-failure scenario - an ordinary batch loop over
+        # unrelated items matches just as well - so the message should not
+        # assert that specific narrative as fact.
         return _finding(
             file, call_line,
-            f"The changed retry loop calls mutating {name} more than once after a failed attempt.",
-            "Stop before the extra mutation or make the repeated operation idempotent.",
+            f"{name} mutates a store/cache inside the changed loop - if this loop can retry the "
+            "same key after a failure, that mutation could run more than once.",
+            "Verify whether this loop can re-run for the same key; if so, make the mutation "
+            "idempotent or stop before repeating it.",
         )
 
     return None
