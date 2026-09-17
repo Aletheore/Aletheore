@@ -18,6 +18,68 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-09-18
+
+18 commits since the 2026-09-13 second deploy, tagged `github-app-deploy-2026-09-18` (commit
+`8c7c9e6`), no migrations. Two headline changes plus dependency bumps and a benchmark/marketing
+cleanup batch that had been sitting merged but undeployed:
+
+- **#730 - Flash Review's generation model swapped from Luna to GLM-5.3-Flash on IndieRouter, and
+  its system prompt rewritten around PR-Agent's vendored review prompt** (MIT-licensed,
+  github.com/the-pr-agent/pr-agent) plus 6 condensed Aletheore-specific safety rules, replacing the
+  prior bespoke prompt entirely. This followed a full night of benchmarking across prompt variants
+  and models on the 50-PR full corpus, landing on PR-Agent's prompt + GLM-5.3-Flash + temperature
+  0.2 + reasoning_effort low as the best-scoring combination (60.4% avg F1, 56.3-62.6% range across
+  runs). `flash_review_generation_adapter()` (`scan_worker/model_tiers.py`) falls back to
+  DeepSeek-v4-flash when `INDIEROUTER_API_KEY` isn't configured or OpenAI isn't available -
+  requires that key to be present in `github-app/.env` for the swap to actually take effect, which
+  this deploy also added. One real bug was caught and fixed before shipping: the free-tier
+  fallback-chain validator in `flash_review.py` checked for a JSON-array response shape, which
+  would have permanently broken every free-tier review under PR-Agent's YAML output format - fixed
+  via a shared `_extract_pr_agent_yaml_issues()` helper. A second real bug was caught by an
+  independent peer review: `flash_review_generation_adapter`'s fallback path hardcoded the GLM
+  model name into the DeepSeek adapter constructor in the no-IndieRouter-AND-no-OpenAI case,
+  building an invalid adapter - fixed with an explicit `fallback_model` parameter. A third finding
+  from that same peer review (PR-Agent's vendored prompt describes a `__new hunk__`/`__old hunk__`
+  diff format that `_build_flash_review_user_prompt` never actually sends) was investigated rather
+  than assumed away: stripping the mismatched paragraph and re-validating on the full corpus showed
+  a real, consistent ~5-point regression (55.4% avg F1), so it was reverted and the dead end
+  documented in a code comment. Verification (`VERIFICATION_MODEL`, hardcoded to
+  `deepseek-v4-flash`), AIRview's writing adapter, and Docs generation are all untouched by this
+  change - confirmed unaffected by direct code inspection, and separately confirmed by a real
+  head-to-head accuracy test (see below) that GLM-5.3-Flash should *not* also replace DeepSeek as
+  the verification model despite outperforming it on writing/generation tasks.
+- **#729 - fixed a real, live production crash**: `_dead_code_context()`
+  (`scan_worker/airview_scanner_context.py`) called `sorted()` directly on
+  `unused_dependencies` entries, which `src/aletheore/dead_code.py` always emits as dicts
+  (`{"ecosystem", "package"}`), never plain strings - every existing test had assumed the string
+  shape, so nothing caught it before it hit prod. Root-caused via a live SSH investigation of a
+  recurring `ops_monitor.failed_jobs.scans` alert: traced from two stale RQ `FailedJobRegistry`
+  entries (dated 2026-09-14) that were re-triggering the alert on every check even though nothing
+  new was failing, through to the actual unguarded `TypeError` inside `live_wiki.generate_file_pages`
+  → `build_repo_context` → `_dead_code_context`. Fixed by normalizing dict entries to strings
+  before sorting, with two new regression tests covering both the real production shape and a
+  malformed-dict fallback.
+- **#724, #725, #726 - Java/Go coverage added to `semantic_checks.py`'s deterministic layer**
+  (gated by file extension, with block-comment stripping), plus a fix for
+  `run_model_comparison.py` silently feeding raw git diffs to `review_diff()` and disabling every
+  deterministic check in the benchmark harness itself.
+- **#711, #713, #714, #716, #717 - a round of real Flash Review recall/citation fixes** found via
+  the same benchmarking push: a prompt change that was suppressing recall specifically on
+  lightweight models, a missing file-context grant for the second-model verifier, a whole-repo-tree
+  dump breaking three benchmark competitors' own harnesses, an indexing bug in
+  `_line_citation_content_matches` (`str.splitlines()` instead of real `\n` lines - could silently
+  misalign line numbers after a stray control character), and a new deterministic check for a
+  dropped closing quote in an edited message.
+- **#712, #723 - benchmark/marketing cleanup**: dropped Bito and Korbit from the PR-review
+  benchmark, removed an unsubstantiated PR-Agent head-to-head marketing claim.
+- Dependency bumps: anyio 4.15.0→4.15.1, numpy 2.5.2→2.5.3, cspell 10.2.2→10.3.0,
+  github/codeql-action/upload-sarif.
+- **Operational note:** prod had drifted 18 commits / 5 days behind master before this deploy
+  (last deployed 2026-09-13). `INDIEROUTER_API_KEY` was added to prod's `github-app/.env` as part
+  of this deploy - previously absent, which would have made #730's GLM swap silently no-op to the
+  DeepSeek/OpenAI fallback path.
+
 ## 2026-09-13 (second deploy)
 
 6 commits since the first 2026-09-13 deploy, tagged `github-app-deploy-2026-09-13-2` (commit
