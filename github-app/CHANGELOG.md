@@ -80,6 +80,46 @@ cleanup batch that had been sitting merged but undeployed:
   of this deploy - previously absent, which would have made #730's GLM swap silently no-op to the
   DeepSeek/OpenAI fallback path.
 
+## 2026-09-18 (second deploy)
+
+3 commits since the first 2026-09-18 deploy, tagged `github-app-deploy-2026-09-18-2` (commit
+`a1fc995`), no migrations. All three had been merged before the first deploy of the day but missed
+that build - a straight audit-findings batch closing real gaps in `semantic_checks.py`'s
+deterministic layer plus one uncovered benchmark-script test file:
+
+- **#727 - 3 real gaps closed in the Java semantic checks**, found auditing #724-#726's own
+  changes rather than assuming they were complete: exception-type matching compared
+  fully-qualified `throws` clauses (as a referenced-definition snippet renders them) against
+  unqualified `catch` types (as real Java code overwhelmingly writes them via an import) by exact
+  string equality, silently missing genuinely-removed handlers - now compared by simple name. The
+  defensive-copy-removal check only verified some `new ArrayList<>(x)` assignment was removed and
+  the same raw variable reached the call, never that the removed code actually passed the copy to
+  that call - a real false positive where an unrelated removed copy (kept for a separate audit
+  log) coincidentally shared a variable name with the call's own argument. And the empty-catch
+  block-comment tracker unconditionally consumed a comment's closing `*/` line whole, so a comment
+  ending on the same line as the catch's own closing `}` (`... */ }`) left the block looking
+  unclosed and silently dropped the finding.
+- **#732 - the Go shell-injection check missed full-path `sh`/`bash` invocations**, found in a
+  reverse-audit of #725/#726: `_GO_SHELL_CALL_RE` only matched the bare `"sh"`/`"bash"` literal, so
+  `exec.Command("/bin/sh", "-c", ...)` - at least as common in real Go code as the bare name, since
+  `os/exec` resolves a bare name via `PATH` at call time and many callers avoid relying on that -
+  went undetected. Fixed by allowing an optional path prefix before the basename, verified by hand
+  (not just by the new tests) that this doesn't widen into a substring match: a binary whose name
+  merely contains "sh" (e.g. `"fish"`) still can't match, because the prefix group requires a
+  trailing literal `/` to consume anything, which `"fish"` never has.
+- **#728 - test coverage added for `run_model_comparison.py`'s diff-parsing functions**, covering
+  the real bug #724 fixed in the same area (the script feeding git-header-included diff text
+  straight into `review_diff()`/`find_semantic_regressions()`, which silently zeroed out every
+  deterministic check the benchmark harness ran).
+
+**Note:** #727 sat merged but unreviewed by Flash Review for ~18 hours before this deploy - its
+"opened" webhook delivery got a synchronous HTTP 500 from `app_server` at the time (confirmed via
+GitHub's own `/app/hook/deliveries` history), most likely the `_dead_code_context` sort-on-dict
+crash #729 fixed the same day, and the original container logs were gone by the time this was
+found (recycled by the first 2026-09-18 deploy's rebuild). Redelivering that exact webhook against
+today's code completed cleanly end-to-end. The underlying gap - a webhook-handler 5xx produces no
+alert anywhere, only a silently-missing review - is tracked as a follow-up, not yet fixed.
+
 ## 2026-09-13 (second deploy)
 
 6 commits since the first 2026-09-13 deploy, tagged `github-app-deploy-2026-09-13-2` (commit
