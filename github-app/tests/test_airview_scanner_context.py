@@ -315,6 +315,36 @@ def test_dead_code_context_normalizes_a_pathless_dict_entry_instead_of_crashing(
     assert "legacy/m.py" in dead_code["unreachable_modules"]
 
 
+def test_dead_code_context_normalizes_the_real_unused_dependency_dict_shape_instead_of_crashing():
+    # Real production crash, traced live on prod (2026-09-17): the real
+    # producer (src/aletheore/dead_code.py) always emits unused_dependencies
+    # as {"ecosystem": ..., "package": ...} dicts, never plain strings -
+    # sorted() on 2+ such dicts raised TypeError ('<' not supported between
+    # instances of 'dict' and 'dict'), since dicts have no ordering. Every
+    # existing test for this field used plain strings, which is exactly why
+    # this shipped unnoticed - this uses the real producer's actual shape.
+    evidence = {"repository": {"dead_code": {
+        "unreachable_modules": [],
+        "unused_dependencies": [
+            {"ecosystem": "npm", "package": "left-pad"},
+            {"ecosystem": "pypi", "package": "requests"},
+        ],
+    }}}
+    dead_code = build_repo_context(evidence)["dead_code"]
+    assert all(isinstance(entry, str) for entry in dead_code["unused_dependencies"])
+    assert dead_code["unused_dependencies"] == ["npm:left-pad", "pypi:requests"]
+
+
+def test_dead_code_context_normalizes_a_malformed_unused_dependency_dict_instead_of_crashing():
+    evidence = {"repository": {"dead_code": {
+        "unreachable_modules": [],
+        "unused_dependencies": [{"ecosystem": "npm", "package": "left-pad"}, {"other_field": "x"}],
+    }}}
+    dead_code = build_repo_context(evidence)["dead_code"]
+    assert all(isinstance(entry, str) for entry in dead_code["unused_dependencies"])
+    assert "npm:left-pad" in dead_code["unused_dependencies"]
+
+
 def test_dead_code_context_caps_deterministically_with_total_counts():
     evidence = {"repository": {"dead_code": {
         "unreachable_modules": [{"path": f"legacy/m{i:03d}.py"} for i in range(MAX_DEAD_CODE_ENTRIES + 5)],
