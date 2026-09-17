@@ -188,7 +188,21 @@ def _dead_code_context(dead_code: dict) -> dict | None:
         # entry happens to be.
         (m.get("path", str(m)) if isinstance(m, dict) else m for m in dead_code.get("unreachable_modules", [])),
     )
-    unused_deps = sorted(dead_code.get("unused_dependencies", []))
+    # Real production crash, traced live on prod (2026-09-17): dead_code.py's
+    # real unused_dependencies entries are always dicts shaped
+    # {"ecosystem": ..., "package": ...} (see src/aletheore/dead_code.py),
+    # never plain strings - sorted() on 2+ such dicts raises TypeError
+    # ('<' not supported between instances of 'dict' and 'dict'), since
+    # dicts have no ordering. Every existing test for this field used
+    # plain strings, which is why this shipped unnoticed - the real
+    # producer never actually emits that shape. Same normalize-to-string
+    # fix as unreachable_modules just above, so both stay homogeneous and
+    # sortable regardless of which producer's shape reaches this function.
+    unused_deps = sorted(
+        f"{m['ecosystem']}:{m['package']}" if isinstance(m, dict) and "ecosystem" in m and "package" in m
+        else (str(m) if isinstance(m, dict) else m)
+        for m in dead_code.get("unused_dependencies", [])
+    )
     if not unreachable and not unused_deps:
         return None
     result = {
