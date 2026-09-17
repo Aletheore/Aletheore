@@ -304,6 +304,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         budget_exceeded_message: str = "the monthly LLM spend cap would be exceeded",
         allow_partial_report: bool = False,
         extra_body: dict | None = None,
+        temperature: float | None = None,
     ) -> None:
         # Provider-specific request fields the OpenAI schema has no slot for.
         # Exists for one measured reason: every model we write with is a
@@ -313,6 +314,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         # - roughly 38,000 per call for pages the prompt caps at 250-400 words.
         # See model_tiers.NO_THINKING_BODY for the per-provider values.
         self._extra_body = extra_body or {}
+        self._temperature = temperature
         self.name = name
         self.requires_consent = requires_consent
         self._base_url = base_url
@@ -352,6 +354,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
                     ],
                     timeout=REQUEST_TIMEOUT_SECONDS,
                     **({"extra_body": self._extra_body} if self._extra_body else {}),
+                    **({"temperature": self._temperature} if self._temperature is not None else {}),
                 )
             )
         except Exception as exc:

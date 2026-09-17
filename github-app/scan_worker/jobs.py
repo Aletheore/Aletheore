@@ -127,10 +127,6 @@ from scan_worker.db import (
 from scan_worker.docs_repo_commit import sync_docs_to_repo
 from scan_worker.flash_review import (
     FLASH_REVIEW_FALLBACK_MODEL,
-    build_blast_radius_context,
-    build_change_impact_context,
-    build_code_evidence_context,
-    build_dependency_impact_context,
     build_referenced_symbol_context,
     fetch_review_file_context,
     files_missing_from_review_context,
@@ -139,12 +135,10 @@ from scan_worker.flash_review import (
     order_changed_files_by_diff_size,
     review_diff,
 )
-from scan_worker.flash_review_schema_context import build_schema_endpoint_context
 from scan_worker.flash_review_cache import (
     lookup_cached_result as lookup_cached_flash_review_result,
     store_result as store_flash_review_result,
 )
-from scan_worker.flash_review_hunk_scope import build_hunk_scope_correction_context
 from scan_worker.github_api import (
     MAX_CONTEXT_FILE_BYTES,
     MAX_CONTEXT_FILES,
@@ -154,9 +148,9 @@ from scan_worker.github_api import (
     fetch_default_branch_head_sha,
     fetch_file_content,
     fetch_pr_changed_files,
-    fetch_pr_context,
     fetch_pr_diff,
     fetch_pr_is_open,
+    fetch_pr_title,
     upsert_pr_comment,
 )
 from app_server.email_templates import (
@@ -175,6 +169,7 @@ from scan_worker.model_tiers import (
     MANAGED_AUDIT_MODEL,
     PRO_MODEL,
     VERIFICATION_MODEL,
+    flash_review_model_used,
     model_for_plan,
     resolve_model,
     writing_adapter_for,
@@ -2150,9 +2145,9 @@ def _run_flash_review(
     # order. See order_changed_files_by_diff_size's docstring.
     changed_files = order_changed_files_by_diff_size(changed_files, diff_patches)
     try:
-        pr_context = fetch_pr_context(client, token, repo_full_name, pr_number)
+        pr_title = fetch_pr_title(client, token, repo_full_name, pr_number)
     except Exception:  # noqa: BLE001
-        pr_context = ""
+        pr_title = ""
 
     spend_accumulator = {"total": 0.0}
     # Verification runs findings concurrently on a bounded thread pool (see
@@ -2175,22 +2170,17 @@ def _run_flash_review(
     if is_non_substantive_diff(changed_files):
         findings: list[dict] = []
     else:
-        file_context, file_contents = fetch_review_file_context(
+        # file_context (the formatted prompt blob half of this call) is
+        # discarded - only file_contents (the raw fetched content) is
+        # needed, for citation grounding/verification. Never put in the
+        # LLM prompt at all: compact mode measured matching or beating
+        # full-context inclusion on independently-verified accept rate
+        # (see aletheore-benchmarks/pr_review/README.md), and PR-Agent's
+        # own real prompt (see flash_review.FLASH_REVIEW_SYSTEM_PROMPT) has
+        # no slot for it either way.
+        _file_context, file_contents = fetch_review_file_context(
             client, token, repo_full_name, changed_files, head_sha
         )
-        # Compact mode: file_contents (the raw fetched content) is still used
-        # below for citation grounding/verification, but the raw file-content
-        # blob itself is deliberately never put in the prompt. A 3-run real
-        # Luna-generates/DeepSeek-verifies benchmark (see
-        # aletheore-benchmarks/pr_review/README.md) found compact matched or
-        # beat full-context inclusion on independently-verified accept rate
-        # on every run (96.7-97.7% vs 85.7-100%, the wider spread on context's
-        # side being run-to-run coverage noise, not a real quality edge) while
-        # using a fraction of the prompt tokens - so this is now the default,
-        # not an experiment. `file_context` is blanked right after the fetch
-        # rather than removed as a parameter, so nothing downstream needs to
-        # change if this default is ever revisited.
-        file_context = ""
         skipped_files = files_missing_from_review_context(changed_files, file_contents)
         if skipped_files:
             logging.getLogger("scan_worker.jobs").info(
@@ -2201,42 +2191,21 @@ def _run_flash_review(
                 len(changed_files),
                 ", ".join(skipped_files[:10]),
             )
+        # evidence is still fetched - referenced_symbol_context below feeds
+        # find_semantic_regressions's deterministic checks regardless of
+        # what the LLM prompt itself contains, and this same deterministic
+        # module graph is reused post-hoc for symbol attribution further
+        # down (find_symbol_at_location). The other evidence-context
+        # builders that used to also live here (code evidence, dependency/
+        # change-impact signals, blast radius, schema/endpoint facts, hunk-
+        # scope correction) only ever fed the LLM prompt's now-removed
+        # code_evidence_context blob - dropped along with it, since PR-
+        # Agent's real prompt (see flash_review.FLASH_REVIEW_SYSTEM_PROMPT)
+        # has no slot for them and this exact combination was never part of
+        # what was measured before shipping that prompt.
         evidence = _evidence_for_review_or_latest(
             settings.database_url, installation_id, repo_full_name, head_sha
         )
-        code_evidence_context = build_code_evidence_context(evidence, changed_files)
-        dependency_impact_context = build_dependency_impact_context(evidence, changed_files)
-        if dependency_impact_context:
-            code_evidence_context = "\n\n".join(
-                part for part in (code_evidence_context, dependency_impact_context) if part
-            )
-        change_impact_context = build_change_impact_context(diff_text)
-        if change_impact_context:
-            code_evidence_context = "\n\n".join(
-                part for part in (code_evidence_context, change_impact_context) if part
-            )
-
-        blast_radius_context = build_blast_radius_context(
-            evidence, changed_files, diff_text,
-            lambda p: fetch_file_content(client, token, repo_full_name, p, head_sha),
-            diff_patches=diff_patches,
-        )
-        if blast_radius_context:
-            code_evidence_context = "\n\n".join(
-                part for part in (code_evidence_context, blast_radius_context) if part
-            )
-
-        schema_endpoint_context = build_schema_endpoint_context(evidence, changed_files, file_contents)
-        if schema_endpoint_context:
-            code_evidence_context = "\n\n".join(
-                part for part in (code_evidence_context, schema_endpoint_context) if part
-            )
-
-        hunk_scope_context = build_hunk_scope_correction_context(file_contents, diff_patches)
-        if hunk_scope_context:
-            code_evidence_context = "\n\n".join(
-                part for part in (code_evidence_context, hunk_scope_context) if part
-            )
 
         def _fetch_symbol_source(file_path: str, start_line: int, end_line: int) -> str | None:
             content = fetch_file_content(client, token, repo_full_name, file_path, head_sha)
@@ -2248,7 +2217,7 @@ def _run_flash_review(
             evidence, changed_files, diff_text, _fetch_symbol_source
         )
         dsn = settings.database_url
-        flash_review_model = resolve_model(FLASH_REVIEW_FALLBACK_MODEL)
+        flash_review_model = flash_review_model_used(FLASH_REVIEW_FALLBACK_MODEL)
 
         def _on_usage(
             prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0
@@ -2360,17 +2329,14 @@ def _run_flash_review(
                 )
                 return False
 
-        # code_evidence_context defaults to "" in review_diff's own
-        # signature, so passing it unconditionally (even when this build
-        # produced none) is identical to omitting it - no need for the two
-        # near-duplicate call sites this used to be split into.
         findings = review_diff(
             diff_text,
-            file_context=file_context,
-            code_evidence_context=code_evidence_context,
             on_usage=_on_usage,
+            pr_title=pr_title,
+            # Feeds find_semantic_regressions's deterministic checks only -
+            # PR-Agent's real prompt (FLASH_REVIEW_SYSTEM_PROMPT) has no
+            # slot for it in the LLM-facing user prompt.
             referenced_symbol_context=referenced_symbol_context,
-            pr_context=pr_context,
             # The similarity cache is keyed only by (installation_id,
             # repo_full_name) + diff similarity - it has no notion of
             # which model produced a cached result. Free tier never
@@ -2490,9 +2456,9 @@ def _run_flash_review(
     findings_to_post = semantic_findings_for_posting + llm_findings
 
     # Symbol attribution is looked up here, post-hoc, from the same
-    # deterministic module graph build_blast_radius_context already reads -
-    # never generated by the LLM - so a finding can never be mislabeled
-    # with a symbol name that doesn't actually contain the cited line.
+    # deterministic module graph `evidence` already holds - never generated
+    # by the LLM - so a finding can never be mislabeled with a symbol name
+    # that doesn't actually contain the cited line.
     # find_symbol_at_location returns None for module-level code or a file
     # outside the scanned evidence; _flash_review_comment_body treats a
     # missing symbol as "nothing to show", not an error.
