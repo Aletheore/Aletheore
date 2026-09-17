@@ -564,6 +564,26 @@ def fetch_pr_context(
     return "\n".join(parts) if len(parts) > 1 else ""
 
 
+def fetch_pr_title(
+    client: httpx.Client,
+    token: str,
+    repo_full_name: str,
+    pr_number: int,
+) -> str:
+    """The PR's real title, on its own - review_diff needs it as a
+    discrete template variable (PR-Agent's own prompt has a dedicated
+    `title` slot, separate from free-form PR context), not folded into
+    fetch_pr_context's single formatted blob."""
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    response = client.get(f"/repos/{repo_full_name}/pulls/{pr_number}", headers=headers)
+    response.raise_for_status()
+    payload = response.json()
+    return str(payload.get("title") or "").strip()
+
+
 def fetch_pr_is_open(
     client: httpx.Client,
     token: str,

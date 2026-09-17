@@ -223,6 +223,109 @@ def writing_adapter_for(
     )
 
 
+FLASH_REVIEW_GENERATION_MODEL = "glm-5.3-flash"
+
+
+def _indierouter_available() -> bool:
+    return has_api_key("INDIEROUTER_API_KEY", "IndieRouter")
+
+
+def flash_review_generation_adapter(
+    on_usage: Callable[[int, int, int], None] | None = None,
+    before_llm_call: Callable[[], bool] | None = None,
+    fallback_model: str = "deepseek-v4-flash",
+) -> OpenAICompatibleAdapter:
+    """Flash Review's real generation adapter - GLM-5.3-Flash via
+    IndieRouter, PR-Agent's own real system/user prompt (see
+    flash_review.py's FLASH_REVIEW_SYSTEM_PROMPT/_FLASH_REVIEW_USER_PROMPT_TEMPLATE),
+    temperature=0.2, reasoning_effort=low.
+
+    The permanent validation record: PR-Agent's real prompt + 6 condensed
+    Aletheore safety rules appended AFTER PR-Agent's own schema/example
+    block (not through its extra_instructions slot, which measured worse -
+    55.2% avg F1, a real regression from adding anything there at all) +
+    temperature=0.2 + reasoning_effort=low, run 3x on the FULL 50-PR
+    Martian corpus across 5 real repos (sentry/grafana/cal.com/discourse/
+    keycloak, 10 each, not just one repo's subset) against golden review
+    comments, gpt-5-nano judge: F1=60.4% avg (56.3-62.6% range) - the
+    number that actually gates this decision. The 6 rules: untrusted-
+    content/prompt-injection defense, referenced-symbol evidence-only
+    claims, swallowed-exception-despite-comment override, sibling-
+    consistency check (equals/hashCode, serialize/deserialize, etc.),
+    behavior-changed-before-reporting comparison, and diff-hunk-header-
+    is-not-proof-of-nesting. Two OTHER candidate rules (a local-logic
+    sanity check, a host-language-escaping warning) were tried and
+    REJECTED: on the same full-corpus protocol they measured 61.7% avg
+    with a much wider, noisier spread (49.1-71.7%) when tested alongside
+    a since-superseded 4-rule baseline - a real, reproducible cost, unlike
+    the 2 rules that shipped, which cost nothing measurable. A bare-4-rule
+    version (without the 2 behavior/hunk-header rules) scored 60.0% avg
+    (57.9-62.1%) on this same full-corpus protocol - the two are
+    statistically indistinguishable, so the 6-rule version shipped for its
+    extra real bug-class coverage at no measured cost, not because it
+    scored higher. A keycloak-only 10-PR pilot of the 4-rule config scored
+    higher (66.3% avg) and an even earlier, bare-PR-Agent-prompt-with-no-
+    safety-rules keycloak-only pilot scored 62.4% avg (8 runs) - both real
+    numbers from real runs, but both from the smaller, single-repo subset
+    that consistently overstated effects relative to the full corpus all
+    night; cited here only for provenance, not as numbers that justified
+    shipping.
+    temperature=0.2 is PR-Agent's own real production default (their
+    configuration.toml), never previously set anywhere in this codebase.
+    reasoning_effort=low is a separate, independently validated lever
+    specific to GLM-5.3 (its thinking mode cannot be disabled, only
+    steered - "low" measured the same or better quality than the default
+    effort while avoiding the real timeouts "high"/"max" hit on longer
+    prompts) - unrelated to prompt wording, kept regardless of provider.
+
+    Sarvam was evaluated side-by-side as an alternative host for the same
+    model and rejected: real production instability isn't the concern (a
+    corrected model id and explicit reasoning_effort=low fixed its earlier
+    crashes), but it ran out of API credits mid-run and measured slower
+    (avg 11.8s/call vs IndieRouter's 8.2s) - IndieRouter was also the
+    provider every number above was actually validated against, so
+    switching hosts now would be an untested variable on top of an
+    already-large prompt/model change to the paid review path.
+
+    Falls back to the existing Luna-or-DeepSeek path (writing_adapter_for's
+    own default, via `fallback_model`) if INDIEROUTER_API_KEY isn't
+    configured, so a deploy that hasn't rolled the new credential out yet
+    degrades to the previous known-good behavior instead of hard-failing
+    every Flash Review. `fallback_model` defaults to the same real
+    DeepSeek model flash_review.FLASH_REVIEW_FALLBACK_MODEL names (passed
+    explicitly by callers rather than imported directly, since flash_review
+    imports FROM this module - importing back would be circular); passing
+    GLM-5.3-Flash's own model id here would be wrong, since
+    writing_adapter_for's fallback_model is only ever used to build a
+    DeepSeek adapter, and "glm-5.3-flash" isn't a real DeepSeek model name.
+    """
+    if not _indierouter_available():
+        logging.getLogger(__name__).warning(
+            "INDIEROUTER_API_KEY not configured - falling back to Luna for Flash Review generation"
+        )
+        return writing_adapter_for(fallback_model, on_usage=on_usage, before_llm_call=before_llm_call)
+    return OpenAICompatibleAdapter(
+        name="IndieRouter",
+        base_url="https://api.indierouter.ai/v1",
+        api_key_env_var="INDIEROUTER_API_KEY",
+        model=FLASH_REVIEW_GENERATION_MODEL,
+        temperature=0.2,
+        extra_body={"reasoning_effort": "low"},
+        on_usage=on_usage,
+        before_llm_call=before_llm_call,
+    )
+
+
+def flash_review_model_used(fallback_model: str) -> str:
+    """The model name flash_review_generation_adapter will actually
+    construct right now - mirrors resolve_model's own role (cost
+    accounting/cache labeling must never drift from what actually ran).
+    `fallback_model` matches resolve_model's own parameter: the model
+    writing_adapter_for's Luna-or-DeepSeek fallback would use if
+    INDIEROUTER_API_KEY isn't configured."""
+    return FLASH_REVIEW_GENERATION_MODEL if _indierouter_available() else resolve_model(fallback_model)
+
+
 def writing_adapter_for_airview(
     fallback_model: str,
     on_usage: Callable[[int, int, int], None] | None = None,
