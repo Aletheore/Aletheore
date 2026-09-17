@@ -1052,8 +1052,17 @@ def _shell_injection_findings_java(file: str, source: str, hunks: list[_Hunk]) -
 # built from a variable. Different enough from the Python/Java shape
 # (there is no equivalent of subprocess's shell= kwarg to gate on) that it
 # needs its own regex rather than sharing _SHELL_CALL_RE/_JAVA_SHELL_CALL_RE.
+#
+# Real gap found in a reverse-audit of #725/#726: the bare "sh"/"bash"
+# literal never matched exec.Command("/bin/sh", "-c", ...) or
+# exec.Command("/bin/bash", "-c", ...) - real Go code invokes the shell by
+# full path at least as often as by bare name (os/exec resolves a bare
+# name via PATH at call time, which many callers avoid pinning down
+# explicitly). Allowing an optional path prefix before the sh/bash
+# basename closes that false negative without widening the match to
+# unrelated binaries whose name merely contains "sh" or "bash".
 _GO_SHELL_CALL_RE = re.compile(
-    r'\bexec\.Command\s*\(\s*"(?:sh|bash)"\s*,\s*"-c"\s*,'
+    r'\bexec\.Command\s*\(\s*"(?:[\w./-]*/)?(?:sh|bash)"\s*,\s*"-c"\s*,'
 )
 
 

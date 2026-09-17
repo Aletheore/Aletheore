@@ -555,6 +555,48 @@ def test_go_shell_injection_with_sh_c_is_flagged():
     assert any("shell-injection" in f["issue"] for f in findings)
 
 
+def test_go_shell_injection_with_full_path_sh_is_flagged():
+    # Real gap found in a reverse-audit of #725/#726: the check only
+    # matched the bare "sh"/"bash" literal, so exec.Command("/bin/sh",
+    # "-c", ...) - at least as common in real Go code as the bare name -
+    # went undetected.
+    diff = (
+        "--- runner.go ---\n@@ -1,1 +1,1 @@\n"
+        "-\t// no-op\n"
+        '+\texec.Command("/bin/sh", "-c", "ping " + host)\n'
+    )
+    file_contents = {"runner.go": 'func run() {\n\texec.Command("/bin/sh", "-c", "ping " + host)\n}\n'}
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert any("shell-injection" in f["issue"] for f in findings)
+
+
+def test_go_shell_injection_with_full_path_bash_is_flagged():
+    diff = (
+        "--- runner.go ---\n@@ -1,1 +1,1 @@\n"
+        "-\t// no-op\n"
+        '+\texec.Command("/usr/local/bin/bash", "-c", "ping " + host)\n'
+    )
+    file_contents = {
+        "runner.go": 'func run() {\n\texec.Command("/usr/local/bin/bash", "-c", "ping " + host)\n}\n'
+    }
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert any("shell-injection" in f["issue"] for f in findings)
+
+
+def test_go_binary_name_merely_containing_sh_is_not_flagged():
+    # The path-prefix widening must not turn into a substring match - a
+    # binary whose name happens to contain "sh" (e.g. "fish") is not a
+    # shell invocation.
+    diff = (
+        "--- runner.go ---\n@@ -1,1 +1,1 @@\n"
+        "-\t// no-op\n"
+        '+\texec.Command("fish", "-c", "ping " + host)\n'
+    )
+    file_contents = {"runner.go": 'func run() {\n\texec.Command("fish", "-c", "ping " + host)\n}\n'}
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert findings == []
+
+
 def test_go_direct_exec_command_is_not_flagged():
     diff = (
         "--- runner.go ---\n@@ -1,1 +1,1 @@\n"
