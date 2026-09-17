@@ -127,6 +127,36 @@ def test_java_empty_catch_with_a_genuine_multiline_block_comment_is_flagged():
     assert "empty body" in findings[0]["issue"]
 
 
+def test_java_empty_catch_block_comment_closing_on_same_line_as_catch_brace_is_flagged():
+    # Real gap found auditing this check: the multi-line block-comment
+    # tracker consumed the comment's closing "*/" line unconditionally,
+    # never checking whether the catch's own closing "}" shared that same
+    # line - so a comment ending right before the brace ("... */ }") left
+    # `closed` False and the whole finding was silently dropped.
+    diff = (
+        "--- Service.java ---\n@@ -1,2 +1,6 @@\n"
+        "+    try {\n"
+        "+        doWork();\n"
+        "+    } catch (IOException e) {\n"
+        "+        /* this failure is expected\n"
+        "+           during shutdown */ }\n"
+    )
+    file_contents = {
+        "Service.java": (
+            "void run() {\n"
+            "    try {\n"
+            "        doWork();\n"
+            "    } catch (IOException e) {\n"
+            "        /* this failure is expected\n"
+            "           during shutdown */ }\n"
+            "}\n"
+        )
+    }
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert len(findings) == 1
+    assert "empty body" in findings[0]["issue"]
+
+
 def test_java_catch_with_real_handling_is_not_flagged():
     diff = (
         "--- Service.java ---\n@@ -1,2 +1,5 @@\n"
@@ -232,6 +262,27 @@ def test_java_removed_exception_handler_is_flagged():
         "void opOne(String key, Store store) throws ErrorA { ... }"
     )
     file_contents = {"Caller.java": "void handler() {\n    opOne(key, store);\n}\n"}
+    findings = find_semantic_regressions(diff, file_contents, refs)
+    assert findings
+    assert "removed its exception handler" in findings[0]["issue"]
+
+
+def test_java_removed_exception_handler_is_flagged_across_qualified_vs_unqualified_names():
+    # Real gap found auditing this check: it compared throws/catch types by
+    # exact string equality, so a fully-qualified throws clause (as a
+    # referenced-definition snippet may render it) never matched the
+    # unqualified catch type real Java code overwhelmingly writes via an
+    # import - a genuinely removed handler went undetected.
+    diff = (
+        "--- Caller.java ---\n@@ -1,2 +1,2 @@\n"
+        "-    try { opOne(key); } catch (IOException e) { log.warn(\"failed\", e); }\n"
+        "+    opOne(key);\n"
+    )
+    refs = (
+        "--- referenced definition (not part of this diff): Callee.java:opOne ---\n"
+        "void opOne(String key) throws java.io.IOException { ... }"
+    )
+    file_contents = {"Caller.java": "void handler() {\n    opOne(key);\n}\n"}
     findings = find_semantic_regressions(diff, file_contents, refs)
     assert findings
     assert "removed its exception handler" in findings[0]["issue"]
@@ -412,9 +463,14 @@ def test_java_equality_comparison_on_instance_field_is_not_flagged_as_mutation()
 
 
 def test_java_mutates_input_with_removed_defensive_copy_is_flagged():
+    # Realistic diff shape: removing "working"'s only declaration while an
+    # unchanged line still called sortItems(working) would not compile, so
+    # a real diff removing the copy must also remove/replace that call in
+    # the same hunk - not leave it as untouched context.
     diff = (
-        "--- Caller.java ---\n@@ -1,1 +1,1 @@\n"
+        "--- Caller.java ---\n@@ -1,2 +1,1 @@\n"
         "-    List<Item> working = new ArrayList<>(raw);\n"
+        "-    sortItems(working);\n"
         "+    sortItems(raw);\n"
     )
     refs = (
@@ -424,6 +480,28 @@ def test_java_mutates_input_with_removed_defensive_copy_is_flagged():
     file_contents = {"Caller.java": "void run() {\n    sortItems(raw);\n}\n"}
     findings = find_semantic_regressions(diff, file_contents, refs)
     assert any("removed the defensive copy" in f["issue"] for f in findings)
+
+
+def test_java_unrelated_removed_copy_with_coincidental_variable_name_is_not_flagged():
+    # Real false positive found auditing this check: it only verified SOME
+    # "new ArrayList<>(x)" assignment was removed and the same raw variable
+    # now reaches the call - never that the removed code actually passed
+    # the copy to this call. Here the removed copy was kept for an
+    # unrelated audit log, and sortItems(raw) is unchanged; the two lines
+    # only coincidentally share the same source variable name.
+    diff = (
+        "--- Caller.java ---\n@@ -1,2 +1,1 @@\n"
+        "-    List<Item> backup = new ArrayList<>(raw);\n"
+        "-    auditLog.save(backup);\n"
+        "+    sortItems(raw);\n"
+    )
+    refs = (
+        "--- referenced definition (not part of this diff): Callee.java:sortItems ---\n"
+        "void sortItems(List<Item> items) { items.sort(...); }"
+    )
+    file_contents = {"Caller.java": "void run() {\n    sortItems(raw);\n}\n"}
+    findings = find_semantic_regressions(diff, file_contents, refs)
+    assert findings == []
 
 
 def test_java_defensive_copy_that_remains_is_not_flagged():

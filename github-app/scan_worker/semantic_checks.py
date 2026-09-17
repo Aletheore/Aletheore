@@ -374,6 +374,19 @@ def _java_declared_exceptions(dependency: str) -> list[str]:
     return sorted(set(_JAVA_THROW_NEW_RE.findall(dependency)))
 
 
+def _java_simple_name(qualified: str) -> str:
+    # Real gap found auditing this check: a `throws java.io.IOException`
+    # (fully qualified, as a referenced-definition snippet may render it)
+    # never string-equals a `catch (IOException e)` (unqualified, as real
+    # Java code overwhelmingly writes it via an import) - exact matching
+    # silently missed a genuinely removed/mismatched handler. Comparing by
+    # simple name instead; a same-simple-name collision across two
+    # different packages at one call site is rare enough that this
+    # conservative check accepts the risk rather than require real type
+    # resolution it doesn't have.
+    return qualified.rsplit(".", 1)[-1]
+
+
 def _check_reference_at_call_java(
     file: str,
     source: str,
@@ -387,12 +400,13 @@ def _check_reference_at_call_java(
 
     raised = _java_declared_exceptions(dependency)
     if raised:
+        raised_simple = {_java_simple_name(t) for t in raised}
         removed_catch = _JAVA_CALL_CATCH_RE.search(removed_text)
         added_catch = _JAVA_CALL_CATCH_RE.search(added_text)
 
         if removed_catch:
             removed_types = [t.strip() for t in removed_catch.group(1).split("|")]
-            if any(t in raised for t in removed_types):
+            if any(_java_simple_name(t) in raised_simple for t in removed_types):
                 if not added_catch:
                     return _finding(
                         file, call_line,
@@ -419,7 +433,9 @@ def _check_reference_at_call_java(
                 # supertype relationships (e.g. a custom exception
                 # hierarchy) without real type information - that would be
                 # guessing, not evidence.
-                covers_raised = any(c in raised or c in ("Exception", "Throwable") for c in caught)
+                covers_raised = any(
+                    _java_simple_name(c) in raised_simple or c in ("Exception", "Throwable") for c in caught
+                )
                 if not covers_raised:
                     return _finding(
                         file,
@@ -431,7 +447,18 @@ def _check_reference_at_call_java(
 
     if _JAVA_MUTATES_RE.search(dependency):
         copied = re.search(r"\b(\w+)\s*=\s*new\s+ArrayList<>\s*\(\s*(\w+)\s*\)", removed_text)
-        if copied and re.search(rf"\b{re.escape(name)}\s*\(\s*{re.escape(copied.group(2))}\b", added_text):
+        # Real false positive found auditing this check: it only verified a
+        # copy assignment was removed and the same raw variable now reaches
+        # the call - never that the removed code actually PASSED the copy
+        # to this call. An unrelated removed copy (e.g. one kept for a
+        # separate audit log) whose source variable happens to match the
+        # call's argument was flagged as a lost defensive copy even though
+        # the call never used the copy in the first place.
+        if (
+            copied
+            and re.search(rf"\b{re.escape(name)}\s*\(\s*{re.escape(copied.group(1))}\b", removed_text)
+            and re.search(rf"\b{re.escape(name)}\s*\(\s*{re.escape(copied.group(2))}\b", added_text)
+        ):
             return _finding(
                 file, call_line,
                 f"{name} mutates its input, but the changed code removed the defensive copy.",
@@ -918,10 +945,21 @@ def _swallowed_exception_findings_java(file: str, source: str, hunks: list[_Hunk
                     stripped = later.strip()
 
                     if in_block_comment:
-                        if "*/" in stripped:
-                            in_block_comment = False
-                        body_lines.append("")
-                        continue
+                        if "*/" not in stripped:
+                            body_lines.append("")
+                            continue
+                        # Real gap found auditing this check: the comment's
+                        # closing "*/" can share a line with the catch's own
+                        # closing "}" (e.g. "explanation. */ }"). Falling
+                        # through to re-examine whatever follows "*/" - rather
+                        # than unconditionally consuming the whole line - so
+                        # that trailing "}" still closes the catch instead of
+                        # silently dropping the finding.
+                        in_block_comment = False
+                        stripped = stripped.split("*/", 1)[1].strip()
+                        if stripped == "":
+                            body_lines.append("")
+                            continue
                     if stripped == "}":
                         closed = True
                         break
