@@ -41,6 +41,23 @@ FLASH_REVIEW_FALLBACK_MODEL = "deepseek-v4-flash"
 # Aletheore's own condensed safety rules appended AFTER PR-Agent's own
 # schema/example block.
 #
+# A real internal inconsistency exists in this vendored text, found via
+# independent peer review (2026-09-17): it includes PR-Agent's own
+# explanation of its "__new hunk__"/"__old hunk__" line-numbered diff
+# format (their extend_patch/decouple_and_convert_to_hunks_with_line_numbers
+# mechanism), but _build_flash_review_user_prompt below never actually
+# sends the diff in that format - it substitutes Aletheore's own plain
+# unified diff (see the "Deliberately NOT PR-Agent's widened diff context"
+# note further down). This was TRIED AND REVERTED: stripping the mismatched
+# paragraph and re-validating 3x on the same full 50-PR corpus measured a
+# real, consistent regression (55.4% avg F1, 54.2-56.0% range - every
+# stripped run scored below the worst unstripped run, not overlapping
+# noise). Counterintuitive and not fully understood (best guess: the extra
+# text may prime more careful line-level reasoning in general, even applied
+# to a diff format it doesn't literally describe), but the measured
+# combination is what's kept - left in deliberately, logical inconsistency
+# and all, because the alternative is worse in practice.
+#
 # This replaced Aletheore's own from-scratch prompt after a real overnight
 # investigation (2026-09-17) found PR-Agent's wording, combined with
 # temperature=0.2 (their own real production default, never set anywhere in
