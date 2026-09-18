@@ -175,11 +175,14 @@ def _diff_hunks_by_file(diff_text: str) -> dict[str, list[_Hunk]]:
 
 def _call_lines(source: str, name: str) -> list[int]:
     needle = f"{name}("
-    return [number for number, line in enumerate(source.splitlines(), 1) if needle in line]
+    # split("\n"), never splitlines() - see _line_number_near_hunk's
+    # docstring for the full explanation (same bug, same fix, same reason,
+    # repeated at every source-content line-splitting site in this file).
+    return [number for number, line in enumerate(source.split("\n"), 1) if needle in line]
 
 
 def _line_number(source: str, needle: str) -> int | None:
-    for number, line in enumerate(source.splitlines(), 1):
+    for number, line in enumerate(source.split("\n"), 1):
         if needle in line:
             return number
     return None
@@ -201,8 +204,20 @@ def _line_number_near_hunk(source: str, needle: str, hunk: "_Hunk") -> int | Non
     every proximity check in this module already uses makes a same-window
     collision the only way to still get this wrong, instead of any same-
     name occurrence anywhere in the file.
+
+    split("\n"), never splitlines() - real bug found in a backward audit:
+    splitlines() also breaks on \v, \f, \x1c-\x1e, NEL, LS, and PS, none
+    of which GitHub or git treat as a line boundary (they only ever split
+    on "\n"). hunk.new_start/new_end are real, \n-based line numbers
+    parsed straight from GitHub's own diff headers, so indexing them into
+    a splitlines()-produced list silently windows around the WRONG lines
+    the moment one of those characters appears anywhere earlier in the
+    file - the same bug class already found and fixed in flash_review.py's
+    _clickable_suggestion/_line_citation_content_matches and jobs.py's
+    _fetch_symbol_source, present here too since every one of them used to
+    share the same splitlines()-based line-indexing approach.
     """
-    lines = source.splitlines()
+    lines = source.split("\n")
     start = max(0, hunk.new_start - 1 - DIFF_HUNK_TOLERANCE)
     end = min(len(lines), hunk.new_end + DIFF_HUNK_TOLERANCE)
     for offset, line in enumerate(lines[start:end]):
@@ -242,7 +257,9 @@ def _check_reference_at_call(
             re.search(rf"\bexcept\s+{re.escape(error)}\b", line) for line in removed_lines for error in raised
         ) and not any(
             re.search(rf"\bexcept\s+{re.escape(error)}\b", line)
-            for line in source.splitlines()[max(0, hunk.new_start - 1 - DIFF_HUNK_TOLERANCE) : hunk.new_end + DIFF_HUNK_TOLERANCE]
+            # split("\n"), never splitlines() - see _line_number_near_hunk's
+            # docstring; same real \n-based hunk line numbers, same bug.
+            for line in source.split("\n")[max(0, hunk.new_start - 1 - DIFF_HUNK_TOLERANCE) : hunk.new_end + DIFF_HUNK_TOLERANCE]
             for error in raised
         ):
             return _finding(
@@ -273,8 +290,10 @@ def _check_reference_at_call(
         # different yield-based dependency - could trip the len(uses) >= 2
         # whole-file count and fire a false "consumes the iterator twice"
         # finding tied to unrelated code.
+        # split("\n"), never splitlines() - see _line_number_near_hunk's
+        # docstring; same real \n-based hunk line numbers, same bug.
         window = "\n".join(
-            source.splitlines()[
+            source.split("\n")[
                 max(0, hunk.new_start - 1 - DIFF_HUNK_TOLERANCE) : hunk.new_end + DIFF_HUNK_TOLERANCE
             ]
         )
@@ -566,7 +585,9 @@ def _resource_leak_findings(file: str, source: str, hunks: list[_Hunk]) -> list[
             if any(re.search(rf"\b{re.escape(var)}\.[Cc]lose\s*\(", added) for added in hunk.added):
                 continue  # still closed somewhere in this same hunk
 
-            nearby = source.splitlines()[
+            # split("\n"), never splitlines() - see _line_number_near_hunk's
+            # docstring; same real \n-based hunk line numbers, same bug.
+            nearby = source.split("\n")[
                 max(0, hunk.new_start - 1 - DIFF_HUNK_TOLERANCE) : hunk.new_end + DIFF_HUNK_TOLERANCE
             ]
             if any(re.search(rf"\b{re.escape(var)}\.[Cc]lose\s*\(", line) for line in nearby):

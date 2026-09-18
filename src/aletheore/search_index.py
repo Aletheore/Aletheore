@@ -523,7 +523,19 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
         if not file_path.exists():
             continue
         try:
-            lines = file_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            # split("\n"), never splitlines() - same real bug class found
+            # and fixed elsewhere in this codebase (query.py's
+            # find_symbol_source, scan_worker/jobs.py's
+            # _fetch_symbol_source): splitlines() also breaks on \v, \f,
+            # \x1c-\x1e, NEL, LS, and PS, none of which git treats as a
+            # line boundary (only "\n" is). Every symbol chunk built below
+            # is sliced out of `lines` via symbol["start_line"]/
+            # ["end_line"] - real, \n-based line numbers recorded when
+            # this file was parsed - so a splitlines()-produced `lines`
+            # silently fed the WRONG source text into this file's own
+            # search index the moment one of those characters appeared
+            # anywhere earlier in the file.
+            lines = file_path.read_text(encoding="utf-8", errors="ignore").split("\n")
         except OSError:
             continue
         file_context = _file_header_comment(lines)

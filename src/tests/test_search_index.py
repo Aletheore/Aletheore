@@ -80,6 +80,32 @@ def test_build_chunks_slices_real_source_per_symbol(tmp_path):
     assert "def greet():" in chunk["text"]
 
 
+def test_build_chunks_symbol_source_indexes_by_real_newline_lines(tmp_path):
+    # Real gap found in a backward audit: build_chunks read each file via
+    # .splitlines() before slicing per-symbol source with symbol["start_
+    # line"]/["end_line"] - real, \n-based line numbers recorded when the
+    # file was parsed. splitlines() also breaks on \v, \f, \x1c-\x1e, NEL,
+    # LS, and PS, none of which git treats as a line boundary (only "\n"
+    # is), so a file with one of those characters anywhere earlier than a
+    # symbol silently indexed the WRONG source into that symbol's chunk -
+    # corrupting the search index itself, not just a citation. Ten
+    # standalone form-feed characters, each its own splitlines() boundary,
+    # same real construction already used for this bug class elsewhere in
+    # this codebase.
+    (tmp_path / "app.py").write_text(
+        "x = 1\n" + ("\x0c" * 10) + "\ndef greet():\n    return 'hi'\n"
+    )
+    evidence = _evidence_with_module(
+        "app.py", [{"name": "greet", "start_line": 3, "end_line": 4}]
+    )
+
+    chunks = build_chunks(evidence, tmp_path)
+
+    symbol_chunk = next(c for c in chunks if c["symbol_name"] == "greet")
+    assert "def greet():" in symbol_chunk["text"]
+    assert "return 'hi'" in symbol_chunk["text"]
+
+
 def test_build_chunks_module_head_stops_at_a_class_that_precedes_the_first_function(tmp_path):
     # Regression: code_symbols concatenates functions then classes - two
     # independently file-ordered lists, not merged/sorted by start_line - so
