@@ -18,6 +18,33 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-09-18 (fourth deploy)
+
+1 commit since the third 2026-09-18 deploy, tagged `github-app-deploy-2026-09-18-4` (commit
+`ae8e319`), no migrations:
+
+- **#734 - a webhook-handler crash now actually alerts, and a real cross-route bug that was
+  suppressing that alert is fixed.** `/webhook` can only ever produce a 5xx one way: an unhandled
+  exception reaching `app_server.main`'s `handle_unexpected_exception`, which already called
+  `send_error_alert` - but that call's dedup key was a bare `"app_server"` plus exception type,
+  not scoped by route, with a process-local (in-memory) 6-hour cooldown. Any unrelated exception of
+  the same type anywhere else in `app_server` within that window would silently eat the `/webhook`
+  alert too, and a container restart wipes the log evidence needed to even notice. Real incident
+  this closes out: PR #727 (earlier the same night) sat merged with zero Flash Review activity for
+  ~18 hours because its "opened" webhook hit exactly this - a genuine crash (most likely the
+  already-fixed `_dead_code_context` sort-on-dict bug, #729) that produced no alert anywhere and no
+  surviving traceback once the container recycled. Fixed two ways: `send_error_alert`'s source is
+  now scoped by path (`app_server:/webhook` instead of bare `app_server`), closing the
+  cross-route suppression; and a new durable Redis counter (`record_webhook_5xx`,
+  `app_server/redis_client.py`) increments on every `/webhook` 5xx and survives a restart, read by
+  a new `ops_monitor` check (`_check_webhook_errors`, `scan_worker/jobs.py`) using the exact same
+  threshold/duration/cooldown shape as the existing queue-depth and failed-jobs checks. Independently
+  re-verified before merge: the dedup-key collision was traced by hand against `send_error_alert`'s
+  real logic, the new check's wiring matches the established `ops_monitor` pattern exactly, and the
+  new end-to-end test (`test_webhook_crash_records_durable_5xx_counter_and_scopes_alert_source`)
+  exercises the real `/webhook` route through a simulated crash rather than mocking the function
+  under test.
+
 ## 2026-09-18 (third deploy)
 
 2 commits since the second 2026-09-18 deploy, tagged `github-app-deploy-2026-09-18-3` (commit
