@@ -58,7 +58,20 @@ def find_symbol_source(
         raise SymbolNotFoundInEvidenceError(module_path, symbol_name)
 
     file_path = repo_path / module_path
-    lines = file_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    # split("\n"), never splitlines() - same real bug class already found
+    # and fixed in the github-app side of this codebase (flash_review.py's
+    # _clickable_suggestion/_line_citation_content_matches, jobs.py's
+    # _fetch_symbol_source): splitlines() also breaks on \v, \f,
+    # \x1c-\x1e, NEL, LS, and PS, none of which git/a real editor treat as
+    # a line boundary (only "\n" is). entry["start_line"]/["end_line"] are
+    # real, \n-based line numbers recorded when this file was parsed -
+    # indexing them into a splitlines()-produced list silently returns the
+    # WRONG symbol body the moment one of those characters appears
+    # anywhere earlier in the file. This is the backing implementation for
+    # both `aletheore symbol-source` (cli.py) and the aletheore_symbol_
+    # source MCP tool (mcp_server.py) - a wrong result here is returned
+    # directly to whoever asked, not merely mis-cited.
+    lines = file_path.read_text(encoding="utf-8", errors="ignore").split("\n")
     source = "\n".join(lines[entry["start_line"] - 1 : entry["end_line"]])
 
     return {

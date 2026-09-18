@@ -730,3 +730,32 @@ def test_go_shaped_text_in_a_javascript_file_is_not_flagged():
     }
     findings = find_semantic_regressions(diff, file_contents, "")
     assert findings == []
+
+
+def test_resource_leak_nearby_window_indexes_by_real_newline_lines_not_splitlines():
+    # Real gap found in a backward audit: _resource_leak_findings' own
+    # "is there still a close() nearby" window indexed source.splitlines()
+    # by hunk.new_start/new_end - real, \n-based line numbers parsed
+    # straight from GitHub's diff headers. splitlines() also breaks on
+    # \v, \f, \x1c-\x1e, NEL, LS, and PS, none of which GitHub or git treat
+    # as a line boundary, so a file with one of those characters anywhere
+    # earlier than the hunk silently windowed around the WRONG lines - this
+    # exact fixture's real f.close() sits well within the check's own
+    # +/-8-line tolerance of the hunk, but the ten form-feed characters
+    # near the top of the file shift every subsequent splitlines() index by
+    # ten, pushing the window past it. Before the fix this fired a false
+    # "resource leak" finding for a file where the resource genuinely is
+    # closed nearby; after the fix it correctly finds the close() and
+    # reports nothing.
+    diff = "--- service.py ---\n@@ -5,1 +5,1 @@\n-    f.close()\n+    pass\n"
+    file_contents = {
+        "service.py": (
+            "header\n"
+            + ("\x0c" * 10)
+            + "\nstmt1\nstmt2\nstmt3\nstmt4\nstmt5\nf.close()\nstmt6\nstmt7\nstmt8\nstmt9\n"
+        )
+    }
+
+    findings = find_semantic_regressions(diff, file_contents, "")
+
+    assert findings == []

@@ -2215,7 +2215,21 @@ def _run_flash_review(
             content = fetch_file_content(client, token, repo_full_name, file_path, head_sha)
             if content is None:
                 return None
-            return "\n".join(content.splitlines()[start_line - 1 : end_line])
+            # split("\n"), never splitlines() - same real bug class already
+            # found and fixed in this file's sibling line-indexing spots
+            # (flash_review.py's _clickable_suggestion and
+            # _line_citation_content_matches): splitlines() also breaks on
+            # \v, \f, \x1c-\x1e, NEL, LS, and PS, none of which GitHub or
+            # git treat as a line boundary (they only ever split on "\n").
+            # start_line/end_line here come from aletheore's own evidence
+            # graph (a real, \n-based line number recorded when the file
+            # was parsed) - indexing that into a splitlines()-produced list
+            # silently returns the WRONG symbol body the moment one of
+            # those characters appears anywhere earlier in the file, and
+            # that wrong body is then handed to the LLM as trusted,
+            # "--- referenced definition (not part of this diff) ---"
+            # evidence, not merely a mis-cited line a human could shrug off.
+            return "\n".join(content.split("\n")[start_line - 1 : end_line])
 
         referenced_symbol_context = build_referenced_symbol_context(
             evidence, changed_files, diff_text, _fetch_symbol_source
@@ -3027,7 +3041,11 @@ def _fix_suggestion_attachment(
         if not file_content:
             return None
 
-        lines = file_content.splitlines()
+        # split("\n"), never splitlines() - same real bug class as
+        # _fetch_symbol_source above: source_line is a real, \n-based line
+        # number, and splitlines() also breaks on \v, \f, \x1c-\x1e, NEL,
+        # LS, and PS, none of which GitHub or git treat as a line boundary.
+        lines = file_content.split("\n")
         anchor = (source_line or 1) - 1
         snippet = "\n".join(lines[max(0, anchor - 15) : min(len(lines), anchor + 15)])
         user_prompt = json.dumps(
@@ -4494,7 +4512,15 @@ def _real_line_count_fetcher(
             return None
         if content is None:
             return None
-        return len(content.splitlines())
+        # split("\n"), not splitlines() - verify_citations bounds-checks a
+        # citation's real, \n-based line number against this count
+        # (citation_verifier.py: "if citation["line"] > line_count"), and
+        # splitlines() also breaks on \v, \f, \x1c-\x1e, NEL, LS, and PS,
+        # none of which GitHub or git treat as a line boundary - so it can
+        # only ever OVER-count relative to real \n-based lines, letting a
+        # citation past the file's real end silently pass this check
+        # instead of being caught as out of bounds.
+        return content.count("\n") + 1
 
     return _fetch_line_count
 

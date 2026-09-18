@@ -178,6 +178,46 @@ def test_find_symbol_source_returns_exact_lines(tmp_path):
     assert result["source"] == "def login():\n    return config.load()"
 
 
+def test_find_symbol_source_indexes_by_real_newline_lines(tmp_path):
+    # Real gap found in a backward audit: this used content.splitlines()
+    # instead of content.split("\n"). Python's splitlines() also breaks on
+    # \v, \f, \x1c-\x1e, NEL, LS, and PS, none of which git or a real
+    # editor treat as a line boundary (only "\n" is) - entry["start_line"]/
+    # ["end_line"] are real, \n-based line numbers recorded when this file
+    # was parsed, so indexing them into a splitlines()-produced list
+    # silently returned the WRONG symbol body the moment one of those
+    # characters appeared anywhere earlier in the file. This is the
+    # backing implementation for both `aletheore symbol-source` and the
+    # aletheore_symbol_source MCP tool - a wrong result here is returned
+    # directly to whoever asked. Ten standalone form-feed characters, each
+    # its own splitlines() boundary, same real construction already used
+    # for this bug class in github-app's own regression tests.
+    repo = tmp_path
+    (repo / "app").mkdir()
+    (repo / "app" / "auth.py").write_text(
+        "x\n" + ("\x0c" * 10) + "\ndef login():\n    return 1\n"
+    )
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "app/auth.py",
+                    "imports": [],
+                    "imported_by": [],
+                    "symbols": {
+                        "functions": [{"name": "login", "start_line": 3, "end_line": 4}],
+                        "classes": [],
+                    },
+                },
+            ],
+        },
+    }
+
+    result = find_symbol_source(evidence, repo, "app/auth.py", "login")
+
+    assert result["source"] == "def login():\n    return 1"
+
+
 def test_find_symbol_source_raises_when_symbol_missing(tmp_path):
     with pytest.raises(SymbolNotFoundInEvidenceError, match="nonexistent"):
         find_symbol_source(make_evidence(), tmp_path, "app/auth.py", "nonexistent")

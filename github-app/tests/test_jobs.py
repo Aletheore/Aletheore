@@ -4499,6 +4499,106 @@ def test_flash_review_job_passes_referenced_symbol_context_to_review_diff(monkey
     assert "def _github_http_client() -> httpx.Client" in captured["referenced_symbol_context"]
 
 
+def test_run_flash_review_referenced_symbol_source_indexes_by_real_newline_lines(monkeypatch):
+    # Real gap found in a backward audit: _run_flash_review's own
+    # _fetch_symbol_source closure indexed the referenced file's content
+    # via splitlines() instead of split("\n"). Python's splitlines() also
+    # breaks on \v, \f, \x1c-\x1e, NEL, LS, and PS, none of which GitHub or
+    # git treat as a line boundary (they only ever split on "\n") - entry
+    # ["start_line"]/["end_line"] are real, \n-based line numbers recorded
+    # in aletheore's own evidence graph, so indexing them into a
+    # splitlines()-produced list silently pulled the WRONG symbol body the
+    # moment one of those characters appeared anywhere earlier in the
+    # file - and that wrong body is fed to the LLM as trusted "referenced
+    # definition (not part of this diff)" evidence, not merely a mis-cited
+    # line. Same real construction (ten standalone form-feed characters,
+    # each its own splitlines() boundary) as flash_review.py's own
+    # _line_citation_content_matches regression test for this bug class.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_pr_diff",
+        lambda *a, **k: "--- dashboard.py ---\n@@ -1,1 +75,1 @@\n+_github_http_client()\n",
+    )
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["dashboard.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs._latest_evidence_or_none",
+        lambda *a, **k: {
+            "repository": {
+                "modules": [
+                    {"path": "dashboard.py", "imports": ["admin.py"], "symbols": {"functions": [], "classes": []}},
+                    {
+                        "path": "admin.py",
+                        "imports": [],
+                        "symbols": {
+                            # Real \n-based lines: 1="line1", 2=ten form
+                            # feeds, 3-4=the real function. splitlines()
+                            # would put line 3's real content at a
+                            # different index (shifted by the form feeds),
+                            # so start_line/end_line=3,4 only resolve to
+                            # the real function body under split("\n").
+                            "functions": [
+                                {"name": "_github_http_client", "start_line": 3, "end_line": 4}
+                            ],
+                            "classes": [],
+                        },
+                    },
+                ],
+            },
+        },
+    )
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    admin_content = (
+        "line1\n" + ("\x0c" * 10) + "\ndef _github_http_client() -> httpx.Client:\n    return httpx.Client()\nline5"
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_file_content",
+        lambda client, token, repo_full_name, path, ref: (admin_content if path == "admin.py" else None),
+    )
+    captured = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda diff_text, file_context="", **kwargs: captured.update(kwargs) or [],
+    )
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    from scan_worker.jobs import run_flash_review_job
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert "def _github_http_client() -> httpx.Client" in captured["referenced_symbol_context"]
+    assert "return httpx.Client()" in captured["referenced_symbol_context"]
+
+
 def test_flash_review_job_passes_changed_file_contents_to_review_diff(monkeypatch):
     # Real production gap this closes: Flash Review can correctly quote a
     # buggy string verbatim while citing the wrong line for it (confirmed
