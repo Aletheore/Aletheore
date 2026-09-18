@@ -129,9 +129,34 @@ async def handle_unexpected_exception(request: Request, exc: Exception) -> JSONR
         "unhandled exception in request",
         extra={"method": request.method, "path": request.url.path},
     )
+    # Scoped by path, not a bare "app_server" - send_error_alert's dedup key
+    # is (source, exception type) alone, so an unrelated TypeError on some
+    # other route would otherwise share this route's cooldown and silently
+    # suppress its alert for up to 6 hours. Real incident (2026-09-18): a
+    # /webhook crash produced no alert email at all, and this collision is
+    # the likely reason why.
     await asyncio.to_thread(
-        send_error_alert, "app_server", exc, f"{request.method} {request.url.path}"
+        send_error_alert,
+        f"app_server:{request.url.path}",
+        exc,
+        f"{request.method} {request.url.path}",
     )
+    if request.url.path == "/webhook":
+        # /webhook never returns a 5xx any other way - it either succeeds,
+        # rejects with a 4xx, or an exception lands here. This is the only
+        # place to observe the failure, and durably: unlike the alert above
+        # (process-local cooldown, wiped by a restart), ops_monitor's
+        # _check_webhook_errors reads this same counter from Redis. Real
+        # incident (2026-09-18): a webhook-handling crash produced zero
+        # signal anywhere for ~18 hours.
+        try:
+            from app_server.redis_client import get_redis_client, record_webhook_5xx
+
+            record_webhook_5xx(get_redis_client())
+        except Exception:
+            logging.getLogger("app_server.errors").warning(
+                "failed to record webhook 5xx counter", exc_info=True
+            )
     return JSONResponse(status_code=500, content={"detail": "internal server error"})
 
 
