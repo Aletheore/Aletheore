@@ -2081,17 +2081,19 @@ async function addMember() {{
   refreshMembers();
 }}
 
-async function generateToken() {{
+async function generateToken(btn) {{
   const input = document.getElementById('new-token-label');
   const label = input.value.trim();
   const out = document.getElementById('token-reveal');
   if (!label) {{ out.innerHTML = '<div class="error-banner">Give the token a label first.</div>'; input.focus(); return; }}
+  btn.disabled = true;
   const res = await fetch(adminBase + '/tokens', {{
     method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify({{ label: label }}),
   }});
-  if (!res.ok) {{ out.innerHTML = '<div class="error-banner">Could not create token.</div>'; return; }}
+  if (!res.ok) {{ btn.disabled = false; out.innerHTML = '<div class="error-banner">Could not create token.</div>'; return; }}
   const data = await res.json();
   input.value = '';
+  btn.disabled = false;
   out.innerHTML = '<div class="token-reveal">' + escapeHtml(data.token) + '<br><span style="color:var(--slate-600);font-family:var(--font-sans);">Copy this now - it will not be shown again.</span></div>';
   refreshTokenList();
 }}
@@ -2180,7 +2182,20 @@ async function sendTestPushover() {{
   status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
 }}
 
-async function buySeat() {{
+async function buySeat(btn) {{
+  // Disabled for the whole round trip, not just re-enabled on failure like
+  // most other buttons on this page: real gap found via audit - buySeat/
+  // removeSeat are the only real-money actions on this page with no
+  // double-click guard at all. A second click landing before the first
+  // response comes back fires a second, genuinely separate POST /seats/buy
+  // - the backend's per-installation lock (admin.py's
+  // _seat_adjustment_lock) only serializes the two against each other, it
+  // does not collapse them into one purchase, so both succeed and the
+  // customer is billed for two extra seats from what looked like one
+  // click. loadSettings() below re-renders this whole section (including
+  // this button) once the real seat count is known, so there is no
+  // separate re-enable path to also get right.
+  btn.disabled = true;
   const status = document.getElementById('seat-billing-status');
   status.textContent = 'Updating billing...';
   status.style.color = 'var(--slate-600)';
@@ -2191,12 +2206,15 @@ async function buySeat() {{
     status.style.color = 'var(--success)';
     loadSettings();
   }} else {{
+    btn.disabled = false;
     status.textContent = data.detail || 'Could not buy a seat.';
     status.style.color = 'var(--critical)';
   }}
 }}
 
-async function removeSeat() {{
+async function removeSeat(btn) {{
+  // See buySeat's comment - same double-click gap, same fix.
+  btn.disabled = true;
   const status = document.getElementById('seat-billing-status');
   status.textContent = 'Updating billing...';
   status.style.color = 'var(--slate-600)';
@@ -2207,6 +2225,7 @@ async function removeSeat() {{
     status.style.color = 'var(--success)';
     loadSettings();
   }} else {{
+    btn.disabled = false;
     status.textContent = data.detail || 'Could not remove a seat.';
     status.style.color = 'var(--critical)';
   }}
@@ -2446,8 +2465,8 @@ async function loadSettings() {{
 
   const seatBillingHtml = window._hasActiveSubscription
     ? '<div class="form-row">' +
-      '<button class="btn" onclick="buySeat()">Buy extra seat (${EXTRA_SEAT_PRICE_USD}/mo)</button>' +
-      (window._extraSeats > 0 ? '<button class="btn" onclick="removeSeat()" style="margin-left:6px;">Remove a seat</button>' : '') +
+      '<button class="btn" onclick="buySeat(this)">Buy extra seat (${EXTRA_SEAT_PRICE_USD}/mo)</button>' +
+      (window._extraSeats > 0 ? '<button class="btn" onclick="removeSeat(this)" style="margin-left:6px;">Remove a seat</button>' : '') +
       '<button class="btn" onclick="openBillingPortal()" style="margin-left:6px;">Manage billing</button>' +
       '</div><div id="seat-billing-status" class="settings-block-hint"></div>'
     : '<div class="settings-block-hint">Extra seats need an active subscription - subscribe first to buy one.</div>';
@@ -2497,7 +2516,7 @@ async function loadSettings() {{
           '<div class="settings-block-label">API tokens</div>' +
           '<div id="token-list">' + renderTokenRows(data.tokens) + '</div>' +
           '<div class="form-row"><input class="field" id="new-token-label" placeholder="Token label, e.g. CI pipeline">' +
-          '<button class="btn" onclick="generateToken()">Generate</button></div>' +
+          '<button class="btn" onclick="generateToken(this)">Generate</button></div>' +
           '<div id="token-reveal"></div>' +
           '<div class="settings-block-hint">Used to authenticate the CLI (<code>aletheore login</code> or <code>ALETHEORE_API_TOKEN</code>) and the MCP server\\'s <code>aletheore_managed_audit</code> tool against this installation\\'s hosted managed audits, and to send runtime events from your app into Aletheore. Give each token a label so you can tell them apart later, and revoke one any time without affecting the others.</div>' +
         '</div>' +
