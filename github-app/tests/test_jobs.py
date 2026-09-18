@@ -8806,6 +8806,68 @@ def test_run_live_docs_full_build_job_survives_one_module_failing(monkeypatch):
     assert "model provider unavailable" in status_calls[0][1]
 
 
+def test_run_docs_build_indexes_source_lines_by_real_newline_lines_not_splitlines(monkeypatch):
+    # Real gap found in a backward audit of #739 (same bug class, same
+    # night): _run_docs_build_for_modules built source_lines via
+    # content.splitlines() before handing it to
+    # _store_docs_generation_for_module, whose own live_docs._symbol_snippet
+    # indexes that list by symbol["start_line"]/["end_line"] - real,
+    # \n-based line numbers recorded in aletheore's own evidence graph.
+    # splitlines() also breaks on \v, \f, \x1c-\x1e, NEL, LS, and PS, none
+    # of which git treats as a line boundary (only "\n" is), so a file with
+    # one of those characters anywhere earlier than a symbol silently fed
+    # the WRONG source snippet into an LLM-written doc description - the
+    # same real construction (ten standalone form feeds, each its own
+    # splitlines() boundary) already used for this bug class elsewhere in
+    # this codebase tonight.
+    _patch_no_spend_cap(monkeypatch)
+    from scan_worker.jobs import run_live_docs_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    symbol = {
+        "name": "greet", "start_line": 3, "end_line": 4, "params": "()",
+        "docstring": None, "is_public": True,
+    }
+    module = _docs_module("a.py", functions=[symbol])
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_latest_evidence", lambda *a, **k: _docs_evidence([module])
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0})
+    monkeypatch.setattr("scan_worker.jobs.list_docs_symbols", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
+    )
+    # Line1="header", line2=ten form feeds, line3-4=the real function.
+    # splitlines() would put line 3's real content at a different index
+    # (shifted by the form feeds), so start_line/end_line=3,4 only resolve
+    # to the real function body under split("\n").
+    content = "header\n" + ("\x0c" * 10) + "\ndef greet():\n    return 1\nfooter"
+    monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda client, token, repo, path, ref: content)
+    monkeypatch.setattr("scan_worker.jobs.get_docs_symbol_hashes", lambda *a, **k: {})
+    monkeypatch.setattr("scan_worker.jobs.upsert_docs_symbol", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.delete_docs_symbols_not_in", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_docs_build_status", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.get_docs_repo_commit_settings", lambda *a, **k: None)
+
+    captured = {}
+
+    def fake_store(dsn, iid, repo, module, adapter, source_lines, commit):
+        captured["source_lines"] = source_lines
+
+    monkeypatch.setattr("scan_worker.jobs._store_docs_generation_for_module", fake_store)
+
+    run_live_docs_full_build_job(1, "octocat/hello-world")
+
+    source_lines = captured["source_lines"]
+    assert source_lines[symbol["start_line"] - 1 : symbol["end_line"]] == [
+        "def greet():",
+        "    return 1",
+    ]
+
+
 def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(monkeypatch):
     from scan_worker.jobs import run_live_docs_full_build_job
 

@@ -5264,9 +5264,23 @@ def _run_docs_build_for_modules(
                     last_error, installation_id, repo_full_name,
                 )
                 continue
+            # split("\n"), never splitlines() - same real bug class found
+            # and fixed at every other symbol-source-indexing site in this
+            # codebase (flash_review.py's _clickable_suggestion/
+            # _line_citation_content_matches, jobs.py's own
+            # _fetch_symbol_source, query.py's find_symbol_source,
+            # search_index.py's build_chunks): splitlines() also breaks on
+            # \v, \f, \x1c-\x1e, NEL, LS, and PS, none of which git treats
+            # as a line boundary (only "\n" is). The list built here feeds
+            # live_docs._symbol_snippet, which indexes it by
+            # symbol["start_line"]/["end_line"] - real, \n-based line
+            # numbers recorded in aletheore's own evidence graph - so a
+            # splitlines()-produced list silently fed the WRONG source
+            # snippet into an LLM-written doc description the moment one
+            # of those characters appeared anywhere earlier in the file.
             _store_docs_generation_for_module(
                 dsn, installation_id, repo_full_name, module, writing_adapter,
-                content.splitlines(), ref,
+                content.split("\n"), ref,
             )
             succeeded += 1
         except Exception as exc:  # noqa: BLE001
