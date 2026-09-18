@@ -2049,7 +2049,7 @@ async def test_flash_review_trues_up_the_credit_balance_to_the_real_cost(pool, m
     monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: None)
 
     def _fake_review_diff(diff_text, file_context="", **kwargs):
@@ -2161,7 +2161,7 @@ async def test_flash_review_reserves_only_what_is_left_when_the_balance_is_below
     monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: None)
 
     def _fake_review_diff(diff_text, file_context="", **kwargs):
@@ -2258,7 +2258,7 @@ async def test_flash_review_trueup_drains_balance_when_real_cost_exceeds_what_is
     monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: None)
 
     def _fake_review_diff(diff_text, file_context="", **kwargs):
@@ -3006,7 +3006,7 @@ def test_flash_review_job_routes_free_tier_to_free_tier_path(monkeypatch):
     # chain or calls review_diff, which would silently pass this test
     # while exercising none of the free-tier code it's named for.
     monkeypatch.setattr("scan_worker.jobs.is_non_substantive_diff", lambda *a: False)
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
     monkeypatch.setattr("scan_worker.jobs.files_missing_from_review_context", lambda *a: [])
     monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a: None)
     monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
@@ -3204,7 +3204,7 @@ def test_flash_review_job_alerts_ops_when_all_free_tier_providers_fail(monkeypat
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["a.py"])
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_title", lambda *a, **k: "")
     monkeypatch.setattr("scan_worker.jobs.is_non_substantive_diff", lambda *a: False)
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
     monkeypatch.setattr("scan_worker.jobs.files_missing_from_review_context", lambda *a: [])
     monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a: None)
     monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
@@ -3286,7 +3286,7 @@ def test_flash_review_does_not_post_or_advance_sha_when_free_tier_exhausted(monk
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["a.py"])
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_title", lambda *a, **k: "")
     monkeypatch.setattr("scan_worker.jobs.is_non_substantive_diff", lambda *a: False)
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
     monkeypatch.setattr("scan_worker.jobs.files_missing_from_review_context", lambda *a: [])
     monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a: None)
     monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
@@ -3536,7 +3536,7 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
     monkeypatch.setattr(
         "scan_worker.jobs.review_diff",
         lambda diff_text, file_context="", **kwargs: [
@@ -3643,7 +3643,7 @@ def test_flash_review_job_excludes_aletheore_json_ignored_paths_from_the_diff(mo
 
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", fake_fetch_pr_diff)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", fake_fetch_pr_changed_files)
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
     monkeypatch.setattr("scan_worker.jobs.review_diff", lambda diff_text, file_context="", **kwargs: [])
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
@@ -3746,7 +3746,7 @@ def test_flash_review_job_attaches_symbol_attribution_from_deterministic_evidenc
     monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
     monkeypatch.setattr(
         "scan_worker.jobs._latest_evidence_or_none",
         lambda *a, **k: {
@@ -3830,7 +3830,7 @@ def test_flash_review_job_reserves_the_cap_before_running_the_review(monkeypatch
     monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
 
     def _reserve_flash_review_count(dsn, iid, limit):
         call_order.append("reserve_count")
@@ -3907,7 +3907,7 @@ def test_flash_review_job_releases_reservation_when_the_review_never_runs(monkey
     monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
     # Free tier, no adapter chain built (no provider keys) - _run_flash_review
     # returns False before ever calling review_diff.
     monkeypatch.setattr("scan_worker.model_tiers.writing_adapter_chain_for_free_tier", lambda *a, **k: [])
@@ -3967,7 +3967,7 @@ def test_flash_review_job_does_not_release_reservation_after_a_successful_review
     monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
     monkeypatch.setattr("scan_worker.jobs.resolve_model", lambda *a, **k: "deepseek-v4-flash")
 
     def _review_diff_with_usage(diff_text, file_context="", **kwargs):
@@ -4027,7 +4027,7 @@ def test_flash_review_job_posts_grounding_note_when_some_findings_are_dropped(mo
     monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
 
     def fake_review_diff(diff_text, file_context="", **kwargs):
         kwargs["on_grounding_result"]({"proposed": 2, "kept": 1})
@@ -4082,7 +4082,7 @@ def test_flash_review_job_reports_zero_grounded_distinctly_from_no_issues_found(
     monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
 
     def fake_review_diff(diff_text, file_context="", **kwargs):
         kwargs["on_grounding_result"]({"proposed": 3, "kept": 0})
@@ -4148,7 +4148,7 @@ def test_flash_review_job_reports_zero_confirmed_distinctly_from_zero_grounded(m
     monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
 
     def fake_review_diff(diff_text, file_context="", **kwargs):
         kwargs["on_grounding_result"]({"proposed": 3, "kept": 3})
@@ -4216,7 +4216,7 @@ def test_flash_review_job_discloses_files_it_never_reviewed(monkeypatch):
     # Only a.py's content came back - huge.py was over the size cap and
     # later.py fell past the file-count cap.
     monkeypatch.setattr(
-        "scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {"a.py": "x"})
+        "scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {"a.py": "x"}
     )
     monkeypatch.setattr("scan_worker.jobs.review_diff", lambda *a, **k: [])
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
@@ -4273,7 +4273,7 @@ def test_flash_review_job_adds_no_coverage_note_when_every_file_was_read(monkeyp
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- a.py ---\n+x")
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["a.py"])
     monkeypatch.setattr(
-        "scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {"a.py": "x"})
+        "scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {"a.py": "x"}
     )
     monkeypatch.setattr("scan_worker.jobs.review_diff", lambda *a, **k: [])
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
@@ -4435,7 +4435,7 @@ def test_flash_review_job_passes_referenced_symbol_context_to_review_diff(monkey
         lambda *a, **k: "--- dashboard.py ---\n@@ -1,1 +75,1 @@\n+_github_http_client()\n",
     )
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["dashboard.py"])
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
     monkeypatch.setattr(
         "scan_worker.jobs._latest_evidence_or_none",
         lambda *a, **k: {
@@ -4525,7 +4525,7 @@ def test_flash_review_job_passes_changed_file_contents_to_review_diff(monkeypatc
     monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.fetch_review_file_context",
-        lambda *a, **k: ("", {"app.py": "real content of app.py"}),
+        lambda *a, **k: {"app.py": "real content of app.py"},
     )
     captured = {}
     monkeypatch.setattr(
@@ -4578,7 +4578,7 @@ def test_flash_review_job_requests_second_model_verification_on_paid_plan(monkey
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
     monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
     captured = {}
     monkeypatch.setattr(
         "scan_worker.jobs.review_diff",
@@ -4656,7 +4656,7 @@ def test_flash_review_job_does_not_request_second_model_verification_on_flash_ti
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
     monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
     captured = {}
     monkeypatch.setattr(
         "scan_worker.jobs.review_diff",
@@ -4709,7 +4709,7 @@ def test_flash_review_job_does_not_request_second_model_verification_on_free_tie
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["a.py"])
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_title", lambda *a, **k: "")
     monkeypatch.setattr("scan_worker.jobs.is_non_substantive_diff", lambda *a: False)
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
     monkeypatch.setattr("scan_worker.jobs.files_missing_from_review_context", lambda *a: [])
     monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a: None)
     monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
@@ -4774,7 +4774,7 @@ def test_flash_review_job_renders_suggestion_as_plain_fence_not_github_suggestio
     monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
     monkeypatch.setattr(
         "scan_worker.jobs.review_diff",
         lambda diff_text, file_context="", **kwargs: [
@@ -4840,7 +4840,7 @@ def test_flash_review_job_posts_no_issues_found_when_findings_empty(monkeypatch)
     monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+fine")
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
     monkeypatch.setattr("scan_worker.jobs.review_diff", lambda diff_text, file_context="", **kwargs: [])
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)

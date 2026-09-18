@@ -347,6 +347,47 @@ def test_line_citation_content_matches_true_when_file_content_unavailable():
     assert _line_citation_content_matches(finding, {}) is True
 
 
+def test_line_citation_content_matches_works_against_a_windowed_oversized_file(monkeypatch):
+    # End-to-end proof: fetch_review_file_context's windowed excerpt for an
+    # oversized file (see _windowed_oversized_file_content) is a real,
+    # usable input for _line_citation_content_matches, not just a
+    # structurally-valid-but-useless string. Before windowing existed, this
+    # exact scenario (a correct citation into a file too big to fetch in
+    # full) always returned True (unverifiable) regardless of whether the
+    # citation was actually right or fabricated - real gap, PR #734
+    # (2026-09-18): scan_worker/jobs.py was always in that state.
+    from scan_worker import flash_review
+
+    # 200 lines * ~8 bytes/line =~ 1600 bytes raw (genuinely oversized
+    # against this cap), but windowing (default FILE_WINDOW_MARGIN_LINES,
+    # 61 real lines around line 50 + ~139 blank filler lines) comfortably
+    # fits under it.
+    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILE_BYTES", 1000)
+    lines = [f"line{i:03d}" for i in range(1, 201)]
+    lines[49] = "raise ValueError('a real bug lives on this exact line')"
+    content = "\n".join(lines)
+    monkeypatch.setattr(flash_review, "fetch_file_content", lambda client, token, repo, path, ref: content)
+    patch = "@@ -50,1 +50,1 @@\n-old\n+new\n"
+
+    file_contents = flash_review.fetch_review_file_context(
+        None, "tok", "o/r", ["big.py"], "sha", diff_patches=(("big.py", patch),)
+    )
+
+    correct_finding = {
+        "file": "big.py",
+        "line": 50,
+        "issue": "'a real bug lives on this exact line'",
+    }
+    assert _line_citation_content_matches(correct_finding, file_contents) is True
+
+    fabricated_finding = {
+        "file": "big.py",
+        "line": 50,
+        "issue": "'this exact quote was never in the file'",
+    }
+    assert _line_citation_content_matches(fabricated_finding, file_contents) is False
+
+
 def test_line_citation_content_matches_false_when_line_out_of_bounds():
     finding = {"file": "a.py", "line": 99, "issue": "anything"}
     file_contents = {"a.py": "one\ntwo"}
@@ -2023,7 +2064,10 @@ def test_fetch_review_file_context_stops_at_max_files(monkeypatch):
     assert set(fetched) == {"a.py", "b.py"}
 
 
-def test_fetch_review_file_context_skips_oversized_files_from_both_outputs(monkeypatch):
+def test_fetch_review_file_context_skips_oversized_file_with_no_diff_patches(monkeypatch):
+    # Default (backward-compatible) behavior: with no diff_patches to
+    # window against, an oversized file is still omitted outright, same
+    # as before windowing existed.
     from scan_worker import flash_review
 
     monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILE_BYTES", 5)
@@ -2033,70 +2077,9 @@ def test_fetch_review_file_context_skips_oversized_files_from_both_outputs(monke
 
     monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
 
-    file_context, file_contents = flash_review.fetch_review_file_context(
-        None, "tok", "o/r", ["a.py"], "sha"
-    )
+    file_contents = flash_review.fetch_review_file_context(None, "tok", "o/r", ["a.py"], "sha")
 
-    assert "a.py" not in file_context
     assert file_contents == {}
-
-
-def test_fetch_review_file_context_stops_context_at_total_byte_budget(monkeypatch):
-    # The total-byte cap only bounds the prompt blob (file_context) - the
-    # citation-check dict (file_contents) still gets every file that was
-    # actually fetched, since a citation check needs the real content of
-    # anything the model was shown, and truncating that too would make
-    # _line_citation_content_matches unable to verify files it has every
-    # right to check.
-    from scan_worker import flash_review
-
-    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILES", 10)
-    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILE_BYTES", 1000)
-    monkeypatch.setattr(flash_review, "MAX_CONTEXT_TOTAL_BYTES", 15)
-
-    def fake_fetch(client, token, repo, path, ref):
-        return "0123456789"
-
-    monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
-
-    file_context, file_contents = flash_review.fetch_review_file_context(
-        None, "tok", "o/r", ["a.py", "b.py", "c.py"], "sha"
-    )
-
-    assert file_context.count("0123456789") == 1
-    assert file_contents == {"a.py": "0123456789", "b.py": "0123456789", "c.py": "0123456789"}
-
-
-def test_fetch_review_file_context_does_not_mislabel_a_production_file_starting_with_test(monkeypatch):
-    # Real regression: the old unanchored "/test" in path.lower() substring
-    # check false-positived on any production file whose path segment
-    # merely starts with "test" - src/testing_utils.py is not a test file.
-    from scan_worker import flash_review
-
-    monkeypatch.setattr(flash_review, "fetch_file_content", lambda client, token, repo, path, ref: "content")
-
-    file_context, _ = flash_review.fetch_review_file_context(
-        None, "tok", "o/r", ["src/testing_utils.py"], "sha"
-    )
-
-    assert "full content: src/testing_utils.py" in file_context
-    assert "test file content: src/testing_utils.py" not in file_context
-
-
-def test_fetch_review_file_context_labels_a_tests_directory_jsx_spec_file_correctly(monkeypatch):
-    # Real regression: __tests__/Button.spec.tsx was missed entirely by the
-    # old check - no literal "/test" substring (it's "__tests__/"), and
-    # .tsx isn't in the old endswith(...) tuple, which only covered
-    # .js/.ts.
-    from scan_worker import flash_review
-
-    monkeypatch.setattr(flash_review, "fetch_file_content", lambda client, token, repo, path, ref: "content")
-
-    file_context, _ = flash_review.fetch_review_file_context(
-        None, "tok", "o/r", ["__tests__/Button.spec.tsx"], "sha"
-    )
-
-    assert "test file content: __tests__/Button.spec.tsx" in file_context
 
 
 def test_fetch_review_file_context_returns_path_to_content_mapping(monkeypatch):
@@ -2107,7 +2090,7 @@ def test_fetch_review_file_context_returns_path_to_content_mapping(monkeypatch):
 
     monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
 
-    _, file_contents = flash_review.fetch_review_file_context(
+    file_contents = flash_review.fetch_review_file_context(
         None, "tok", "o/r", ["a.py", "b.py"], "sha"
     )
 
@@ -2122,36 +2105,107 @@ def test_fetch_review_file_context_skips_files_where_fetch_returns_none(monkeypa
 
     monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
 
-    _, file_contents = flash_review.fetch_review_file_context(
+    file_contents = flash_review.fetch_review_file_context(
         None, "tok", "o/r", ["a.py", "missing.py"], "sha"
     )
 
     assert file_contents == {"a.py": "real content"}
 
 
-def test_fetch_review_file_context_preserves_diff_order_when_truncating(monkeypatch):
-    # The concurrent fetch can complete in any order, but the formatted
-    # context blob must still truncate based on the *original* changed-files
-    # order (matching diff order), not fetch-completion order - otherwise
-    # which file gets cut when the total budget is hit would be
-    # nondeterministic instead of "whichever file was last in the diff".
+def test_fetch_review_file_context_windows_an_oversized_file_with_diff_patches(monkeypatch):
+    # The core new behavior: given real hunk-line evidence, an oversized
+    # file gets a windowed excerpt instead of being dropped entirely.
+    # Confirmed against a real incident, PR #734 (2026-09-18) -
+    # scan_worker/jobs.py, this repo's own biggest file, was
+    # unconditionally excluded before this existed.
     from scan_worker import flash_review
 
-    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILES", 10)
-    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILE_BYTES", 1000)
-    monkeypatch.setattr(flash_review, "MAX_CONTEXT_TOTAL_BYTES", 12)
+    # 200 lines, each "lineNNN" (8 bytes incl. \n) =~ 1600 bytes raw, well
+    # over this cap (genuinely oversized) - but windowed (5 real lines +
+    # ~195 blank filler lines, margin=2) comfortably fits under it.
+    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILE_BYTES", 400)
+    monkeypatch.setattr(flash_review, "FILE_WINDOW_MARGIN_LINES", 2)
+    content = "\n".join(f"line{i:03d}" for i in range(1, 201))
+    monkeypatch.setattr(flash_review, "fetch_file_content", lambda client, token, repo, path, ref: content)
+    patch = "@@ -50,1 +50,1 @@\n-old\n+new\n"
 
-    def fake_fetch(client, token, repo, path, ref):
-        return "0123456789"
-
-    monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
-
-    file_context, _ = flash_review.fetch_review_file_context(
-        None, "tok", "o/r", ["a.py", "b.py"], "sha"
+    file_contents = flash_review.fetch_review_file_context(
+        None, "tok", "o/r", ["big.py"], "sha", diff_patches=(("big.py", patch),)
     )
 
-    assert "a.py" in file_context
-    assert "b.py" not in file_context
+    assert "big.py" in file_contents
+    windowed = file_contents["big.py"]
+    lines = windowed.split("\n")
+    assert len(lines) == 200  # line count/positions preserved
+    # Within the +/-2 window of line 50: real content survives.
+    assert lines[49] == "line050"
+    assert lines[47] == "line048"
+    assert lines[51] == "line052"
+    # Well outside the window: blanked, not the real (would-be-huge) content.
+    assert lines[0] == ""
+    assert lines[150] == ""
+
+
+def test_fetch_review_file_context_still_drops_a_file_when_windowing_stays_over_budget(monkeypatch):
+    # A file with hunks dense/spread out enough that even the windowed
+    # excerpt exceeds the byte cap is omitted, same as before windowing
+    # existed - never silently exceed the real per-file byte budget.
+    from scan_worker import flash_review
+
+    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILE_BYTES", 10)
+    monkeypatch.setattr(flash_review, "FILE_WINDOW_MARGIN_LINES", 50)
+
+    content = "\n".join(f"line{i:03d}" for i in range(1, 201))
+    monkeypatch.setattr(flash_review, "fetch_file_content", lambda client, token, repo, path, ref: content)
+    patch = "@@ -50,1 +50,1 @@\n-old\n+new\n"
+
+    file_contents = flash_review.fetch_review_file_context(
+        None, "tok", "o/r", ["big.py"], "sha", diff_patches=(("big.py", patch),)
+    )
+
+    assert file_contents == {}
+
+
+def test_fetch_review_file_context_drops_an_oversized_file_with_no_matching_patch(monkeypatch):
+    # diff_patches was passed, but has no entry for this specific file
+    # (e.g. it was renamed with no content change) - same fallback as no
+    # diff_patches at all, not a crash.
+    from scan_worker import flash_review
+
+    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILE_BYTES", 5)
+    monkeypatch.setattr(flash_review, "fetch_file_content", lambda client, token, repo, path, ref: "too long")
+
+    file_contents = flash_review.fetch_review_file_context(
+        None, "tok", "o/r", ["a.py"], "sha", diff_patches=(("other.py", "@@ -1,1 +1,1 @@\n-x\n+y\n"),)
+    )
+
+    assert file_contents == {}
+
+
+def test_windowed_oversized_file_content_returns_none_with_no_hunk_evidence():
+    from scan_worker.flash_review import _windowed_oversized_file_content
+
+    assert _windowed_oversized_file_content("a\nb\nc\n", patch="") is None
+
+
+def test_windowed_oversized_file_content_merges_nearby_hunk_windows():
+    # Two hunks close enough that their +/-margin windows overlap should
+    # read as one continuous kept region, not two windows with a spurious
+    # blanked gap between them.
+    from scan_worker.flash_review import _windowed_oversized_file_content
+
+    content = "\n".join(f"line{i:02d}" for i in range(1, 21))
+    patch = "@@ -5,1 +5,1 @@\n-a\n+b\n@@ -10,1 +10,1 @@\n-c\n+d\n"
+
+    windowed = _windowed_oversized_file_content(content, patch, margin=3)
+    lines = windowed.split("\n")
+
+    # Hunks at new-file lines 5 and 10, margin 3: windows [2,8] and [7,13]
+    # overlap at 7-8, so the whole [2,13] range should be real content.
+    for i in range(2, 14):
+        assert lines[i - 1] == f"line{i:02d}", f"line {i} should be kept"
+    assert lines[0] == ""  # line 1, outside every window
+    assert lines[14] == ""  # line 15, outside every window
 
 
 def test_validate_findings_keeps_a_finding_just_past_a_deletion_only_hunk():
