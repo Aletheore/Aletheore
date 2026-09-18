@@ -2087,15 +2087,25 @@ async function generateToken(btn) {{
   const out = document.getElementById('token-reveal');
   if (!label) {{ out.innerHTML = '<div class="error-banner">Give the token a label first.</div>'; input.focus(); return; }}
   btn.disabled = true;
-  const res = await fetch(adminBase + '/tokens', {{
-    method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify({{ label: label }}),
-  }});
-  if (!res.ok) {{ btn.disabled = false; out.innerHTML = '<div class="error-banner">Could not create token.</div>'; return; }}
-  const data = await res.json();
-  input.value = '';
-  btn.disabled = false;
-  out.innerHTML = '<div class="token-reveal">' + escapeHtml(data.token) + '<br><span style="color:var(--slate-600);font-family:var(--font-sans);">Copy this now - it will not be shown again.</span></div>';
-  refreshTokenList();
+  // Real gap found by Flash Review on the disabled-button change itself:
+  // re-enabling only on the explicit !res.ok branch and the success path
+  // left the button stuck disabled forever if fetch() itself rejected
+  // (network drop, timeout) or res.json() threw on a malformed response -
+  // the function would exit via an unhandled exception with no code path
+  // left to run btn.disabled = false. try/finally re-enables on every
+  // exit, not just the two branches that were reachable normally.
+  try {{
+    const res = await fetch(adminBase + '/tokens', {{
+      method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify({{ label: label }}),
+    }});
+    if (!res.ok) {{ out.innerHTML = '<div class="error-banner">Could not create token.</div>'; return; }}
+    const data = await res.json();
+    input.value = '';
+    out.innerHTML = '<div class="token-reveal">' + escapeHtml(data.token) + '<br><span style="color:var(--slate-600);font-family:var(--font-sans);">Copy this now - it will not be shown again.</span></div>';
+    refreshTokenList();
+  }} finally {{
+    btn.disabled = false;
+  }}
 }}
 
 async function saveLlmSuggestions(checkbox) {{
@@ -2194,40 +2204,55 @@ async function buySeat(btn) {{
   // customer is billed for two extra seats from what looked like one
   // click. loadSettings() below re-renders this whole section (including
   // this button) once the real seat count is known, so there is no
-  // separate re-enable path to also get right.
+  // separate re-enable path to also get right for the SUCCESS path - but
+  // that reasoning only covers success. Real gap found by Flash Review on
+  // this same change: on a genuine network failure (fetch() itself
+  // rejects, before res/data ever exist) the function exits via an
+  // unhandled exception, loadSettings() never runs, and the button - a
+  // real-money action - stays disabled forever with no page-reload-free
+  // recovery. try/finally re-enables on every exit; harmless on the
+  // success path too, since loadSettings() has already replaced this
+  // button's DOM node by the time finally runs.
   btn.disabled = true;
   const status = document.getElementById('seat-billing-status');
   status.textContent = 'Updating billing...';
   status.style.color = 'var(--slate-600)';
-  const res = await fetch(adminBase + '/seats/buy', {{ method: 'POST' }});
-  const data = await res.json().catch(function () {{ return {{}}; }});
-  if (res.ok) {{
-    status.textContent = 'Seat added - billing updated. Refreshing...';
-    status.style.color = 'var(--success)';
-    loadSettings();
-  }} else {{
+  try {{
+    const res = await fetch(adminBase + '/seats/buy', {{ method: 'POST' }});
+    const data = await res.json().catch(function () {{ return {{}}; }});
+    if (res.ok) {{
+      status.textContent = 'Seat added - billing updated. Refreshing...';
+      status.style.color = 'var(--success)';
+      loadSettings();
+    }} else {{
+      status.textContent = data.detail || 'Could not buy a seat.';
+      status.style.color = 'var(--critical)';
+    }}
+  }} finally {{
     btn.disabled = false;
-    status.textContent = data.detail || 'Could not buy a seat.';
-    status.style.color = 'var(--critical)';
   }}
 }}
 
 async function removeSeat(btn) {{
-  // See buySeat's comment - same double-click gap, same fix.
+  // See buySeat's comment - same double-click gap and same network-failure
+  // stuck-button gap, same fix for both.
   btn.disabled = true;
   const status = document.getElementById('seat-billing-status');
   status.textContent = 'Updating billing...';
   status.style.color = 'var(--slate-600)';
-  const res = await fetch(adminBase + '/seats/remove', {{ method: 'POST' }});
-  const data = await res.json().catch(function () {{ return {{}}; }});
-  if (res.ok) {{
-    status.textContent = 'Seat removed - billing updated. Refreshing...';
-    status.style.color = 'var(--success)';
-    loadSettings();
-  }} else {{
+  try {{
+    const res = await fetch(adminBase + '/seats/remove', {{ method: 'POST' }});
+    const data = await res.json().catch(function () {{ return {{}}; }});
+    if (res.ok) {{
+      status.textContent = 'Seat removed - billing updated. Refreshing...';
+      status.style.color = 'var(--success)';
+      loadSettings();
+    }} else {{
+      status.textContent = data.detail || 'Could not remove a seat.';
+      status.style.color = 'var(--critical)';
+    }}
+  }} finally {{
     btn.disabled = false;
-    status.textContent = data.detail || 'Could not remove a seat.';
-    status.style.color = 'var(--critical)';
   }}
 }}
 

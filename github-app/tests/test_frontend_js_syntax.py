@@ -173,6 +173,47 @@ p.then(function () {{
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+@pytest.mark.parametrize("name", ["buySeat", "removeSeat"])
+def test_seat_billing_button_reenables_after_a_network_failure_not_just_an_http_error(name):
+    # Real gap found by Flash Review on the double-click-guard change
+    # itself (#741): re-enabling only on the explicit else (HTTP error)
+    # branch and the success path left the button stuck disabled forever
+    # if fetch() itself REJECTED (network drop, timeout, DNS failure) -
+    # the function exits via an unhandled promise rejection before res/data
+    # ever exist, and no code path was left to run btn.disabled = false.
+    # For a real-money action, that's a permanently stuck button with no
+    # recovery short of a full page reload. try/finally must re-enable on
+    # every exit, not just the two branches reachable when fetch() itself
+    # succeeds.
+    js = frontend._settings_html()
+    fn = _extract_js_function(js, name)
+    harness = (
+        fn
+        + f"""
+const status = {{ textContent: '', style: {{}} }};
+const adminBase = '';
+global.document = {{ getElementById: function (id) {{ return status; }} }};
+function loadSettings() {{ throw new Error('loadSettings must not run on a network failure'); }}
+global.fetch = function (url, opts) {{
+  return Promise.reject(new Error('network error'));
+}};
+
+const btn = {{ disabled: false }};
+const p = {name}(btn);
+if (btn.disabled !== true) {{ throw new Error('button not disabled before the network call'); }}
+
+p.then(function () {{
+  throw new Error('promise should have rejected, not resolved');
+}}, function (err) {{
+  if (btn.disabled !== false) {{ throw new Error('button left disabled after a rejected fetch'); }}
+}}).catch(function (e) {{ console.error(e); process.exitCode = 1; }});
+"""
+    )
+    result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_generate_token_button_disabled_for_the_whole_request_and_reenabled_on_failure():
     # Same real gap and fix as buySeat/removeSeat, in the "API tokens"
     # settings block (generateToken) - lower stakes (no money changes
@@ -205,6 +246,41 @@ if (btn.disabled !== true) { throw new Error('button not disabled before the net
 p.then(function () {
   if (btn.disabled !== false) { throw new Error('button left disabled after a failed request'); }
   if (calls.indexOf('refreshTokenList') !== -1) { throw new Error('refreshTokenList should not run on failure'); }
+}).catch(function (e) { console.error(e); process.exitCode = 1; });
+"""
+    )
+    result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_generate_token_button_reenables_after_a_network_failure_not_just_an_http_error():
+    # Same real gap and fix as buySeat/removeSeat's own network-failure
+    # test above, in generateToken.
+    js = frontend._settings_html()
+    fn = _extract_js_function(js, "generateToken")
+    harness = (
+        fn
+        + """
+const input = { value: 'CI pipeline', focus: function () {} };
+const out = { innerHTML: '' };
+const adminBase = '';
+global.document = {
+  getElementById: function (id) { return id === 'new-token-label' ? input : out; },
+};
+function refreshTokenList() { throw new Error('refreshTokenList must not run on a network failure'); }
+global.fetch = function (url, opts) {
+  return Promise.reject(new Error('network error'));
+};
+
+const btn = { disabled: false };
+const p = generateToken(btn);
+if (btn.disabled !== true) { throw new Error('button not disabled before the network call'); }
+
+p.then(function () {
+  throw new Error('promise should have rejected, not resolved');
+}, function (err) {
+  if (btn.disabled !== false) { throw new Error('button left disabled after a rejected fetch'); }
 }).catch(function (e) { console.error(e); process.exitCode = 1; });
 """
     )

@@ -8016,6 +8016,40 @@ def test_real_line_count_fetcher_returns_real_line_count(monkeypatch):
     assert fetch_line_count("missing.py") is None
 
 
+def test_real_line_count_fetcher_does_not_overcount_a_trailing_newline(monkeypatch):
+    # Real gap found by Flash Review on this exact function (#739): a naive
+    # content.count("\n") + 1 over-counts by one for a file ending in a
+    # trailing newline (the common case, e.g. every file this codebase
+    # writes itself) - split("\n") produces a final empty-string element
+    # for that trailing newline that isn't a real line, so counting it let
+    # a citation exactly one past the file's true end wrongly pass
+    # verify_citations' bounds check.
+    from scan_worker.jobs import _real_line_count_fetcher
+
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_file_content",
+        lambda client, token, repo, path, ref: {
+            "trailing_newline.py": "one\ntwo\nthree\n",
+            "no_trailing_newline.py": "one\ntwo\nthree",
+            "empty.py": "",
+            "internal_form_feed.py": "one\x0ctwo\nthree\n",
+        }.get(path),
+    )
+
+    fetch_line_count = _real_line_count_fetcher(1, "octocat/hello-world", "sha1")
+
+    assert fetch_line_count("trailing_newline.py") == 3
+    assert fetch_line_count("no_trailing_newline.py") == 3
+    assert fetch_line_count("empty.py") == 0
+    # Preserves the original fix's intent: an internal \x0c (which
+    # splitlines() would treat as a boundary but git/GitHub never do) must
+    # not inflate the count - "one\x0ctwo" is one real line, "three" the
+    # second, 2 total, not 3.
+    assert fetch_line_count("internal_form_feed.py") == 2
+
+
 def test_run_live_wiki_full_build_job_passes_fetch_line_count_through(monkeypatch):
     _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import run_live_wiki_full_build_job
