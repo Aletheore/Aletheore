@@ -5629,6 +5629,102 @@ def test_sweep_skips_fix_suggestion_when_endpoint_was_recently_down(monkeypatch)
     assert suggestion_calls == []
 
 
+def test_sweep_does_not_burn_the_cooldown_when_no_suggestion_was_actually_produced(monkeypatch):
+    # Real bug found via audit: the cooldown used to be marked the instant
+    # a fix suggestion was merely ATTEMPTED (include_fix_suggestion=True),
+    # not when one was actually produced - _fix_suggestion_attachment has
+    # several ordinary reasons to return None (credit balance exhausted,
+    # spend budget exhausted, file content fetch failed, the LLM call
+    # itself raised, or it returned "unknown"), and every one of those
+    # burned the same HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS window a real,
+    # successfully-delivered suggestion would have - so a customer whose
+    # endpoint stayed down could get zero real suggestions for the full
+    # cooldown, with no retry until it expired. The cooldown key must stay
+    # unset when the suggestion attempt itself failed.
+    from scan_worker.jobs import _health_fix_suggestion_cooldown_key
+
+    redis_conn = _FakeRedis()
+    sent = _patch_sweep(
+        monkeypatch,
+        prior={"reachable": True, "latency_ms": 100.0},
+        evidence={
+            "repository": {
+                "api_endpoints": {
+                    "endpoints": [
+                        {"method": "GET", "path": "/x", "file": "controllers/user.controller.ts", "line": 42}
+                    ]
+                }
+            }
+        },
+        result_entry={
+            "method": "GET", "path": "/x", "reachable": False,
+            "status_code": None, "latency_ms": 10.0, "response_shape": None,
+        },
+        redis_conn=redis_conn,
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs._commit_attachment_from_graph", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._owner_attachment_from_graph", lambda *a, **k: None)
+    # Simulates any of _fix_suggestion_attachment's real failure paths
+    # (exhausted balance, exhausted spend budget, missing file content, a
+    # raised LLM call, or an "unknown" response) - the attempt happened,
+    # but no real suggestion came out of it.
+    monkeypatch.setattr("scan_worker.jobs._fix_suggestion_attachment", lambda *a, **k: None)
+
+    from scan_worker.jobs import run_health_check_sweep_job
+
+    run_health_check_sweep_job()
+
+    assert len(sent) == 1
+    assert redis_conn.get(
+        _health_fix_suggestion_cooldown_key(1, "octocat/hello-world", "GET", "/x", 900)
+    ) is None
+
+
+def test_health_check_down_retry_job_does_not_burn_the_cooldown_when_no_suggestion_produced(monkeypatch):
+    # Same real bug, same fix, in run_health_check_down_retry_job's own
+    # copy of this logic (a confirmed-down retry, not the initial sweep) -
+    # it shares _attach_recent_commit_for_failure with the sweep job but
+    # had its own separate eager _mark_fix_suggestion_sent call.
+    from scan_worker.jobs import _health_fix_suggestion_cooldown_key, run_health_check_down_retry_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    redis_conn = _FakeRedis()
+    monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
+    monkeypatch.setattr(
+        "scan_worker.jobs.validate_and_pin_https_url", lambda url: (url, "93.184.216.34")
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs._recheck_single_endpoint",
+        lambda entry, base_url, pinned_ip: {
+            "method": "GET", "path": "/x", "reachable": False,
+            "status_code": None, "latency_ms": None, "response_shape": None,
+        },
+    )
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_last_endpoint_health",
+        lambda *a, **k: {"reachable": True, "latency_ms": 90.0},
+    )
+    monkeypatch.setattr("scan_worker.jobs._commit_attachment_from_graph", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._owner_attachment_from_graph", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._fix_suggestion_attachment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._send_alerts_if_configured", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.insert_endpoint_health", lambda *a, **k: None)
+
+    target = {
+        "installation_id": 1, "repo_full_name": "octocat/hello-world",
+        "target_id": 900, "base_url": "https://api.example.com",
+    }
+    entry = {"method": "GET", "path": "/x", "file": "controllers/user.controller.ts", "line": 42}
+
+    run_health_check_down_retry_job(target, entry, attempt=2)
+
+    assert redis_conn.get(
+        _health_fix_suggestion_cooldown_key(1, "octocat/hello-world", "GET", "/x", 900)
+    ) is None
+
+
 def test_sweep_alerts_without_commit_when_correlation_fails(monkeypatch):
     sent = _patch_sweep(
         monkeypatch,
