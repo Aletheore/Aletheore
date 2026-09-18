@@ -4537,7 +4537,22 @@ def _real_line_count_fetcher(
         # only ever OVER-count relative to real \n-based lines, letting a
         # citation past the file's real end silently pass this check
         # instead of being caught as out of bounds.
-        return content.count("\n") + 1
+        #
+        # Real gap found by Flash Review on this exact change (#739): a
+        # naive content.count("\n") + 1 over-counts by exactly one for any
+        # file ending in a trailing newline (the common case) - split("\n")
+        # produces a final empty-string element for that trailing newline
+        # (real content has no line there), so counting it as a real line
+        # let a citation exactly one past the file's true end wrongly pass
+        # the bounds check, the same failure mode this change existed to
+        # close, just from the opposite direction. An empty file is 0
+        # lines, not 1 (matching wc -l / splitlines()' own convention).
+        if not content:
+            return 0
+        line_count = content.count("\n") + 1
+        if content.endswith("\n"):
+            line_count -= 1
+        return line_count
 
     return _fetch_line_count
 
