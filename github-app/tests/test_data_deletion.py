@@ -421,3 +421,38 @@ async def test_purge_leaves_no_installation_scoped_rows_behind(pool, monkeypatch
             f"SELECT count(*) FROM {table} WHERE installation_id = 906"  # noqa: S608
         )
         assert remaining == 0, f"{table} survived the cascade"
+
+
+@pytest.mark.asyncio
+async def test_purge_removes_sent_emails_and_pending_subscription_claims(pool, monkeypatch):
+    # Real gap found via audit: purge_installation_data's own docstring
+    # claims "Deleting the installations row cascades to every
+    # installation-scoped table," but sent_emails.installation_id was
+    # ON DELETE SET NULL (migration 030) - the row, including its real
+    # `recipient` email address, survived a purge with just the FK column
+    # nulled out. pending_subscription_claims.claimed_by_installation_id
+    # had no ON DELETE clause at all (NO ACTION, migration 018) - a
+    # referencing row made the purge's own DELETE FROM installations raise
+    # a ForeignKeyViolation instead of completing, and that table's
+    # paddle_customer_email column is the same class of PII. See
+    # migration 066.
+    await _seed_installation(pool, 907, "acme", "acme/api")
+    await pool.execute(
+        "INSERT INTO sent_emails (dedupe_key, template_name, recipient, installation_id) "
+        "VALUES ('payment_failed:907', 'payment_failed', 'owner@acme.example', 907)"
+    )
+    await pool.execute(
+        "INSERT INTO pending_subscription_claims "
+        "(claim_token, paddle_subscription_id, paddle_customer_id, paddle_customer_email, "
+        "plan, claimed_by_installation_id) "
+        "VALUES ('claim-907', 'sub-907', 'cust-907', 'owner@acme.example', 'air', 907)"
+    )
+
+    await purge_installation_data(pool, 907, "solo-dev")
+
+    for table in ("sent_emails", "pending_subscription_claims"):
+        column = "installation_id" if table == "sent_emails" else "claimed_by_installation_id"
+        remaining = await pool.fetchval(
+            f"SELECT count(*) FROM {table} WHERE {column} = 907"  # noqa: S608
+        )
+        assert remaining == 0, f"{table} survived the purge with a real email address still attached"
