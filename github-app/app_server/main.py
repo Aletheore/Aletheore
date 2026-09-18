@@ -129,15 +129,31 @@ async def handle_unexpected_exception(request: Request, exc: Exception) -> JSONR
         "unhandled exception in request",
         extra={"method": request.method, "path": request.url.path},
     )
-    # Scoped by path, not a bare "app_server" - send_error_alert's dedup key
-    # is (source, exception type) alone, so an unrelated TypeError on some
-    # other route would otherwise share this route's cooldown and silently
-    # suppress its alert for up to 6 hours. Real incident (2026-09-18): a
-    # /webhook crash produced no alert email at all, and this collision is
-    # the likely reason why.
+    # Scoped by route, not a bare "app_server" - send_error_alert's dedup
+    # key is (source, exception type) alone, so an unrelated TypeError on
+    # some other route would otherwise share this route's cooldown and
+    # silently suppress its alert for up to 6 hours. Real incident
+    # (2026-09-18): a /webhook crash produced no alert email at all, and
+    # this collision is the likely reason why.
+    #
+    # request.scope["route"].path is the matched route's TEMPLATE (e.g.
+    # "/dashboard/{org}/{repo}"), not request.url.path's fully-instantiated
+    # URL (e.g. "/dashboard/acme/widgets") - several real routes here take
+    # path params (org/repo, job_id, verification_token, and
+    # {file_path:path} which is attacker/user-controllable free text).
+    # send_error_alert's dedup store is a plain, never-evicted, process-
+    # lifetime dict keyed by this string (error_alerts.py's
+    # _last_alert_at) - keying by the instantiated URL would mint a new,
+    # permanent dict entry for every distinct org/repo/job/file that ever
+    # errors, an unbounded leak for the life of the process instead of one
+    # bounded entry per route. Falls back to request.url.path only for the
+    # case no route object is on the scope (defensive - every path that
+    # reaches this handler by raising from within an endpoint has already
+    # matched one).
+    route_path = getattr(request.scope.get("route"), "path", None) or request.url.path
     await asyncio.to_thread(
         send_error_alert,
-        f"app_server:{request.url.path}",
+        f"app_server:{route_path}",
         exc,
         f"{request.method} {request.url.path}",
     )
