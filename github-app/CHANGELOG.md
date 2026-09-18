@@ -18,6 +18,59 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-09-18 (fifth deploy)
+
+8 commits since the fourth 2026-09-18 deploy, tagged `github-app-deploy-2026-09-18-5` (commit
+`f37cd98`), one migration (066). A backward-audit sweep of recently-touched hotspots, plus two
+real self-findings Aletheore's own Flash Review surfaced on its own merged PRs the same night:
+
+- **#738 - the crash-alert dedup key now uses a matched route's TEMPLATE**, not the fully-
+  instantiated URL - a follow-up to the earlier same-night #734 fix. Several real routes here take
+  path params (`dashboard.py`'s `{org}/{repo}`, `managed_audit_api.py`'s `{job_id}`/
+  `{verification_token}`, and `{file_path:path}`, user-controllable free text); `error_alerts.py`'s
+  dedup store is a plain, never-evicted, process-lifetime dict keyed by this exact string, so
+  keying by the instantiated URL would have minted one new permanent entry per distinct org/repo/
+  job/file that ever errors - an unbounded leak for the life of the process instead of the single
+  bounded entry per route #734 intended.
+- **#739 - 8 more `splitlines()` vs `split("\n")` line-indexing fixes**, the same real bug class
+  fixed twice earlier this session (#707, #711): `splitlines()` also breaks on `\v`, `\f`,
+  `\x1c`-`\x1e`, NEL, LS, and PS, none of which git or GitHub ever treat as a line boundary, so
+  indexing a real `\n`-based line number into a `splitlines()`-produced list silently targets the
+  wrong content the moment one of those characters appears anywhere earlier in the file. Landed
+  across `scan_worker/jobs.py`, `semantic_checks.py`, and `src/aletheore/query.py`/`search_index.py`
+  - the last two mean this also affects `aletheore symbol-source` and the MCP server's own
+  `aletheore_symbol_source` tool, not just Flash Review.
+- **#743 - one real sibling site #739's own sweep missed**: `live_docs.py`'s `_symbol_snippet`
+  (reached via `scan_worker/jobs.py`'s `_run_docs_build_for_modules`) hit the identical bug -
+  found by independently grepping every remaining `.splitlines()` call in the codebase after #739
+  merged, not by trusting its "N more sibling sites" count.
+- **#740 - the health-check fix-suggestion cooldown now only burns on a real, delivered
+  suggestion**, not on every attempt. `_fix_suggestion_attachment` has several ordinary reasons to
+  return `None` (credit balance exhausted, spend budget exhausted, file content fetch failed, the
+  LLM call itself raised, or it returned "unknown") - each of those used to burn the same cooldown
+  a real suggestion would have, so a customer whose endpoint stayed down could get zero real
+  suggestions for the full cooldown window with no retry until it expired.
+- **#741 - double-click guards added to `buySeat`/`removeSeat`/`generateToken`**, the only
+  button-triggered actions on the settings page with no disabled-during-request guard - a second
+  click landing before the first response came back fired a second, genuinely separate real-money
+  POST (the backend's per-installation lock only serializes the two requests, it doesn't collapse
+  them into one purchase).
+- **#742 - two orphaned-PII gaps closed in account-deletion purge** (migration 066):
+  `sent_emails.installation_id` was `ON DELETE SET NULL`, so a deleted customer's real email
+  address survived a purge with just the FK column nulled out; `pending_subscription_claims.
+  claimed_by_installation_id` had no `ON DELETE` clause at all, which would have made the purge
+  itself crash with a `ForeignKeyViolation` on any referencing row. Both now `ON DELETE CASCADE`.
+- **#744 - two real gaps Aletheore's own Flash Review found on #739 and #741 after they'd already
+  merged**, posted as grounded inline findings rather than a generic "no issues" pass: (1)
+  `_fetch_line_count`'s `content.count("\n") + 1` over-counted by one for any file ending in a
+  trailing newline (the common case) - a citation exactly one past a file's true end wrongly
+  passed `verify_citations`' bounds check, the same failure mode the original fix existed to
+  close, from the opposite direction; (2) `generateToken`/`buySeat`/`removeSeat`'s new double-click
+  guard only re-enabled its button on the explicit HTTP-error branch and the success path - a
+  genuine network failure (`fetch()` itself rejecting) left a real-money action's button stuck
+  disabled forever with no recovery short of a full page reload. Both fixes proven to fail against
+  the pre-fix code before being confirmed fixed, not just asserted correct.
+
 ## 2026-09-18 (fourth deploy)
 
 1 commit since the third 2026-09-18 deploy, tagged `github-app-deploy-2026-09-18-4` (commit
