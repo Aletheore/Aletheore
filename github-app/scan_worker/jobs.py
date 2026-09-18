@@ -3084,6 +3084,7 @@ def _attach_recent_commit_for_failure(
     status_code: int | None = None,
     source_line: int | None = None,
     include_fix_suggestion: bool = True,
+    on_fix_suggestion_included: Callable[[], None] | None = None,
 ) -> dict | None:
     attachments = []
     commit_attachment = _commit_attachment_from_graph(installation_id, repo_full_name, source_file)
@@ -3111,6 +3112,24 @@ def _attach_recent_commit_for_failure(
         )
         if suggestion_attachment is not None:
             attachments.append(suggestion_attachment)
+            # Real bug found via audit: both call sites that pass
+            # include_fix_suggestion used to call _mark_fix_suggestion_sent
+            # themselves, BEFORE this function ran at all - unconditionally
+            # burning the cooldown the instant a suggestion was merely
+            # ATTEMPTED, not when one was actually produced.
+            # _fix_suggestion_attachment has several real, ordinary reasons
+            # to return None (credit balance exhausted, spend_budget can't
+            # start another call, file content fetch failed, the LLM call
+            # itself raised, or it returned "unknown") - each of those
+            # burned the same cooldown a real, successfully-delivered
+            # suggestion would have, so a customer whose endpoint stayed
+            # down could go the full HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS
+            # having received zero real suggestions, with no retry until it
+            # expired. Marking only here, once a suggestion is confirmed
+            # attached, means the cooldown always corresponds to a
+            # suggestion the customer actually got.
+            if on_fix_suggestion_included is not None:
+                on_fix_suggestion_included()
 
     if not attachments:
         return evidence_resolution
@@ -3317,10 +3336,6 @@ def _run_health_check_sweep_for_target(
                 recently_down = _recently_suggested_a_fix(
                     redis_conn, installation_id, repo_full_name, method, path, target_id
                 )
-                if not recently_down:
-                    _mark_fix_suggestion_sent(
-                        redis_conn, installation_id, repo_full_name, method, path, target_id
-                    )
                 evidence_resolution = _attach_recent_commit_for_failure(
                     installation_id,
                     repo_full_name,
@@ -3332,6 +3347,9 @@ def _run_health_check_sweep_for_target(
                     status_code=status_code,
                     source_line=source_line,
                     include_fix_suggestion=not recently_down,
+                    on_fix_suggestion_included=lambda: _mark_fix_suggestion_sent(
+                        redis_conn, installation_id, repo_full_name, method, path, target_id
+                    ),
                 )
             _send_alerts_if_configured(
                 target,
@@ -3455,10 +3473,6 @@ def run_health_check_down_retry_job(target: dict, entry: dict, attempt: int) -> 
             recently_down = _recently_suggested_a_fix(
                 redis_conn, installation_id, repo_full_name, method, path, target_id
             )
-            if not recently_down:
-                _mark_fix_suggestion_sent(
-                    redis_conn, installation_id, repo_full_name, method, path, target_id
-                )
             evidence_resolution = _attach_recent_commit_for_failure(
                 installation_id,
                 repo_full_name,
@@ -3470,6 +3484,9 @@ def run_health_check_down_retry_job(target: dict, entry: dict, attempt: int) -> 
                 status_code=status_code,
                 source_line=source_line,
                 include_fix_suggestion=not recently_down,
+                on_fix_suggestion_included=lambda: _mark_fix_suggestion_sent(
+                    redis_conn, installation_id, repo_full_name, method, path, target_id
+                ),
             )
         _send_alerts_if_configured(
             target,
