@@ -18,6 +18,33 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-09-18 (third deploy)
+
+2 commits since the second 2026-09-18 deploy, tagged `github-app-deploy-2026-09-18-3` (commit
+`6ebe04f`), no migrations. #733 was a docs-only carryover from the prior deploy; #735 is the real
+change:
+
+- **#735 - Flash Review no longer drops a changed file over MAX_CONTEXT_FILE_BYTES (100KB)
+  outright.** `fetch_review_file_context`'s old behavior made an oversized file invisible not just
+  to the prompt but to `_line_citation_content_matches`'s citation check too (which passes any
+  finding whose file content it doesn't have) - confirmed live on #734 the same night:
+  `scan_worker/jobs.py`, this repo's own biggest and highest-churn file, was silently excluded from
+  its own PR's review, "No issues found" reported having genuinely never looked at it. Given real
+  diff-hunk evidence, an oversized file now gets a windowed excerpt instead: real content survives
+  within `FILE_WINDOW_MARGIN_LINES` (30) of anything the diff touched (reusing the existing
+  `_patch_valid_lines` helper for line accounting), everything else becomes a blank filler line -
+  which preserves every kept line's real absolute line number for free, so the citation check's
+  existing `content.split("\n")[line]` indexing needed zero changes to work against a windowed file
+  exactly as it does a full one, and costs about a byte per blanked line even for a huge file.
+  `MAX_CONTEXT_FILE_BYTES`/`MAX_CONTEXT_FILES` (`github_api.py`) stayed untouched - real, cost-tuned
+  values against the $6/mo Flash plan cap; this works within them rather than raising them. Also
+  removed `fetch_review_file_context`'s second return value, a formatted "file_context" prompt
+  blob that PR-Agent's real prompt (#730) has no slot for and whose one caller discarded unread the
+  moment that prompt shipped - dead computation on every single review, found and removed rather
+  than windowed alongside the real fix. Independently re-verified by a second session (full
+  repo-wide grep confirming no other caller of the removed return value or removed imports, and a
+  from-scratch trace of the windowing index math) before merge.
+
 ## 2026-09-18
 
 18 commits since the 2026-09-13 second deploy, tagged `github-app-deploy-2026-09-18` (commit
