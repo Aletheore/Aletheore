@@ -240,6 +240,62 @@ async def test_request_logging_middleware_adds_request_id_header():
 
 
 @pytest.mark.asyncio
+async def test_unexpected_exception_alert_key_uses_route_template_not_instantiated_url(monkeypatch):
+    # Real gap found in a backward-audit of #734: the dedup key passed to
+    # send_error_alert used request.url.path (the fully-instantiated URL,
+    # e.g. "/dashboard/acme/widgets"), not the matched route's template
+    # (e.g. "/dashboard/{org}/{repo}"). error_alerts.py's dedup store is a
+    # plain, never-evicted, process-lifetime dict keyed by this exact
+    # string - several real routes here take path params (org/repo,
+    # job_id, verification_token, {file_path:path}), so keying by the
+    # instantiated URL would mint one new permanent dict entry per
+    # distinct org/repo/job/file that ever errors: an unbounded leak for
+    # the life of the process, not the single bounded entry per route the
+    # fix intended. Two requests to the SAME route template with
+    # DIFFERENT instantiated URLs must collapse to the same alert key.
+    from starlette.requests import Request
+    from starlette.routing import Route
+
+    from app_server.main import handle_unexpected_exception
+
+    alerts = []
+    monkeypatch.setattr("app_server.main.send_error_alert", lambda *a, **k: alerts.append(a[0]))
+
+    route = Route("/dashboard/{org}/{repo}", endpoint=lambda request: None)
+    for org, repo in [("acme", "widgets"), ("other-org", "other-repo")]:
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": f"/dashboard/{org}/{repo}",
+            "headers": [],
+            "route": route,
+        }
+        request = Request(scope)
+        await handle_unexpected_exception(request, RuntimeError("boom"))
+
+    assert alerts == ["app_server:/dashboard/{org}/{repo}"] * 2
+
+
+@pytest.mark.asyncio
+async def test_unexpected_exception_alert_key_falls_back_to_url_path_with_no_matched_route(monkeypatch):
+    # Defensive fallback: a request that somehow reaches this handler with
+    # no route on the scope still gets a usable (if unbounded) key rather
+    # than crashing on a None-valued f-string segment.
+    from starlette.requests import Request
+
+    from app_server.main import handle_unexpected_exception
+
+    alerts = []
+    monkeypatch.setattr("app_server.main.send_error_alert", lambda *a, **k: alerts.append(a[0]))
+
+    scope = {"type": "http", "method": "GET", "path": "/no-matched-route", "headers": []}
+    request = Request(scope)
+    await handle_unexpected_exception(request, RuntimeError("boom"))
+
+    assert alerts == ["app_server:/no-matched-route"]
+
+
+@pytest.mark.asyncio
 async def test_webhook_crash_records_durable_5xx_counter_and_scopes_alert_source(monkeypatch, pool):
     """Real incident (2026-09-18): a /webhook crash produced zero visible
     signal anywhere. Two things must now happen when webhook handling
