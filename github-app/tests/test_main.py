@@ -240,6 +240,92 @@ async def test_request_logging_middleware_adds_request_id_header():
 
 
 @pytest.mark.asyncio
+async def test_webhook_crash_records_durable_5xx_counter_and_scopes_alert_source(monkeypatch, pool):
+    """Real incident (2026-09-18): a /webhook crash produced zero visible
+    signal anywhere. Two things must now happen when webhook handling
+    raises: the durable Redis counter ops_monitor reads gets incremented
+    (record_webhook_5xx), and the crash-alert source is scoped by path so
+    an unrelated exception elsewhere in app_server can't share its dedup
+    cooldown and suppress this one (see error_alerts.py's (source,
+    exception type) keying)."""
+    app.state.db_pool = pool
+    payload = {
+        "action": "opened",
+        "number": 9,
+        "installation": {"id": 123},
+        "repository": {"full_name": "octocat/hello-world"},
+        "pull_request": {"base": {"sha": "aaa"}, "head": {"sha": "bbb"}},
+    }
+    body = json.dumps(payload).encode()
+
+    async def fake_handle(payload_arg, pool_arg, redis_url):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("app_server.webhooks.pull_request.handle_pull_request_event", fake_handle)
+
+    recorded = []
+    monkeypatch.setattr(
+        "app_server.redis_client.record_webhook_5xx", lambda redis_conn: recorded.append(redis_conn)
+    )
+    alerts = []
+    monkeypatch.setattr("app_server.main.send_error_alert", lambda *a, **k: alerts.append((a, k)))
+
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/webhook",
+            content=body,
+            headers={
+                "X-Hub-Signature-256": _signature(body, settings.github_webhook_secret),
+                "X-GitHub-Event": "pull_request",
+                "X-GitHub-Delivery": "delivery-crash-1",
+            },
+        )
+
+    assert response.status_code == 500
+    assert len(recorded) == 1
+    assert len(alerts) == 1
+    assert alerts[0][0][0] == "app_server:/webhook"
+
+
+@pytest.mark.asyncio
+async def test_successful_webhook_does_not_touch_5xx_counter(monkeypatch, pool):
+    app.state.db_pool = pool
+    payload = {
+        "action": "opened",
+        "number": 9,
+        "installation": {"id": 123},
+        "repository": {"full_name": "octocat/hello-world"},
+        "pull_request": {"base": {"sha": "aaa"}, "head": {"sha": "bbb"}},
+    }
+    body = json.dumps(payload).encode()
+
+    async def fake_handle(payload_arg, pool_arg, redis_url):
+        pass
+
+    monkeypatch.setattr("app_server.webhooks.pull_request.handle_pull_request_event", fake_handle)
+    recorded = []
+    monkeypatch.setattr(
+        "app_server.redis_client.record_webhook_5xx", lambda redis_conn: recorded.append(redis_conn)
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/webhook",
+            content=body,
+            headers={
+                "X-Hub-Signature-256": _signature(body, settings.github_webhook_secret),
+                "X-GitHub-Event": "pull_request",
+                "X-GitHub-Delivery": "delivery-ok-1",
+            },
+        )
+
+    assert response.status_code == 200
+    assert recorded == []
+
+
+@pytest.mark.asyncio
 async def test_request_logging_middleware_logs_structured_fields(caplog):
     app.state.db_pool = object()
     transport = ASGITransport(app=app)

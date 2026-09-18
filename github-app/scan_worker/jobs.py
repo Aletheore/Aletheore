@@ -49,7 +49,7 @@ from app_server.llm_cost import (
     monthly_cap_for_installation,
 )
 from app_server.logging_config import log_job
-from app_server.redis_client import get_redis_client
+from app_server.redis_client import WEBHOOK_5XX_COUNT_KEY, get_redis_client
 from app_server.rate_limit import (
     MIN_MANAGED_AUDIT_COOLDOWN_SECONDS,
     cooldown_seconds_for_loc,
@@ -3602,11 +3602,13 @@ OPS_APP_HEALTH_URL_ENV = "ALETHEORE_APP_HEALTH_URL"
 OPS_BACKUP_DIR_ENV = "ALETHEORE_BACKUP_DIR"
 OPS_QUEUE_DEPTH_THRESHOLD_ENV = "ALETHEORE_OPS_QUEUE_DEPTH_THRESHOLD"
 OPS_FAILED_JOBS_THRESHOLD_ENV = "ALETHEORE_OPS_FAILED_JOBS_THRESHOLD"
+OPS_WEBHOOK_5XX_THRESHOLD_ENV = "ALETHEORE_OPS_WEBHOOK_5XX_THRESHOLD"
 
 OPS_DEFAULT_APP_HEALTH_URL = "http://app-server:8000/healthz"
 OPS_DEFAULT_BACKUP_DIR = "/app/backups"
 OPS_DEFAULT_QUEUE_DEPTH_THRESHOLD = 25
 OPS_DEFAULT_FAILED_JOBS_THRESHOLD = 0
+OPS_DEFAULT_WEBHOOK_5XX_THRESHOLD = 0
 OPS_THRESHOLD_DURATION_SECONDS = 600
 # Not a bare 24h (86400s): the backup cron fires at a fixed wall-clock time
 # (0 3 * * * UTC) and pg_dump takes several seconds to finish - a dump's
@@ -3830,6 +3832,31 @@ def _check_queue_alerts(redis_conn, now: float) -> None:
         )
 
 
+def _check_webhook_errors(redis_conn, now: float) -> None:
+    """Reads the durable counter app_server.main's handle_unexpected_exception
+    increments on every /webhook 5xx (see record_webhook_5xx). Before this,
+    a synchronous webhook-handling crash had no signal here at all - only a
+    per-request crash email whose own dedup key isn't route-scoped, so an
+    unrelated exception elsewhere in app_server could silently suppress it
+    for hours (real incident, 2026-09-18: 18 hours of a PR's Flash Review
+    lost with zero alert anywhere). Same threshold/duration/cooldown shape
+    as _check_queue_alerts so a single already-retried GitHub delivery
+    doesn't page, but a sustained failure does.
+    """
+    threshold = _env_int(OPS_WEBHOOK_5XX_THRESHOLD_ENV, OPS_DEFAULT_WEBHOOK_5XX_THRESHOLD)
+    raw = redis_conn.get(WEBHOOK_5XX_COUNT_KEY)
+    current_value = int(_decode_redis_value(raw)) if raw is not None else 0
+    _check_threshold_duration(
+        redis_conn,
+        state_key="ops_monitor:webhook_5xx:first_seen",
+        source="ops_monitor.webhook_5xx",
+        metric_name="webhook 5xx responses",
+        current_value=current_value,
+        threshold=threshold,
+        now=now,
+    )
+
+
 def _latest_backup_age_seconds(backup_dir: Path, now: float) -> float | None:
     backups = list(backup_dir.glob("aletheore_app_*.dump"))
     if not backups:
@@ -3929,6 +3956,7 @@ def run_ops_monitor_job() -> None:
     _check_queue_alerts(redis_conn, now)
     _check_backup_freshness(redis_conn, now)
     _check_free_tier_provider_keys(redis_conn)
+    _check_webhook_errors(redis_conn, now)
 
 
 # Each template function takes exactly one positional string arg

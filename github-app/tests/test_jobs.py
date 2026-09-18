@@ -9306,6 +9306,7 @@ def test_run_ops_monitor_job_alerts_on_second_app_health_failure(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs._check_queue_alerts", lambda redis_conn, now: None)
     monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda redis_conn, now: None)
     monkeypatch.setattr("scan_worker.jobs._check_free_tier_provider_keys", lambda redis_conn: None)
+    monkeypatch.setattr("scan_worker.jobs._check_webhook_errors", lambda redis_conn, now: None)
     monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
     monkeypatch.setenv("ALETHEORE_APP_HEALTH_URL", "http://bad-health.local/healthz")
 
@@ -9336,6 +9337,7 @@ def test_run_ops_monitor_job_broken_app_health_sends_ops_email(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs._check_queue_alerts", lambda redis_conn, now: None)
     monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda redis_conn, now: None)
     monkeypatch.setattr("scan_worker.jobs._check_free_tier_provider_keys", lambda redis_conn: None)
+    monkeypatch.setattr("scan_worker.jobs._check_webhook_errors", lambda redis_conn, now: None)
     monkeypatch.setattr(
         error_alerts,
         "send_transactional_email",
@@ -9375,6 +9377,7 @@ def test_run_ops_monitor_job_alerts_when_queue_depth_stays_high(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs._check_app_health", lambda redis_conn, url: None)
     monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda redis_conn, now: None)
     monkeypatch.setattr("scan_worker.jobs._check_free_tier_provider_keys", lambda redis_conn: None)
+    monkeypatch.setattr("scan_worker.jobs._check_webhook_errors", lambda redis_conn, now: None)
     monkeypatch.setattr("scan_worker.jobs.Queue", FakeQueue)
     monkeypatch.setattr("scan_worker.jobs.FailedJobRegistry", FakeFailedRegistry)
     monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
@@ -9426,6 +9429,7 @@ def test_run_ops_monitor_job_does_not_repeat_alert_within_cooldown(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs._check_app_health", lambda redis_conn, url: None)
     monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda redis_conn, now: None)
     monkeypatch.setattr("scan_worker.jobs._check_free_tier_provider_keys", lambda redis_conn: None)
+    monkeypatch.setattr("scan_worker.jobs._check_webhook_errors", lambda redis_conn, now: None)
     monkeypatch.setattr("scan_worker.jobs.Queue", FakeQueue)
     monkeypatch.setattr("scan_worker.jobs.FailedJobRegistry", FakeFailedRegistry)
     monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
@@ -9489,6 +9493,7 @@ def test_run_ops_monitor_job_alerts_when_backup_missing(monkeypatch, tmp_path):
     monkeypatch.setattr("scan_worker.jobs._check_app_health", lambda redis_conn, url: None)
     monkeypatch.setattr("scan_worker.jobs._check_queue_alerts", lambda redis_conn, now: None)
     monkeypatch.setattr("scan_worker.jobs._check_free_tier_provider_keys", lambda redis_conn: None)
+    monkeypatch.setattr("scan_worker.jobs._check_webhook_errors", lambda redis_conn, now: None)
     monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
     monkeypatch.setenv("ALETHEORE_BACKUP_DIR", str(missing_dir))
 
@@ -9582,6 +9587,7 @@ def test_run_ops_monitor_job_alerts_when_a_free_tier_provider_key_is_missing(mon
     monkeypatch.setattr("scan_worker.jobs._check_app_health", lambda redis_conn, url: None)
     monkeypatch.setattr("scan_worker.jobs._check_queue_alerts", lambda redis_conn, now: None)
     monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs._check_webhook_errors", lambda redis_conn, now: None)
     monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
 
     def fake_has_api_key(env_var, provider_name, **kwargs):
@@ -9629,6 +9635,55 @@ def test_check_free_tier_provider_keys_sends_no_alert_when_all_keys_present(monk
     _check_free_tier_provider_keys(redis_conn)
 
     assert alerts == []
+
+
+def test_check_webhook_errors_sends_no_alert_when_counter_is_absent(monkeypatch):
+    from scan_worker.jobs import _check_webhook_errors
+
+    redis_conn = _FakeRedis()
+    alerts = []
+    monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
+
+    _check_webhook_errors(redis_conn, now=1000.0)
+
+    assert alerts == []
+
+
+def test_run_ops_monitor_job_alerts_when_webhook_5xxs_stay_above_threshold(monkeypatch):
+    """Real incident this guards against (2026-09-18): a synchronous crash
+    in webhook handling produced a 500 on every retried delivery for ~18
+    hours with zero signal anywhere - not even the per-request crash email,
+    whose dedup cooldown isn't route-scoped. record_webhook_5xx (called
+    from app_server.main's handle_unexpected_exception on every /webhook
+    5xx) is the durable counter this check reads; same threshold/duration/
+    cooldown shape as the queue-depth check so an isolated, already-retried
+    failure doesn't page but a sustained one does."""
+    from scan_worker import jobs
+    from scan_worker.jobs import OPS_THRESHOLD_DURATION_SECONDS, WEBHOOK_5XX_COUNT_KEY, run_ops_monitor_job
+
+    redis_conn = _FakeRedis()
+    redis_conn.set(WEBHOOK_5XX_COUNT_KEY, 3)
+    alerts = []
+    monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
+    monkeypatch.setattr("scan_worker.jobs._check_app_health", lambda redis_conn, url: None)
+    monkeypatch.setattr("scan_worker.jobs._check_queue_alerts", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs._check_free_tier_provider_keys", lambda redis_conn: None)
+    monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
+    monkeypatch.setattr(jobs.time, "time", lambda: 1000.0)
+
+    run_ops_monitor_job()
+
+    assert alerts == []
+
+    monkeypatch.setattr(jobs.time, "time", lambda: 1000.0 + OPS_THRESHOLD_DURATION_SECONDS + 1)
+    redis_conn.set(WEBHOOK_5XX_COUNT_KEY, 5)  # still elevated - more deliveries kept failing
+
+    run_ops_monitor_job()
+
+    assert len(alerts) == 1
+    assert alerts[0][0][0] == "ops_monitor.webhook_5xx"
+    assert "webhook 5xx responses=5" in alerts[0][0][2]
 
 
 def test_run_git_scrubs_credentialed_url_from_a_failed_clone_error(tmp_path):
