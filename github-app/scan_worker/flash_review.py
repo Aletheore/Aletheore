@@ -10,7 +10,6 @@ from pathlib import Path
 import yaml
 from tree_sitter import Parser
 
-from aletheore.dead_code import is_test_file
 from aletheore.evidence_resolution import (
     attach_dependency_evidence,
     attach_risk_evidence,
@@ -21,7 +20,6 @@ from aletheore.scanner.graph import LANGUAGE_BY_EXTENSION
 from scan_worker.github_api import (
     MAX_CONTEXT_FILE_BYTES,
     MAX_CONTEXT_FILES,
-    MAX_CONTEXT_TOTAL_BYTES,
     fetch_file_content,
 )
 from scan_worker.model_tiers import flash_review_generation_adapter, flash_review_model_used
@@ -281,28 +279,84 @@ def _parse_pr_agent_yaml_findings(raw: str) -> list[dict]:
 def files_missing_from_review_context(
     changed_files: list[str], file_contents: dict[str, str]
 ) -> list[str]:
-    """Changed files whose real content never reached the review.
+    """Changed files with no real content to check citations against.
 
-    fetch_review_file_context stops at MAX_CONTEXT_FILES and skips anything
-    over MAX_CONTEXT_FILE_BYTES, so on
-    a PR touching more than 30 files - or any file over 100KB - the excess
-    is invisible to the model *and* to the citation check, which passes any
-    finding whose file content it doesn't have (see
-    _line_citation_content_matches). Without this, "No issues found in this
-    diff" was reported identically whether the whole PR was reviewed or
-    only the first 30 files of it, which is the more damaging half of the
-    problem: silence read as an all-clear.
+    fetch_review_file_context stops at MAX_CONTEXT_FILES, and a file over
+    MAX_CONTEXT_FILE_BYTES now gets a windowed excerpt around its diff
+    hunks rather than being dropped outright whenever diff-patch evidence
+    is available to window against (see
+    _windowed_oversized_file_content) - so this list is now genuinely
+    "no real content signal at all" (file-count limit exceeded, or no
+    hunk evidence to window around), not every oversized file. Whatever
+    remains on this list is invisible to _line_citation_content_matches,
+    which passes any finding whose file content it doesn't have - so "No
+    issues found in this diff" for a file on this list means "not
+    checked", not "checked and clean". Real, confirmed gap this closes
+    most of: on PR #734 (2026-09-18), scan_worker/jobs.py - this repo's
+    own biggest, highest-churn file, and the file holding that PR's
+    actual new logic - was unconditionally on this list before windowing
+    existed, and Flash Review reported a clean diff having never looked
+    at it.
 
-    (These two thresholds have moved before without this docstring being
-    updated - found stale here at 15 files/40KB, one raise behind the real
-    30 files/80KB it should have said; keep this in sync with github_api.
-    MAX_CONTEXT_FILES/MAX_CONTEXT_FILE_BYTES rather than restating the
-    literal numbers if either changes again.)
+    (These thresholds have moved before without this docstring being kept
+    in sync - point at github_api.MAX_CONTEXT_FILES/MAX_CONTEXT_FILE_BYTES
+    rather than restating the literal numbers.)
     """
     return [path for path in changed_files if path not in file_contents]
 
 
 MAX_FILE_FETCH_WORKERS = 8
+
+# How far past MAX_CONTEXT_FILE_BYTES a file's real content is windowed
+# around each diff hunk it was changed in (see
+# _windowed_oversized_file_content). Generous over
+# LINE_CITATION_CONTEXT_WINDOW (8, this file's own citation-tolerance
+# margin below) rather than matched to it exactly: this margin also has
+# to survive whatever hunk-splitting GitHub's own diff produced (two
+# nearby but separately-hunked changes should usually merge into one
+# window, not leave a citation-blind gap between them), not just the
+# model's observed +/-1-to-3 line-counting variance that number was sized
+# for.
+FILE_WINDOW_MARGIN_LINES = 30
+
+
+def _windowed_oversized_file_content(
+    content: str, patch: str, margin: int = FILE_WINDOW_MARGIN_LINES
+) -> str | None:
+    """A line-position-preserving excerpt of `content` for a file too big
+    to include in full (see MAX_CONTEXT_FILE_BYTES): real text survives
+    only within `margin` lines of a line the diff actually touched (per
+    _patch_valid_lines - the same new-file line accounting
+    _line_citation_content_matches' own caller relies on elsewhere, so a
+    removed line's collapse point is handled identically here), and every
+    other line is replaced with an empty string rather than dropped.
+
+    Blank filler rather than a compacted string is deliberate: it keeps
+    every surviving line's index identical to its real line number in
+    the file, so _line_citation_content_matches' existing
+    content.split("\\n")[line] lookup needs no change to work against a
+    windowed file exactly as it does against a full one - and it's cheap
+    even for a huge file, since each blank filler line costs one byte
+    regardless of how long the real line it stands in for was.
+
+    Returns None when the patch carries no hunk-line evidence at all
+    (the caller falls back to omitting the file entirely, same as
+    before this existed) rather than guessing at what to keep - windowing
+    with no real basis would be an arbitrary truncation, not evidence-
+    backed coverage.
+    """
+    valid_lines = _patch_valid_lines(patch)
+    if not valid_lines:
+        return None
+    lines = content.split("\n")
+    total = len(lines)
+    keep = bytearray(total)
+    for line_no in valid_lines:
+        lo = max(1, line_no - margin)
+        hi = min(total, line_no + margin)
+        for i in range(lo, hi + 1):
+            keep[i - 1] = 1
+    return "\n".join(lines[i] if keep[i] else "" for i in range(total))
 
 
 def fetch_review_file_context(
@@ -311,25 +365,41 @@ def fetch_review_file_context(
     repo_full_name: str,
     changed_files: list[str],
     head_ref: str,
-) -> tuple[str, dict[str, str]]:
-    """One fetch pass over changed_files[:MAX_CONTEXT_FILES], producing both
-    the formatted prompt blob (file_context, capped by
-    MAX_CONTEXT_TOTAL_BYTES and truncated in original diff order once that
-    budget is hit) and the structured path->content lookup used by
-    _line_citation_content_matches for verification (file_contents, capped
-    only per-file - no total budget, since a citation check needs the real
-    content of every file that was actually read regardless of whether it
-    made it into the prompt).
+    diff_patches: tuple[tuple[str, str], ...] | None = None,
+) -> dict[str, str]:
+    """Fetches real content for changed_files[:MAX_CONTEXT_FILES] - the
+    path->content lookup _line_citation_content_matches uses to verify a
+    finding's claimed line against the real file.
 
-    This used to be two separate functions (gather_file_context,
+    Used to also build a second, formatted "file_context" prompt blob -
+    removed, because PR-Agent's real prompt (see
+    FLASH_REVIEW_SYSTEM_PROMPT) has no slot for it, and its one real
+    caller (jobs._run_flash_review) discarded it unread the moment that
+    prompt shipped (see PR #730) - byte-budgeting and formatting a string
+    nobody reads was pure waste on every single review.
+
+    A file over MAX_CONTEXT_FILE_BYTES is no longer unconditionally
+    dropped: when diff_patches gives real hunk-line evidence for it, a
+    windowed excerpt (see _windowed_oversized_file_content) keeps real
+    content near every changed line instead, small enough for even a
+    huge file to fit the same per-file byte cap (blank filler lines cost
+    about a byte each) - so citation-checking on a file like
+    scan_worker/jobs.py, this repo's own biggest file, stops being
+    unconditionally blind. Confirmed live gap, PR #734 (2026-09-18): the
+    file holding that PR's actual new logic was silently excluded from
+    review with no signal anywhere. diff_patches defaults to None (no
+    windowing, matching the prior all-or-nothing behavior) rather than
+    being required, so a caller with no patch data on hand still gets a
+    working, if less complete, result instead of an error.
+
+    Concurrent fetch (httpx.Client is safe for concurrent use across
+    threads) - this used to be two separate functions (gather_file_context,
     fetch_changed_file_contents) that each looped over the same file list
-    and issued their own GET per file - fetching every changed file's
-    content from GitHub twice for no reason. Fetched once here, concurrently
-    (httpx.Client is safe for concurrent use across threads), since on a
-    real PR this pair of loops was a measurable chunk of Flash review's
-    end-to-end latency (a single review was clocked at 5m50s in production,
-    well past the job's old 180s timeout - see FLASH_REVIEW_JOB_TIMEOUT_SECONDS
-    in app_server/webhooks/pull_request.py)."""
+    and issued their own GET per file, fetching every changed file's
+    content from GitHub twice for no reason, a measurable chunk of Flash
+    review's end-to-end latency on a real PR (a single review was clocked
+    at 5m50s in production, well past the job's old 180s timeout - see
+    FLASH_REVIEW_JOB_TIMEOUT_SECONDS in app_server/webhooks/pull_request.py)."""
     paths = changed_files[:MAX_CONTEXT_FILES]
     raw_contents: dict[str, str] = {}
     if paths:
@@ -343,27 +413,25 @@ def fetch_review_file_context(
                 if content is not None:
                     raw_contents[path] = content
 
-    file_contents = {
-        path: content
-        for path, content in raw_contents.items()
-        if len(content.encode("utf-8")) <= MAX_CONTEXT_FILE_BYTES
-    }
-
-    parts = []
-    total_bytes = 0
-    for path in paths:
-        content = file_contents.get(path)
-        if content is None:
+    patch_by_path = {filename: patch for filename, patch in (diff_patches or ())}
+    file_contents: dict[str, str] = {}
+    for path, content in raw_contents.items():
+        if len(content.encode("utf-8")) <= MAX_CONTEXT_FILE_BYTES:
+            file_contents[path] = content
             continue
-        encoded_len = len(content.encode("utf-8"))
-        if total_bytes + encoded_len > MAX_CONTEXT_TOTAL_BYTES:
-            break
-        label = "test file content" if is_test_file(path) else "full content"
-        parts.append(f"--- {label}: {path} ---\n{content}")
-        total_bytes += encoded_len
-    file_context = "\n\n".join(parts)
+        patch = patch_by_path.get(path)
+        if patch is None:
+            continue
+        windowed = _windowed_oversized_file_content(content, patch, margin=FILE_WINDOW_MARGIN_LINES)
+        # A windowed excerpt can still exceed the cap when a file's real
+        # hunks are dense/spread out enough that the kept ranges add up to
+        # more real content than MAX_CONTEXT_FILE_BYTES allows - omitted
+        # in that case, same as before windowing existed, rather than
+        # silently blow past the real per-file byte budget.
+        if windowed is not None and len(windowed.encode("utf-8")) <= MAX_CONTEXT_FILE_BYTES:
+            file_contents[path] = windowed
 
-    return file_context, file_contents
+    return file_contents
 
 
 def order_changed_files_by_diff_size(

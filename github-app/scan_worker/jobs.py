@@ -2170,16 +2170,20 @@ def _run_flash_review(
     if is_non_substantive_diff(changed_files):
         findings: list[dict] = []
     else:
-        # file_context (the formatted prompt blob half of this call) is
-        # discarded - only file_contents (the raw fetched content) is
-        # needed, for citation grounding/verification. Never put in the
-        # LLM prompt at all: compact mode measured matching or beating
-        # full-context inclusion on independently-verified accept rate
-        # (see aletheore-benchmarks/pr_review/README.md), and PR-Agent's
-        # own real prompt (see flash_review.FLASH_REVIEW_SYSTEM_PROMPT) has
-        # no slot for it either way.
-        _file_context, file_contents = fetch_review_file_context(
-            client, token, repo_full_name, changed_files, head_sha
+        # Only file_contents (real file content) is needed here, for
+        # citation grounding/verification - never put in the LLM prompt at
+        # all: compact mode measured matching or beating full-context
+        # inclusion on independently-verified accept rate (see
+        # aletheore-benchmarks/pr_review/README.md), and PR-Agent's own
+        # real prompt (see flash_review.FLASH_REVIEW_SYSTEM_PROMPT) has no
+        # slot for it either way - fetch_review_file_context stopped
+        # building that unused prompt blob for exactly this reason. Passing
+        # diff_patches lets an oversized file (e.g. this repo's own
+        # scan_worker/jobs.py) get a windowed excerpt around its real diff
+        # hunks instead of being silently dropped from citation-checking
+        # entirely - see fetch_review_file_context's docstring.
+        file_contents = fetch_review_file_context(
+            client, token, repo_full_name, changed_files, head_sha, diff_patches=diff_patches
         )
         skipped_files = files_missing_from_review_context(changed_files, file_contents)
         if skipped_files:
