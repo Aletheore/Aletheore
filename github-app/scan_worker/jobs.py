@@ -128,6 +128,7 @@ from scan_worker.docs_repo_commit import sync_docs_to_repo
 from scan_worker.flash_review import (
     FLASH_REVIEW_FALLBACK_MODEL,
     build_referenced_symbol_context,
+    build_sibling_file_context,
     fetch_review_file_context,
     files_missing_from_review_context,
     find_symbol_at_location,
@@ -2234,6 +2235,11 @@ def _run_flash_review(
         referenced_symbol_context = build_referenced_symbol_context(
             evidence, changed_files, diff_text, _fetch_symbol_source
         )
+        # No fetch callback, unlike referenced_symbol_context above: this
+        # stays compact (a sibling's path + its top-level symbol NAMES,
+        # read straight from evidence's module graph), never real source -
+        # see build_sibling_file_context's own docstring for why.
+        sibling_file_context = build_sibling_file_context(evidence, changed_files)
         dsn = settings.database_url
         flash_review_model = flash_review_model_used(FLASH_REVIEW_FALLBACK_MODEL)
 
@@ -2351,10 +2357,12 @@ def _run_flash_review(
             diff_text,
             on_usage=_on_usage,
             pr_title=pr_title,
-            # Feeds find_semantic_regressions's deterministic checks only -
-            # PR-Agent's real prompt (FLASH_REVIEW_SYSTEM_PROMPT) has no
-            # slot for it in the LLM-facing user prompt.
+            # Feeds both find_semantic_regressions's deterministic checks
+            # AND the LLM-facing user prompt (appended after the diff via
+            # _SIBLING_FILE_CONTEXT_SUFFIX/_REFERENCED_SYMBOL_CONTEXT_SUFFIX
+            # - see _build_flash_review_user_prompt).
             referenced_symbol_context=referenced_symbol_context,
+            sibling_file_context=sibling_file_context,
             # The similarity cache is keyed only by (installation_id,
             # repo_full_name) + diff similarity - it has no notion of
             # which model produced a cached result. Free tier never
