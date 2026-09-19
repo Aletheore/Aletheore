@@ -372,6 +372,52 @@ python scripts/score_fallback_judge.py</code></pre>
 
       <section class="developer-section dogfood-repo dogfood-repo-alt">
         <div class="section-heading dogfood-heading">
+          <p class="eyebrow">PR review · 5-way, named, and a real regression we found and fixed</p>
+          <h2>A benchmark found a real bug in our own product — so we shipped the fix the same night.</h2>
+          <p>Same 24-case corpus as the PR-Agent head-to-head, this time a 5-way comparison
+            (PR-Agent, DeepSource, Sourcery, Greptile, and Aletheore on its current production
+            model). Aletheore came in last on recall at first — not because the model or the
+            grounding architecture was weak, but because production was feeding Flash Review a
+            context block that was actively hurting it.</p>
+        </div>
+
+        <div class="dogfood-table-wrap">
+          <table class="dogfood-table">
+            <thead>
+              <tr><th>Tool</th><th>Recall</th><th>False positives (4 clean cases)</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Greptile</td><td>95.0%</td><td>1</td></tr>
+              <tr><td><strong>Aletheore</strong> (current config, post-fix)</td><td><strong>90-95%</strong></td><td><strong>0-1</strong></td></tr>
+              <tr><td>PR-Agent / Qodo</td><td>92.5%</td><td>1</td></tr>
+              <tr><td>Sourcery</td><td>80.0%</td><td>0</td></tr>
+              <tr><td>DeepSource</td><td>5.0%</td><td>0</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="dogfood-callout">
+          <p><strong>What actually happened:</strong> Flash Review builds two optional context
+            blocks beyond the diff — one resolving symbols the diff imports from unchanged files
+            (built to stop a confirmed hallucination class), and a newer one surfacing sibling
+            files in the same directory. A controlled test — same model, same corpus, only the
+            context varied, most configs run twice to separate real signal from model noise —
+            found the newer sibling-file context alone cost <strong>15-25 points of recall</strong>
+            and doubled the false-positive rate. The older, unrelated context block wasn't the
+            problem. Production was changed the same night: the sibling-file context is no longer
+            fed into live Flash Review prompts. A post-deploy verification run confirmed the fix
+            performs exactly as the isolation test predicted.</p>
+        </div>
+
+        <p class="dogfood-p">We're publishing the regression, the isolation test, and the fix
+          together, not just the after-picture — including where this run's conclusion disagrees
+          with an earlier benchmark's finding about the same feature on a different corpus. Full
+          writeup, every run's numbers, and the raw per-case data in
+          <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/pr_review/README.md#experiment-6-5-way-named-comparison-same-corpus--and-a-real-production-fix-decided-by-the-results" rel="noopener">pr_review/README.md</a>.</p>
+      </section>
+
+      <section class="developer-section dogfood-repo dogfood-repo-alt">
+        <div class="section-heading dogfood-heading">
           <p class="eyebrow">Deterministic analysis vs. bare LLM</p>
           <h2>Can a bare LLM reproduce the scanner's answer, given the same data?</h2>
           <p>Not "Aletheore vs. RepoWise" — for the parts of Aletheore that aren't an LLM call
