@@ -2220,6 +2220,41 @@ def test_system_prompt_instructs_reporting_narrow_or_subtle_real_issues_rather_t
     assert "do not skip a genuine problem just because the trigger scenario is narrow" in normalized
 
 
+def test_system_prompt_softens_confidence_bar_for_lower_severity_concerns():
+    # Real gap found via a 14-case benchmark run (2026-09-19, sentry/
+    # grafana/cal.com/keycloak) on top of PR #746's sibling-file/referenced-
+    # symbol context: Aletheore consistently produced only 2-5 findings per
+    # review even on PRs with 50+ real golden issues (calcom-10967,
+    # calcom-10600) - low volume, not bad targeting, was the dominant
+    # recall ceiling. Isolated test #1 (raising the vendored schema's
+    # stated "0-5 issues" cap to "0-10") moved finding volume almost
+    # nothing (35->36 total across 14 cases) and genuinely cost precision
+    # (81.8%->75.0%) - proof the printed number was never the real gate.
+    #
+    # This is isolated test #2: PR-Agent's vendored prompt gated lower-
+    # severity concerns behind "be certain before flagging... If you
+    # cannot confidently explain why something is a problem... do not flag
+    # it" - a bar most of the pattern-consistency/edge-case findings PR
+    # #746's new context exists to surface can't clear, regardless of how
+    # good that context is. Softened to require groundedness (a concrete
+    # reason tied to the diff or given evidence - a named sibling's
+    # contradicting convention, a referenced definition's real behavior)
+    # rather than certainty, while leaving the numeric cap and few-shot
+    # example untouched to isolate this one variable. Real result on the
+    # same 14-case corpus: recall 44.7%->47.9% (+3.2pp over the #746
+    # baseline, +5.0pp over the failed cap experiment), precision
+    # 81.8%->78.9% (a real but modest cost, and clearly better held than
+    # the cap experiment's 75.0%). calcom-10967 alone went from 23-25/53
+    # matched (every prior run) to 33/53 with this change.
+    normalized = " ".join(FLASH_REVIEW_SYSTEM_PROMPT.lower().split())
+    assert "flag it if you can point to a concrete, specific reason grounded in the diff" in normalized
+    assert "withhold a lower-severity concern only when your reasoning is speculative or ungrounded" in normalized
+    # The high-severity bar and the numeric cap are both untouched - this
+    # change targets only the lower-severity gate.
+    assert "for clear bugs and security issues, be thorough" in normalized
+    assert "a concise list (0-5 issues)" in normalized
+
+
 def test_system_prompt_instructs_a_deliberate_security_pass_even_when_diff_purpose_is_unrelated():
     # Same 2026-08-30 benchmark pass: Aletheore missed a real, security-shaped
     # bug in case 003 (a Windows registry proxy-bypass rule converted to an

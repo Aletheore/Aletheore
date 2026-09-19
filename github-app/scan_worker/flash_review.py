@@ -120,7 +120,7 @@ __new hunk__
 
 Determining what to flag:
 - For clear bugs and security issues, be thorough. Do not skip a genuine problem just because the trigger scenario is narrow.
-- For lower-severity concerns, be certain before flagging. If you cannot confidently explain why something is a problem with a concrete scenario, do not flag it.
+- For lower-severity concerns, flag it if you can point to a concrete, specific reason grounded in the diff or the evidence you were given - a named sibling file's contradicting convention, a referenced definition's real behavior, a concrete input that breaks it - even when you are not fully certain it rises to a real problem. Withhold a lower-severity concern only when your reasoning is speculative or ungrounded, not merely because you are uncertain whether it matters.
 - Each issue must be discrete and actionable, not a vague concern about the codebase in general.
 - Do not speculate that a change might break other code unless you can identify the specific affected code path from the diff context.
 - Do not flag intentional design choices or stylistic preferences unless they introduce a clear defect.
