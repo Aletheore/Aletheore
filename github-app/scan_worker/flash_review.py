@@ -191,18 +191,76 @@ Response (should be a valid YAML, and nothing else):
 ```yaml"""
 
 
-def _build_flash_review_user_prompt(pr_title: str, diff_text: str) -> str:
+# Appended after the diff, only when referenced_symbol_context is non-empty
+# (real customer repos Aletheore has actually scanned - see review_diff's
+# call site comment for why this was safe to add: the martian-benchmark
+# corpus this prompt was tuned against is external repos with no Aletheore
+# scan evidence, so referenced_symbol_context was always "" during that
+# validation - this addition can't contradict a result that never exercised
+# it). Wording carried over verbatim from Aletheore's own pre-PR-Agent
+# prompt, which used this exact framing for the same evidence.
+_REFERENCED_SYMBOL_CONTEXT_SUFFIX = """
+
+You may also be given real source for specific functions or classes that the diff calls or
+references but does not itself define, labeled "--- referenced definition (not part of this
+diff): <file>:<name> ---". This is the ONLY evidence you have about what such a symbol actually
+does. Never guess or assume the behavior, return type, sync/async-ness, or side effects of a
+symbol the diff merely calls or imports - if you were not given its real definition this way, do
+not make any claim that depends on knowing it. Do not report a finding at all rather than
+inventing a plausible-sounding one about code you were never shown.
+
+{referenced_symbol_context}"""
+
+# Appended after referenced_symbol_context (when both are present) or
+# directly after the diff (when referenced_symbol_context is empty) - same
+# non-negotiable positioning rule as _REFERENCED_SYMBOL_CONTEXT_SUFFIX (see
+# review_diff's call site comment: injecting context BEFORE PR-Agent's
+# schema regressed quality 55.2% vs 62.4% F1; appending AFTER preserved it).
+# Real recall gap this targets: a 24-case benchmark run (2026-09-19) found
+# Aletheore's biggest miss versus PR-Agent/Greptile was "this new/changed
+# code doesn't follow the pattern used by a sibling file in the same
+# directory" - confirmed concretely on calcom/cal.diy PR #22532, where
+# deleteCache.handler.ts throws a plain Error and bypasses a factory that
+# every sibling handler in its directory (e.g. setDestinationCalendar.
+# handler.ts) already uses. referenced_symbol_context's one-hop import
+# resolution structurally cannot surface this: the new file never imports
+# the sibling, so there is no import edge to walk.
+_SIBLING_FILE_CONTEXT_SUFFIX = """
+
+You may also be given the names of top-level functions/classes defined in other files that live
+in the SAME DIRECTORY as a changed file, labeled "--- sibling file in the same directory (not
+part of this diff): <path> ---". These files are not part of the diff and you were not given
+their real source - only their symbol names. Use this only to notice when the diff's new or
+changed code conspicuously does NOT follow a pattern/convention that its own directory siblings'
+names suggest (e.g. every other handler in the directory is named/shaped like an error-handling
+or validation wrapper, and the new one visibly isn't). Never assert what a sibling file's code
+actually does, raises, or returns - you were not shown its body, only its symbol names.
+
+{sibling_file_context}"""
+
+
+def _build_flash_review_user_prompt(
+    pr_title: str,
+    diff_text: str,
+    referenced_symbol_context: str = "",
+    sibling_file_context: str = "",
+) -> str:
     """Fills PR-Agent's real user-prompt template. Plain str.format(), not
     Jinja2 (which isn't a production dependency of this service) - safe
     here because only this template's own literal braces are parsed;
     pr_title/diff_text are substituted as opaque values, never re-parsed
     for braces of their own, so untrusted PR-author content (title, diff)
     can't inject template syntax."""
-    return _FLASH_REVIEW_USER_PROMPT_TEMPLATE.format(
+    prompt = _FLASH_REVIEW_USER_PROMPT_TEMPLATE.format(
         date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         title=pr_title,
         diff=diff_text,
     )
+    if referenced_symbol_context:
+        prompt += _REFERENCED_SYMBOL_CONTEXT_SUFFIX.format(referenced_symbol_context=referenced_symbol_context)
+    if sibling_file_context:
+        prompt += _SIBLING_FILE_CONTEXT_SUFFIX.format(sibling_file_context=sibling_file_context)
+    return prompt
 
 
 def _extract_pr_agent_yaml_issues(raw: str) -> list | None:
@@ -918,6 +976,128 @@ def build_referenced_symbol_context(
                 total_bytes += encoded_len
                 if len(parts) >= MAX_REFERENCED_SYMBOLS:
                     return "\n\n".join(parts)
+
+    return "\n\n".join(parts)
+
+
+# Per-changed-file cap on how many sibling files get pulled in, and an
+# overall byte budget of similar magnitude to MAX_CODE_EVIDENCE_BYTES
+# (20_000) above - this context is compact symbol-name summaries, not real
+# source, same reasoning as build_code_evidence_context's own comment:
+# compact mode matched or beat full-context inclusion, so there is no case
+# for spending the byte budget on full sibling source.
+MAX_SIBLING_FILES_PER_CHANGED_FILE = 3
+MAX_SIBLING_FILE_BYTES = 20_000
+
+
+def _file_kind_suffix(path: str) -> str:
+    """The dotted suffix after a filename's first segment - e.g.
+    "deleteCache.handler.ts" -> "handler.ts", "_router.tsx" -> "tsx". Used
+    to prioritize siblings of the SAME kind as the changed file (another
+    "*.handler.ts" over a "*.schema.ts" or "*.test.ts" in the same
+    directory), since a handler is far more likely to reveal the
+    convention another handler should follow than an unrelated schema/
+    router/test file is.
+
+    Real bug this fixes: without kind-based prioritization, a low per-file
+    cap (2-3, to keep this context genuinely compact) combined with a
+    directory's real module order (whatever order the scanner emits
+    modules in - alphabetical in practice) silently dropped the one
+    sibling that actually mattered. Confirmed empirically against a real
+    `aletheore scan` of calcom/cal.diy: naive "first N in module order"
+    selection for deleteCache.handler.ts's directory picked _router.tsx
+    and two *.schema.ts/*.handler.ts files that happened to sort first
+    alphabetically, and NEVER included setDestinationCalendar.handler.ts -
+    the exact sibling PR #22532's real gap depends on. Sorting same-kind
+    siblings first fixed it without raising the per-file cap.
+    """
+    name = path.rsplit("/", 1)[-1]
+    parts = name.split(".")
+    return ".".join(parts[1:]) if len(parts) > 1 else ""
+
+
+def build_sibling_file_context(evidence: dict | None, changed_files: list[str]) -> str:
+    """Surface OTHER files in the same directory as a changed file, so the
+    model can notice when new/changed code doesn't follow a convention its
+    own directory siblings suggest - a gap build_referenced_symbol_context
+    structurally cannot cover, since it only resolves symbols a changed
+    file actually imports. Confirmed as a real recall gap via a 24-case
+    benchmark run (2026-09-19) against PR-Agent/Greptile: on calcom/
+    cal.diy PR #22532, deleteCache.handler.ts throws a plain Error and
+    bypasses a factory that every sibling handler in its directory already
+    uses (e.g. setDestinationCalendar.handler.ts) - but deleteCache.
+    handler.ts never imports that sibling, so there is no import edge for
+    one-hop resolution to walk.
+
+    Deliberately compact, unlike build_referenced_symbol_context: only a
+    sibling's file path and its top-level function/class names (read
+    straight from evidence, no source fetch), never real source. A sibling
+    is evidence of a NAMING/SHAPE convention, not of specific behavior the
+    model should assert as fact - see _SIBLING_FILE_CONTEXT_SUFFIX's own
+    instruction not to claim what a sibling's code actually does.
+
+    Within a directory, siblings sharing the changed file's own "kind"
+    (_file_kind_suffix - e.g. another *.handler.ts for a *.handler.ts
+    change) are included before other siblings, since the low per-file cap
+    (MAX_SIBLING_FILES_PER_CHANGED_FILE) leaves no room to include
+    everything in a large directory - see _file_kind_suffix's own
+    docstring for the real miss this fixes.
+    """
+    if not evidence:
+        return ""
+    modules = evidence.get("repository", {}).get("modules", [])
+    changed = set(changed_files)
+
+    by_directory: dict[str, list[dict]] = {}
+    for module in modules:
+        path = module.get("path")
+        if not path or path in changed:
+            continue
+        directory = path.rsplit("/", 1)[0] if "/" in path else ""
+        by_directory.setdefault(directory, []).append(module)
+
+    seen_paths: set[str] = set()
+    parts: list[str] = []
+    total_bytes = 0
+    for file_path in changed_files:
+        directory = file_path.rsplit("/", 1)[0] if "/" in file_path else ""
+        siblings = by_directory.get(directory, [])
+        if not siblings:
+            continue
+        # Same-kind siblings first (stable sort preserves each group's
+        # original scan order), so a low per-file cap still reaches the
+        # sibling most likely to reveal the convention being broken.
+        changed_kind = _file_kind_suffix(file_path)
+        siblings = sorted(
+            siblings,
+            key=lambda mod: _file_kind_suffix(mod.get("path", "")) != changed_kind,
+        )
+        included_for_this_file = 0
+        for sibling in siblings:
+            if included_for_this_file >= MAX_SIBLING_FILES_PER_CHANGED_FILE:
+                break
+            sibling_path = sibling.get("path")
+            if not sibling_path or sibling_path in seen_paths:
+                continue
+            symbols = sibling.get("symbols", {})
+            names = [
+                entry.get("name")
+                for entry in symbols.get("functions", []) + symbols.get("classes", [])
+                if entry.get("name")
+            ]
+            if not names:
+                continue
+            block = (
+                f"--- sibling file in the same directory (not part of this diff): "
+                f"{sibling_path} ---\n{', '.join(names)}"
+            )
+            encoded_len = len(block.encode("utf-8"))
+            if total_bytes + encoded_len > MAX_SIBLING_FILE_BYTES:
+                continue
+            parts.append(block)
+            total_bytes += encoded_len
+            seen_paths.add(sibling_path)
+            included_for_this_file += 1
 
     return "\n\n".join(parts)
 
@@ -1835,6 +2015,7 @@ def review_diff(
     *,
     pr_title: str = "",
     referenced_symbol_context: str = "",
+    sibling_file_context: str = "",
     cache_lookup: Callable[[str], list[dict] | None] | None = None,
     cache_write: Callable[[str, list[dict], str], None] | None = None,
     model_used: str | None = None,
@@ -1931,18 +2112,42 @@ def review_diff(
                 on_grounding_result({"proposed": len(combined), "kept": len(kept)})
             return kept
 
-    # Bare PR-Agent user prompt (title/date/diff only) - no file/code-
-    # evidence/referenced-symbol/PR-description context blocks. This is a
-    # deliberate choice, not an oversight: those blocks were never part of
-    # the combination that was actually measured (the martian-benchmark
-    # corpus is external repos Aletheore never scanned, so there was no
-    # evidence to inject in the first place), and appending untested
-    # context onto a prompt whose wording is the whole reason it was
-    # chosen risks losing exactly the effect being shipped for. Aletheore's
-    # own deterministic evidence isn't lost for the review as a whole -
-    # find_semantic_regressions above still runs against referenced_symbol_
-    # context regardless of what the LLM itself sees.
-    user_prompt = _build_flash_review_user_prompt(pr_title, diff_text)
+    # PR-Agent user prompt (title/date/diff) plus, when non-empty,
+    # referenced_symbol_context appended after the diff. File/code-evidence/
+    # dependency/blast-radius/schema-endpoint/PR-description context blocks
+    # stay dropped - those were never part of the measured combination and
+    # PR-Agent's prompt has no slot for them. referenced_symbol_context is
+    # different: a second full 24-case run of this session's own PR-review
+    # benchmark (2026-09-19, sentry/grafana/cal.com/keycloak, discourse-
+    # graphite excluded - its "golden" comments turned out to be AI-review-
+    # styled content from 1-2 non-maintainer accounts, not organic human
+    # review) found Aletheore's biggest recall gap versus PR-Agent/Greptile
+    # was specifically missing "this doesn't match the pattern used by a
+    # sibling/imported symbol" findings - exactly the class of claim
+    # referenced_symbol_context exists to ground. It was never part of the
+    # original 50-PR martian-benchmark validation this prompt was tuned
+    # against, but not because it was tried and measured worse: that corpus
+    # is external repos Aletheore never scanned, so referenced_symbol_
+    # context was always "" there regardless of whether this call site
+    # passed it through - there is no earlier result this contradicts.
+    # find_semantic_regressions below still runs against it either way, so
+    # this doesn't add new evidence-gathering cost, only reuses it.
+    #
+    # sibling_file_context follows the same after-the-diff positioning rule
+    # (see _SIBLING_FILE_CONTEXT_SUFFIX) but targets a DIFFERENT recall gap
+    # than referenced_symbol_context: the same benchmark run's biggest miss
+    # was specifically "doesn't follow the pattern used by a sibling file
+    # in the same directory" (confirmed on calcom/cal.diy PR #22532), which
+    # referenced_symbol_context's one-hop import resolution cannot surface
+    # when the changed file never imports that sibling at all. Not fed into
+    # find_semantic_regressions: that function only runs deterministic,
+    # regex-anchored checks (raises/yields/mutates from a resolved
+    # definition's real source) - whether new code "matches the style" of
+    # an unrelated sibling is a judgment call, not something a regex check
+    # can verify, so this context is LLM-prompt-only.
+    user_prompt = _build_flash_review_user_prompt(
+        pr_title, diff_text, referenced_symbol_context, sibling_file_context
+    )
 
     def _call_adapter(used_adapter) -> str:
         return used_adapter.simple_completion(FLASH_REVIEW_SYSTEM_PROMPT, user_prompt, cwd=".")

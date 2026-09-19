@@ -4499,6 +4499,86 @@ def test_flash_review_job_passes_referenced_symbol_context_to_review_diff(monkey
     assert "def _github_http_client() -> httpx.Client" in captured["referenced_symbol_context"]
 
 
+def test_flash_review_job_passes_sibling_file_context_to_review_diff(monkeypatch):
+    # Proves the job actually wires build_sibling_file_context's output
+    # into review_diff, not just that the pure function (already covered
+    # in test_flash_review.py) works in isolation - mirrors
+    # test_flash_review_job_passes_referenced_symbol_context_to_review_diff
+    # above. widgets.py here is a same-directory sibling of the changed
+    # file (dashboard.py) that dashboard.py never imports - exactly the
+    # shape build_referenced_symbol_context's own import-resolution test
+    # cannot cover.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_pr_diff",
+        lambda *a, **k: "--- dashboard.py ---\n@@ -1,1 +1,1 @@\n+thing\n",
+    )
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["dashboard.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs._latest_evidence_or_none",
+        lambda *a, **k: {
+            "repository": {
+                "modules": [
+                    {"path": "dashboard.py", "imports": [], "symbols": {"functions": [], "classes": []}},
+                    {
+                        "path": "widgets.py",
+                        "imports": [],
+                        "symbols": {
+                            "functions": [{"name": "render_widget", "start_line": 1, "end_line": 2}],
+                            "classes": [],
+                        },
+                    },
+                ],
+            },
+        },
+    )
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: None)
+    captured = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda diff_text, file_context="", **kwargs: captured.update(kwargs) or [],
+    )
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    from scan_worker.jobs import run_flash_review_job
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert "widgets.py" in captured["sibling_file_context"]
+    assert "render_widget" in captured["sibling_file_context"]
+
+
 def test_run_flash_review_referenced_symbol_source_indexes_by_real_newline_lines(monkeypatch):
     # Real gap found in a backward audit: _run_flash_review's own
     # _fetch_symbol_source closure indexed the referenced file's content

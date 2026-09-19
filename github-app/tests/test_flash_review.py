@@ -7,6 +7,7 @@ from scan_worker.flash_review import (
     FLASH_REVIEW_SYSTEM_PROMPT,
     VERIFICATION_SYSTEM_PROMPT,
     files_missing_from_review_context,
+    _build_flash_review_user_prompt,
     _diff_valid_lines,
     _lookup_valid_lines,
     _line_citation_content_matches,
@@ -20,12 +21,13 @@ from scan_worker.flash_review import (
     build_code_evidence_context,
     build_dependency_impact_context,
     build_referenced_symbol_context,
+    build_sibling_file_context,
     find_semantic_regressions,
     is_non_substantive_diff,
     order_changed_files_by_diff_size,
     review_diff,
 )
-from scan_worker.flash_review import MAX_CODE_EVIDENCE_BYTES
+from scan_worker.flash_review import MAX_CODE_EVIDENCE_BYTES, MAX_SIBLING_FILE_BYTES, MAX_SIBLING_FILES_PER_CHANGED_FILE
 
 
 def test_diff_valid_lines_maps_added_and_context_lines_by_file():
@@ -1892,12 +1894,15 @@ def test_build_referenced_symbol_context_skips_when_fetch_returns_none():
 
 @patch("scan_worker.flash_review.flash_review_generation_adapter")
 def test_review_diff_passes_referenced_symbol_context_to_semantic_regressions(mock_adapter_class, monkeypatch):
-    # referenced_symbol_context is no longer put in the LLM-facing prompt
-    # (PR-Agent's real prompt has no slot for it - see FLASH_REVIEW_SYSTEM_
-    # PROMPT), but it still must reach find_semantic_regressions, whose
+    # referenced_symbol_context must reach find_semantic_regressions, whose
     # deterministic checks (_check_reference_at_call and friends) depend on
     # it to verify a referenced symbol's real behavior against how the diff
-    # calls it.
+    # calls it - and, since 2026-09-19, must also reach the LLM-facing
+    # prompt (appended after the diff): a real benchmark run found this was
+    # Aletheore's single biggest recall gap versus PR-Agent/Greptile, and
+    # this data was never part of what tuned PR-Agent's prompt in the first
+    # place (that corpus is external repos with no Aletheore scan evidence,
+    # so referenced_symbol_context was always "" there either way).
     mock_adapter = MagicMock()
     mock_adapter.simple_completion.return_value = "review:\n  key_issues_to_review: []\n"
     mock_adapter_class.return_value = mock_adapter
@@ -1918,9 +1923,262 @@ def test_review_diff_passes_referenced_symbol_context_to_semantic_regressions(mo
 
     assert "_github_http_client" in captured["referenced_symbol_context"]
 
-    # And confirm it's genuinely absent from what the LLM itself sees.
+    # Now also confirmed present in what the LLM itself sees.
     user_prompt = mock_adapter.simple_completion.call_args[0][1]
-    assert "_github_http_client" not in user_prompt
+    assert "_github_http_client" in user_prompt
+
+
+def _evidence_with_sibling_directory():
+    return {
+        "repository": {
+            "modules": [
+                {
+                    "path": "packages/handlers/deleteCache.handler.ts",
+                    "imports": [],
+                    "symbols": {"functions": [{"name": "handler", "start_line": 1, "end_line": 5}], "classes": []},
+                },
+                {
+                    "path": "packages/handlers/setDestinationCalendar.handler.ts",
+                    "imports": [],
+                    "symbols": {
+                        "functions": [
+                            {"name": "handler", "start_line": 1, "end_line": 20},
+                            {"name": "buildInput", "start_line": 21, "end_line": 30},
+                        ],
+                        "classes": [],
+                    },
+                },
+                {
+                    "path": "packages/handlers/getCalendars.handler.ts",
+                    "imports": [],
+                    "symbols": {"classes": [{"name": "CalendarQuery", "start_line": 1, "end_line": 10}], "functions": []},
+                },
+                {
+                    "path": "packages/unrelated/other.ts",
+                    "imports": [],
+                    "symbols": {"functions": [{"name": "unrelatedFn", "start_line": 1, "end_line": 2}], "classes": []},
+                },
+            ],
+        },
+    }
+
+
+def test_build_sibling_file_context_includes_files_in_the_same_directory():
+    # Concrete confirmed gap (calcom/cal.diy PR #22532): a new handler
+    # bypasses a factory every sibling handler in its directory already
+    # uses, but never imports that sibling - build_referenced_symbol_
+    # context's one-hop import resolution structurally cannot surface it.
+    evidence = _evidence_with_sibling_directory()
+
+    context = build_sibling_file_context(evidence, ["packages/handlers/deleteCache.handler.ts"])
+
+    assert "packages/handlers/setDestinationCalendar.handler.ts" in context
+    assert "packages/handlers/getCalendars.handler.ts" in context
+    assert "handler" in context
+    assert "buildInput" in context
+    assert "CalendarQuery" in context
+    assert "--- sibling file in the same directory (not part of this diff): " in context
+
+
+def test_build_sibling_file_context_excludes_files_in_a_different_directory():
+    evidence = _evidence_with_sibling_directory()
+
+    context = build_sibling_file_context(evidence, ["packages/handlers/deleteCache.handler.ts"])
+
+    assert "packages/unrelated/other.ts" not in context
+    assert "unrelatedFn" not in context
+
+
+def test_build_sibling_file_context_excludes_files_already_in_changed_files():
+    # A same-directory file that is itself part of this diff is not a
+    # "sibling not part of this diff" - its own content already reaches
+    # the model through the normal changed-file path.
+    evidence = _evidence_with_sibling_directory()
+
+    context = build_sibling_file_context(
+        evidence,
+        [
+            "packages/handlers/deleteCache.handler.ts",
+            "packages/handlers/setDestinationCalendar.handler.ts",
+        ],
+    )
+
+    assert "setDestinationCalendar.handler.ts" not in context
+    assert "getCalendars.handler.ts" in context
+
+
+def test_build_sibling_file_context_caps_siblings_per_changed_file():
+    evidence = {
+        "repository": {
+            "modules": [
+                {"path": "dir/changed.py", "imports": [], "symbols": {"functions": [], "classes": []}},
+            ]
+            + [
+                {
+                    "path": f"dir/sibling_{i}.py",
+                    "imports": [],
+                    "symbols": {"functions": [{"name": f"fn_{i}", "start_line": 1, "end_line": 2}], "classes": []},
+                }
+                for i in range(MAX_SIBLING_FILES_PER_CHANGED_FILE + 2)
+            ],
+        },
+    }
+
+    context = build_sibling_file_context(evidence, ["dir/changed.py"])
+
+    included = context.count("--- sibling file in the same directory")
+    assert included == MAX_SIBLING_FILES_PER_CHANGED_FILE
+
+
+def test_build_sibling_file_context_prioritizes_same_kind_siblings_under_the_cap():
+    # Real regression, caught empirically against a real `aletheore scan`
+    # of calcom/cal.diy for PR #22532: with a per-file cap of 3 and the
+    # directory's real module order (alphabetical, as the scanner emits
+    # it), naive first-N selection picked _router.tsx and two *.schema.ts
+    # files and NEVER included setDestinationCalendar.handler.ts - the one
+    # sibling PR #22532's real gap actually depends on. Sorting same-kind
+    # siblings (matching _file_kind_suffix) first fixes it. This fixture
+    # mirrors that directory's real shape: alphabetically-first files of a
+    # DIFFERENT kind than the changed file, with the matching-kind sibling
+    # sorting later.
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "dir/deleteCache.handler.ts",
+                    "imports": [],
+                    "symbols": {"functions": [], "classes": []},
+                },
+                {
+                    "path": "dir/_router.tsx",
+                    "imports": [],
+                    "symbols": {"functions": [{"name": "Router", "start_line": 1, "end_line": 2}], "classes": []},
+                },
+                {
+                    "path": "dir/aSchema.schema.ts",
+                    "imports": [],
+                    "symbols": {"functions": [{"name": "aSchemaFn", "start_line": 1, "end_line": 2}], "classes": []},
+                },
+                {
+                    "path": "dir/bSchema.schema.ts",
+                    "imports": [],
+                    "symbols": {"functions": [{"name": "bSchemaFn", "start_line": 1, "end_line": 2}], "classes": []},
+                },
+                {
+                    "path": "dir/setDestinationCalendar.handler.ts",
+                    "imports": [],
+                    "symbols": {
+                        "functions": [{"name": "setDestinationCalendarHandler", "start_line": 1, "end_line": 20}],
+                        "classes": [],
+                    },
+                },
+            ],
+        },
+    }
+
+    context = build_sibling_file_context(evidence, ["dir/deleteCache.handler.ts"])
+
+    assert "setDestinationCalendar.handler.ts" in context
+    assert "setDestinationCalendarHandler" in context
+    included = context.count("--- sibling file in the same directory")
+    assert included == MAX_SIBLING_FILES_PER_CHANGED_FILE
+
+
+def test_build_sibling_file_context_skips_siblings_with_no_symbols():
+    evidence = {
+        "repository": {
+            "modules": [
+                {"path": "dir/changed.py", "imports": [], "symbols": {"functions": [], "classes": []}},
+                {"path": "dir/empty.py", "imports": [], "symbols": {"functions": [], "classes": []}},
+            ],
+        },
+    }
+
+    context = build_sibling_file_context(evidence, ["dir/changed.py"])
+
+    assert context == ""
+
+
+def test_build_sibling_file_context_returns_empty_without_evidence():
+    assert build_sibling_file_context(None, ["dir/changed.py"]) == ""
+
+
+def test_build_sibling_file_context_returns_empty_when_no_changed_files_have_siblings():
+    evidence = {
+        "repository": {
+            "modules": [
+                {"path": "dir/changed.py", "imports": [], "symbols": {"functions": [], "classes": []}},
+            ],
+        },
+    }
+
+    assert build_sibling_file_context(evidence, ["dir/changed.py"]) == ""
+
+
+def test_build_sibling_file_context_respects_the_overall_byte_budget():
+    # Each sibling summary line is large enough that only a handful fit
+    # under MAX_SIBLING_FILE_BYTES - mirrors build_code_evidence_context's
+    # own byte-budget test shape for MAX_CODE_EVIDENCE_BYTES.
+    big_name = "x" * 500
+    evidence = {
+        "repository": {
+            "modules": [
+                {"path": "dir/changed.py", "imports": [], "symbols": {"functions": [], "classes": []}},
+            ]
+            + [
+                {
+                    "path": f"dir/sibling_{i}.py",
+                    "imports": [],
+                    "symbols": {"functions": [{"name": f"{big_name}_{i}", "start_line": 1, "end_line": 2}], "classes": []},
+                }
+                for i in range(MAX_SIBLING_FILES_PER_CHANGED_FILE)
+            ],
+        },
+    }
+
+    context = build_sibling_file_context(evidence, ["dir/changed.py"])
+
+    assert len(context.encode("utf-8")) <= MAX_SIBLING_FILE_BYTES
+
+
+@patch("scan_worker.flash_review.flash_review_generation_adapter")
+def test_review_diff_includes_sibling_file_context_in_the_llm_prompt(mock_adapter_class):
+    # Unlike referenced_symbol_context, sibling_file_context never reaches
+    # find_semantic_regressions (whether new code "matches a sibling's
+    # style" isn't something a deterministic regex check can verify) - the
+    # only place it can show up is the LLM-facing prompt itself.
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.return_value = "review:\n  key_issues_to_review: []\n"
+    mock_adapter_class.return_value = mock_adapter
+
+    review_diff(
+        "--- a.py ---\n@@ -1,1 +1,1 @@\n+thing",
+        sibling_file_context="--- sibling file in the same directory (not part of this diff): b.py ---\nhandler, buildInput",
+    )
+
+    user_prompt = mock_adapter.simple_completion.call_args[0][1]
+    assert "sibling file in the same directory" in user_prompt
+    assert "b.py" in user_prompt
+    assert "buildInput" in user_prompt
+
+
+def test_build_flash_review_user_prompt_omits_sibling_suffix_when_empty():
+    prompt = _build_flash_review_user_prompt("title", "diff", sibling_file_context="")
+    assert "sibling file in the same directory" not in prompt
+
+
+def test_build_flash_review_user_prompt_appends_sibling_context_after_referenced_symbol_context():
+    # Both suffixes are additive and independently gated - real production
+    # diffs can have referenced_symbol_context, sibling_file_context, both,
+    # or neither.
+    prompt = _build_flash_review_user_prompt(
+        "title",
+        "diff",
+        referenced_symbol_context="--- referenced definition (not part of this diff): a.py:fn ---\ndef fn(): ...",
+        sibling_file_context="--- sibling file in the same directory (not part of this diff): b.py ---\nhandler",
+    )
+
+    assert prompt.index("referenced definition") < prompt.index("sibling file in the same directory")
 
 
 def test_system_prompt_instructs_model_not_to_guess_about_unresolved_symbols():
