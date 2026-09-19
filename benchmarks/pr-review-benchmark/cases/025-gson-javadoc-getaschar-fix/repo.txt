@@ -1,2 +1,3 @@
 repo_url=https://github.com/google/gson.git
 base_commit=6bf8bf6cbf4d4f5f72f69262be890a5a5e28259d
+pr_url=https://github.com/ArihantK15/proctor-browser/pull/325
