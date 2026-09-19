@@ -1,2 +1,3 @@
 repo_url=https://github.com/psf/requests.git
 base_commit=1604e20fc87ce212cf3a02474a6d7509b640cbbb
+pr_url=https://github.com/ArihantK15/proctor-browser/pull/303

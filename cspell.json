@@ -63,6 +63,8 @@
     "Pydantic",
     "Procta",
     "Qodo",
+    "Greptile",
+    "Sourcery",
     "Squeezy",
     "SLOS",
     "Scorecard",
