@@ -128,7 +128,6 @@ from scan_worker.docs_repo_commit import sync_docs_to_repo
 from scan_worker.flash_review import (
     FLASH_REVIEW_FALLBACK_MODEL,
     build_referenced_symbol_context,
-    build_sibling_file_context,
     fetch_review_file_context,
     files_missing_from_review_context,
     find_symbol_at_location,
@@ -2235,11 +2234,18 @@ def _run_flash_review(
         referenced_symbol_context = build_referenced_symbol_context(
             evidence, changed_files, diff_text, _fetch_symbol_source
         )
-        # No fetch callback, unlike referenced_symbol_context above: this
-        # stays compact (a sibling's path + its top-level symbol NAMES,
-        # read straight from evidence's module graph), never real source -
-        # see build_sibling_file_context's own docstring for why.
-        sibling_file_context = build_sibling_file_context(evidence, changed_files)
+        # Disabled 2026-09-19: a real 24-case pr-review-benchmark run
+        # (benchmarks/pr-review-benchmark/REPORT.md) isolated
+        # sibling_file_context, not referenced_symbol_context, as the real
+        # cause of a large recall/precision regression on GLM-5.3-Flash -
+        # bare prompt and referenced-symbol-only both scored 85-95% recall
+        # across two independent runs, while sibling-file-only and the
+        # full combination both scored 65-75% with an extra false positive.
+        # Replicated twice before this change shipped. build_sibling_file_context
+        # itself is left in place (tested, no known bug) in case a future
+        # model/prompt combination is re-measured and found to benefit from
+        # it; only this call site stops feeding it into the live prompt.
+        sibling_file_context = ""
         dsn = settings.database_url
         flash_review_model = flash_review_model_used(FLASH_REVIEW_FALLBACK_MODEL)
 

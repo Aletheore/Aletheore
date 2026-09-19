@@ -4499,15 +4499,19 @@ def test_flash_review_job_passes_referenced_symbol_context_to_review_diff(monkey
     assert "def _github_http_client() -> httpx.Client" in captured["referenced_symbol_context"]
 
 
-def test_flash_review_job_passes_sibling_file_context_to_review_diff(monkeypatch):
-    # Proves the job actually wires build_sibling_file_context's output
-    # into review_diff, not just that the pure function (already covered
-    # in test_flash_review.py) works in isolation - mirrors
-    # test_flash_review_job_passes_referenced_symbol_context_to_review_diff
-    # above. widgets.py here is a same-directory sibling of the changed
-    # file (dashboard.py) that dashboard.py never imports - exactly the
-    # shape build_referenced_symbol_context's own import-resolution test
-    # cannot cover.
+def test_flash_review_job_never_passes_sibling_file_context_to_review_diff(monkeypatch):
+    # Real, replicated benchmark finding (2026-09-19,
+    # benchmarks/pr-review-benchmark/REPORT.md): sibling_file_context was
+    # isolated as the cause of a large recall/precision regression on
+    # GLM-5.3-Flash - bare prompt and referenced-symbol-only both scored
+    # 85-95% recall across two independent runs, while sibling-file-only
+    # and the full combination both scored 65-75% with an extra false
+    # positive. jobs.py stopped feeding it into review_diff() as a result
+    # (referenced_symbol_context is unaffected - see the sibling test
+    # above, still passed). widgets.py here is a same-directory sibling of
+    # the changed file (dashboard.py) that dashboard.py never imports -
+    # if this regressed back to feeding sibling context in, it would show
+    # up here.
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
@@ -4575,8 +4579,7 @@ def test_flash_review_job_passes_sibling_file_context_to_review_diff(monkeypatch
     )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
-    assert "widgets.py" in captured["sibling_file_context"]
-    assert "render_widget" in captured["sibling_file_context"]
+    assert captured["sibling_file_context"] == ""
 
 
 def test_run_flash_review_referenced_symbol_source_indexes_by_real_newline_lines(monkeypatch):
