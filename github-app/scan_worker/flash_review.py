@@ -263,6 +263,68 @@ def _build_flash_review_user_prompt(
     return prompt
 
 
+# The vendored prompt's own num_max_findings=5 (see FLASH_REVIEW_SYSTEM_
+# PROMPT's "(0-5 issues)" schema description) is a flat cap regardless of
+# diff size - fine for a single-concern PR, a real ceiling on a diff that
+# touches many files. Confirmed directly: on a real 6-file calendar-
+# provider refactor (external gold-set audit, calcom-10967), Aletheore
+# generated only 4 candidates total and caught 1/6 real issues, while a
+# competitor tool with no such cap generated 9 and caught 5/6 - the same
+# model finding the right area (it caught the one thing it did report
+# correctly) but structurally unable to report more.
+#
+# Scaled by hunk count (total "@@ ... @@" chunks across every file in the
+# diff), not file count: file count alone false-positives on a diff that
+# touches many files but trivially (e.g. a translation PR editing one
+# string in each of 48 locale files, keycloak-37429 in the same gold-set
+# audit - 48 files but not a coverage-ceiling case, Aletheore already
+# caught 3/5 real issues there at the default cap). Hunk count tracks how
+# many separate places in the code actually changed, which is what
+# predicts "how many independent things could be wrong" - confirmed
+# against the real audit data: calcom-10967 (58 hunks) is exactly the
+# case Aletheore under-covered (1/6 real issues caught, 4 candidates
+# total, while a competitor with no cap found 9 and caught 5/6);
+# calcom-10600 (45 hunks, 0/5 caught) is the other real miss. Not diff
+# size in raw bytes/lines either - sentry-95633's diff is the single
+# largest by line count (1048 changed lines) but only 17 hunks in one
+# big addition, and Aletheore didn't need extra room there.
+#
+# Thresholds are file count's uniform-raise experiment (5->10, rejected -
+# see this module's git history) with a size gate added, not removed: that
+# earlier test moved every diff to the same higher cap, including small
+# ones, and cost precision along with recall on the small-diff-heavy
+# corpus it ran against. Staying at the default for low-hunk diffs
+# preserves that already-tuned behavior exactly; only diffs with enough
+# real, separate changed regions to plausibly hide more than one
+# independent bug get a higher ceiling.
+_MAX_FINDINGS_DEFAULT = 5
+
+_HUNK_RE = re.compile(r"^@@ ", re.MULTILINE)
+
+
+def _max_findings_for_diff(diff_patches: tuple[tuple[str, str], ...] | None) -> int:
+    if not diff_patches:
+        return _MAX_FINDINGS_DEFAULT
+    hunk_count = sum(len(_HUNK_RE.findall(patch)) for _file, patch in diff_patches)
+    if hunk_count <= 15:
+        return _MAX_FINDINGS_DEFAULT
+    if hunk_count <= 35:
+        return 8
+    return 12
+
+
+def _flash_review_system_prompt_for_cap(max_findings: int) -> str:
+    """FLASH_REVIEW_SYSTEM_PROMPT unchanged (same object, same text) when
+    max_findings is the default - every existing test/reference against
+    the constant keeps working verbatim. Only a non-default cap gets a
+    substituted copy."""
+    if max_findings == _MAX_FINDINGS_DEFAULT:
+        return FLASH_REVIEW_SYSTEM_PROMPT
+    return FLASH_REVIEW_SYSTEM_PROMPT.replace(
+        f"(0-{_MAX_FINDINGS_DEFAULT} issues)", f"(0-{max_findings} issues)"
+    )
+
+
 def _extract_pr_agent_yaml_issues(raw: str) -> list | None:
     """Parses PR-Agent's real YAML response and returns its
     review.key_issues_to_review list (possibly empty - a legitimately
@@ -1362,6 +1424,32 @@ def _diff_valid_lines(
         valid_lines[current_file].add(current_line)
         if not line.startswith("-"):
             current_line += 1
+
+    # Real landmine found via audit, confirmed by direct testing: this
+    # fallback path only ever recognizes diff_text in the synthetic
+    # "--- {file} ---\n{patch}" shape _production_diff_text builds (see
+    # github_api.py's fetch_pr_diff) - it silently matches nothing against
+    # a raw git unified diff's "--- a/path" header (no trailing " ---").
+    # Production's real call path never hits this: jobs.py always supplies
+    # diff_patches, which routes to _patch_valid_lines above instead. But
+    # any direct-invocation caller (a benchmark script, a one-off
+    # diagnostic, a future test harness) that builds diff_text from a raw
+    # diff without also building diff_patches gets an empty dict back here
+    # with no error - every finding then looks "outside the diff" and gets
+    # dropped, reported as a clean "no issues found" review. That is
+    # exactly the "unfixable and unmeasurable" failure mode this file's
+    # own _validate_findings docstring warns about, so it does not fail
+    # silently here: a non-empty diff_text that produced zero valid lines
+    # for every file is a strong signal the input wasn't in the expected
+    # shape, worth a loud warning even though it changes no findings.
+    if diff_text.strip() and not any(valid_lines.values()):
+        logger.warning(
+            "_diff_valid_lines: text-only fallback found zero valid lines for a "
+            "non-empty diff (%d chars) - diff_text is likely not in the expected "
+            "'--- {file} ---' marker shape (see _production_diff_text); every "
+            "finding on this diff will be dropped as outside the diff",
+            len(diff_text),
+        )
     return valid_lines
 
 
@@ -2148,9 +2236,10 @@ def review_diff(
     user_prompt = _build_flash_review_user_prompt(
         pr_title, diff_text, referenced_symbol_context, sibling_file_context
     )
+    system_prompt = _flash_review_system_prompt_for_cap(_max_findings_for_diff(diff_patches))
 
     def _call_adapter(used_adapter) -> str:
-        return used_adapter.simple_completion(FLASH_REVIEW_SYSTEM_PROMPT, user_prompt, cwd=".")
+        return used_adapter.simple_completion(system_prompt, user_prompt, cwd=".")
 
     def _call_adapter_and_validate(used_adapter) -> str:
         # Only used by the free-tier fallback chain: run_with_free_tier_fallback
