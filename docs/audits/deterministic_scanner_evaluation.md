@@ -287,16 +287,109 @@ Java/C/C++ repos specifically, same value proposition as Error Prone/
 Infer, not tested hands-on for the same reason (wrong language for this
 investigation's target bugs).
 
+## gosec and Bandit — dedicated Go/Python security linters, tested/checked directly
+
+Discovered indirectly: Horusec (below) turned out to be an orchestrator
+wrapping these two, and they're more directly relevant on their own than
+the orchestrator wrapping them - dedicated, mature, single-language
+security scanners for exactly the two languages both target bugs live in.
+
+**gosec**: Apache-2.0, 8,948 stars, actively maintained (pushed 4 days
+before this check). **Tested live**: `go install
+github.com/securego/gosec/v2/cmd/gosec@latest`, ran against the real
+`pkg/services/authz/rbac` package (11 files, 1,604 lines). Real result:
+**0 issues** - gosec's rule set found nothing at all in this code, not
+even an unrelated nitpick, confirming the same pattern as every other
+tool tonight on this specific bug.
+
+**Bandit**: Apache-2.0, 8,276 stars, actively maintained (pushed 3 weeks
+before this check). Not tested hands-on (no real Python checkout of the
+sentry-67876 case exists locally the way the Go grafana-103633 checkout
+does), but same category and same expected result as gosec by
+architecture - AST-level pattern matching, not cross-function/control-flow
+analysis.
+
+Both real, additive, dedicated candidates for the language-specific layer
+- narrower and more precisely targeted than SonarQube/Semgrep's
+multi-language rule sets for Go/Python specifically, worth having
+alongside them, not instead of them.
+
+## Orchestrators and adjacent tools — Mega-Linter, Super-Linter, Horusec, AppThreat/sast-scan, DefectDojo, Graudit, Trivy
+
+**Mega-Linter**: real license correction needed - the pasted claim said
+MIT; GitHub's own classifier and the actual LICENSE file both confirm
+**AGPL-3.0**. This matters for a hosted product specifically: AGPL's
+network-use clause (Section 13) can require disclosing your own service's
+complete source if you run AGPL code as part of it. Real legal exposure
+question, not a simple license-compatibility one - needs real legal
+review before any integration, not just noting the license tier.
+
+**Super-Linter** (MIT, 10,600 stars, active) and **Horusec** (Apache-2.0,
+1,340 stars, active, not archived): both confirmed to be **orchestrators
+that wrap other existing tools** (Super-Linter wraps golangci-lint/
+hadolint/actionlint/etc.; Horusec wraps 20+ SAST engines including gosec
+and Bandit themselves). Real implication for Aletheore specifically:
+since the integration plan already calls for building custom orchestration
+(the `security.static_analysis` evidence schema, per the scoping doc) to
+get results into Aletheore's own finding shape and merge logic, adopting
+a generic orchestrator's own opinionated output format would need about
+as much adapter work as calling the underlying tools directly - the
+convenience these tools sell (one drop-in CI gate) isn't really the
+problem Aletheore has.
+
+**AppThreat/sast-scan**: the pasted description ("exceptionally
+powerful") didn't mention that GitHub confirms this repo is **archived**,
+last pushed 2020-09-04 - over 6 years dead. Not viable, full stop.
+
+**DefectDojo**: real, BSD-3-Clause, very active (pushed the same day as
+this check), 4,949 stars - but it's a vulnerability management/dashboard
+application (Django-based, its own database), not a scanner. Its actual
+job (dedupe and track findings across many tools) is what Aletheore's own
+evidence schema is already being built to do for its specific needs -
+redundant with planned work, not a detection source.
+
+**Graudit**: real, GPL-3.0 (confirmed - not AGPL), 1,689 stars, maintained
+(pushed ~9 months before this check, slower-moving than the others but not
+abandoned). Worth a real license distinction: GPL's copyleft obligations
+generally attach to distributing/linking the code, not to invoking it as
+a separate CLI subprocess - a materially different risk profile than
+Mega-Linter's AGPL - but that's my own reasoning, not a substitute for
+real legal sign-off before shipping anything built on it. Architecturally
+just curated grep-pattern signature databases (the pasted description's
+own framing - "extended grep" - is accurate), same single-location
+pattern-matching category as everything else, not expected to touch
+either target bug.
+
+**Trivy**: real, Apache-2.0, the largest tool checked tonight by far
+(37,993 stars), extremely active (pushed 2 days before this check). Real
+but *different in kind* from everything else in this doc: container
+image/SBOM/IaC (Terraform, Kubernetes, CloudFormation) and dependency-
+vulnerability scanning, not source-code logic analysis. Directly relevant
+to evidence categories Aletheore **already has and populates** today -
+`security.dependency_vulnerabilities` (currently OSV.dev-based, see
+`vulnerabilities.py`), `security.secrets`, `repository.infrastructure` -
+a real candidate to evaluate as an upgrade/replacement for those existing
+checks specifically, not as a new category alongside the others in this
+doc.
+
 ## Recommendation
 
-Nine tools checked total, eight confirmed real and legitimate (CodeQL
-disqualified on license, WAP passed on for maturity/abandonment risk).
-None caught either target bug, and none were ever going to - reachable
-from license/architecture research alone, live runs just confirm it with
-real data. Per direction: the goal isn't only closing this one gap, it's
-Aletheore getting generally better, so tools that can't touch this
-specific bug class are still worth adding for their own real, independent
-coverage:
+Twenty tools checked total (SonarQube, Semgrep, Bearer, CodeQL, Joern,
+Error Prone, Infer, PMD, SpotBugs, Phasar, WAP, gosec, Bandit, Mega-Linter,
+Super-Linter, Horusec, AppThreat/sast-scan, DefectDojo, Graudit, Trivy).
+Seven excluded: CodeQL (license), WAP (abandonment risk), AppThreat/
+sast-scan (archived, 6 years dead), Mega-Linter (real AGPL-3.0 correction
+from the pasted MIT claim - blocked pending real legal review, not a
+simple license-tier note), and Super-Linter/Horusec/DefectDojo
+(orchestrators/aggregators wrapping or tracking other tools' output, not
+independent detectors - redundant with Aletheore's own planned
+orchestration work). The other thirteen confirmed real, legitimate, and
+worth the integration list. None caught either target bug, and none were
+ever going to - reachable from license/architecture research alone, live
+runs just confirm it with real data. Per direction: the goal isn't only
+closing this one gap, it's Aletheore getting generally better, so tools
+that can't touch this specific bug class are still worth adding for their
+own real, independent coverage:
 
 - **SonarQube**: broadest general-purpose coverage (bugs, code smells,
   duplication, complexity, generic vulnerability patterns) across the whole
@@ -342,6 +435,20 @@ coverage:
   excluded - real abandonment risk (2015 academic origin, SourceForge-
   hosted, no confirmed recent maintenance), a different kind of problem
   than a language-coverage gap.
+- **gosec** and **Bandit**: dedicated Go/Python security linters - the
+  most directly relevant of this batch by language, but architecturally
+  the same single-location pattern-matching category as everything else.
+  gosec tested live against the real target code: 0 issues, confirming it
+  by measurement, not just by category.
+- **Graudit**: real, maintained, GPL-3.0 - get real legal sign-off on the
+  subprocess-invocation distinction noted above before relying on it, not
+  just this doc's reasoning. Curated grep-signature coverage, cheap to run,
+  same category as everything else for detection depth.
+- **Trivy**: not really the same kind of tool as the rest of this list -
+  evaluate it specifically as a real upgrade path for Aletheore's existing
+  `security.dependency_vulnerabilities`/`security.secrets`/
+  `repository.infrastructure` evidence sections (currently OSV.dev-based),
+  not as a fourteenth entry in the source-code-logic-bug category.
 
 **"Pull all in" is a reasonable plan** if the goal is broad, complementary,
 battle-tested deterministic coverage layered under/alongside LLM review —
