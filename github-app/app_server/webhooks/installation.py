@@ -89,7 +89,13 @@ async def handle_installation_event(
                     "could not cancel Paddle subscription %s for installation %s on uninstall: %s",
                     subscription_id, installation_id, exc,
                 )
-                send_error_alert(
+                # send_error_alert does a real blocking HTTP call (Resend)
+                # under the hood - off the event loop the same way the
+                # Paddle cancel call above is, or it stalls every other
+                # webhook this process is handling concurrently for the
+                # duration of that request.
+                await asyncio.to_thread(
+                    send_error_alert,
                     "installation_webhook",
                     exc,
                     context=f"uninstall for installation {installation_id} ({account_login}) - "
