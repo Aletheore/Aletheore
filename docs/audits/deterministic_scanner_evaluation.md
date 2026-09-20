@@ -546,3 +546,108 @@ generalize beyond Go. Integration design (how six tools' results surface in
 PR comments and AIRview, how findings get deduplicated against LLM findings
 and against each other, cost/latency of running six real scanners per
 review or scan) is real, separate work not scoped by this evaluation.
+
+## Open Code Review's real orchestration prompts — read directly from source, Apache-2.0
+
+Confirmed via the actual repo (not the README's prose) that "deterministic
+engineering" has no standalone rule engine - `internal/` has no `rules/`,
+`checkers/`, or `staticanalysis/` package. What it does have is a real,
+multi-stage LLM pipeline, each stage its own small, narrowly-scoped prompt
+(`internal/config/template/task_template.json` dispatches to separate
+`.md` prompt files per stage). Quoted here in full - Apache-2.0 permits
+this, and it's real reference material for the "build" side of the split
+below, not creative content.
+
+**MAIN_TASK system prompt** (`main_task_system.md`) - the actual review
+generation prompt, notably tool-call-driven (`code_comment`/`task_done`
+tools) rather than PR-Agent/Aletheore's single structured-YAML response:
+
+> Review every file listed in `<review_files>` individually. Cross-file
+> observations within `<review_files>` are encouraged — look for
+> inconsistencies, missing updates, and broken contracts across related
+> files... Before calling `task_done`, confirm you have given every
+> `<file>` in `<review_files>` its own pass. Reviewing an implementation
+> file does not cover its header, interface, or configuration
+> counterpart — a file being the smaller or secondary member of the
+> group is not a reason to skip it.
+
+That completeness-forcing instruction directly targets the "incomplete
+coverage" failure mode their own README calls out in general-purpose
+agents - a real, specific, adoptable prompt technique.
+
+**REVIEW_FILTER_TASK system prompt** (`review_filter_task_system.md`) -
+their real "reflection" module, and the most interesting find in this
+whole doc. It's not a generic verifier; it has an explicit, asymmetric-
+risk philosophy:
+
+> Your task is narrow: remove only the comments that this diff **proves**
+> to be factually wrong... The two mistakes available to you are not
+> equally bad: Keeping an incorrect comment costs a reviewer a few
+> seconds of attention. Removing a correct comment silently destroys a
+> real finding. It never reaches anyone, and nobody learns that it was
+> dropped. So when your evidence falls short of proof, approve.
+
+This is a materially different stance from Aletheore's own
+`VERIFICATION_SYSTEM_PROMPT` (ACCEPT/REJECT/UNCERTAIN, no explicit
+asymmetric-cost framing) and directly relevant to a real problem this
+session hit tonight independently: the verification model sometimes
+over-credits or wrongly rejects findings without this kind of explicit
+"burden of proof" instruction. Worth a direct, real comparison against
+Aletheore's own verification prompt, not just noting it exists.
+
+**GROUPING_TASK system prompt** (`grouping_task_system.md`) - the real
+"smart file bundling," confirmed to be an LLM call, not deterministic
+logic:
+
+> Files in the same group typically: Belong to the same module/feature;
+> Have producer/consumer relationships (e.g. interface and
+> implementation); Are i18n/config variants of the same resource (e.g.
+> `message_en.properties` and `message_zh.properties`); Share the same
+> directory and work together on a single concern.
+
+**RE_LOCATION_TASK** (`re_location_task_system.md`) - a tiny, cheap,
+narrowly-scoped call (their own prompt appends `/no_think`, explicitly
+disabling reasoning mode for speed/cost) whose only job is extracting the
+exact verbatim snippet a comment refers to, fixing the "position drift"
+problem their README names. A real, minimal, portable pattern: a small
+dedicated correction call is cheaper and more reliable than asking the
+main review call to also self-verify its own line numbers.
+
+## Everything from this investigation, sorted: drag in vs. build ourselves
+
+**Drag in directly** (real dependencies/binaries to call, Apache-2.0/MIT/
+BSD/LGPL-2.1, no code to write beyond the integration plumbing already
+scoped in `deterministic_scanner_integration_scope.md`): SonarQube,
+Semgrep, Bearer, Joern, Error Prone, Infer, PMD, SpotBugs, Phasar, gosec,
+Bandit, Graudit (pending real legal sign-off on the GPL-3.0 subprocess
+question), Reviewdog (for the PR-comment-posting question specifically),
+Trivy (for the existing dependency-vulnerability/secrets/infrastructure
+evidence sections specifically, not as a new category). YASA is a real
+lead worth a deeper look before deciding drag-in vs. not - same
+architectural family as Joern, not yet hands-on validated.
+
+**Build ourselves, inspired by real prior art, no code imported**:
+- The two custom checks this session already built and validated
+  (`_asymmetric_cache_trust_findings_go`, `oauth-state-not-random.yaml`)
+  - the actual gap that started this whole investigation, and nothing
+    checked tonight, dragged in or otherwise, closes it out of the box.
+- Open Code Review's multi-stage pipeline shape (plan → group → review →
+  filter → relocate) as a real alternative architecture to compare
+  against Aletheore's current single-call generation + optional single
+  verification pass in `flash_review.py`.
+- Their `GROUPING_TASK` prompt idea - semantic file bundling before
+  review, not per-diff single-pass - reimplemented as an Aletheore
+  prompt/call, not their Go code.
+- Their `REVIEW_FILTER_TASK` asymmetric-risk verification philosophy -
+  the strongest single idea from this whole exploration - worth directly
+  rewriting into `VERIFICATION_SYSTEM_PROMPT` and measuring the effect,
+  the same rigor this session applied to every other prompt change
+  tonight.
+- Their `RE_LOCATION_TASK` pattern - a small, cheap, dedicated
+  correction call for comment positioning specifically, if Aletheore ever
+  measures a real position-drift problem worth a dedicated fix rather
+  than folding into the main generation prompt.
+- Not recommended to copy: their completeness-forcing "review every file
+  individually" framing assumes a per-file tool-call loop; Aletheore's
+  current single-shot-YAML shape would need real redesign, not a prompt
+  patch, to use it the same way.
