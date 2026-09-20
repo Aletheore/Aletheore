@@ -1415,6 +1415,59 @@ def _quoted_strings(text: str) -> list[str]:
     return matches
 
 
+# Backtick spans, not _QUOTED_STRING_RE's single/double-quoted ones: this
+# system prompt's own rule tells the model to use backticks specifically
+# for "variables, names or file paths from the code" ("use backticks (`)
+# instead of single quote (')"), so a backtick span is the model's own
+# marked claim "this specific symbol is real, I saw it in the code" - the
+# exact kind of claim a grep-style check can cheaply verify without
+# another model call, the same category of thing CodeRabbit's own
+# verification agent uses grep/ast-grep for (see get_why's real-gold
+# audit tonight for where this gap was found: no existing check here
+# verifies a finding's identifier claims against the real code at all,
+# only its cited line position and, when file_contents happens to be
+# available, its quoted-string content).
+_BACKTICK_RE = re.compile(r"`([^`\n]+)`")
+# Lower than _MIN_QUOTED_STRING_LENGTH deliberately: identifiers are
+# routinely short and legitimate (`id`, `cb`, `db`) in ways quoted prose
+# strings aren't, so the same 8-char floor would silently exempt most
+# real symbol names from ever being checked. 3 still skips single-letter
+# noise (`x`, a lambda param) without exempting the common short-name case.
+_MIN_IDENTIFIER_LENGTH = 3
+
+
+def _backtick_identifiers(text: str) -> list[str]:
+    """Backtick-quoted spans at least _MIN_IDENTIFIER_LENGTH long - see
+    _BACKTICK_RE's comment for why backticks specifically, not
+    _quoted_strings' single/double-quote spans."""
+    matches = []
+    for match in _BACKTICK_RE.finditer(text):
+        value = match.group(1).strip()
+        if len(value) >= _MIN_IDENTIFIER_LENGTH:
+            matches.append(value)
+    return matches
+
+
+def _identifier_grounded(finding: dict, source: str) -> bool:
+    """Deterministic (no model call) check that at least one backtick-
+    quoted identifier in the finding's own text actually appears in the
+    real visible source for its file. A finding with no backtick-quoted
+    spans at all is never penalized here - not every real finding names a
+    specific symbol (a docstring/return-type mismatch, an ordering
+    change), only findings that make a specific named claim and get the
+    name wrong should be caught by this. "At least one" match, not "all",
+    deliberately: a finding legitimately quoting both a symbol name and a
+    literal value/string like an error message would otherwise be
+    penalized for the literal value never appearing verbatim in source
+    (it might be interpolated, translated, or partially reconstructed by
+    the model), when the symbol name alone is enough to confirm the claim
+    points at something real."""
+    identifiers = _backtick_identifiers(finding.get("issue", ""))
+    if not identifiers:
+        return True
+    return any(ident in source for ident in identifiers)
+
+
 def _line_citation_content_matches(finding: dict, file_contents: dict[str, str]) -> bool:
     """Verifies a finding's claimed line against the real file content
     already fetched for this diff, when there's something concrete to
@@ -1850,27 +1903,49 @@ def _validate_findings(
         else:
             out_of_diff.append(finding)
 
-    kept = []
+    line_ok = []
     content_mismatch = []
     for finding in in_diff:
         # Classified in one pass rather than by comparing against the kept
         # list - two findings on the same line can be equal dicts, and an
         # `in`-based split would then mis-attribute one of them.
         if not file_contents or _line_citation_content_matches(finding, file_contents):
-            kept.append(finding)
+            line_ok.append(finding)
         else:
             content_mismatch.append(finding)
 
-    if out_of_diff or content_mismatch:
+    # Deterministic identifier grounding - a grep-style check, not a model
+    # call: every backtick-quoted symbol a finding names must actually
+    # appear somewhere in that file's own visible source (its diff patch,
+    # plus file_contents when available for the fuller real-file check).
+    # Deliberately per-file, not the whole multi-file diff - a name that
+    # only appears in some OTHER file's code isn't evidence this finding's
+    # claim about THIS file is real, it would just weaken the check.
+    patch_source_by_file = {file: patch for file, patch in (diff_patches or ())}
+    kept = []
+    identifier_mismatch = []
+    for finding in line_ok:
+        source = patch_source_by_file.get(finding["file"], "")
+        if file_contents:
+            source += "\n" + (file_contents.get(finding["file"]) or "")
+        if _identifier_grounded(finding, source):
+            kept.append(finding)
+        else:
+            identifier_mismatch.append(finding)
+
+    if out_of_diff or content_mismatch or identifier_mismatch:
         logger.info(
             "flash review grounding: kept %d/%d finding(s); dropped %d outside the diff (%s), "
-            "%d whose quoted content wasn't near the cited line (%s)",
+            "%d whose quoted content wasn't near the cited line (%s), "
+            "%d whose named symbol doesn't appear in the file (%s)",
             len(kept),
             len(findings),
             len(out_of_diff),
             ", ".join(f"{f['file']}:{f['line']}" for f in out_of_diff) or "-",
             len(content_mismatch),
             ", ".join(f"{f['file']}:{f['line']}" for f in content_mismatch) or "-",
+            len(identifier_mismatch),
+            ", ".join(f"{f['file']}:{f['line']}" for f in identifier_mismatch) or "-",
         )
 
     # Annotated here, once, after grounding - both review_diff call sites
