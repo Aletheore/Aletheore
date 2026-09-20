@@ -185,14 +185,79 @@ not something Aletheore could rely on generally. **Not evaluated further -
 no live test run, since the license rules out the real use case before any
 technical evaluation would matter.**
 
+## Joern — tested live, architecturally the most promising of everything checked
+
+**Setup**: `docker pull ghcr.io/joernio/joern:master` (avoids a sudo system
+install). Real Go frontend confirmed via `joern-parse --list-languages`
+(`golang` is a first-class listed option, alongside swift/csharp/php/ruby/
+rust/abap - broader than the pasted claim's language list even understated).
+Built a real CPG (Code Property Graph) from the actual
+`pkg/services/authz/rbac` package with `joern-parse --language golang`, then
+queried it with a real `.sc` script via `joern --script`.
+
+**License**: Apache License 2.0 - fully permissive, no commercial-use
+restriction of any kind, confirmed directly from the GitHub repo's own
+license field. The cleanest license of everything evaluated in this doc.
+
+**Maturity**: real but smaller than SonarQube/Semgrep - 3,511 GitHub stars,
+created 2019, actively maintained (pushed within a day of this evaluation),
+321 open issues (real usage, not abandoned).
+
+**Real query result**: `cpg.method.name("Check")` correctly located the
+real `Check` method at the right line; `cpg.call.name("Get").where(_.method
+.name("Check"))` correctly found exactly the `s.permDenialCache.Get(...)`
+call and correctly did NOT conflate it with `getCachedIdentityPermissions`
+(a differently-named call) - confirming the CPG genuinely captures real
+per-call, per-method structure, not just text patterns.
+
+**Why this matters more than the other three**: Joern queries the actual
+control-flow/data-flow graph via a real Scala DSL - `reachableBy`,
+control-dependence traversal, cross-function data flow - the same class of
+capability that makes CodeQL/taint analysis powerful, without CodeQL's
+license problem. This is architecturally the right *kind* of tool for the
+asymmetric-cache-trust bug class (comparing whether two branches reach a
+`return` node the same way is a real graph query, not a text pattern) in a
+way SonarQube/Semgrep/Bearer's single-file pattern matching structurally
+isn't.
+
+**Honest limitation - not overclaiming this as done**: I confirmed the CPG
+correctly represents the real code and that Joern's query language can
+reach into it, but I did not write and validate a working query for the
+actual asymmetric-trust pattern (the CFG/CDG traversal needed - "does every
+path out of this cache-guard block reach a return" - is real, nontrivial
+Joern DSL work). That's a distinct, larger engineering effort than the
+Semgrep rule or the Python heuristic, both of which I built AND validated
+end-to-end tonight. Worth real investment given the license and
+architecture are both clean, but it is not a finished artifact the way the
+other two are.
+
+## Error Prone (Google) and Infer (Meta) — checked, real, but wrong languages for this gap
+
+**Error Prone**: Apache-2.0, 7,237 GitHub stars, actively maintained
+(pushed hours before this check), hooks directly into `javac` so it runs on
+every build with no separate scan step. Java-only.
+
+**Infer**: MIT, 15,707 GitHub stars, actively maintained, real and
+sophisticated (separation logic for null derefs, memory leaks, concurrency
+races). Confirmed it does **not** support Python or Go - Java, C, C++,
+Objective-C, and Erlang only.
+
+Neither covers Go or Python, the two languages both of this session's
+target bugs live in, so neither could have caught either one - not tested
+hands-on for that reason, same logic as skipping Bearer's PII-focused
+scan on a permission-cache file. Real, mature, permissively licensed tools
+regardless; see the recommendation below for why they're worth adding
+anyway.
+
 ## Recommendation
 
-All three are real, working, legitimate tools — confirmed hands-on, not just
-from documentation. None caught the target bug, and none were ever going to:
-that conclusion was reachable from the license/architecture research alone,
-and the live runs just confirm it with real data instead of an inference.
-
-They are not redundant with each other, though:
+Six tools checked total, five confirmed real and legitimate (CodeQL
+disqualified on license). None caught either target bug, and none were ever
+going to - reachable from license/architecture research alone, live runs
+just confirm it with real data. Per direction: the goal isn't only closing
+this one gap, it's Aletheore getting generally better, so tools that can't
+touch this specific bug class are still worth adding for their own real,
+independent coverage:
 
 - **SonarQube**: broadest general-purpose coverage (bugs, code smells,
   duplication, complexity, generic vulnerability patterns) across the whole
@@ -205,18 +270,33 @@ They are not redundant with each other, though:
   investigation that's actually mechanically checkable: flagging a
   `state`/`csrf_token`/`nonce`-shaped variable that isn't assigned from a
   recognized secure-random call.
-- **Bearer**: narrowest scope of the three (privacy/sensitive-data flows
+- **Bearer**: narrowest scope of the six (privacy/sensitive-data flows
   specifically) — real value only on repos that actually handle PII/PHI:
   worth having if/when Aletheore reviews code touching user data, not
-  generally applicable to every PR the way the other two are.
+  generally applicable to every PR the way the others are.
+- **Joern**: cleanest license (Apache 2.0) and the only one architecturally
+  capable of real cross-function control-flow/data-flow queries - the
+  actual right *kind* of tool for the asymmetric-trust bug class, confirmed
+  hands-on against the real Go code. Not a finished integration (the
+  specific query wasn't built), and the real cost is engineering time to
+  learn and validate its Scala DSL, not licensing or availability.
+- **Error Prone** and **Infer**: real, mature, permissively licensed
+  (Apache-2.0 / MIT), zero relevance to either target bug (Java/C/C++ only,
+  no Go/Python), but genuinely additive general coverage for any Java/C/C++
+  repos Aletheore reviews - same value proposition as SonarQube, narrower
+  and more specialized (Error Prone compiles-in via javac with a very low
+  false-positive rate per its own design goals; Infer catches deep bugs
+  like null derefs/concurrency races SonarQube's pattern rules don't reach).
 
-**"Pull all three in" is a reasonable plan** if the goal is broad,
-complementary, battle-tested deterministic coverage layered under/alongside
-LLM review — genuinely additive, not overlapping. It is **not** a fix for
-the specific gap that motivated this evaluation (asymmetric-trust and
-token-randomness bugs); that still needs the two custom checks described in
-"What we actually need" above, built by hand (one narrow Semgrep rule, one
-bespoke Aletheore-native check in the `find_semantic_regressions` style).
-Integration design (how results surface in PR comments, how findings get
-deduplicated against LLM findings, cost/latency of running three real
-scanners per review) is real, separate work not scoped by this evaluation.
+**"Pull all in" is a reasonable plan** if the goal is broad, complementary,
+battle-tested deterministic coverage layered under/alongside LLM review —
+genuinely additive, not overlapping, and explicitly not gated on solving
+the one gap that started this investigation. That gap still needs the two
+custom checks described in "What we actually need" above (both now built
+and validated - see `_asymmetric_cache_trust_findings_go` in
+`semantic_checks.py` and `oauth-state-not-random.yaml`), plus real future
+investment in a Joern query if the asymmetric-trust pattern needs to
+generalize beyond Go. Integration design (how six tools' results surface in
+PR comments and AIRview, how findings get deduplicated against LLM findings
+and against each other, cost/latency of running six real scanners per
+review or scan) is real, separate work not scoped by this evaluation.
