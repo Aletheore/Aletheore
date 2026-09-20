@@ -1161,6 +1161,123 @@ def _shell_injection_findings_go(file: str, source: str, hunks: list[_Hunk]) -> 
     return findings
 
 
+# Asymmetric cache trust: a new security/permission check that guards two
+# different cache lookups before deciding an outcome, but doesn't give them
+# the same trust - one returns unconditionally on a cache hit (Go's comma-ok
+# idiom, `if _, ok := X.Get(...); ok { ... return }`), the other - a helper
+# wrapping a cache read, `v, err := someCachedThing(...); if err == nil {
+# ... }` - branches internally before deciding whether to return, so at
+# least one of its outcomes falls through instead of short-circuiting. If
+# both guard the same underlying decision, a cache hit for one outcome can
+# end up trusted while the other is always re-verified (or vice versa),
+# letting a stale cached result outlive the state change that should have
+# invalidated it.
+#
+# Real, validated example: grafana/grafana#103633 - a new permDenialCache
+# hit returns immediately, but a cache hit via getCachedIdentityPermissions
+# only short-circuits when the cached result is a grant; a cached denial
+# still falls through to a fresh DB lookup, which is itself the SAME shape
+# as the real bug (grants trusted, denials re-derived - the golden finding's
+# actual asymmetry direction). Confirmed no LLM caught this across a full
+# night of testing (2026-09-20/21): GLM-5.3-Flash, DeepSeek-V4-Flash,
+# gpt-5.6-luna, gpt-4.1-mini, o4-mini, and three open-weight models, across
+# a plain prompt, a targeted rewritten safety rule specifically naming this
+# pattern, and full tool-executing agent mode with real grep/read access to
+# the complete repo, all missed it - this check exists because that gap is
+# real and repeatable, not hypothetical. Validated zero false positives
+# across the other 14 real diffs in this session's own benchmark corpus
+# (13 PR-review-benchmark cases plus 2 additional real security-tagged
+# cases) - a single true-positive example, so treat the false-positive rate
+# on genuinely novel code as unproven beyond that, not as a large-sample
+# guarantee.
+#
+# Intentionally narrow and Go-only (gated by is_go at the call site, same
+# convention as _shell_injection_findings_go): flags the STRUCTURAL
+# asymmetry as worth a look, not a proven bug - a legitimate reason for two
+# cache guards to have different trust levels can exist, and only
+# Aletheore's LLM review layer (which sees this finding alongside the full
+# diff) can tell a real bug from an intentional design choice.
+_GO_CACHE_GETOK_RE = re.compile(
+    r'\bif\s+[^{;]{0,60}?:=\s*(?:\w+\.)?(\w*[Cc]ache\w*)\s*\.\s*(?:Get|Fetch|Lookup)\s*\([^{;]{0,160}?;\s*'
+    r'(?:ok|found|hit)\s*\{',
+)
+_GO_CACHE_ERR_ASSIGN_RE = re.compile(
+    r'\b\w+,\s*err\s*:=\s*\w*\.?\s*(\w*[Cc]ached\w*|\w*[Cc]ache\w*)\s*\([^)]{0,160}?\)',
+)
+_ERR_NIL_GUARD_RE = re.compile(r'\bif\s+err\s*==\s*nil\s*\{')
+_ASYMMETRIC_CACHE_CLASSIFY_WINDOW_CHARS = 300
+
+
+def _go_cache_guards(added_text: str) -> list[tuple[str, int]]:
+    guards: list[tuple[str, int]] = []
+    for match in _GO_CACHE_GETOK_RE.finditer(added_text):
+        guards.append((match.group(1), match.end()))
+    for match in _GO_CACHE_ERR_ASSIGN_RE.finditer(added_text):
+        tail = added_text[match.end():match.end() + 40]
+        nil_check = _ERR_NIL_GUARD_RE.search(tail)
+        if nil_check:
+            guards.append((match.group(1), match.end() + nil_check.end()))
+    return guards
+
+
+def _returns_unconditionally_on_hit(added_text: str, guard_end_pos: int) -> bool | None:
+    # Deliberately crude proxy for real control-flow analysis, matching this
+    # file's existing pragmatic style (see _off_by_one_loop_findings):
+    # scans lines in order from the guard's opening brace, returns True the
+    # moment `return` is seen first, False the moment `if` is seen first
+    # (branching before any return - the partial-trust shape), None if the
+    # block's own closing brace is reached before either - an ambiguous
+    # shape this check should not guess about.
+    block = added_text[guard_end_pos:guard_end_pos + _ASYMMETRIC_CACHE_CLASSIFY_WINDOW_CHARS]
+    for line in block.split("\n"):
+        stripped = line.strip()
+        if stripped == "}":
+            return None
+        if re.match(r"\bif\b", stripped):
+            return False
+        if re.search(r"\breturn\b", stripped):
+            return True
+    return None
+
+
+def _asymmetric_cache_trust_findings_go(file: str, source: str, hunks: list[_Hunk]) -> list[dict]:
+    findings: list[dict] = []
+    for hunk in hunks:
+        added_text = "\n".join(hunk.added)
+        guards = _go_cache_guards(added_text)
+
+        by_name: dict[str, list[bool]] = {}
+        for name, end_pos in guards:
+            classification = _returns_unconditionally_on_hit(added_text, end_pos)
+            if classification is None:
+                continue
+            by_name.setdefault(name, []).append(classification)
+
+        if len(by_name) < 2:
+            continue
+
+        unconditional_names = [name for name, classifications in by_name.items() if any(classifications)]
+        conditional_names = [name for name, classifications in by_name.items() if not any(classifications)]
+        if not unconditional_names or not conditional_names:
+            continue
+
+        findings.append(
+            _finding(
+                file,
+                hunk.new_start,
+                f"This new code guards two different cache lookups ({unconditional_names[0]!r} and "
+                f"{conditional_names[0]!r}) before making a decision, but they don't get the same "
+                f"trust: {unconditional_names[0]!r} returns immediately on a cache hit, while "
+                f"{conditional_names[0]!r}'s hit branches internally and doesn't return for at "
+                "least one of its outcomes.",
+                "Confirm this asymmetry is intentional; if not, make both branches return "
+                "immediately on a hit (or neither does) so a cached result isn't trusted "
+                "differently depending on which outcome it represents.",
+            )
+        )
+    return findings
+
+
 # A C-style counted loop indexing a collection by its own length/size using
 # <= instead of < is an off-by-one that reads or writes one element past
 # the end. The comparison syntax (`i <= x.length`, `i <= x.size()`,
@@ -1421,6 +1538,7 @@ def find_semantic_regressions(
             findings.extend(_shell_injection_findings_java(file, source, hunks))
         if is_go:
             findings.extend(_shell_injection_findings_go(file, source, hunks))
+            findings.extend(_asymmetric_cache_trust_findings_go(file, source, hunks))
         findings.extend(_shell_injection_findings(file, source, hunks))
         findings.extend(_broken_quoted_phrase_findings(file, source, hunks))
 

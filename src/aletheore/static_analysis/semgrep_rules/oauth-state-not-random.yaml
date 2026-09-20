@@ -1,0 +1,80 @@
+rules:
+  - id: oauth-state-not-random
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: security
+      confidence: MEDIUM
+      references:
+        - https://github.com/getsentry/sentry/pull/67876
+      # Real, validated example: getsentry/sentry#67876 - `state =
+      # pipeline.signature` (a value derived from the pipeline's own
+      # static signature, not freshly generated) used as the OAuth `state`
+      # query parameter, then compared back on callback. A static/
+      # predictable state value can be guessed or replayed, defeating the
+      # CSRF/replay protection the parameter exists for. Confirmed no LLM
+      # caught this across a full night of testing (2026-09-20/21):
+      # GLM-5.3-Flash, DeepSeek-V4-Flash, gpt-5.6-luna, gpt-4.1-mini,
+      # o4-mini, and three open-weight models all missed it, plain prompt
+      # and with a targeted rewritten safety rule naming this exact
+      # pattern - this rule exists because that gap is real and
+      # repeatable, not hypothetical.
+    message: >
+      '$STATE' is assigned here and later used as an OAuth/CSRF state-like
+      parameter, but this assignment isn't a call to a recognized
+      secure-random source. A static or derivable value here can be
+      guessed or replayed by an attacker, defeating the replay/CSRF
+      protection this parameter exists for. If '$VALUE' is not freshly
+      random per request, use secrets.token_urlsafe()/token_hex(),
+      uuid.uuid4(), or os.urandom() instead.
+    patterns:
+      - pattern: $STATE = $VALUE
+      - metavariable-regex:
+          metavariable: $STATE
+          regex: (?i)^(state|csrf_token|csrf|nonce|oauth_state)$
+      # Name-matching a generic word like "state" is not enough by itself -
+      # real false positive found live testing this rule against
+      # Aletheore's own codebase: src/aletheore/cli.py's
+      # `state = {"in_place": False, "frame": 0}` (an unrelated in-place/
+      # frame-tracking dict) matched on name alone. An OAuth/CSRF state
+      # value is never a dict/list literal - it's a string/bytes token -
+      # so excluding a literal-collection RHS closes this specific false
+      # positive without needing a (real, tried, and reverted - Semgrep's
+      # `...` does not wildcard-match partial content inside an f-string
+      # literal the way it does between statements) cross-statement
+      # pattern-inside requiring the variable to reappear in a `state=`
+      # URL fragment.
+      - pattern-not: $STATE = {...}
+      - pattern-not: $STATE = [...]
+      # Real random sources - never flag an assignment from one of these.
+      - pattern-not: $STATE = secrets.token_urlsafe(...)
+      - pattern-not: $STATE = secrets.token_hex(...)
+      - pattern-not: $STATE = secrets.token_bytes(...)
+      - pattern-not: $STATE = secrets.choice(...)
+      - pattern-not: $STATE = uuid.uuid4()
+      - pattern-not: $STATE = uuid4()
+      - pattern-not: $STATE = os.urandom(...)
+      - pattern-not: $STATE = random.SystemRandom(...)
+      - pattern-not: $STATE = get_random_string(...)
+      - pattern-not: $STATE = generate_token(...)
+      - pattern-not: $STATE = make_random_state(...)
+      # Reading an already-generated value back (from the request, a
+      # session, a form) is not generating a new insecure one - only flag
+      # assignment sites that MINT the value, not sites that read it. Real
+      # false positive found live testing: src/aletheore/vulnerabilities.py's
+      # `state = pin.get("state") or {}` - the bare $X.get("state") pattern-not
+      # doesn't match with a trailing `or ...` fallback, so that's covered
+      # explicitly too.
+      - pattern-not: $STATE = $REQ.GET.get(...)
+      - pattern-not: $STATE = $REQ.GET[...]
+      - pattern-not: $STATE = $REQ.POST.get(...)
+      - pattern-not: $STATE = $REQ.session[...]
+      - pattern-not: $STATE = $REQ.session.get(...)
+      - pattern-not: $STATE = $X.get("state")
+      - pattern-not: $STATE = $X["state"]
+      - pattern-not: $STATE = $X.get("state") or $DEFAULT
+      - pattern-not: $STATE = $X.get("state", $DEFAULT)
+    paths:
+      exclude:
+        - "**/*test*.py"
+        - "**/*fixture*.py"

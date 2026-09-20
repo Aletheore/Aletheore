@@ -739,6 +739,71 @@ def test_go_direct_exec_command_is_not_flagged():
     assert findings == []
 
 
+def test_go_asymmetric_cache_trust_is_flagged():
+    # Real shape from grafana/grafana#103633: a new denial-cache hit
+    # returns immediately, but a cache hit via a getCached* helper only
+    # short-circuits for one of its two outcomes.
+    diff = (
+        "--- service.go ---\n@@ -1,1 +1,20 @@\n"
+        "-\t// no-op\n"
+        "+\tif _, ok := s.permDenialCache.Get(ctx, key); ok {\n"
+        "+\t\ts.metrics.Inc()\n"
+        "+\t\treturn &Response{Allowed: false}, nil\n"
+        "+\t}\n"
+        "+\n"
+        "+\tcachedPerms, err := s.getCachedIdentityPermissions(ctx, ns, action)\n"
+        "+\tif err == nil {\n"
+        "+\t\tallowed, err := s.checkPermission(ctx, cachedPerms, req)\n"
+        "+\t\tif err != nil {\n"
+        "+\t\t\treturn deny, err\n"
+        "+\t\t}\n"
+        "+\t\tif allowed {\n"
+        "+\t\t\treturn &Response{Allowed: allowed}, nil\n"
+        "+\t\t}\n"
+        "+\t}\n"
+        "+\n"
+        "+\tpermissions, err := s.getIdentityPermissions(ctx, ns, action)\n"
+    )
+    file_contents = {"service.go": ""}
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert any("don't get the same trust" in f["issue"] for f in findings)
+
+
+def test_go_symmetric_cache_guards_both_returning_is_not_flagged():
+    diff = (
+        "--- service.go ---\n@@ -1,1 +1,10 @@\n"
+        "-\t// no-op\n"
+        "+\tif _, ok := s.permCache.Get(ctx, key); ok {\n"
+        "+\t\treturn &Response{Allowed: true}, nil\n"
+        "+\t}\n"
+        "+\n"
+        "+\tif _, ok := s.permDenialCache.Get(ctx, key); ok {\n"
+        "+\t\treturn &Response{Allowed: false}, nil\n"
+        "+\t}\n"
+    )
+    file_contents = {"service.go": ""}
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert findings == []
+
+
+def test_go_single_cache_guard_is_not_flagged():
+    # Needs at least two distinct cache-like guards to say anything about
+    # asymmetry - one guard alone has nothing to be asymmetric relative to.
+    diff = (
+        "--- service.go ---\n@@ -1,1 +1,10 @@\n"
+        "-\t// no-op\n"
+        "+\tcachedPerms, err := s.getCachedIdentityPermissions(ctx, ns, action)\n"
+        "+\tif err == nil {\n"
+        "+\t\tif allowed {\n"
+        "+\t\t\treturn &Response{Allowed: allowed}, nil\n"
+        "+\t\t}\n"
+        "+\t}\n"
+    )
+    file_contents = {"service.go": ""}
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert findings == []
+
+
 def test_java_shaped_text_in_a_python_docstring_is_not_flagged():
     # Real false positive found independently by GLM-5.3-Flash reviewing
     # PR #725 with PR-Agent's own prompt structure (a genuinely different
