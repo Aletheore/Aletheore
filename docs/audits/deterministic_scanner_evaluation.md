@@ -249,15 +249,54 @@ scan on a permission-cache file. Real, mature, permissively licensed tools
 regardless; see the recommendation below for why they're worth adding
 anyway.
 
+## PMD, SpotBugs, Phasar — checked, real, same category as Error Prone/Infer
+
+**PMD**: BSD-style license (confirmed from the real LICENSE file, not just
+GitHub's detector, which returned NOASSERTION on this repo), 5,493 stars,
+actively maintained (pushed 2 days before this check). AST-based with a
+genuinely low-friction custom-rule mechanism (XPath queries over the AST,
+lighter-weight than Semgrep's pattern DSL for some rule shapes). Covers
+Java, JavaScript, Apex, Scala, XML/HTML - no Go/Python.
+
+**SpotBugs**: LGPL-2.1, 3,944 stars, actively maintained (pushed the day
+before this check). FindBugs' successor, operates on compiled Java
+bytecode rather than source - catches a different class of logic flaws
+than source-level tools by construction. Java only.
+
+**Phasar**: MIT (confirmed from the real LICENSE.txt - GitHub's detector
+returned NOASSERTION here too, purely because the file isn't named the
+standard `LICENSE`), 1,056 stars (smallest of everything checked, but real
+and active - pushed 12 days before this check). Real interprocedural taint
+analysis on LLVM bitcode. Does not practically cover our Go codebase - Go's
+default toolchain doesn't emit LLVM IR without extra tooling (gollvm/
+TinyGo) - so this is a C/C++-only candidate in practice despite the
+LLVM-bitcode framing suggesting broader reach.
+
+**WAP ("Web Application Protection") - checked, not recommended**: real
+academic taint-analysis tool for PHP (SQL injection/XSS/file inclusion/
+command injection), but it traces back to a 2015 IEEE journal paper,
+ships on SourceForge, and shows no confirmed recent maintenance activity.
+That's a real abandonment risk, not just a language-coverage gap like the
+other tools above - didn't clear the same bar, so not adding it to the
+integration list unless Aletheore develops a specific PHP-review need
+that reopens the question.
+
+None of these three cover Go or Python either, so none could have caught
+either target bug - real, additive, permissively-licensed coverage for
+Java/C/C++ repos specifically, same value proposition as Error Prone/
+Infer, not tested hands-on for the same reason (wrong language for this
+investigation's target bugs).
+
 ## Recommendation
 
-Six tools checked total, five confirmed real and legitimate (CodeQL
-disqualified on license). None caught either target bug, and none were ever
-going to - reachable from license/architecture research alone, live runs
-just confirm it with real data. Per direction: the goal isn't only closing
-this one gap, it's Aletheore getting generally better, so tools that can't
-touch this specific bug class are still worth adding for their own real,
-independent coverage:
+Nine tools checked total, eight confirmed real and legitimate (CodeQL
+disqualified on license, WAP passed on for maturity/abandonment risk).
+None caught either target bug, and none were ever going to - reachable
+from license/architecture research alone, live runs just confirm it with
+real data. Per direction: the goal isn't only closing this one gap, it's
+Aletheore getting generally better, so tools that can't touch this
+specific bug class are still worth adding for their own real, independent
+coverage:
 
 - **SonarQube**: broadest general-purpose coverage (bugs, code smells,
   duplication, complexity, generic vulnerability patterns) across the whole
@@ -277,16 +316,32 @@ independent coverage:
 - **Joern**: cleanest license (Apache 2.0) and the only one architecturally
   capable of real cross-function control-flow/data-flow queries - the
   actual right *kind* of tool for the asymmetric-trust bug class, confirmed
-  hands-on against the real Go code. Not a finished integration (the
-  specific query wasn't built), and the real cost is engineering time to
-  learn and validate its Scala DSL, not licensing or availability.
-- **Error Prone** and **Infer**: real, mature, permissively licensed
-  (Apache-2.0 / MIT), zero relevance to either target bug (Java/C/C++ only,
-  no Go/Python), but genuinely additive general coverage for any Java/C/C++
-  repos Aletheore reviews - same value proposition as SonarQube, narrower
-  and more specialized (Error Prone compiles-in via javac with a very low
-  false-positive rate per its own design goals; Infer catches deep bugs
-  like null derefs/concurrency races SonarQube's pattern rules don't reach).
+  hands-on against the real Go code. **Update**: the query is now built and
+  validated - real CFG-based classification (does every path out of a
+  cache-guard block reach a RETURN, via actual graph traversal, not text
+  proximity), fires correctly on the real grafana-103633 bug after fixing
+  three real bugs found live (a `forall`-vs-`exists` CFG-escape logic
+  error, a call-name-vs-full-code-text matching gap that missed the real
+  `permDenialCache.Get` call, and a false positive matching metrics calls
+  merely named `permissionCacheUsage`), and zero false positives across
+  the other 3 real Go repos in this session's corpus (one hit found, but
+  on code outside that diff entirely - the known, not-yet-built,
+  diff-scoping gap, not a logic bug). Still not wired into production -
+  that's the same real orchestration work as the Semgrep rule needs.
+- **Error Prone**, **Infer**, **PMD**, **SpotBugs**, **Phasar**: real,
+  mature, permissively licensed, zero relevance to either target bug
+  (Java/C/C++ only, no Go/Python), but genuinely additive general coverage
+  for any Java/C/C++ repos Aletheore reviews - same value proposition as
+  SonarQube, narrower and more specialized (Error Prone compiles-in via
+  javac with a very low false-positive rate per its own design goals;
+  Infer catches deep bugs like null derefs/concurrency races SonarQube's
+  pattern rules don't reach; PMD's XPath rule DSL is a lighter-weight
+  custom-rule path than Semgrep's for some shapes; SpotBugs operates on
+  compiled bytecode rather than source; Phasar does real interprocedural
+  taint analysis on LLVM bitcode, practically C/C++-only). WAP checked and
+  excluded - real abandonment risk (2015 academic origin, SourceForge-
+  hosted, no confirmed recent maintenance), a different kind of problem
+  than a language-coverage gap.
 
 **"Pull all in" is a reasonable plan** if the goal is broad, complementary,
 battle-tested deterministic coverage layered under/alongside LLM review —
