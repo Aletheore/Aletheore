@@ -238,12 +238,43 @@ actually does, raises, or returns - you were not shown its body, only its symbol
 
 {sibling_file_context}"""
 
+# Appended when _detect_moved_code_blocks finds one - carves out a real
+# exception to this prompt's own "only issues introduced by this PR"
+# scoping rule (see FLASH_REVIEW_SYSTEM_PROMPT's "Determining what to
+# flag" section), which otherwise makes the model correctly-by-its-own-
+# logic decline to report a bug that was simply relocated unchanged.
+# Confirmed directly on a real gold-set case (sentry-80528): a function
+# with a real, High-severity bug (builds a modified `config` dict but
+# returns the original `monitor.config`) was cut-and-pasted verbatim from
+# one file to another as part of a refactor PR. The raw model response
+# was identical across 3 independent calls - key_issues_to_review: [] -
+# not uncertainty, confident rule-following. A competitor tool with no
+# such scoping rule caught it; this repo's own gold-set audit is what
+# surfaced the gap. The fix is not "always flag pre-existing issues" (that
+# would make every large refactor noisy with complaints about code the
+# diff barely touches) - it's specifically "code proven to have moved
+# verbatim within this diff is the one case where 'not new' isn't a
+# reason to skip it, because the PR is already touching it and this is
+# the natural moment to fix it."
+_MOVED_CODE_SUFFIX = """
+
+Some added code below is a near-exact copy of code removed elsewhere in this same diff - a
+genuine relocation (e.g. moved to a new file/function during a refactor), not a rewrite. This
+diff proves it, it is not a guess. For a block flagged this way, "only issues introduced by this
+PR" does NOT mean skip it: report a real, pre-existing bug in it exactly like any other finding.
+The PR is already touching this code, making this the natural point to catch it - a human
+reviewer would expect it flagged here, not silently carried forward. This does not relax anything
+else - still no speculation, still only concrete, grounded issues.
+
+{moved_code_context}"""
+
 
 def _build_flash_review_user_prompt(
     pr_title: str,
     diff_text: str,
     referenced_symbol_context: str = "",
     sibling_file_context: str = "",
+    moved_code_context: str = "",
 ) -> str:
     """Fills PR-Agent's real user-prompt template. Plain str.format(), not
     Jinja2 (which isn't a production dependency of this service) - safe
@@ -260,7 +291,169 @@ def _build_flash_review_user_prompt(
         prompt += _REFERENCED_SYMBOL_CONTEXT_SUFFIX.format(referenced_symbol_context=referenced_symbol_context)
     if sibling_file_context:
         prompt += _SIBLING_FILE_CONTEXT_SUFFIX.format(sibling_file_context=sibling_file_context)
+    if moved_code_context:
+        prompt += _MOVED_CODE_SUFFIX.format(moved_code_context=moved_code_context)
     return prompt
+
+
+# Minimum contiguous +/- lines for a block to be considered for a move
+# match - high enough that a coincidental 1-2 line resemblance (a common
+# guard clause, a routine import line) never qualifies, low enough to
+# still catch a real relocated function that's on the smaller side. Also
+# the minimum size of a matched SUB-RANGE within two larger blocks (see
+# _detect_moved_code_blocks) - deliberately exact-match at this stage,
+# not a ratio: SequenceMatcher.get_matching_blocks() already only reports
+# genuinely-identical runs, so a size floor is the only threshold needed
+# to reject a coincidental short overlap.
+_MOVED_BLOCK_MIN_LINES = 4
+
+
+def _extract_diff_blocks(diff_text: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Every contiguous run of removed-only or added-only lines, each at
+    least _MOVED_BLOCK_MIN_LINES long, as (file, block_text) pairs -
+    the same file-marker/hunk-header parsing rules as _diff_valid_lines,
+    kept in sync deliberately rather than sharing code, since this walk
+    tracks contiguous same-tag runs instead of a per-line new-file number
+    and the two would fight over what "current position" means."""
+    removed_blocks: list[tuple[str, str]] = []
+    added_blocks: list[tuple[str, str]] = []
+    current_file: str | None = None
+    prev_blank = True
+    run_tag: str | None = None
+    run_lines: list[str] = []
+
+    def _flush() -> None:
+        if run_tag is not None and len(run_lines) >= _MOVED_BLOCK_MIN_LINES and current_file:
+            target = removed_blocks if run_tag == "-" else added_blocks
+            target.append((current_file, "\n".join(run_lines)))
+
+    for line in diff_text.splitlines():
+        file_match = _FILE_MARKER_RE.match(line)
+        if file_match and prev_blank:
+            _flush()
+            run_tag, run_lines = None, []
+            current_file = file_match.group(1)
+            prev_blank = False
+            continue
+        if _HUNK_HEADER_RE.match(line):
+            _flush()
+            run_tag, run_lines = None, []
+            prev_blank = False
+            continue
+        if line == "":
+            _flush()
+            run_tag, run_lines = None, []
+            prev_blank = True
+            continue
+        if line == r"\ No newline at end of file":
+            prev_blank = False
+            continue
+        prev_blank = False
+        if current_file is None:
+            continue
+        tag = line[:1] if line[:1] in ("-", "+") else " "
+        if tag != run_tag:
+            _flush()
+            run_tag, run_lines = tag, []
+        if tag in ("-", "+"):
+            run_lines.append(line[1:])
+    _flush()
+    return removed_blocks, added_blocks
+
+
+def _detect_moved_code_blocks(diff_text: str) -> list[tuple[str, str]]:
+    """Added blocks that contain a near-exact matching sub-range of some
+    removed block elsewhere in this same diff - deterministic, not a
+    model guess (see _MOVED_CODE_SUFFIX for why this matters).
+
+    Matches at the LINE-SUBSEQUENCE level (SequenceMatcher.get_matching_
+    blocks on line lists), not whole-block ratio: a removed block is
+    whatever contiguous run of deleted lines the diff produced, which is
+    often several adjacent functions concatenated with no unchanged line
+    between them (nothing separates two back-to-back full-function
+    deletions) - a real relocated function living inside that run does
+    not make the SURROUNDING run 90% similar to where it landed, only
+    the function itself is. Confirmed directly on sentry-80528: the
+    removed run bundles mark_failed_threshold, create_issue_platform_
+    occurrence, and get_monitor_environment_context together (no blank
+    separator survives the diff), so comparing the whole 150-line blobs
+    scored well under any reasonable ratio threshold even though get_
+    monitor_environment_context itself moved verbatim - only a sub-range
+    match catches that. Returns (file, matched_text) for each match at
+    least _MOVED_BLOCK_MIN_LINES long, capped and de-duplicated by the
+    caller."""
+    removed_blocks, added_blocks = _extract_diff_blocks(diff_text)
+    if not removed_blocks or not added_blocks:
+        return []
+    matches: list[tuple[str, str]] = []
+    for file, added_text in added_blocks:
+        added_lines = added_text.split("\n")
+        for _removed_file, removed_text in removed_blocks:
+            removed_lines = removed_text.split("\n")
+            matcher = SequenceMatcher(None, added_lines, removed_lines, autojunk=False)
+            for match in matcher.get_matching_blocks():
+                if match.size < _MOVED_BLOCK_MIN_LINES:
+                    continue
+                matched_lines = added_lines[match.a : match.a + match.size]
+                if _is_mostly_imports(matched_lines):
+                    # A real move, just not a useful one to flag: two
+                    # unrelated files needing the same handful of stdlib/
+                    # framework imports match here constantly by pure
+                    # coincidence, not because either file's imports were
+                    # cut-pasted from the other - and "a pre-existing bug
+                    # in this import line" isn't a real finding shape
+                    # anyway, so there's nothing for the annotation to buy
+                    # even on a genuine match.
+                    continue
+                matches.append((file, "\n".join(matched_lines)))
+    matches.sort(key=lambda m: len(m[1]), reverse=True)
+    return matches
+
+
+def _is_mostly_imports(lines: list[str]) -> bool:
+    real_lines = [line for line in lines if line.strip()]
+    if not real_lines:
+        return True
+    import_lines = sum(1 for line in real_lines if line.strip().startswith(("import ", "from ")))
+    return import_lines / len(real_lines) > 0.5
+
+
+# A preview, not necessarily the full relocated body. Deliberately
+# generous, not a tight excerpt: a "first N chars" truncation cannot
+# reliably keep the part that matters, since a matched run frequently
+# bundles several adjacent functions together (nothing separates
+# back-to-back moved functions in the diff either - the same shape
+# _extract_diff_blocks already deals with on the removed side) and the
+# real bug can sit in whichever one landed last. Confirmed directly on
+# sentry-80528: the matched run is create_incident_occurrence + two
+# small dicts + get_failure_reason + get_monitor_environment_context in
+# sequence, and the actual bug lives in the LAST function, ~4700 chars
+# in - a tight preview would cut it before the annotation ever mentioned
+# it. 4000 comfortably covers that real case end to end; a genuinely
+# pathological multi-hundred-line match still gets capped rather than
+# unbounded, same spirit as MAX_CODE_EVIDENCE_BYTES elsewhere in this
+# module, just sized to the shape actually observed here.
+_MOVED_BLOCK_PREVIEW_CHARS = 6000
+
+
+def _moved_code_context(moved_blocks: list[tuple[str, str]]) -> str:
+    """Formats up to 3 moved blocks (the common case is one relocated
+    function; more than a few in one diff is unusual enough that
+    including all of them would bloat the prompt for no real benefit).
+    Caller (_detect_moved_code_blocks) already sorts largest-first, so
+    the cap keeps the most substantive matches, not an arbitrary subset."""
+    seen: set[tuple[str, str]] = set()
+    parts = []
+    for file, text in moved_blocks:
+        key = (file, text[:200])
+        if key in seen:
+            continue
+        seen.add(key)
+        preview = text if len(text) <= _MOVED_BLOCK_PREVIEW_CHARS else text[:_MOVED_BLOCK_PREVIEW_CHARS] + "\n..."
+        parts.append(f"--- moved into: {file} ---\n{preview}")
+        if len(parts) >= 3:
+            break
+    return "\n\n".join(parts)
 
 
 # The vendored prompt's own num_max_findings=5 (see FLASH_REVIEW_SYSTEM_
@@ -2233,8 +2426,9 @@ def review_diff(
     # definition's real source) - whether new code "matches the style" of
     # an unrelated sibling is a judgment call, not something a regex check
     # can verify, so this context is LLM-prompt-only.
+    moved_code_context = _moved_code_context(_detect_moved_code_blocks(diff_text))
     user_prompt = _build_flash_review_user_prompt(
-        pr_title, diff_text, referenced_symbol_context, sibling_file_context
+        pr_title, diff_text, referenced_symbol_context, sibling_file_context, moved_code_context
     )
     system_prompt = _flash_review_system_prompt_for_cap(_max_findings_for_diff(diff_patches))
 
