@@ -160,6 +160,31 @@ PII-adjacent data-type occurrence elsewhere in the scanned files, confirming
 the detector itself is live and working). Correctly out of scope for this
 bug class — the narrowest-purpose of the three tools tested.
 
+## GitHub CodeQL — checked, disqualified on license (not tested live)
+
+Pulled the real primary-source license text
+(`raw.githubusercontent.com/github/codeql-cli-binaries/main/LICENSE.md`),
+not a secondhand summary, since this is a real compliance question. Two
+clauses rule it out for Aletheore's actual business model, more decisively
+than any of the three tools above:
+
+1. Automated/CI/CD analysis is only permitted for an Open Source Codebase
+   that is specifically "hosted and maintained on GitHub.com" - narrower
+   than SonarQube/Semgrep/Bearer, none of which care where the repo lives.
+2. The disqualifying clause: the license explicitly forbids using the
+   Software to *"provide or make available the Software as a hosted
+   solution (whether on a standalone basis or combined, incorporated or
+   integrated with other software or services) for others to use."* That
+   is a direct, explicit prohibition on exactly what Aletheore does -
+   offering scan results as part of a hosted product to customers -
+   regardless of whether the target repo is open source or private.
+
+The only way around either restriction is a paid GitHub Advanced Security
+license, which would have to be *the customer's* license for *their* repo,
+not something Aletheore could rely on generally. **Not evaluated further -
+no live test run, since the license rules out the real use case before any
+technical evaluation would matter.**
+
 ## Recommendation
 
 All three are real, working, legitimate tools — confirmed hands-on, not just
