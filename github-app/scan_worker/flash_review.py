@@ -1362,6 +1362,32 @@ def _diff_valid_lines(
         valid_lines[current_file].add(current_line)
         if not line.startswith("-"):
             current_line += 1
+
+    # Real landmine found via audit, confirmed by direct testing: this
+    # fallback path only ever recognizes diff_text in the synthetic
+    # "--- {file} ---\n{patch}" shape _production_diff_text builds (see
+    # github_api.py's fetch_pr_diff) - it silently matches nothing against
+    # a raw git unified diff's "--- a/path" header (no trailing " ---").
+    # Production's real call path never hits this: jobs.py always supplies
+    # diff_patches, which routes to _patch_valid_lines above instead. But
+    # any direct-invocation caller (a benchmark script, a one-off
+    # diagnostic, a future test harness) that builds diff_text from a raw
+    # diff without also building diff_patches gets an empty dict back here
+    # with no error - every finding then looks "outside the diff" and gets
+    # dropped, reported as a clean "no issues found" review. That is
+    # exactly the "unfixable and unmeasurable" failure mode this file's
+    # own _validate_findings docstring warns about, so it does not fail
+    # silently here: a non-empty diff_text that produced zero valid lines
+    # for every file is a strong signal the input wasn't in the expected
+    # shape, worth a loud warning even though it changes no findings.
+    if diff_text.strip() and not any(valid_lines.values()):
+        logger.warning(
+            "_diff_valid_lines: text-only fallback found zero valid lines for a "
+            "non-empty diff (%d chars) - diff_text is likely not in the expected "
+            "'--- {file} ---' marker shape (see _production_diff_text); every "
+            "finding on this diff will be dropped as outside the diff",
+            len(diff_text),
+        )
     return valid_lines
 
 

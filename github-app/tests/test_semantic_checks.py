@@ -157,6 +157,59 @@ def test_java_empty_catch_block_comment_closing_on_same_line_as_catch_brace_is_f
     assert "empty body" in findings[0]["issue"]
 
 
+def test_java_catch_with_code_after_same_line_block_comment_is_not_flagged():
+    # Sibling gap to the "*/ }" fix above, found in a later audit: a block
+    # comment that opens AND closes on the same line, followed by a real
+    # statement on that same line (e.g. "/* note */ recover();"), was
+    # unconditionally discarded by the "if stripped.startswith('/*')"
+    # branch - misjudging a catch that actually recovers as empty/swallowed.
+    diff = (
+        "--- Service.java ---\n@@ -1,2 +1,5 @@\n"
+        "+    try {\n"
+        "+        doWork();\n"
+        "+    } catch (IOException e) {\n"
+        "+        /* handled elsewhere */ recover();\n"
+        "+    }\n"
+    )
+    file_contents = {
+        "Service.java": (
+            "void run() {\n"
+            "    try {\n"
+            "        doWork();\n"
+            "    } catch (IOException e) {\n"
+            "        /* handled elsewhere */ recover();\n"
+            "    }\n"
+            "}\n"
+        )
+    }
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert findings == []
+
+
+def test_java_catch_with_logging_after_same_line_block_comment_is_not_flagged():
+    diff = (
+        "--- Service.java ---\n@@ -1,2 +1,5 @@\n"
+        "+    try {\n"
+        "+        doWork();\n"
+        "+    } catch (IOException e) {\n"
+        "+        /* network hiccup */ logger.error(\"failed\", e);\n"
+        "+    }\n"
+    )
+    file_contents = {
+        "Service.java": (
+            "void run() {\n"
+            "    try {\n"
+            "        doWork();\n"
+            "    } catch (IOException e) {\n"
+            "        /* network hiccup */ logger.error(\"failed\", e);\n"
+            "    }\n"
+            "}\n"
+        )
+    }
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert findings == []
+
+
 def test_java_catch_with_real_handling_is_not_flagged():
     diff = (
         "--- Service.java ---\n@@ -1,2 +1,5 @@\n"

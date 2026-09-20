@@ -5816,14 +5816,21 @@ def test_sweep_does_not_burn_the_cooldown_when_no_suggestion_was_actually_produc
     # Real bug found via audit: the cooldown used to be marked the instant
     # a fix suggestion was merely ATTEMPTED (include_fix_suggestion=True),
     # not when one was actually produced - _fix_suggestion_attachment has
-    # several ordinary reasons to return None (credit balance exhausted,
-    # spend budget exhausted, file content fetch failed, the LLM call
-    # itself raised, or it returned "unknown"), and every one of those
-    # burned the same HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS window a real,
+    # several ordinary reasons to return None before ever reaching the LLM
+    # call (credit balance exhausted, spend budget exhausted, file content
+    # fetch failed) or after it raised, and every one of those burned the
+    # same HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS window a real,
     # successfully-delivered suggestion would have - so a customer whose
     # endpoint stayed down could get zero real suggestions for the full
     # cooldown, with no retry until it expired. The cooldown key must stay
-    # unset when the suggestion attempt itself failed.
+    # unset when the suggestion attempt never reached the model at all.
+    #
+    # A later audit found the sibling gap: an "unknown" response (the LLM
+    # call DID complete, just found no fixable cause) was originally
+    # bundled into this same "no cooldown" bucket too - see
+    # test_sweep_burns_the_cooldown_when_llm_call_completes_with_unknown_verdict
+    # below for why that specific case was corrected to burn the cooldown
+    # like a real suggestion does, not left in this one.
     from scan_worker.jobs import _health_fix_suggestion_cooldown_key
 
     redis_conn = _FakeRedis()
@@ -5906,6 +5913,111 @@ def test_health_check_down_retry_job_does_not_burn_the_cooldown_when_no_suggesti
     assert redis_conn.get(
         _health_fix_suggestion_cooldown_key(1, "octocat/hello-world", "GET", "/x", 900)
     ) is None
+
+
+def test_sweep_burns_the_cooldown_when_llm_call_completes_with_unknown_verdict(monkeypatch):
+    # Sibling gap to the two tests above, found in a later audit:
+    # _fix_suggestion_attachment's on_llm_call_completed must fire once the
+    # LLM call genuinely completes - "unknown" included - not just when a
+    # real suggestion comes back. Before this fix, a model that correctly
+    # determined "this needs a human, not a code fix" (e.g. a real
+    # third-party outage) was treated identically to a call that never
+    # reached the model at all (spend exhausted, fetch failed, an
+    # exception) - re-billing a full paid LLM call on every single flip of
+    # a flapping endpoint with a genuinely unfixable root cause, forever,
+    # since no cooldown state ever distinguished the two. Calls the real
+    # _fix_suggestion_attachment (not mocked away, unlike the two tests
+    # above) so this actually exercises the on_llm_call_completed wiring.
+    from scan_worker.jobs import _fix_suggestion_attachment
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {"database_url": "postgresql://unused", "github_app_id": "1", "github_app_private_key": "fake-key"},
+        )(),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
+    )
+
+    class _AlwaysAllowedBudget:
+        def __init__(self, *a, **k):
+            pass
+
+        def can_start_next_call(self):
+            return True
+
+        def record_usage(self, *a, **k):
+            pass
+
+    monkeypatch.setattr("scan_worker.jobs._IncrementalSpendBudget", _AlwaysAllowedBudget)
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_github_api_client", lambda: object())
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_file_content", lambda *a, **k: "def handler():\n    pass\n"
+    )
+    monkeypatch.setattr("scan_worker.jobs.model_for_plan", lambda *a, **k: "gpt-5.6-luna")
+
+    class _UnknownAdapter:
+        def simple_completion(self, *a, **k):
+            return "unknown"
+
+    monkeypatch.setattr("scan_worker.jobs._health_fix_suggestion_adapter", lambda *a, **k: _UnknownAdapter())
+
+    completed = []
+    result = _fix_suggestion_attachment(
+        1, "octocat/hello-world", "controllers/user.controller.ts", 42,
+        "GET", "/x", None, None,
+        on_llm_call_completed=lambda: completed.append(True),
+    )
+
+    assert result is None  # "unknown" is still not a real suggestion to attach
+    assert completed == [True]  # but the attempt genuinely completed, so the cooldown should be set
+
+
+def test_fix_suggestion_attachment_does_not_signal_completion_when_spend_budget_rejects(monkeypatch):
+    # Contrast case for the test above: a call that never reaches the
+    # model at all (spend budget exhausted here; file-fetch failure and a
+    # raised LLM call are the same shape) must NOT signal completion - that
+    # customer should get a fresh, unthrottled retry, not a cooldown for
+    # an attempt that never actually ran.
+    from scan_worker.jobs import _fix_suggestion_attachment
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {"database_url": "postgresql://unused", "github_app_id": "1", "github_app_private_key": "fake-key"},
+        )(),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
+    )
+
+    class _AlwaysRejectedBudget:
+        def __init__(self, *a, **k):
+            pass
+
+        def can_start_next_call(self):
+            return False
+
+    monkeypatch.setattr("scan_worker.jobs._IncrementalSpendBudget", _AlwaysRejectedBudget)
+
+    completed = []
+    result = _fix_suggestion_attachment(
+        1, "octocat/hello-world", "controllers/user.controller.ts", 42,
+        "GET", "/x", None, None,
+        on_llm_call_completed=lambda: completed.append(True),
+    )
+
+    assert result is None
+    assert completed == []
 
 
 def test_sweep_alerts_without_commit_when_correlation_fails(monkeypatch):

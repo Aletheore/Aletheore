@@ -987,8 +987,23 @@ def _swallowed_exception_findings_java(file: str, source: str, hunks: list[_Hunk
                     if stripped.startswith("/*"):
                         if "*/" not in stripped[2:]:
                             in_block_comment = True
-                        body_lines.append("")
-                        continue
+                            body_lines.append("")
+                            continue
+                        # Sibling gap to the in_block_comment branch's own
+                        # fix above: a block comment that opens AND closes
+                        # on this same line (e.g. "/* note */ recover();")
+                        # was unconditionally discarding whatever real code
+                        # follows "*/" - misjudging a genuinely-handled
+                        # catch (even one that logs the exception) as
+                        # empty/swallowed. Fall through to re-examine the
+                        # remainder instead of consuming the whole line.
+                        stripped = stripped.split("*/", 1)[1].strip()
+                        if stripped == "":
+                            body_lines.append("")
+                            continue
+                        if stripped == "}":
+                            closed = True
+                            break
                     if stripped.startswith("//"):
                         body_lines.append("")
                         continue

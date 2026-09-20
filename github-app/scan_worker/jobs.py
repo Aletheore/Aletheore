@@ -3000,6 +3000,7 @@ def _fix_suggestion_attachment(
     path: str,
     status_code: int | None,
     evidence: dict | None,
+    on_llm_call_completed: Callable[[], None] | None = None,
 ) -> dict | None:
     # Grounded in the file/line/symbol already pinpointed deterministically
     # by the owner/dependency attachments - the one LLM call in this whole
@@ -3082,6 +3083,25 @@ def _fix_suggestion_attachment(
             "fix-suggestion generation failed (%s); alerting without it", type(exc).__name__
         )
         return None
+    # Real gap found via audit, sibling to the one #740 already fixed
+    # above (see _attach_recent_commit_for_failure's comment): reaching
+    # this point means the LLM call itself genuinely completed - the model
+    # looked at the real code context and made a determination, "unknown"
+    # included. That is meaningfully different from every return-None path
+    # above this line (credit balance exhausted, spend_budget rejected the
+    # call, file content fetch failed, the completion call itself raised),
+    # none of which ever reached the model at all. #740's fix only credits
+    # a cooldown when a suggestion is actually attached, so a model that
+    # confidently says "this needs a human, not a code fix" (e.g. a real
+    # third-party outage with no fixable cause) was treated identically to
+    # a transient infra failure - re-billing a full paid LLM call on every
+    # single flip of a flapping endpoint, forever, since no cooldown state
+    # ever distinguished "genuinely nothing to fix" from "try again soon."
+    # Signaling completion here (regardless of the verdict) lets the
+    # caller apply a cooldown to a confirmed "unknown" too, while still
+    # leaving every real failure path above free to retry without waiting.
+    if on_llm_call_completed is not None:
+        on_llm_call_completed()
     if not suggestion or suggestion.lower() == "unknown":
         return None
     return normalize_resolution(kind="suggestion", suggestion=suggestion, confidence="inferred")
@@ -3114,6 +3134,31 @@ def _attach_recent_commit_for_failure(
     # correlation chain (see HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS) - the
     # deterministic attachments above are unaffected either way.
     if include_fix_suggestion:
+        # Real bug found via audit: both call sites that pass
+        # include_fix_suggestion used to call _mark_fix_suggestion_sent
+        # themselves, BEFORE this function ran at all - unconditionally
+        # burning the cooldown the instant a suggestion was merely
+        # ATTEMPTED, not when one was actually produced.
+        # _fix_suggestion_attachment has several real, ordinary reasons
+        # to return None (credit balance exhausted, spend_budget can't
+        # start another call, file content fetch failed, the LLM call
+        # itself raised) - each of those used to burn the same cooldown a
+        # real, successfully-delivered suggestion would have, so a
+        # customer whose endpoint stayed down could go the full
+        # HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS having received zero real
+        # suggestions, with no retry until it expired.
+        #
+        # on_fix_suggestion_included is now wired to
+        # _fix_suggestion_attachment's own on_llm_call_completed, not
+        # gated on suggestion_attachment being non-None: a completed LLM
+        # call that confidently determined "unknown" (see that function's
+        # own comment) is a real, finished diagnosis, not a failure - it
+        # deserves the same cooldown a delivered suggestion gets, so a
+        # flapping endpoint with a genuinely unfixable root cause doesn't
+        # re-bill a full LLM call on every single flip forever. Only the
+        # paths that never reached the model at all (spend/fetch/exception
+        # failures) still skip the cooldown and stay eligible for an
+        # immediate retry.
         suggestion_attachment = _fix_suggestion_attachment(
             installation_id,
             repo_full_name,
@@ -3123,27 +3168,10 @@ def _attach_recent_commit_for_failure(
             path,
             status_code,
             evidence,
+            on_llm_call_completed=on_fix_suggestion_included,
         )
         if suggestion_attachment is not None:
             attachments.append(suggestion_attachment)
-            # Real bug found via audit: both call sites that pass
-            # include_fix_suggestion used to call _mark_fix_suggestion_sent
-            # themselves, BEFORE this function ran at all - unconditionally
-            # burning the cooldown the instant a suggestion was merely
-            # ATTEMPTED, not when one was actually produced.
-            # _fix_suggestion_attachment has several real, ordinary reasons
-            # to return None (credit balance exhausted, spend_budget can't
-            # start another call, file content fetch failed, the LLM call
-            # itself raised, or it returned "unknown") - each of those
-            # burned the same cooldown a real, successfully-delivered
-            # suggestion would have, so a customer whose endpoint stayed
-            # down could go the full HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS
-            # having received zero real suggestions, with no retry until it
-            # expired. Marking only here, once a suggestion is confirmed
-            # attached, means the cooldown always corresponds to a
-            # suggestion the customer actually got.
-            if on_fix_suggestion_included is not None:
-                on_fix_suggestion_included()
 
     if not attachments:
         return evidence_resolution

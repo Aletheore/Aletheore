@@ -1143,8 +1143,16 @@ function renderTargetRows(targets) {{
 
 async function removeTarget(btn) {{
   btn.disabled = true;
-  const res = await fetch(adminBase + '/health-targets/' + btn.dataset.targetId, {{ method: 'DELETE' }});
-  if (res.ok) {{ loadTargets(); loadResults(); }} else {{ btn.disabled = false; }}
+  // Same stuck-button gap found elsewhere on this page (see buySeat's
+  // comment): a fetch() rejection used to skip the else branch entirely
+  // and leave this disabled forever. finally re-enables on every exit;
+  // harmless on success too, since loadTargets() re-renders this row.
+  try {{
+    const res = await fetch(adminBase + '/health-targets/' + btn.dataset.targetId, {{ method: 'DELETE' }});
+    if (res.ok) {{ loadTargets(); loadResults(); }}
+  }} finally {{
+    btn.disabled = false;
+  }}
 }}
 
 async function addTarget() {{
@@ -2019,8 +2027,15 @@ if (typeof Paddle !== "undefined") {{
 
 async function revokeToken(tokenId, btn) {{
   btn.disabled = true;
-  const res = await fetch(adminBase + '/tokens/' + tokenId, {{ method: 'DELETE' }});
-  if (res.ok) {{ btn.closest('.token-row').remove(); }} else {{ btn.disabled = false; }}
+  // Same stuck-button gap as removeTarget above. Re-enabling in finally on
+  // the success path too is harmless: the row (and this button with it)
+  // is removed from the DOM right before finally runs.
+  try {{
+    const res = await fetch(adminBase + '/tokens/' + tokenId, {{ method: 'DELETE' }});
+    if (res.ok) {{ btn.closest('.token-row').remove(); }}
+  }} finally {{
+    btn.disabled = false;
+  }}
 }}
 
 function renderTokenRows(tokens) {{
@@ -2271,7 +2286,7 @@ async function openBillingPortal() {{
   }}
 }}
 
-async function buyCredit() {{
+async function buyCredit(btn) {{
   const statusEl = document.getElementById('topup-status');
   if (typeof Paddle === "undefined") {{
     statusEl.textContent = 'Checkout is unavailable right now - try disabling any ad/script blocker and reload.';
@@ -2286,40 +2301,54 @@ async function buyCredit() {{
     statusEl.textContent = 'Minimum purchase is $5.';
     return;
   }}
+  // Real gap found via audit: buySeat/removeSeat both guard against a
+  // rapid double-click firing two independent purchases (see buySeat's
+  // comment); this button had no guard at all - two clicks before the
+  // first apiGet() round trip returns could open two stacked
+  // Paddle.Checkout.open() overlays with two different signed
+  // checkout_installation_tokens. Re-enabled in finally - unlike
+  // buySeat/removeSeat, this button's DOM node is never replaced by a
+  // re-render, so it must actually come back (e.g. the customer closes
+  // the overlay without completing checkout and wants to try again).
+  btn.disabled = true;
   statusEl.textContent = 'Opening checkout...';
   statusEl.style.color = '';
-  window._creditCheckoutCompleted = false;
-  // The installation token is minted with a 30-minute TTL (auth.py's
-  // sign_checkout_installation_id) - re-fetch it fresh here instead of
-  // reusing loadSettings()'s page-load-time copy, so a tab left open past
-  // 30 minutes doesn't send Paddle a token the webhook can no longer
-  // resolve (money taken, no credit granted). window._creditTopupPriceId
-  // is a static price id set once at page load and doesn't need refreshing.
-  const res = await apiGet(adminBase);
-  if (!res || !res.ok) {{
-    statusEl.textContent = 'Could not start checkout - try again.';
-    return;
+  try {{
+    window._creditCheckoutCompleted = false;
+    // The installation token is minted with a 30-minute TTL (auth.py's
+    // sign_checkout_installation_id) - re-fetch it fresh here instead of
+    // reusing loadSettings()'s page-load-time copy, so a tab left open past
+    // 30 minutes doesn't send Paddle a token the webhook can no longer
+    // resolve (money taken, no credit granted). window._creditTopupPriceId
+    // is a static price id set once at page load and doesn't need refreshing.
+    const res = await apiGet(adminBase);
+    if (!res || !res.ok) {{
+      statusEl.textContent = 'Could not start checkout - try again.';
+      return;
+    }}
+    const data = await res.json();
+    // Associates the checkout with the installation's existing Paddle
+    // customer record (already returned in data.installation, same source
+    // /subscribe's checkout page reads for its own pwCustomer wiring) -
+    // without it, an existing subscriber topping up credit would re-enter
+    // their email and Paddle would silently open a second customer record,
+    // splitting billing history and producing a transaction whose
+    // customer_id the subscription webhook path can't attribute back to
+    // this installation.
+    const paddleCustomerId = data.installation && data.installation.paddle_customer_id;
+    Paddle.Checkout.open({{
+      items: [{{ priceId: window._creditTopupPriceId, quantity: amount }}],
+      customData: {{ installation_token: data.checkout_installation_token }},
+      ...(paddleCustomerId ? {{ customer: {{ id: paddleCustomerId }} }} : {{}}),
+      settings: {{
+        displayMode: 'overlay',
+        variant: 'one-page',
+        successUrl: 'https://app.aletheore.com/dashboard',
+      }},
+    }});
+  }} finally {{
+    btn.disabled = false;
   }}
-  const data = await res.json();
-  // Associates the checkout with the installation's existing Paddle
-  // customer record (already returned in data.installation, same source
-  // /subscribe's checkout page reads for its own pwCustomer wiring) -
-  // without it, an existing subscriber topping up credit would re-enter
-  // their email and Paddle would silently open a second customer record,
-  // splitting billing history and producing a transaction whose
-  // customer_id the subscription webhook path can't attribute back to
-  // this installation.
-  const paddleCustomerId = data.installation && data.installation.paddle_customer_id;
-  Paddle.Checkout.open({{
-    items: [{{ priceId: window._creditTopupPriceId, quantity: amount }}],
-    customData: {{ installation_token: data.checkout_installation_token }},
-    ...(paddleCustomerId ? {{ customer: {{ id: paddleCustomerId }} }} : {{}}),
-    settings: {{
-      displayMode: 'overlay',
-      variant: 'one-page',
-      successUrl: 'https://app.aletheore.com/dashboard',
-    }},
-  }});
 }}
 
 // The danger zone renders on every plan, including free and lapsed - the
@@ -2402,18 +2431,30 @@ async function requestDeletionOtp() {{
   btn.disabled = true;
   status.textContent = 'Sending code...';
   status.style.color = 'var(--slate-600)';
-  const res = await fetch(adminBase + '/delete-all-data/request-otp', {{ method: 'POST' }});
-  const data = await res.json().catch(function () {{ return {{}}; }});
-  if (!res.ok) {{
-    status.textContent = data.detail || 'Could not send a code.';
-    status.style.color = 'var(--critical)';
+  // Real gap found via audit: same stuck-button shape buySeat/removeSeat
+  // were fixed for (see buySeat's comment) - on a genuine network failure
+  // (fetch() itself rejects, before res/data exist) this exited via an
+  // unhandled exception and the button stayed disabled forever with no
+  // recovery short of a page reload. try/finally + syncDeleteButton()
+  // covers every exit path uniformly instead of only the res.ok-but-
+  // rejected branch; syncDeleteButton() re-derives the real disabled
+  // state from the current inputs, so calling it here is correct on
+  // success too, not just on error.
+  try {{
+    const res = await fetch(adminBase + '/delete-all-data/request-otp', {{ method: 'POST' }});
+    const data = await res.json().catch(function () {{ return {{}}; }});
+    if (!res.ok) {{
+      status.textContent = data.detail || 'Could not send a code.';
+      status.style.color = 'var(--critical)';
+      return;
+    }}
+    status.textContent = 'Code sent to ' + (data.sent_to || 'your email') + ' - expires in 10 minutes.';
+    status.style.color = 'var(--slate-600)';
+    document.getElementById('otp-row').style.display = '';
+    document.getElementById('delete-otp-input').focus();
+  }} finally {{
     syncDeleteButton();
-    return;
   }}
-  status.textContent = 'Code sent to ' + (data.sent_to || 'your email') + ' - expires in 10 minutes.';
-  status.style.color = 'var(--slate-600)';
-  document.getElementById('otp-row').style.display = '';
-  document.getElementById('delete-otp-input').focus();
 }}
 
 async function deleteAllData() {{
@@ -2424,26 +2465,32 @@ async function deleteAllData() {{
   btn.disabled = true;
   status.textContent = 'Deleting...';
   status.style.color = 'var(--slate-600)';
-  const res = await fetch(adminBase + '/delete-all-data', {{
-    method: 'POST',
-    headers: {{ 'Content-Type': 'application/json' }},
-    body: JSON.stringify({{
-      confirm: confirmInput.value.trim(),
-      otp_code: otpInput.value.trim(),
-    }}),
-  }});
-  const data = await res.json().catch(function () {{ return {{}}; }});
-  if (!res.ok) {{
-    status.textContent = data.detail || 'Could not delete your data.';
-    status.style.color = 'var(--critical)';
+  // Same stuck-button gap and same fix as requestDeletionOtp above - on a
+  // real-money-adjacent, irreversible action, a fetch() rejection must not
+  // leave this permanently disabled with no recovery.
+  try {{
+    const res = await fetch(adminBase + '/delete-all-data', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{
+        confirm: confirmInput.value.trim(),
+        otp_code: otpInput.value.trim(),
+      }}),
+    }});
+    const data = await res.json().catch(function () {{ return {{}}; }});
+    if (!res.ok) {{
+      status.textContent = data.detail || 'Could not delete your data.';
+      status.style.color = 'var(--critical)';
+      return;
+    }}
+    // Everything this page reads is gone, including possibly this session -
+    // there is nothing left here to re-render, so leave for the marketing site.
+    status.textContent = 'Deleted. Signing you out...';
+    status.style.color = 'var(--success)';
+    window.location.href = '/auth/logout';
+  }} finally {{
     syncDeleteButton();
-    return;
   }}
-  // Everything this page reads is gone, including possibly this session -
-  // there is nothing left here to re-render, so leave for the marketing site.
-  status.textContent = 'Deleted. Signing you out...';
-  status.style.color = 'var(--success)';
-  window.location.href = '/auth/logout';
 }}
 
 async function loadSettings() {{
@@ -2511,7 +2558,7 @@ async function loadSettings() {{
         (data.credit_topup_price_id
           ? '<div class="form-row" style="margin-top: 10px;">' +
               '<input type="number" id="topup-amount" min="5" step="1" value="10" style="width: 80px;">' +
-              '<button class="btn" onclick="buyCredit()" style="margin-left: 6px;">Buy more credit</button>' +
+              '<button class="btn" onclick="buyCredit(this)" style="margin-left: 6px;">Buy more credit</button>' +
             '</div>' +
             '<div id="topup-status" class="settings-block-hint"></div>'
           : '<div class="settings-block-hint">Buying additional credit is coming soon.</div>') +

@@ -2,10 +2,13 @@ import asyncio
 import logging
 
 from app_server.config import get_settings
-from app_server.db import hide_repo, purge_installation_data, unhide_repo, upsert_installation
+from app_server.db import get_installation, hide_repo, purge_installation_data, unhide_repo, upsert_installation
+from app_server.error_alerts import send_error_alert
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.github_pagination import fetch_paginated_github_collection
 from app_server.http_client import get_github_api_client
+from app_server.paddle_client import PaddleAPIError, PaddleAPINotConfigured
+from app_server.paddle_client import cancel_subscription as cancel_paddle_subscription
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +66,36 @@ async def handle_installation_event(
         # log. A bare DELETE here would leave those behind.
         sender = payload.get("sender") or {}
         actor = sender.get("login") or "github:installation.deleted"
+
+        # Cancel the real Paddle subscription BEFORE purge deletes the row
+        # it lives on - see delete_all_data's identical comment in
+        # admin.py. Unlike that route, there's no live user here to retry
+        # for: GitHub already completed the uninstall on its side, so this
+        # can't block or fail the webhook. Best-effort cancel, then alert
+        # loudly on failure so a human follows up in the Paddle dashboard
+        # instead of the customer silently being billed forever.
+        existing = await get_installation(pool, installation_id)
+        subscription_id = existing.get("paddle_subscription_id") if existing else None
+        if subscription_id:
+            settings = get_settings()
+            try:
+                await asyncio.to_thread(
+                    cancel_paddle_subscription, settings.paddle_api_key, subscription_id
+                )
+            except PaddleAPINotConfigured:
+                pass
+            except PaddleAPIError as exc:
+                logger.error(
+                    "could not cancel Paddle subscription %s for installation %s on uninstall: %s",
+                    subscription_id, installation_id, exc,
+                )
+                send_error_alert(
+                    "installation_webhook",
+                    exc,
+                    context=f"uninstall for installation {installation_id} ({account_login}) - "
+                    f"Paddle subscription {subscription_id} NOT canceled, customer will keep being billed",
+                )
+
         await purge_installation_data(pool, installation_id, actor)
         _enqueue_checkout_purge(installation_id, redis_url, queue)
         return

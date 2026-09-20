@@ -62,6 +62,43 @@ def test_diff_valid_lines_tracks_multiple_files_separately():
     assert _diff_valid_lines(diff_text) == {"a.py": {5}, "b.py": {10}}
 
 
+def test_diff_valid_lines_warns_loudly_on_a_real_git_diff_with_no_patches(caplog):
+    # Real landmine found via audit, confirmed independently twice (direct
+    # testing against a real benchmark case, and a fresh code read): this
+    # fallback only recognizes the synthetic "--- {file} ---" marker
+    # _production_diff_text builds, never a real git unified diff's
+    # "--- a/path" header. Production never hits this (jobs.py always
+    # supplies diff_patches), but any direct-invocation caller that builds
+    # diff_text from a raw diff without diff_patches gets an empty dict
+    # back with no error - every finding then silently drops as "outside
+    # the diff". Must at least warn loudly instead of failing silently.
+    real_git_diff = (
+        "diff --git a/a.py b/a.py\n"
+        "index 1234567..89abcde 100644\n"
+        "--- a/a.py\n"
+        "+++ b/a.py\n"
+        "@@ -1,2 +1,3 @@\n"
+        " context\n"
+        "+added\n"
+        " context2\n"
+    )
+    with caplog.at_level("WARNING"):
+        result = _diff_valid_lines(real_git_diff)
+
+    assert result == {}
+    assert any("zero valid lines" in record.message for record in caplog.records)
+
+
+def test_diff_valid_lines_does_not_warn_on_the_expected_marker_shape():
+    diff_text = "--- a.py ---\n@@ -1,2 +1,3 @@\n context\n+added\n context2"
+
+    with patch("scan_worker.flash_review.logger.warning") as mock_warning:
+        result = _diff_valid_lines(diff_text)
+
+    assert result == {"a.py": {1, 2, 3}}
+    mock_warning.assert_not_called()
+
+
 def test_structured_patches_do_not_treat_deleted_comment_markers_as_filenames():
     patch = "@@ -10,4 +10,4 @@\n context\n--- x ---\n-removed\n+added\n context"
 
