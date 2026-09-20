@@ -372,19 +372,103 @@ a real candidate to evaluate as an upgrade/replacement for those existing
 checks specifically, not as a new category alongside the others in this
 doc.
 
+## YASA, LiSA, Reviewdog — checked, real, two more graph-based candidates plus real PR-comment infrastructure
+
+**YASA-Engine** (Ant Group): real, confirmed at `github.com/antgroup/
+YASA-Engine`, Apache-2.0, 323 stars, not archived (last pushed ~5 weeks
+before this check). Architecturally in the same family as Joern - a
+unified cross-language graph representation (UAST, not CPG), real
+built-in taint analysis, a declarative query language, and - notably -
+native MCP exposure per its own README, directly relevant given
+Aletheore's own MCP server. Real but young (created September 2025) and
+smaller/slower-moving than Joern's community - a real lead worth deeper
+evaluation, not hands-on tested tonight given the time already spent
+validating Joern as the flagship graph-based candidate.
+
+**LiSA**: real, MIT, but genuinely tiny - 85 stars, smallest of every
+tool checked in this entire evaluation. Real academic-scale project
+(Python/Go/Java/EVM-bytecode frontends into a shared CFG, abstract
+interpretation for formal verification) - the architecture is
+interesting, but the community size is a real, honest maintenance-risk
+flag distinct from anything else recommended in this doc.
+
+**Reviewdog**: real, MIT, 9,602 stars, very active - genuinely different
+role from every other tool here. It's not a detector at all; it's the
+piece that takes any linter's diagnostic output and posts it as precise
+line-level PR/MR comments on GitHub/GitLab/Bitbucket. This is a direct,
+real candidate for the open integration question the scoping doc flagged
+and never answered: "how do results surface in PR comments" - Reviewdog
+may be a real, mature, off-the-shelf answer to exactly that, rather than
+something Aletheore needs to build from scratch.
+
+## Open Code Review (Alibaba) — a different kind of finding: a real, mature competing product, not a tool to integrate
+
+This is not a scanner to bolt on. It's a real, mature, directly
+competing hybrid deterministic+LLM PR review product - worth understanding
+as a peer/competitor, the same way this session studied CodeRabbit's real
+architecture earlier tonight, not as a fourteenth entry in the
+integration list.
+
+**Real and legitimate, verified past the surface-level star count**: 38,308
+stars is unusually fast growth for a repo created 2026-05-18 (~4 months
+before this check) - real enough to warrant scrutiny before trusting it,
+which the actual README answers: it originated as Alibaba's internal
+official AI code review tool, in real production for **two years**
+("served tens of thousands of developers and identified millions of code
+defects") before being open-sourced - the star velocity reflects a
+proven internal tool's public launch, not an inflated new project.
+Apache-2.0, confirmed from the real LICENSE file. OpenSSF Best Practices
+Gold badge (a real, third-party-administered certification, not
+self-claimed).
+
+**Real, rigorous benchmark**: AACR-Bench - 50 real open-source repos, 200
+real PRs, 10 languages, cross-validated by 80+ senior engineers, 1,505
+annotated ground-truth issues, published openly on Hugging Face
+(`Alibaba-Aone/aacr-bench`) - directly comparable in spirit and rigor to
+this session's own Martian Code Review Bench work tonight, and a real,
+independently-checkable dataset if a future direct comparison against
+Aletheore is ever worth running.
+
+**Real architectural techniques worth studying, not copying blind**:
+- *Smart file bundling*: groups related files (their own example:
+  `message_en.properties` + `message_zh.properties`) into one review
+  unit handled by an isolated sub-agent - a divide-and-conquer approach
+  to large changesets, structurally different from Aletheore's current
+  per-diff single-pass generation.
+- *External positioning and reflection modules*: separate, dedicated
+  passes specifically for comment-location accuracy and comment-content
+  accuracy, independent of the main review generation - a more granular
+  split than Aletheore's current single second-model verification step
+  (`_verify_findings_with_second_model`), which conflates "is this
+  finding real" with "is it positioned/worded well" into one pass.
+- Their own published claim (from their own benchmark, not
+  independently reproduced here): ~1/9 the token cost of a general-purpose
+  coding agent doing the same review, at higher precision/F1, with lower
+  recall as an explicit, deliberate tradeoff - the same precision-vs-
+  recall tension this session's whole night of model comparisons has been
+  wrestling with, approached from the opposite side (favor precision,
+  accept recall loss) of where tonight's investigation has been pushing
+  (favor recall, accept the two specific misses).
+
+Not recommended for integration - it's a peer product, not a library or
+scanner. Worth a closer, dedicated look (the AACR-Bench dataset
+specifically) if there's appetite to benchmark Aletheore against it
+directly, the way tonight's session benchmarked against CodeRabbit's real
+architecture and the Martian gold set.
+
 ## Recommendation
 
-Twenty tools checked total (SonarQube, Semgrep, Bearer, CodeQL, Joern,
-Error Prone, Infer, PMD, SpotBugs, Phasar, WAP, gosec, Bandit, Mega-Linter,
-Super-Linter, Horusec, AppThreat/sast-scan, DefectDojo, Graudit, Trivy).
-Seven excluded: CodeQL (license), WAP (abandonment risk), AppThreat/
-sast-scan (archived, 6 years dead), Mega-Linter (real AGPL-3.0 correction
-from the pasted MIT claim - blocked pending real legal review, not a
-simple license-tier note), and Super-Linter/Horusec/DefectDojo
-(orchestrators/aggregators wrapping or tracking other tools' output, not
-independent detectors - redundant with Aletheore's own planned
-orchestration work). The other thirteen confirmed real, legitimate, and
-worth the integration list. None caught either target bug, and none were
+Twenty-four tools/products checked total. Eight excluded or set aside:
+CodeQL (license), WAP (abandonment risk), AppThreat/sast-scan (archived,
+6 years dead), Mega-Linter (real AGPL-3.0 correction from the pasted MIT
+claim - blocked pending real legal review), Super-Linter/Horusec/
+DefectDojo (orchestrators/aggregators, redundant with Aletheore's own
+planned orchestration work), and LiSA (real but too small - 85 stars -
+to recommend alongside everything else here, a lead to revisit rather
+than integrate now). Open Code Review is a separate case entirely - not
+excluded, just not a fit for "integration list" at all; see above. The
+other fifteen (the original thirteen plus YASA and Reviewdog) confirmed
+real, legitimate, and worth the integration list. None caught either target bug, and none were
 ever going to - reachable from license/architecture research alone, live
 runs just confirm it with real data. Per direction: the goal isn't only
 closing this one gap, it's Aletheore getting generally better, so tools
