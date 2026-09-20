@@ -1433,6 +1433,19 @@ async def delete_all_data(
     # Paddle is unreachable, leaving their installation and billing-portal
     # access intact until cancellation actually succeeds is safer than
     # deleting their only way to fix it themselves.
+    #
+    # Real gap found by GLM-5.3-Flash reviewing this exact PR with a wider
+    # diff-context window: consume_deletion_otp_code (just above) is
+    # deliberately atomic - claim-and-invalidate in one UPDATE, by design,
+    # to prevent a replay/double-submit race (see its own docstring) - so
+    # this cancellation attempt necessarily runs AFTER the one-time code
+    # has already been burned, not before. A Paddle failure here used to
+    # say "Try again", which is wrong: the code is already spent, so an
+    # immediate retry fails with "that code is invalid, expired, or
+    # already used" above, and the customer has no way to know they need a
+    # fresh code first instead. The detail message below says so
+    # explicitly; not reordered around the atomic consume, which would
+    # reopen the exact race that design prevents.
     subscription_id = installation.get("paddle_subscription_id")
     if subscription_id:
         settings = get_settings()
@@ -1449,7 +1462,9 @@ async def delete_all_data(
             )
             raise HTTPException(
                 status_code=502,
-                detail="could not cancel your subscription with Paddle - your data was NOT deleted. Try again, or contact support@aletheore.com",
+                detail="could not cancel your subscription with Paddle - your data was NOT deleted. "
+                "Your deletion code has already been used - request a new one and try again, "
+                "or contact support@aletheore.com",
             ) from exc
 
     result = await purge_installation_data(pool, installation_id, session["github_login"])

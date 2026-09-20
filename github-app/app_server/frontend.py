@@ -2481,6 +2481,21 @@ async function deleteAllData() {{
     if (!res.ok) {{
       status.textContent = data.detail || 'Could not delete your data.';
       status.style.color = 'var(--critical)';
+      // Real gap found by GLM-5.3-Flash reviewing this exact PR with a
+      // wider diff-context window: the backend's OTP consume is atomic
+      // (claim-and-invalidate in one step, to prevent a replay race - see
+      // admin.py's comment on consume_deletion_otp_code), so ANY failure
+      // response other than a rate limit (429 - the one status this
+      // endpoint can return before ever touching the code) means the
+      // submitted code is now dead, even on a downstream failure (Paddle
+      // unreachable, 502) that has nothing to do with the code itself.
+      // Leaving the stale code sitting in the input implied a same-code
+      // retry would work; it never will. Send the flow back to "request a
+      // new code" instead of a broken "try again".
+      if (res.status !== 429) {{
+        otpInput.value = '';
+        document.getElementById('otp-row').style.display = 'none';
+      }}
       return;
     }}
     // Everything this page reads is gone, including possibly this session -
