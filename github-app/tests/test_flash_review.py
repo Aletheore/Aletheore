@@ -2529,6 +2529,55 @@ def test_validate_findings_still_rejects_a_citation_far_from_any_hunk():
     assert _validate_findings([finding], diff_text) == []
 
 
+def test_validate_findings_identifier_grounding_accepts_a_referenced_symbol_context_name():
+    # Real bug found via independent audit (verified against source before
+    # fixing, not taken on trust): identifier grounding only ever checked a
+    # finding's backtick-quoted identifiers against the changed file's own
+    # diff/content, even though the prompt explicitly tells the model it may
+    # cite a symbol from referenced_symbol_context ("not part of this diff")
+    # - a finding correctly doing exactly that always failed grounding and
+    # got silently dropped, undoing the one feature built specifically to
+    # surface this class of finding.
+    diff_text = "--- a.py ---\n@@ -1,1 +1,3 @@\n ctx\n+call_helper(x)\n ctx2"
+    finding = {
+        "file": "a.py",
+        "line": 2,
+        "issue": "the referenced `parse_config_from_env` helper this calls raises on a missing key, but the new call site has no try/except",
+    }
+    referenced_symbol_context = (
+        "--- referenced definition (not part of this diff): helpers.py:parse_config_from_env ---\n"
+        "def parse_config_from_env():\n    return os.environ['REQUIRED_KEY']"
+    )
+
+    # Without the referenced context, the identifier is genuinely nowhere
+    # in what this call was given - correctly dropped.
+    assert _validate_findings([finding], diff_text) == []
+
+    # With it, the same finding's cited identifier is real, legitimate
+    # evidence and must survive.
+    assert _validate_findings(
+        [finding], diff_text, referenced_symbol_context=referenced_symbol_context
+    ) == [finding]
+
+
+def test_validate_findings_identifier_grounding_accepts_a_sibling_file_context_name():
+    diff_text = "--- a.py ---\n@@ -1,1 +1,3 @@\n ctx\n+def handle(self): pass\n ctx2"
+    finding = {
+        "file": "a.py",
+        "line": 2,
+        "issue": "unlike the sibling `ValidatingHandler`, this new handler skips input validation entirely",
+    }
+    sibling_file_context = (
+        "--- sibling file in the same directory (not part of this diff): validating_handler.py ---\n"
+        "ValidatingHandler"
+    )
+
+    assert _validate_findings([finding], diff_text) == []
+    assert _validate_findings(
+        [finding], diff_text, sibling_file_context=sibling_file_context
+    ) == [finding]
+
+
 def test_semantic_checker_finds_a_removed_bounds_clamp():
     """Real shape: axios#6807 (benchmark case 005) - `Math.max(0, total !=
     null ? Math.min(rawLoaded, total) : rawLoaded)` lost its outer

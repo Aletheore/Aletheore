@@ -1879,6 +1879,8 @@ def _validate_findings(
     diff_patches: tuple[tuple[str, str], ...] | None = None,
     on_verification_usage: Callable[[int, int, int], None] | None = None,
     verify_suggestions: bool = True,
+    referenced_symbol_context: str = "",
+    sibling_file_context: str = "",
 ) -> list[dict]:
     """Drops findings whose cited location doesn't hold up, and says so.
 
@@ -1921,6 +1923,24 @@ def _validate_findings(
     # Deliberately per-file, not the whole multi-file diff - a name that
     # only appears in some OTHER file's code isn't evidence this finding's
     # claim about THIS file is real, it would just weaken the check.
+    #
+    # referenced_symbol_context/sibling_file_context are ALSO real, legitimate
+    # source for an identifier - real bug found via audit: the prompt
+    # explicitly tells the model it may cite a symbol from a referenced
+    # definition ("not part of this diff") or notice a sibling file's naming
+    # convention, but this check only ever looked at the changed file's own
+    # diff/content, so a finding correctly citing exactly that kind of
+    # cross-file evidence (e.g. "doesn't follow the sibling handler's
+    # convention", naming the sibling's symbol) would always fail here and
+    # get silently dropped - the two features this session already built
+    # specifically to surface that class of finding, undone by the grounding
+    # check meant to police a different failure mode. Appended whole rather
+    # than scoped per-file: both blocks are already compact (symbol/name
+    # listings, not full source dumps - see build_referenced_symbol_context/
+    # build_sibling_file_context), and a false-negative drop of a real,
+    # correctly-cited finding is worse than the small extra leniency of
+    # matching an identifier that happens to appear in another file's
+    # referenced context too.
     patch_source_by_file = {file: patch for file, patch in (diff_patches or ())}
     kept = []
     identifier_mismatch = []
@@ -1928,6 +1948,10 @@ def _validate_findings(
         source = patch_source_by_file.get(finding["file"], "")
         if file_contents:
             source += "\n" + (file_contents.get(finding["file"]) or "")
+        if referenced_symbol_context:
+            source += "\n" + referenced_symbol_context
+        if sibling_file_context:
+            source += "\n" + sibling_file_context
         if _identifier_grounded(finding, source):
             kept.append(finding)
         else:
@@ -2421,6 +2445,8 @@ def review_diff(
                 combined, diff_text, file_contents, diff_patches,
                 on_verification_usage=on_verification_usage,
                 verify_suggestions=verify_suggestions,
+                referenced_symbol_context=referenced_symbol_context,
+                sibling_file_context=sibling_file_context,
             )
 
             # The one exception: a kept finding grounding could only pass
@@ -2596,6 +2622,8 @@ def review_diff(
         valid, diff_text, file_contents, diff_patches,
         on_verification_usage=on_verification_usage,
         verify_suggestions=verify_suggestions,
+        referenced_symbol_context=referenced_symbol_context,
+        sibling_file_context=sibling_file_context,
     )
     if on_grounding_result is not None:
         on_grounding_result({"proposed": len(valid), "kept": len(kept)})
