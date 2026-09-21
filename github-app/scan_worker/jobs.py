@@ -1887,6 +1887,11 @@ def run_flash_review_job(
             settings, installation_id, repo_full_name, pr_number, base_sha, head_sha,
             reserved_spend, is_free_tier=is_free_tier,
             verify_with_second_model=(installation["plan"] == "air"),
+            # Both paid tiers (flash, air) - not is_free_tier, not plan-
+            # specific like verify_with_second_model above. See
+            # per_file_completeness's own comment at the review_diff call
+            # site for the real cost numbers behind this split.
+            per_file_completeness=not is_free_tier,
         )
     except Exception as exc:  # noqa: BLE001
         try:
@@ -2071,6 +2076,7 @@ def _run_flash_review(
     *,
     is_free_tier: bool = False,
     verify_with_second_model: bool = False,
+    per_file_completeness: bool = False,
 ) -> bool:
     """Returns True if a real review actually ran and its spend/count
     reservation (see run_flash_review_job) was trued up to reflect it -
@@ -2409,6 +2415,16 @@ def _run_flash_review(
             # non-clickable (an inert plain fence) until that's a real
             # decision someone makes on purpose.
             verify_suggestions=not is_free_tier,
+            # Per-file completeness gets its own gate, separate from
+            # verify_with_second_model above: real measured cost is ~3x
+            # single-shot generation (~$0.0028 vs ~$0.00095/review,
+            # 2026-09-21 martian-corpus benchmark), cheap enough for both
+            # paid tiers, unlike the second-model verification pass (~15x
+            # generation cost even windowed) which stays AIR-only. Free
+            # tier is excluded here explicitly, though review_diff's own
+            # `adapter_chain is None` guard already makes this a no-op for
+            # free tier regardless (free_tier_chain is never None there).
+            per_file_completeness=per_file_completeness,
         )
     # Every free-tier provider failed mid-review (see
     # _on_free_tier_exhausted above) - this review never actually ran, the
