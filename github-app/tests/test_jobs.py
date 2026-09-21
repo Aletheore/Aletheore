@@ -4875,6 +4875,11 @@ def test_flash_review_job_requests_second_model_verification_on_paid_plan(monkey
     # Suggestion-correctness verification runs on every paid plan
     # regardless of verify_with_second_model - AIR gets both.
     assert captured["verify_suggestions"] is True
+    # AIR gets per-file completeness too - not gated the same as
+    # verify_with_second_model (that one's plan-specific; this one's
+    # `not is_free_tier`, see test_flash_review_job_requests_per_file_
+    # completeness_on_flash_tier for why flash gets it too).
+    assert captured["per_file_completeness"] is True
 
     # And that callback must price at the verification model's own rate
     # (deepseek-v4-flash), never flash_review_model's - wrong whenever
@@ -4946,6 +4951,12 @@ def test_flash_review_job_does_not_request_second_model_verification_on_flash_ti
     # (no dual-agent grounding check) makes it more exposed to a
     # wrong-direction one-click suggestion than AIR, not less.
     assert captured["verify_suggestions"] is True
+    # Per-file completeness is ALSO not AIR-only, unlike second-model
+    # verification: real measured cost is ~3x single-shot generation
+    # (~$0.0028 vs ~$0.00095/review, 2026-09-21 martian-corpus benchmark),
+    # cheap enough for flash tier too - only the much pricier (~15x even
+    # windowed) verification pass stays AIR-exclusive.
+    assert captured["per_file_completeness"] is True
 
 
 def test_flash_review_job_does_not_request_second_model_verification_on_free_tier(monkeypatch):
@@ -5013,6 +5024,13 @@ def test_flash_review_job_does_not_request_second_model_verification_on_free_tie
     # tier", so this must stay False here or a real dollar cost would land
     # in free tier's spend accounting for the first time.
     assert captured["verify_suggestions"] is False
+    # Free tier stays False too - both paid tiers get per-file
+    # completeness (see the flash/AIR tests above), free tier gets
+    # neither. review_diff's own adapter_chain-is-None guard would make
+    # this a no-op for free tier even if it were True (free tier always
+    # passes a real adapter_chain), but the call site should never rely
+    # on that as the only backstop.
+    assert captured["per_file_completeness"] is False
 
 
 def test_flash_review_job_renders_suggestion_as_plain_fence_not_github_suggestion_syntax(monkeypatch):
@@ -9899,7 +9917,15 @@ def test_run_ops_monitor_job_broken_app_health_sends_ops_email(monkeypatch):
     monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
     monkeypatch.setenv("EMAIL_REPLY_TO_ADDRESS", "ops@example.com")
     get_settings.cache_clear()
-    monkeypatch.setattr(error_alerts, "_last_alert_at", {})
+    # error_alerts._should_alert's own cooldown now lives in real Redis
+    # (see error_alerts.py's real production-bug fix), not the process
+    # dict this used to reset - clear the real key so a previous test run
+    # (or this same source/exception combo cooling down from an earlier
+    # test) can't make this test's very first call already look rate-
+    # limited.
+    error_alerts.get_redis_client().delete(
+        error_alerts._ALERT_COOLDOWN_KEY_PREFIX + "ops_monitor.app_health:OpsMonitorError"
+    )
     monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
     monkeypatch.setattr("scan_worker.jobs._fetch_app_health", lambda url: (False, "broken"))
     monkeypatch.setattr("scan_worker.jobs._check_queue_alerts", lambda redis_conn, now: None)
