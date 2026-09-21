@@ -77,7 +77,8 @@ from app_server.db import (
     update_session_tokens,
 )
 from app_server.llm_cost import EXTRA_SEAT_PRICE_USD
-from app_server.paddle_client import PaddleAPIError
+from app_server.paddle_client import PaddleAPIError, PaddleAPINotConfigured
+from app_server.paddle_client import cancel_subscription as cancel_paddle_subscription
 from app_server.paddle_client import create_discount as create_paddle_discount
 from app_server.paddle_client import create_portal_session
 from app_server.paddle_client import get_subscription as get_paddle_subscription
@@ -1421,6 +1422,50 @@ async def delete_all_data(
             status_code=400,
             detail="that code is invalid, expired, or already used - request a new one",
         )
+
+    # Cancel the real Paddle subscription BEFORE purging - purge deletes the
+    # row this subscription_id lives on, and once it's gone there is no
+    # installation left to reach a billing portal from. Without this, a
+    # paying customer who deletes their account keeps being charged every
+    # cycle with no in-app path left to stop it. Blocking on failure here
+    # (rather than logging and proceeding, as the uninstall webhook below
+    # does) is deliberate: this call site has a live user who can retry: if
+    # Paddle is unreachable, leaving their installation and billing-portal
+    # access intact until cancellation actually succeeds is safer than
+    # deleting their only way to fix it themselves.
+    #
+    # Real gap found by GLM-5.3-Flash reviewing this exact PR with a wider
+    # diff-context window: consume_deletion_otp_code (just above) is
+    # deliberately atomic - claim-and-invalidate in one UPDATE, by design,
+    # to prevent a replay/double-submit race (see its own docstring) - so
+    # this cancellation attempt necessarily runs AFTER the one-time code
+    # has already been burned, not before. A Paddle failure here used to
+    # say "Try again", which is wrong: the code is already spent, so an
+    # immediate retry fails with "that code is invalid, expired, or
+    # already used" above, and the customer has no way to know they need a
+    # fresh code first instead. The detail message below says so
+    # explicitly; not reordered around the atomic consume, which would
+    # reopen the exact race that design prevents.
+    subscription_id = installation.get("paddle_subscription_id")
+    if subscription_id:
+        settings = get_settings()
+        try:
+            await asyncio.to_thread(
+                cancel_paddle_subscription, settings.paddle_api_key, subscription_id
+            )
+        except PaddleAPINotConfigured:
+            pass
+        except PaddleAPIError as exc:
+            logger.error(
+                "could not cancel Paddle subscription %s for installation %s before deletion: %s",
+                subscription_id, installation_id, exc,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="could not cancel your subscription with Paddle - your data was NOT deleted. "
+                "Your deletion code has already been used - request a new one and try again, "
+                "or contact support@aletheore.com",
+            ) from exc
 
     result = await purge_installation_data(pool, installation_id, session["github_login"])
     if result is None:

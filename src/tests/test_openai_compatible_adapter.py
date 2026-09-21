@@ -294,6 +294,76 @@ def test_invoke_normalizes_provider_errors_without_leaking_details(mock_openai_c
     assert "secret detail" not in message
 
 
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_invoke_calls_on_call_failed_when_the_call_fails(mock_openai_class, tmp_path):
+    # Real production bug: invoke() reserves real budget per round via
+    # before_llm_call (_has_budget_for_next_call), exactly like
+    # simple_completion, but never got simple_completion's own #314
+    # on_call_failed fix - a round's raw API call failing here used to
+    # leak that round's reservation with zero release and zero ledger
+    # trace, silently, for as long as failures kept happening. Confirmed
+    # live: two AIR installations' $18 base credit both hit $0.00 while
+    # real ledgered spend totaled $3.43 combined.
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.side_effect = _openai_error(
+        openai.BadRequestError, status_code=400
+    )
+
+    failed_calls = []
+    adapter = _adapter(tmp_path, on_call_failed=lambda: failed_calls.append(1))
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        with pytest.raises(AdapterInvocationError):
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+    assert failed_calls == [1]
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_invoke_does_not_call_on_call_failed_on_success(mock_openai_class, tmp_path):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.side_effect = _write_all_sections_then_finish_responses()
+
+    failed_calls = []
+    adapter = _adapter(tmp_path, on_call_failed=lambda: failed_calls.append(1))
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        result = adapter.invoke("audit this repo", cwd=str(repo))
+
+    assert "Summary" in result
+    assert failed_calls == []
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_invoke_calls_on_call_failed_when_a_round_has_no_usage(mock_openai_class, tmp_path):
+    # Same real gap as simple_completion's own no-usage-field regression:
+    # a 200 response with no usage field never raises, so the except block
+    # never sees it - without this, that round's reservation is stuck with
+    # neither on_usage (nothing to true up) nor on_call_failed ever firing.
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    no_usage_responses = _write_all_sections_then_finish_responses()
+    no_usage_responses[0].usage = None
+    mock_client.chat.completions.create.side_effect = no_usage_responses
+
+    failed_calls = []
+    usage_calls = []
+    adapter = _adapter(
+        tmp_path,
+        on_call_failed=lambda: failed_calls.append(1),
+        on_usage=lambda p, c, cached=0: usage_calls.append((p, c)),
+    )
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        adapter.invoke("audit this repo", cwd=str(repo))
+
+    assert failed_calls == [1]
+    # Every OTHER round did have usage - only the no-usage round is missing.
+    assert len(usage_calls) == len(no_usage_responses) - 1
+
+
 @patch("aletheore.adapters.openai_compatible.time.sleep")
 @patch("aletheore.adapters.openai_compatible.OpenAI")
 def test_invoke_retries_a_transient_authentication_error_and_succeeds(

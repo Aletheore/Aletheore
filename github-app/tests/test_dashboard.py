@@ -650,7 +650,7 @@ async def test_dashboard_returns_empty_dismissed_finding_keys_by_default(pool, m
     async with client:
         response = await client.get("/app/octocat/hello-world")
     body = response.json()
-    assert body["dismissed_finding_keys"] == {"secret": [], "vulnerability": []}
+    assert body["dismissed_finding_keys"] == {"secret": [], "vulnerability": [], "static_analysis": []}
 
 
 @pytest.mark.asyncio
@@ -736,6 +736,42 @@ async def test_undismiss_finding_route_removes_it(pool, monkeypatch):
     assert undismiss_response.status_code == 200
     body = get_response.json()
     assert body["dismissed_finding_keys"]["vulnerability"] == []
+
+
+@pytest.mark.asyncio
+async def test_dismiss_static_analysis_finding_route_then_get_dashboard_reflects_it(pool, monkeypatch):
+    await upsert_installation(pool, 1, "octocat")
+    await set_installation_plan(pool, 1, "air")
+    await insert_repo_history(
+        pool, 1, "octocat/hello-world", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[1])
+    finding = {
+        "tool": "semgrep",
+        "rule_id": "oauth-state-not-random",
+        "severity": "critical",
+        "type": "vulnerability",
+        "path": "app.py",
+        "line": 4,
+        "message": "state is not freshly random",
+    }
+    async with client:
+        dismiss_response = await client.post(
+            "/app/octocat/hello-world/findings/dismiss",
+            json={"finding_type": "static_analysis", "finding": finding},
+        )
+        get_response = await client.get("/app/octocat/hello-world")
+
+        undismiss_response = await client.post(
+            "/app/octocat/hello-world/findings/undismiss",
+            json={"finding_type": "static_analysis", "finding": finding},
+        )
+        get_response_after_undismiss = await client.get("/app/octocat/hello-world")
+
+    assert dismiss_response.status_code == 200
+    assert len(get_response.json()["dismissed_finding_keys"]["static_analysis"]) == 1
+    assert undismiss_response.status_code == 200
+    assert get_response_after_undismiss.json()["dismissed_finding_keys"]["static_analysis"] == []
 
 
 @pytest.mark.asyncio

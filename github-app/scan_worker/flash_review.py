@@ -23,7 +23,7 @@ from scan_worker.github_api import (
     fetch_file_content,
 )
 from scan_worker.model_tiers import flash_review_generation_adapter, flash_review_model_used
-from scan_worker.semantic_checks import find_semantic_regressions
+from scan_worker.semantic_checks import find_semantic_regressions, find_static_analysis_regressions
 
 logger = logging.getLogger(__name__)
 
@@ -2582,6 +2582,12 @@ def review_diff(
     semantic_findings = find_semantic_regressions(
         diff_text, file_contents, referenced_symbol_context
     )
+    # Merged into the same list, not kept separate - both are deterministic,
+    # pre-computed findings (source: "semantic") from _merge_semantic_
+    # findings' point of view; downstream verification/caching/gating
+    # treats every entry here identically regardless of which function
+    # produced it.
+    semantic_findings = semantic_findings + find_static_analysis_regressions(diff_text, file_contents)
 
     if cache_lookup is not None:
         try:

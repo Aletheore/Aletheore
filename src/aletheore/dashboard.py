@@ -59,6 +59,19 @@ def build_evidence_summary(evidence: dict) -> dict:
                 "finding_count": len(evidence["security"]["dependency_licenses"]["findings"]),
                 "findings": evidence["security"]["dependency_licenses"]["findings"],
             },
+            # Presented as Aletheore's own findings, same as every other
+            # card here - tool/rule_id stay in the raw finding dicts for
+            # anyone reading air.json directly, but the card itself never
+            # names SonarQube/Semgrep/Bearer/gosec/Bandit/Joern; only
+            # tools_run/tools_skipped (rendered as a coverage caption, not
+            # a "powered by" list) says which of them actually ran.
+            "static_analysis": {
+                "checked": evidence["security"]["static_analysis"]["checked"],
+                "tools_run": evidence["security"]["static_analysis"]["tools_run"],
+                "tools_skipped": evidence["security"]["static_analysis"]["tools_skipped"],
+                "finding_count": len(evidence["security"]["static_analysis"]["findings"]),
+                "findings": evidence["security"]["static_analysis"]["findings"],
+            },
         },
         "architecture": {
             "cluster_count": len(evidence["architecture"]["clusters"]),
@@ -314,6 +327,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .tool-row { padding: 6px 0; border-bottom: 1px solid #1a1a1a; font-size: 13px; color: #c8c8c8; }
   .tool-name { color: #fff; font-family: monospace; }
   .tool-detail { color: #8a8a8a; font-size: 12px; margin-top: 2px; }
+  /* Same monochrome card language as every other list here - the one
+     accent color in the whole dashboard, reserved for a blocker/critical
+     static-analysis finding specifically so the highest-severity rows are
+     scannable in a long list without turning this into a multi-color
+     severity-badge UI. */
+  .tool-row.sa-severity-high { border-left: 2px solid #ff6b6b; padding-left: 8px; }
+  .tool-row.sa-severity-high .tool-name { color: #ff9b9b; }
   .graph-hint { font-size: 11px; color: #5a5a5a; margin-top: 6px; }
   #graph-hover-info { min-height: 18px; margin-top: 4px; font-size: 13px; color: #9a9a9a; }
   #graph-hover-info .hover-path { color: #fff; font-family: monospace; }
@@ -432,6 +452,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <h2>API Endpoints</h2>
     <div id="endpoints-summary" class="stat"></div>
     <div id="endpoints" class="tools-list"></div>
+  </div>
+  <div class="card">
+    <h2>Static Analysis</h2>
+    <div id="static-analysis-summary" class="stat"></div>
+    <div id="static-analysis-coverage" class="stat-row"></div>
+    <div id="static-analysis" class="tools-list"></div>
   </div>
   <div class="card">
     <h2>MCP Tools Available for This Repo</h2>
@@ -1446,6 +1472,38 @@ function renderEndpoints(data) {
   }).join('');
 }
 
+const STATIC_ANALYSIS_SEVERITY_ORDER = {blocker: 0, critical: 1, major: 2, minor: 3, info: 4};
+
+function renderStaticAnalysis(data) {
+  const summary = document.getElementById('static-analysis-summary');
+  const coverage = document.getElementById('static-analysis-coverage');
+  const el = document.getElementById('static-analysis');
+  const findings = data.findings;
+  const ranCount = data.tools_run.length;
+  const totalCount = ranCount + data.tools_skipped.length;
+
+  summary.textContent = findings.length + ' finding' + (findings.length === 1 ? '' : 's') +
+    skipCaption(data, 'static analysis not run');
+  // Deliberately no tool names here (or anywhere else on this card) -
+  // every finding presents as Aletheore's own, same as PR review comments;
+  // "N of M checks ran" is a coverage signal, not a "powered by" list.
+  coverage.innerHTML = '<span>Coverage</span><span>' + ranCount + ' of ' + totalCount + ' checks ran</span>';
+
+  if (findings.length === 0) {
+    el.innerHTML = '<div class="tool-row">No static analysis findings.</div>';
+    return;
+  }
+  const sorted = findings.slice().sort((a, b) =>
+    (STATIC_ANALYSIS_SEVERITY_ORDER[a.severity] ?? 5) - (STATIC_ANALYSIS_SEVERITY_ORDER[b.severity] ?? 5)
+  );
+  el.innerHTML = sorted.map(f => {
+    const highSeverity = f.severity === 'blocker' || f.severity === 'critical';
+    return '<div class="tool-row' + (highSeverity ? ' sa-severity-high' : '') + '"><span class="tool-name">' +
+      escapeHtml(f.path) + ':' + f.line + '</span> - ' + escapeHtml(f.message) +
+      '<div class="tool-detail">' + escapeHtml(f.type) + ', ' + escapeHtml(f.severity) + '</div></div>';
+  }).join('');
+}
+
 function renderMcpTools(tools) {
   const el = document.getElementById('mcp-tools');
   // Real gap found via audit: every other render function in this file
@@ -1495,6 +1553,7 @@ async function loadAll() {
   renderVulnerabilities(evidence.security.vulnerabilities);
   renderLicenses(evidence.security.licenses);
   renderEndpoints(evidence.endpoints);
+  renderStaticAnalysis(evidence.security.static_analysis);
 
   const history = await fetchJSON('/api/history');
   renderBarChart('sparkline-modules', history.map(h => h.module_count), 'sparkline-modules-value', 'sparkline-modules-note');

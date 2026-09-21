@@ -144,7 +144,7 @@ QUERY_KIND_GROUPS: dict[str, list[str]] = {
         "schema",
         "ast-pattern",
     ],
-    "Security": ["secrets", "vulnerabilities", "licenses"],
+    "Security": ["secrets", "vulnerabilities", "licenses", "static-analysis"],
     "Runtime": ["endpoints", "database", "infrastructure", "environment-variables"],
     "History": ["branch", "ownership", "hotspots", "changes"],
     "Evidence": [
@@ -432,7 +432,8 @@ def _resolve_check_toggles(
     check_licenses: bool | None,
     map_endpoints: bool | None,
     map_schema: bool | None,
-) -> tuple[bool, bool, bool, bool, bool]:
+    check_static_analysis: bool | None,
+) -> tuple[bool, bool, bool, bool, bool, bool]:
     """Each toggle is bool|None from the CLI: None means "no explicit flag
     passed", so the repo's .aletheore.json disabled_checks decides. An
     explicit --check-x/--no-check-x flag always overrides the config,
@@ -444,7 +445,34 @@ def _resolve_check_toggles(
         check_licenses if check_licenses is not None else "licenses" not in disabled,
         map_endpoints if map_endpoints is not None else "endpoints" not in disabled,
         map_schema if map_schema is not None else "schema" not in disabled,
+        check_static_analysis if check_static_analysis is not None else "static_analysis" not in disabled,
     )
+
+
+def _resolve_bearer_toggle(check_bearer: bool | None) -> bool:
+    """Bearer is opt-in, unlike the other static-analysis scanners - real
+    timing gap found live: its full-repo runtime doesn't scale cleanly
+    with repo size (18.7s on a 241-file subtree, still running past 300s
+    on this repo's own real ~3,331-file tree). An explicit
+    --check-bearer/--no-check-bearer flag always wins. With neither
+    passed: on an interactive terminal, ask - a human is right there to
+    decide, and the warning below is real, not boilerplate. Non-
+    interactive (CI, a script, the hosted worker's own subprocess
+    invocation - none of which have a real stdin to answer a prompt)
+    defaults to skipping it rather than hanging forever on an
+    unanswerable question.
+    """
+    if check_bearer is not None:
+        return check_bearer
+    if not sys.stdin.isatty():
+        return False
+    console.print(
+        "[bold yellow]Bearer[/bold yellow] (sensitive-data/PII flow scanner) finds real "
+        "issues nothing else here does, but it's opt-in: its runtime doesn't scale cleanly "
+        "with repo size and it can take significantly longer than Aletheore's other checks "
+        "on a large repo."
+    )
+    return input("Include Bearer in this scan? [y/N]: ").strip().lower() == "y"
 
 
 def _scan(
@@ -454,14 +482,28 @@ def _scan(
     check_licenses: bool | None = None,
     map_endpoints: bool | None = None,
     map_schema: bool | None = None,
+    check_static_analysis: bool | None = None,
+    check_bearer: bool | None = None,
+    check_joern: bool | None = None,
 ) -> tuple[int, dict, Path]:
     repo = Path(repo_path).resolve()
     (
         resolved_vulnerabilities, resolved_git_history, resolved_licenses,
-        resolved_endpoints, resolved_schema,
+        resolved_endpoints, resolved_schema, resolved_static_analysis,
     ) = _resolve_check_toggles(
-        repo, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints, map_schema
+        repo, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints, map_schema,
+        check_static_analysis,
     )
+    # Only worth asking about Bearer if static analysis is running at all -
+    # --no-check-static-analysis already answers the question.
+    resolved_bearer = resolved_static_analysis and _resolve_bearer_toggle(check_bearer)
+    # Joern gets no interactive prompt, unlike Bearer - it requires a
+    # whole separate toolchain (Joern + a JVM) almost no install will have
+    # by default, so check_joern's own shutil.which self-skip already
+    # covers the common case gracefully; nagging every scan with a prompt
+    # for a capability that's rarely even installed would be more
+    # annoying than useful. Plain opt-in flag only.
+    resolved_joern = resolved_static_analysis and bool(check_joern)
 
     console.print(f"Scanning {repo}...")
     try:
@@ -472,6 +514,9 @@ def _scan(
             check_licenses=resolved_licenses,
             map_endpoints=resolved_endpoints,
             map_schema=resolved_schema,
+            check_static_analysis=resolved_static_analysis,
+            run_bearer=resolved_bearer,
+            run_joern=resolved_joern,
             progress=_make_progress_printer(),
         )
     except GitAnalysisError as exc:
@@ -496,9 +541,13 @@ def _audit(
     check_licenses: bool | None = None,
     map_endpoints: bool | None = None,
     map_schema: bool | None = None,
+    check_static_analysis: bool | None = None,
+    check_bearer: bool | None = None,
+    check_joern: bool | None = None,
 ) -> int:
     scan_exit_code, _evidence, evidence_path = _scan(
-        repo_path, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints, map_schema
+        repo_path, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints, map_schema,
+        check_static_analysis, check_bearer, check_joern,
     )
     if scan_exit_code != 0:
         return scan_exit_code
@@ -557,6 +606,9 @@ def _managed_audit(
     check_licenses: bool | None = None,
     map_endpoints: bool | None = None,
     map_schema: bool | None = None,
+    check_static_analysis: bool | None = None,
+    check_bearer: bool | None = None,
+    check_joern: bool | None = None,
 ) -> int:
     resolved_token = token or get_api_key("ALETHEORE_API_TOKEN", "aletheore-managed-audit")
     if not resolved_token:
@@ -570,6 +622,9 @@ def _managed_audit(
         check_licenses,
         map_endpoints,
         map_schema,
+        check_static_analysis,
+        check_bearer,
+        check_joern,
     )
     if scan_exit_code != 0:
         return scan_exit_code
@@ -1544,6 +1599,28 @@ def audit(
         "--map-endpoints/--no-map-endpoints",
         help="static API endpoint mapping (on by default, or set by .aletheore.json's disabled_checks)",
     ),
+    check_static_analysis: Optional[bool] = typer.Option(
+        None,
+        "--check-static-analysis/--no-check-static-analysis",
+        help="run static analysis scanners - Semgrep, gosec, Bandit, opt-in Bearer/Joern/SonarQube "
+        "(on by default, or set by .aletheore.json's disabled_checks; each scanner self-skips "
+        "if its binary isn't installed, and SonarQube self-skips unless SONARQUBE_HOST_URL is set)",
+    ),
+    check_bearer: Optional[bool] = typer.Option(
+        None,
+        "--check-bearer/--no-check-bearer",
+        help="include Bearer (sensitive-data/PII flow scanner) in static analysis - opt-in, "
+        "since its full-repo runtime doesn't scale cleanly with repo size. With neither flag "
+        "passed: asks interactively on a real terminal, defaults to skipped otherwise (CI, "
+        "scripts, the hosted worker)",
+    ),
+    check_joern: Optional[bool] = typer.Option(
+        None,
+        "--check-joern/--no-check-joern",
+        help="include Joern's CFG-based asymmetric-cache-trust query (Go only) in static "
+        "analysis - opt-in, off by default with no prompt: requires Joern installed "
+        "separately, and a CPG build is real per-scan JVM/parsing cost",
+    ),
 ) -> None:
     path = _resolve_path(path, path_option)
     if managed:
@@ -1561,6 +1638,9 @@ def audit(
                 check_licenses,
                 map_endpoints,
                 map_schema,
+                check_static_analysis,
+                check_bearer,
+                check_joern,
             )
         )
     if token is not None:
@@ -1568,7 +1648,8 @@ def audit(
             "[bold yellow]warning:[/bold yellow] --token has no effect without --managed - ignored."
         )
     exit_code = _audit(
-        path, agent, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints, map_schema
+        path, agent, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints, map_schema,
+        check_static_analysis, check_bearer, check_joern,
     )
     if exit_code == 0:
         console.print(_free_pr_review_nudge())
@@ -1606,10 +1687,33 @@ def scan(
         "--map-endpoints/--no-map-endpoints",
         help="static API endpoint mapping (on by default, or set by .aletheore.json's disabled_checks)",
     ),
+    check_static_analysis: Optional[bool] = typer.Option(
+        None,
+        "--check-static-analysis/--no-check-static-analysis",
+        help="run static analysis scanners - Semgrep, gosec, Bandit, opt-in Bearer/Joern/SonarQube "
+        "(on by default, or set by .aletheore.json's disabled_checks; each scanner self-skips "
+        "if its binary isn't installed, and SonarQube self-skips unless SONARQUBE_HOST_URL is set)",
+    ),
+    check_bearer: Optional[bool] = typer.Option(
+        None,
+        "--check-bearer/--no-check-bearer",
+        help="include Bearer (sensitive-data/PII flow scanner) in static analysis - opt-in, "
+        "since its full-repo runtime doesn't scale cleanly with repo size. With neither flag "
+        "passed: asks interactively on a real terminal, defaults to skipped otherwise (CI, "
+        "scripts, the hosted worker)",
+    ),
+    check_joern: Optional[bool] = typer.Option(
+        None,
+        "--check-joern/--no-check-joern",
+        help="include Joern's CFG-based asymmetric-cache-trust query (Go only) in static "
+        "analysis - opt-in, off by default with no prompt: requires Joern installed "
+        "separately, and a CPG build is real per-scan JVM/parsing cost",
+    ),
 ) -> None:
     path = _resolve_path(path, path_option)
     exit_code, _evidence, _evidence_path = _scan(
-        path, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints, map_schema
+        path, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints, map_schema,
+        check_static_analysis, check_bearer, check_joern,
     )
     if exit_code == 0:
         console.print(_free_pr_review_nudge())

@@ -23,9 +23,11 @@ def make_evidence(
     secrets_count: int = 0,
     vulnerability_findings: list | None = None,
     license_findings: list | None = None,
+    static_analysis_findings: list | None = None,
 ) -> dict:
     vulnerability_findings = vulnerability_findings or []
     license_findings = license_findings or []
+    static_analysis_findings = static_analysis_findings or []
     return {
         "aletheore_version": EVIDENCE_VERSION,
         "scanned_at": scanned_at,
@@ -88,6 +90,12 @@ def make_evidence(
                 "repo_license": {"category": "permissive", "detected_from": "LICENSE"},
                 "findings": license_findings,
             },
+            "static_analysis": {
+                "checked": True,
+                "tools_run": ["semgrep", "gosec", "bandit"],
+                "tools_skipped": [{"tool": "bearer", "reason": "skipped (opt-in)"}],
+                "findings": static_analysis_findings,
+            },
         },
         "architecture": {
             "clusters": [{"id": 0, "modules": ["m0.py"], "internal_edges": 0}],
@@ -109,6 +117,17 @@ def test_build_evidence_summary_shape():
                 "advisory_id": "PYSEC-2024-230",
                 "summary": "Certifi root certificate issue",
                 "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N"}],
+            }
+        ],
+        static_analysis_findings=[
+            {
+                "tool": "semgrep",
+                "rule_id": "oauth-state-not-random",
+                "severity": "critical",
+                "type": "vulnerability",
+                "path": "app.py",
+                "line": 4,
+                "message": "state is not freshly random",
             }
         ],
         license_findings=[
@@ -144,6 +163,11 @@ def test_build_evidence_summary_shape():
     assert summary["security"]["licenses"]["findings"][0]["package"] == "some-pkg"
     assert summary["security"]["licenses"]["repo_license"]["category"] == "permissive"
     assert summary["security"]["licenses"]["reason"] is None
+    assert summary["security"]["static_analysis"]["checked"] is True
+    assert summary["security"]["static_analysis"]["finding_count"] == 1
+    assert summary["security"]["static_analysis"]["findings"][0]["rule_id"] == "oauth-state-not-random"
+    assert summary["security"]["static_analysis"]["tools_run"] == ["semgrep", "gosec", "bandit"]
+    assert summary["security"]["static_analysis"]["tools_skipped"] == [{"tool": "bearer", "reason": "skipped (opt-in)"}]
     assert summary["endpoints"]["checked"] is True
     assert summary["endpoints"]["reason"] is None
     assert summary["endpoints"]["endpoints"] == [
@@ -443,7 +467,7 @@ def test_api_mcp_tools_reflects_the_configured_consent_posture(tmp_path):
 
     assert response.status_code == 200
     tools = response.json()
-    assert len(tools) == 32
+    assert len(tools) == 33
     names = {t["name"] for t in tools}
     assert "aletheore_managed_audit" not in names
     assert "aletheore_scan" in names

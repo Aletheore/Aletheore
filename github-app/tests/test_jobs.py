@@ -1835,6 +1835,84 @@ async def test_incremental_spend_budget_record_usage_refunds_when_actual_cost_is
 
 
 @pytest.mark.asyncio
+async def test_incremental_spend_budget_on_call_failed_releases_the_reservation(pool):
+    # Real production bug: can_start_next_call() reserves next_call_reserve_usd
+    # up front (e.g. $0.10 for AIRview/Docs incremental), but before this
+    # fix nothing released it when the LLM call that followed failed -
+    # record_usage() (the only thing that ever trued up the reservation)
+    # is never reached on a failure path. Confirmed live: two AIR
+    # installations' $18 base credit both hit $0.00 while their combined
+    # real ledgered spend (llm_spend_events) totaled $3.43 - a ~$32 gap
+    # this exact mechanism explains. on_call_failed() must give back
+    # exactly what was reserved, same as a real cost of $0 would.
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    installation_id = 9104
+    await _insert_installation(
+        pool, installation_id, "a",
+        base_credit_allotment_usd=5.00,
+        base_credit_remaining_usd=5.00,
+        topup_credit_balance_usd=0.00,
+    )
+
+    budget = _IncrementalSpendBudget(
+        TEST_DATABASE_URL, installation_id, "deepseek-v4-flash",
+        next_call_reserve_usd=0.10, feature="airview_incremental",
+    )
+    assert budget.can_start_next_call() is True
+    remaining_after_reserve = await _get_balance(pool, installation_id)
+    assert float(remaining_after_reserve["base_credit_remaining_usd"]) == pytest.approx(4.90)
+
+    budget.on_call_failed()
+
+    remaining_after_release = await _get_balance(pool, installation_id)
+    assert float(remaining_after_release["base_credit_remaining_usd"]) == pytest.approx(5.00)
+    assert float(remaining_after_release["topup_credit_balance_usd"]) == pytest.approx(0.00)
+
+
+@pytest.mark.asyncio
+async def test_incremental_spend_budget_on_call_failed_is_a_noop_without_a_pending_reservation(pool):
+    # Must be safe to call defensively from a broad except block even when
+    # it's ambiguous whether record_usage() already ran - e.g. a failure
+    # in DB-write code that runs after a successful LLM call. Calling it
+    # with nothing pending must not release money the installation was
+    # never actually charged.
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    installation_id = 9105
+    await _insert_installation(
+        pool, installation_id, "a",
+        base_credit_allotment_usd=5.00,
+        base_credit_remaining_usd=5.00,
+        topup_credit_balance_usd=0.00,
+    )
+
+    budget = _IncrementalSpendBudget(
+        TEST_DATABASE_URL, installation_id, "deepseek-v4-flash",
+        next_call_reserve_usd=0.10, feature="airview_incremental",
+    )
+    # Never reserved anything yet - on_call_failed must not credit $0.10
+    # out of nowhere.
+    budget.on_call_failed()
+    remaining = await _get_balance(pool, installation_id)
+    assert float(remaining["base_credit_remaining_usd"]) == pytest.approx(5.00)
+
+    # Reserve, resolve normally via record_usage, then call on_call_failed
+    # again (simulating a second, unrelated failure later in the same
+    # call site) - must still be a no-op, not a second release of the
+    # already-resolved reservation.
+    assert budget.can_start_next_call() is True
+    budget.record_usage(prompt_tokens=10, completion_tokens=1)
+    remaining_after_usage = await _get_balance(pool, installation_id)
+
+    budget.on_call_failed()
+    remaining_after_stale_failure = await _get_balance(pool, installation_id)
+    assert float(remaining_after_stale_failure["base_credit_remaining_usd"]) == pytest.approx(
+        float(remaining_after_usage["base_credit_remaining_usd"])
+    )
+
+
+@pytest.mark.asyncio
 async def test_reserve_llm_spend_low_balance_triggers_email_enqueue(pool, monkeypatch):
     enqueued = []
     monkeypatch.setattr(
@@ -5126,11 +5204,11 @@ def test_run_live_wiki_full_build_job_skips_model_call_on_cache_hit(monkeypatch)
 
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_full_build_writing_adapter",
-        lambda on_usage=None, before_llm_call=None: _SpyAdapter(),
+        lambda on_usage=None, before_llm_call=None, on_call_failed=None: _SpyAdapter(),
     )
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_naming_adapter",
-        lambda on_usage=None, before_llm_call=None: _NamingAdapter(),
+        lambda on_usage=None, before_llm_call=None, on_call_failed=None: _NamingAdapter(),
     )
     monkeypatch.setattr("scan_worker.jobs._store_wiki_subsystem_records", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._regenerate_wiki_overview", lambda *a, **k: None)
@@ -5834,14 +5912,21 @@ def test_sweep_does_not_burn_the_cooldown_when_no_suggestion_was_actually_produc
     # Real bug found via audit: the cooldown used to be marked the instant
     # a fix suggestion was merely ATTEMPTED (include_fix_suggestion=True),
     # not when one was actually produced - _fix_suggestion_attachment has
-    # several ordinary reasons to return None (credit balance exhausted,
-    # spend budget exhausted, file content fetch failed, the LLM call
-    # itself raised, or it returned "unknown"), and every one of those
-    # burned the same HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS window a real,
+    # several ordinary reasons to return None before ever reaching the LLM
+    # call (credit balance exhausted, spend budget exhausted, file content
+    # fetch failed) or after it raised, and every one of those burned the
+    # same HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS window a real,
     # successfully-delivered suggestion would have - so a customer whose
     # endpoint stayed down could get zero real suggestions for the full
     # cooldown, with no retry until it expired. The cooldown key must stay
-    # unset when the suggestion attempt itself failed.
+    # unset when the suggestion attempt never reached the model at all.
+    #
+    # A later audit found the sibling gap: an "unknown" response (the LLM
+    # call DID complete, just found no fixable cause) was originally
+    # bundled into this same "no cooldown" bucket too - see
+    # test_sweep_burns_the_cooldown_when_llm_call_completes_with_unknown_verdict
+    # below for why that specific case was corrected to burn the cooldown
+    # like a real suggestion does, not left in this one.
     from scan_worker.jobs import _health_fix_suggestion_cooldown_key
 
     redis_conn = _FakeRedis()
@@ -5924,6 +6009,114 @@ def test_health_check_down_retry_job_does_not_burn_the_cooldown_when_no_suggesti
     assert redis_conn.get(
         _health_fix_suggestion_cooldown_key(1, "octocat/hello-world", "GET", "/x", 900)
     ) is None
+
+
+def test_sweep_burns_the_cooldown_when_llm_call_completes_with_unknown_verdict(monkeypatch):
+    # Sibling gap to the two tests above, found in a later audit:
+    # _fix_suggestion_attachment's on_llm_call_completed must fire once the
+    # LLM call genuinely completes - "unknown" included - not just when a
+    # real suggestion comes back. Before this fix, a model that correctly
+    # determined "this needs a human, not a code fix" (e.g. a real
+    # third-party outage) was treated identically to a call that never
+    # reached the model at all (spend exhausted, fetch failed, an
+    # exception) - re-billing a full paid LLM call on every single flip of
+    # a flapping endpoint with a genuinely unfixable root cause, forever,
+    # since no cooldown state ever distinguished the two. Calls the real
+    # _fix_suggestion_attachment (not mocked away, unlike the two tests
+    # above) so this actually exercises the on_llm_call_completed wiring.
+    from scan_worker.jobs import _fix_suggestion_attachment
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {"database_url": "postgresql://unused", "github_app_id": "1", "github_app_private_key": "fake-key"},
+        )(),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
+    )
+
+    class _AlwaysAllowedBudget:
+        def __init__(self, *a, **k):
+            pass
+
+        def can_start_next_call(self):
+            return True
+
+        def record_usage(self, *a, **k):
+            pass
+
+        def on_call_failed(self):
+            pass
+
+    monkeypatch.setattr("scan_worker.jobs._IncrementalSpendBudget", _AlwaysAllowedBudget)
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_github_api_client", lambda: object())
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_file_content", lambda *a, **k: "def handler():\n    pass\n"
+    )
+    monkeypatch.setattr("scan_worker.jobs.model_for_plan", lambda *a, **k: "gpt-5.6-luna")
+
+    class _UnknownAdapter:
+        def simple_completion(self, *a, **k):
+            return "unknown"
+
+    monkeypatch.setattr("scan_worker.jobs._health_fix_suggestion_adapter", lambda *a, **k: _UnknownAdapter())
+
+    completed = []
+    result = _fix_suggestion_attachment(
+        1, "octocat/hello-world", "controllers/user.controller.ts", 42,
+        "GET", "/x", None, None,
+        on_llm_call_completed=lambda: completed.append(True),
+    )
+
+    assert result is None  # "unknown" is still not a real suggestion to attach
+    assert completed == [True]  # but the attempt genuinely completed, so the cooldown should be set
+
+
+def test_fix_suggestion_attachment_does_not_signal_completion_when_spend_budget_rejects(monkeypatch):
+    # Contrast case for the test above: a call that never reaches the
+    # model at all (spend budget exhausted here; file-fetch failure and a
+    # raised LLM call are the same shape) must NOT signal completion - that
+    # customer should get a fresh, unthrottled retry, not a cooldown for
+    # an attempt that never actually ran.
+    from scan_worker.jobs import _fix_suggestion_attachment
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {"database_url": "postgresql://unused", "github_app_id": "1", "github_app_private_key": "fake-key"},
+        )(),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
+    )
+
+    class _AlwaysRejectedBudget:
+        def __init__(self, *a, **k):
+            pass
+
+        def can_start_next_call(self):
+            return False
+
+    monkeypatch.setattr("scan_worker.jobs._IncrementalSpendBudget", _AlwaysRejectedBudget)
+
+    completed = []
+    result = _fix_suggestion_attachment(
+        1, "octocat/hello-world", "controllers/user.controller.ts", 42,
+        "GET", "/x", None, None,
+        on_llm_call_completed=lambda: completed.append(True),
+    )
+
+    assert result is None
+    assert completed == []
 
 
 def test_sweep_alerts_without_commit_when_correlation_fails(monkeypatch):
@@ -7131,11 +7324,11 @@ def test_maybe_update_live_wiki_reserves_spend_atomically_against_concurrent_pus
 
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_naming_adapter",
-        lambda on_usage=None, before_llm_call=None: _FakeWikiAdapter(on_usage, before_llm_call),
+        lambda on_usage=None, before_llm_call=None, on_call_failed=None: _FakeWikiAdapter(on_usage, before_llm_call),
     )
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_update_writing_adapter",
-        lambda on_usage=None, before_llm_call=None: _FakeWikiAdapter(on_usage, before_llm_call),
+        lambda on_usage=None, before_llm_call=None, on_call_failed=None: _FakeWikiAdapter(on_usage, before_llm_call),
     )
 
     def _call(repo):
@@ -8069,11 +8262,11 @@ def test_run_live_wiki_full_build_job_reserves_spend_atomically_against_concurre
 
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_naming_adapter",
-        lambda on_usage=None, before_llm_call=None: _FakeWikiAdapter(on_usage, before_llm_call),
+        lambda on_usage=None, before_llm_call=None, on_call_failed=None: _FakeWikiAdapter(on_usage, before_llm_call),
     )
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_full_build_writing_adapter",
-        lambda on_usage=None, before_llm_call=None: _FakeWikiAdapter(on_usage, before_llm_call),
+        lambda on_usage=None, before_llm_call=None, on_call_failed=None: _FakeWikiAdapter(on_usage, before_llm_call),
     )
 
     threads = [
@@ -8872,7 +9065,7 @@ def test_run_live_docs_full_build_job_skips_llm_call_when_spend_cap_reached(monk
     adapter_calls = []
     monkeypatch.setattr(
         "scan_worker.jobs._live_docs_full_build_writing_adapter",
-        lambda plan, on_usage=None: adapter_calls.append(True),
+        lambda plan, on_usage=None, on_call_failed=None: adapter_calls.append(True),
     )
     status_calls = []
     monkeypatch.setattr(
@@ -8908,7 +9101,7 @@ def test_run_live_docs_full_build_job_survives_one_module_failing(monkeypatch):
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None, on_call_failed=None: object()
     )
 
     def fake_fetch(client, token, repo, path, ref):
@@ -8973,7 +9166,7 @@ def test_run_docs_build_indexes_source_lines_by_real_newline_lines_not_splitline
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None, on_call_failed=None: object()
     )
     # Line1="header", line2=ten form feeds, line3-4=the real function.
     # splitlines() would put line 3's real content at a different index
@@ -9046,7 +9239,7 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
 
     monkeypatch.setattr(
         "scan_worker.jobs._live_docs_full_build_writing_adapter",
-        lambda plan, on_usage=None: FakeAdapter(on_usage),
+        lambda plan, on_usage=None, on_call_failed=None: FakeAdapter(on_usage),
     )
     stored_for = []
 
@@ -9110,7 +9303,7 @@ def test_run_live_docs_full_build_job_reports_failed_when_every_module_fails(mon
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None, on_call_failed=None: object()
     )
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "source")
 
@@ -9152,7 +9345,7 @@ def test_run_live_docs_full_build_job_reports_failed_when_every_fetch_returns_no
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None, on_call_failed=None: object()
     )
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: None)
     status_calls = []
@@ -9182,7 +9375,7 @@ def test_maybe_update_live_docs_skips_llm_call_when_spend_cap_reached(monkeypatc
     adapter_calls = []
     monkeypatch.setattr(
         "scan_worker.jobs._live_docs_update_writing_adapter",
-        lambda on_usage=None: adapter_calls.append(True),
+        lambda on_usage=None, on_call_failed=None: adapter_calls.append(True),
     )
     status_calls = []
     monkeypatch.setattr(
@@ -9213,7 +9406,7 @@ def test_maybe_update_live_docs_survives_one_module_failing(monkeypatch):
     monkeypatch.setattr(
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
-    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda on_usage=None: object())
+    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda on_usage=None, on_call_failed=None: object())
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "source")
 
     def fake_store(dsn, iid, repo, module, adapter, source_lines, commit):
@@ -9248,7 +9441,7 @@ def test_maybe_update_live_docs_excludes_test_files_from_changed_modules(monkeyp
     monkeypatch.setattr(
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
-    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda on_usage=None: object())
+    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda on_usage=None, on_call_failed=None: object())
 
     fetched_for = []
     monkeypatch.setattr(
@@ -9493,7 +9686,7 @@ def test_fix_suggestion_attachment_reserves_spend_atomically_against_concurrent_
 
     monkeypatch.setattr(
         "scan_worker.jobs._health_fix_suggestion_adapter",
-        lambda on_usage=None: _FakeAdapter(on_usage),
+        lambda on_usage=None, on_call_failed=None: _FakeAdapter(on_usage),
     )
 
     results: list[dict | None] = [None, None]

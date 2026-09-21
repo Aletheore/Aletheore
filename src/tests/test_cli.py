@@ -991,7 +991,7 @@ def test_main_audit_invokes_audit_flow(tmp_path):
         result = runner.invoke(app, ["audit", str(tmp_path), "--agent", "claude"])
 
     assert result.exit_code == 0
-    mock_audit.assert_called_once_with(str(tmp_path), "claude", None, None, None, None, None)
+    mock_audit.assert_called_once_with(str(tmp_path), "claude", None, None, None, None, None, None, None, None)
 
 
 def test_scan_command_reports_git_analysis_error_cleanly(tmp_path):

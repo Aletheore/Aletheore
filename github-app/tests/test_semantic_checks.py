@@ -1,4 +1,5 @@
-from scan_worker.semantic_checks import find_semantic_regressions
+import scan_worker.semantic_checks as semantic_checks
+from scan_worker.semantic_checks import find_semantic_regressions, find_static_analysis_regressions
 
 
 def test_java_empty_catch_inline_braces_is_flagged():
@@ -155,6 +156,59 @@ def test_java_empty_catch_block_comment_closing_on_same_line_as_catch_brace_is_f
     findings = find_semantic_regressions(diff, file_contents, "")
     assert len(findings) == 1
     assert "empty body" in findings[0]["issue"]
+
+
+def test_java_catch_with_code_after_same_line_block_comment_is_not_flagged():
+    # Sibling gap to the "*/ }" fix above, found in a later audit: a block
+    # comment that opens AND closes on the same line, followed by a real
+    # statement on that same line (e.g. "/* note */ recover();"), was
+    # unconditionally discarded by the "if stripped.startswith('/*')"
+    # branch - misjudging a catch that actually recovers as empty/swallowed.
+    diff = (
+        "--- Service.java ---\n@@ -1,2 +1,5 @@\n"
+        "+    try {\n"
+        "+        doWork();\n"
+        "+    } catch (IOException e) {\n"
+        "+        /* handled elsewhere */ recover();\n"
+        "+    }\n"
+    )
+    file_contents = {
+        "Service.java": (
+            "void run() {\n"
+            "    try {\n"
+            "        doWork();\n"
+            "    } catch (IOException e) {\n"
+            "        /* handled elsewhere */ recover();\n"
+            "    }\n"
+            "}\n"
+        )
+    }
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert findings == []
+
+
+def test_java_catch_with_logging_after_same_line_block_comment_is_not_flagged():
+    diff = (
+        "--- Service.java ---\n@@ -1,2 +1,5 @@\n"
+        "+    try {\n"
+        "+        doWork();\n"
+        "+    } catch (IOException e) {\n"
+        "+        /* network hiccup */ logger.error(\"failed\", e);\n"
+        "+    }\n"
+    )
+    file_contents = {
+        "Service.java": (
+            "void run() {\n"
+            "    try {\n"
+            "        doWork();\n"
+            "    } catch (IOException e) {\n"
+            "        /* network hiccup */ logger.error(\"failed\", e);\n"
+            "    }\n"
+            "}\n"
+        )
+    }
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert findings == []
 
 
 def test_java_catch_with_real_handling_is_not_flagged():
@@ -686,6 +740,71 @@ def test_go_direct_exec_command_is_not_flagged():
     assert findings == []
 
 
+def test_go_asymmetric_cache_trust_is_flagged():
+    # Real shape from grafana/grafana#103633: a new denial-cache hit
+    # returns immediately, but a cache hit via a getCached* helper only
+    # short-circuits for one of its two outcomes.
+    diff = (
+        "--- service.go ---\n@@ -1,1 +1,20 @@\n"
+        "-\t// no-op\n"
+        "+\tif _, ok := s.permDenialCache.Get(ctx, key); ok {\n"
+        "+\t\ts.metrics.Inc()\n"
+        "+\t\treturn &Response{Allowed: false}, nil\n"
+        "+\t}\n"
+        "+\n"
+        "+\tcachedPerms, err := s.getCachedIdentityPermissions(ctx, ns, action)\n"
+        "+\tif err == nil {\n"
+        "+\t\tallowed, err := s.checkPermission(ctx, cachedPerms, req)\n"
+        "+\t\tif err != nil {\n"
+        "+\t\t\treturn deny, err\n"
+        "+\t\t}\n"
+        "+\t\tif allowed {\n"
+        "+\t\t\treturn &Response{Allowed: allowed}, nil\n"
+        "+\t\t}\n"
+        "+\t}\n"
+        "+\n"
+        "+\tpermissions, err := s.getIdentityPermissions(ctx, ns, action)\n"
+    )
+    file_contents = {"service.go": ""}
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert any("don't get the same trust" in f["issue"] for f in findings)
+
+
+def test_go_symmetric_cache_guards_both_returning_is_not_flagged():
+    diff = (
+        "--- service.go ---\n@@ -1,1 +1,10 @@\n"
+        "-\t// no-op\n"
+        "+\tif _, ok := s.permCache.Get(ctx, key); ok {\n"
+        "+\t\treturn &Response{Allowed: true}, nil\n"
+        "+\t}\n"
+        "+\n"
+        "+\tif _, ok := s.permDenialCache.Get(ctx, key); ok {\n"
+        "+\t\treturn &Response{Allowed: false}, nil\n"
+        "+\t}\n"
+    )
+    file_contents = {"service.go": ""}
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert findings == []
+
+
+def test_go_single_cache_guard_is_not_flagged():
+    # Needs at least two distinct cache-like guards to say anything about
+    # asymmetry - one guard alone has nothing to be asymmetric relative to.
+    diff = (
+        "--- service.go ---\n@@ -1,1 +1,10 @@\n"
+        "-\t// no-op\n"
+        "+\tcachedPerms, err := s.getCachedIdentityPermissions(ctx, ns, action)\n"
+        "+\tif err == nil {\n"
+        "+\t\tif allowed {\n"
+        "+\t\t\treturn &Response{Allowed: allowed}, nil\n"
+        "+\t\t}\n"
+        "+\t}\n"
+    )
+    file_contents = {"service.go": ""}
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert findings == []
+
+
 def test_java_shaped_text_in_a_python_docstring_is_not_flagged():
     # Real false positive found independently by GLM-5.3-Flash reviewing
     # PR #725 with PR-Agent's own prompt structure (a genuinely different
@@ -759,3 +878,76 @@ def test_resource_leak_nearby_window_indexes_by_real_newline_lines_not_splitline
     findings = find_semantic_regressions(diff, file_contents, "")
 
     assert findings == []
+
+
+def _stub_scanner(findings_by_path):
+    def scanner(repo_path):
+        findings = []
+        for path, entries in findings_by_path.items():
+            for line, tool, rule_id, message in entries:
+                findings.append(
+                    {"tool": tool, "rule_id": rule_id, "severity": "major", "type": "bug", "path": path, "line": line, "message": message}
+                )
+        return {"checked": True, "reason": None, "findings": findings}
+    return scanner
+
+
+def test_find_static_analysis_regressions_scopes_findings_to_the_diff_hunk(monkeypatch):
+    # A finding on line 50 sits in the same file as the diff but well
+    # outside the hunk's actual changed-line range (2-4) - Semgrep/Bearer
+    # analyze the WHOLE materialized file, so without diff-scoping this
+    # would misreport unrelated, unchanged code as part of the PR.
+    monkeypatch.setattr(
+        semantic_checks,
+        "_STATIC_ANALYSIS_TOOLS",
+        (_stub_scanner({"app.py": [(3, "semgrep", "some-rule", "in range"), (50, "semgrep", "other-rule", "out of range")]}),),
+    )
+    diff = "--- app.py ---\n@@ -1,1 +2,3 @@\n context\n+line2\n+line3\n"
+    file_contents = {"app.py": "line1\nline2\nline3\n" + "\n".join(f"filler{i}" for i in range(60))}
+
+    findings = find_static_analysis_regressions(diff, file_contents)
+
+    assert len(findings) == 1
+    assert findings[0]["file"] == "app.py"
+    assert findings[0]["line"] == 3
+    # Presented as Aletheore's own finding, not a third-party tool's - the
+    # raw scanner/rule message ("in range"), not a "[tool/rule-id]" prefix.
+    assert findings[0]["issue"] == "in range"
+
+
+def test_find_static_analysis_regressions_returns_empty_for_a_file_outside_the_diff(monkeypatch):
+    monkeypatch.setattr(
+        semantic_checks,
+        "_STATIC_ANALYSIS_TOOLS",
+        (_stub_scanner({"other.py": [(1, "semgrep", "r", "m")]}),),
+    )
+    diff = "--- app.py ---\n@@ -1,1 +1,1 @@\n-a\n+b\n"
+    file_contents = {"app.py": "b\n"}
+
+    findings = find_static_analysis_regressions(diff, file_contents)
+
+    assert findings == []
+
+
+def test_find_static_analysis_regressions_returns_empty_without_file_contents():
+    assert find_static_analysis_regressions("--- app.py ---\n@@ -1,1 +1,1 @@\n-a\n+b\n", None) == []
+    assert find_static_analysis_regressions("--- app.py ---\n@@ -1,1 +1,1 @@\n-a\n+b\n", {}) == []
+
+
+def test_find_static_analysis_regressions_survives_a_git_subprocess_timeout(monkeypatch):
+    # Real bug found via audit (2026-09-21): subprocess.TimeoutExpired
+    # (raised by the git init/add/commit calls' own timeout=10 - confirmed:
+    # subprocess.TimeoutExpired's MRO is SubprocessError -> Exception, NOT
+    # OSError) used to propagate straight past the `except OSError:` guard
+    # below and fail the whole Flash Review run, contrary to that guard's
+    # own stated intent ("must never take down the rest of PR review").
+    import subprocess
+
+    def raise_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=["git", "init"], timeout=10)
+
+    monkeypatch.setattr(subprocess, "run", raise_timeout)
+    diff = "--- app.py ---\n@@ -1,1 +2,3 @@\n context\n+line2\n+line3\n"
+    file_contents = {"app.py": "line1\nline2\nline3\n"}
+
+    assert find_static_analysis_regressions(diff, file_contents) == []

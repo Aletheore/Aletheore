@@ -246,6 +246,7 @@ async def get_dashboard(org: str, repo: str, request: Request):
         "dismissed_finding_keys": {
             "secret": list(dismissed["secret"]),
             "vulnerability": list(dismissed["vulnerability"]),
+            "static_analysis": list(dismissed["static_analysis"]),
         },
     }
 
@@ -256,7 +257,7 @@ async def dismiss_finding_route(org: str, repo: str, request: Request):
     body = await request.json()
     finding_type = body.get("finding_type")
     finding = body.get("finding")
-    if finding_type not in ("secret", "vulnerability") or not isinstance(finding, dict):
+    if finding_type not in ("secret", "vulnerability", "static_analysis") or not isinstance(finding, dict):
         raise HTTPException(status_code=400, detail="invalid finding_type or finding")
 
     pool = request.app.state.db_pool
@@ -277,7 +278,7 @@ async def undismiss_finding_route(org: str, repo: str, request: Request):
     body = await request.json()
     finding_type = body.get("finding_type")
     finding = body.get("finding")
-    if finding_type not in ("secret", "vulnerability") or not isinstance(finding, dict):
+    if finding_type not in ("secret", "vulnerability", "static_analysis") or not isinstance(finding, dict):
         raise HTTPException(status_code=400, detail="invalid finding_type or finding")
 
     pool = request.app.state.db_pool

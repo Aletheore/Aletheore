@@ -40,7 +40,13 @@ narrow slice of real bugs, however precise its logic is once it does run.
 from __future__ import annotations
 
 import re
+import subprocess
+import tempfile
 from difflib import SequenceMatcher
+from pathlib import Path
+
+from aletheore.static_analysis.bearer_scanner import check_bearer
+from aletheore.static_analysis.semgrep_scanner import check_semgrep
 
 _REFERENCE_RE = re.compile(
     r"^--- referenced definition \(not part of this diff\): (?P<path>.+?):(?P<name>[^: ]+) ---\n"
@@ -987,8 +993,23 @@ def _swallowed_exception_findings_java(file: str, source: str, hunks: list[_Hunk
                     if stripped.startswith("/*"):
                         if "*/" not in stripped[2:]:
                             in_block_comment = True
-                        body_lines.append("")
-                        continue
+                            body_lines.append("")
+                            continue
+                        # Sibling gap to the in_block_comment branch's own
+                        # fix above: a block comment that opens AND closes
+                        # on this same line (e.g. "/* note */ recover();")
+                        # was unconditionally discarding whatever real code
+                        # follows "*/" - misjudging a genuinely-handled
+                        # catch (even one that logs the exception) as
+                        # empty/swallowed. Fall through to re-examine the
+                        # remainder instead of consuming the whole line.
+                        stripped = stripped.split("*/", 1)[1].strip()
+                        if stripped == "":
+                            body_lines.append("")
+                            continue
+                        if stripped == "}":
+                            closed = True
+                            break
                     if stripped.startswith("//"):
                         body_lines.append("")
                         continue
@@ -1143,6 +1164,123 @@ def _shell_injection_findings_go(file: str, source: str, hunks: list[_Hunk]) -> 
                     "instead of building a shell command string.",
                 )
             )
+    return findings
+
+
+# Asymmetric cache trust: a new security/permission check that guards two
+# different cache lookups before deciding an outcome, but doesn't give them
+# the same trust - one returns unconditionally on a cache hit (Go's comma-ok
+# idiom, `if _, ok := X.Get(...); ok { ... return }`), the other - a helper
+# wrapping a cache read, `v, err := someCachedThing(...); if err == nil {
+# ... }` - branches internally before deciding whether to return, so at
+# least one of its outcomes falls through instead of short-circuiting. If
+# both guard the same underlying decision, a cache hit for one outcome can
+# end up trusted while the other is always re-verified (or vice versa),
+# letting a stale cached result outlive the state change that should have
+# invalidated it.
+#
+# Real, validated example: grafana/grafana#103633 - a new permDenialCache
+# hit returns immediately, but a cache hit via getCachedIdentityPermissions
+# only short-circuits when the cached result is a grant; a cached denial
+# still falls through to a fresh DB lookup, which is itself the SAME shape
+# as the real bug (grants trusted, denials re-derived - the golden finding's
+# actual asymmetry direction). Confirmed no LLM caught this across a full
+# night of testing (2026-09-20/21): GLM-5.3-Flash, DeepSeek-V4-Flash,
+# gpt-5.6-luna, gpt-4.1-mini, o4-mini, and three open-weight models, across
+# a plain prompt, a targeted rewritten safety rule specifically naming this
+# pattern, and full tool-executing agent mode with real grep/read access to
+# the complete repo, all missed it - this check exists because that gap is
+# real and repeatable, not hypothetical. Validated zero false positives
+# across the other 14 real diffs in this session's own benchmark corpus
+# (13 PR-review-benchmark cases plus 2 additional real security-tagged
+# cases) - a single true-positive example, so treat the false-positive rate
+# on genuinely novel code as unproven beyond that, not as a large-sample
+# guarantee.
+#
+# Intentionally narrow and Go-only (gated by is_go at the call site, same
+# convention as _shell_injection_findings_go): flags the STRUCTURAL
+# asymmetry as worth a look, not a proven bug - a legitimate reason for two
+# cache guards to have different trust levels can exist, and only
+# Aletheore's LLM review layer (which sees this finding alongside the full
+# diff) can tell a real bug from an intentional design choice.
+_GO_CACHE_GETOK_RE = re.compile(
+    r'\bif\s+[^{;]{0,60}?:=\s*(?:\w+\.)?(\w*[Cc]ache\w*)\s*\.\s*(?:Get|Fetch|Lookup)\s*\([^{;]{0,160}?;\s*'
+    r'(?:ok|found|hit)\s*\{',
+)
+_GO_CACHE_ERR_ASSIGN_RE = re.compile(
+    r'\b\w+,\s*err\s*:=\s*\w*\.?\s*(\w*[Cc]ached\w*|\w*[Cc]ache\w*)\s*\([^)]{0,160}?\)',
+)
+_ERR_NIL_GUARD_RE = re.compile(r'\bif\s+err\s*==\s*nil\s*\{')
+_ASYMMETRIC_CACHE_CLASSIFY_WINDOW_CHARS = 300
+
+
+def _go_cache_guards(added_text: str) -> list[tuple[str, int]]:
+    guards: list[tuple[str, int]] = []
+    for match in _GO_CACHE_GETOK_RE.finditer(added_text):
+        guards.append((match.group(1), match.end()))
+    for match in _GO_CACHE_ERR_ASSIGN_RE.finditer(added_text):
+        tail = added_text[match.end():match.end() + 40]
+        nil_check = _ERR_NIL_GUARD_RE.search(tail)
+        if nil_check:
+            guards.append((match.group(1), match.end() + nil_check.end()))
+    return guards
+
+
+def _returns_unconditionally_on_hit(added_text: str, guard_end_pos: int) -> bool | None:
+    # Deliberately crude proxy for real control-flow analysis, matching this
+    # file's existing pragmatic style (see _off_by_one_loop_findings):
+    # scans lines in order from the guard's opening brace, returns True the
+    # moment `return` is seen first, False the moment `if` is seen first
+    # (branching before any return - the partial-trust shape), None if the
+    # block's own closing brace is reached before either - an ambiguous
+    # shape this check should not guess about.
+    block = added_text[guard_end_pos:guard_end_pos + _ASYMMETRIC_CACHE_CLASSIFY_WINDOW_CHARS]
+    for line in block.split("\n"):
+        stripped = line.strip()
+        if stripped == "}":
+            return None
+        if re.match(r"\bif\b", stripped):
+            return False
+        if re.search(r"\breturn\b", stripped):
+            return True
+    return None
+
+
+def _asymmetric_cache_trust_findings_go(file: str, source: str, hunks: list[_Hunk]) -> list[dict]:
+    findings: list[dict] = []
+    for hunk in hunks:
+        added_text = "\n".join(hunk.added)
+        guards = _go_cache_guards(added_text)
+
+        by_name: dict[str, list[bool]] = {}
+        for name, end_pos in guards:
+            classification = _returns_unconditionally_on_hit(added_text, end_pos)
+            if classification is None:
+                continue
+            by_name.setdefault(name, []).append(classification)
+
+        if len(by_name) < 2:
+            continue
+
+        unconditional_names = [name for name, classifications in by_name.items() if any(classifications)]
+        conditional_names = [name for name, classifications in by_name.items() if not any(classifications)]
+        if not unconditional_names or not conditional_names:
+            continue
+
+        findings.append(
+            _finding(
+                file,
+                hunk.new_start,
+                f"This new code guards two different cache lookups ({unconditional_names[0]!r} and "
+                f"{conditional_names[0]!r}) before making a decision, but they don't get the same "
+                f"trust: {unconditional_names[0]!r} returns immediately on a cache hit, while "
+                f"{conditional_names[0]!r}'s hit branches internally and doesn't return for at "
+                "least one of its outcomes.",
+                "Confirm this asymmetry is intentional; if not, make both branches return "
+                "immediately on a hit (or neither does) so a cached result isn't trusted "
+                "differently depending on which outcome it represents.",
+            )
+        )
     return findings
 
 
@@ -1406,6 +1544,7 @@ def find_semantic_regressions(
             findings.extend(_shell_injection_findings_java(file, source, hunks))
         if is_go:
             findings.extend(_shell_injection_findings_go(file, source, hunks))
+            findings.extend(_asymmetric_cache_trust_findings_go(file, source, hunks))
         findings.extend(_shell_injection_findings(file, source, hunks))
         findings.extend(_broken_quoted_phrase_findings(file, source, hunks))
 
@@ -1417,3 +1556,111 @@ def find_semantic_regressions(
             seen.add(key)
             unique.append(finding)
     return unique
+
+
+_STATIC_ANALYSIS_TOOLS = (check_semgrep, check_bearer)
+
+
+def find_static_analysis_regressions(diff_text: str, file_contents: dict[str, str] | None) -> list[dict]:
+    """Semgrep/Bearer, run fresh and scoped to just this diff's changed
+    files - real precedent from the integration scope doc's own per-tool
+    cost split: both are cheap stateless CLI subprocess calls (seconds),
+    unlike SonarQube, which is deliberately NOT run here - it's too slow
+    for any realistic PR-review latency budget and instead feeds
+    AIRview/MCP from the last full `aletheore scan` (see
+    static_analysis/sonarqube_scanner.py and the scope doc's "PR review
+    timing" section).
+
+    review_diff never has a real on-disk checkout - only diff text and
+    fetched file blobs (file_contents) - so this materializes just the
+    changed files into a throwaway temp directory, runs the two scanners
+    against that, and discards it. A finding whose tool/rule already
+    exists is intentionally not deduplicated against find_semantic_
+    regressions' own findings here - _merge_semantic_findings at the
+    call site already handles cross-source dedup by (file, line, issue).
+    """
+    if not file_contents:
+        return []
+
+    hunks_by_file = _diff_hunks_by_file(diff_text)
+    relevant_files = {file: content for file, content in file_contents.items() if file in hunks_by_file}
+    if not relevant_files:
+        return []
+
+    findings: list[dict] = []
+    try:
+        with tempfile.TemporaryDirectory(prefix="aletheore-pr-static-analysis-") as tmp:
+            tmp_path = Path(tmp)
+            for file, content in relevant_files.items():
+                # file_contents' keys are diff-derived paths, not raw user
+                # input, but still checked before writing - a path
+                # escaping the temp checkout (a literal ".." component)
+                # must never be allowed to write outside the directory
+                # this function creates and tears down.
+                dest = (tmp_path / file).resolve()
+                if tmp_path.resolve() not in dest.parents:
+                    continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(content, encoding="utf-8", errors="ignore")
+
+            # Bearer requires a git-tracked working tree (real requirement
+            # confirmed live: static_analysis/bearer_scanner.py) - a fresh
+            # init+commit of just these files satisfies that without
+            # needing the PR's real git history, which this function never
+            # has access to either way.
+            subprocess.run(["git", "init", "-q"], cwd=tmp_path, capture_output=True, timeout=10)
+            subprocess.run(["git", "add", "-A"], cwd=tmp_path, capture_output=True, timeout=10)
+            subprocess.run(
+                [
+                    "git", "-c", "user.email=aletheore@local", "-c", "user.name=aletheore",
+                    "commit", "-q", "-m", "diff-scoped scan",
+                ],
+                cwd=tmp_path, capture_output=True, timeout=10,
+            )
+
+            for scanner in _STATIC_ANALYSIS_TOOLS:
+                result = scanner(tmp_path)
+                if not result["checked"]:
+                    continue
+                for finding in result["findings"]:
+                    hunks = hunks_by_file.get(finding["path"], [])
+                    line = finding["line"]
+                    # Tight to the hunk's actual new-line range, not the
+                    # padded DIFF_HUNK_TOLERANCE used elsewhere in this
+                    # file for call-site proximity - Semgrep/Bearer
+                    # analyze the WHOLE materialized file, so without this
+                    # a finding on unrelated, unchanged code sitting in the
+                    # same file would be misreported as part of this diff.
+                    if not any(hunk.new_start <= line <= hunk.new_end for hunk in hunks):
+                        continue
+                    # Presented as an Aletheore finding, not a
+                    # third-party-tool one - which underlying scanner/rule
+                    # produced it (finding["tool"]/finding["rule_id"])
+                    # stays available in air.json's security.static_analysis
+                    # for internal attribution/debugging, but is deliberately
+                    # not surfaced in PR-facing text.
+                    findings.append(
+                        _finding(
+                            finding["path"],
+                            line,
+                            finding["message"],
+                            "Review this finding and address it if it applies to the change.",
+                        )
+                    )
+    except (OSError, subprocess.SubprocessError):
+        # Materializing/scanning a throwaway temp checkout must never take
+        # down the rest of PR review - find_semantic_regressions' own
+        # findings still run and merge normally even if this fails.
+        #
+        # subprocess.SubprocessError added via audit (2026-09-21): a real
+        # bug - subprocess.TimeoutExpired (raised by any of the three
+        # timeout=10 git calls above, e.g. on a slow/contended disk) is
+        # NOT an OSError subclass (confirmed: subprocess.TimeoutExpired.
+        # __mro__ is SubprocessError -> Exception, not OSError), so it
+        # propagated straight past this guard and failed the whole Flash
+        # Review run instead of just skipping static-analysis findings -
+        # exactly the failure mode this except clause's own comment says
+        # it exists to prevent.
+        return []
+
+    return findings
