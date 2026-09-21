@@ -159,9 +159,18 @@ def check_semgrep(repo_path: Path, timeout: int | None = None) -> dict:
     custom_rule_ids = _custom_rule_ids()
     findings = []
     for item in payload.get("results", []):
-        extra = item.get("extra", {})
+        # `or {}`, not a bare .get(key, {}) default: semgrep can emit an
+        # explicit `null` for a present key (not just omit it), and dict.get's
+        # default only ever applies when the key is absent - a real bug found
+        # via audit (2026-09-21), confirmed to raise AttributeError uncaught
+        # (item.get("extra", {}) returns None when "extra" is present as
+        # null, and None.get(...) then fails) with no guard anywhere between
+        # here and check_static_analysis's per-scanner loop, aborting the
+        # whole static-analysis pass on one malformed finding instead of
+        # just that finding.
+        extra = item.get("extra") or {}
         severity = extra.get("severity", "INFO")
-        category = extra.get("metadata", {}).get("category", "")
+        category = (extra.get("metadata") or {}).get("category", "")
         findings.append(
             {
                 "tool": "semgrep",
@@ -169,7 +178,7 @@ def check_semgrep(repo_path: Path, timeout: int | None = None) -> dict:
                 "severity": _SEVERITY_MAP.get(severity, "minor"),
                 "type": _CATEGORY_TYPE_MAP.get(category, "bug"),
                 "path": _relative_path(item.get("path", ""), repo_path),
-                "line": item.get("start", {}).get("line", 0),
+                "line": (item.get("start") or {}).get("line", 0),
                 "message": (extra.get("message") or "").strip(),
             }
         )

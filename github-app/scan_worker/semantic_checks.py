@@ -1647,10 +1647,20 @@ def find_static_analysis_regressions(diff_text: str, file_contents: dict[str, st
                             "Review this finding and address it if it applies to the change.",
                         )
                     )
-    except OSError:
+    except (OSError, subprocess.SubprocessError):
         # Materializing/scanning a throwaway temp checkout must never take
         # down the rest of PR review - find_semantic_regressions' own
         # findings still run and merge normally even if this fails.
+        #
+        # subprocess.SubprocessError added via audit (2026-09-21): a real
+        # bug - subprocess.TimeoutExpired (raised by any of the three
+        # timeout=10 git calls above, e.g. on a slow/contended disk) is
+        # NOT an OSError subclass (confirmed: subprocess.TimeoutExpired.
+        # __mro__ is SubprocessError -> Exception, not OSError), so it
+        # propagated straight past this guard and failed the whole Flash
+        # Review run instead of just skipping static-analysis findings -
+        # exactly the failure mode this except clause's own comment says
+        # it exists to prevent.
         return []
 
     return findings

@@ -932,3 +932,22 @@ def test_find_static_analysis_regressions_returns_empty_for_a_file_outside_the_d
 def test_find_static_analysis_regressions_returns_empty_without_file_contents():
     assert find_static_analysis_regressions("--- app.py ---\n@@ -1,1 +1,1 @@\n-a\n+b\n", None) == []
     assert find_static_analysis_regressions("--- app.py ---\n@@ -1,1 +1,1 @@\n-a\n+b\n", {}) == []
+
+
+def test_find_static_analysis_regressions_survives_a_git_subprocess_timeout(monkeypatch):
+    # Real bug found via audit (2026-09-21): subprocess.TimeoutExpired
+    # (raised by the git init/add/commit calls' own timeout=10 - confirmed:
+    # subprocess.TimeoutExpired's MRO is SubprocessError -> Exception, NOT
+    # OSError) used to propagate straight past the `except OSError:` guard
+    # below and fail the whole Flash Review run, contrary to that guard's
+    # own stated intent ("must never take down the rest of PR review").
+    import subprocess
+
+    def raise_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=["git", "init"], timeout=10)
+
+    monkeypatch.setattr(subprocess, "run", raise_timeout)
+    diff = "--- app.py ---\n@@ -1,1 +2,3 @@\n context\n+line2\n+line3\n"
+    file_contents = {"app.py": "line1\nline2\nline3\n"}
+
+    assert find_static_analysis_regressions(diff, file_contents) == []

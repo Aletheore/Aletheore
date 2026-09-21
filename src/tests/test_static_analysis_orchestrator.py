@@ -127,6 +127,36 @@ def test_check_static_analysis_runs_joern_when_opted_in(tmp_path, monkeypatch):
     assert joern_finding in result["findings"]
 
 
+def test_check_static_analysis_survives_a_scanner_raising_unexpectedly(tmp_path, monkeypatch):
+    # Real bug found via audit (2026-09-21): nothing guarded scanner(repo_path)
+    # against an unexpected exception (as opposed to the graceful
+    # {"checked": False, ...} every scanner already returns for its own
+    # EXPECTED failure modes) - one scanner's parsing bug on malformed-but-
+    # valid tool output used to abort the whole static-analysis pass,
+    # dropping every other scanner's real findings along with it.
+    semgrep_finding = {"tool": "semgrep", "rule_id": "r1", "severity": "major", "type": "bug", "path": "a.py", "line": 1, "message": "m"}
+
+    def raising_bandit(repo_path):
+        raise AttributeError("'NoneType' object has no attribute 'get'")
+
+    _patch_required_scanners(
+        monkeypatch,
+        semgrep=lambda repo_path: _checked([semgrep_finding]),
+        bandit=raising_bandit,
+    )
+    _patch_optional_scanners(monkeypatch)
+
+    with patch("aletheore.static_analysis.check_sonarqube", return_value=_skipped("SonarQube not configured (set SONARQUBE_HOST_URL to enable)")):
+        result = check_static_analysis(tmp_path)
+
+    assert result["checked"] is True
+    assert "semgrep" in result["tools_run"]
+    assert semgrep_finding in result["findings"]
+    assert "bandit" not in result["tools_run"]
+    bandit_skip = next(s for s in result["tools_skipped"] if s["tool"] == "bandit")
+    assert "AttributeError" in bandit_skip["reason"]
+
+
 def test_check_static_analysis_passes_sonarqube_host_url_through(tmp_path, monkeypatch):
     _patch_required_scanners(monkeypatch)
     _patch_optional_scanners(monkeypatch)

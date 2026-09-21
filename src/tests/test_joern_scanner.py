@@ -81,6 +81,58 @@ def test_check_joern_parses_real_finding_shape(tmp_path):
     assert result["findings"] == findings_payload
 
 
+def test_check_joern_excludes_findings_under_worktrees_dir(tmp_path):
+    # Real bug found via audit (2026-09-21): unlike bandit/bearer/gosec/
+    # semgrep/sonarqube, check_joern never called filter_findings, so a
+    # finding under .worktrees/ or .repowise/ (or a user's ignored_paths)
+    # reached the caller unfiltered - exactly the class of duplicate/noise
+    # finding filter_findings exists to strip for every other scanner here.
+    (tmp_path / "go.mod").write_text("module example\n\ngo 1.21\n")
+    (tmp_path / "main.go").write_text("package main\n")
+
+    findings_payload = [
+        {
+            "tool": "joern",
+            "rule_id": "asymmetric-cache-trust-go",
+            "severity": "critical",
+            "type": "vulnerability",
+            "path": "service.go",
+            "line": 117,
+            "message": "real finding, must survive",
+        },
+        {
+            "tool": "joern",
+            "rule_id": "asymmetric-cache-trust-go",
+            "severity": "critical",
+            "type": "vulnerability",
+            "path": ".worktrees/agent-1/service.go",
+            "line": 117,
+            "message": "duplicate under a nested worktree checkout, must be excluded",
+        },
+    ]
+
+    def fake_run(cmd, **kwargs):
+        if "gosrc2cpg" in cmd[0]:
+            cpg_path = cmd[cmd.index("-o") + 1]
+            with open(cpg_path, "w") as f:
+                f.write("fake cpg")
+            return _mock_run(0)
+        output_path = None
+        for arg in cmd:
+            if arg.startswith("outputPath="):
+                output_path = arg.split("=", 1)[1]
+        with open(output_path, "w") as f:
+            json.dump(findings_payload, f)
+        return _mock_run(0)
+
+    with patch("aletheore.static_analysis.joern_scanner.shutil.which", side_effect=lambda name: f"/usr/local/bin/{name}"), \
+         patch("aletheore.static_analysis.joern_scanner.subprocess.run", side_effect=fake_run):
+        result = check_joern(tmp_path)
+
+    assert result["checked"] is True
+    assert result["findings"] == [findings_payload[0]]
+
+
 def test_check_joern_reports_cpg_build_failure(tmp_path):
     (tmp_path / "go.mod").write_text("module example\n\ngo 1.21\n")
     (tmp_path / "main.go").write_text("package main\n")

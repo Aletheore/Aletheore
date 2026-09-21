@@ -52,6 +52,28 @@ _OPTIONAL_SCANNERS = (
 )
 
 
+def _run_scanner_safely(name: str, scanner, *args, **kwargs) -> dict:
+    """Real bug found via audit (2026-09-21): every scanner here already
+    self-skips gracefully ({"checked": False, "reason": ...}) for its own
+    EXPECTED failure modes (tool not installed, no matching source, CLI
+    exits non-zero), but nothing guarded against an UNEXPECTED one - a
+    parsing bug on a real tool's malformed-but-valid-JSON output (e.g. an
+    explicit `null` in a field a scanner's own parser assumed present, see
+    semgrep_scanner.py's fix the same night this was found) would raise
+    straight out of this loop and abort the whole static-analysis pass,
+    not just that one tool's contribution - contradicting the "each
+    scanner self-skips gracefully" design promise every other failure mode
+    here honors."""
+    try:
+        return scanner(*args, **kwargs)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "checked": False,
+            "reason": f"{name} raised an unexpected error: {type(exc).__name__}: {exc}",
+            "findings": [],
+        }
+
+
 def check_static_analysis(
     repo_path: Path,
     run_bearer: bool = False,
@@ -64,7 +86,7 @@ def check_static_analysis(
     opted_in = {"bearer": run_bearer, "joern": run_joern}
 
     for name, scanner in _SCANNERS:
-        result = scanner(repo_path)
+        result = _run_scanner_safely(name, scanner, repo_path)
         if result["checked"]:
             tools_run.append(name)
             findings.extend(result["findings"])
@@ -73,7 +95,7 @@ def check_static_analysis(
 
     for name, scanner, skip_reason in _OPTIONAL_SCANNERS:
         if opted_in[name]:
-            result = scanner(repo_path)
+            result = _run_scanner_safely(name, scanner, repo_path)
             if result["checked"]:
                 tools_run.append(name)
                 findings.extend(result["findings"])
@@ -82,7 +104,9 @@ def check_static_analysis(
         else:
             tools_skipped.append({"tool": name, "reason": skip_reason})
 
-    sonarqube_result = check_sonarqube(repo_path, host_url=sonarqube_host_url)
+    sonarqube_result = _run_scanner_safely(
+        "sonarqube", check_sonarqube, repo_path, host_url=sonarqube_host_url
+    )
     if sonarqube_result["checked"]:
         tools_run.append("sonarqube")
         findings.extend(sonarqube_result["findings"])

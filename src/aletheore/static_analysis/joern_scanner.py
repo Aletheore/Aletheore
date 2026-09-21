@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from aletheore.static_analysis._exclusions import excluded_dir_names, has_real_file
+from aletheore.static_analysis._exclusions import excluded_dir_names, filter_findings, has_real_file
 
 # Real cost profile, measured live tonight, is why this is opt-in like
 # Bearer (see static_analysis/__init__.py): a CPG build is JVM startup
@@ -99,4 +99,16 @@ def check_joern(repo_path: Path, timeout: int = DEFAULT_JOERN_TIMEOUT_SECONDS) -
         except json.JSONDecodeError:
             return {"checked": False, "reason": "joern query produced unparseable output", "findings": []}
 
-    return {"checked": True, "reason": None, "findings": findings}
+    # Real bug found via audit (2026-09-21): every other scanner in this
+    # package (bandit, bearer, gosec, semgrep, sonarqube) ends its return
+    # with filter_findings(findings, repo_path) - the "authoritative
+    # correctness backstop, independent of whether a given tool's own
+    # native exclude flag actually honored excluded_dir_names" (see that
+    # function's own docstring). check_joern above DOES pass exclude_args
+    # to gosrc2cpg at CPG-build time (a native exclusion attempt, same as
+    # the other tools' own flags), but never applied this same backstop -
+    # a finding under .worktrees/, .repowise/, or a user's ignored_paths
+    # could reach the caller unfiltered if that native exclusion didn't
+    # hold, exactly the gap filter_findings exists to close for every
+    # other scanner here.
+    return {"checked": True, "reason": None, "findings": filter_findings(findings, repo_path)}

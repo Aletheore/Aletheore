@@ -57,6 +57,44 @@ def test_check_semgrep_normalizes_a_real_finding_shape(tmp_path):
     ]
 
 
+def test_check_semgrep_survives_explicit_null_in_nested_fields(tmp_path):
+    # Real bug found via audit (2026-09-21): dict.get(key, default) only
+    # ever applies its default when the key is ABSENT, not when it's
+    # present with an explicit `null` value - semgrep can and does emit
+    # "extra": null or "metadata": null on some result shapes. Before this
+    # fix, extra.get("metadata", {}).get("category", "") would raise
+    # AttributeError the moment "metadata" was present-but-null (the outer
+    # .get returns None, not {}), uncaught anywhere between here and
+    # check_static_analysis's per-scanner loop - one malformed finding
+    # aborted the whole static-analysis pass instead of just itself.
+    payload = {
+        "results": [
+            {
+                "check_id": "go.lang.some-rule",
+                "path": str(tmp_path / "a.go"),
+                "start": None,
+                "extra": {"severity": "WARNING", "message": "m", "metadata": None},
+            },
+            {
+                "check_id": "go.lang.other-rule",
+                "path": str(tmp_path / "b.go"),
+                "start": {"line": 9},
+                "extra": None,
+            },
+        ]
+    }
+    mock_result = _mock_run(1, stdout=json.dumps(payload))
+
+    with patch("aletheore.static_analysis.semgrep_scanner.shutil.which", return_value="/usr/bin/semgrep"), \
+         patch("aletheore.static_analysis.semgrep_scanner.subprocess.run", return_value=mock_result):
+        result = check_semgrep(tmp_path)
+
+    assert result["checked"] is True
+    assert len(result["findings"]) == 2
+    assert result["findings"][0]["line"] == 0
+    assert result["findings"][1]["message"] == ""
+
+
 def test_check_semgrep_rewrites_a_local_custom_rule_id_to_its_short_form(tmp_path):
     # Real bug found live: Semgrep dot-joins a locally-loaded rule's full
     # load path into check_id (e.g.
