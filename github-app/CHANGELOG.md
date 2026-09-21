@@ -18,6 +18,34 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-09-21
+
+2 commits since the previous deploy (`github-app-deploy-2026-09-19-2`), tagged
+`github-app-deploy-2026-09-21` (commit `d832130`), no migrations. One real production incident,
+reported live and fixed the same session:
+
+- **#752 - the error-alert cooldown never actually worked for any job-dispatched alert.**
+  `error_alerts.py`'s `_should_alert()` rate-limited repeated alerts with a plain in-process
+  Python dict, on the stated assumption that "process-local and reset on restart" was an
+  acceptable tradeoff. It wasn't, for this specific call path: `scan_worker.worker` runs RQ's
+  default `Worker` class, which forks a fresh child process for every job - each fork's write to
+  that dict died with the fork, so the cooldown never survived past the one job execution that set
+  it. `run_health_sweep_staleness_check_job` runs every 180s and calls `send_error_alert` directly
+  with no extra guard of its own; with the cooldown structurally non-functional, every tick where
+  the underlying staleness condition stayed true re-sent the same alert email from scratch -
+  observed live as roughly one email every 3 minutes for 12+ hours. Same root cause a 2026-09-18
+  incident already hit once (918 emails from `ops_monitor` before that fix - see `jobs.py`'s
+  `_send_ops_alert`), but that fix only added a second, `ops_monitor`-specific Redis-backed
+  cooldown in front of the shared mechanism, never fixing the shared mechanism itself. Moved to a
+  Redis key with a TTL (the same pooled `get_redis_client()` every other cross-process durable
+  check here already uses), atomic across every forked job process and both `scan-worker`
+  replicas; fails open (alerts anyway) if Redis itself is unreachable. The underlying staleness
+  condition this alert was correctly reporting is a separate, still-open question - live evidence
+  (health-worker's sweep completing in ~15-85ms with zero per-target activity) points at zero
+  currently-monitored `health_check_targets`, plausibly from an AIR-plan downgrade or a hidden
+  repo (`list_health_check_targets_all` filters both out by design) - not confirmed with a direct
+  DB read.
+
 ## 2026-09-18 (fifth deploy)
 
 8 commits since the fourth 2026-09-18 deploy, tagged `github-app-deploy-2026-09-18-5` (commit
