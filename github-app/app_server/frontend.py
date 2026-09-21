@@ -1048,7 +1048,7 @@ async function loadSecurity() {{
       '<td>' + findingActionButtonHtml('vulnerability', f, 'Dismiss', 'dismissFinding') + '</td></tr>';
   }});
   // Presented as Aletheore's own findings, same as PR review comments -
-  // f.tool/f.rule_id (SonarQube/Semgrep/Bearer/gosec/Bandit/Joern) stay
+  // f.tool/f.rule_id (SonarQube/Semgrep/Bearer/gosec/Bandit/Joern/Trivy) stay
   // out of the visible row; only f.message and the citation are shown.
   staticAnalysisFindings.forEach(function (f) {{
     const sev = staticAnalysisSevChip(f.severity);
