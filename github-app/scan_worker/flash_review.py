@@ -2118,12 +2118,29 @@ def _generate_findings_per_file(
     (lockfiles, build output, vendor/, *.min.js - see
     _is_non_substantive_path) are skipped, same filter is_non_substantive_diff
     already applies at the whole-PR level.
+
+    Sorted smallest-patch-first before that cap is applied - real bug
+    found via audit (2026-09-21): diff_patches arrives in GitHub's raw,
+    unsorted listing order (see fetch_pr_diff's own "re-walk in GitHub's
+    own original file order" comment), which is a DIFFERENT order than
+    file_contents' own selection (built from order_changed_files_by_diff_
+    size-sorted changed_files, same smallest-first philosophy). Capping
+    two differently-ordered lists at the same count independently meant a
+    small file well within file_contents' cut could still fall outside
+    this cap on a >30-file PR and never get a generation call at all -
+    the exact "small fix inside a huge bundled file never reached
+    context because larger files sorted earlier" bug class order_changed_
+    files_by_diff_size's own docstring says this codebase already hit and
+    fixed once, reintroduced here by not reusing that same ordering.
     """
-    candidates = [
-        (filename, patch)
-        for filename, patch in diff_patches
-        if patch.strip() and not _is_non_substantive_path(filename)
-    ][:MAX_CONTEXT_FILES]
+    candidates = sorted(
+        (
+            (filename, patch)
+            for filename, patch in diff_patches
+            if patch.strip() and not _is_non_substantive_path(filename)
+        ),
+        key=lambda item: len(item[1]),
+    )[:MAX_CONTEXT_FILES]
     if not candidates:
         return []
 

@@ -13,6 +13,7 @@ from scan_worker.flash_review import (
     _line_citation_content_matches,
     _names_referenced_in_diff,
     _quoted_strings,
+    _generate_findings_per_file,
     _validate_findings,
     _verification_user_prompt,
     _verify_findings_with_second_model,
@@ -4566,3 +4567,41 @@ def test_system_prompt_warns_that_diff_hunk_headers_are_not_proof_of_code_nestin
     normalized = " ".join(FLASH_REVIEW_SYSTEM_PROMPT.lower().split())
     assert "git's own heuristic guess at the nearest" in normalized
     assert "not proof the hunk's lines are still nested" in normalized
+
+
+def test_generate_findings_per_file_caps_smallest_patch_first_not_raw_order(monkeypatch):
+    # Real bug found via audit (2026-09-21): candidates used to be capped by
+    # slicing diff_patches in GitHub's raw, unsorted listing order - a
+    # DIFFERENT order than file_contents' own selection (order_changed_
+    # files_by_diff_size, smallest-first). On a PR past MAX_CONTEXT_FILES, a
+    # small file well within file_contents' cut could still fall outside
+    # this cap and never get a generation call at all - the exact "small fix
+    # inside a huge bundled file never reached context" bug class this
+    # codebase already hit once (see order_changed_files_by_diff_size's own
+    # docstring). tiny.py sits LAST in raw order here but is by far the
+    # smallest patch - it must survive the cap, and the larger of the two
+    # big files must not.
+    from scan_worker import flash_review
+
+    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILES", 2)
+
+    diff_patches = (
+        ("large_a.py", "x" * 500),
+        ("large_b.py", "y" * 400),
+        ("tiny.py", "z" * 10),
+    )
+
+    called_files = []
+
+    def fake_completion(system_prompt, user_prompt, cwd="."):
+        called_files.append("tiny.py" if "--- tiny.py ---" in user_prompt else
+                             "large_b.py" if "--- large_b.py ---" in user_prompt else "large_a.py")
+        return "review:\n  key_issues_to_review: []\n"
+
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.side_effect = fake_completion
+
+    flash_review._generate_findings_per_file(diff_patches, "some PR", mock_adapter)
+
+    assert set(called_files) == {"tiny.py", "large_b.py"}
+    assert "large_a.py" not in called_files
