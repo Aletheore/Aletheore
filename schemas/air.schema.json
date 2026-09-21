@@ -610,12 +610,71 @@
             "scanned_files"
           ],
           "type": "object"
+        },
+        "static_analysis": {
+          "properties": {
+            "checked": {
+              "type": "boolean"
+            },
+            "findings": {
+              "items": {
+                "properties": {
+                  "line": {
+                    "type": "integer"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "rule_id": {
+                    "type": "string"
+                  },
+                  "severity": {
+                    "type": "string"
+                  },
+                  "tool": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "line",
+                  "message",
+                  "path",
+                  "rule_id",
+                  "severity",
+                  "tool",
+                  "type"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "tools_run": {
+              "type": "array"
+            },
+            "tools_skipped": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "checked",
+            "findings",
+            "tools_run",
+            "tools_skipped"
+          ],
+          "type": "object"
         }
       },
       "required": [
         "dependency_licenses",
         "dependency_vulnerabilities",
-        "secrets"
+        "secrets",
+        "static_analysis"
       ],
       "type": "object"
     }

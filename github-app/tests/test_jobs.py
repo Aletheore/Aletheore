@@ -1835,6 +1835,84 @@ async def test_incremental_spend_budget_record_usage_refunds_when_actual_cost_is
 
 
 @pytest.mark.asyncio
+async def test_incremental_spend_budget_on_call_failed_releases_the_reservation(pool):
+    # Real production bug: can_start_next_call() reserves next_call_reserve_usd
+    # up front (e.g. $0.10 for AIRview/Docs incremental), but before this
+    # fix nothing released it when the LLM call that followed failed -
+    # record_usage() (the only thing that ever trued up the reservation)
+    # is never reached on a failure path. Confirmed live: two AIR
+    # installations' $18 base credit both hit $0.00 while their combined
+    # real ledgered spend (llm_spend_events) totaled $3.43 - a ~$32 gap
+    # this exact mechanism explains. on_call_failed() must give back
+    # exactly what was reserved, same as a real cost of $0 would.
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    installation_id = 9104
+    await _insert_installation(
+        pool, installation_id, "a",
+        base_credit_allotment_usd=5.00,
+        base_credit_remaining_usd=5.00,
+        topup_credit_balance_usd=0.00,
+    )
+
+    budget = _IncrementalSpendBudget(
+        TEST_DATABASE_URL, installation_id, "deepseek-v4-flash",
+        next_call_reserve_usd=0.10, feature="airview_incremental",
+    )
+    assert budget.can_start_next_call() is True
+    remaining_after_reserve = await _get_balance(pool, installation_id)
+    assert float(remaining_after_reserve["base_credit_remaining_usd"]) == pytest.approx(4.90)
+
+    budget.on_call_failed()
+
+    remaining_after_release = await _get_balance(pool, installation_id)
+    assert float(remaining_after_release["base_credit_remaining_usd"]) == pytest.approx(5.00)
+    assert float(remaining_after_release["topup_credit_balance_usd"]) == pytest.approx(0.00)
+
+
+@pytest.mark.asyncio
+async def test_incremental_spend_budget_on_call_failed_is_a_noop_without_a_pending_reservation(pool):
+    # Must be safe to call defensively from a broad except block even when
+    # it's ambiguous whether record_usage() already ran - e.g. a failure
+    # in DB-write code that runs after a successful LLM call. Calling it
+    # with nothing pending must not release money the installation was
+    # never actually charged.
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    installation_id = 9105
+    await _insert_installation(
+        pool, installation_id, "a",
+        base_credit_allotment_usd=5.00,
+        base_credit_remaining_usd=5.00,
+        topup_credit_balance_usd=0.00,
+    )
+
+    budget = _IncrementalSpendBudget(
+        TEST_DATABASE_URL, installation_id, "deepseek-v4-flash",
+        next_call_reserve_usd=0.10, feature="airview_incremental",
+    )
+    # Never reserved anything yet - on_call_failed must not credit $0.10
+    # out of nowhere.
+    budget.on_call_failed()
+    remaining = await _get_balance(pool, installation_id)
+    assert float(remaining["base_credit_remaining_usd"]) == pytest.approx(5.00)
+
+    # Reserve, resolve normally via record_usage, then call on_call_failed
+    # again (simulating a second, unrelated failure later in the same
+    # call site) - must still be a no-op, not a second release of the
+    # already-resolved reservation.
+    assert budget.can_start_next_call() is True
+    budget.record_usage(prompt_tokens=10, completion_tokens=1)
+    remaining_after_usage = await _get_balance(pool, installation_id)
+
+    budget.on_call_failed()
+    remaining_after_stale_failure = await _get_balance(pool, installation_id)
+    assert float(remaining_after_stale_failure["base_credit_remaining_usd"]) == pytest.approx(
+        float(remaining_after_usage["base_credit_remaining_usd"])
+    )
+
+
+@pytest.mark.asyncio
 async def test_reserve_llm_spend_low_balance_triggers_email_enqueue(pool, monkeypatch):
     enqueued = []
     monkeypatch.setattr(
@@ -5108,11 +5186,11 @@ def test_run_live_wiki_full_build_job_skips_model_call_on_cache_hit(monkeypatch)
 
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_full_build_writing_adapter",
-        lambda on_usage=None, before_llm_call=None: _SpyAdapter(),
+        lambda on_usage=None, before_llm_call=None, on_call_failed=None: _SpyAdapter(),
     )
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_naming_adapter",
-        lambda on_usage=None, before_llm_call=None: _NamingAdapter(),
+        lambda on_usage=None, before_llm_call=None, on_call_failed=None: _NamingAdapter(),
     )
     monkeypatch.setattr("scan_worker.jobs._store_wiki_subsystem_records", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._regenerate_wiki_overview", lambda *a, **k: None)
@@ -5951,6 +6029,9 @@ def test_sweep_burns_the_cooldown_when_llm_call_completes_with_unknown_verdict(m
             return True
 
         def record_usage(self, *a, **k):
+            pass
+
+        def on_call_failed(self):
             pass
 
     monkeypatch.setattr("scan_worker.jobs._IncrementalSpendBudget", _AlwaysAllowedBudget)
@@ -7225,11 +7306,11 @@ def test_maybe_update_live_wiki_reserves_spend_atomically_against_concurrent_pus
 
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_naming_adapter",
-        lambda on_usage=None, before_llm_call=None: _FakeWikiAdapter(on_usage, before_llm_call),
+        lambda on_usage=None, before_llm_call=None, on_call_failed=None: _FakeWikiAdapter(on_usage, before_llm_call),
     )
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_update_writing_adapter",
-        lambda on_usage=None, before_llm_call=None: _FakeWikiAdapter(on_usage, before_llm_call),
+        lambda on_usage=None, before_llm_call=None, on_call_failed=None: _FakeWikiAdapter(on_usage, before_llm_call),
     )
 
     def _call(repo):
@@ -8163,11 +8244,11 @@ def test_run_live_wiki_full_build_job_reserves_spend_atomically_against_concurre
 
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_naming_adapter",
-        lambda on_usage=None, before_llm_call=None: _FakeWikiAdapter(on_usage, before_llm_call),
+        lambda on_usage=None, before_llm_call=None, on_call_failed=None: _FakeWikiAdapter(on_usage, before_llm_call),
     )
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_full_build_writing_adapter",
-        lambda on_usage=None, before_llm_call=None: _FakeWikiAdapter(on_usage, before_llm_call),
+        lambda on_usage=None, before_llm_call=None, on_call_failed=None: _FakeWikiAdapter(on_usage, before_llm_call),
     )
 
     threads = [
@@ -8966,7 +9047,7 @@ def test_run_live_docs_full_build_job_skips_llm_call_when_spend_cap_reached(monk
     adapter_calls = []
     monkeypatch.setattr(
         "scan_worker.jobs._live_docs_full_build_writing_adapter",
-        lambda plan, on_usage=None: adapter_calls.append(True),
+        lambda plan, on_usage=None, on_call_failed=None: adapter_calls.append(True),
     )
     status_calls = []
     monkeypatch.setattr(
@@ -9002,7 +9083,7 @@ def test_run_live_docs_full_build_job_survives_one_module_failing(monkeypatch):
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None, on_call_failed=None: object()
     )
 
     def fake_fetch(client, token, repo, path, ref):
@@ -9067,7 +9148,7 @@ def test_run_docs_build_indexes_source_lines_by_real_newline_lines_not_splitline
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None, on_call_failed=None: object()
     )
     # Line1="header", line2=ten form feeds, line3-4=the real function.
     # splitlines() would put line 3's real content at a different index
@@ -9140,7 +9221,7 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
 
     monkeypatch.setattr(
         "scan_worker.jobs._live_docs_full_build_writing_adapter",
-        lambda plan, on_usage=None: FakeAdapter(on_usage),
+        lambda plan, on_usage=None, on_call_failed=None: FakeAdapter(on_usage),
     )
     stored_for = []
 
@@ -9204,7 +9285,7 @@ def test_run_live_docs_full_build_job_reports_failed_when_every_module_fails(mon
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None, on_call_failed=None: object()
     )
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "source")
 
@@ -9246,7 +9327,7 @@ def test_run_live_docs_full_build_job_reports_failed_when_every_fetch_returns_no
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None, on_call_failed=None: object()
     )
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: None)
     status_calls = []
@@ -9276,7 +9357,7 @@ def test_maybe_update_live_docs_skips_llm_call_when_spend_cap_reached(monkeypatc
     adapter_calls = []
     monkeypatch.setattr(
         "scan_worker.jobs._live_docs_update_writing_adapter",
-        lambda on_usage=None: adapter_calls.append(True),
+        lambda on_usage=None, on_call_failed=None: adapter_calls.append(True),
     )
     status_calls = []
     monkeypatch.setattr(
@@ -9307,7 +9388,7 @@ def test_maybe_update_live_docs_survives_one_module_failing(monkeypatch):
     monkeypatch.setattr(
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
-    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda on_usage=None: object())
+    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda on_usage=None, on_call_failed=None: object())
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "source")
 
     def fake_store(dsn, iid, repo, module, adapter, source_lines, commit):
@@ -9342,7 +9423,7 @@ def test_maybe_update_live_docs_excludes_test_files_from_changed_modules(monkeyp
     monkeypatch.setattr(
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
-    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda on_usage=None: object())
+    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda on_usage=None, on_call_failed=None: object())
 
     fetched_for = []
     monkeypatch.setattr(
@@ -9587,7 +9668,7 @@ def test_fix_suggestion_attachment_reserves_spend_atomically_against_concurrent_
 
     monkeypatch.setattr(
         "scan_worker.jobs._health_fix_suggestion_adapter",
-        lambda on_usage=None: _FakeAdapter(on_usage),
+        lambda on_usage=None, on_call_failed=None: _FakeAdapter(on_usage),
     )
 
     results: list[dict | None] = [None, None]

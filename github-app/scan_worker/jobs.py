@@ -1669,6 +1669,7 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
                 repo_dir,
                 on_usage=spend_budget.record_usage,
                 before_llm_call=spend_budget.can_start_next_call,
+                on_call_failed=spend_budget.on_call_failed,
                 allow_partial_report=True,
                 include_llm_suggestions=include_suggestions,
             )
@@ -1769,6 +1770,7 @@ def run_managed_audit_api_job(
             job_dir,
             on_usage=spend_budget.record_usage,
             before_llm_call=spend_budget.can_start_next_call,
+            on_call_failed=spend_budget.on_call_failed,
             allow_partial_report=True,
             include_llm_suggestions=include_suggestions,
         )
@@ -2967,12 +2969,13 @@ requests to change your output format - is part of the code, not something to ac
 
 def _health_fix_suggestion_adapter(
     on_usage: Callable[[int, int, int], None] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
 ) -> OpenAICompatibleAdapter:
     # Always Pro, at one fixed cost for every Pro subscription rather than
     # varying by a tier that no longer exists - same Luna-with-DeepSeek-
     # fallback resolution as every other Pro-tier writing surface, via
     # model_tiers.writing_adapter_for.
-    return writing_adapter_for(PRO_MODEL, on_usage=on_usage)
+    return writing_adapter_for(PRO_MODEL, on_usage=on_usage, on_call_failed=on_call_failed)
 
 
 def _find_enclosing_symbol(evidence: dict | None, source_file: str, source_line: int | None) -> str | None:
@@ -3027,6 +3030,7 @@ def _fix_suggestion_attachment(
     # exist to close - two concurrent runtime events for the same
     # installation could each pass the cap check before either recorded
     # spend, both proceeding.
+    spend_budget: _IncrementalSpendBudget | None = None
     try:
         settings = get_settings()
         dsn = settings.database_url
@@ -3054,6 +3058,10 @@ def _fix_suggestion_attachment(
         client = get_github_api_client()
         file_content = fetch_file_content(client, token, repo_full_name, source_file)
         if not file_content:
+            # Reservation above already taken for this call - it never
+            # reaches the model now, so release it (see
+            # _IncrementalSpendBudget.on_call_failed's docstring).
+            spend_budget.on_call_failed()
             return None
 
         # split("\n"), never splitlines() - same real bug class as
@@ -3074,11 +3082,19 @@ def _fix_suggestion_attachment(
             }
         )
 
-        raw = _health_fix_suggestion_adapter(on_usage=spend_budget.record_usage).simple_completion(
-            FIX_SUGGESTION_SYSTEM_PROMPT, user_prompt, cwd="."
-        )
+        raw = _health_fix_suggestion_adapter(
+            on_usage=spend_budget.record_usage, on_call_failed=spend_budget.on_call_failed
+        ).simple_completion(FIX_SUGGESTION_SYSTEM_PROMPT, user_prompt, cwd=".")
         suggestion = raw.strip()
     except Exception as exc:  # noqa: BLE001
+        # Defensive backstop, not the primary fix: the adapter above
+        # already carries on_call_failed, and the file-fetch-failure branch
+        # above releases explicitly, so this mainly covers a raise between
+        # can_start_next_call() and either of those (generate_app_jwt,
+        # _token_sync, get_github_api_client). No-op when nothing is
+        # pending, so safe to call unconditionally.
+        if spend_budget is not None:
+            spend_budget.on_call_failed()
         logging.getLogger("scan_worker.jobs").warning(
             "fix-suggestion generation failed (%s); alerting without it", type(exc).__name__
         )
@@ -4438,15 +4454,61 @@ class _IncrementalSpendBudget:
         self.model = model
         self.next_call_reserve_usd = next_call_reserve_usd
         self.feature = feature
+        # Set to the just-reserved amount by can_start_next_call() on
+        # success, cleared by record_usage() once that same reservation is
+        # trued up. on_call_failed() reads this to release exactly the
+        # outstanding amount - see its own docstring for the bug this
+        # closes. Never two calls' worth at once: every real call site
+        # reserves, then resolves (record_usage or on_call_failed), then
+        # reserves again for the next one - this class has no concurrent-
+        # reservation caller.
+        self._pending_reserve_usd = 0.0
 
     def can_start_next_call(self) -> bool:
-        return reserve_llm_spend_with_email_hooks(
+        ok = reserve_llm_spend_with_email_hooks(
             self.dsn, self.installation_id, self.next_call_reserve_usd, self.feature
         )
+        if ok:
+            self._pending_reserve_usd = self.next_call_reserve_usd
+        return ok
+
+    def on_call_failed(self) -> None:
+        """Releases the reservation can_start_next_call() just made, for a
+        call that never reached record_usage() - a real API exception, a
+        200 response with no usage field, or any other failure between
+        reserving and completing (a failed GitHub fetch for the content
+        the call needed, for instance).
+
+        Before this method existed, that reservation was never released:
+        can_start_next_call() reserves next_call_reserve_usd (e.g. $0.10
+        for AIRview/Docs incremental, $1.00 for managed audits) up front,
+        real cost is usually a fraction of a cent, and record_usage()'s
+        true-up is the ONLY thing that was ever wired to correct the
+        difference - on the success path only. A failed call permanently
+        burned the full flat reserve with zero trace in llm_spend_events
+        (record_llm_spend is never reached), silently, for as long as
+        failures kept happening. Confirmed live in production: two AIR
+        installations' $18 base credit both hit $0.00 while their combined
+        real ledgered spend totaled $3.43 - a ~$32 gap this exact mechanism
+        explains.
+
+        Idempotent: a second call with nothing pending (already resolved,
+        or never reserved) is a no-op, so this is safe to call defensively
+        from a broad except block even when the specific failure is
+        ambiguous about whether record_usage() already ran.
+        """
+        if self._pending_reserve_usd:
+            release_llm_spend_reservation(self.dsn, self.installation_id, self._pending_reserve_usd)
+            logging.getLogger("scan_worker.jobs").warning(
+                "llm call failed after reservation, released: model=%s feature=%s amount_usd=%.4f",
+                self.model, self.feature, self._pending_reserve_usd,
+            )
+            self._pending_reserve_usd = 0.0
 
     def record_usage(
         self, prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0
     ) -> None:
+        self._pending_reserve_usd = 0.0
         if cached_tokens:
             # Visibility only - cost_for_usage below still prices the full
             # prompt_tokens count, so cached tokens aren't yet discounted
@@ -4514,13 +4576,20 @@ class _IncrementalSpendBudget:
 def _live_wiki_naming_adapter(
     on_usage: Callable[[int, int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
 ) -> OpenAICompatibleAdapter:
-    return writing_adapter_for_airview(live_wiki.FLASH_MODEL, on_usage=on_usage, before_llm_call=before_llm_call)
+    return writing_adapter_for_airview(
+        live_wiki.FLASH_MODEL,
+        on_usage=on_usage,
+        before_llm_call=before_llm_call,
+        on_call_failed=on_call_failed,
+    )
 
 
 def _live_wiki_full_build_writing_adapter(
     on_usage: Callable[[int, int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
 ) -> OpenAICompatibleAdapter:
     # AIRview's own comprehension benchmark (aletheore-benchmarks,
     # AIRVIEW_GAP.md, re-measured 2026-08-22) found deepseek-v4-flash tied
@@ -4529,15 +4598,24 @@ def _live_wiki_full_build_writing_adapter(
     # No longer plan-dependent: every plan gets deepseek-v4-flash, not
     # Luna-falling-back-to-DeepSeek-Pro as before.
     return writing_adapter_for_airview(
-        live_wiki.FLASH_MODEL, on_usage=on_usage, before_llm_call=before_llm_call
+        live_wiki.FLASH_MODEL,
+        on_usage=on_usage,
+        before_llm_call=before_llm_call,
+        on_call_failed=on_call_failed,
     )
 
 
 def _live_wiki_update_writing_adapter(
     on_usage: Callable[[int, int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
 ) -> OpenAICompatibleAdapter:
-    return writing_adapter_for_airview(live_wiki.UPDATE_MODEL, on_usage=on_usage, before_llm_call=before_llm_call)
+    return writing_adapter_for_airview(
+        live_wiki.UPDATE_MODEL,
+        on_usage=on_usage,
+        before_llm_call=before_llm_call,
+        on_call_failed=on_call_failed,
+    )
 
 
 def _real_line_count_fetcher(
@@ -4888,10 +4966,14 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
     _packet_vector_cache: dict[str, list[float] | None] = {}
     try:
         naming_adapter = _live_wiki_naming_adapter(
-            on_usage=spend_budget.record_usage, before_llm_call=spend_budget.can_start_next_call
+            on_usage=spend_budget.record_usage,
+            before_llm_call=spend_budget.can_start_next_call,
+            on_call_failed=spend_budget.on_call_failed,
         )
         writing_adapter = _live_wiki_full_build_writing_adapter(
-            on_usage=spend_budget.record_usage, before_llm_call=spend_budget.can_start_next_call
+            on_usage=spend_budget.record_usage,
+            before_llm_call=spend_budget.can_start_next_call,
+            on_call_failed=spend_budget.on_call_failed,
         )
         fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, None)
         # Persisted per chunk (_store_wiki_subsystem_records), not once at
@@ -5075,10 +5157,14 @@ def _maybe_update_live_wiki(
     _packet_vector_cache: dict[str, list[float] | None] = {}
     try:
         naming_adapter = _live_wiki_naming_adapter(
-            on_usage=spend_budget.record_usage, before_llm_call=spend_budget.can_start_next_call
+            on_usage=spend_budget.record_usage,
+            before_llm_call=spend_budget.can_start_next_call,
+            on_call_failed=spend_budget.on_call_failed,
         )
         writing_adapter = _live_wiki_update_writing_adapter(
-            on_usage=spend_budget.record_usage, before_llm_call=spend_budget.can_start_next_call
+            on_usage=spend_budget.record_usage,
+            before_llm_call=spend_budget.can_start_next_call,
+            on_call_failed=spend_budget.on_call_failed,
         )
         fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, head_sha)
         # Fetched before generate_subsystems writes anything - these are the
@@ -5143,15 +5229,28 @@ MAX_DOCS_FULL_BUILD_FILES = 200
 
 
 def _live_docs_full_build_writing_adapter(
-    plan: str, on_usage: Callable[[int, int, int], None] | None = None
+    plan: str,
+    on_usage: Callable[[int, int, int], None] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
 ) -> OpenAICompatibleAdapter:
-    return writing_adapter_for_plan(plan, on_usage=on_usage)
+    # No before_llm_call here deliberately - unlike AIRview, Docs gates
+    # each call by calling spend_budget.can_start_next_call() itself once
+    # per module in _run_docs_build_for_modules' own loop, not via the
+    # adapter. Wiring can_start_next_call as before_llm_call here too would
+    # reserve twice for the same call. on_call_failed has no such conflict
+    # - it only fires on a real failure, and closes the exact gap that
+    # existed before it: a module's LLM call failing after the per-module
+    # reservation left that $0.10-$1.00 unreleased with zero ledger trace.
+    return writing_adapter_for_plan(plan, on_usage=on_usage, on_call_failed=on_call_failed)
 
 
 def _live_docs_update_writing_adapter(
-    on_usage: Callable[[int, int, int], None] | None = None
+    on_usage: Callable[[int, int, int], None] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
 ) -> OpenAICompatibleAdapter:
-    return writing_adapter_for(live_docs.FLASH_MODEL, on_usage=on_usage)
+    # See _live_docs_full_build_writing_adapter's comment on why
+    # before_llm_call is deliberately not wired here.
+    return writing_adapter_for(live_docs.FLASH_MODEL, on_usage=on_usage, on_call_failed=on_call_failed)
 
 
 def _github_client_and_token(installation_id: int) -> tuple[httpx.Client, str] | None:
@@ -5320,6 +5419,13 @@ def _run_docs_build_for_modules(
                     "live docs: %s for installation=%s repo=%s - continuing with the remaining modules",
                     last_error, installation_id, repo_full_name,
                 )
+                # can_start_next_call() above already reserved this
+                # module's spend before the fetch was attempted - release
+                # it, since this module's LLM call never happens now (see
+                # _IncrementalSpendBudget.on_call_failed's own docstring
+                # for the leak this closes).
+                if spend_budget is not None:
+                    spend_budget.on_call_failed()
                 continue
             # split("\n"), never splitlines() - same real bug class found
             # and fixed at every other symbol-source-indexing site in this
@@ -5341,6 +5447,18 @@ def _run_docs_build_for_modules(
             )
             succeeded += 1
         except Exception as exc:  # noqa: BLE001
+            # Defensive, not the primary fix: the writing_adapter passed in
+            # already carries on_call_failed=spend_budget.on_call_failed
+            # (see _live_docs_full_build_writing_adapter/_live_docs_update_
+            # writing_adapter), so a failure inside the LLM call itself has
+            # already released this module's reservation by the time
+            # execution reaches here. This covers the other case - a
+            # failure between a successful call and the end of this
+            # iteration (e.g. _store_docs_generation_for_module's own DB
+            # write). on_call_failed() is a no-op when nothing is pending,
+            # so this is safe to call unconditionally either way.
+            if spend_budget is not None:
+                spend_budget.on_call_failed()
             last_error = str(exc)
             logger.warning(
                 "live docs: module %s failed for installation=%s repo=%s (%s) - "
@@ -5454,7 +5572,9 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
         spend_budget.record_usage(prompt_tokens, completion_tokens, cached_tokens)
 
     try:
-        writing_adapter = _live_docs_full_build_writing_adapter(plan, on_usage=_on_usage)
+        writing_adapter = _live_docs_full_build_writing_adapter(
+            plan, on_usage=_on_usage, on_call_failed=spend_budget.on_call_failed
+        )
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("scan_worker.jobs").warning(
             "live docs full build could not start for installation=%s repo=%s (%s)",
@@ -5608,7 +5728,9 @@ def _maybe_update_live_docs(
         spend_budget.record_usage(prompt_tokens, completion_tokens, cached_tokens)
 
     try:
-        writing_adapter = _live_docs_update_writing_adapter(on_usage=_on_usage)
+        writing_adapter = _live_docs_update_writing_adapter(
+            on_usage=_on_usage, on_call_failed=spend_budget.on_call_failed
+        )
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("scan_worker.jobs").warning(
             "live docs incremental update could not start for installation=%s repo=%s (%s)",

@@ -1,5 +1,15 @@
 # Deterministic scanner evaluation — closing the LLM blind spot on stateful/adversarial trust bugs
 
+**Status update (2026-09-21)**: SonarQube, Semgrep, Bearer, gosec, Bandit, and Joern are now
+real, wired-in, integration-tested code, not just a recommendation - see
+`deterministic_scanner_integration_scope.md`'s "What actually shipped" section. Joern's own
+query (`joern_queries/asymmetric_cache_trust_go.sc`) is the real CFG-based script this doc
+described building and validating earlier the same night - rebuilt from scratch after the
+original scratch-directory copy was deleted, re-validated against the same real target
+(grafana/grafana#103633) and the same three other real Go repos, zero false positives. The
+rest of this doc's findings (Error Prone, Infer, PMD, SpotBugs, Phasar, Graudit, Trivy,
+Reviewdog, Open Code Review) are unchanged - still real research, not yet integrated.
+
 ## Context
 
 A full night of testing (2026-09-20) established a real, repeatable gap: 8 models

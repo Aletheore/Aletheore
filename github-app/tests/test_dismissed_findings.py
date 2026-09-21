@@ -13,6 +13,15 @@ from app_server.dismissed_findings import (
 
 SECRET_FINDING = {"path": "config.py", "pattern": "aws_access_key_id", "match_preview": "AKIA****...MNOP"}
 VULN_FINDING = {"ecosystem": "PyPI", "package": "requests", "advisory_id": "GHSA-1"}
+STATIC_ANALYSIS_FINDING = {
+    "tool": "semgrep",
+    "rule_id": "oauth-state-not-random",
+    "severity": "critical",
+    "type": "vulnerability",
+    "path": "app.py",
+    "line": 42,
+    "message": "state is not freshly random",
+}
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 
@@ -23,6 +32,27 @@ def test_finding_identity_key_secret():
 
 def test_finding_identity_key_vulnerability():
     assert finding_identity_key("vulnerability", VULN_FINDING) == "PyPI\x1frequests\x1fGHSA-1"
+
+
+def test_finding_identity_key_static_analysis():
+    assert finding_identity_key("static_analysis", STATIC_ANALYSIS_FINDING) == "app.py\x1f42\x1fsemgrep\x1foauth-state-not-random"
+
+
+def test_finding_identity_key_static_analysis_different_rule_differs():
+    other = {**STATIC_ANALYSIS_FINDING, "rule_id": "other-rule"}
+    assert finding_identity_key("static_analysis", STATIC_ANALYSIS_FINDING) != finding_identity_key(
+        "static_analysis", other
+    )
+
+
+def test_finding_identity_key_static_analysis_different_tool_same_rule_id_differs():
+    # Real scenario this guards against: two different scanners could
+    # coincidentally use the same rule_id string for unrelated checks -
+    # tool is part of the identity precisely so that doesn't collide.
+    other = {**STATIC_ANALYSIS_FINDING, "tool": "bandit"}
+    assert finding_identity_key("static_analysis", STATIC_ANALYSIS_FINDING) != finding_identity_key(
+        "static_analysis", other
+    )
 
 
 def test_finding_identity_key_raises_on_unknown_type():
@@ -111,8 +141,8 @@ class _FakePool:
 
 
 @pytest.mark.asyncio
-async def test_get_dismissed_identity_keys_seeds_all_four_types_with_zero_rows():
-    # Always seeds all four known finding_type keys even with zero rows, so
+async def test_get_dismissed_identity_keys_seeds_all_five_types_with_zero_rows():
+    # Always seeds all five known finding_type keys even with zero rows, so
     # a caller building a dict comprehension over its result (e.g. jobs.py's
     # dismissed["flash_review_llm"]) never KeyErrors on an installation
     # with no dismissals of that type yet.
@@ -122,6 +152,7 @@ async def test_get_dismissed_identity_keys_seeds_all_four_types_with_zero_rows()
         "vulnerability": set(),
         "flash_review_llm": set(),
         "flash_review_semantic": set(),
+        "static_analysis": set(),
     }
 
 
@@ -170,6 +201,45 @@ async def test_dismiss_finding_stores_reason(pool):
     row = await pool.fetchrow("SELECT reason, dismissed_by FROM dismissed_findings WHERE installation_id = $1", 1)
     assert row["reason"] == "test fixture"
     assert row["dismissed_by"] == "octocat"
+
+
+@pytest.mark.asyncio
+async def test_dismiss_static_analysis_finding_then_get_dismissed_identity_keys(pool):
+    # Real, live-DB check that migration 068's CHECK constraint update
+    # actually accepts 'static_analysis' - not just that the Python-side
+    # identity-key logic handles it.
+    await upsert_installation(pool, 1, "octocat")
+
+    await dismiss_finding(pool, 1, "octocat/repo", "static_analysis", STATIC_ANALYSIS_FINDING, "octocat")
+
+    try:
+        dismissed = await get_dismissed_identity_keys(pool, 1, "octocat/repo")
+        assert finding_identity_key("static_analysis", STATIC_ANALYSIS_FINDING) in dismissed["static_analysis"]
+        assert dismissed["secret"] == set()
+    finally:
+        # Real bug found live wiring this up: unlike 'secret'/'vulnerability'
+        # (valid under every migration since 033), 'static_analysis' only
+        # became valid at migration 068 - a row with this finding_type left
+        # behind past this test breaks EVERY other test file's `pool`
+        # fixture setup, not just this one: conftest.py's fixture replays
+        # every migration file from scratch on every test, in order, and
+        # migration 058's own (historical, correctly un-editable) CHECK list
+        # doesn't include 'static_analysis' - re-applying it with this row
+        # still present raises a real asyncpg.CheckViolationError. Explicit
+        # cleanup here, not reliance on the next test's truncate (which runs
+        # AFTER migrations replay, too late to help).
+        await undismiss_finding(pool, 1, "octocat/repo", "static_analysis", STATIC_ANALYSIS_FINDING)
+
+
+@pytest.mark.asyncio
+async def test_undismiss_static_analysis_finding_removes_it(pool):
+    await upsert_installation(pool, 1, "octocat")
+    await dismiss_finding(pool, 1, "octocat/repo", "static_analysis", STATIC_ANALYSIS_FINDING, "octocat")
+
+    await undismiss_finding(pool, 1, "octocat/repo", "static_analysis", STATIC_ANALYSIS_FINDING)
+
+    dismissed = await get_dismissed_identity_keys(pool, 1, "octocat/repo")
+    assert dismissed["static_analysis"] == set()
 
 
 @pytest.mark.asyncio

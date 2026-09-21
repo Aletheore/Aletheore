@@ -40,7 +40,13 @@ narrow slice of real bugs, however precise its logic is once it does run.
 from __future__ import annotations
 
 import re
+import subprocess
+import tempfile
 from difflib import SequenceMatcher
+from pathlib import Path
+
+from aletheore.static_analysis.bearer_scanner import check_bearer
+from aletheore.static_analysis.semgrep_scanner import check_semgrep
 
 _REFERENCE_RE = re.compile(
     r"^--- referenced definition \(not part of this diff\): (?P<path>.+?):(?P<name>[^: ]+) ---\n"
@@ -1550,3 +1556,101 @@ def find_semantic_regressions(
             seen.add(key)
             unique.append(finding)
     return unique
+
+
+_STATIC_ANALYSIS_TOOLS = (check_semgrep, check_bearer)
+
+
+def find_static_analysis_regressions(diff_text: str, file_contents: dict[str, str] | None) -> list[dict]:
+    """Semgrep/Bearer, run fresh and scoped to just this diff's changed
+    files - real precedent from the integration scope doc's own per-tool
+    cost split: both are cheap stateless CLI subprocess calls (seconds),
+    unlike SonarQube, which is deliberately NOT run here - it's too slow
+    for any realistic PR-review latency budget and instead feeds
+    AIRview/MCP from the last full `aletheore scan` (see
+    static_analysis/sonarqube_scanner.py and the scope doc's "PR review
+    timing" section).
+
+    review_diff never has a real on-disk checkout - only diff text and
+    fetched file blobs (file_contents) - so this materializes just the
+    changed files into a throwaway temp directory, runs the two scanners
+    against that, and discards it. A finding whose tool/rule already
+    exists is intentionally not deduplicated against find_semantic_
+    regressions' own findings here - _merge_semantic_findings at the
+    call site already handles cross-source dedup by (file, line, issue).
+    """
+    if not file_contents:
+        return []
+
+    hunks_by_file = _diff_hunks_by_file(diff_text)
+    relevant_files = {file: content for file, content in file_contents.items() if file in hunks_by_file}
+    if not relevant_files:
+        return []
+
+    findings: list[dict] = []
+    try:
+        with tempfile.TemporaryDirectory(prefix="aletheore-pr-static-analysis-") as tmp:
+            tmp_path = Path(tmp)
+            for file, content in relevant_files.items():
+                # file_contents' keys are diff-derived paths, not raw user
+                # input, but still checked before writing - a path
+                # escaping the temp checkout (a literal ".." component)
+                # must never be allowed to write outside the directory
+                # this function creates and tears down.
+                dest = (tmp_path / file).resolve()
+                if tmp_path.resolve() not in dest.parents:
+                    continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(content, encoding="utf-8", errors="ignore")
+
+            # Bearer requires a git-tracked working tree (real requirement
+            # confirmed live: static_analysis/bearer_scanner.py) - a fresh
+            # init+commit of just these files satisfies that without
+            # needing the PR's real git history, which this function never
+            # has access to either way.
+            subprocess.run(["git", "init", "-q"], cwd=tmp_path, capture_output=True, timeout=10)
+            subprocess.run(["git", "add", "-A"], cwd=tmp_path, capture_output=True, timeout=10)
+            subprocess.run(
+                [
+                    "git", "-c", "user.email=aletheore@local", "-c", "user.name=aletheore",
+                    "commit", "-q", "-m", "diff-scoped scan",
+                ],
+                cwd=tmp_path, capture_output=True, timeout=10,
+            )
+
+            for scanner in _STATIC_ANALYSIS_TOOLS:
+                result = scanner(tmp_path)
+                if not result["checked"]:
+                    continue
+                for finding in result["findings"]:
+                    hunks = hunks_by_file.get(finding["path"], [])
+                    line = finding["line"]
+                    # Tight to the hunk's actual new-line range, not the
+                    # padded DIFF_HUNK_TOLERANCE used elsewhere in this
+                    # file for call-site proximity - Semgrep/Bearer
+                    # analyze the WHOLE materialized file, so without this
+                    # a finding on unrelated, unchanged code sitting in the
+                    # same file would be misreported as part of this diff.
+                    if not any(hunk.new_start <= line <= hunk.new_end for hunk in hunks):
+                        continue
+                    # Presented as an Aletheore finding, not a
+                    # third-party-tool one - which underlying scanner/rule
+                    # produced it (finding["tool"]/finding["rule_id"])
+                    # stays available in air.json's security.static_analysis
+                    # for internal attribution/debugging, but is deliberately
+                    # not surfaced in PR-facing text.
+                    findings.append(
+                        _finding(
+                            finding["path"],
+                            line,
+                            finding["message"],
+                            "Review this finding and address it if it applies to the change.",
+                        )
+                    )
+    except OSError:
+        # Materializing/scanning a throwaway temp checkout must never take
+        # down the rest of PR review - find_semantic_regressions' own
+        # findings still run and merge normally even if this fails.
+        return []
+
+    return findings

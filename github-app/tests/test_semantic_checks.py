@@ -1,4 +1,5 @@
-from scan_worker.semantic_checks import find_semantic_regressions
+import scan_worker.semantic_checks as semantic_checks
+from scan_worker.semantic_checks import find_semantic_regressions, find_static_analysis_regressions
 
 
 def test_java_empty_catch_inline_braces_is_flagged():
@@ -877,3 +878,57 @@ def test_resource_leak_nearby_window_indexes_by_real_newline_lines_not_splitline
     findings = find_semantic_regressions(diff, file_contents, "")
 
     assert findings == []
+
+
+def _stub_scanner(findings_by_path):
+    def scanner(repo_path):
+        findings = []
+        for path, entries in findings_by_path.items():
+            for line, tool, rule_id, message in entries:
+                findings.append(
+                    {"tool": tool, "rule_id": rule_id, "severity": "major", "type": "bug", "path": path, "line": line, "message": message}
+                )
+        return {"checked": True, "reason": None, "findings": findings}
+    return scanner
+
+
+def test_find_static_analysis_regressions_scopes_findings_to_the_diff_hunk(monkeypatch):
+    # A finding on line 50 sits in the same file as the diff but well
+    # outside the hunk's actual changed-line range (2-4) - Semgrep/Bearer
+    # analyze the WHOLE materialized file, so without diff-scoping this
+    # would misreport unrelated, unchanged code as part of the PR.
+    monkeypatch.setattr(
+        semantic_checks,
+        "_STATIC_ANALYSIS_TOOLS",
+        (_stub_scanner({"app.py": [(3, "semgrep", "some-rule", "in range"), (50, "semgrep", "other-rule", "out of range")]}),),
+    )
+    diff = "--- app.py ---\n@@ -1,1 +2,3 @@\n context\n+line2\n+line3\n"
+    file_contents = {"app.py": "line1\nline2\nline3\n" + "\n".join(f"filler{i}" for i in range(60))}
+
+    findings = find_static_analysis_regressions(diff, file_contents)
+
+    assert len(findings) == 1
+    assert findings[0]["file"] == "app.py"
+    assert findings[0]["line"] == 3
+    # Presented as Aletheore's own finding, not a third-party tool's - the
+    # raw scanner/rule message ("in range"), not a "[tool/rule-id]" prefix.
+    assert findings[0]["issue"] == "in range"
+
+
+def test_find_static_analysis_regressions_returns_empty_for_a_file_outside_the_diff(monkeypatch):
+    monkeypatch.setattr(
+        semantic_checks,
+        "_STATIC_ANALYSIS_TOOLS",
+        (_stub_scanner({"other.py": [(1, "semgrep", "r", "m")]}),),
+    )
+    diff = "--- app.py ---\n@@ -1,1 +1,1 @@\n-a\n+b\n"
+    file_contents = {"app.py": "b\n"}
+
+    findings = find_static_analysis_regressions(diff, file_contents)
+
+    assert findings == []
+
+
+def test_find_static_analysis_regressions_returns_empty_without_file_contents():
+    assert find_static_analysis_regressions("--- app.py ---\n@@ -1,1 +1,1 @@\n-a\n+b\n", None) == []
+    assert find_static_analysis_regressions("--- app.py ---\n@@ -1,1 +1,1 @@\n-a\n+b\n", {}) == []

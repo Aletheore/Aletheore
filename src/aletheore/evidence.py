@@ -36,10 +36,11 @@ from aletheore.secrets import (
     find_secrets_in_history,
     load_secrets_baseline,
 )
+from aletheore.static_analysis import check_static_analysis as run_static_analysis
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.vulnerabilities import check_vulnerabilities as check_dependency_vulnerabilities
 
-EVIDENCE_VERSION = "0.5.0"
+EVIDENCE_VERSION = "0.6.0"
 
 
 def _version_compatibility_key(version: str) -> tuple[int, int] | None:
@@ -387,6 +388,10 @@ def scan_repository(
     check_licenses: bool = True,
     map_endpoints: bool = True,
     map_schema: bool = True,
+    check_static_analysis: bool = True,
+    run_bearer: bool = False,
+    run_joern: bool = False,
+    sonarqube_host_url: str | None = None,
     # Named to avoid shadowing the build_clusters/compute_hotspots imports
     # this function calls - a same-named bool parameter would silently
     # replace the function reference inside this function's own body.
@@ -592,6 +597,22 @@ def scan_repository(
             "findings": [],
         }
 
+    if check_static_analysis:
+        report(
+            "Running static analysis scanners (Semgrep, gosec, Bandit, opt-in Bearer/Joern/SonarQube)"
+        )
+        static_analysis_data = run_static_analysis(
+            repo_path, run_bearer=run_bearer, run_joern=run_joern, sonarqube_host_url=sonarqube_host_url
+        )
+    else:
+        static_analysis_data = {
+            "checked": False,
+            "reason": "skipped (--no-check-static-analysis)",
+            "tools_run": [],
+            "tools_skipped": [],
+            "findings": [],
+        }
+
     if map_schema:
         report("Mapping database schema from migrations")
         schema_data = extract_schema(repo_path, [
@@ -636,6 +657,7 @@ def scan_repository(
             "secrets": secrets_data,
             "dependency_vulnerabilities": vulnerabilities_data,
             "dependency_licenses": licenses_data,
+            "static_analysis": static_analysis_data,
         },
         "architecture": {
             "clusters": clusters,

@@ -23,7 +23,7 @@ from scan_worker.github_api import (
     fetch_file_content,
 )
 from scan_worker.model_tiers import flash_review_generation_adapter, flash_review_model_used
-from scan_worker.semantic_checks import find_semantic_regressions
+from scan_worker.semantic_checks import find_semantic_regressions, find_static_analysis_regressions
 
 logger = logging.getLogger(__name__)
 
@@ -238,12 +238,43 @@ actually does, raises, or returns - you were not shown its body, only its symbol
 
 {sibling_file_context}"""
 
+# Appended when _detect_moved_code_blocks finds one - carves out a real
+# exception to this prompt's own "only issues introduced by this PR"
+# scoping rule (see FLASH_REVIEW_SYSTEM_PROMPT's "Determining what to
+# flag" section), which otherwise makes the model correctly-by-its-own-
+# logic decline to report a bug that was simply relocated unchanged.
+# Confirmed directly on a real gold-set case (sentry-80528): a function
+# with a real, High-severity bug (builds a modified `config` dict but
+# returns the original `monitor.config`) was cut-and-pasted verbatim from
+# one file to another as part of a refactor PR. The raw model response
+# was identical across 3 independent calls - key_issues_to_review: [] -
+# not uncertainty, confident rule-following. A competitor tool with no
+# such scoping rule caught it; this repo's own gold-set audit is what
+# surfaced the gap. The fix is not "always flag pre-existing issues" (that
+# would make every large refactor noisy with complaints about code the
+# diff barely touches) - it's specifically "code proven to have moved
+# verbatim within this diff is the one case where 'not new' isn't a
+# reason to skip it, because the PR is already touching it and this is
+# the natural moment to fix it."
+_MOVED_CODE_SUFFIX = """
+
+Some added code below is a near-exact copy of code removed elsewhere in this same diff - a
+genuine relocation (e.g. moved to a new file/function during a refactor), not a rewrite. This
+diff proves it, it is not a guess. For a block flagged this way, "only issues introduced by this
+PR" does NOT mean skip it: report a real, pre-existing bug in it exactly like any other finding.
+The PR is already touching this code, making this the natural point to catch it - a human
+reviewer would expect it flagged here, not silently carried forward. This does not relax anything
+else - still no speculation, still only concrete, grounded issues.
+
+{moved_code_context}"""
+
 
 def _build_flash_review_user_prompt(
     pr_title: str,
     diff_text: str,
     referenced_symbol_context: str = "",
     sibling_file_context: str = "",
+    moved_code_context: str = "",
 ) -> str:
     """Fills PR-Agent's real user-prompt template. Plain str.format(), not
     Jinja2 (which isn't a production dependency of this service) - safe
@@ -260,7 +291,231 @@ def _build_flash_review_user_prompt(
         prompt += _REFERENCED_SYMBOL_CONTEXT_SUFFIX.format(referenced_symbol_context=referenced_symbol_context)
     if sibling_file_context:
         prompt += _SIBLING_FILE_CONTEXT_SUFFIX.format(sibling_file_context=sibling_file_context)
+    if moved_code_context:
+        prompt += _MOVED_CODE_SUFFIX.format(moved_code_context=moved_code_context)
     return prompt
+
+
+# Minimum contiguous +/- lines for a block to be considered for a move
+# match - high enough that a coincidental 1-2 line resemblance (a common
+# guard clause, a routine import line) never qualifies, low enough to
+# still catch a real relocated function that's on the smaller side. Also
+# the minimum size of a matched SUB-RANGE within two larger blocks (see
+# _detect_moved_code_blocks) - deliberately exact-match at this stage,
+# not a ratio: SequenceMatcher.get_matching_blocks() already only reports
+# genuinely-identical runs, so a size floor is the only threshold needed
+# to reject a coincidental short overlap.
+_MOVED_BLOCK_MIN_LINES = 4
+
+
+def _extract_diff_blocks(diff_text: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Every contiguous run of removed-only or added-only lines, each at
+    least _MOVED_BLOCK_MIN_LINES long, as (file, block_text) pairs -
+    the same file-marker/hunk-header parsing rules as _diff_valid_lines,
+    kept in sync deliberately rather than sharing code, since this walk
+    tracks contiguous same-tag runs instead of a per-line new-file number
+    and the two would fight over what "current position" means."""
+    removed_blocks: list[tuple[str, str]] = []
+    added_blocks: list[tuple[str, str]] = []
+    current_file: str | None = None
+    prev_blank = True
+    run_tag: str | None = None
+    run_lines: list[str] = []
+
+    def _flush() -> None:
+        if run_tag is not None and len(run_lines) >= _MOVED_BLOCK_MIN_LINES and current_file:
+            target = removed_blocks if run_tag == "-" else added_blocks
+            target.append((current_file, "\n".join(run_lines)))
+
+    for line in diff_text.splitlines():
+        file_match = _FILE_MARKER_RE.match(line)
+        if file_match and prev_blank:
+            _flush()
+            run_tag, run_lines = None, []
+            current_file = file_match.group(1)
+            prev_blank = False
+            continue
+        if _HUNK_HEADER_RE.match(line):
+            _flush()
+            run_tag, run_lines = None, []
+            prev_blank = False
+            continue
+        if line == "":
+            _flush()
+            run_tag, run_lines = None, []
+            prev_blank = True
+            continue
+        if line == r"\ No newline at end of file":
+            prev_blank = False
+            continue
+        prev_blank = False
+        if current_file is None:
+            continue
+        tag = line[:1] if line[:1] in ("-", "+") else " "
+        if tag != run_tag:
+            _flush()
+            run_tag, run_lines = tag, []
+        if tag in ("-", "+"):
+            run_lines.append(line[1:])
+    _flush()
+    return removed_blocks, added_blocks
+
+
+def _detect_moved_code_blocks(diff_text: str) -> list[tuple[str, str]]:
+    """Added blocks that contain a near-exact matching sub-range of some
+    removed block elsewhere in this same diff - deterministic, not a
+    model guess (see _MOVED_CODE_SUFFIX for why this matters).
+
+    Matches at the LINE-SUBSEQUENCE level (SequenceMatcher.get_matching_
+    blocks on line lists), not whole-block ratio: a removed block is
+    whatever contiguous run of deleted lines the diff produced, which is
+    often several adjacent functions concatenated with no unchanged line
+    between them (nothing separates two back-to-back full-function
+    deletions) - a real relocated function living inside that run does
+    not make the SURROUNDING run 90% similar to where it landed, only
+    the function itself is. Confirmed directly on sentry-80528: the
+    removed run bundles mark_failed_threshold, create_issue_platform_
+    occurrence, and get_monitor_environment_context together (no blank
+    separator survives the diff), so comparing the whole 150-line blobs
+    scored well under any reasonable ratio threshold even though get_
+    monitor_environment_context itself moved verbatim - only a sub-range
+    match catches that. Returns (file, matched_text) for each match at
+    least _MOVED_BLOCK_MIN_LINES long, capped and de-duplicated by the
+    caller."""
+    removed_blocks, added_blocks = _extract_diff_blocks(diff_text)
+    if not removed_blocks or not added_blocks:
+        return []
+    matches: list[tuple[str, str]] = []
+    for file, added_text in added_blocks:
+        added_lines = added_text.split("\n")
+        for _removed_file, removed_text in removed_blocks:
+            removed_lines = removed_text.split("\n")
+            matcher = SequenceMatcher(None, added_lines, removed_lines, autojunk=False)
+            for match in matcher.get_matching_blocks():
+                if match.size < _MOVED_BLOCK_MIN_LINES:
+                    continue
+                matched_lines = added_lines[match.a : match.a + match.size]
+                if _is_mostly_imports(matched_lines):
+                    # A real move, just not a useful one to flag: two
+                    # unrelated files needing the same handful of stdlib/
+                    # framework imports match here constantly by pure
+                    # coincidence, not because either file's imports were
+                    # cut-pasted from the other - and "a pre-existing bug
+                    # in this import line" isn't a real finding shape
+                    # anyway, so there's nothing for the annotation to buy
+                    # even on a genuine match.
+                    continue
+                matches.append((file, "\n".join(matched_lines)))
+    matches.sort(key=lambda m: len(m[1]), reverse=True)
+    return matches
+
+
+def _is_mostly_imports(lines: list[str]) -> bool:
+    real_lines = [line for line in lines if line.strip()]
+    if not real_lines:
+        return True
+    import_lines = sum(1 for line in real_lines if line.strip().startswith(("import ", "from ")))
+    return import_lines / len(real_lines) > 0.5
+
+
+# A preview, not necessarily the full relocated body. Deliberately
+# generous, not a tight excerpt: a "first N chars" truncation cannot
+# reliably keep the part that matters, since a matched run frequently
+# bundles several adjacent functions together (nothing separates
+# back-to-back moved functions in the diff either - the same shape
+# _extract_diff_blocks already deals with on the removed side) and the
+# real bug can sit in whichever one landed last. Confirmed directly on
+# sentry-80528: the matched run is create_incident_occurrence + two
+# small dicts + get_failure_reason + get_monitor_environment_context in
+# sequence, and the actual bug lives in the LAST function, ~4700 chars
+# in - a tight preview would cut it before the annotation ever mentioned
+# it. 4000 comfortably covers that real case end to end; a genuinely
+# pathological multi-hundred-line match still gets capped rather than
+# unbounded, same spirit as MAX_CODE_EVIDENCE_BYTES elsewhere in this
+# module, just sized to the shape actually observed here.
+_MOVED_BLOCK_PREVIEW_CHARS = 6000
+
+
+def _moved_code_context(moved_blocks: list[tuple[str, str]]) -> str:
+    """Formats up to 3 moved blocks (the common case is one relocated
+    function; more than a few in one diff is unusual enough that
+    including all of them would bloat the prompt for no real benefit).
+    Caller (_detect_moved_code_blocks) already sorts largest-first, so
+    the cap keeps the most substantive matches, not an arbitrary subset."""
+    seen: set[tuple[str, str]] = set()
+    parts = []
+    for file, text in moved_blocks:
+        key = (file, text[:200])
+        if key in seen:
+            continue
+        seen.add(key)
+        preview = text if len(text) <= _MOVED_BLOCK_PREVIEW_CHARS else text[:_MOVED_BLOCK_PREVIEW_CHARS] + "\n..."
+        parts.append(f"--- moved into: {file} ---\n{preview}")
+        if len(parts) >= 3:
+            break
+    return "\n\n".join(parts)
+
+
+# The vendored prompt's own num_max_findings=5 (see FLASH_REVIEW_SYSTEM_
+# PROMPT's "(0-5 issues)" schema description) is a flat cap regardless of
+# diff size - fine for a single-concern PR, a real ceiling on a diff that
+# touches many files. Confirmed directly: on a real 6-file calendar-
+# provider refactor (external gold-set audit, calcom-10967), Aletheore
+# generated only 4 candidates total and caught 1/6 real issues, while a
+# competitor tool with no such cap generated 9 and caught 5/6 - the same
+# model finding the right area (it caught the one thing it did report
+# correctly) but structurally unable to report more.
+#
+# Scaled by hunk count (total "@@ ... @@" chunks across every file in the
+# diff), not file count: file count alone false-positives on a diff that
+# touches many files but trivially (e.g. a translation PR editing one
+# string in each of 48 locale files, keycloak-37429 in the same gold-set
+# audit - 48 files but not a coverage-ceiling case, Aletheore already
+# caught 3/5 real issues there at the default cap). Hunk count tracks how
+# many separate places in the code actually changed, which is what
+# predicts "how many independent things could be wrong" - confirmed
+# against the real audit data: calcom-10967 (58 hunks) is exactly the
+# case Aletheore under-covered (1/6 real issues caught, 4 candidates
+# total, while a competitor with no cap found 9 and caught 5/6);
+# calcom-10600 (45 hunks, 0/5 caught) is the other real miss. Not diff
+# size in raw bytes/lines either - sentry-95633's diff is the single
+# largest by line count (1048 changed lines) but only 17 hunks in one
+# big addition, and Aletheore didn't need extra room there.
+#
+# Thresholds are file count's uniform-raise experiment (5->10, rejected -
+# see this module's git history) with a size gate added, not removed: that
+# earlier test moved every diff to the same higher cap, including small
+# ones, and cost precision along with recall on the small-diff-heavy
+# corpus it ran against. Staying at the default for low-hunk diffs
+# preserves that already-tuned behavior exactly; only diffs with enough
+# real, separate changed regions to plausibly hide more than one
+# independent bug get a higher ceiling.
+_MAX_FINDINGS_DEFAULT = 5
+
+_HUNK_RE = re.compile(r"^@@ ", re.MULTILINE)
+
+
+def _max_findings_for_diff(diff_patches: tuple[tuple[str, str], ...] | None) -> int:
+    if not diff_patches:
+        return _MAX_FINDINGS_DEFAULT
+    hunk_count = sum(len(_HUNK_RE.findall(patch)) for _file, patch in diff_patches)
+    if hunk_count <= 15:
+        return _MAX_FINDINGS_DEFAULT
+    if hunk_count <= 35:
+        return 8
+    return 12
+
+
+def _flash_review_system_prompt_for_cap(max_findings: int) -> str:
+    """FLASH_REVIEW_SYSTEM_PROMPT unchanged (same object, same text) when
+    max_findings is the default - every existing test/reference against
+    the constant keeps working verbatim. Only a non-default cap gets a
+    substituted copy."""
+    if max_findings == _MAX_FINDINGS_DEFAULT:
+        return FLASH_REVIEW_SYSTEM_PROMPT
+    return FLASH_REVIEW_SYSTEM_PROMPT.replace(
+        f"(0-{_MAX_FINDINGS_DEFAULT} issues)", f"(0-{max_findings} issues)"
+    )
 
 
 def _extract_pr_agent_yaml_issues(raw: str) -> list | None:
@@ -1160,6 +1415,59 @@ def _quoted_strings(text: str) -> list[str]:
     return matches
 
 
+# Backtick spans, not _QUOTED_STRING_RE's single/double-quoted ones: this
+# system prompt's own rule tells the model to use backticks specifically
+# for "variables, names or file paths from the code" ("use backticks (`)
+# instead of single quote (')"), so a backtick span is the model's own
+# marked claim "this specific symbol is real, I saw it in the code" - the
+# exact kind of claim a grep-style check can cheaply verify without
+# another model call, the same category of thing CodeRabbit's own
+# verification agent uses grep/ast-grep for (see get_why's real-gold
+# audit tonight for where this gap was found: no existing check here
+# verifies a finding's identifier claims against the real code at all,
+# only its cited line position and, when file_contents happens to be
+# available, its quoted-string content).
+_BACKTICK_RE = re.compile(r"`([^`\n]+)`")
+# Lower than _MIN_QUOTED_STRING_LENGTH deliberately: identifiers are
+# routinely short and legitimate (`id`, `cb`, `db`) in ways quoted prose
+# strings aren't, so the same 8-char floor would silently exempt most
+# real symbol names from ever being checked. 3 still skips single-letter
+# noise (`x`, a lambda param) without exempting the common short-name case.
+_MIN_IDENTIFIER_LENGTH = 3
+
+
+def _backtick_identifiers(text: str) -> list[str]:
+    """Backtick-quoted spans at least _MIN_IDENTIFIER_LENGTH long - see
+    _BACKTICK_RE's comment for why backticks specifically, not
+    _quoted_strings' single/double-quote spans."""
+    matches = []
+    for match in _BACKTICK_RE.finditer(text):
+        value = match.group(1).strip()
+        if len(value) >= _MIN_IDENTIFIER_LENGTH:
+            matches.append(value)
+    return matches
+
+
+def _identifier_grounded(finding: dict, source: str) -> bool:
+    """Deterministic (no model call) check that at least one backtick-
+    quoted identifier in the finding's own text actually appears in the
+    real visible source for its file. A finding with no backtick-quoted
+    spans at all is never penalized here - not every real finding names a
+    specific symbol (a docstring/return-type mismatch, an ordering
+    change), only findings that make a specific named claim and get the
+    name wrong should be caught by this. "At least one" match, not "all",
+    deliberately: a finding legitimately quoting both a symbol name and a
+    literal value/string like an error message would otherwise be
+    penalized for the literal value never appearing verbatim in source
+    (it might be interpolated, translated, or partially reconstructed by
+    the model), when the symbol name alone is enough to confirm the claim
+    points at something real."""
+    identifiers = _backtick_identifiers(finding.get("issue", ""))
+    if not identifiers:
+        return True
+    return any(ident in source for ident in identifiers)
+
+
 def _line_citation_content_matches(finding: dict, file_contents: dict[str, str]) -> bool:
     """Verifies a finding's claimed line against the real file content
     already fetched for this diff, when there's something concrete to
@@ -1595,27 +1903,49 @@ def _validate_findings(
         else:
             out_of_diff.append(finding)
 
-    kept = []
+    line_ok = []
     content_mismatch = []
     for finding in in_diff:
         # Classified in one pass rather than by comparing against the kept
         # list - two findings on the same line can be equal dicts, and an
         # `in`-based split would then mis-attribute one of them.
         if not file_contents or _line_citation_content_matches(finding, file_contents):
-            kept.append(finding)
+            line_ok.append(finding)
         else:
             content_mismatch.append(finding)
 
-    if out_of_diff or content_mismatch:
+    # Deterministic identifier grounding - a grep-style check, not a model
+    # call: every backtick-quoted symbol a finding names must actually
+    # appear somewhere in that file's own visible source (its diff patch,
+    # plus file_contents when available for the fuller real-file check).
+    # Deliberately per-file, not the whole multi-file diff - a name that
+    # only appears in some OTHER file's code isn't evidence this finding's
+    # claim about THIS file is real, it would just weaken the check.
+    patch_source_by_file = {file: patch for file, patch in (diff_patches or ())}
+    kept = []
+    identifier_mismatch = []
+    for finding in line_ok:
+        source = patch_source_by_file.get(finding["file"], "")
+        if file_contents:
+            source += "\n" + (file_contents.get(finding["file"]) or "")
+        if _identifier_grounded(finding, source):
+            kept.append(finding)
+        else:
+            identifier_mismatch.append(finding)
+
+    if out_of_diff or content_mismatch or identifier_mismatch:
         logger.info(
             "flash review grounding: kept %d/%d finding(s); dropped %d outside the diff (%s), "
-            "%d whose quoted content wasn't near the cited line (%s)",
+            "%d whose quoted content wasn't near the cited line (%s), "
+            "%d whose named symbol doesn't appear in the file (%s)",
             len(kept),
             len(findings),
             len(out_of_diff),
             ", ".join(f"{f['file']}:{f['line']}" for f in out_of_diff) or "-",
             len(content_mismatch),
             ", ".join(f"{f['file']}:{f['line']}" for f in content_mismatch) or "-",
+            len(identifier_mismatch),
+            ", ".join(f"{f['file']}:{f['line']}" for f in identifier_mismatch) or "-",
         )
 
     # Annotated here, once, after grounding - both review_diff call sites
@@ -2069,6 +2399,12 @@ def review_diff(
     semantic_findings = find_semantic_regressions(
         diff_text, file_contents, referenced_symbol_context
     )
+    # Merged into the same list, not kept separate - both are deterministic,
+    # pre-computed findings (source: "semantic") from _merge_semantic_
+    # findings' point of view; downstream verification/caching/gating
+    # treats every entry here identically regardless of which function
+    # produced it.
+    semantic_findings = semantic_findings + find_static_analysis_regressions(diff_text, file_contents)
 
     if cache_lookup is not None:
         try:
@@ -2171,12 +2507,14 @@ def review_diff(
     # definition's real source) - whether new code "matches the style" of
     # an unrelated sibling is a judgment call, not something a regex check
     # can verify, so this context is LLM-prompt-only.
+    moved_code_context = _moved_code_context(_detect_moved_code_blocks(diff_text))
     user_prompt = _build_flash_review_user_prompt(
-        pr_title, diff_text, referenced_symbol_context, sibling_file_context
+        pr_title, diff_text, referenced_symbol_context, sibling_file_context, moved_code_context
     )
+    system_prompt = _flash_review_system_prompt_for_cap(_max_findings_for_diff(diff_patches))
 
     def _call_adapter(used_adapter) -> str:
-        return used_adapter.simple_completion(FLASH_REVIEW_SYSTEM_PROMPT, user_prompt, cwd=".")
+        return used_adapter.simple_completion(system_prompt, user_prompt, cwd=".")
 
     def _call_adapter_and_validate(used_adapter) -> str:
         # Only used by the free-tier fallback chain: run_with_free_tier_fallback

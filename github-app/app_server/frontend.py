@@ -250,6 +250,7 @@ table.findings tr:last-child td { border-bottom: none; }
 .sev-stripe { display: inline-block; width: 3px; height: 13px; border-radius: 2px; margin-right: 8px; vertical-align: -2px; }
 .sev-stripe.critical { background: var(--critical); }
 .sev-stripe.warning { background: var(--warning); }
+.sev-stripe.neutral { background: var(--slate-400); }
 
 .deadcode-list, .dep-list { display: flex; flex-direction: column; }
 .deadcode-row { display: flex; align-items: baseline; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px; flex-wrap: wrap; }
@@ -463,7 +464,16 @@ function findingIdentityKey(findingType, f) {
   // membership against the dismissed_finding_keys set the read endpoint
   // already returns.
   if (findingType === 'secret') return f.path + '\x1f' + f.pattern + '\x1f' + f.match_preview;
+  if (findingType === 'static_analysis') return f.path + '\x1f' + f.line + '\x1f' + f.tool + '\x1f' + f.rule_id;
   return f.ecosystem + '\x1f' + f.package + '\x1f' + f.advisory_id;
+}
+function staticAnalysisSevChip(severity) {
+  // Shared (not defined per-page) - both the overview page's "Recent
+  // security findings" preview and the full Security page's table render
+  // static-analysis findings with this same severity mapping.
+  if (severity === 'blocker' || severity === 'critical') return { stripe: 'critical', chip: 'critical', label: 'Critical' };
+  if (severity === 'major') return { stripe: 'warning', chip: 'warning', label: 'Warning' };
+  return { stripe: 'neutral', chip: 'neutral', label: 'Info' };
 }
 function relativeTime(iso) {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -812,7 +822,7 @@ async function loadOverview() {{
   const evidence = latest.evidence || {{}};
   document.getElementById('last-scanned').textContent = 'Last scanned ' + relativeTime(latest.scanned_at);
 
-  const dismissedKeys = data.dismissed_finding_keys || {{ secret: [], vulnerability: [] }};
+  const dismissedKeys = data.dismissed_finding_keys || {{ secret: [], vulnerability: [], static_analysis: [] }};
   const security = evidence.security || {{}};
   const secretFindings = ((security.secrets || {{}}).findings || []).filter(function (f) {{
     return !f.likely_placeholder && !f.accepted && dismissedKeys.secret.indexOf(findingIdentityKey('secret', f)) === -1;
@@ -820,7 +830,10 @@ async function loadOverview() {{
   const vulnFindings = ((security.dependency_vulnerabilities || {{}}).findings || []).filter(function (f) {{
     return dismissedKeys.vulnerability.indexOf(findingIdentityKey('vulnerability', f)) === -1;
   }});
-  const totalFindings = secretFindings.length + vulnFindings.length;
+  const staticAnalysisFindings = ((security.static_analysis || {{}}).findings || []).filter(function (f) {{
+    return (dismissedKeys.static_analysis || []).indexOf(findingIdentityKey('static_analysis', f)) === -1;
+  }});
+  const totalFindings = secretFindings.length + vulnFindings.length + staticAnalysisFindings.length;
   document.getElementById('summary-title').textContent =
     totalFindings === 0 ? repo + ' is clean in the latest scan' : repo + ' has ' + totalFindings + ' open finding' + (totalFindings === 1 ? '' : 's');
   document.getElementById('summary-copy').textContent =
@@ -830,7 +843,7 @@ async function loadOverview() {{
 
   document.getElementById('stat-findings').textContent = totalFindings;
   document.getElementById('stat-findings').className = 'stat-value' + (totalFindings > 0 ? ' critical' : ' success');
-  document.getElementById('stat-findings-sub').textContent = secretFindings.length + ' secret, ' + vulnFindings.length + ' dependency';
+  document.getElementById('stat-findings-sub').textContent = secretFindings.length + ' secret, ' + vulnFindings.length + ' dependency, ' + staticAnalysisFindings.length + ' static analysis';
 
   const deadCode = (evidence.repository || {{}}).dead_code || {{}};
   const unreachable = deadCode.unreachable_modules || [];
@@ -846,7 +859,8 @@ async function loadOverview() {{
   const recentBody = document.getElementById('recent-security-body');
   const securePreview = secretFindings.slice(0, 5);
   const vulnPreview = vulnFindings.slice(0, 5 - securePreview.length);
-  if (securePreview.length === 0 && vulnPreview.length === 0) {{
+  const staticAnalysisPreview = staticAnalysisFindings.slice(0, Math.max(0, 5 - securePreview.length - vulnPreview.length));
+  if (securePreview.length === 0 && vulnPreview.length === 0 && staticAnalysisPreview.length === 0) {{
     recentBody.innerHTML = '<div class="empty-state">No open findings.</div>';
   }} else {{
     let rows = '';
@@ -859,6 +873,12 @@ async function loadOverview() {{
       rows += '<tr><td><span class="sev-stripe warning"></span><span class="finding-title">' + escapeHtml(f.advisory_id) + ': ' + escapeHtml(f.summary || 'known vulnerability') + '</span></td>' +
         '<td class="finding-cite">' + escapeHtml(f.package) + '@' + escapeHtml(f.installed_version) + '</td>' +
         '<td><span class="chip warning">Warning</span></td></tr>';
+    }});
+    staticAnalysisPreview.forEach(function (f) {{
+      const sev = staticAnalysisSevChip(f.severity);
+      rows += '<tr><td><span class="sev-stripe ' + sev.stripe + '"></span><span class="finding-title">' + escapeHtml(f.message) + '</span></td>' +
+        '<td class="finding-cite">' + escapeHtml(f.path) + ':' + f.line + '</td>' +
+        '<td><span class="chip ' + sev.chip + '">' + sev.label + '</span></td></tr>';
     }});
     recentBody.innerHTML = '<table class="findings"><thead><tr><th>Finding</th><th>Evidence</th><th>Severity</th></tr></thead><tbody>' + rows + '</tbody></table>';
   }}
@@ -914,6 +934,11 @@ function findingActionButtonHtml(findingType, f, label, handler) {{
       '" data-pattern="' + escapeHtml(f.pattern) + '" data-match-preview="' + escapeHtml(f.match_preview) +
       '" onclick="' + handler + '(this)">' + label + '</button>';
   }}
+  if (findingType === 'static_analysis') {{
+    return '<button class="btn" data-type="static_analysis" data-path="' + escapeHtml(f.path) +
+      '" data-line="' + f.line + '" data-tool="' + escapeHtml(f.tool) + '" data-rule-id="' + escapeHtml(f.rule_id) +
+      '" onclick="' + handler + '(this)">' + label + '</button>';
+  }}
   return '<button class="btn" data-type="vulnerability" data-ecosystem="' + escapeHtml(f.ecosystem) +
     '" data-package="' + escapeHtml(f.package) + '" data-advisory-id="' + escapeHtml(f.advisory_id) +
     '" onclick="' + handler + '(this)">' + label + '</button>';
@@ -924,6 +949,12 @@ function findingPayloadFromButton(btn) {{
     return {{
       finding_type: 'secret',
       finding: {{ path: btn.dataset.path, pattern: btn.dataset.pattern, match_preview: btn.dataset.matchPreview }},
+    }};
+  }}
+  if (btn.dataset.type === 'static_analysis') {{
+    return {{
+      finding_type: 'static_analysis',
+      finding: {{ path: btn.dataset.path, line: Number(btn.dataset.line), tool: btn.dataset.tool, rule_id: btn.dataset.ruleId }},
     }};
   }}
   return {{
@@ -944,7 +975,7 @@ async function undismissFinding(btn) {{
   loadSecurity();
 }}
 
-function toggleDismissedFindings(event, dismissedSecretFindings, dismissedVulnFindings) {{
+function toggleDismissedFindings(event, dismissedSecretFindings, dismissedVulnFindings, dismissedStaticAnalysisFindings) {{
   event.preventDefault();
   const el = document.getElementById('dismissed-findings-body');
   if (el.style.display !== 'none') {{ el.style.display = 'none'; return; }}
@@ -959,6 +990,11 @@ function toggleDismissedFindings(event, dismissedSecretFindings, dismissedVulnFi
       '<td class="finding-cite">' + escapeHtml(f.package) + '@' + escapeHtml(f.installed_version) + '</td>' +
       '<td>' + findingActionButtonHtml('vulnerability', f, 'Undismiss', 'undismissFinding') + '</td></tr>';
   }});
+  (dismissedStaticAnalysisFindings || []).forEach(function (f) {{
+    rows += '<tr><td><span class="finding-title">' + escapeHtml(f.message) + '</span></td>' +
+      '<td class="finding-cite">' + escapeHtml(f.path) + ':' + f.line + '</td>' +
+      '<td>' + findingActionButtonHtml('static_analysis', f, 'Undismiss', 'undismissFinding') + '</td></tr>';
+  }});
   el.innerHTML = '<table class="findings" style="opacity:0.7"><thead><tr><th>Finding</th><th>Evidence</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
   el.style.display = 'block';
 }}
@@ -971,26 +1007,31 @@ async function loadSecurity() {{
   const data = await res.json();
   const history = data.history || [];
   if (history.length === 0) {{ body.innerHTML = '<div class="empty-state">No scans yet.</div>'; return; }}
-  const dismissedKeys = data.dismissed_finding_keys || {{ secret: [], vulnerability: [] }};
+  const dismissedKeys = data.dismissed_finding_keys || {{ secret: [], vulnerability: [], static_analysis: [] }};
   const evidence = history[0].evidence || {{}};
   const security = evidence.security || {{}};
   const allSecretFindings = ((security.secrets || {{}}).findings || []).filter(function (f) {{ return !f.likely_placeholder && !f.accepted; }});
   const allVulnFindings = (security.dependency_vulnerabilities || {{}}).findings || [];
+  const allStaticAnalysisFindings = (security.static_analysis || {{}}).findings || [];
 
   const secretFindings = allSecretFindings.filter(function (f) {{ return dismissedKeys.secret.indexOf(findingIdentityKey('secret', f)) === -1; }});
   const vulnFindings = allVulnFindings.filter(function (f) {{ return dismissedKeys.vulnerability.indexOf(findingIdentityKey('vulnerability', f)) === -1; }});
+  const staticAnalysisFindings = allStaticAnalysisFindings.filter(function (f) {{ return (dismissedKeys.static_analysis || []).indexOf(findingIdentityKey('static_analysis', f)) === -1; }});
   const dismissedSecretFindings = allSecretFindings.filter(function (f) {{ return dismissedKeys.secret.indexOf(findingIdentityKey('secret', f)) !== -1; }});
   const dismissedVulnFindings = allVulnFindings.filter(function (f) {{ return dismissedKeys.vulnerability.indexOf(findingIdentityKey('vulnerability', f)) !== -1; }});
-  const dismissedCount = dismissedSecretFindings.length + dismissedVulnFindings.length;
+  const dismissedStaticAnalysisFindings = allStaticAnalysisFindings.filter(function (f) {{ return (dismissedKeys.static_analysis || []).indexOf(findingIdentityKey('static_analysis', f)) !== -1; }});
+  const dismissedCount = dismissedSecretFindings.length + dismissedVulnFindings.length + dismissedStaticAnalysisFindings.length;
 
-  if (secretFindings.length === 0 && vulnFindings.length === 0) {{
+  window._dismissedSecretFindings = dismissedSecretFindings;
+  window._dismissedVulnFindings = dismissedVulnFindings;
+  window._dismissedStaticAnalysisFindings = dismissedStaticAnalysisFindings;
+
+  if (secretFindings.length === 0 && vulnFindings.length === 0 && staticAnalysisFindings.length === 0) {{
     body.innerHTML = '<div class="empty-state">No open findings.</div>';
     if (dismissedCount > 0) {{
-      body.innerHTML += '<p class="section-sub" style="margin-top:16px"><a href="#" onclick="toggleDismissedFindings(event, window._dismissedSecretFindings, window._dismissedVulnFindings)">Show dismissed (' + dismissedCount + ')</a></p>' +
+      body.innerHTML += '<p class="section-sub" style="margin-top:16px"><a href="#" onclick="toggleDismissedFindings(event, window._dismissedSecretFindings, window._dismissedVulnFindings, window._dismissedStaticAnalysisFindings)">Show dismissed (' + dismissedCount + ')</a></p>' +
         '<div id="dismissed-findings-body" style="display:none"></div>';
     }}
-    window._dismissedSecretFindings = dismissedSecretFindings;
-    window._dismissedVulnFindings = dismissedVulnFindings;
     return;
   }}
   let rows = '';
@@ -1006,13 +1047,21 @@ async function loadSecurity() {{
       '<td><span class="chip warning">Warning</span></td>' +
       '<td>' + findingActionButtonHtml('vulnerability', f, 'Dismiss', 'dismissFinding') + '</td></tr>';
   }});
+  // Presented as Aletheore's own findings, same as PR review comments -
+  // f.tool/f.rule_id (SonarQube/Semgrep/Bearer/gosec/Bandit/Joern) stay
+  // out of the visible row; only f.message and the citation are shown.
+  staticAnalysisFindings.forEach(function (f) {{
+    const sev = staticAnalysisSevChip(f.severity);
+    rows += '<tr><td><span class="sev-stripe ' + sev.stripe + '"></span><span class="finding-title">' + escapeHtml(f.message) + '</span></td>' +
+      '<td class="finding-cite">' + escapeHtml(f.path) + ':' + f.line + '</td>' +
+      '<td><span class="chip ' + sev.chip + '">' + sev.label + '</span></td>' +
+      '<td>' + findingActionButtonHtml('static_analysis', f, 'Dismiss', 'dismissFinding') + '</td></tr>';
+  }});
   body.innerHTML = '<table class="findings"><thead><tr><th>Finding</th><th>Evidence</th><th>Severity</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
   if (dismissedCount > 0) {{
-    body.innerHTML += '<p class="section-sub" style="margin-top:16px"><a href="#" onclick="toggleDismissedFindings(event, window._dismissedSecretFindings, window._dismissedVulnFindings)">Show dismissed (' + dismissedCount + ')</a></p>' +
+    body.innerHTML += '<p class="section-sub" style="margin-top:16px"><a href="#" onclick="toggleDismissedFindings(event, window._dismissedSecretFindings, window._dismissedVulnFindings, window._dismissedStaticAnalysisFindings)">Show dismissed (' + dismissedCount + ')</a></p>' +
       '<div id="dismissed-findings-body" style="display:none"></div>';
   }}
-  window._dismissedSecretFindings = dismissedSecretFindings;
-  window._dismissedVulnFindings = dismissedVulnFindings;
 }}
 
 loadSecurity();
