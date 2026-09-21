@@ -1259,6 +1259,151 @@ def test_vulnerability_check_run_succeeds_when_no_new_vulnerability(
     assert vuln_runs[0]["conclusion"] == "success"
 
 
+def test_maybe_create_static_analysis_check_run_fails_with_new_findings(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    created = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run",
+        lambda client, token, repo, sha, conclusion, summary, name="": created.append(
+            (conclusion, name, summary)
+        ),
+    )
+    diff = {
+        "static_analysis": {
+            "new": [
+                {
+                    "tool": "trivy",
+                    "rule_id": "openai-api-key",
+                    "severity": "critical",
+                    "type": "privacy",
+                    "path": "app/.env",
+                    "line": 3,
+                    "message": "OpenAI API Key (sha256:abc123)",
+                }
+            ],
+            "resolved": [],
+        }
+    }
+
+    from scan_worker.jobs import _maybe_create_static_analysis_check_run
+
+    _maybe_create_static_analysis_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        diff=diff,
+    )
+
+    assert len(created) == 1
+    conclusion, name, summary = created[0]
+    assert conclusion == "failure"
+    assert name == "Aletheore Deterministic Scan"
+    assert "app/.env:3" in summary
+    assert "OpenAI API Key" in summary
+    # Presented as Aletheore's own finding, never the underlying tool/rule -
+    # same convention audited across every other customer-facing surface
+    # (dashboard, PR comments, docs export) on 2026-09-21.
+    assert "trivy" not in summary
+    assert "openai-api-key" not in summary
+
+
+def test_maybe_create_static_analysis_check_run_succeeds_with_no_new_findings(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    created = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run",
+        lambda client, token, repo, sha, conclusion, summary, name="": created.append(
+            (conclusion, name, summary)
+        ),
+    )
+
+    from scan_worker.jobs import _maybe_create_static_analysis_check_run
+
+    _maybe_create_static_analysis_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        diff={"static_analysis": {"new": [], "resolved": []}},
+    )
+
+    assert len(created) == 1
+    assert created[0][0] == "success"
+    assert created[0][1] == "Aletheore Deterministic Scan"
+
+
+def test_maybe_create_static_analysis_check_run_runs_on_free_plan(monkeypatch):
+    # Real, deliberate difference from every other check run in this file
+    # (secrets, vulnerabilities, regression fence, regression risk all
+    # return early on plan == "free") - this one is meant to be available
+    # to every tier, per product decision 2026-09-21. A regression here
+    # would silently take real security value away from free-tier repos.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"})
+    created = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run",
+        lambda client, token, repo, sha, conclusion, summary, name="": created.append(
+            (conclusion, name, summary)
+        ),
+    )
+    diff = {
+        "static_analysis": {
+            "new": [
+                {
+                    "tool": "semgrep",
+                    "rule_id": "some-rule",
+                    "severity": "major",
+                    "type": "bug",
+                    "path": "app.py",
+                    "line": 10,
+                    "message": "m",
+                }
+            ],
+            "resolved": [],
+        }
+    }
+
+    from scan_worker.jobs import _maybe_create_static_analysis_check_run
+
+    _maybe_create_static_analysis_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        diff=diff,
+    )
+
+    assert len(created) == 1
+    assert created[0][0] == "failure"
+
+
+def test_maybe_create_static_analysis_check_run_skips_when_installation_missing(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    created = []
+    monkeypatch.setattr("scan_worker.jobs.create_check_run", lambda *a, **k: created.append(True))
+
+    from scan_worker.jobs import _maybe_create_static_analysis_check_run
+
+    _maybe_create_static_analysis_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        diff={"static_analysis": {"new": [{"tool": "semgrep", "rule_id": "r", "path": "a.py", "line": 1, "message": "m"}], "resolved": []}},
+    )
+
+    assert created == []
+
+
 def test_maybe_create_regression_risk_check_run_creates_neutral_check_run(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})

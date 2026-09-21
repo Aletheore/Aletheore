@@ -896,6 +896,64 @@ def _maybe_create_vulnerability_check_run(
         )
 
 
+def _maybe_create_static_analysis_check_run(
+    client: httpx.Client,
+    token: str,
+    repo_full_name: str,
+    head_sha: str,
+    installation_id: int,
+    diff: dict,
+) -> None:
+    """Same shape as _maybe_create_vulnerability_check_run, for
+    diff["static_analysis"]["new"] (Semgrep/gosec/Bandit/Trivy, always-on
+    - see history.py's _compute_curated_diff for how that category is
+    built from the SAME base/head evidence run_pr_scan_job already
+    produces above, no extra scan needed).
+
+    Deliberately Semgrep/gosec/Bandit/Trivy only, not Bearer/Joern/
+    SonarQube - a real, tested attempt (2026-09-21) to add Bearer here via
+    a diff-scoped pass (materializing just the PR's changed files into a
+    throwaway checkout, bounded by PR size instead of Bearer's real
+    300s+-on-this-repo full-scan cost) measured WORSE results, not
+    equivalent-but-cheaper ones: isolating this repo's own jobs.py (even
+    with three sibling modules included for context) made Bearer report
+    11 "os_command_injection" findings on `subprocess.run(["git", ...])`
+    calls the full-repo scan correctly recognizes as safe - Bearer's
+    dataflow sanitization reasoning depends on cross-file context a
+    diff-scoped checkout structurally can't provide, confirmed twice, not
+    a fluke. Joern's CPG-based whole-program analysis depends on that kind
+    of context even more, so it wasn't attempted at all. Both stay
+    opt-in/full-scan-only, same as before this experiment.
+
+    Deliberately NOT gated behind `installation["plan"] == "free"` like
+    every other check run in this file - this is the one meant to be
+    available to every tier, including free, per product decision
+    2026-09-21. Findings are presented the same way every other
+    customer-facing surface already does (see static_analysis/__init__.py's
+    module comment): path/line/message only, never tool/rule_id.
+    """
+    settings = get_settings()
+    installation = get_installation_row(settings.database_url, installation_id)
+    if installation is None:
+        return
+
+    new_findings = diff.get("static_analysis", {}).get("new", [])
+    if new_findings:
+        summary = "\n".join(
+            f"- `{finding.get('path')}:{finding.get('line')}` - {finding.get('message')}"
+            for finding in new_findings
+        )
+        create_check_run(
+            client, token, repo_full_name, head_sha, "failure", summary,
+            name="Aletheore Deterministic Scan",
+        )
+    else:
+        create_check_run(
+            client, token, repo_full_name, head_sha, "success", "No new static analysis findings.",
+            name="Aletheore Deterministic Scan",
+        )
+
+
 def _maybe_create_regression_risk_check_run(
     client: httpx.Client,
     token: str,
@@ -1182,6 +1240,10 @@ def run_pr_scan_job(
             pass
         try:
             _maybe_create_vulnerability_check_run(client, token, repo_full_name, head_sha, installation_id, diff)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            _maybe_create_static_analysis_check_run(client, token, repo_full_name, head_sha, installation_id, diff)
         except Exception:  # noqa: BLE001
             pass
         try:
