@@ -141,15 +141,17 @@ async def handle_unexpected_exception(request: Request, exc: Exception) -> JSONR
     # URL (e.g. "/dashboard/acme/widgets") - several real routes here take
     # path params (org/repo, job_id, verification_token, and
     # {file_path:path} which is attacker/user-controllable free text).
-    # send_error_alert's dedup store is a plain, never-evicted, process-
-    # lifetime dict keyed by this string (error_alerts.py's
-    # _last_alert_at) - keying by the instantiated URL would mint a new,
-    # permanent dict entry for every distinct org/repo/job/file that ever
-    # errors, an unbounded leak for the life of the process instead of one
-    # bounded entry per route. Falls back to request.url.path only for the
-    # case no route object is on the scope (defensive - every path that
-    # reaches this handler by raising from within an endpoint has already
-    # matched one).
+    # send_error_alert's dedup store is a Redis key with a TTL
+    # (error_alerts.py's _ALERT_COOLDOWN_KEY_PREFIX, fixed in a separate
+    # real production incident - see that file), not the unbounded
+    # process-lifetime dict this comment used to describe - a key per
+    # instantiated URL wouldn't leak forever the way it would have then,
+    # but it would still mean "this endpoint is broken" alerts once per
+    # distinct org/repo/job/file instead of once for the route, which is
+    # the actual reason to keep grouping by template rather than instance.
+    # Falls back to request.url.path only for the case no route object is
+    # on the scope (defensive - every path that reaches this handler by
+    # raising from within an endpoint has already matched one).
     route_path = getattr(request.scope.get("route"), "path", None) or request.url.path
     await asyncio.to_thread(
         send_error_alert,

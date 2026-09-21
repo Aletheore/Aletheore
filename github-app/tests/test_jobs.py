@@ -9706,7 +9706,15 @@ def test_run_ops_monitor_job_broken_app_health_sends_ops_email(monkeypatch):
     monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
     monkeypatch.setenv("EMAIL_REPLY_TO_ADDRESS", "ops@example.com")
     get_settings.cache_clear()
-    monkeypatch.setattr(error_alerts, "_last_alert_at", {})
+    # error_alerts._should_alert's own cooldown now lives in real Redis
+    # (see error_alerts.py's real production-bug fix), not the process
+    # dict this used to reset - clear the real key so a previous test run
+    # (or this same source/exception combo cooling down from an earlier
+    # test) can't make this test's very first call already look rate-
+    # limited.
+    error_alerts.get_redis_client().delete(
+        error_alerts._ALERT_COOLDOWN_KEY_PREFIX + "ops_monitor.app_health:OpsMonitorError"
+    )
     monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
     monkeypatch.setattr("scan_worker.jobs._fetch_app_health", lambda url: (False, "broken"))
     monkeypatch.setattr("scan_worker.jobs._check_queue_alerts", lambda redis_conn, now: None)
