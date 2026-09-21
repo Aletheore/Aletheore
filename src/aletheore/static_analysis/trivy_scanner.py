@@ -78,6 +78,22 @@ def check_trivy(repo_path: Path, timeout: int | None = None) -> dict:
         "--format", "json",
         "--timeout", f"{resolved_timeout}s",
         "--quiet",
+        # Real bug found live (2026-09-21): even scoped to secret,misconfig
+        # only - deliberately excluding "vuln" specifically to avoid needing
+        # network/lockfile resolution, see _SCANNERS_ARG's comment above -
+        # Trivy still made a real network call resolving a Maven repo's POM
+        # metadata for a Java project's pom.xml, and failed the whole scan
+        # when Maven Central rate-limited it (429, confirmed live against
+        # google/gson: "remote Maven repository returned 429 Too Many
+        # Requests"). A hosted scan-worker shares one IP across every
+        # customer's scans, making this a real, recurring failure mode, not
+        # a one-off. --offline-scan disables it entirely - confirmed live
+        # this doesn't cost any real detection: the same repo/finding set
+        # (1 secret + 3 misconfigs on this repo's own known-good case)
+        # comes back identical with vs without it, since secret/misconfig
+        # scanning is pure local file-content analysis and never needed
+        # network access in the first place.
+        "--offline-scan",
     ]
     skip_dirs = _skip_dirs_arg(repo_path)
     if skip_dirs:

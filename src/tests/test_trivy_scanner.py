@@ -19,6 +19,25 @@ def test_check_trivy_reports_not_installed(tmp_path):
     assert result == {"checked": False, "reason": "trivy not installed", "findings": []}
 
 
+def test_check_trivy_always_passes_offline_scan(tmp_path):
+    # Real bug found live (2026-09-21): even scoped to secret,misconfig
+    # only, Trivy still made a real network call resolving Maven POM
+    # metadata for a Java project's pom.xml, and failed the whole scan
+    # when Maven Central rate-limited it (429, confirmed live against
+    # google/gson). --offline-scan must always be present to prevent this
+    # regressing - a hosted scan-worker sharing one IP across every
+    # customer's scans makes this a real, recurring failure mode.
+    (tmp_path / "app.py").write_text("x = 1\n")
+    mock_result = _mock_run(0, stdout=json.dumps({"Results": []}))
+
+    with patch("aletheore.static_analysis.trivy_scanner.shutil.which", return_value="/usr/local/bin/trivy"), \
+         patch("aletheore.static_analysis.trivy_scanner.subprocess.run", return_value=mock_result) as mock_run:
+        check_trivy(tmp_path)
+
+    called_cmd = mock_run.call_args[0][0]
+    assert "--offline-scan" in called_cmd
+
+
 def test_check_trivy_normalizes_a_real_secret_finding_shape(tmp_path):
     (tmp_path / ".env").write_text("OPENAI_API_KEY=sk-proj-abcdef1234567890\n")
     # Real shape confirmed live against this repo's own .env (2026-09-21).
