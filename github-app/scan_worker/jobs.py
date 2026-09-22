@@ -912,15 +912,26 @@ def _static_analysis_annotations(findings: list[dict]) -> list[dict]:
     comments on this - CauseMetadata often carries no StartLine at all)
     defaults line to 0, which would be rejected outright. Those findings
     stay summary-text-only rather than getting a fabricated line 1
-    annotation that would point at the wrong place."""
+    annotation that would point at the wrong place.
+
+    Same reasoning for `path`: every real scanner module always sets it,
+    but a missing/None path here would produce an annotation the Checks
+    API rejects outright - and since annotations are sent in one batch
+    per create_check_run call, one malformed entry risks the whole batch
+    (up to 50 otherwise-valid findings), not just itself. Flash Review
+    finding on this PR, real gap even though not yet observed in
+    practice."""
     annotations = []
     for finding in findings:
         line = finding.get("line")
+        path = finding.get("path")
         if not isinstance(line, int) or line < 1:
+            continue
+        if not isinstance(path, str) or not path:
             continue
         annotations.append(
             {
-                "path": finding.get("path"),
+                "path": path,
                 "start_line": line,
                 "end_line": line,
                 "annotation_level": _ANNOTATION_LEVEL_BY_SEVERITY.get(finding.get("severity"), "notice"),
@@ -1288,7 +1299,14 @@ def run_pr_scan_job(
         try:
             _maybe_create_static_analysis_check_run(client, token, repo_full_name, head_sha, installation_id, diff)
         except Exception:  # noqa: BLE001
-            pass
+            # Flash Review finding on this call site: every sibling check-run
+            # call in this function swallows silently the same way, but this
+            # is the newest one and logging costs nothing - a persistently
+            # broken check run would otherwise be invisible to operators.
+            logging.getLogger("scan_worker.jobs").warning(
+                "static analysis check run failed for installation=%s repo=%s",
+                installation_id, repo_full_name, exc_info=True,
+            )
         try:
             changed_files = fetch_pr_changed_files(client, token, repo_full_name, base_sha, head_sha)
         except Exception:  # noqa: BLE001
