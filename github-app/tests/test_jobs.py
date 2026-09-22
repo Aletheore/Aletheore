@@ -1435,6 +1435,26 @@ def test_static_analysis_annotations_skips_findings_with_no_real_line():
     assert annotations[0]["path"] == "app.py"
 
 
+def test_static_analysis_annotations_skips_findings_with_no_real_path():
+    # Real Flash Review finding on #764: a finding with a valid line but a
+    # missing/None path would produce an annotation the GitHub Checks API
+    # rejects outright - and since annotations post in one batch, one
+    # malformed entry risks the whole batch, not just itself.
+    from scan_worker.jobs import _static_analysis_annotations
+
+    findings = [
+        {"path": None, "line": 5, "severity": "major", "message": "no real path"},
+        {"line": 6, "severity": "major", "message": "path key missing entirely"},
+        {"path": "", "line": 7, "severity": "major", "message": "empty path"},
+        {"path": "app.py", "line": 10, "severity": "major", "message": "real finding"},
+    ]
+
+    annotations = _static_analysis_annotations(findings)
+
+    assert len(annotations) == 1
+    assert annotations[0]["path"] == "app.py"
+
+
 def test_maybe_create_static_analysis_check_run_skips_when_installation_missing(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
