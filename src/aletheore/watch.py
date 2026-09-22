@@ -303,7 +303,7 @@ def rebuild(repo_path: Path, report: Callable[[str], None]) -> None:
     layer violations) and hotspots are driven by the import graph and
     commit history respectively, neither of which moves when a function
     body is edited. Static analysis is the one exception to "doesn't move
-    on a body edit" - Semgrep/Bearer/gosec/Bandit/Trivy very much care about
+    on a body edit" - Semgrep/Bearer/gosec/Bandit/Trivy/PMD very much care about
     changed code - but each is a real subprocess spawn (seconds at best,
     SonarQube minutes), and running five-plus external tools on every
     keystroke-triggered save would make the loop unusable regardless of
