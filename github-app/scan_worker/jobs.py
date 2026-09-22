@@ -896,6 +896,40 @@ def _maybe_create_vulnerability_check_run(
         )
 
 
+_ANNOTATION_LEVEL_BY_SEVERITY = {
+    "blocker": "failure",
+    "critical": "failure",
+    "major": "warning",
+    "minor": "notice",
+    "info": "notice",
+}
+
+
+def _static_analysis_annotations(findings: list[dict]) -> list[dict]:
+    """Real GitHub Checks API constraint confirmed against its own docs:
+    start_line/end_line must be >= 1 - a misconfig-type finding with no
+    real single offending line (see trivy_scanner.py/pmd_scanner.py's own
+    comments on this - CauseMetadata often carries no StartLine at all)
+    defaults line to 0, which would be rejected outright. Those findings
+    stay summary-text-only rather than getting a fabricated line 1
+    annotation that would point at the wrong place."""
+    annotations = []
+    for finding in findings:
+        line = finding.get("line")
+        if not isinstance(line, int) or line < 1:
+            continue
+        annotations.append(
+            {
+                "path": finding.get("path"),
+                "start_line": line,
+                "end_line": line,
+                "annotation_level": _ANNOTATION_LEVEL_BY_SEVERITY.get(finding.get("severity"), "notice"),
+                "message": finding.get("message", ""),
+            }
+        )
+    return annotations
+
+
 def _maybe_create_static_analysis_check_run(
     client: httpx.Client,
     token: str,
@@ -930,7 +964,15 @@ def _maybe_create_static_analysis_check_run(
     available to every tier, including free, per product decision
     2026-09-21. Findings are presented the same way every other
     customer-facing surface already does (see static_analysis/__init__.py's
-    module comment): path/line/message only, never tool/rule_id.
+    module comment): path/line/message only, never tool/rule_id - true of
+    both the summary text and the inline annotations below.
+
+    Also posts each finding as a real inline Checks-API annotation on its
+    own file:line (up to GitHub's real 50-per-request limit, batched via
+    create_check_run's own annotations handling for anything beyond that),
+    not just the summary block - a finding lands on the diff itself, the
+    same surface Flash Review's own inline comments already use, not only
+    a text list a reviewer has to cross-reference manually.
     """
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
@@ -946,6 +988,7 @@ def _maybe_create_static_analysis_check_run(
         create_check_run(
             client, token, repo_full_name, head_sha, "failure", summary,
             name="Aletheore Deterministic Scan",
+            annotations=_static_analysis_annotations(new_findings),
         )
     else:
         create_check_run(

@@ -1265,8 +1265,8 @@ def test_maybe_create_static_analysis_check_run_fails_with_new_findings(monkeypa
     created = []
     monkeypatch.setattr(
         "scan_worker.jobs.create_check_run",
-        lambda client, token, repo, sha, conclusion, summary, name="": created.append(
-            (conclusion, name, summary)
+        lambda client, token, repo, sha, conclusion, summary, name="", annotations=None: created.append(
+            (conclusion, name, summary, annotations)
         ),
     )
     diff = {
@@ -1298,7 +1298,7 @@ def test_maybe_create_static_analysis_check_run_fails_with_new_findings(monkeypa
     )
 
     assert len(created) == 1
-    conclusion, name, summary = created[0]
+    conclusion, name, summary, annotations = created[0]
     assert conclusion == "failure"
     assert name == "Aletheore Deterministic Scan"
     assert "app/.env:3" in summary
@@ -1308,6 +1308,18 @@ def test_maybe_create_static_analysis_check_run_fails_with_new_findings(monkeypa
     # (dashboard, PR comments, docs export) on 2026-09-21.
     assert "trivy" not in summary
     assert "openai-api-key" not in summary
+    # Real GitHub Checks API annotation, not just a text summary line - a
+    # finding now lands on the diff itself, same surface Flash Review's
+    # own inline comments already use.
+    assert annotations == [
+        {
+            "path": "app/.env",
+            "start_line": 3,
+            "end_line": 3,
+            "annotation_level": "failure",
+            "message": "OpenAI API Key (sha256:abc123)",
+        }
+    ]
 
 
 def test_maybe_create_static_analysis_check_run_succeeds_with_no_new_findings(monkeypatch):
@@ -1316,7 +1328,7 @@ def test_maybe_create_static_analysis_check_run_succeeds_with_no_new_findings(mo
     created = []
     monkeypatch.setattr(
         "scan_worker.jobs.create_check_run",
-        lambda client, token, repo, sha, conclusion, summary, name="": created.append(
+        lambda client, token, repo, sha, conclusion, summary, name="", annotations=None: created.append(
             (conclusion, name, summary)
         ),
     )
@@ -1348,7 +1360,7 @@ def test_maybe_create_static_analysis_check_run_runs_on_free_plan(monkeypatch):
     created = []
     monkeypatch.setattr(
         "scan_worker.jobs.create_check_run",
-        lambda client, token, repo, sha, conclusion, summary, name="": created.append(
+        lambda client, token, repo, sha, conclusion, summary, name="", annotations=None: created.append(
             (conclusion, name, summary)
         ),
     )
@@ -1382,6 +1394,45 @@ def test_maybe_create_static_analysis_check_run_runs_on_free_plan(monkeypatch):
 
     assert len(created) == 1
     assert created[0][0] == "failure"
+
+
+def test_static_analysis_annotations_maps_severity_to_annotation_level():
+    from scan_worker.jobs import _static_analysis_annotations
+
+    findings = [
+        {"path": "a.py", "line": 1, "severity": "blocker", "message": "m1"},
+        {"path": "a.py", "line": 2, "severity": "critical", "message": "m2"},
+        {"path": "a.py", "line": 3, "severity": "major", "message": "m3"},
+        {"path": "a.py", "line": 4, "severity": "minor", "message": "m4"},
+        {"path": "a.py", "line": 5, "severity": "info", "message": "m5"},
+        {"path": "a.py", "line": 6, "severity": "unknown-severity", "message": "m6"},
+    ]
+
+    annotations = _static_analysis_annotations(findings)
+
+    assert [a["annotation_level"] for a in annotations] == [
+        "failure", "failure", "warning", "notice", "notice", "notice",
+    ]
+
+
+def test_static_analysis_annotations_skips_findings_with_no_real_line():
+    # Real GitHub Checks API constraint: start_line/end_line must be >= 1.
+    # A misconfig-type finding with no single offending line (real gap
+    # confirmed live in trivy_scanner.py/pmd_scanner.py: CauseMetadata
+    # often carries no StartLine at all) defaults line to 0 - must stay
+    # summary-text-only, not get a fabricated line 1 annotation pointing
+    # at the wrong place.
+    from scan_worker.jobs import _static_analysis_annotations
+
+    findings = [
+        {"path": "Dockerfile", "line": 0, "severity": "minor", "message": "no HEALTHCHECK"},
+        {"path": "app.py", "line": 10, "severity": "major", "message": "real finding"},
+    ]
+
+    annotations = _static_analysis_annotations(findings)
+
+    assert len(annotations) == 1
+    assert annotations[0]["path"] == "app.py"
 
 
 def test_maybe_create_static_analysis_check_run_skips_when_installation_missing(monkeypatch):
