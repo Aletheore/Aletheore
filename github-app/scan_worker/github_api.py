@@ -299,6 +299,13 @@ def edit_pr_review_comment(
     response.raise_for_status()
 
 
+# GitHub's real, documented Checks API constraint: at most 50 annotations
+# per request, on both the initial create and each subsequent update - more
+# than that needs multiple requests, and an update's annotations APPEND to
+# the check run's existing set rather than replacing it.
+_MAX_ANNOTATIONS_PER_REQUEST = 50
+
+
 def create_check_run(
     client: httpx.Client,
     token: str,
@@ -307,11 +314,20 @@ def create_check_run(
     conclusion: str,
     summary: str,
     name: str = "Aletheore secrets check",
+    annotations: list[dict] | None = None,
 ) -> None:
     headers = {
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github+json",
     }
+    annotations = annotations or []
+    first_batch = annotations[:_MAX_ANNOTATIONS_PER_REQUEST]
+    remaining = annotations[_MAX_ANNOTATIONS_PER_REQUEST:]
+
+    output: dict = {"title": name, "summary": summary}
+    if first_batch:
+        output["annotations"] = first_batch
+
     response = client.post(
         f"/repos/{repo_full_name}/check-runs",
         headers=headers,
@@ -320,10 +336,26 @@ def create_check_run(
             "head_sha": head_sha,
             "status": "completed",
             "conclusion": conclusion,
-            "output": {"title": name, "summary": summary},
+            "output": output,
         },
     )
     response.raise_for_status()
+
+    if not remaining:
+        return
+    # Real API shape confirmed against GitHub's own Checks API docs: each
+    # update call's annotations append to what the check run already has,
+    # they don't replace it - so this loop is correct to keep issuing
+    # 50-at-a-time batches rather than resending everything each time.
+    check_run_id = response.json()["id"]
+    for start in range(0, len(remaining), _MAX_ANNOTATIONS_PER_REQUEST):
+        batch = remaining[start : start + _MAX_ANNOTATIONS_PER_REQUEST]
+        update_response = client.patch(
+            f"/repos/{repo_full_name}/check-runs/{check_run_id}",
+            headers=headers,
+            json={"output": {"title": name, "summary": summary, "annotations": batch}},
+        )
+        update_response.raise_for_status()
 
 
 # A file this large wasn't going to fit the review budget even if it could

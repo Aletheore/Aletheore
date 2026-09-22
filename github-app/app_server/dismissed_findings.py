@@ -69,7 +69,7 @@ def finding_identity_key(finding_type: str, finding: dict) -> str:
     them stay possible) use file+line+_issue_fingerprint(issue) - see that
     function's docstring for why a fingerprint rather than the raw text.
 
-    static_analysis (SonarQube/Semgrep/Bearer/gosec/Bandit/Joern, normalized
+    static_analysis (SonarQube/Semgrep/Bearer/gosec/Bandit/Joern/Trivy, normalized
     into security.static_analysis - see src/aletheore/static_analysis/)
     uses path+line+tool+rule_id. Unlike Flash Review's free-text issue
     field, a deterministic scanner's rule_id is stable across re-runs of

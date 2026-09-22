@@ -22,6 +22,7 @@ This directory contains concise runbooks and policies for operating the hosted A
 - [DATA-HANDLING.md](DATA-HANDLING.md)
 - [DEPLOYMENT-VERIFICATION.md](DEPLOYMENT-VERIFICATION.md)
 - [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md)
+- [MANUAL-ACCOUNT-CHANGES.md](MANUAL-ACCOUNT-CHANGES.md)
 - [SLOS.md](SLOS.md)
 - [SUPPORT-PROCESS.md](SUPPORT-PROCESS.md)
 

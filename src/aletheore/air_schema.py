@@ -60,7 +60,7 @@ def _arr(items: dict | None = None) -> dict:
 _SECRET_FINDING = _obj({"path": _STR, "line": _INT, "pattern": _STR})
 _ENDPOINT = _obj({"file": _STR, "line": _INT, "method": _STR, "path": _STR})
 # One normalized shape across every static-analysis tool (SonarQube,
-# Semgrep, Bearer, gosec, Bandit) - every downstream consumer (MCP tool,
+# Semgrep, Bearer, gosec, Bandit, Joern, Trivy) - every downstream consumer (MCP tool,
 # PR-review merge, AIRview) reads this regardless of which tool produced
 # it. severity/type are each tool's own taxonomy mapped down to this
 # shared set - see the per-tool scanner modules in

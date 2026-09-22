@@ -598,9 +598,13 @@ def scan_repository(
         }
 
     if check_static_analysis:
-        report(
-            "Running static analysis scanners (Semgrep, gosec, Bandit, opt-in Bearer/Joern/SonarQube)"
-        )
+        # Deliberately no vendor names in this progress line - every other
+        # customer-facing surface (dashboard, PR comments, docs export;
+        # see static_analysis/__init__.py's module comment) already
+        # presents these findings as Aletheore's own, and a CLI progress
+        # message naming the underlying tools would be the one place that
+        # convention didn't hold.
+        report("Running static analysis scanners")
         static_analysis_data = run_static_analysis(
             repo_path, run_bearer=run_bearer, run_joern=run_joern, sonarqube_host_url=sonarqube_host_url
         )

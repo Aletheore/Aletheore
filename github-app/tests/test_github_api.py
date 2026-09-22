@@ -97,6 +97,82 @@ def test_create_check_run_posts_expected_payload():
     assert body["name"] == "Aletheore secrets check"
 
 
+def test_create_check_run_includes_annotations_in_the_initial_request():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(201, json={"id": 1})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    annotations = [
+        {"path": "a.py", "start_line": 1, "end_line": 1, "annotation_level": "failure", "message": "m1"},
+        {"path": "b.py", "start_line": 2, "end_line": 2, "annotation_level": "warning", "message": "m2"},
+    ]
+    create_check_run(
+        client, "token", "octocat/hello-world", "abc123", "failure", "summary", annotations=annotations
+    )
+
+    assert len(calls) == 1
+    import json as _json
+
+    body = _json.loads(calls[0].content)
+    assert body["output"]["annotations"] == annotations
+
+
+def test_create_check_run_batches_more_than_fifty_annotations():
+    # Real GitHub Checks API constraint: at most 50 annotations per
+    # request - more needs additional update calls, each APPENDING to the
+    # check run's existing set (confirmed against GitHub's own docs), not
+    # replacing it.
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.method == "POST":
+            return httpx.Response(201, json={"id": 42})
+        return httpx.Response(200, json={"id": 42})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    annotations = [
+        {"path": f"f{i}.py", "start_line": i, "end_line": i, "annotation_level": "warning", "message": f"m{i}"}
+        for i in range(120)
+    ]
+    create_check_run(
+        client, "token", "octocat/hello-world", "abc123", "failure", "summary", annotations=annotations
+    )
+
+    import json as _json
+
+    assert [c.method for c in calls] == ["POST", "PATCH", "PATCH"]
+    assert calls[0].url.path == "/repos/octocat/hello-world/check-runs"
+    post_body = _json.loads(calls[0].content)
+    assert len(post_body["output"]["annotations"]) == 50
+    assert post_body["output"]["annotations"] == annotations[:50]
+
+    for i, patch_call in enumerate(calls[1:], start=1):
+        assert patch_call.url.path == "/repos/octocat/hello-world/check-runs/42"
+        patch_body = _json.loads(patch_call.content)
+        expected = annotations[50 + (i - 1) * 50 : 50 + i * 50]
+        assert patch_body["output"]["annotations"] == expected
+
+
+def test_create_check_run_omits_annotations_key_when_none_given():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(201, json={"id": 1})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    create_check_run(client, "token", "octocat/hello-world", "abc123", "success", "summary")
+
+    import json as _json
+
+    body = _json.loads(calls[0].content)
+    assert "annotations" not in body["output"]
+
+
 def test_create_check_run_uses_custom_name_when_given():
     calls = []
 
