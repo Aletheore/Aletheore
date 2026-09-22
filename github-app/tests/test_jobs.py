@@ -9801,6 +9801,10 @@ def test_run_health_sweep_staleness_check_job_alerts_when_stale(monkeypatch):
         "scan_worker.jobs.get_seconds_since_last_health_check",
         lambda dsn: HEALTH_SWEEP_STALENESS_THRESHOLD_SECONDS + 1,
     )
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_health_check_targets_all",
+        lambda dsn: [{"target_id": 1}],
+    )
     alerts = []
     monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
 
@@ -9808,6 +9812,33 @@ def test_run_health_sweep_staleness_check_job_alerts_when_stale(monkeypatch):
 
     assert len(alerts) == 1
     assert alerts[0][0][0] == "health_sweep"
+
+
+def test_run_health_sweep_staleness_check_job_does_not_alert_when_no_current_targets(monkeypatch):
+    # Real false positive found live in production (2026-09-22): a target
+    # row survives an installation's air -> flash downgrade - the sweep
+    # correctly stops checking it forever, but endpoint_health's last-write
+    # timestamp stays frozen from before the downgrade, so
+    # seconds_since_last_check only ever grows. Without this check, this
+    # alerted every 6 hours indefinitely for a fully-expected,
+    # working-as-designed state (Aletheore's own dogfood install,
+    # downgraded to flash on purpose) - confirmed live: exactly one target
+    # row existed, joined to an installation on plan="flash", which
+    # list_health_check_targets_all's own AIR-exclusive query silently
+    # excludes.
+    from scan_worker.jobs import HEALTH_SWEEP_STALENESS_THRESHOLD_SECONDS, run_health_sweep_staleness_check_job
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_seconds_since_last_health_check",
+        lambda dsn: HEALTH_SWEEP_STALENESS_THRESHOLD_SECONDS + 1,
+    )
+    monkeypatch.setattr("scan_worker.jobs.list_health_check_targets_all", lambda dsn: [])
+    alerts = []
+    monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
+
+    run_health_sweep_staleness_check_job()
+
+    assert alerts == []
 
 
 def test_run_health_sweep_staleness_check_job_does_not_alert_when_fresh(monkeypatch):

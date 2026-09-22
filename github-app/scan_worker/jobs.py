@@ -3691,6 +3691,11 @@ def run_health_sweep_staleness_check_job() -> None:
     unnoticed - Docker's HEALTHCHECK on health-worker (see
     app_server/heartbeat.py) only proves that container's process hasn't
     fully deadlocked, not that its actual sweep is landing data.
+
+    Only alerts when there's currently at least one eligible (AIR-plan)
+    target to sweep - a staleness gap with zero current targets means the
+    sweep correctly has nothing to do, not that it's broken (see the real
+    2026-09-22 false positive this guards against, in the check below).
     """
     dsn = get_settings().database_url
     seconds_since_last_check = get_seconds_since_last_health_check(dsn)
@@ -3699,6 +3704,18 @@ def run_health_sweep_staleness_check_job() -> None:
         # no monitored targets configured, not a failure to alert on.
         return
     if seconds_since_last_check < HEALTH_SWEEP_STALENESS_THRESHOLD_SECONDS:
+        return
+    # Real false positive found live in production (2026-09-22): a target
+    # row survives an installation's air -> flash downgrade -
+    # list_health_check_targets_all is deliberately AIR-exclusive (see its
+    # own docstring), so the downgrade just makes every sweep skip that
+    # target forever - it doesn't clear endpoint_health's history. Without
+    # this check, that's indistinguishable from a genuinely broken sweep:
+    # seconds_since_last_check only ever grows past the threshold, so this
+    # re-alerted every _ALERT_COOLDOWN_SECONDS (6h) indefinitely for a
+    # fully-expected, working-as-designed state (Aletheore's own dogfood
+    # install, downgraded to flash on purpose).
+    if not list_health_check_targets_all(dsn):
         return
     send_error_alert(
         "health_sweep",
