@@ -19,7 +19,7 @@ def _skipped(reason):
 # to be replaced. check_sonarqube is looked up fresh by name on every call
 # instead (see check_static_analysis's own body), which is why that one
 # still works patched individually - see the last test below.
-def _patch_required_scanners(monkeypatch, semgrep=None, gosec=None, bandit=None):
+def _patch_required_scanners(monkeypatch, semgrep=None, gosec=None, bandit=None, trivy=None):
     monkeypatch.setattr(
         static_analysis_module,
         "_SCANNERS",
@@ -27,6 +27,7 @@ def _patch_required_scanners(monkeypatch, semgrep=None, gosec=None, bandit=None)
             ("semgrep", semgrep or (lambda repo_path: _checked([]))),
             ("gosec", gosec or (lambda repo_path: _checked([]))),
             ("bandit", bandit or (lambda repo_path: _checked([]))),
+            ("trivy", trivy or (lambda repo_path: _checked([]))),
         ),
     )
 
@@ -56,22 +57,26 @@ def _patch_optional_scanners(monkeypatch, bearer=None, joern=None):
 def test_check_static_analysis_aggregates_tools_run_and_skipped(tmp_path, monkeypatch):
     semgrep_finding = {"tool": "semgrep", "rule_id": "r1", "severity": "major", "type": "bug", "path": "a.py", "line": 1, "message": "m"}
     bandit_finding = {"tool": "bandit", "rule_id": "B602", "severity": "critical", "type": "vulnerability", "path": "b.py", "line": 2, "message": "m"}
+    trivy_finding = {"tool": "trivy", "rule_id": "openai-api-key", "severity": "critical", "type": "privacy", "path": "c.env", "line": 1, "message": "m"}
 
     _patch_required_scanners(
         monkeypatch,
         semgrep=lambda repo_path: _checked([semgrep_finding]),
         bandit=lambda repo_path: _checked([bandit_finding]),
+        trivy=lambda repo_path: _checked([trivy_finding]),
     )
     _patch_optional_scanners(monkeypatch)
 
     with patch("aletheore.static_analysis.check_sonarqube", return_value=_skipped("SonarQube not configured (set SONARQUBE_HOST_URL to enable)")):
         # run_bearer/run_joern default to False - both are opt-in (real
         # cost gaps found live: Bearer's non-linear-looking full-repo
-        # runtime, Joern's real per-scan CPG-build cost).
+        # runtime, Joern's real per-scan CPG-build cost). Trivy is not
+        # opt-in - it's in _SCANNERS above, on by default like semgrep/
+        # gosec/bandit (real timing data justified this: 2026-09-21).
         result = check_static_analysis(tmp_path)
 
     assert result["checked"] is True
-    assert sorted(result["tools_run"]) == ["bandit", "gosec", "semgrep"]
+    assert sorted(result["tools_run"]) == ["bandit", "gosec", "semgrep", "trivy"]
     assert result["tools_skipped"] == [
         {
             "tool": "bearer",
@@ -86,7 +91,7 @@ def test_check_static_analysis_aggregates_tools_run_and_skipped(tmp_path, monkey
         },
         {"tool": "sonarqube", "reason": "SonarQube not configured (set SONARQUBE_HOST_URL to enable)"},
     ]
-    assert result["findings"] == [semgrep_finding, bandit_finding]
+    assert result["findings"] == [semgrep_finding, bandit_finding, trivy_finding]
 
 
 def test_check_static_analysis_runs_bearer_when_opted_in(tmp_path, monkeypatch):
@@ -155,6 +160,19 @@ def test_check_static_analysis_survives_a_scanner_raising_unexpectedly(tmp_path,
     assert "bandit" not in result["tools_run"]
     bandit_skip = next(s for s in result["tools_skipped"] if s["tool"] == "bandit")
     assert "AttributeError" in bandit_skip["reason"]
+
+
+def test_trivy_is_wired_into_the_real_always_on_scanners_tuple():
+    # Real regression this guards against: Trivy briefly lived in
+    # _OPTIONAL_SCANNERS during development, before real timing data
+    # (2026-09-21) justified moving it to always-on like semgrep/gosec/
+    # bandit. Every test above patches _SCANNERS away entirely, so none of
+    # them would catch Trivy silently sliding back into _OPTIONAL_SCANNERS
+    # (or being dropped altogether) - this checks the real, unpatched tuple.
+    names = [name for name, _ in static_analysis_module._SCANNERS]
+    assert "trivy" in names
+    optional_names = [name for name, _, _ in static_analysis_module._OPTIONAL_SCANNERS]
+    assert "trivy" not in optional_names
 
 
 def test_check_static_analysis_passes_sonarqube_host_url_through(tmp_path, monkeypatch):

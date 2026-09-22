@@ -62,7 +62,7 @@ def build_evidence_summary(evidence: dict) -> dict:
             # Presented as Aletheore's own findings, same as every other
             # card here - tool/rule_id stay in the raw finding dicts for
             # anyone reading air.json directly, but the card itself never
-            # names SonarQube/Semgrep/Bearer/gosec/Bandit/Joern; only
+            # names SonarQube/Semgrep/Bearer/gosec/Bandit/Joern/Trivy; only
             # tools_run/tools_skipped (rendered as a coverage caption, not
             # a "powered by" list) says which of them actually ran.
             "static_analysis": {
