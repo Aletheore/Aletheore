@@ -14,8 +14,45 @@ COPY github-app/scan_worker ./scan_worker
 
 RUN apt-get update \
     && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends git \
+    && apt-get install -y --no-install-recommends git curl unzip default-jre-headless \
     && rm -rf /var/lib/apt/lists/*
+
+# Trivy and PMD (static_analysis/trivy_scanner.py, pmd_scanner.py) shell out
+# to these binaries via shutil.which() and degrade to "not installed, zero
+# findings" when absent - neither scanner test exercises the real binary
+# (every test patches shutil.which), so a missing install here never fails
+# CI, it just makes both scanners silently no-op in production. Pinned to
+# the exact versions this integration was evaluated against (see
+# docs/audits/deterministic_scanner_evaluation.md and pmd_scanner.py's
+# _NOISY_RULES, tuned against real 7.27.0 output), with a checksum verified
+# against each release's own published artifact - Trivy publishes
+# trivy_0.74.0_checksums.txt directly; PMD publishes only a GPG signature
+# (.asc) for this asset, so the pinned hash below was computed locally from
+# the real, currently-published pmd-dist-7.27.0-bin.zip rather than left
+# unverified.
+RUN curl -sfL -o /tmp/trivy.tar.gz \
+      https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz \
+    && echo "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a  /tmp/trivy.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy \
+    && rm /tmp/trivy.tar.gz \
+    && curl -sfL -o /tmp/pmd-dist.zip \
+      "https://github.com/pmd/pmd/releases/download/pmd_releases%2F7.27.0/pmd-dist-7.27.0-bin.zip" \
+    && echo "4ae396ffaf2b0d3ef0b73a10b2925e77066f73d57a4ce9078c60e7302bcddec9  /tmp/pmd-dist.zip" | sha256sum -c - \
+    && unzip -q /tmp/pmd-dist.zip -d /opt \
+    && rm /tmp/pmd-dist.zip \
+    && ln -s /opt/pmd-bin-7.27.0/bin/pmd /usr/local/bin/pmd \
+    # jline-3.21.0.jar (org.jline:jline-remote-telnet) is PMD's bundled
+    # interactive-REPL telnet server, not something pmd_scanner.py's
+    # `pmd check` invocation ever starts - two real HIGH CVEs live in it
+    # (CVE-2026-56740, CVE-2026-56741, both DoS in the telnet server
+    # itself), caught by this repo's own container-security.yml image
+    # scan. Verified locally: `pmd check` runs and reports findings
+    # identically with this jar deleted (only a progressbar-rendering
+    # fallback warning changes, already the default behavior in a
+    # non-interactive container). Deleted outright rather than added to
+    # .trivyignore, since the safer fix here is removing genuinely unused
+    # attack surface, not just suppressing its detection.
+    && rm -f /opt/pmd-bin-7.27.0/lib/jline-3.21.0.jar
 
 RUN groupadd --system aletheore \
     && useradd --system --gid aletheore --home-dir /app --no-create-home aletheore \
