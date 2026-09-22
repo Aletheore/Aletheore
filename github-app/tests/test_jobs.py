@@ -1259,6 +1259,202 @@ def test_vulnerability_check_run_succeeds_when_no_new_vulnerability(
     assert vuln_runs[0]["conclusion"] == "success"
 
 
+def test_maybe_create_static_analysis_check_run_fails_with_new_findings(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    created = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run",
+        lambda client, token, repo, sha, conclusion, summary, name="", annotations=None: created.append(
+            (conclusion, name, summary, annotations)
+        ),
+    )
+    diff = {
+        "static_analysis": {
+            "new": [
+                {
+                    "tool": "trivy",
+                    "rule_id": "openai-api-key",
+                    "severity": "critical",
+                    "type": "privacy",
+                    "path": "app/.env",
+                    "line": 3,
+                    "message": "OpenAI API Key (sha256:abc123)",
+                }
+            ],
+            "resolved": [],
+        }
+    }
+
+    from scan_worker.jobs import _maybe_create_static_analysis_check_run
+
+    _maybe_create_static_analysis_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        diff=diff,
+    )
+
+    assert len(created) == 1
+    conclusion, name, summary, annotations = created[0]
+    assert conclusion == "failure"
+    assert name == "Aletheore Deterministic Scan"
+    assert "app/.env:3" in summary
+    assert "OpenAI API Key" in summary
+    # Presented as Aletheore's own finding, never the underlying tool/rule -
+    # same convention audited across every other customer-facing surface
+    # (dashboard, PR comments, docs export) on 2026-09-21.
+    assert "trivy" not in summary
+    assert "openai-api-key" not in summary
+    # Real GitHub Checks API annotation, not just a text summary line - a
+    # finding now lands on the diff itself, same surface Flash Review's
+    # own inline comments already use.
+    assert annotations == [
+        {
+            "path": "app/.env",
+            "start_line": 3,
+            "end_line": 3,
+            "annotation_level": "failure",
+            "message": "OpenAI API Key (sha256:abc123)",
+        }
+    ]
+
+
+def test_maybe_create_static_analysis_check_run_succeeds_with_no_new_findings(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    created = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run",
+        lambda client, token, repo, sha, conclusion, summary, name="", annotations=None: created.append(
+            (conclusion, name, summary)
+        ),
+    )
+
+    from scan_worker.jobs import _maybe_create_static_analysis_check_run
+
+    _maybe_create_static_analysis_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        diff={"static_analysis": {"new": [], "resolved": []}},
+    )
+
+    assert len(created) == 1
+    assert created[0][0] == "success"
+    assert created[0][1] == "Aletheore Deterministic Scan"
+
+
+def test_maybe_create_static_analysis_check_run_runs_on_free_plan(monkeypatch):
+    # Real, deliberate difference from every other check run in this file
+    # (secrets, vulnerabilities, regression fence, regression risk all
+    # return early on plan == "free") - this one is meant to be available
+    # to every tier, per product decision 2026-09-21. A regression here
+    # would silently take real security value away from free-tier repos.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"})
+    created = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run",
+        lambda client, token, repo, sha, conclusion, summary, name="", annotations=None: created.append(
+            (conclusion, name, summary)
+        ),
+    )
+    diff = {
+        "static_analysis": {
+            "new": [
+                {
+                    "tool": "semgrep",
+                    "rule_id": "some-rule",
+                    "severity": "major",
+                    "type": "bug",
+                    "path": "app.py",
+                    "line": 10,
+                    "message": "m",
+                }
+            ],
+            "resolved": [],
+        }
+    }
+
+    from scan_worker.jobs import _maybe_create_static_analysis_check_run
+
+    _maybe_create_static_analysis_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        diff=diff,
+    )
+
+    assert len(created) == 1
+    assert created[0][0] == "failure"
+
+
+def test_static_analysis_annotations_maps_severity_to_annotation_level():
+    from scan_worker.jobs import _static_analysis_annotations
+
+    findings = [
+        {"path": "a.py", "line": 1, "severity": "blocker", "message": "m1"},
+        {"path": "a.py", "line": 2, "severity": "critical", "message": "m2"},
+        {"path": "a.py", "line": 3, "severity": "major", "message": "m3"},
+        {"path": "a.py", "line": 4, "severity": "minor", "message": "m4"},
+        {"path": "a.py", "line": 5, "severity": "info", "message": "m5"},
+        {"path": "a.py", "line": 6, "severity": "unknown-severity", "message": "m6"},
+    ]
+
+    annotations = _static_analysis_annotations(findings)
+
+    assert [a["annotation_level"] for a in annotations] == [
+        "failure", "failure", "warning", "notice", "notice", "notice",
+    ]
+
+
+def test_static_analysis_annotations_skips_findings_with_no_real_line():
+    # Real GitHub Checks API constraint: start_line/end_line must be >= 1.
+    # A misconfig-type finding with no single offending line (real gap
+    # confirmed live in trivy_scanner.py/pmd_scanner.py: CauseMetadata
+    # often carries no StartLine at all) defaults line to 0 - must stay
+    # summary-text-only, not get a fabricated line 1 annotation pointing
+    # at the wrong place.
+    from scan_worker.jobs import _static_analysis_annotations
+
+    findings = [
+        {"path": "Dockerfile", "line": 0, "severity": "minor", "message": "no HEALTHCHECK"},
+        {"path": "app.py", "line": 10, "severity": "major", "message": "real finding"},
+    ]
+
+    annotations = _static_analysis_annotations(findings)
+
+    assert len(annotations) == 1
+    assert annotations[0]["path"] == "app.py"
+
+
+def test_maybe_create_static_analysis_check_run_skips_when_installation_missing(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    created = []
+    monkeypatch.setattr("scan_worker.jobs.create_check_run", lambda *a, **k: created.append(True))
+
+    from scan_worker.jobs import _maybe_create_static_analysis_check_run
+
+    _maybe_create_static_analysis_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        diff={"static_analysis": {"new": [{"tool": "semgrep", "rule_id": "r", "path": "a.py", "line": 1, "message": "m"}], "resolved": []}},
+    )
+
+    assert created == []
+
+
 def test_maybe_create_regression_risk_check_run_creates_neutral_check_run(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})

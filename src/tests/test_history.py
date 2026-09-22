@@ -171,6 +171,21 @@ def base_evidence() -> dict:
                     }
                 ],
             },
+            "static_analysis": {
+                "checked": True,
+                "reason": None,
+                "findings": [
+                    {
+                        "tool": "semgrep",
+                        "rule_id": "some-rule",
+                        "severity": "major",
+                        "type": "bug",
+                        "path": "a.py",
+                        "line": 10,
+                        "message": "m",
+                    }
+                ],
+            },
         },
         "architecture": {
             "layer_violations": {
@@ -188,6 +203,7 @@ def test_compute_diff_reports_no_new_or_resolved_when_identical():
 
     assert diff["secrets"] == {"new": [], "resolved": []}
     assert diff["vulnerabilities"] == {"new": [], "resolved": []}
+    assert diff["static_analysis"] == {"new": [], "resolved": []}
     assert diff["layer_violations"] == {"new": [], "resolved": []}
     assert diff["endpoints"] == {"new": [], "resolved": []}
     assert diff["aggregate_deltas"] == {
@@ -248,6 +264,52 @@ def test_compute_diff_detects_a_resolved_vulnerability():
     assert diff["vulnerabilities"]["new"] == []
     assert len(diff["vulnerabilities"]["resolved"]) == 1
     assert diff["vulnerabilities"]["resolved"][0]["advisory_id"] == "GHSA-1"
+
+
+def test_compute_diff_detects_a_new_static_analysis_finding():
+    old = base_evidence()
+    new = base_evidence()
+    new["security"]["static_analysis"]["findings"].append(
+        {
+            "tool": "trivy",
+            "rule_id": "openai-api-key",
+            "severity": "critical",
+            "type": "privacy",
+            "path": "b.py",
+            "line": 3,
+            "message": "m2",
+        }
+    )
+
+    diff = compute_diff(old, new)
+
+    assert len(diff["static_analysis"]["new"]) == 1
+    assert diff["static_analysis"]["new"][0]["path"] == "b.py"
+    assert diff["static_analysis"]["resolved"] == []
+
+
+def test_compute_diff_detects_a_resolved_static_analysis_finding():
+    old = base_evidence()
+    new = base_evidence()
+    new["security"]["static_analysis"]["findings"] = []
+
+    diff = compute_diff(old, new)
+
+    assert diff["static_analysis"]["new"] == []
+    assert len(diff["static_analysis"]["resolved"]) == 1
+    assert diff["static_analysis"]["resolved"][0]["rule_id"] == "some-rule"
+
+
+def test_compute_diff_does_not_crash_diffing_evidence_missing_static_analysis_entirely():
+    new = base_evidence()
+    old = base_evidence()
+    del old["security"]["static_analysis"]
+
+    diff = compute_diff(old, new)
+
+    assert len(diff["static_analysis"]["new"]) == 1
+    assert "caveats" in diff
+    assert any("static analysis" in caveat for caveat in diff["caveats"])
 
 
 def test_compute_diff_filters_new_vulnerabilities_by_severity_threshold(tmp_path):
@@ -382,6 +444,18 @@ def test_compute_diff_caveat_fires_when_vulnerability_checking_toggled():
 
     assert "caveats" in diff
     assert any("vulnerability" in c for c in diff["caveats"])
+
+
+def test_compute_diff_caveat_fires_when_static_analysis_checking_toggled():
+    old = base_evidence()
+    old["security"]["static_analysis"]["checked"] = False
+    old["security"]["static_analysis"]["findings"] = []
+    new = base_evidence()
+
+    diff = compute_diff(old, new)
+
+    assert "caveats" in diff
+    assert any("static analysis" in c for c in diff["caveats"])
 
 
 def test_compute_diff_caveat_fires_when_history_scanning_toggled():
