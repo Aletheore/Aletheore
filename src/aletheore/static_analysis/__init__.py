@@ -4,6 +4,7 @@ from aletheore.static_analysis.bandit_scanner import check_bandit
 from aletheore.static_analysis.bearer_scanner import check_bearer
 from aletheore.static_analysis.gosec_scanner import check_gosec
 from aletheore.static_analysis.joern_scanner import check_joern
+from aletheore.static_analysis.pmd_scanner import check_pmd
 from aletheore.static_analysis.semgrep_scanner import check_semgrep
 from aletheore.static_analysis.sonarqube_scanner import check_sonarqube
 from aletheore.static_analysis.trivy_scanner import check_trivy
@@ -22,6 +23,19 @@ from aletheore.static_analysis.trivy_scanner import check_trivy
 # nothing), and real Dockerfile misconfigurations detect_infrastructure
 # structurally cannot produce (pure file-inventory, no misconfig
 # analysis) - real, demonstrated value, not just a plausible addition.
+# PMD is the same real-timed-first-then-decided addition (2026-09-21):
+# 2.74s on google/gson (264 real Java files), 5.0s on apache/commons-lang
+# (629 files) - well-scaling, no JVM-startup-blowup problem. Its default
+# bestpractices+errorprone+security ruleset combo was NOT trustworthy
+# as-is though: unfiltered against gson it produced 3,582 violations, 70%
+# of them two JUnit-authoring-convention rules (WrongTestAnnotation,
+# UnitTestContainsTooManyAsserts) flagging test-code style, not bugs, and
+# CloseResource (a real bug-class rule in principle) sampled as a real
+# false positive on the same repo (flagged a JsonTreeWriter - an in-memory
+# tree builder whose close() is a no-op, not a real I/O resource). See
+# pmd_scanner.py's _NOISY_RULES for the full, evidence-based exclude list -
+# the remaining ~271 findings on that same repo were spot-checked as
+# bug-shaped before trusting them.
 # Bearer, Joern, and SonarQube are each opt-in, for different real reasons
 # found live: SonarQube per the integration scope doc's hosting-cost
 # tradeoff; Bearer because its full-repo runtime doesn't scale cleanly
@@ -38,6 +52,7 @@ _SCANNERS = (
     ("gosec", check_gosec),
     ("bandit", check_bandit),
     ("trivy", check_trivy),
+    ("pmd", check_pmd),
 )
 
 

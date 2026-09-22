@@ -197,7 +197,7 @@ _QUERY_TOOL_DESCRIPTIONS = {
     "secrets": "Secret-scanner findings for one file. target: file path exactly as it appears in evidence.",
     "vulnerabilities": "All dependency vulnerability findings for this repo. Takes no target.",
     "licenses": "All dependency license findings for this repo. Takes no target.",
-    "static-analysis": "Static analysis findings (SonarQube/Semgrep/Bearer/gosec/Bandit/Joern/Trivy), normalized "
+    "static-analysis": "Static analysis findings (SonarQube/Semgrep/Bearer/gosec/Bandit/Joern/Trivy/PMD), normalized "
     "into one shape - {tool, rule_id, severity, type, path, line, message}. Also reports which "
     "tools actually ran and which were skipped, and why. Takes no target.",
     "endpoints": "All API endpoints mapped from source. Takes no target.",
