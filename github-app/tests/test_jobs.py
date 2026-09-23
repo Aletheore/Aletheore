@@ -351,7 +351,7 @@ def test_clone_ref_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch):
 
     def fake_run(args, cwd=None, check=None):
         calls.append(args)
-        if args[:2] == ["git", "clone"]:
+        if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
         return subprocess.CompletedProcess(args, 0)
 
@@ -361,28 +361,30 @@ def test_clone_ref_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch):
     credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
     _clone_ref(credentialed_url, "somesha", dest)
 
+    assert ["git", "fetch", "-q", "--depth", "1", "origin", "somesha"] in calls
     set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
     assert set_url_calls, "expected a 'git remote set-url' call scrubbing the clone"
     assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
     assert "livetoken" not in set_url_calls[-1][-1]
 
 
-def test_clone_ref_scrubs_the_token_even_when_checkout_fails(tmp_path, monkeypatch):
+def test_clone_ref_scrubs_the_token_even_when_the_fetch_fails(tmp_path, monkeypatch):
     # Proves the scrub runs from a finally block, not just after a
-    # successful checkout - a failed checkout must not leave the
-    # credentialed .git/config behind for run_job_temp_dir_cleanup_job's
+    # successful fetch/checkout - a failed shallow fetch must not leave
+    # the credentialed .git/config behind for run_job_temp_dir_cleanup_job's
     # 6-hour sweep to be the only thing standing between a live token and
-    # disk.
+    # disk. No pr_number here, so the failure must surface immediately -
+    # no PR-ref fallback to try.
     from scan_worker.jobs import _clone_ref
 
     calls = []
 
     def fake_run(args, cwd=None, check=None):
         calls.append(args)
-        if args[:2] == ["git", "clone"]:
+        if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
             return subprocess.CompletedProcess(args, 0)
-        if args[:2] == ["git", "checkout"]:
+        if args[:2] == ["git", "fetch"]:
             raise subprocess.CalledProcessError(1, args)
         return subprocess.CompletedProcess(args, 0)
 
@@ -398,57 +400,140 @@ def test_clone_ref_scrubs_the_token_even_when_checkout_fails(tmp_path, monkeypat
     assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
 
 
-def test_clone_ref_scrubs_the_token_even_when_the_clone_itself_is_interrupted(tmp_path, monkeypatch):
-    # Real Flash Review finding on the first version of this fix: the
-    # clone call sat before the try, so an interruption DURING the clone
-    # (e.g. an RQ job timeout - not a raw OOM SIGKILL, which no
-    # try/finally placement can survive regardless of where it sits)
-    # skipped the scrub entirely, even though the clone had already
-    # written the credentialed URL into .git/config by the time it was
-    # interrupted.
+def test_checkout_sha_falls_back_to_pr_ref_when_direct_checkout_fails(tmp_path, monkeypatch):
+    # Real bug found live 2026-09-22: run_pr_scan_job crashed with `git
+    # checkout` exit 128 for a PR whose source branch had already been
+    # deleted (an ordinary squash-merge-with-delete-branch) by the time the
+    # (queued, not instant) scan job actually ran - a plain `git fetch`
+    # only pulls refs/heads/*, never refs/pull/*, so the PR's head SHA was
+    # never advertised at all. Confirmed live that `git fetch origin
+    # refs/pull/<n>/head` still resolves the identical SHA even after the
+    # branch is gone.
+    from scan_worker.jobs import _checkout_sha
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:3] == ["git", "checkout", "-q"] and args[-1] == "deadsha":
+            raise subprocess.CalledProcessError(128, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    _checkout_sha(tmp_path, "deadsha", pr_number=42)
+
+    assert ["git", "checkout", "-q", "deadsha"] in calls
+    assert ["git", "fetch", "-q", "origin", "refs/pull/42/head"] in calls
+    assert ["git", "checkout", "-q", "FETCH_HEAD"] in calls
+
+
+def test_checkout_sha_reraises_when_no_pr_number_to_fall_back_to(tmp_path, monkeypatch):
+    # base_sha and a push/initial scan's branch head are always on a real,
+    # live branch ref - callers pass pr_number=None for both, and a
+    # genuine checkout failure (a truly bad SHA, a network error) must
+    # still surface as an error rather than silently trying a PR ref that
+    # doesn't apply here.
+    from scan_worker.jobs import _checkout_sha
+
+    def fake_run(args, cwd=None, check=None):
+        if args[:2] == ["git", "checkout"]:
+            raise subprocess.CalledProcessError(128, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _checkout_sha(tmp_path, "badsha", pr_number=None)
+
+
+def test_clone_ref_recovers_a_deleted_branchs_head_via_the_pr_ref(tmp_path, monkeypatch):
+    # End-to-end through _clone_ref (the actual fallback path
+    # _prepare_head_checkout uses once _ensure_persistent_checkout raises)
+    # rather than _checkout_sha in isolation - proves the real
+    # run_pr_scan_job failure this session hit is actually fixed, not just
+    # the unit in the middle of it.
     from scan_worker.jobs import _clone_ref
 
     calls = []
 
     def fake_run(args, cwd=None, check=None):
         calls.append(args)
-        if args[:2] == ["git", "clone"]:
-            # git writes .git/config with the credentialed remote before
-            # the clone finishes populating the working tree - simulate
-            # an interruption after that point.
+        if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+            return subprocess.CompletedProcess(args, 0)
+        if args[:2] == ["git", "fetch"] and args[-1] == "deletedbranchsha":
+            raise subprocess.CalledProcessError(128, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "recovered"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    _clone_ref(credentialed_url, "deletedbranchsha", dest, pr_number=25)
+
+    assert ["git", "fetch", "-q", "--depth", "1", "origin", "deletedbranchsha"] in calls
+    assert ["git", "fetch", "-q", "--depth", "1", "origin", "refs/pull/25/head"] in calls
+    assert ["git", "checkout", "-q", "FETCH_HEAD"] in calls
+    # Still scrubs the token afterward - the PR-ref fallback must not
+    # bypass the same credential-scrub finally block every other path here
+    # goes through.
+    set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
+    assert set_url_calls
+    assert "livetoken" not in set_url_calls[-1][-1]
+
+
+def test_clone_ref_scrubs_the_token_even_when_remote_add_is_interrupted(tmp_path, monkeypatch):
+    # Real Flash Review finding on the first version of this fix (back
+    # when this was a `git clone`): an interruption after the credentialed
+    # URL was already written to .git/config, but before the function
+    # otherwise completed, must still trigger the scrub. Under the current
+    # `git init` + `git remote add origin <url>` shape, `git remote add`
+    # is the exact command that writes the credentialed URL into
+    # .git/config - `git init` itself never touches a remote, so it's the
+    # realistic place a real interruption after that write would land.
+    from scan_worker.jobs import _clone_ref
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "init"]:
+            os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+            return subprocess.CompletedProcess(args, 0)
+        if args[:3] == ["git", "remote", "add"]:
             raise subprocess.CalledProcessError(1, args)
         return subprocess.CompletedProcess(args, 0)
 
     monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
 
-    dest = tmp_path / "ephemeral-clone-interrupted"
+    dest = tmp_path / "ephemeral-remote-add-interrupted"
     credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
     with pytest.raises(subprocess.CalledProcessError):
         _clone_ref(credentialed_url, "somesha", dest)
 
     set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
-    assert set_url_calls, "expected the scrub to still run even though the clone itself was interrupted"
+    assert set_url_calls, "expected the scrub to still run even though remote add was interrupted"
     assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
 
 
-def test_clone_ref_does_not_attempt_a_scrub_when_the_clone_never_created_a_git_dir(tmp_path, monkeypatch):
-    # The other half: a clone interrupted before git ever created .git at
-    # all (e.g. a DNS failure) must not attempt a `git remote set-url`
-    # against a directory that has no repo in it.
+def test_clone_ref_does_not_attempt_a_scrub_when_init_never_created_a_git_dir(tmp_path, monkeypatch):
+    # The other half: `git init` itself failing (e.g. disk full, no write
+    # permission) must not attempt a `git remote set-url` against a
+    # directory that has no repo in it.
     from scan_worker.jobs import _clone_ref
 
     calls = []
 
     def fake_run(args, cwd=None, check=None):
         calls.append(args)
-        if args[:2] == ["git", "clone"]:
+        if args[:2] == ["git", "init"]:
             raise subprocess.CalledProcessError(1, args)
         return subprocess.CompletedProcess(args, 0)
 
     monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
 
-    dest = tmp_path / "ephemeral-never-cloned"
+    dest = tmp_path / "ephemeral-never-inited"
     credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
     with pytest.raises(subprocess.CalledProcessError):
         _clone_ref(credentialed_url, "somesha", dest)
@@ -465,7 +550,7 @@ def test_clone_pr_head_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch
 
     def fake_run(args, cwd=None, check=None):
         calls.append(args)
-        if args[:2] == ["git", "clone"]:
+        if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
         return subprocess.CompletedProcess(args, 0)
 
@@ -475,38 +560,41 @@ def test_clone_pr_head_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch
     credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
     _clone_pr_head(credentialed_url, 42, dest)
 
+    assert ["git", "fetch", "-q", "--depth", "1", "origin", "refs/pull/42/head"] in calls
     set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
     assert set_url_calls, "expected a 'git remote set-url' call scrubbing the clone"
     assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
     assert "livetoken" not in set_url_calls[-1][-1]
 
 
-def test_clone_pr_head_scrubs_the_token_even_when_the_clone_itself_is_interrupted(tmp_path, monkeypatch):
-    # Same Flash Review finding as _clone_ref's identical test above.
+def test_clone_pr_head_scrubs_the_token_even_when_remote_add_is_interrupted(tmp_path, monkeypatch):
+    # Same real reasoning as _clone_ref's identical test above.
     from scan_worker.jobs import _clone_pr_head
 
     calls = []
 
     def fake_run(args, cwd=None, check=None):
         calls.append(args)
-        if args[:2] == ["git", "clone"]:
+        if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+            return subprocess.CompletedProcess(args, 0)
+        if args[:3] == ["git", "remote", "add"]:
             raise subprocess.CalledProcessError(1, args)
         return subprocess.CompletedProcess(args, 0)
 
     monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
 
-    dest = tmp_path / "pr-head-clone-interrupted"
+    dest = tmp_path / "pr-head-remote-add-interrupted"
     credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
     with pytest.raises(subprocess.CalledProcessError):
         _clone_pr_head(credentialed_url, 42, dest)
 
     set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
-    assert set_url_calls, "expected the scrub to still run even though the clone itself was interrupted"
+    assert set_url_calls, "expected the scrub to still run even though remote add was interrupted"
     assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
 
 
-def test_clone_pr_head_does_not_attempt_a_scrub_when_the_clone_never_created_a_git_dir(
+def test_clone_pr_head_does_not_attempt_a_scrub_when_init_never_created_a_git_dir(
     tmp_path, monkeypatch
 ):
     from scan_worker.jobs import _clone_pr_head
@@ -515,13 +603,13 @@ def test_clone_pr_head_does_not_attempt_a_scrub_when_the_clone_never_created_a_g
 
     def fake_run(args, cwd=None, check=None):
         calls.append(args)
-        if args[:2] == ["git", "clone"]:
+        if args[:2] == ["git", "init"]:
             raise subprocess.CalledProcessError(1, args)
         return subprocess.CompletedProcess(args, 0)
 
     monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
 
-    dest = tmp_path / "pr-head-never-cloned"
+    dest = tmp_path / "pr-head-never-inited"
     credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
     with pytest.raises(subprocess.CalledProcessError):
         _clone_pr_head(credentialed_url, 42, dest)
@@ -617,11 +705,15 @@ def test_run_pr_scan_job_uses_persistent_checkout_and_unchanged_cache_for_head(
 
     real_prepare_head_checkout = jobs_module._prepare_head_checkout
 
-    def spy_prepare_head_checkout(clone_url, head_sha_arg, installation_id, repo_full_name, fallback_dir):
+    def spy_prepare_head_checkout(
+        clone_url, head_sha_arg, installation_id, repo_full_name, fallback_dir, pr_number=None
+    ):
         prepare_head_calls.append(
             {"clone_url": clone_url, "head_sha": head_sha_arg, "installation_id": installation_id}
         )
-        return real_prepare_head_checkout(clone_url, head_sha_arg, installation_id, repo_full_name, fallback_dir)
+        return real_prepare_head_checkout(
+            clone_url, head_sha_arg, installation_id, repo_full_name, fallback_dir, pr_number=pr_number
+        )
 
     monkeypatch.setattr("scan_worker.jobs._prepare_head_checkout", spy_prepare_head_checkout)
 

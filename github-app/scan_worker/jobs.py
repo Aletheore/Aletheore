@@ -415,7 +415,70 @@ def _run_git(args: list[str], **kwargs) -> None:
         raise
 
 
-def _clone_ref(url: str, ref: str, dest: Path) -> None:
+def _checkout_sha(dest: Path, sha: str, pr_number: int | None, *, force: bool = False) -> None:
+    """git checkout <sha>, falling back to fetching the PR's own head ref
+    and checking that out instead if the direct checkout fails.
+
+    Real bug found live 2026-09-22: a plain `git clone`/`git fetch origin`
+    only pulls refs/heads/* (and tags), never refs/pull/* - so a PR whose
+    source branch was already deleted by the time this job actually runs
+    (an ordinary squash-merge-with-delete-branch, not a corrupted repo or
+    a rare edge case) makes `sha` permanently unreachable to both
+    _clone_ref's fresh clone and _ensure_persistent_checkout's
+    fetch-and-checkout. Confirmed live: `git checkout <sha>` against a
+    plain clone of a repo with the branch already deleted fails with
+    `fatal: unable to read tree <sha>` (exit 128) - the exact error two
+    real run_pr_scan_job jobs hit in production, both for PRs merged with
+    branch deletion before the (queued, not instant) scan job ran.
+    Confirmed the fix works the same way: `git fetch origin
+    refs/pull/<n>/head` resolves the identical SHA even after the branch
+    is gone, since GitHub keeps that ref regardless of branch deletion.
+
+    Only relevant for a PR's own head_sha - base_sha and a push/initial
+    scan's branch head are always on a real, live branch ref, so callers
+    pass pr_number=None for both and this never takes the fallback path.
+    """
+    args = ["git", "checkout", "-q", *(["-f"] if force else []), sha]
+    try:
+        subprocess.run(args, cwd=dest, check=True)
+    except subprocess.CalledProcessError:
+        if pr_number is None:
+            raise
+        subprocess.run(
+            ["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"], cwd=dest, check=True
+        )
+        subprocess.run(
+            ["git", "checkout", "-q", *(["-f"] if force else []), "FETCH_HEAD"], cwd=dest, check=True
+        )
+
+
+def _shallow_fetch_and_checkout(dest: Path, sha: str, pr_number: int | None) -> None:
+    """Fetches exactly one commit (`--depth 1`) by its SHA and checks it
+    out, instead of `_checkout_sha`'s approach of cloning full history
+    first - real bandwidth/storage savings, confirmed live: GitHub allows
+    fetching an arbitrary commit SHA directly and shallowly, not just a
+    branch/tag tip, as long as it's reachable from some advertised ref (a
+    branch, a tag, or - the same real scenario `_checkout_sha` handles - a
+    still-live PR ref even after its own branch is deleted). Only safe for
+    a checkout nothing will ever need to `git diff` against its own
+    history later - see this function's callers for why that's true here
+    and never true for `_ensure_persistent_checkout`, which keeps full
+    history on purpose to make incremental scanning possible.
+    """
+    try:
+        subprocess.run(["git", "fetch", "-q", "--depth", "1", "origin", sha], cwd=dest, check=True)
+    except subprocess.CalledProcessError:
+        if pr_number is None:
+            raise
+        subprocess.run(
+            ["git", "fetch", "-q", "--depth", "1", "origin", f"refs/pull/{pr_number}/head"],
+            cwd=dest,
+            check=True,
+        )
+    subprocess.run(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest, check=True)
+
+
+def _clone_ref(url: str, ref: str, dest: Path, pr_number: int | None = None) -> None:
     # Scrubs the credentialed URL from dest/.git/config in a finally block
     # covering the clone itself, the same reasoning and shape as
     # _ensure_persistent_checkout's own fresh-clone path: real audit found
@@ -438,14 +501,25 @@ def _clone_ref(url: str, ref: str, dest: Path) -> None:
     # for the catchable subset of interruptions this fix already protects
     # against elsewhere in this same file (RQ's signal-based job_timeout,
     # not a raw OOM SIGKILL - no try/finally anywhere can run after that,
-    # regardless of placement, since the whole process is gone) - moved
-    # inside the try, mirroring _ensure_persistent_checkout's own
-    # fresh-clone path exactly, including its `.git` existence guard
-    # (clone interrupted before `git init` ever ran leaves no `.git` to
-    # run `git remote set-url` against).
+    # regardless of placement, since the whole process is gone) - the
+    # `git init`/`git remote add` below run inside the try for the same
+    # reason: `dest/.git` can exist (and so need the scrub) after either
+    # one, even if the fetch that follows never gets that far.
+    #
+    # `git init` + `git remote add` + a shallow single-SHA fetch here
+    # instead of `git clone --no-checkout` (full history) - this checkout
+    # is thrown away after one scan (base_sha, a PR head, or a first-time
+    # connect scan; never reused, never `git diff`-ed against later), so
+    # there's no reason to pay for the repo's entire history just to read
+    # one commit's tree. Real, measured savings on a real repo: a full
+    # clone pulled 2.6M for a small, young repo - a large or old one (the
+    # actual multi-tenant hosted case this matters for) would see a far
+    # bigger gap. See _ensure_persistent_checkout's own docstring for why
+    # its checkouts deliberately stay full-history instead.
     try:
-        _run_git(["git", "clone", "-q", "--no-checkout", url, str(dest)])
-        subprocess.run(["git", "checkout", "-q", ref], cwd=dest, check=True)
+        _run_git(["git", "init", "-q", str(dest)])
+        _run_git(["git", "remote", "add", "origin", url], cwd=dest)
+        _shallow_fetch_and_checkout(dest, ref, pr_number)
     finally:
         if (dest / ".git").exists():
             subprocess.run(
@@ -490,7 +564,9 @@ def purge_persistent_checkouts_job(installation_id: int) -> None:
     shutil.rmtree(_installation_checkout_root(installation_id), ignore_errors=True)
 
 
-def _ensure_persistent_checkout(url: str, checkout_sha: str, checkout_dir: Path) -> None:
+def _ensure_persistent_checkout(
+    url: str, checkout_sha: str, checkout_dir: Path, pr_number: int | None = None
+) -> None:
     """Keeps one real checkout per repo, reused across scans, instead of
     the clone-fresh-and-delete pattern _clone_ref/_clone_pr_head use for
     the ephemeral per-job checkouts above. This is what gives a later
@@ -505,7 +581,11 @@ def _ensure_persistent_checkout(url: str, checkout_sha: str, checkout_dir: Path)
     fetching the SHA directly - GitHub does not reliably allow fetching a
     bare SHA unless it happens to be reachable from an advertised ref,
     the same reason _clone_ref itself relies on a full clone's implicit
-    ref fetching rather than fetching head_sha directly.
+    ref fetching rather than fetching head_sha directly. `pr_number`, when
+    given, lets _checkout_sha fall back to fetching that PR's own
+    `refs/pull/<n>/head` if the plain fetch above didn't advertise
+    `checkout_sha` at all - see _checkout_sha's own docstring for the real
+    production bug (a deleted source branch) this closes.
 
     `git remote set-url` runs on every reuse so a rotated access token
     (see _clone_url - `url` always carries a fresh one) doesn't leave
@@ -527,7 +607,7 @@ def _ensure_persistent_checkout(url: str, checkout_sha: str, checkout_dir: Path)
         _run_git(["git", "remote", "set-url", "origin", url], cwd=checkout_dir)
         try:
             subprocess.run(["git", "fetch", "-q", "origin"], cwd=checkout_dir, check=True)
-            subprocess.run(["git", "checkout", "-q", "-f", checkout_sha], cwd=checkout_dir, check=True)
+            _checkout_sha(checkout_dir, checkout_sha, pr_number, force=True)
             subprocess.run(["git", "clean", "-q", "-fdx"], cwd=checkout_dir, check=True)
         finally:
             subprocess.run(
@@ -537,7 +617,7 @@ def _ensure_persistent_checkout(url: str, checkout_sha: str, checkout_dir: Path)
         checkout_dir.mkdir(parents=True, exist_ok=True)
         try:
             _run_git(["git", "clone", "-q", "--no-checkout", url, str(checkout_dir)])
-            subprocess.run(["git", "checkout", "-q", checkout_sha], cwd=checkout_dir, check=True)
+            _checkout_sha(checkout_dir, checkout_sha, pr_number)
         finally:
             if (checkout_dir / ".git").exists():
                 subprocess.run(
@@ -548,7 +628,12 @@ def _ensure_persistent_checkout(url: str, checkout_sha: str, checkout_dir: Path)
 
 
 def _prepare_head_checkout(
-    clone_url: str, head_sha: str, installation_id: int, repo_full_name: str, fallback_dir: Path
+    clone_url: str,
+    head_sha: str,
+    installation_id: int,
+    repo_full_name: str,
+    fallback_dir: Path,
+    pr_number: int | None = None,
 ) -> Path:
     """Uses a persistent, reused-across-scans checkout when one is
     available (see _ensure_persistent_checkout), falling back to the
@@ -556,17 +641,20 @@ def _prepare_head_checkout(
     persistent storage isn't mounted, isn't writable, or fails for any
     other reason - this must never be the reason a PR scan fails
     outright, it only ever gates whether the upcoming scan can be
-    incremental.
+    incremental. `pr_number` (a PR's own number, None for a push/initial
+    scan's branch head) is threaded through to both paths so either one
+    can recover a head_sha whose source branch was already deleted by the
+    time this job runs - see _checkout_sha's own docstring.
     """
     try:
         checkout_dir = _persistent_checkout_dir(installation_id, repo_full_name)
-        _ensure_persistent_checkout(clone_url, head_sha, checkout_dir)
+        _ensure_persistent_checkout(clone_url, head_sha, checkout_dir, pr_number=pr_number)
         return checkout_dir
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("scan_worker.jobs").warning(
             "persistent checkout unavailable (%s); falling back to an ephemeral clone", type(exc).__name__
         )
-        _clone_ref(clone_url, head_sha, fallback_dir)
+        _clone_ref(clone_url, head_sha, fallback_dir, pr_number=pr_number)
         return fallback_dir
 
 
@@ -950,13 +1038,17 @@ def _maybe_create_static_analysis_check_run(
     diff: dict,
 ) -> None:
     """Same shape as _maybe_create_vulnerability_check_run, for
-    diff["static_analysis"]["new"] (Semgrep/gosec/Bandit/Trivy, always-on
-    - see history.py's _compute_curated_diff for how that category is
-    built from the SAME base/head evidence run_pr_scan_job already
-    produces above, no extra scan needed).
+    diff["static_analysis"]["new"] (Semgrep/gosec/Bandit/Trivy/PMD,
+    always-on - see static_analysis/__init__.py's _SCANNERS for the
+    definitive list; this function reads that category generically, so a
+    scanner added there (PMD, 2026-09-22, after this docstring was first
+    written) flows through automatically with no change needed here - see
+    history.py's _compute_curated_diff for how that category is built
+    from the SAME base/head evidence run_pr_scan_job already produces
+    above, no extra scan needed).
 
-    Deliberately Semgrep/gosec/Bandit/Trivy only, not Bearer/Joern/
-    SonarQube - a real, tested attempt (2026-09-21) to add Bearer here via
+    Deliberately excludes Bearer/Joern/SonarQube - a real, tested attempt
+    (2026-09-21) to add Bearer here via
     a diff-scoped pass (materializing just the PR's changed files into a
     throwaway checkout, bounded by PR size instead of Bearer's real
     300s+-on-this-repo full-scan cost) measured WORSE results, not
@@ -1241,7 +1333,7 @@ def run_pr_scan_job(
         # one scan, just not persisted or incremental.
         with repo_checkout_lock(settings.database_url, installation_id, repo_full_name):
             head_dir = _prepare_head_checkout(
-                clone_url, head_sha, installation_id, repo_full_name, job_dir / "head"
+                clone_url, head_sha, installation_id, repo_full_name, job_dir / "head", pr_number=pr_number
             )
 
             try:
@@ -1572,10 +1664,20 @@ def _clone_pr_head(url: str, pr_number: int, dest: Path) -> None:
     # against the credentialed origin (the PR head isn't in the initial
     # clone), so the scrub can only happen after that fetch, but nothing
     # here needs it afterward either.
+    #
+    # `git init` + `git remote add` + a shallow `refs/pull/<n>/head` fetch,
+    # same real reasoning as _clone_ref's own shallow rewrite - this always
+    # already knows its PR number (a managed audit is invoked with one
+    # explicitly), so unlike _clone_ref it never needs a bare-SHA attempt
+    # first. The old shape paid for the repo's entire history via `git
+    # clone --no-checkout` and THEN fetched the PR ref on top of that -
+    # strictly more wasted transfer than _clone_ref's old version, not
+    # just the same amount.
     try:
-        _run_git(["git", "clone", "-q", "--no-checkout", url, str(dest)])
+        _run_git(["git", "init", "-q", str(dest)])
+        _run_git(["git", "remote", "add", "origin", url], cwd=dest)
         subprocess.run(
-            ["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
+            ["git", "fetch", "-q", "--depth", "1", "origin", f"refs/pull/{pr_number}/head"],
             cwd=dest,
             check=True,
         )
