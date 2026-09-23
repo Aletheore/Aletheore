@@ -115,8 +115,23 @@ _GEMSPEC_LICENSE_RE = re.compile(r"\.licenses?\s*=\s*(?:\[\s*)?['\"]([^'\"]+)['\
 # The other real NuGet convention, <PackageLicenseFile>, names a bundled file
 # rather than an SPDX expression - not handled here, the same way pyproject.toml's
 # "license-file"-only shape isn't a machine-readable identifier this function can use.
+#
+# Real ReDoS reported live (GHSA-66qv-fmhr-gpj8, credit: Filip Kulisiewicz/
+# KulFilip): the previous pattern bracketed the captured group with `\s*` on
+# both sides, on top of a non-greedy `[^<]+?` - all three overlap, since
+# whitespace is itself inside `[^<]`. An opening tag followed by a long run
+# of whitespace with no closing tag (nothing unusual about a truncated/
+# malformed real-world file, and trivially craftable by an attacker) makes
+# the engine try every way of partitioning that run across the three
+# sub-patterns - confirmed independently, cubic in input size (300 chars:
+# 16ms: 600: 119ms; 1200: 961ms; matches the reporter's own measurements).
+# A hosted scan-worker job evaluates this against arbitrary PR content, so
+# this was a real, unauthenticated DoS vector, not just a local nuisance.
+# Fix: no quantifiers inside the delimiters - capture everything between
+# the tags verbatim and trim once, after matching, not as part of the
+# pattern itself.
 _CSPROJ_LICENSE_EXPRESSION_RE = re.compile(
-    r"<PackageLicenseExpression>\s*([^<]+?)\s*</PackageLicenseExpression>"
+    r"<PackageLicenseExpression>([^<]*)</PackageLicenseExpression>"
 )
 
 
@@ -304,11 +319,12 @@ def detect_repo_license(repo_path: Path) -> dict:
     for csproj in sorted(repo_path.rglob("*.csproj")):
         text = csproj.read_text(encoding="utf-8", errors="ignore")
         match = _CSPROJ_LICENSE_EXPRESSION_RE.search(text)
-        if match:
+        if match and match.group(1).strip():
             rel = csproj.relative_to(repo_path).as_posix()
+            expression = match.group(1).strip()
             return {
-                "category": categorize_license(match.group(1)),
-                "detected_from": f"{rel}: {match.group(1)}",
+                "category": categorize_license(expression),
+                "detected_from": f"{rel}: {expression}",
             }
 
     pom_xml = repo_path / "pom.xml"
