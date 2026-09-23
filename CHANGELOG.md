@@ -3,6 +3,31 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.19 — 2026-09-23
+
+**Deterministic static-analysis scanning (#750, #763, #772)**
+
+`aletheore scan` now runs Semgrep, gosec, Bandit, Trivy (secrets + misconfig), and PMD (Java)
+always-on, normalized into one new `security.static_analysis` evidence category regardless of
+which tool produced a finding. SonarQube is also wired in. Bearer and Joern (taint-flow analysis,
+including a real Go asymmetric-cache-trust query) ship as opt-in scanners behind explicit CLI
+flags rather than always-on: a controlled, twice-confirmed experiment found Bearer's accuracy
+degrades sharply when it only sees a diff-scoped subset of a repo (11 false-positive
+`os_command_injection` findings on this very codebase's own `jobs.py` that a full-repo scan
+correctly suppresses via context a partial checkout can't provide).
+
+**`aletheore diff` gains a `static_analysis` new/resolved category (#764)**
+
+`history.py`'s curated diff computation now tracks static-analysis findings the same way it
+already tracks secrets and vulnerabilities — identity keyed on `(tool, rule_id, path, line)`,
+with the same moved-but-unchanged-finding caveat every other category already carries.
+
+**Fixed: `splitlines()` vs `split("\n")` line-indexing bug (#739)**
+
+`query.py`/`search_index.py` line-indexing used `splitlines()`, which treats rare control
+characters (e.g. form feed) as line breaks that `split("\n")` doesn't — a real, if rare, off-by-N
+bug in `evidence-for-symbol`/`evidence-for-endpoint` results on files containing them.
+
 ## 0.9.18 — 2026-09-13
 
 **MCP server now asks agents to report real gaps (#708)**
