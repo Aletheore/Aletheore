@@ -2192,7 +2192,7 @@ def _post_flash_review_finding_comments(
     pr_number: int,
     head_sha: str,
     findings_to_post: list[dict],
-) -> None:
+) -> int:
     """Posts one inline PR review comment per finding (anchored to its real
     file:line via create_pr_review_comment) instead of the old single
     upserted issue-comment listing every finding as a bullet - each
@@ -2210,10 +2210,22 @@ def _post_flash_review_finding_comments(
     reply thread must survive) to note it's no longer detected, and only
     on the first push that doesn't detect it (resolved_at is a one-time
     transition, not resynced every subsequent silent push).
+
+    Returns the number of NEW findings that failed to post at all (the
+    except block below, a real 422 for a citation GitHub's diff-position
+    validation rejects). Real gap found live on PR #764: the caller's
+    summary comment said "4 finding(s) posted" from `len(findings_to_post)`
+    while only 3 inline comments actually existed on the PR - counting
+    what was attempted, not what a reviewer could actually see. A
+    reappeared-and-failed-to-un-resolve finding isn't counted as a failure
+    here: its comment already exists and is visible on the PR (just still
+    carrying a stale "no longer detected" prefix), unlike a NEW finding
+    that never got a comment at all.
     """
     dsn = settings.database_url
     existing = get_flash_review_finding_comments(dsn, installation_id, repo_full_name, pr_number)
     seen_keys: set[tuple[str, str]] = set()
+    failed_new_posts = 0
 
     for finding in findings_to_post:
         finding_type = _flash_review_finding_type(finding)
@@ -2237,6 +2249,7 @@ def _post_flash_review_finding_comments(
                     "failed to post flash review inline comment for %s:%s on %s#%s",
                     finding["file"], finding["line"], repo_full_name, pr_number, exc_info=True,
                 )
+                failed_new_posts += 1
                 continue
             insert_flash_review_finding_comment(
                 dsn, installation_id, repo_full_name, pr_number,
@@ -2290,6 +2303,8 @@ def _post_flash_review_finding_comments(
                 "failed to mark flash review comment %s resolved on %s#%s",
                 row["github_comment_id"], repo_full_name, pr_number, exc_info=True,
             )
+
+    return failed_new_posts
 
 
 def _run_flash_review(
@@ -2740,14 +2755,36 @@ def _run_flash_review(
     for finding in findings_to_post:
         finding["symbol"] = find_symbol_at_location(evidence, finding["file"], finding["line"])
 
-    _post_flash_review_finding_comments(
+    failed_new_posts = _post_flash_review_finding_comments(
         settings, client, token, installation_id, repo_full_name, pr_number, head_sha, findings_to_post,
     )
+    posted_count = len(findings_to_post) - failed_new_posts
 
-    if findings_to_post:
+    if posted_count:
+        # Real gap found live on PR #764: this used to read
+        # len(findings_to_post) (what was attempted), not what actually
+        # landed - a citation GitHub's diff-position validation rejects
+        # (a real, logged 422 - see _post_flash_review_finding_comments's
+        # own per-finding try/except) makes this comment overclaim a
+        # finding that was never actually visible on the PR at all.
+        suffix = "" if not failed_new_posts else (
+            f" ({failed_new_posts} more finding(s) held up but couldn't be posted "
+            "as an inline comment - see the job log for the real error.)"
+        )
         body = (
             f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\n"
-            f"{len(findings_to_post)} finding(s) posted as inline review comment(s) below."
+            f"{posted_count} finding(s) posted as inline review comment(s) below.{suffix}"
+        )
+    elif findings_to_post:
+        # Every finding that held up failed to post (the failure path
+        # above, not zero findings) - distinct from every branch below,
+        # which all describe a real "nothing held up" outcome. Saying
+        # nothing here would be a silent failure a customer has no way to
+        # notice.
+        body = (
+            f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\n"
+            f"{len(findings_to_post)} finding(s) held up but none could be posted as an inline "
+            "comment - see the job log for the real error."
         )
     elif findings:
         # findings (raw, pre-dismissal) is non-empty but findings_to_post
