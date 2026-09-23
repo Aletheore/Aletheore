@@ -4,8 +4,33 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-09-21
-**Snapshot Freshness:** CURRENT as of 2026-09-21 - production was redeployed to `master` (commit
+**Last Updated:** 2026-09-23
+**Snapshot Freshness:** CURRENT as of 2026-09-23 (third deploy) - production was redeployed to
+`master` (commit `1618369`, tagged `github-app-deploy-2026-09-23-3`) and re-verified live via SSH
+the same session. 3 commits since the previous deploy tag (`github-app-deploy-2026-09-23-2`), no
+migrations - see `github-app/CHANGELOG.md` for the full writeup. Two real production bugs, both
+found live investigating this session's own earlier deploy, plus one docs-only PR:
+`_post_flash_review_finding_comments` (#775) reported `len(findings_to_post)` in its summary
+comment - what was *attempted* - instead of what actually landed, overclaiming when GitHub's
+diff-position validation 422s a citation (caught live on PR #764: summary said 4 posted, only 3
+inline comments existed); and the shallow `git fetch --depth 1` this session's earlier deploy
+(`github-app-deploy-2026-09-23-2`) introduced for ephemeral checkouts (#774) turned out to be
+unsafe for every one of its callers (#776) - `_run_scan` always walks full git history
+(`find_secrets_in_history`, `analyze_git`), so a depth-1 base-commit checkout silently collapsed
+that history to one commit, making the PR-scan evidence-diff comment report the checkout's entire
+real history as newly introduced (caught live on PR #775: reported 1241 commits' worth of secrets
+as new). Fixed by fetching each ref's full ancestry instead - still a smaller transfer than the
+original `git clone --no-checkout` (which pulled every branch and tag), just not shallow.
+`app-server`, `scan-worker`, `scan-worker-2`, `health-worker`, and `scheduler` all rebuilt and
+force-recreated (both fixes touch `scan_worker/jobs.py`, shared by all five); confirmed healthy
+via `docker compose ps` (all `healthy`), zero errors in any of the five services' logs since
+restart, and both fixes confirmed present in the *running* `scan-worker` container's actual source
+via `inspect.getsource` and direct inspection of the real `git fetch` subprocess call arguments
+(no `--depth` flag; the string appears only in the function's own docstring explaining the bug it
+replaced) - not re-read from the repo, and not fooled by a naive substring match against the
+docstring.
+
+**Previous:** CURRENT as of 2026-09-21 - production was redeployed to `master` (commit
 `d832130`, tagged `github-app-deploy-2026-09-21`) and re-verified live via SSH the same session.
 2 commits since the previous deploy tag (`github-app-deploy-2026-09-19-2`), no migrations - see
 `github-app/CHANGELOG.md`'s "2026-09-21" entry for the full writeup. One real production
