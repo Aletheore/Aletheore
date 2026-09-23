@@ -260,6 +260,29 @@ def test_detect_repo_license_from_csproj_nested_in_a_project_directory(tmp_path)
     assert "MyApp.csproj" in result["detected_from"]
 
 
+def test_detect_repo_license_csproj_does_not_hang_on_an_unclosed_tag(tmp_path):
+    # Real ReDoS reported live (GHSA-66qv-fmhr-gpj8): the old
+    # _CSPROJ_LICENSE_EXPRESSION_RE bracketed its capture group with `\s*`
+    # on both sides around a non-greedy `[^<]+?` - all three overlap
+    # (whitespace is itself inside `[^<]`), so a real file with an opening
+    # tag and no closing one made the regex engine try every way of
+    # partitioning a run of whitespace across the three sub-patterns -
+    # cubic in input size, confirmed independently (300 chars: 16ms; 1200:
+    # 961ms). A hosted scan-worker job evaluates this against arbitrary
+    # PR content, so this was a real, unauthenticated DoS vector. This
+    # payload (200,000 whitespace chars, no closing tag) must resolve
+    # near-instantly, not hang.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "App.csproj").write_text(
+        "<Project><PackageLicenseExpression>" + (" " * 200_000)
+    )
+
+    result = detect_repo_license(repo)
+
+    assert result["category"] == "unknown"
+
+
 def test_detect_repo_license_from_pom_xml_without_a_namespace_declaration(tmp_path):
     # Real bug found via audit: same gap for Java, plus a real, hand-
     # written pom.xml commonly omits the xmlns Maven Central's own served
