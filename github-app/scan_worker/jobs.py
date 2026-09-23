@@ -1394,11 +1394,22 @@ def run_pr_scan_job(
         try:
             _maybe_create_check_run(client, token, repo_full_name, head_sha, installation_id, diff)
         except Exception:  # noqa: BLE001
-            pass
+            # PR #771 fixed this same silent-swallow for the static-analysis
+            # check run below and explicitly flagged this and the other 3
+            # sibling call sites in this function as the same pre-existing
+            # gap - a persistently broken check run was otherwise invisible
+            # to operators. Same fix, same reason, for all of them.
+            logging.getLogger("scan_worker.jobs").warning(
+                "flash review check run failed for installation=%s repo=%s",
+                installation_id, repo_full_name, exc_info=True,
+            )
         try:
             _maybe_create_vulnerability_check_run(client, token, repo_full_name, head_sha, installation_id, diff)
         except Exception:  # noqa: BLE001
-            pass
+            logging.getLogger("scan_worker.jobs").warning(
+                "vulnerability check run failed for installation=%s repo=%s",
+                installation_id, repo_full_name, exc_info=True,
+            )
         try:
             _maybe_create_static_analysis_check_run(client, token, repo_full_name, head_sha, installation_id, diff)
         except Exception:  # noqa: BLE001
@@ -1463,7 +1474,10 @@ def run_pr_scan_job(
                     changed_files,
                 )
             except Exception:  # noqa: BLE001
-                pass
+                logging.getLogger("scan_worker.jobs").warning(
+                    "regression risk check run failed for installation=%s repo=%s",
+                    installation_id, repo_full_name, exc_info=True,
+                )
             try:
                 _maybe_create_regression_fence_check_run(
                     client,
@@ -1476,7 +1490,10 @@ def run_pr_scan_job(
                     changed_files,
                 )
             except Exception:  # noqa: BLE001
-                pass
+                logging.getLogger("scan_worker.jobs").warning(
+                    "regression fence check run failed for installation=%s repo=%s",
+                    installation_id, repo_full_name, exc_info=True,
+                )
     except Exception as exc:  # noqa: BLE001
         _try_post_failure_comment(
             settings, installation_id, repo_full_name, pr_number, exc, source="run_pr_scan_job"
