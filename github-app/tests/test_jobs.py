@@ -3990,6 +3990,77 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     assert recorded_spend == [-FLASH_REVIEW_SPEND_RESERVE_USD]
 
 
+def test_flash_review_job_summary_count_reflects_a_real_post_failure(monkeypatch):
+    # Real gap found live on PR #764: the summary comment said "4
+    # finding(s) posted" from len(findings_to_post) while only 3 inline
+    # comments actually existed on the PR - a real 422 from GitHub's
+    # diff-position validation for one finding's citation was caught and
+    # logged (create_pr_review_comment's own per-finding try/except), but
+    # the summary count never learned about it. Two findings here, one
+    # citation GitHub rejects - the summary must say 1, not 2, and must
+    # name the failure rather than silently omitting it.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr(
+        "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
+    )
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda diff_text, file_context="", **kwargs: [
+            {"file": "app.py", "line": 1, "issue": "real problem one", "source": "llm"},
+            {"file": "app.py", "line": 2, "issue": "real problem two", "source": "llm"},
+        ],
+    )
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    posted = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.upsert_pr_comment",
+        lambda client, token, repo_full_name, pr_number, body, **kwargs: posted.update(body=body),
+    )
+    from scan_worker.jobs import run_flash_review_job
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+
+    def fake_create_pr_review_comment(client, token, repo, pr, commit_id, path, line, body):
+        if line == 2:
+            raise Exception("422 Client Error: Unprocessable Entity")
+        return {"id": 999001}
+
+    monkeypatch.setattr("scan_worker.jobs.create_pr_review_comment", fake_create_pr_review_comment)
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert "1 finding(s) posted as inline review comment(s) below" in posted["body"]
+    assert "2 finding(s) posted" not in posted["body"]
+    assert "1 more finding(s) held up but couldn't be posted" in posted["body"]
+
+
 def test_flash_review_job_excludes_aletheore_json_ignored_paths_from_the_diff(monkeypatch):
     # Real gap this closes: Flash Review's PR-comment pipeline has no
     # local checkout to read .aletheore.json from the way the
