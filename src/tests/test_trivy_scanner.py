@@ -74,7 +74,7 @@ def test_check_trivy_normalizes_a_real_secret_finding_shape(tmp_path):
             "type": "privacy",
             "path": ".env",
             "line": 1,
-            "message": "OpenAI API Key (sha256:51ad92c86d10)",
+            "message": "OpenAI API Key (sha256:5f59305859ed)",
         }
     ]
 
@@ -104,6 +104,49 @@ def test_check_trivy_never_leaks_the_raw_secret_value(tmp_path):
         result = check_trivy(tmp_path)
 
     assert raw_secret not in json.dumps(result)
+
+
+def _trivy_secret_payload(match: str) -> dict:
+    return {
+        "Results": [
+            {
+                "Target": ".env",
+                "Secrets": [
+                    {
+                        "RuleID": "openai-api-key",
+                        "Title": "OpenAI API Key",
+                        "Severity": "CRITICAL",
+                        "StartLine": 1,
+                        "Match": match,
+                    }
+                ],
+            }
+        ]
+    }
+
+
+def test_check_trivy_preview_hash_actually_depends_on_the_secret_value(tmp_path):
+    # Real bug found auditing this PR: the preview hash used to be computed
+    # from f"{path}:{line}:{rule_id}" - metadata already plaintext elsewhere
+    # in the same finding - instead of Trivy's own "Match" field (the real
+    # matched secret text). Two different secrets at the identical
+    # path/line/rule (e.g. the same key rotated to a new value) produced the
+    # exact same "preview", silently defeating the one thing a salted hash
+    # of the real value is for. This asserts the hash actually changes when
+    # the underlying secret does, at the identical path/line/rule.
+    with patch("aletheore.static_analysis.trivy_scanner.shutil.which", return_value="/usr/local/bin/trivy"):
+        with patch(
+            "aletheore.static_analysis.trivy_scanner.subprocess.run",
+            return_value=_mock_run(0, stdout=json.dumps(_trivy_secret_payload("OPENAI_API_KEY=sk-proj-aaaa"))),
+        ):
+            first = check_trivy(tmp_path)["findings"][0]["message"]
+        with patch(
+            "aletheore.static_analysis.trivy_scanner.subprocess.run",
+            return_value=_mock_run(0, stdout=json.dumps(_trivy_secret_payload("OPENAI_API_KEY=sk-proj-bbbb"))),
+        ):
+            second = check_trivy(tmp_path)["findings"][0]["message"]
+
+    assert first != second
 
 
 def test_check_trivy_normalizes_a_real_misconfig_finding_shape(tmp_path):

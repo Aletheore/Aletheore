@@ -136,7 +136,21 @@ def check_trivy(repo_path: Path, timeout: int | None = None) -> dict:
             # salted hash and its rule/title, matching every other
             # dashboard-rendered finding's shape (message text a human can
             # read safely), never the secret material itself.
-            preview = _redact_secret_value(f"{path}:{line}:{rule_id}", salt)
+            #
+            # Real bug found auditing this PR: this used to hash
+            # f"{path}:{line}:{rule_id}" instead of Trivy's own "Match" field
+            # (the actual matched secret text, confirmed present in Trivy's
+            # real JSON output - see this module's own leak-prevention
+            # comment above and test_check_trivy_never_leaks_the_raw_secret_
+            # value) - path/line/rule_id are already plaintext in every
+            # other field this finding carries, so hashing them again added
+            # zero fingerprinting signal: the "preview" was identical for
+            # any two findings at the same location/rule regardless of what
+            # the actual secret text was, silently defeating the one thing
+            # secrets.py's own convention (a salted hash OF the real value)
+            # is for - telling two different real secrets apart, or noticing
+            # a flagged secret was rotated to a different value.
+            preview = _redact_secret_value(secret.get("Match", ""), salt)
             findings.append(
                 {
                     "tool": "trivy",
