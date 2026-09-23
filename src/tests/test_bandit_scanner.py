@@ -72,3 +72,37 @@ def test_check_bandit_treats_a_fatal_exit_code_as_a_real_failure(tmp_path):
         result = check_bandit(tmp_path)
 
     assert result["checked"] is False
+
+
+def test_check_bandit_filters_known_noisy_rules(tmp_path):
+    # Real finding (2026-09-23): unfiltered against pallets/flask, B101
+    # ("assert used") alone was 1,054 of 1,083 total findings (97%) -
+    # fires on every bare `assert`, idiomatic in both pytest-style tests
+    # and ordinary programmer sanity checks, not a real security signal.
+    (tmp_path / "app.py").write_text("import subprocess\n")
+    payload = {
+        "results": [
+            {
+                "filename": "./app.py",
+                "issue_severity": "LOW",
+                "issue_text": "Use of assert detected.",
+                "line_number": 1,
+                "test_id": "B101",
+            },
+            {
+                "filename": "./app.py",
+                "issue_severity": "HIGH",
+                "issue_text": "subprocess call with shell=True identified, security issue.",
+                "line_number": 4,
+                "test_id": "B602",
+            },
+        ]
+    }
+    mock_result = _mock_run(1, stdout=json.dumps(payload))
+
+    with patch("aletheore.static_analysis.bandit_scanner.shutil.which", return_value="/usr/bin/bandit"), \
+         patch("aletheore.static_analysis.bandit_scanner.subprocess.run", return_value=mock_result):
+        result = check_bandit(tmp_path)
+
+    assert len(result["findings"]) == 1
+    assert result["findings"][0]["rule_id"] == "B602"
