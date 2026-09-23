@@ -170,6 +170,7 @@ _TOOL_NAME_TO_QUERY_KIND = {
     "aletheore_secrets": "secrets",
     "aletheore_vulnerabilities": "vulnerabilities",
     "aletheore_licenses": "licenses",
+    "aletheore_static_analysis": "static-analysis",
     "aletheore_endpoints": "endpoints",
     "aletheore_cluster": "cluster",
     "aletheore_layer_violations": "layer-violations",
@@ -196,6 +197,9 @@ _QUERY_TOOL_DESCRIPTIONS = {
     "secrets": "Secret-scanner findings for one file. target: file path exactly as it appears in evidence.",
     "vulnerabilities": "All dependency vulnerability findings for this repo. Takes no target.",
     "licenses": "All dependency license findings for this repo. Takes no target.",
+    "static-analysis": "Static analysis findings (SonarQube/Semgrep/Bearer/gosec/Bandit/Joern/Trivy/PMD), normalized "
+    "into one shape - {tool, rule_id, severity, type, path, line, message}. Also reports which "
+    "tools actually ran and which were skipped, and why. Takes no target.",
     "endpoints": "All API endpoints mapped from source. Takes no target.",
     "cluster": "The architecture cluster containing this module. target: file path exactly as it appears in evidence.",
     "layer-violations": "Layer-convention violations detected in the architecture. Takes no target.",

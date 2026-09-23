@@ -29,17 +29,23 @@ def _llm_based_suggestion_section(
     report_text: str,
     on_usage: Callable[[int, int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
 ) -> str | None:
     # Purely additive, and never allowed to break a real audit: the
     # evidence-backed report above this section is the product's core
     # promise ("no claim without evidence"), and this is the one place
     # that promise is deliberately relaxed - clearly labeled, never mixed
     # into the findings themselves. Any failure (bad JSON, missing key,
-    # model outage) just means this section doesn't get appended.
+    # model outage) just means this section doesn't get appended. The
+    # adapter's own on_call_failed (wired below when given) already
+    # releases the reservation before this except ever sees the failure -
+    # see writing_adapter_for's docstring chain / _IncrementalSpendBudget.
     try:
         adapter_kwargs = {"on_usage": on_usage}
         if before_llm_call is not None:
             adapter_kwargs["before_llm_call"] = before_llm_call
+        if on_call_failed is not None:
+            adapter_kwargs["on_call_failed"] = on_call_failed
         adapter = writing_adapter_for_managed_audit(**adapter_kwargs)
         raw = adapter.simple_completion(LLM_SUGGESTION_SYSTEM_PROMPT, report_text, cwd=".")
         parsed = json.loads(raw)
@@ -71,12 +77,15 @@ def run_managed_audit(
     manual_dir: str | None = None,
     on_usage: Callable[[int, int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
     allow_partial_report: bool = False,
     include_llm_suggestions: bool = True,
 ) -> str:
     adapter_kwargs = {"on_usage": on_usage}
     if before_llm_call is not None:
         adapter_kwargs["before_llm_call"] = before_llm_call
+    if on_call_failed is not None:
+        adapter_kwargs["on_call_failed"] = on_call_failed
     if allow_partial_report:
         adapter_kwargs["allow_partial_report"] = allow_partial_report
     adapter = writing_adapter_for_managed_audit(**adapter_kwargs)
@@ -101,6 +110,8 @@ def run_managed_audit(
         suggestion_kwargs = {"on_usage": on_usage}
         if before_llm_call is not None:
             suggestion_kwargs["before_llm_call"] = before_llm_call
+        if on_call_failed is not None:
+            suggestion_kwargs["on_call_failed"] = on_call_failed
         suggestion_section = _llm_based_suggestion_section(report_text, **suggestion_kwargs)
         if suggestion_section:
             report_text += suggestion_section

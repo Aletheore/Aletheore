@@ -68,6 +68,14 @@ def finding_identity_key(finding_type: str, finding: dict) -> str:
     distinct types rather than one, so dismissal-rate comparisons between
     them stay possible) use file+line+_issue_fingerprint(issue) - see that
     function's docstring for why a fingerprint rather than the raw text.
+
+    static_analysis (SonarQube/Semgrep/Bearer/gosec/Bandit/Joern/Trivy/PMD, normalized
+    into security.static_analysis - see src/aletheore/static_analysis/)
+    uses path+line+tool+rule_id. Unlike Flash Review's free-text issue
+    field, a deterministic scanner's rule_id is stable across re-runs of
+    the same code (it's the rule that fired, not a model's own phrasing of
+    why), so this doesn't need _issue_fingerprint's reworded-text
+    tolerance - exact structured fields, same as secret/vulnerability.
     """
     if finding_type == "secret":
         return f"{finding['path']}\x1f{finding['pattern']}\x1f{finding['match_preview']}"
@@ -75,6 +83,8 @@ def finding_identity_key(finding_type: str, finding: dict) -> str:
         return f"{finding['ecosystem']}\x1f{finding['package']}\x1f{finding['advisory_id']}"
     if finding_type in ("flash_review_llm", "flash_review_semantic"):
         return f"{finding['file']}\x1f{finding['line']}\x1f{_issue_fingerprint(finding['issue'])}"
+    if finding_type == "static_analysis":
+        return f"{finding['path']}\x1f{finding['line']}\x1f{finding['tool']}\x1f{finding['rule_id']}"
     raise ValueError(f"unknown finding_type: {finding_type!r}")
 
 
@@ -174,6 +184,7 @@ async def get_dismissed_identity_keys(
         "vulnerability": set(),
         "flash_review_llm": set(),
         "flash_review_semantic": set(),
+        "static_analysis": set(),
     }
     for row in rows:
         result[row["finding_type"]].add(row["identity_key"])

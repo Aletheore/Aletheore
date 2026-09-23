@@ -18,6 +18,27 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-09-22
+
+4 commits since the previous deploy, tagged `github-app-deploy-2026-09-22` (commit `4abeae9`),
+2 migrations (067, 068):
+
+- **#762 - per-file completeness generation + windowed verification for Flash Review.** One real
+  LLM generation call per changed file instead of one for the whole PR, fixing PR-Agent's vendored
+  "0-5 issues per PR" cap being PR-wide rather than per-file; verification calls now scope to just
+  the finding's own file patch instead of the whole PR diff, roughly halving that cost.
+- **#751 - hunk-scaled cap, moved-code detection, and identifier grounding for Flash Review.**
+- **#750 - audit fixes + 6 deterministic scanners wired into Aletheore** (Semgrep, gosec, Bandit,
+  Bearer, Joern, SonarQube) - `security.static_analysis` evidence, normalized findings across every
+  tool, dashboard/PR-review/AIRview/MCP consumption.
+- **#766 - health-sweep stale-alert false positive fixed**, found live investigating a real report:
+  an installation's air -> flash downgrade leaves its `health_check_targets` row in place (by
+  design - `list_health_check_targets_all` is AIR-exclusive, a downgrade should stop polling, not
+  delete history), but the separate staleness-check job didn't know that, so it re-alerted every 6
+  hours indefinitely for a fully-expected state instead of a real outage - confirmed live against
+  Aletheore's own dogfood install, whose `endpoint_health` gap had grown to 1 day 15.5 hours before
+  this shipped.
+
 ## 2026-09-21
 
 2 commits since the previous deploy (`github-app-deploy-2026-09-19-2`), tagged

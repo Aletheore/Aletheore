@@ -40,6 +40,38 @@ def get_subscription(api_key: str | None, subscription_id: str) -> dict:
     return _data_or_raise(response, f"could not fetch subscription {subscription_id}")
 
 
+def cancel_subscription(
+    api_key: str | None,
+    subscription_id: str,
+    effective_from: str = "immediately",
+) -> dict:
+    """Cancels a Paddle subscription outright - POST /subscriptions/{id}/cancel,
+    not a PATCH (Paddle has no cancel field on the update endpoint; only
+    the dedicated cancel/pause/resume operations create a scheduled_change).
+    Real gap this closes: account deletion and the GitHub App uninstall
+    webhook used to only ever delete Aletheore's own local row - nothing in
+    this module called Paddle to stop billing, so a customer who deleted
+    their account kept being charged every cycle with no installation left
+    to reach a billing portal from. Defaults to effective_from="immediately"
+    (not Paddle's own default of "next_billing_period") because a customer
+    erasing their account is not the same as one downgrading - they should
+    stop being charged now, not at the end of whatever period they happen
+    to be mid-cycle in."""
+    if not api_key:
+        raise PaddleAPINotConfigured("PADDLE_API_KEY is not configured")
+    try:
+        response = get_generic_http_client().post(
+            f"{_PADDLE_API_BASE}/subscriptions/{subscription_id}/cancel",
+            headers=_headers(api_key),
+            json={"effective_from": effective_from},
+            timeout=_PADDLE_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise PaddleAPIError(f"could not cancel subscription {subscription_id}: {exc}") from exc
+    return _data_or_raise(response, f"could not cancel subscription {subscription_id}")
+
+
 def create_portal_session(
     api_key: str | None,
     customer_id: str,

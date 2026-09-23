@@ -25,8 +25,9 @@ cat .aletheore/air.json   # the evidence everything else reads from
 ```
 
 That's the whole deterministic path: no LLM call, no account, no network access beyond the
-dependency-vulnerability/license registry lookups (skip those with `--no-check-vulnerabilities
---no-check-licenses` for a fully offline run). Everything below - the per-language import
+dependency-vulnerability/license registry lookups and Semgrep's `--config=auto` rule-registry
+pull (skip those with `--no-check-vulnerabilities --no-check-licenses --no-check-static-analysis`
+for a fully offline run). Everything below - the per-language import
 resolution details, `audit`'s LLM-written report, the MCP server, the dashboard - builds on
 top of that one `air.json` file.
 
@@ -189,6 +190,9 @@ aletheore scan . --no-check-vulnerabilities   # skip the OSV.dev dependency chec
 aletheore scan . --no-scan-git-history        # skip walking git history for secrets
 aletheore scan . --no-check-licenses          # skip the dependency-license check
 aletheore scan . --no-map-endpoints           # skip static API endpoint mapping
+aletheore scan . --no-check-static-analysis   # skip Semgrep/gosec/Bandit and opt-in Bearer/Joern/SonarQube
+aletheore scan . --check-bearer                # include Bearer without being asked
+aletheore scan . --check-joern                 # include Joern's Go asymmetric-cache-trust query
 ```
 
 The license check reads each pinned PyPI/npm dependency's registry metadata (PyPI's `license`
@@ -201,6 +205,25 @@ pattern-matching a `LICENSE` file's text) so a report can flag a copyleft depend
 what license the repo itself claims to be under - a factual categorization, not a legal
 compatibility verdict, which is genuinely subjective and outside what a deterministic scanner
 should claim.
+
+The static analysis check runs Semgrep, gosec, and Bandit as subprocess scanners (self-skipping
+with a reason, not an error, for any binary not on `PATH`) and normalizes their findings into
+`security.static_analysis`. Bearer, Joern, and SonarQube are each opt-in, for different real
+reasons. Bearer finds real sensitive-data/PII-flow issues nothing else here does, but its
+full-repo runtime doesn't scale cleanly with repo size, so it's never on by default - pass
+`--check-bearer`/`--no-check-bearer` explicitly, or, with neither passed, `scan`/`audit` on a
+real terminal ask before running it (with the same warning); a non-interactive run (CI, a
+script, the hosted worker) skips it by default rather than hang on an unanswerable prompt. Joern
+runs one real CFG-based query (Go's asymmetric-cache-trust pattern - two cache guards in the
+same function that trust a hit differently, one returning immediately, one re-deriving via a
+fresh lookup on some paths) - `--check-joern`, no prompt, since it needs a separate Joern
+install (`gosrc2cpg`/`joern` on `PATH`) and a `go.mod` at the scanned root, and a CPG build is
+real per-scan JVM-startup-plus-parsing cost, not a fast subprocess call. SonarQube is opt-in and
+local-only, since a real SonarQube analysis needs a running server, not
+just a CLI. Set `SONARQUBE_HOST_URL` (and, for anything but a fully anonymous local instance,
+`SONARQUBE_TOKEN`) to enable it; `SONARQUBE_PROJECT_KEY` defaults to the scanned directory's
+own name. With no `SONARQUBE_HOST_URL` set, it's silently skipped like any other unconfigured
+check - no server, no cost, no error.
 
 Static API endpoint mapping records `repository.api_endpoints` for Flask, FastAPI-style
 decorators, Django `urlpatterns`, Express route calls, Go (`net/http`/`gorilla/mux` and Gin),

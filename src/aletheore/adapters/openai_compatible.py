@@ -154,6 +154,7 @@ git.hotspots[]                      - {path, churn_count, co_change_partners[]: 
 security.secrets                    - {scanned_files, findings[], history_scanned_commits, history_findings[]}
 security.dependency_vulnerabilities - {checked, reason, findings[]: {ecosystem, package, installed_version, advisory_id, summary, severity}}
 security.dependency_licenses        - {checked, reason, repo_license: {category, detected_from}, findings[]: {ecosystem, package, installed_version, license, category}}
+security.static_analysis            - {checked, tools_run[], tools_skipped[]: {tool, reason}, findings[]: {tool, rule_id, severity, type, path, line, message}}
 architecture.clusters[]             - {id, modules[], internal_edges}
 architecture.cross_cluster_edges
 architecture.layer_violations       - {convention_detected, layers[], violations[]}
@@ -468,15 +469,32 @@ class OpenAICompatibleAdapter(AgentAdapter):
                     lambda: client.chat.completions.create(messages=messages, **create_kwargs)
                 )
             except Exception as exc:
+                # _has_budget_for_next_call above already reserved real
+                # budget for this round - a failed call still needs that
+                # reservation released, the same fix simple_completion's own
+                # except block already has (see its comment). invoke() never
+                # got this fix when #314 shipped, even though it reserves
+                # and trues up exactly the same way, once per round instead
+                # of once per call - a managed audit round failing here
+                # used to burn MANAGED_AUDIT_LLM_RESERVE_USD ($1.00) with no
+                # ledger trace at all, for every failed round.
+                if self._on_call_failed is not None:
+                    self._on_call_failed()
                 raise AdapterInvocationError(
                     f"{self.name} invocation failed: {type(exc).__name__}"
                 ) from exc
-            if self._on_usage is not None and response.usage is not None:
-                self._on_usage(
-                    response.usage.prompt_tokens,
-                    response.usage.completion_tokens,
-                    _cached_tokens_from_usage(response.usage),
-                )
+            if response.usage is not None:
+                if self._on_usage is not None:
+                    self._on_usage(
+                        response.usage.prompt_tokens,
+                        response.usage.completion_tokens,
+                        _cached_tokens_from_usage(response.usage),
+                    )
+            elif self._on_call_failed is not None:
+                # Same real, observed shape simple_completion's own comment
+                # documents: a 200 with no usage field, which the except
+                # block above never sees since nothing raised.
+                self._on_call_failed()
             message = response.choices[0].message
             messages.append(message.model_dump(exclude_none=True))
 

@@ -409,17 +409,32 @@ def test_fix_suggestion_attachment_records_spend_when_model_succeeds(monkeypatch
     monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda model, prompt, completion: 0.0017)
 
     class FakeAdapter:
-        def __init__(self, on_usage=None):
+        def __init__(self, on_usage=None, on_call_failed=None):
             self._on_usage = on_usage
+            self._on_call_failed = on_call_failed
 
         def simple_completion(self, system_prompt, user_prompt, cwd):
             if self._on_usage is not None:
                 self._on_usage(80, 40)
             return "increase the connection pool size"
 
-    monkeypatch.setattr(
-        "scan_worker.jobs._health_fix_suggestion_adapter", lambda on_usage=None: FakeAdapter(on_usage)
-    )
+    # Stale test found via audit (2026-09-21): the real call site passes
+    # on_call_failed=spend_budget.on_call_failed to _health_fix_suggestion_
+    # adapter (writing_adapter_for really does accept it), but this mock's
+    # lambda only ever accepted on_usage - a TypeError on the unexpected
+    # kwarg was silently swallowed by _fix_suggestion_attachment's own
+    # broad except Exception, degrading to "no suggestion" instead of
+    # failing loud, so this test kept passing on the WRONG code path
+    # (result is None -> the same assertion the failure test below makes)
+    # until the assertion itself started failing once real code diverged
+    # further from what this mock actually exercised.
+    call_failed_calls = []
+
+    def fake_adapter_factory(on_usage=None, on_call_failed=None):
+        call_failed_calls.append(on_call_failed)
+        return FakeAdapter(on_usage, on_call_failed)
+
+    monkeypatch.setattr("scan_worker.jobs._health_fix_suggestion_adapter", fake_adapter_factory)
     recorded = []
     monkeypatch.setattr(
         "scan_worker.jobs.record_llm_spend", lambda dsn, iid, cost, **k: recorded.append(cost)
@@ -428,6 +443,11 @@ def test_fix_suggestion_attachment_records_spend_when_model_succeeds(monkeypatch
     result = _fix_suggestion_attachment(901, "org/repo", "app/handler.py", 15, "GET", "/v1/users", 500, None)
 
     assert result is not None
+    # A real, callable on_call_failed was passed through to the adapter
+    # factory, matching the real call site - and, on this success path,
+    # never actually invoked.
+    assert len(call_failed_calls) == 1
+    assert callable(call_failed_calls[0])
     # record_llm_spend now receives the true-up delta from the flat
     # HEALTH_FIX_SUGGESTION_LLM_RESERVE_USD reservation already made by
     # can_start_next_call() (this call site's own sized reserve, not the

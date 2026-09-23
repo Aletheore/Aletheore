@@ -59,6 +59,23 @@ def _arr(items: dict | None = None) -> dict:
 # here would turn a harmless additive change into a CI failure.
 _SECRET_FINDING = _obj({"path": _STR, "line": _INT, "pattern": _STR})
 _ENDPOINT = _obj({"file": _STR, "line": _INT, "method": _STR, "path": _STR})
+# One normalized shape across every static-analysis tool (SonarQube,
+# Semgrep, Bearer, gosec, Bandit, Joern, Trivy, PMD) - every downstream consumer (MCP tool,
+# PR-review merge, AIRview) reads this regardless of which tool produced
+# it. severity/type are each tool's own taxonomy mapped down to this
+# shared set - see the per-tool scanner modules in
+# aletheore/static_analysis/ for the exact mapping.
+_STATIC_ANALYSIS_FINDING = _obj(
+    {
+        "tool": _STR,
+        "rule_id": _STR,
+        "severity": _STR,  # "blocker" | "critical" | "major" | "minor" | "info"
+        "type": _STR,  # "bug" | "vulnerability" | "code_smell" | "privacy"
+        "path": _STR,
+        "line": _INT,
+        "message": _STR,
+    }
+)
 
 # Same "only what consumers read" discipline as the findings arrays above.
 # The extractor emits more per column (unique, default); those stay
@@ -211,6 +228,14 @@ AIR_JSON_SCHEMA: dict = {
                 ),
                 "dependency_vulnerabilities": _obj({"checked": _BOOL, "findings": _ANY_LIST}),
                 "dependency_licenses": _obj({"checked": _BOOL, "findings": _ANY_LIST}),
+                "static_analysis": _obj(
+                    {
+                        "checked": _BOOL,
+                        "tools_run": _ANY_LIST,
+                        "tools_skipped": _ANY_LIST,
+                        "findings": _arr(_STATIC_ANALYSIS_FINDING),
+                    }
+                ),
             }
         ),
         "architecture": _obj(

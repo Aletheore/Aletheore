@@ -415,7 +415,84 @@ def _run_git(args: list[str], **kwargs) -> None:
         raise
 
 
-def _clone_ref(url: str, ref: str, dest: Path) -> None:
+def _checkout_sha(dest: Path, sha: str, pr_number: int | None, *, force: bool = False) -> None:
+    """git checkout <sha>, falling back to fetching the PR's own head ref
+    and checking that out instead if the direct checkout fails.
+
+    Real bug found live 2026-09-22: a plain `git clone`/`git fetch origin`
+    only pulls refs/heads/* (and tags), never refs/pull/* - so a PR whose
+    source branch was already deleted by the time this job actually runs
+    (an ordinary squash-merge-with-delete-branch, not a corrupted repo or
+    a rare edge case) makes `sha` permanently unreachable to both
+    _clone_ref's fresh clone and _ensure_persistent_checkout's
+    fetch-and-checkout. Confirmed live: `git checkout <sha>` against a
+    plain clone of a repo with the branch already deleted fails with
+    `fatal: unable to read tree <sha>` (exit 128) - the exact error two
+    real run_pr_scan_job jobs hit in production, both for PRs merged with
+    branch deletion before the (queued, not instant) scan job ran.
+    Confirmed the fix works the same way: `git fetch origin
+    refs/pull/<n>/head` resolves the identical SHA even after the branch
+    is gone, since GitHub keeps that ref regardless of branch deletion.
+
+    Only relevant for a PR's own head_sha - base_sha and a push/initial
+    scan's branch head are always on a real, live branch ref, so callers
+    pass pr_number=None for both and this never takes the fallback path.
+    """
+    args = ["git", "checkout", "-q", *(["-f"] if force else []), sha]
+    try:
+        subprocess.run(args, cwd=dest, check=True)
+    except subprocess.CalledProcessError:
+        if pr_number is None:
+            raise
+        subprocess.run(
+            ["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"], cwd=dest, check=True
+        )
+        subprocess.run(
+            ["git", "checkout", "-q", *(["-f"] if force else []), "FETCH_HEAD"], cwd=dest, check=True
+        )
+
+
+def _fetch_and_checkout(dest: Path, sha: str, pr_number: int | None) -> None:
+    """Fetches one commit SHA (its full ancestry, not `--depth 1`) and
+    checks it out. GitHub allows fetching an arbitrary commit SHA
+    directly, not just a branch/tag tip, as long as it's reachable from
+    some advertised ref (a branch, a tag, or - the same real scenario
+    `_checkout_sha` handles - a still-live PR ref even after its own
+    branch is deleted).
+
+    Real bug this replaced: an earlier version of this function used
+    `--depth 1`, on the theory that a one-shot checkout (base_sha, a PR
+    head, a first-connect scan) never needs its own history and so
+    shouldn't pay to fetch it. False for every real caller - `_clone_ref`
+    and `_clone_pr_head` both feed straight into `_run_scan`, which always
+    runs `find_secrets_in_history` and `analyze_git` (full `git log`
+    walks), gated only by GRAPH_COLD_SYNC_DEPTH_CAP/
+    SECRETS_HISTORY_DEPTH_CAP - both in the tens of thousands of commits,
+    so large they never bind on a real repo and every scan has always
+    effectively walked full history. A depth-1 checkout has exactly one
+    commit, so those walks silently collapsed to "almost nothing changed
+    since forever" instead of erroring - caught live on PR #775, where the
+    base-side history-secrets set came back empty and the evidence-diff
+    comment reported the checkout's entire real history (1241 commits) as
+    newly introduced. Fetching one ref's full ancestry (this function)
+    instead of `git clone`'s every-branch-and-tag (the shape this
+    replaced originally) is still a real, smaller transfer - just not as
+    small as `--depth 1`, which isn't safe for any current caller.
+    """
+    try:
+        subprocess.run(["git", "fetch", "-q", "origin", sha], cwd=dest, check=True)
+    except subprocess.CalledProcessError:
+        if pr_number is None:
+            raise
+        subprocess.run(
+            ["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
+            cwd=dest,
+            check=True,
+        )
+    subprocess.run(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest, check=True)
+
+
+def _clone_ref(url: str, ref: str, dest: Path, pr_number: int | None = None) -> None:
     # Scrubs the credentialed URL from dest/.git/config in a finally block
     # covering the clone itself, the same reasoning and shape as
     # _ensure_persistent_checkout's own fresh-clone path: real audit found
@@ -438,14 +515,22 @@ def _clone_ref(url: str, ref: str, dest: Path) -> None:
     # for the catchable subset of interruptions this fix already protects
     # against elsewhere in this same file (RQ's signal-based job_timeout,
     # not a raw OOM SIGKILL - no try/finally anywhere can run after that,
-    # regardless of placement, since the whole process is gone) - moved
-    # inside the try, mirroring _ensure_persistent_checkout's own
-    # fresh-clone path exactly, including its `.git` existence guard
-    # (clone interrupted before `git init` ever ran leaves no `.git` to
-    # run `git remote set-url` against).
+    # regardless of placement, since the whole process is gone) - the
+    # `git init`/`git remote add` below run inside the try for the same
+    # reason: `dest/.git` can exist (and so need the scrub) after either
+    # one, even if the fetch that follows never gets that far.
+    #
+    # `git init` + `git remote add` + a single-ref fetch here instead of
+    # `git clone --no-checkout` (which pulls every branch and tag) - this
+    # checkout only ever needs the one ref's own ancestry (base_sha, a PR
+    # head, or a first-time connect scan), so fetching just that ref is
+    # still a real transfer saving over a full clone even though (see
+    # _fetch_and_checkout's docstring) it can't go shallow: `_run_scan`
+    # always walks this checkout's real git history.
     try:
-        _run_git(["git", "clone", "-q", "--no-checkout", url, str(dest)])
-        subprocess.run(["git", "checkout", "-q", ref], cwd=dest, check=True)
+        _run_git(["git", "init", "-q", str(dest)])
+        _run_git(["git", "remote", "add", "origin", url], cwd=dest)
+        _fetch_and_checkout(dest, ref, pr_number)
     finally:
         if (dest / ".git").exists():
             subprocess.run(
@@ -490,7 +575,9 @@ def purge_persistent_checkouts_job(installation_id: int) -> None:
     shutil.rmtree(_installation_checkout_root(installation_id), ignore_errors=True)
 
 
-def _ensure_persistent_checkout(url: str, checkout_sha: str, checkout_dir: Path) -> None:
+def _ensure_persistent_checkout(
+    url: str, checkout_sha: str, checkout_dir: Path, pr_number: int | None = None
+) -> None:
     """Keeps one real checkout per repo, reused across scans, instead of
     the clone-fresh-and-delete pattern _clone_ref/_clone_pr_head use for
     the ephemeral per-job checkouts above. This is what gives a later
@@ -505,7 +592,11 @@ def _ensure_persistent_checkout(url: str, checkout_sha: str, checkout_dir: Path)
     fetching the SHA directly - GitHub does not reliably allow fetching a
     bare SHA unless it happens to be reachable from an advertised ref,
     the same reason _clone_ref itself relies on a full clone's implicit
-    ref fetching rather than fetching head_sha directly.
+    ref fetching rather than fetching head_sha directly. `pr_number`, when
+    given, lets _checkout_sha fall back to fetching that PR's own
+    `refs/pull/<n>/head` if the plain fetch above didn't advertise
+    `checkout_sha` at all - see _checkout_sha's own docstring for the real
+    production bug (a deleted source branch) this closes.
 
     `git remote set-url` runs on every reuse so a rotated access token
     (see _clone_url - `url` always carries a fresh one) doesn't leave
@@ -527,7 +618,7 @@ def _ensure_persistent_checkout(url: str, checkout_sha: str, checkout_dir: Path)
         _run_git(["git", "remote", "set-url", "origin", url], cwd=checkout_dir)
         try:
             subprocess.run(["git", "fetch", "-q", "origin"], cwd=checkout_dir, check=True)
-            subprocess.run(["git", "checkout", "-q", "-f", checkout_sha], cwd=checkout_dir, check=True)
+            _checkout_sha(checkout_dir, checkout_sha, pr_number, force=True)
             subprocess.run(["git", "clean", "-q", "-fdx"], cwd=checkout_dir, check=True)
         finally:
             subprocess.run(
@@ -537,7 +628,7 @@ def _ensure_persistent_checkout(url: str, checkout_sha: str, checkout_dir: Path)
         checkout_dir.mkdir(parents=True, exist_ok=True)
         try:
             _run_git(["git", "clone", "-q", "--no-checkout", url, str(checkout_dir)])
-            subprocess.run(["git", "checkout", "-q", checkout_sha], cwd=checkout_dir, check=True)
+            _checkout_sha(checkout_dir, checkout_sha, pr_number)
         finally:
             if (checkout_dir / ".git").exists():
                 subprocess.run(
@@ -548,7 +639,12 @@ def _ensure_persistent_checkout(url: str, checkout_sha: str, checkout_dir: Path)
 
 
 def _prepare_head_checkout(
-    clone_url: str, head_sha: str, installation_id: int, repo_full_name: str, fallback_dir: Path
+    clone_url: str,
+    head_sha: str,
+    installation_id: int,
+    repo_full_name: str,
+    fallback_dir: Path,
+    pr_number: int | None = None,
 ) -> Path:
     """Uses a persistent, reused-across-scans checkout when one is
     available (see _ensure_persistent_checkout), falling back to the
@@ -556,17 +652,20 @@ def _prepare_head_checkout(
     persistent storage isn't mounted, isn't writable, or fails for any
     other reason - this must never be the reason a PR scan fails
     outright, it only ever gates whether the upcoming scan can be
-    incremental.
+    incremental. `pr_number` (a PR's own number, None for a push/initial
+    scan's branch head) is threaded through to both paths so either one
+    can recover a head_sha whose source branch was already deleted by the
+    time this job runs - see _checkout_sha's own docstring.
     """
     try:
         checkout_dir = _persistent_checkout_dir(installation_id, repo_full_name)
-        _ensure_persistent_checkout(clone_url, head_sha, checkout_dir)
+        _ensure_persistent_checkout(clone_url, head_sha, checkout_dir, pr_number=pr_number)
         return checkout_dir
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("scan_worker.jobs").warning(
             "persistent checkout unavailable (%s); falling back to an ephemeral clone", type(exc).__name__
         )
-        _clone_ref(clone_url, head_sha, fallback_dir)
+        _clone_ref(clone_url, head_sha, fallback_dir, pr_number=pr_number)
         return fallback_dir
 
 
@@ -896,6 +995,122 @@ def _maybe_create_vulnerability_check_run(
         )
 
 
+_ANNOTATION_LEVEL_BY_SEVERITY = {
+    "blocker": "failure",
+    "critical": "failure",
+    "major": "warning",
+    "minor": "notice",
+    "info": "notice",
+}
+
+
+def _static_analysis_annotations(findings: list[dict]) -> list[dict]:
+    """Real GitHub Checks API constraint confirmed against its own docs:
+    start_line/end_line must be >= 1 - a misconfig-type finding with no
+    real single offending line (see trivy_scanner.py/pmd_scanner.py's own
+    comments on this - CauseMetadata often carries no StartLine at all)
+    defaults line to 0, which would be rejected outright. Those findings
+    stay summary-text-only rather than getting a fabricated line 1
+    annotation that would point at the wrong place.
+
+    Same reasoning for `path`: every real scanner module always sets it,
+    but a missing/None path here would produce an annotation the Checks
+    API rejects outright - and since annotations are sent in one batch
+    per create_check_run call, one malformed entry risks the whole batch
+    (up to 50 otherwise-valid findings), not just itself. Flash Review
+    finding on this PR, real gap even though not yet observed in
+    practice."""
+    annotations = []
+    for finding in findings:
+        line = finding.get("line")
+        path = finding.get("path")
+        if not isinstance(line, int) or line < 1:
+            continue
+        if not isinstance(path, str) or not path:
+            continue
+        annotations.append(
+            {
+                "path": path,
+                "start_line": line,
+                "end_line": line,
+                "annotation_level": _ANNOTATION_LEVEL_BY_SEVERITY.get(finding.get("severity"), "notice"),
+                "message": finding.get("message", ""),
+            }
+        )
+    return annotations
+
+
+def _maybe_create_static_analysis_check_run(
+    client: httpx.Client,
+    token: str,
+    repo_full_name: str,
+    head_sha: str,
+    installation_id: int,
+    diff: dict,
+) -> None:
+    """Same shape as _maybe_create_vulnerability_check_run, for
+    diff["static_analysis"]["new"] (Semgrep/gosec/Bandit/Trivy/PMD,
+    always-on - see static_analysis/__init__.py's _SCANNERS for the
+    definitive list; this function reads that category generically, so a
+    scanner added there (PMD, 2026-09-22, after this docstring was first
+    written) flows through automatically with no change needed here - see
+    history.py's _compute_curated_diff for how that category is built
+    from the SAME base/head evidence run_pr_scan_job already produces
+    above, no extra scan needed).
+
+    Deliberately excludes Bearer/Joern/SonarQube - a real, tested attempt
+    (2026-09-21) to add Bearer here via
+    a diff-scoped pass (materializing just the PR's changed files into a
+    throwaway checkout, bounded by PR size instead of Bearer's real
+    300s+-on-this-repo full-scan cost) measured WORSE results, not
+    equivalent-but-cheaper ones: isolating this repo's own jobs.py (even
+    with three sibling modules included for context) made Bearer report
+    11 "os_command_injection" findings on `subprocess.run(["git", ...])`
+    calls the full-repo scan correctly recognizes as safe - Bearer's
+    dataflow sanitization reasoning depends on cross-file context a
+    diff-scoped checkout structurally can't provide, confirmed twice, not
+    a fluke. Joern's CPG-based whole-program analysis depends on that kind
+    of context even more, so it wasn't attempted at all. Both stay
+    opt-in/full-scan-only, same as before this experiment.
+
+    Deliberately NOT gated behind `installation["plan"] == "free"` like
+    every other check run in this file - this is the one meant to be
+    available to every tier, including free, per product decision
+    2026-09-21. Findings are presented the same way every other
+    customer-facing surface already does (see static_analysis/__init__.py's
+    module comment): path/line/message only, never tool/rule_id - true of
+    both the summary text and the inline annotations below.
+
+    Also posts each finding as a real inline Checks-API annotation on its
+    own file:line (up to GitHub's real 50-per-request limit, batched via
+    create_check_run's own annotations handling for anything beyond that),
+    not just the summary block - a finding lands on the diff itself, the
+    same surface Flash Review's own inline comments already use, not only
+    a text list a reviewer has to cross-reference manually.
+    """
+    settings = get_settings()
+    installation = get_installation_row(settings.database_url, installation_id)
+    if installation is None:
+        return
+
+    new_findings = diff.get("static_analysis", {}).get("new", [])
+    if new_findings:
+        summary = "\n".join(
+            f"- `{finding.get('path')}:{finding.get('line')}` - {finding.get('message')}"
+            for finding in new_findings
+        )
+        create_check_run(
+            client, token, repo_full_name, head_sha, "failure", summary,
+            name="Aletheore Deterministic Scan",
+            annotations=_static_analysis_annotations(new_findings),
+        )
+    else:
+        create_check_run(
+            client, token, repo_full_name, head_sha, "success", "No new static analysis findings.",
+            name="Aletheore Deterministic Scan",
+        )
+
+
 def _maybe_create_regression_risk_check_run(
     client: httpx.Client,
     token: str,
@@ -1129,7 +1344,7 @@ def run_pr_scan_job(
         # one scan, just not persisted or incremental.
         with repo_checkout_lock(settings.database_url, installation_id, repo_full_name):
             head_dir = _prepare_head_checkout(
-                clone_url, head_sha, installation_id, repo_full_name, job_dir / "head"
+                clone_url, head_sha, installation_id, repo_full_name, job_dir / "head", pr_number=pr_number
             )
 
             try:
@@ -1184,6 +1399,17 @@ def run_pr_scan_job(
             _maybe_create_vulnerability_check_run(client, token, repo_full_name, head_sha, installation_id, diff)
         except Exception:  # noqa: BLE001
             pass
+        try:
+            _maybe_create_static_analysis_check_run(client, token, repo_full_name, head_sha, installation_id, diff)
+        except Exception:  # noqa: BLE001
+            # Flash Review finding on this call site: every sibling check-run
+            # call in this function swallows silently the same way, but this
+            # is the newest one and logging costs nothing - a persistently
+            # broken check run would otherwise be invisible to operators.
+            logging.getLogger("scan_worker.jobs").warning(
+                "static analysis check run failed for installation=%s repo=%s",
+                installation_id, repo_full_name, exc_info=True,
+            )
         try:
             changed_files = fetch_pr_changed_files(client, token, repo_full_name, base_sha, head_sha)
         except Exception:  # noqa: BLE001
@@ -1449,8 +1675,21 @@ def _clone_pr_head(url: str, pr_number: int, dest: Path) -> None:
     # against the credentialed origin (the PR head isn't in the initial
     # clone), so the scrub can only happen after that fetch, but nothing
     # here needs it afterward either.
+    #
+    # `git init` + `git remote add` + a `refs/pull/<n>/head` fetch, same
+    # real reasoning as _clone_ref's own rewrite - this always already
+    # knows its PR number (a managed audit is invoked with one
+    # explicitly), so unlike _clone_ref it never needs a bare-SHA attempt
+    # first. Not `--depth 1`: `_run_scan` (this checkout's only consumer)
+    # always walks real git history (find_secrets_in_history, analyze_git)
+    # - see _fetch_and_checkout's docstring for the real bug a shallow
+    # fetch caused here. The old shape paid for the repo's entire history
+    # via `git clone --no-checkout` (every branch and tag) and THEN
+    # fetched the PR ref on top of that - fetching just the one ref is
+    # still a real, smaller transfer than that, just not shallow.
     try:
-        _run_git(["git", "clone", "-q", "--no-checkout", url, str(dest)])
+        _run_git(["git", "init", "-q", str(dest)])
+        _run_git(["git", "remote", "add", "origin", url], cwd=dest)
         subprocess.run(
             ["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
             cwd=dest,
@@ -1669,6 +1908,7 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
                 repo_dir,
                 on_usage=spend_budget.record_usage,
                 before_llm_call=spend_budget.can_start_next_call,
+                on_call_failed=spend_budget.on_call_failed,
                 allow_partial_report=True,
                 include_llm_suggestions=include_suggestions,
             )
@@ -1769,6 +2009,7 @@ def run_managed_audit_api_job(
             job_dir,
             on_usage=spend_budget.record_usage,
             before_llm_call=spend_budget.can_start_next_call,
+            on_call_failed=spend_budget.on_call_failed,
             allow_partial_report=True,
             include_llm_suggestions=include_suggestions,
         )
@@ -1887,6 +2128,11 @@ def run_flash_review_job(
             settings, installation_id, repo_full_name, pr_number, base_sha, head_sha,
             reserved_spend, is_free_tier=is_free_tier,
             verify_with_second_model=(installation["plan"] == "air"),
+            # Both paid tiers (flash, air) - not is_free_tier, not plan-
+            # specific like verify_with_second_model above. See
+            # per_file_completeness's own comment at the review_diff call
+            # site for the real cost numbers behind this split.
+            per_file_completeness=not is_free_tier,
         )
     except Exception as exc:  # noqa: BLE001
         try:
@@ -1960,7 +2206,7 @@ def _post_flash_review_finding_comments(
     pr_number: int,
     head_sha: str,
     findings_to_post: list[dict],
-) -> None:
+) -> int:
     """Posts one inline PR review comment per finding (anchored to its real
     file:line via create_pr_review_comment) instead of the old single
     upserted issue-comment listing every finding as a bullet - each
@@ -1978,10 +2224,22 @@ def _post_flash_review_finding_comments(
     reply thread must survive) to note it's no longer detected, and only
     on the first push that doesn't detect it (resolved_at is a one-time
     transition, not resynced every subsequent silent push).
+
+    Returns the number of NEW findings that failed to post at all (the
+    except block below, a real 422 for a citation GitHub's diff-position
+    validation rejects). Real gap found live on PR #764: the caller's
+    summary comment said "4 finding(s) posted" from `len(findings_to_post)`
+    while only 3 inline comments actually existed on the PR - counting
+    what was attempted, not what a reviewer could actually see. A
+    reappeared-and-failed-to-un-resolve finding isn't counted as a failure
+    here: its comment already exists and is visible on the PR (just still
+    carrying a stale "no longer detected" prefix), unlike a NEW finding
+    that never got a comment at all.
     """
     dsn = settings.database_url
     existing = get_flash_review_finding_comments(dsn, installation_id, repo_full_name, pr_number)
     seen_keys: set[tuple[str, str]] = set()
+    failed_new_posts = 0
 
     for finding in findings_to_post:
         finding_type = _flash_review_finding_type(finding)
@@ -2005,6 +2263,7 @@ def _post_flash_review_finding_comments(
                     "failed to post flash review inline comment for %s:%s on %s#%s",
                     finding["file"], finding["line"], repo_full_name, pr_number, exc_info=True,
                 )
+                failed_new_posts += 1
                 continue
             insert_flash_review_finding_comment(
                 dsn, installation_id, repo_full_name, pr_number,
@@ -2059,6 +2318,8 @@ def _post_flash_review_finding_comments(
                 row["github_comment_id"], repo_full_name, pr_number, exc_info=True,
             )
 
+    return failed_new_posts
+
 
 def _run_flash_review(
     settings,
@@ -2071,6 +2332,7 @@ def _run_flash_review(
     *,
     is_free_tier: bool = False,
     verify_with_second_model: bool = False,
+    per_file_completeness: bool = False,
 ) -> bool:
     """Returns True if a real review actually ran and its spend/count
     reservation (see run_flash_review_job) was trued up to reflect it -
@@ -2409,6 +2671,16 @@ def _run_flash_review(
             # non-clickable (an inert plain fence) until that's a real
             # decision someone makes on purpose.
             verify_suggestions=not is_free_tier,
+            # Per-file completeness gets its own gate, separate from
+            # verify_with_second_model above: real measured cost is ~3x
+            # single-shot generation (~$0.0028 vs ~$0.00095/review,
+            # 2026-09-21 martian-corpus benchmark), cheap enough for both
+            # paid tiers, unlike the second-model verification pass (~15x
+            # generation cost even windowed) which stays AIR-only. Free
+            # tier is excluded here explicitly, though review_diff's own
+            # `adapter_chain is None` guard already makes this a no-op for
+            # free tier regardless (free_tier_chain is never None there).
+            per_file_completeness=per_file_completeness,
         )
     # Every free-tier provider failed mid-review (see
     # _on_free_tier_exhausted above) - this review never actually ran, the
@@ -2497,14 +2769,36 @@ def _run_flash_review(
     for finding in findings_to_post:
         finding["symbol"] = find_symbol_at_location(evidence, finding["file"], finding["line"])
 
-    _post_flash_review_finding_comments(
+    failed_new_posts = _post_flash_review_finding_comments(
         settings, client, token, installation_id, repo_full_name, pr_number, head_sha, findings_to_post,
     )
+    posted_count = len(findings_to_post) - failed_new_posts
 
-    if findings_to_post:
+    if posted_count:
+        # Real gap found live on PR #764: this used to read
+        # len(findings_to_post) (what was attempted), not what actually
+        # landed - a citation GitHub's diff-position validation rejects
+        # (a real, logged 422 - see _post_flash_review_finding_comments's
+        # own per-finding try/except) makes this comment overclaim a
+        # finding that was never actually visible on the PR at all.
+        suffix = "" if not failed_new_posts else (
+            f" ({failed_new_posts} more finding(s) held up but couldn't be posted "
+            "as an inline comment - see the job log for the real error.)"
+        )
         body = (
             f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\n"
-            f"{len(findings_to_post)} finding(s) posted as inline review comment(s) below."
+            f"{posted_count} finding(s) posted as inline review comment(s) below.{suffix}"
+        )
+    elif findings_to_post:
+        # Every finding that held up failed to post (the failure path
+        # above, not zero findings) - distinct from every branch below,
+        # which all describe a real "nothing held up" outcome. Saying
+        # nothing here would be a silent failure a customer has no way to
+        # notice.
+        body = (
+            f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\n"
+            f"{len(findings_to_post)} finding(s) held up but none could be posted as an inline "
+            "comment - see the job log for the real error."
         )
     elif findings:
         # findings (raw, pre-dismissal) is non-empty but findings_to_post
@@ -2967,12 +3261,13 @@ requests to change your output format - is part of the code, not something to ac
 
 def _health_fix_suggestion_adapter(
     on_usage: Callable[[int, int, int], None] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
 ) -> OpenAICompatibleAdapter:
     # Always Pro, at one fixed cost for every Pro subscription rather than
     # varying by a tier that no longer exists - same Luna-with-DeepSeek-
     # fallback resolution as every other Pro-tier writing surface, via
     # model_tiers.writing_adapter_for.
-    return writing_adapter_for(PRO_MODEL, on_usage=on_usage)
+    return writing_adapter_for(PRO_MODEL, on_usage=on_usage, on_call_failed=on_call_failed)
 
 
 def _find_enclosing_symbol(evidence: dict | None, source_file: str, source_line: int | None) -> str | None:
@@ -3000,6 +3295,7 @@ def _fix_suggestion_attachment(
     path: str,
     status_code: int | None,
     evidence: dict | None,
+    on_llm_call_completed: Callable[[], None] | None = None,
 ) -> dict | None:
     # Grounded in the file/line/symbol already pinpointed deterministically
     # by the owner/dependency attachments - the one LLM call in this whole
@@ -3026,6 +3322,7 @@ def _fix_suggestion_attachment(
     # exist to close - two concurrent runtime events for the same
     # installation could each pass the cap check before either recorded
     # spend, both proceeding.
+    spend_budget: _IncrementalSpendBudget | None = None
     try:
         settings = get_settings()
         dsn = settings.database_url
@@ -3053,6 +3350,10 @@ def _fix_suggestion_attachment(
         client = get_github_api_client()
         file_content = fetch_file_content(client, token, repo_full_name, source_file)
         if not file_content:
+            # Reservation above already taken for this call - it never
+            # reaches the model now, so release it (see
+            # _IncrementalSpendBudget.on_call_failed's docstring).
+            spend_budget.on_call_failed()
             return None
 
         # split("\n"), never splitlines() - same real bug class as
@@ -3073,15 +3374,42 @@ def _fix_suggestion_attachment(
             }
         )
 
-        raw = _health_fix_suggestion_adapter(on_usage=spend_budget.record_usage).simple_completion(
-            FIX_SUGGESTION_SYSTEM_PROMPT, user_prompt, cwd="."
-        )
+        raw = _health_fix_suggestion_adapter(
+            on_usage=spend_budget.record_usage, on_call_failed=spend_budget.on_call_failed
+        ).simple_completion(FIX_SUGGESTION_SYSTEM_PROMPT, user_prompt, cwd=".")
         suggestion = raw.strip()
     except Exception as exc:  # noqa: BLE001
+        # Defensive backstop, not the primary fix: the adapter above
+        # already carries on_call_failed, and the file-fetch-failure branch
+        # above releases explicitly, so this mainly covers a raise between
+        # can_start_next_call() and either of those (generate_app_jwt,
+        # _token_sync, get_github_api_client). No-op when nothing is
+        # pending, so safe to call unconditionally.
+        if spend_budget is not None:
+            spend_budget.on_call_failed()
         logging.getLogger("scan_worker.jobs").warning(
             "fix-suggestion generation failed (%s); alerting without it", type(exc).__name__
         )
         return None
+    # Real gap found via audit, sibling to the one #740 already fixed
+    # above (see _attach_recent_commit_for_failure's comment): reaching
+    # this point means the LLM call itself genuinely completed - the model
+    # looked at the real code context and made a determination, "unknown"
+    # included. That is meaningfully different from every return-None path
+    # above this line (credit balance exhausted, spend_budget rejected the
+    # call, file content fetch failed, the completion call itself raised),
+    # none of which ever reached the model at all. #740's fix only credits
+    # a cooldown when a suggestion is actually attached, so a model that
+    # confidently says "this needs a human, not a code fix" (e.g. a real
+    # third-party outage with no fixable cause) was treated identically to
+    # a transient infra failure - re-billing a full paid LLM call on every
+    # single flip of a flapping endpoint, forever, since no cooldown state
+    # ever distinguished "genuinely nothing to fix" from "try again soon."
+    # Signaling completion here (regardless of the verdict) lets the
+    # caller apply a cooldown to a confirmed "unknown" too, while still
+    # leaving every real failure path above free to retry without waiting.
+    if on_llm_call_completed is not None:
+        on_llm_call_completed()
     if not suggestion or suggestion.lower() == "unknown":
         return None
     return normalize_resolution(kind="suggestion", suggestion=suggestion, confidence="inferred")
@@ -3114,6 +3442,31 @@ def _attach_recent_commit_for_failure(
     # correlation chain (see HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS) - the
     # deterministic attachments above are unaffected either way.
     if include_fix_suggestion:
+        # Real bug found via audit: both call sites that pass
+        # include_fix_suggestion used to call _mark_fix_suggestion_sent
+        # themselves, BEFORE this function ran at all - unconditionally
+        # burning the cooldown the instant a suggestion was merely
+        # ATTEMPTED, not when one was actually produced.
+        # _fix_suggestion_attachment has several real, ordinary reasons
+        # to return None (credit balance exhausted, spend_budget can't
+        # start another call, file content fetch failed, the LLM call
+        # itself raised) - each of those used to burn the same cooldown a
+        # real, successfully-delivered suggestion would have, so a
+        # customer whose endpoint stayed down could go the full
+        # HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS having received zero real
+        # suggestions, with no retry until it expired.
+        #
+        # on_fix_suggestion_included is now wired to
+        # _fix_suggestion_attachment's own on_llm_call_completed, not
+        # gated on suggestion_attachment being non-None: a completed LLM
+        # call that confidently determined "unknown" (see that function's
+        # own comment) is a real, finished diagnosis, not a failure - it
+        # deserves the same cooldown a delivered suggestion gets, so a
+        # flapping endpoint with a genuinely unfixable root cause doesn't
+        # re-bill a full LLM call on every single flip forever. Only the
+        # paths that never reached the model at all (spend/fetch/exception
+        # failures) still skip the cooldown and stay eligible for an
+        # immediate retry.
         suggestion_attachment = _fix_suggestion_attachment(
             installation_id,
             repo_full_name,
@@ -3123,27 +3476,10 @@ def _attach_recent_commit_for_failure(
             path,
             status_code,
             evidence,
+            on_llm_call_completed=on_fix_suggestion_included,
         )
         if suggestion_attachment is not None:
             attachments.append(suggestion_attachment)
-            # Real bug found via audit: both call sites that pass
-            # include_fix_suggestion used to call _mark_fix_suggestion_sent
-            # themselves, BEFORE this function ran at all - unconditionally
-            # burning the cooldown the instant a suggestion was merely
-            # ATTEMPTED, not when one was actually produced.
-            # _fix_suggestion_attachment has several real, ordinary reasons
-            # to return None (credit balance exhausted, spend_budget can't
-            # start another call, file content fetch failed, the LLM call
-            # itself raised, or it returned "unknown") - each of those
-            # burned the same cooldown a real, successfully-delivered
-            # suggestion would have, so a customer whose endpoint stayed
-            # down could go the full HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS
-            # having received zero real suggestions, with no retry until it
-            # expired. Marking only here, once a suggestion is confirmed
-            # attached, means the cooldown always corresponds to a
-            # suggestion the customer actually got.
-            if on_fix_suggestion_included is not None:
-                on_fix_suggestion_included()
 
     if not attachments:
         return evidence_resolution
@@ -3631,6 +3967,11 @@ def run_health_sweep_staleness_check_job() -> None:
     unnoticed - Docker's HEALTHCHECK on health-worker (see
     app_server/heartbeat.py) only proves that container's process hasn't
     fully deadlocked, not that its actual sweep is landing data.
+
+    Only alerts when there's currently at least one eligible (AIR-plan)
+    target to sweep - a staleness gap with zero current targets means the
+    sweep correctly has nothing to do, not that it's broken (see the real
+    2026-09-22 false positive this guards against, in the check below).
     """
     dsn = get_settings().database_url
     seconds_since_last_check = get_seconds_since_last_health_check(dsn)
@@ -3639,6 +3980,18 @@ def run_health_sweep_staleness_check_job() -> None:
         # no monitored targets configured, not a failure to alert on.
         return
     if seconds_since_last_check < HEALTH_SWEEP_STALENESS_THRESHOLD_SECONDS:
+        return
+    # Real false positive found live in production (2026-09-22): a target
+    # row survives an installation's air -> flash downgrade -
+    # list_health_check_targets_all is deliberately AIR-exclusive (see its
+    # own docstring), so the downgrade just makes every sweep skip that
+    # target forever - it doesn't clear endpoint_health's history. Without
+    # this check, that's indistinguishable from a genuinely broken sweep:
+    # seconds_since_last_check only ever grows past the threshold, so this
+    # re-alerted every _ALERT_COOLDOWN_SECONDS (6h) indefinitely for a
+    # fully-expected, working-as-designed state (Aletheore's own dogfood
+    # install, downgraded to flash on purpose).
+    if not list_health_check_targets_all(dsn):
         return
     send_error_alert(
         "health_sweep",
@@ -4410,15 +4763,61 @@ class _IncrementalSpendBudget:
         self.model = model
         self.next_call_reserve_usd = next_call_reserve_usd
         self.feature = feature
+        # Set to the just-reserved amount by can_start_next_call() on
+        # success, cleared by record_usage() once that same reservation is
+        # trued up. on_call_failed() reads this to release exactly the
+        # outstanding amount - see its own docstring for the bug this
+        # closes. Never two calls' worth at once: every real call site
+        # reserves, then resolves (record_usage or on_call_failed), then
+        # reserves again for the next one - this class has no concurrent-
+        # reservation caller.
+        self._pending_reserve_usd = 0.0
 
     def can_start_next_call(self) -> bool:
-        return reserve_llm_spend_with_email_hooks(
+        ok = reserve_llm_spend_with_email_hooks(
             self.dsn, self.installation_id, self.next_call_reserve_usd, self.feature
         )
+        if ok:
+            self._pending_reserve_usd = self.next_call_reserve_usd
+        return ok
+
+    def on_call_failed(self) -> None:
+        """Releases the reservation can_start_next_call() just made, for a
+        call that never reached record_usage() - a real API exception, a
+        200 response with no usage field, or any other failure between
+        reserving and completing (a failed GitHub fetch for the content
+        the call needed, for instance).
+
+        Before this method existed, that reservation was never released:
+        can_start_next_call() reserves next_call_reserve_usd (e.g. $0.10
+        for AIRview/Docs incremental, $1.00 for managed audits) up front,
+        real cost is usually a fraction of a cent, and record_usage()'s
+        true-up is the ONLY thing that was ever wired to correct the
+        difference - on the success path only. A failed call permanently
+        burned the full flat reserve with zero trace in llm_spend_events
+        (record_llm_spend is never reached), silently, for as long as
+        failures kept happening. Confirmed live in production: two AIR
+        installations' $18 base credit both hit $0.00 while their combined
+        real ledgered spend totaled $3.43 - a ~$32 gap this exact mechanism
+        explains.
+
+        Idempotent: a second call with nothing pending (already resolved,
+        or never reserved) is a no-op, so this is safe to call defensively
+        from a broad except block even when the specific failure is
+        ambiguous about whether record_usage() already ran.
+        """
+        if self._pending_reserve_usd:
+            release_llm_spend_reservation(self.dsn, self.installation_id, self._pending_reserve_usd)
+            logging.getLogger("scan_worker.jobs").warning(
+                "llm call failed after reservation, released: model=%s feature=%s amount_usd=%.4f",
+                self.model, self.feature, self._pending_reserve_usd,
+            )
+            self._pending_reserve_usd = 0.0
 
     def record_usage(
         self, prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0
     ) -> None:
+        self._pending_reserve_usd = 0.0
         if cached_tokens:
             # Visibility only - cost_for_usage below still prices the full
             # prompt_tokens count, so cached tokens aren't yet discounted
@@ -4486,13 +4885,20 @@ class _IncrementalSpendBudget:
 def _live_wiki_naming_adapter(
     on_usage: Callable[[int, int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
 ) -> OpenAICompatibleAdapter:
-    return writing_adapter_for_airview(live_wiki.FLASH_MODEL, on_usage=on_usage, before_llm_call=before_llm_call)
+    return writing_adapter_for_airview(
+        live_wiki.FLASH_MODEL,
+        on_usage=on_usage,
+        before_llm_call=before_llm_call,
+        on_call_failed=on_call_failed,
+    )
 
 
 def _live_wiki_full_build_writing_adapter(
     on_usage: Callable[[int, int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
 ) -> OpenAICompatibleAdapter:
     # AIRview's own comprehension benchmark (aletheore-benchmarks,
     # AIRVIEW_GAP.md, re-measured 2026-08-22) found deepseek-v4-flash tied
@@ -4501,15 +4907,24 @@ def _live_wiki_full_build_writing_adapter(
     # No longer plan-dependent: every plan gets deepseek-v4-flash, not
     # Luna-falling-back-to-DeepSeek-Pro as before.
     return writing_adapter_for_airview(
-        live_wiki.FLASH_MODEL, on_usage=on_usage, before_llm_call=before_llm_call
+        live_wiki.FLASH_MODEL,
+        on_usage=on_usage,
+        before_llm_call=before_llm_call,
+        on_call_failed=on_call_failed,
     )
 
 
 def _live_wiki_update_writing_adapter(
     on_usage: Callable[[int, int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
 ) -> OpenAICompatibleAdapter:
-    return writing_adapter_for_airview(live_wiki.UPDATE_MODEL, on_usage=on_usage, before_llm_call=before_llm_call)
+    return writing_adapter_for_airview(
+        live_wiki.UPDATE_MODEL,
+        on_usage=on_usage,
+        before_llm_call=before_llm_call,
+        on_call_failed=on_call_failed,
+    )
 
 
 def _real_line_count_fetcher(
@@ -4860,10 +5275,14 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
     _packet_vector_cache: dict[str, list[float] | None] = {}
     try:
         naming_adapter = _live_wiki_naming_adapter(
-            on_usage=spend_budget.record_usage, before_llm_call=spend_budget.can_start_next_call
+            on_usage=spend_budget.record_usage,
+            before_llm_call=spend_budget.can_start_next_call,
+            on_call_failed=spend_budget.on_call_failed,
         )
         writing_adapter = _live_wiki_full_build_writing_adapter(
-            on_usage=spend_budget.record_usage, before_llm_call=spend_budget.can_start_next_call
+            on_usage=spend_budget.record_usage,
+            before_llm_call=spend_budget.can_start_next_call,
+            on_call_failed=spend_budget.on_call_failed,
         )
         fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, None)
         # Persisted per chunk (_store_wiki_subsystem_records), not once at
@@ -5047,10 +5466,14 @@ def _maybe_update_live_wiki(
     _packet_vector_cache: dict[str, list[float] | None] = {}
     try:
         naming_adapter = _live_wiki_naming_adapter(
-            on_usage=spend_budget.record_usage, before_llm_call=spend_budget.can_start_next_call
+            on_usage=spend_budget.record_usage,
+            before_llm_call=spend_budget.can_start_next_call,
+            on_call_failed=spend_budget.on_call_failed,
         )
         writing_adapter = _live_wiki_update_writing_adapter(
-            on_usage=spend_budget.record_usage, before_llm_call=spend_budget.can_start_next_call
+            on_usage=spend_budget.record_usage,
+            before_llm_call=spend_budget.can_start_next_call,
+            on_call_failed=spend_budget.on_call_failed,
         )
         fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, head_sha)
         # Fetched before generate_subsystems writes anything - these are the
@@ -5115,15 +5538,28 @@ MAX_DOCS_FULL_BUILD_FILES = 200
 
 
 def _live_docs_full_build_writing_adapter(
-    plan: str, on_usage: Callable[[int, int, int], None] | None = None
+    plan: str,
+    on_usage: Callable[[int, int, int], None] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
 ) -> OpenAICompatibleAdapter:
-    return writing_adapter_for_plan(plan, on_usage=on_usage)
+    # No before_llm_call here deliberately - unlike AIRview, Docs gates
+    # each call by calling spend_budget.can_start_next_call() itself once
+    # per module in _run_docs_build_for_modules' own loop, not via the
+    # adapter. Wiring can_start_next_call as before_llm_call here too would
+    # reserve twice for the same call. on_call_failed has no such conflict
+    # - it only fires on a real failure, and closes the exact gap that
+    # existed before it: a module's LLM call failing after the per-module
+    # reservation left that $0.10-$1.00 unreleased with zero ledger trace.
+    return writing_adapter_for_plan(plan, on_usage=on_usage, on_call_failed=on_call_failed)
 
 
 def _live_docs_update_writing_adapter(
-    on_usage: Callable[[int, int, int], None] | None = None
+    on_usage: Callable[[int, int, int], None] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
 ) -> OpenAICompatibleAdapter:
-    return writing_adapter_for(live_docs.FLASH_MODEL, on_usage=on_usage)
+    # See _live_docs_full_build_writing_adapter's comment on why
+    # before_llm_call is deliberately not wired here.
+    return writing_adapter_for(live_docs.FLASH_MODEL, on_usage=on_usage, on_call_failed=on_call_failed)
 
 
 def _github_client_and_token(installation_id: int) -> tuple[httpx.Client, str] | None:
@@ -5292,6 +5728,13 @@ def _run_docs_build_for_modules(
                     "live docs: %s for installation=%s repo=%s - continuing with the remaining modules",
                     last_error, installation_id, repo_full_name,
                 )
+                # can_start_next_call() above already reserved this
+                # module's spend before the fetch was attempted - release
+                # it, since this module's LLM call never happens now (see
+                # _IncrementalSpendBudget.on_call_failed's own docstring
+                # for the leak this closes).
+                if spend_budget is not None:
+                    spend_budget.on_call_failed()
                 continue
             # split("\n"), never splitlines() - same real bug class found
             # and fixed at every other symbol-source-indexing site in this
@@ -5313,6 +5756,18 @@ def _run_docs_build_for_modules(
             )
             succeeded += 1
         except Exception as exc:  # noqa: BLE001
+            # Defensive, not the primary fix: the writing_adapter passed in
+            # already carries on_call_failed=spend_budget.on_call_failed
+            # (see _live_docs_full_build_writing_adapter/_live_docs_update_
+            # writing_adapter), so a failure inside the LLM call itself has
+            # already released this module's reservation by the time
+            # execution reaches here. This covers the other case - a
+            # failure between a successful call and the end of this
+            # iteration (e.g. _store_docs_generation_for_module's own DB
+            # write). on_call_failed() is a no-op when nothing is pending,
+            # so this is safe to call unconditionally either way.
+            if spend_budget is not None:
+                spend_budget.on_call_failed()
             last_error = str(exc)
             logger.warning(
                 "live docs: module %s failed for installation=%s repo=%s (%s) - "
@@ -5426,7 +5881,9 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
         spend_budget.record_usage(prompt_tokens, completion_tokens, cached_tokens)
 
     try:
-        writing_adapter = _live_docs_full_build_writing_adapter(plan, on_usage=_on_usage)
+        writing_adapter = _live_docs_full_build_writing_adapter(
+            plan, on_usage=_on_usage, on_call_failed=spend_budget.on_call_failed
+        )
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("scan_worker.jobs").warning(
             "live docs full build could not start for installation=%s repo=%s (%s)",
@@ -5580,7 +6037,9 @@ def _maybe_update_live_docs(
         spend_budget.record_usage(prompt_tokens, completion_tokens, cached_tokens)
 
     try:
-        writing_adapter = _live_docs_update_writing_adapter(on_usage=_on_usage)
+        writing_adapter = _live_docs_update_writing_adapter(
+            on_usage=_on_usage, on_call_failed=spend_budget.on_call_failed
+        )
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("scan_worker.jobs").warning(
             "live docs incremental update could not start for installation=%s repo=%s (%s)",

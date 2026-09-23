@@ -207,6 +207,7 @@ def test_rebuild_refreshes_evidence_and_skips_the_slow_checks(tmp_path):
         "scan_git_history": False,
         "analyze_architecture": False,
         "check_hotspots": False,
+        "check_static_analysis": False,
     }
 
 

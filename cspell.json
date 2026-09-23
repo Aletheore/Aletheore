@@ -65,6 +65,7 @@
     "Qodo",
     "Greptile",
     "Sourcery",
+    "opped",
     "Squeezy",
     "SLOS",
     "Scorecard",
@@ -185,6 +186,13 @@
     "worktrees",
     "writeup",
     "writeups",
-    "xmlattr"
+    "xmlattr",
+    "Joern",
+    "joern",
+    "SonarQube",
+    "SONARQUBE",
+    "Qube",
+    "Semgrep",
+    "gosec"
   ]
 }

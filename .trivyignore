@@ -30,6 +30,24 @@ CVE-2026-5241
 # GitHub's push-protection allowlist for this exact value in this repo.
 stripe-secret-token
 
+# CVE-2026-84304 and CVE-2026-84445 (google.golang.org/grpc, scan-worker
+# image only): both are gRPC-Go server-side denial-of-service bugs (malformed
+# RPC requests / a related HIGH-severity flaw), fixed only in grpc-go
+# 1.83.1+/1.82.2+. They ship inside the trivy binary itself (installed by
+# Dockerfile.scan-worker for static_analysis/trivy_scanner.py's own scanning
+# - see that file), which is the latest available release (v0.74.0, checked
+# 2026-09-22: no newer tag exists upstream) and has no newer build that
+# bumps this dependency.
+#
+# Accepted because trivy is invoked here only as `trivy fs <path>` - a
+# one-shot local filesystem scan, never `trivy server`/`trivy client` - and
+# gRPC-Go's vulnerable code is exclusively in its server-side RPC-handling
+# path. `trivy fs` never starts a gRPC server or opens a network listener,
+# so this dependency is linked into the binary but its vulnerable code path
+# is never reached in this image's actual usage.
+CVE-2026-84304
+CVE-2026-84445
+
 # github-app-token: same situation as stripe-secret-token above, added by
 # #527. KNOWN_VENDOR_EXAMPLE_VALUES also contains two of GitHub's own
 # published OpenAPI-spec example tokens verbatim (see secrets.py's own

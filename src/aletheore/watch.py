@@ -264,6 +264,9 @@ def _carry_forward_skipped_analysis(evidence: dict, repo_path: Path) -> None:
     previous_licenses = previous_security.get("dependency_licenses")
     if previous_licenses and previous_licenses.get("checked"):
         evidence.setdefault("security", {})["dependency_licenses"] = previous_licenses
+    previous_static_analysis = previous_security.get("static_analysis")
+    if previous_static_analysis and previous_static_analysis.get("checked"):
+        evidence.setdefault("security", {})["static_analysis"] = previous_static_analysis
 
     # scan_git_history=False resets history_findings/history_scanned_commits
     # to empty on every rebuild (evidence.py: history_data defaults to
@@ -294,17 +297,23 @@ def _carry_forward_skipped_analysis(evidence: dict, repo_path: Path) -> None:
 def rebuild(repo_path: Path, report: Callable[[str], None]) -> None:
     """One scan-and-reindex cycle.
 
-    Vulnerability, license, git-history, architecture-analysis, and hotspot
-    checks are skipped. Vulnerability/license/history are network-bound and
-    history-bound; architecture analysis (clustering + layer violations) and
-    hotspots are driven by the import graph and commit history respectively,
-    neither of which moves when a function body is edited. All take seconds
-    to minutes - clustering alone measured at 1.9s on a 42-module repo, the
-    dominant cost of an incremental rebuild by far (confirmed by direct
-    profiling) - and running any of them on every save would make the loop
-    unusable while adding nothing. A full `aletheore scan` still does all of
-    them. The skipped fields (architecture, hotspots, vulnerabilities,
-    licenses, git-history secrets) aren't left blank in the meantime -
+    Vulnerability, license, git-history, architecture-analysis, hotspot, and
+    static-analysis checks are skipped. Vulnerability/license/history are
+    network-bound and history-bound; architecture analysis (clustering +
+    layer violations) and hotspots are driven by the import graph and
+    commit history respectively, neither of which moves when a function
+    body is edited. Static analysis is the one exception to "doesn't move
+    on a body edit" - Semgrep/Bearer/gosec/Bandit/Trivy/PMD very much care about
+    changed code - but each is a real subprocess spawn (seconds at best,
+    SonarQube minutes), and running five-plus external tools on every
+    keystroke-triggered save would make the loop unusable regardless of
+    relevance. All take seconds to minutes - clustering alone measured at
+    1.9s on a 42-module repo, the dominant cost of an incremental rebuild by
+    far (confirmed by direct profiling) - and running any of them on every
+    save would make the loop unusable while adding nothing. A full
+    `aletheore scan` still does all of them. The skipped fields
+    (architecture, hotspots, vulnerabilities, licenses, git-history secrets,
+    static analysis) aren't left blank in the meantime -
     _carry_forward_skipped_analysis reuses the last real full scan's
     values for each, so a dashboard or MCP server reading evidence written
     mid-session sees the last known-good state rather than "nothing"
@@ -323,6 +332,7 @@ def rebuild(repo_path: Path, report: Callable[[str], None]) -> None:
         scan_git_history=False,
         analyze_architecture=False,
         check_hotspots=False,
+        check_static_analysis=False,
     )
     _carry_forward_skipped_analysis(evidence, repo_path)
     write_evidence(evidence, repo_path)

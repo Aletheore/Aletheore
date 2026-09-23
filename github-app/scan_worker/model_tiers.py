@@ -183,6 +183,7 @@ def writing_adapter_for(
     fallback_model: str,
     on_usage: Callable[[int, int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
     allow_partial_report: bool = False,
     _prefer_luna: bool = True,
 ) -> OpenAICompatibleAdapter:
@@ -195,6 +196,7 @@ def writing_adapter_for(
             extra_body=_reasoning_body(NO_THINKING_OPENAI),
             on_usage=on_usage,
             before_llm_call=before_llm_call,
+            on_call_failed=on_call_failed,
             allow_partial_report=allow_partial_report,
         )
     if not _prefer_luna:
@@ -219,6 +221,7 @@ def writing_adapter_for(
         extra_body=_reasoning_body(NO_THINKING_DEEPSEEK),
         on_usage=on_usage,
         before_llm_call=before_llm_call,
+        on_call_failed=on_call_failed,
         allow_partial_report=allow_partial_report,
     )
 
@@ -330,6 +333,7 @@ def writing_adapter_for_airview(
     fallback_model: str,
     on_usage: Callable[[int, int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
 ) -> OpenAICompatibleAdapter:
     """Always DeepSeek for AIRview specifically - never Luna, regardless of
     OPENAI_API_KEY availability.
@@ -349,7 +353,11 @@ def writing_adapter_for_airview(
     see writing_adapter_for_managed_audit below.
     """
     return writing_adapter_for(
-        fallback_model, on_usage=on_usage, before_llm_call=before_llm_call, _prefer_luna=False
+        fallback_model,
+        on_usage=on_usage,
+        before_llm_call=before_llm_call,
+        on_call_failed=on_call_failed,
+        _prefer_luna=False,
     )
 
 
@@ -362,6 +370,7 @@ MANAGED_AUDIT_MODEL = "deepseek-v4-flash"
 def writing_adapter_for_managed_audit(
     on_usage: Callable[[int, int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
     allow_partial_report: bool = False,
 ) -> OpenAICompatibleAdapter:
     """Always DeepSeek Flash for managed_audit specifically - never Luna
@@ -390,6 +399,7 @@ def writing_adapter_for_managed_audit(
         MANAGED_AUDIT_MODEL,
         on_usage=on_usage,
         before_llm_call=before_llm_call,
+        on_call_failed=on_call_failed,
         allow_partial_report=allow_partial_report,
         _prefer_luna=False,
     )
@@ -403,11 +413,13 @@ def writing_adapter_for_plan(
     plan: str,
     on_usage: Callable[[int, int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
     allow_partial_report: bool = False,
 ) -> OpenAICompatibleAdapter:
     return writing_adapter_for(
         PRO_MODEL,
         on_usage=on_usage,
+        on_call_failed=on_call_failed,
         before_llm_call=before_llm_call,
         allow_partial_report=allow_partial_report,
     )

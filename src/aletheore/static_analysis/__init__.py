@@ -1,0 +1,146 @@
+from pathlib import Path
+
+from aletheore.static_analysis.bandit_scanner import check_bandit
+from aletheore.static_analysis.bearer_scanner import check_bearer
+from aletheore.static_analysis.gosec_scanner import check_gosec
+from aletheore.static_analysis.joern_scanner import check_joern
+from aletheore.static_analysis.pmd_scanner import check_pmd
+from aletheore.static_analysis.semgrep_scanner import check_semgrep
+from aletheore.static_analysis.sonarqube_scanner import check_sonarqube
+from aletheore.static_analysis.trivy_scanner import check_trivy
+
+# Semgrep/gosec/Bandit/Trivy are stateless CLI subprocess calls with no
+# infra dependency and bounded, predictable runtime - real value
+# demonstrated live (docs/audits/deterministic_scanner_evaluation.md), on
+# by default the same way dependency_vulnerabilities/dependency_licenses
+# already are. Trivy specifically real-timed on this repo before being
+# added here, not assumed safe by category alone (2026-09-21): 3.15s on
+# the github-app/ subtree (241 files), 10.46s on the real full ~3,331-file
+# tree - well-scaling, not the pathological blowup Bearer's own real
+# timing showed at the same jump (18.7s -> 300s+). Caught a real, live
+# OpenAI API key in this repo's own .env that secrets.py has zero pattern
+# coverage for (confirmed: grep -i openai src/aletheore/secrets.py matches
+# nothing), and real Dockerfile misconfigurations detect_infrastructure
+# structurally cannot produce (pure file-inventory, no misconfig
+# analysis) - real, demonstrated value, not just a plausible addition.
+# PMD is the same real-timed-first-then-decided addition (2026-09-21):
+# 2.74s on google/gson (264 real Java files), 5.0s on apache/commons-lang
+# (629 files) - well-scaling, no JVM-startup-blowup problem. Its default
+# bestpractices+errorprone+security ruleset combo was NOT trustworthy
+# as-is though: unfiltered against gson it produced 3,582 violations, 70%
+# of them two JUnit-authoring-convention rules (WrongTestAnnotation,
+# UnitTestContainsTooManyAsserts) flagging test-code style, not bugs, and
+# CloseResource (a real bug-class rule in principle) sampled as a real
+# false positive on the same repo (flagged a JsonTreeWriter - an in-memory
+# tree builder whose close() is a no-op, not a real I/O resource). See
+# pmd_scanner.py's _NOISY_RULES for the full, evidence-based exclude list -
+# the remaining ~271 findings on that same repo were spot-checked as
+# bug-shaped before trusting them.
+# Bearer, Joern, and SonarQube are each opt-in, for different real reasons
+# found live: SonarQube per the integration scope doc's hosting-cost
+# tradeoff; Bearer because its full-repo runtime doesn't scale cleanly
+# with repo size (18.7s on a 241-file subtree, still running past 300s on
+# this repo's real ~3,331-file tree); Joern because a CPG build is real
+# JVM-startup-plus-parsing cost (several real seconds even for one
+# mid-sized package) and requires a whole separate toolchain most installs
+# won't have. See cli.py's interactive ask-and-warn prompt for how Bearer
+# specifically is opted into; Joern and SonarQube are flag/env-var opt-in
+# without a prompt, since neither is likely to be installed/configured by
+# default at all.
+_SCANNERS = (
+    ("semgrep", check_semgrep),
+    ("gosec", check_gosec),
+    ("bandit", check_bandit),
+    ("trivy", check_trivy),
+    ("pmd", check_pmd),
+)
+
+
+# One optional scanner, its own opt-in bool flag, and its own skip-reason
+# when not opted into - kept as a tuple of (name, flag, scanner, skip
+# reason) rather than three near-identical if/else blocks. SonarQube isn't
+# here: it's gated by a host_url, not a plain bool, and always runs last.
+_OPTIONAL_SCANNERS = (
+    (
+        "bearer",
+        check_bearer,
+        "skipped (opt-in - pass --check-bearer to include it; useful but "
+        "can take significantly longer than the other scanners on a large repo)",
+    ),
+    (
+        "joern",
+        check_joern,
+        "skipped (opt-in - pass --check-joern to include it; requires Joern installed "
+        "separately, and a CPG build is real per-scan JVM/parsing cost, not a fast "
+        "stateless subprocess call like the other scanners here)",
+    ),
+)
+
+
+def _run_scanner_safely(name: str, scanner, *args, **kwargs) -> dict:
+    """Real bug found via audit (2026-09-21): every scanner here already
+    self-skips gracefully ({"checked": False, "reason": ...}) for its own
+    EXPECTED failure modes (tool not installed, no matching source, CLI
+    exits non-zero), but nothing guarded against an UNEXPECTED one - a
+    parsing bug on a real tool's malformed-but-valid-JSON output (e.g. an
+    explicit `null` in a field a scanner's own parser assumed present, see
+    semgrep_scanner.py's fix the same night this was found) would raise
+    straight out of this loop and abort the whole static-analysis pass,
+    not just that one tool's contribution - contradicting the "each
+    scanner self-skips gracefully" design promise every other failure mode
+    here honors."""
+    try:
+        return scanner(*args, **kwargs)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "checked": False,
+            "reason": f"{name} raised an unexpected error: {type(exc).__name__}: {exc}",
+            "findings": [],
+        }
+
+
+def check_static_analysis(
+    repo_path: Path,
+    run_bearer: bool = False,
+    run_joern: bool = False,
+    sonarqube_host_url: str | None = None,
+) -> dict:
+    findings: list[dict] = []
+    tools_run: list[str] = []
+    tools_skipped: list[dict] = []
+    opted_in = {"bearer": run_bearer, "joern": run_joern}
+
+    for name, scanner in _SCANNERS:
+        result = _run_scanner_safely(name, scanner, repo_path)
+        if result["checked"]:
+            tools_run.append(name)
+            findings.extend(result["findings"])
+        else:
+            tools_skipped.append({"tool": name, "reason": result["reason"]})
+
+    for name, scanner, skip_reason in _OPTIONAL_SCANNERS:
+        if opted_in[name]:
+            result = _run_scanner_safely(name, scanner, repo_path)
+            if result["checked"]:
+                tools_run.append(name)
+                findings.extend(result["findings"])
+            else:
+                tools_skipped.append({"tool": name, "reason": result["reason"]})
+        else:
+            tools_skipped.append({"tool": name, "reason": skip_reason})
+
+    sonarqube_result = _run_scanner_safely(
+        "sonarqube", check_sonarqube, repo_path, host_url=sonarqube_host_url
+    )
+    if sonarqube_result["checked"]:
+        tools_run.append("sonarqube")
+        findings.extend(sonarqube_result["findings"])
+    else:
+        tools_skipped.append({"tool": "sonarqube", "reason": sonarqube_result["reason"]})
+
+    return {
+        "checked": True,
+        "tools_run": tools_run,
+        "tools_skipped": tools_skipped,
+        "findings": findings,
+    }

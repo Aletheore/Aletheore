@@ -351,7 +351,7 @@ def test_clone_ref_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch):
 
     def fake_run(args, cwd=None, check=None):
         calls.append(args)
-        if args[:2] == ["git", "clone"]:
+        if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
         return subprocess.CompletedProcess(args, 0)
 
@@ -361,28 +361,30 @@ def test_clone_ref_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch):
     credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
     _clone_ref(credentialed_url, "somesha", dest)
 
+    assert ["git", "fetch", "-q", "origin", "somesha"] in calls
     set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
     assert set_url_calls, "expected a 'git remote set-url' call scrubbing the clone"
     assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
     assert "livetoken" not in set_url_calls[-1][-1]
 
 
-def test_clone_ref_scrubs_the_token_even_when_checkout_fails(tmp_path, monkeypatch):
+def test_clone_ref_scrubs_the_token_even_when_the_fetch_fails(tmp_path, monkeypatch):
     # Proves the scrub runs from a finally block, not just after a
-    # successful checkout - a failed checkout must not leave the
-    # credentialed .git/config behind for run_job_temp_dir_cleanup_job's
+    # successful fetch/checkout - a failed fetch must not leave
+    # the credentialed .git/config behind for run_job_temp_dir_cleanup_job's
     # 6-hour sweep to be the only thing standing between a live token and
-    # disk.
+    # disk. No pr_number here, so the failure must surface immediately -
+    # no PR-ref fallback to try.
     from scan_worker.jobs import _clone_ref
 
     calls = []
 
     def fake_run(args, cwd=None, check=None):
         calls.append(args)
-        if args[:2] == ["git", "clone"]:
+        if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
             return subprocess.CompletedProcess(args, 0)
-        if args[:2] == ["git", "checkout"]:
+        if args[:2] == ["git", "fetch"]:
             raise subprocess.CalledProcessError(1, args)
         return subprocess.CompletedProcess(args, 0)
 
@@ -398,57 +400,140 @@ def test_clone_ref_scrubs_the_token_even_when_checkout_fails(tmp_path, monkeypat
     assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
 
 
-def test_clone_ref_scrubs_the_token_even_when_the_clone_itself_is_interrupted(tmp_path, monkeypatch):
-    # Real Flash Review finding on the first version of this fix: the
-    # clone call sat before the try, so an interruption DURING the clone
-    # (e.g. an RQ job timeout - not a raw OOM SIGKILL, which no
-    # try/finally placement can survive regardless of where it sits)
-    # skipped the scrub entirely, even though the clone had already
-    # written the credentialed URL into .git/config by the time it was
-    # interrupted.
+def test_checkout_sha_falls_back_to_pr_ref_when_direct_checkout_fails(tmp_path, monkeypatch):
+    # Real bug found live 2026-09-22: run_pr_scan_job crashed with `git
+    # checkout` exit 128 for a PR whose source branch had already been
+    # deleted (an ordinary squash-merge-with-delete-branch) by the time the
+    # (queued, not instant) scan job actually ran - a plain `git fetch`
+    # only pulls refs/heads/*, never refs/pull/*, so the PR's head SHA was
+    # never advertised at all. Confirmed live that `git fetch origin
+    # refs/pull/<n>/head` still resolves the identical SHA even after the
+    # branch is gone.
+    from scan_worker.jobs import _checkout_sha
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:3] == ["git", "checkout", "-q"] and args[-1] == "deadsha":
+            raise subprocess.CalledProcessError(128, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    _checkout_sha(tmp_path, "deadsha", pr_number=42)
+
+    assert ["git", "checkout", "-q", "deadsha"] in calls
+    assert ["git", "fetch", "-q", "origin", "refs/pull/42/head"] in calls
+    assert ["git", "checkout", "-q", "FETCH_HEAD"] in calls
+
+
+def test_checkout_sha_reraises_when_no_pr_number_to_fall_back_to(tmp_path, monkeypatch):
+    # base_sha and a push/initial scan's branch head are always on a real,
+    # live branch ref - callers pass pr_number=None for both, and a
+    # genuine checkout failure (a truly bad SHA, a network error) must
+    # still surface as an error rather than silently trying a PR ref that
+    # doesn't apply here.
+    from scan_worker.jobs import _checkout_sha
+
+    def fake_run(args, cwd=None, check=None):
+        if args[:2] == ["git", "checkout"]:
+            raise subprocess.CalledProcessError(128, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _checkout_sha(tmp_path, "badsha", pr_number=None)
+
+
+def test_clone_ref_recovers_a_deleted_branchs_head_via_the_pr_ref(tmp_path, monkeypatch):
+    # End-to-end through _clone_ref (the actual fallback path
+    # _prepare_head_checkout uses once _ensure_persistent_checkout raises)
+    # rather than _checkout_sha in isolation - proves the real
+    # run_pr_scan_job failure this session hit is actually fixed, not just
+    # the unit in the middle of it.
     from scan_worker.jobs import _clone_ref
 
     calls = []
 
     def fake_run(args, cwd=None, check=None):
         calls.append(args)
-        if args[:2] == ["git", "clone"]:
-            # git writes .git/config with the credentialed remote before
-            # the clone finishes populating the working tree - simulate
-            # an interruption after that point.
+        if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+            return subprocess.CompletedProcess(args, 0)
+        if args[:2] == ["git", "fetch"] and args[-1] == "deletedbranchsha":
+            raise subprocess.CalledProcessError(128, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "recovered"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    _clone_ref(credentialed_url, "deletedbranchsha", dest, pr_number=25)
+
+    assert ["git", "fetch", "-q", "origin", "deletedbranchsha"] in calls
+    assert ["git", "fetch", "-q", "origin", "refs/pull/25/head"] in calls
+    assert ["git", "checkout", "-q", "FETCH_HEAD"] in calls
+    # Still scrubs the token afterward - the PR-ref fallback must not
+    # bypass the same credential-scrub finally block every other path here
+    # goes through.
+    set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
+    assert set_url_calls
+    assert "livetoken" not in set_url_calls[-1][-1]
+
+
+def test_clone_ref_scrubs_the_token_even_when_remote_add_is_interrupted(tmp_path, monkeypatch):
+    # Real Flash Review finding on the first version of this fix (back
+    # when this was a `git clone`): an interruption after the credentialed
+    # URL was already written to .git/config, but before the function
+    # otherwise completed, must still trigger the scrub. Under the current
+    # `git init` + `git remote add origin <url>` shape, `git remote add`
+    # is the exact command that writes the credentialed URL into
+    # .git/config - `git init` itself never touches a remote, so it's the
+    # realistic place a real interruption after that write would land.
+    from scan_worker.jobs import _clone_ref
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "init"]:
+            os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+            return subprocess.CompletedProcess(args, 0)
+        if args[:3] == ["git", "remote", "add"]:
             raise subprocess.CalledProcessError(1, args)
         return subprocess.CompletedProcess(args, 0)
 
     monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
 
-    dest = tmp_path / "ephemeral-clone-interrupted"
+    dest = tmp_path / "ephemeral-remote-add-interrupted"
     credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
     with pytest.raises(subprocess.CalledProcessError):
         _clone_ref(credentialed_url, "somesha", dest)
 
     set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
-    assert set_url_calls, "expected the scrub to still run even though the clone itself was interrupted"
+    assert set_url_calls, "expected the scrub to still run even though remote add was interrupted"
     assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
 
 
-def test_clone_ref_does_not_attempt_a_scrub_when_the_clone_never_created_a_git_dir(tmp_path, monkeypatch):
-    # The other half: a clone interrupted before git ever created .git at
-    # all (e.g. a DNS failure) must not attempt a `git remote set-url`
-    # against a directory that has no repo in it.
+def test_clone_ref_does_not_attempt_a_scrub_when_init_never_created_a_git_dir(tmp_path, monkeypatch):
+    # The other half: `git init` itself failing (e.g. disk full, no write
+    # permission) must not attempt a `git remote set-url` against a
+    # directory that has no repo in it.
     from scan_worker.jobs import _clone_ref
 
     calls = []
 
     def fake_run(args, cwd=None, check=None):
         calls.append(args)
-        if args[:2] == ["git", "clone"]:
+        if args[:2] == ["git", "init"]:
             raise subprocess.CalledProcessError(1, args)
         return subprocess.CompletedProcess(args, 0)
 
     monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
 
-    dest = tmp_path / "ephemeral-never-cloned"
+    dest = tmp_path / "ephemeral-never-inited"
     credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
     with pytest.raises(subprocess.CalledProcessError):
         _clone_ref(credentialed_url, "somesha", dest)
@@ -465,7 +550,7 @@ def test_clone_pr_head_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch
 
     def fake_run(args, cwd=None, check=None):
         calls.append(args)
-        if args[:2] == ["git", "clone"]:
+        if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
         return subprocess.CompletedProcess(args, 0)
 
@@ -475,38 +560,41 @@ def test_clone_pr_head_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch
     credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
     _clone_pr_head(credentialed_url, 42, dest)
 
+    assert ["git", "fetch", "-q", "origin", "refs/pull/42/head"] in calls
     set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
     assert set_url_calls, "expected a 'git remote set-url' call scrubbing the clone"
     assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
     assert "livetoken" not in set_url_calls[-1][-1]
 
 
-def test_clone_pr_head_scrubs_the_token_even_when_the_clone_itself_is_interrupted(tmp_path, monkeypatch):
-    # Same Flash Review finding as _clone_ref's identical test above.
+def test_clone_pr_head_scrubs_the_token_even_when_remote_add_is_interrupted(tmp_path, monkeypatch):
+    # Same real reasoning as _clone_ref's identical test above.
     from scan_worker.jobs import _clone_pr_head
 
     calls = []
 
     def fake_run(args, cwd=None, check=None):
         calls.append(args)
-        if args[:2] == ["git", "clone"]:
+        if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+            return subprocess.CompletedProcess(args, 0)
+        if args[:3] == ["git", "remote", "add"]:
             raise subprocess.CalledProcessError(1, args)
         return subprocess.CompletedProcess(args, 0)
 
     monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
 
-    dest = tmp_path / "pr-head-clone-interrupted"
+    dest = tmp_path / "pr-head-remote-add-interrupted"
     credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
     with pytest.raises(subprocess.CalledProcessError):
         _clone_pr_head(credentialed_url, 42, dest)
 
     set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
-    assert set_url_calls, "expected the scrub to still run even though the clone itself was interrupted"
+    assert set_url_calls, "expected the scrub to still run even though remote add was interrupted"
     assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
 
 
-def test_clone_pr_head_does_not_attempt_a_scrub_when_the_clone_never_created_a_git_dir(
+def test_clone_pr_head_does_not_attempt_a_scrub_when_init_never_created_a_git_dir(
     tmp_path, monkeypatch
 ):
     from scan_worker.jobs import _clone_pr_head
@@ -515,13 +603,13 @@ def test_clone_pr_head_does_not_attempt_a_scrub_when_the_clone_never_created_a_g
 
     def fake_run(args, cwd=None, check=None):
         calls.append(args)
-        if args[:2] == ["git", "clone"]:
+        if args[:2] == ["git", "init"]:
             raise subprocess.CalledProcessError(1, args)
         return subprocess.CompletedProcess(args, 0)
 
     monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
 
-    dest = tmp_path / "pr-head-never-cloned"
+    dest = tmp_path / "pr-head-never-inited"
     credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
     with pytest.raises(subprocess.CalledProcessError):
         _clone_pr_head(credentialed_url, 42, dest)
@@ -617,11 +705,15 @@ def test_run_pr_scan_job_uses_persistent_checkout_and_unchanged_cache_for_head(
 
     real_prepare_head_checkout = jobs_module._prepare_head_checkout
 
-    def spy_prepare_head_checkout(clone_url, head_sha_arg, installation_id, repo_full_name, fallback_dir):
+    def spy_prepare_head_checkout(
+        clone_url, head_sha_arg, installation_id, repo_full_name, fallback_dir, pr_number=None
+    ):
         prepare_head_calls.append(
             {"clone_url": clone_url, "head_sha": head_sha_arg, "installation_id": installation_id}
         )
-        return real_prepare_head_checkout(clone_url, head_sha_arg, installation_id, repo_full_name, fallback_dir)
+        return real_prepare_head_checkout(
+            clone_url, head_sha_arg, installation_id, repo_full_name, fallback_dir, pr_number=pr_number
+        )
 
     monkeypatch.setattr("scan_worker.jobs._prepare_head_checkout", spy_prepare_head_checkout)
 
@@ -1259,6 +1351,222 @@ def test_vulnerability_check_run_succeeds_when_no_new_vulnerability(
     assert vuln_runs[0]["conclusion"] == "success"
 
 
+def test_maybe_create_static_analysis_check_run_fails_with_new_findings(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    created = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run",
+        lambda client, token, repo, sha, conclusion, summary, name="", annotations=None: created.append(
+            (conclusion, name, summary, annotations)
+        ),
+    )
+    diff = {
+        "static_analysis": {
+            "new": [
+                {
+                    "tool": "trivy",
+                    "rule_id": "openai-api-key",
+                    "severity": "critical",
+                    "type": "privacy",
+                    "path": "app/.env",
+                    "line": 3,
+                    "message": "OpenAI API Key (sha256:abc123)",
+                }
+            ],
+            "resolved": [],
+        }
+    }
+
+    from scan_worker.jobs import _maybe_create_static_analysis_check_run
+
+    _maybe_create_static_analysis_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        diff=diff,
+    )
+
+    assert len(created) == 1
+    conclusion, name, summary, annotations = created[0]
+    assert conclusion == "failure"
+    assert name == "Aletheore Deterministic Scan"
+    assert "app/.env:3" in summary
+    assert "OpenAI API Key" in summary
+    # Presented as Aletheore's own finding, never the underlying tool/rule -
+    # same convention audited across every other customer-facing surface
+    # (dashboard, PR comments, docs export) on 2026-09-21.
+    assert "trivy" not in summary
+    assert "openai-api-key" not in summary
+    # Real GitHub Checks API annotation, not just a text summary line - a
+    # finding now lands on the diff itself, same surface Flash Review's
+    # own inline comments already use.
+    assert annotations == [
+        {
+            "path": "app/.env",
+            "start_line": 3,
+            "end_line": 3,
+            "annotation_level": "failure",
+            "message": "OpenAI API Key (sha256:abc123)",
+        }
+    ]
+
+
+def test_maybe_create_static_analysis_check_run_succeeds_with_no_new_findings(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    created = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run",
+        lambda client, token, repo, sha, conclusion, summary, name="", annotations=None: created.append(
+            (conclusion, name, summary)
+        ),
+    )
+
+    from scan_worker.jobs import _maybe_create_static_analysis_check_run
+
+    _maybe_create_static_analysis_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        diff={"static_analysis": {"new": [], "resolved": []}},
+    )
+
+    assert len(created) == 1
+    assert created[0][0] == "success"
+    assert created[0][1] == "Aletheore Deterministic Scan"
+
+
+def test_maybe_create_static_analysis_check_run_runs_on_free_plan(monkeypatch):
+    # Real, deliberate difference from every other check run in this file
+    # (secrets, vulnerabilities, regression fence, regression risk all
+    # return early on plan == "free") - this one is meant to be available
+    # to every tier, per product decision 2026-09-21. A regression here
+    # would silently take real security value away from free-tier repos.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"})
+    created = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run",
+        lambda client, token, repo, sha, conclusion, summary, name="", annotations=None: created.append(
+            (conclusion, name, summary)
+        ),
+    )
+    diff = {
+        "static_analysis": {
+            "new": [
+                {
+                    "tool": "semgrep",
+                    "rule_id": "some-rule",
+                    "severity": "major",
+                    "type": "bug",
+                    "path": "app.py",
+                    "line": 10,
+                    "message": "m",
+                }
+            ],
+            "resolved": [],
+        }
+    }
+
+    from scan_worker.jobs import _maybe_create_static_analysis_check_run
+
+    _maybe_create_static_analysis_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        diff=diff,
+    )
+
+    assert len(created) == 1
+    assert created[0][0] == "failure"
+
+
+def test_static_analysis_annotations_maps_severity_to_annotation_level():
+    from scan_worker.jobs import _static_analysis_annotations
+
+    findings = [
+        {"path": "a.py", "line": 1, "severity": "blocker", "message": "m1"},
+        {"path": "a.py", "line": 2, "severity": "critical", "message": "m2"},
+        {"path": "a.py", "line": 3, "severity": "major", "message": "m3"},
+        {"path": "a.py", "line": 4, "severity": "minor", "message": "m4"},
+        {"path": "a.py", "line": 5, "severity": "info", "message": "m5"},
+        {"path": "a.py", "line": 6, "severity": "unknown-severity", "message": "m6"},
+    ]
+
+    annotations = _static_analysis_annotations(findings)
+
+    assert [a["annotation_level"] for a in annotations] == [
+        "failure", "failure", "warning", "notice", "notice", "notice",
+    ]
+
+
+def test_static_analysis_annotations_skips_findings_with_no_real_line():
+    # Real GitHub Checks API constraint: start_line/end_line must be >= 1.
+    # A misconfig-type finding with no single offending line (real gap
+    # confirmed live in trivy_scanner.py/pmd_scanner.py: CauseMetadata
+    # often carries no StartLine at all) defaults line to 0 - must stay
+    # summary-text-only, not get a fabricated line 1 annotation pointing
+    # at the wrong place.
+    from scan_worker.jobs import _static_analysis_annotations
+
+    findings = [
+        {"path": "Dockerfile", "line": 0, "severity": "minor", "message": "no HEALTHCHECK"},
+        {"path": "app.py", "line": 10, "severity": "major", "message": "real finding"},
+    ]
+
+    annotations = _static_analysis_annotations(findings)
+
+    assert len(annotations) == 1
+    assert annotations[0]["path"] == "app.py"
+
+
+def test_static_analysis_annotations_skips_findings_with_no_real_path():
+    # Real Flash Review finding on #764: a finding with a valid line but a
+    # missing/None path would produce an annotation the GitHub Checks API
+    # rejects outright - and since annotations post in one batch, one
+    # malformed entry risks the whole batch, not just itself.
+    from scan_worker.jobs import _static_analysis_annotations
+
+    findings = [
+        {"path": None, "line": 5, "severity": "major", "message": "no real path"},
+        {"line": 6, "severity": "major", "message": "path key missing entirely"},
+        {"path": "", "line": 7, "severity": "major", "message": "empty path"},
+        {"path": "app.py", "line": 10, "severity": "major", "message": "real finding"},
+    ]
+
+    annotations = _static_analysis_annotations(findings)
+
+    assert len(annotations) == 1
+    assert annotations[0]["path"] == "app.py"
+
+
+def test_maybe_create_static_analysis_check_run_skips_when_installation_missing(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    created = []
+    monkeypatch.setattr("scan_worker.jobs.create_check_run", lambda *a, **k: created.append(True))
+
+    from scan_worker.jobs import _maybe_create_static_analysis_check_run
+
+    _maybe_create_static_analysis_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        diff={"static_analysis": {"new": [{"tool": "semgrep", "rule_id": "r", "path": "a.py", "line": 1, "message": "m"}], "resolved": []}},
+    )
+
+    assert created == []
+
+
 def test_maybe_create_regression_risk_check_run_creates_neutral_check_run(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
@@ -1832,6 +2140,84 @@ async def test_incremental_spend_budget_record_usage_refunds_when_actual_cost_is
     assert combined > 4.95
     assert float(remaining["topup_credit_balance_usd"]) == pytest.approx(0.00)
     assert float(remaining["base_credit_remaining_usd"]) == pytest.approx(combined)
+
+
+@pytest.mark.asyncio
+async def test_incremental_spend_budget_on_call_failed_releases_the_reservation(pool):
+    # Real production bug: can_start_next_call() reserves next_call_reserve_usd
+    # up front (e.g. $0.10 for AIRview/Docs incremental), but before this
+    # fix nothing released it when the LLM call that followed failed -
+    # record_usage() (the only thing that ever trued up the reservation)
+    # is never reached on a failure path. Confirmed live: two AIR
+    # installations' $18 base credit both hit $0.00 while their combined
+    # real ledgered spend (llm_spend_events) totaled $3.43 - a ~$32 gap
+    # this exact mechanism explains. on_call_failed() must give back
+    # exactly what was reserved, same as a real cost of $0 would.
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    installation_id = 9104
+    await _insert_installation(
+        pool, installation_id, "a",
+        base_credit_allotment_usd=5.00,
+        base_credit_remaining_usd=5.00,
+        topup_credit_balance_usd=0.00,
+    )
+
+    budget = _IncrementalSpendBudget(
+        TEST_DATABASE_URL, installation_id, "deepseek-v4-flash",
+        next_call_reserve_usd=0.10, feature="airview_incremental",
+    )
+    assert budget.can_start_next_call() is True
+    remaining_after_reserve = await _get_balance(pool, installation_id)
+    assert float(remaining_after_reserve["base_credit_remaining_usd"]) == pytest.approx(4.90)
+
+    budget.on_call_failed()
+
+    remaining_after_release = await _get_balance(pool, installation_id)
+    assert float(remaining_after_release["base_credit_remaining_usd"]) == pytest.approx(5.00)
+    assert float(remaining_after_release["topup_credit_balance_usd"]) == pytest.approx(0.00)
+
+
+@pytest.mark.asyncio
+async def test_incremental_spend_budget_on_call_failed_is_a_noop_without_a_pending_reservation(pool):
+    # Must be safe to call defensively from a broad except block even when
+    # it's ambiguous whether record_usage() already ran - e.g. a failure
+    # in DB-write code that runs after a successful LLM call. Calling it
+    # with nothing pending must not release money the installation was
+    # never actually charged.
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    installation_id = 9105
+    await _insert_installation(
+        pool, installation_id, "a",
+        base_credit_allotment_usd=5.00,
+        base_credit_remaining_usd=5.00,
+        topup_credit_balance_usd=0.00,
+    )
+
+    budget = _IncrementalSpendBudget(
+        TEST_DATABASE_URL, installation_id, "deepseek-v4-flash",
+        next_call_reserve_usd=0.10, feature="airview_incremental",
+    )
+    # Never reserved anything yet - on_call_failed must not credit $0.10
+    # out of nowhere.
+    budget.on_call_failed()
+    remaining = await _get_balance(pool, installation_id)
+    assert float(remaining["base_credit_remaining_usd"]) == pytest.approx(5.00)
+
+    # Reserve, resolve normally via record_usage, then call on_call_failed
+    # again (simulating a second, unrelated failure later in the same
+    # call site) - must still be a no-op, not a second release of the
+    # already-resolved reservation.
+    assert budget.can_start_next_call() is True
+    budget.record_usage(prompt_tokens=10, completion_tokens=1)
+    remaining_after_usage = await _get_balance(pool, installation_id)
+
+    budget.on_call_failed()
+    remaining_after_stale_failure = await _get_balance(pool, installation_id)
+    assert float(remaining_after_stale_failure["base_credit_remaining_usd"]) == pytest.approx(
+        float(remaining_after_usage["base_credit_remaining_usd"])
+    )
 
 
 @pytest.mark.asyncio
@@ -3604,6 +3990,77 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     assert recorded_spend == [-FLASH_REVIEW_SPEND_RESERVE_USD]
 
 
+def test_flash_review_job_summary_count_reflects_a_real_post_failure(monkeypatch):
+    # Real gap found live on PR #764: the summary comment said "4
+    # finding(s) posted" from len(findings_to_post) while only 3 inline
+    # comments actually existed on the PR - a real 422 from GitHub's
+    # diff-position validation for one finding's citation was caught and
+    # logged (create_pr_review_comment's own per-finding try/except), but
+    # the summary count never learned about it. Two findings here, one
+    # citation GitHub rejects - the summary must say 1, not 2, and must
+    # name the failure rather than silently omitting it.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr(
+        "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
+    )
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda diff_text, file_context="", **kwargs: [
+            {"file": "app.py", "line": 1, "issue": "real problem one", "source": "llm"},
+            {"file": "app.py", "line": 2, "issue": "real problem two", "source": "llm"},
+        ],
+    )
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    posted = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.upsert_pr_comment",
+        lambda client, token, repo_full_name, pr_number, body, **kwargs: posted.update(body=body),
+    )
+    from scan_worker.jobs import run_flash_review_job
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+
+    def fake_create_pr_review_comment(client, token, repo, pr, commit_id, path, line, body):
+        if line == 2:
+            raise Exception("422 Client Error: Unprocessable Entity")
+        return {"id": 999001}
+
+    monkeypatch.setattr("scan_worker.jobs.create_pr_review_comment", fake_create_pr_review_comment)
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert "1 finding(s) posted as inline review comment(s) below" in posted["body"]
+    assert "2 finding(s) posted" not in posted["body"]
+    assert "1 more finding(s) held up but couldn't be posted" in posted["body"]
+
+
 def test_flash_review_job_excludes_aletheore_json_ignored_paths_from_the_diff(monkeypatch):
     # Real gap this closes: Flash Review's PR-comment pipeline has no
     # local checkout to read .aletheore.json from the way the
@@ -4797,6 +5254,11 @@ def test_flash_review_job_requests_second_model_verification_on_paid_plan(monkey
     # Suggestion-correctness verification runs on every paid plan
     # regardless of verify_with_second_model - AIR gets both.
     assert captured["verify_suggestions"] is True
+    # AIR gets per-file completeness too - not gated the same as
+    # verify_with_second_model (that one's plan-specific; this one's
+    # `not is_free_tier`, see test_flash_review_job_requests_per_file_
+    # completeness_on_flash_tier for why flash gets it too).
+    assert captured["per_file_completeness"] is True
 
     # And that callback must price at the verification model's own rate
     # (deepseek-v4-flash), never flash_review_model's - wrong whenever
@@ -4868,6 +5330,12 @@ def test_flash_review_job_does_not_request_second_model_verification_on_flash_ti
     # (no dual-agent grounding check) makes it more exposed to a
     # wrong-direction one-click suggestion than AIR, not less.
     assert captured["verify_suggestions"] is True
+    # Per-file completeness is ALSO not AIR-only, unlike second-model
+    # verification: real measured cost is ~3x single-shot generation
+    # (~$0.0028 vs ~$0.00095/review, 2026-09-21 martian-corpus benchmark),
+    # cheap enough for flash tier too - only the much pricier (~15x even
+    # windowed) verification pass stays AIR-exclusive.
+    assert captured["per_file_completeness"] is True
 
 
 def test_flash_review_job_does_not_request_second_model_verification_on_free_tier(monkeypatch):
@@ -4935,6 +5403,13 @@ def test_flash_review_job_does_not_request_second_model_verification_on_free_tie
     # tier", so this must stay False here or a real dollar cost would land
     # in free tier's spend accounting for the first time.
     assert captured["verify_suggestions"] is False
+    # Free tier stays False too - both paid tiers get per-file
+    # completeness (see the flash/AIR tests above), free tier gets
+    # neither. review_diff's own adapter_chain-is-None guard would make
+    # this a no-op for free tier even if it were True (free tier always
+    # passes a real adapter_chain), but the call site should never rely
+    # on that as the only backstop.
+    assert captured["per_file_completeness"] is False
 
 
 def test_flash_review_job_renders_suggestion_as_plain_fence_not_github_suggestion_syntax(monkeypatch):
@@ -5108,11 +5583,11 @@ def test_run_live_wiki_full_build_job_skips_model_call_on_cache_hit(monkeypatch)
 
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_full_build_writing_adapter",
-        lambda on_usage=None, before_llm_call=None: _SpyAdapter(),
+        lambda on_usage=None, before_llm_call=None, on_call_failed=None: _SpyAdapter(),
     )
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_naming_adapter",
-        lambda on_usage=None, before_llm_call=None: _NamingAdapter(),
+        lambda on_usage=None, before_llm_call=None, on_call_failed=None: _NamingAdapter(),
     )
     monkeypatch.setattr("scan_worker.jobs._store_wiki_subsystem_records", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._regenerate_wiki_overview", lambda *a, **k: None)
@@ -5816,14 +6291,21 @@ def test_sweep_does_not_burn_the_cooldown_when_no_suggestion_was_actually_produc
     # Real bug found via audit: the cooldown used to be marked the instant
     # a fix suggestion was merely ATTEMPTED (include_fix_suggestion=True),
     # not when one was actually produced - _fix_suggestion_attachment has
-    # several ordinary reasons to return None (credit balance exhausted,
-    # spend budget exhausted, file content fetch failed, the LLM call
-    # itself raised, or it returned "unknown"), and every one of those
-    # burned the same HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS window a real,
+    # several ordinary reasons to return None before ever reaching the LLM
+    # call (credit balance exhausted, spend budget exhausted, file content
+    # fetch failed) or after it raised, and every one of those burned the
+    # same HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS window a real,
     # successfully-delivered suggestion would have - so a customer whose
     # endpoint stayed down could get zero real suggestions for the full
     # cooldown, with no retry until it expired. The cooldown key must stay
-    # unset when the suggestion attempt itself failed.
+    # unset when the suggestion attempt never reached the model at all.
+    #
+    # A later audit found the sibling gap: an "unknown" response (the LLM
+    # call DID complete, just found no fixable cause) was originally
+    # bundled into this same "no cooldown" bucket too - see
+    # test_sweep_burns_the_cooldown_when_llm_call_completes_with_unknown_verdict
+    # below for why that specific case was corrected to burn the cooldown
+    # like a real suggestion does, not left in this one.
     from scan_worker.jobs import _health_fix_suggestion_cooldown_key
 
     redis_conn = _FakeRedis()
@@ -5906,6 +6388,114 @@ def test_health_check_down_retry_job_does_not_burn_the_cooldown_when_no_suggesti
     assert redis_conn.get(
         _health_fix_suggestion_cooldown_key(1, "octocat/hello-world", "GET", "/x", 900)
     ) is None
+
+
+def test_sweep_burns_the_cooldown_when_llm_call_completes_with_unknown_verdict(monkeypatch):
+    # Sibling gap to the two tests above, found in a later audit:
+    # _fix_suggestion_attachment's on_llm_call_completed must fire once the
+    # LLM call genuinely completes - "unknown" included - not just when a
+    # real suggestion comes back. Before this fix, a model that correctly
+    # determined "this needs a human, not a code fix" (e.g. a real
+    # third-party outage) was treated identically to a call that never
+    # reached the model at all (spend exhausted, fetch failed, an
+    # exception) - re-billing a full paid LLM call on every single flip of
+    # a flapping endpoint with a genuinely unfixable root cause, forever,
+    # since no cooldown state ever distinguished the two. Calls the real
+    # _fix_suggestion_attachment (not mocked away, unlike the two tests
+    # above) so this actually exercises the on_llm_call_completed wiring.
+    from scan_worker.jobs import _fix_suggestion_attachment
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {"database_url": "postgresql://unused", "github_app_id": "1", "github_app_private_key": "fake-key"},
+        )(),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
+    )
+
+    class _AlwaysAllowedBudget:
+        def __init__(self, *a, **k):
+            pass
+
+        def can_start_next_call(self):
+            return True
+
+        def record_usage(self, *a, **k):
+            pass
+
+        def on_call_failed(self):
+            pass
+
+    monkeypatch.setattr("scan_worker.jobs._IncrementalSpendBudget", _AlwaysAllowedBudget)
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_github_api_client", lambda: object())
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_file_content", lambda *a, **k: "def handler():\n    pass\n"
+    )
+    monkeypatch.setattr("scan_worker.jobs.model_for_plan", lambda *a, **k: "gpt-5.6-luna")
+
+    class _UnknownAdapter:
+        def simple_completion(self, *a, **k):
+            return "unknown"
+
+    monkeypatch.setattr("scan_worker.jobs._health_fix_suggestion_adapter", lambda *a, **k: _UnknownAdapter())
+
+    completed = []
+    result = _fix_suggestion_attachment(
+        1, "octocat/hello-world", "controllers/user.controller.ts", 42,
+        "GET", "/x", None, None,
+        on_llm_call_completed=lambda: completed.append(True),
+    )
+
+    assert result is None  # "unknown" is still not a real suggestion to attach
+    assert completed == [True]  # but the attempt genuinely completed, so the cooldown should be set
+
+
+def test_fix_suggestion_attachment_does_not_signal_completion_when_spend_budget_rejects(monkeypatch):
+    # Contrast case for the test above: a call that never reaches the
+    # model at all (spend budget exhausted here; file-fetch failure and a
+    # raised LLM call are the same shape) must NOT signal completion - that
+    # customer should get a fresh, unthrottled retry, not a cooldown for
+    # an attempt that never actually ran.
+    from scan_worker.jobs import _fix_suggestion_attachment
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {"database_url": "postgresql://unused", "github_app_id": "1", "github_app_private_key": "fake-key"},
+        )(),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
+    )
+
+    class _AlwaysRejectedBudget:
+        def __init__(self, *a, **k):
+            pass
+
+        def can_start_next_call(self):
+            return False
+
+    monkeypatch.setattr("scan_worker.jobs._IncrementalSpendBudget", _AlwaysRejectedBudget)
+
+    completed = []
+    result = _fix_suggestion_attachment(
+        1, "octocat/hello-world", "controllers/user.controller.ts", 42,
+        "GET", "/x", None, None,
+        on_llm_call_completed=lambda: completed.append(True),
+    )
+
+    assert result is None
+    assert completed == []
 
 
 def test_sweep_alerts_without_commit_when_correlation_fails(monkeypatch):
@@ -7113,11 +7703,11 @@ def test_maybe_update_live_wiki_reserves_spend_atomically_against_concurrent_pus
 
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_naming_adapter",
-        lambda on_usage=None, before_llm_call=None: _FakeWikiAdapter(on_usage, before_llm_call),
+        lambda on_usage=None, before_llm_call=None, on_call_failed=None: _FakeWikiAdapter(on_usage, before_llm_call),
     )
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_update_writing_adapter",
-        lambda on_usage=None, before_llm_call=None: _FakeWikiAdapter(on_usage, before_llm_call),
+        lambda on_usage=None, before_llm_call=None, on_call_failed=None: _FakeWikiAdapter(on_usage, before_llm_call),
     )
 
     def _call(repo):
@@ -8051,11 +8641,11 @@ def test_run_live_wiki_full_build_job_reserves_spend_atomically_against_concurre
 
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_naming_adapter",
-        lambda on_usage=None, before_llm_call=None: _FakeWikiAdapter(on_usage, before_llm_call),
+        lambda on_usage=None, before_llm_call=None, on_call_failed=None: _FakeWikiAdapter(on_usage, before_llm_call),
     )
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_full_build_writing_adapter",
-        lambda on_usage=None, before_llm_call=None: _FakeWikiAdapter(on_usage, before_llm_call),
+        lambda on_usage=None, before_llm_call=None, on_call_failed=None: _FakeWikiAdapter(on_usage, before_llm_call),
     )
 
     threads = [
@@ -8854,7 +9444,7 @@ def test_run_live_docs_full_build_job_skips_llm_call_when_spend_cap_reached(monk
     adapter_calls = []
     monkeypatch.setattr(
         "scan_worker.jobs._live_docs_full_build_writing_adapter",
-        lambda plan, on_usage=None: adapter_calls.append(True),
+        lambda plan, on_usage=None, on_call_failed=None: adapter_calls.append(True),
     )
     status_calls = []
     monkeypatch.setattr(
@@ -8890,7 +9480,7 @@ def test_run_live_docs_full_build_job_survives_one_module_failing(monkeypatch):
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None, on_call_failed=None: object()
     )
 
     def fake_fetch(client, token, repo, path, ref):
@@ -8955,7 +9545,7 @@ def test_run_docs_build_indexes_source_lines_by_real_newline_lines_not_splitline
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None, on_call_failed=None: object()
     )
     # Line1="header", line2=ten form feeds, line3-4=the real function.
     # splitlines() would put line 3's real content at a different index
@@ -9028,7 +9618,7 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
 
     monkeypatch.setattr(
         "scan_worker.jobs._live_docs_full_build_writing_adapter",
-        lambda plan, on_usage=None: FakeAdapter(on_usage),
+        lambda plan, on_usage=None, on_call_failed=None: FakeAdapter(on_usage),
     )
     stored_for = []
 
@@ -9092,7 +9682,7 @@ def test_run_live_docs_full_build_job_reports_failed_when_every_module_fails(mon
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None, on_call_failed=None: object()
     )
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "source")
 
@@ -9134,7 +9724,7 @@ def test_run_live_docs_full_build_job_reports_failed_when_every_fetch_returns_no
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None, on_call_failed=None: object()
     )
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: None)
     status_calls = []
@@ -9164,7 +9754,7 @@ def test_maybe_update_live_docs_skips_llm_call_when_spend_cap_reached(monkeypatc
     adapter_calls = []
     monkeypatch.setattr(
         "scan_worker.jobs._live_docs_update_writing_adapter",
-        lambda on_usage=None: adapter_calls.append(True),
+        lambda on_usage=None, on_call_failed=None: adapter_calls.append(True),
     )
     status_calls = []
     monkeypatch.setattr(
@@ -9195,7 +9785,7 @@ def test_maybe_update_live_docs_survives_one_module_failing(monkeypatch):
     monkeypatch.setattr(
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
-    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda on_usage=None: object())
+    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda on_usage=None, on_call_failed=None: object())
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "source")
 
     def fake_store(dsn, iid, repo, module, adapter, source_lines, commit):
@@ -9230,7 +9820,7 @@ def test_maybe_update_live_docs_excludes_test_files_from_changed_modules(monkeyp
     monkeypatch.setattr(
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
-    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda on_usage=None: object())
+    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda on_usage=None, on_call_failed=None: object())
 
     fetched_for = []
     monkeypatch.setattr(
@@ -9475,7 +10065,7 @@ def test_fix_suggestion_attachment_reserves_spend_atomically_against_concurrent_
 
     monkeypatch.setattr(
         "scan_worker.jobs._health_fix_suggestion_adapter",
-        lambda on_usage=None: _FakeAdapter(on_usage),
+        lambda on_usage=None, on_call_failed=None: _FakeAdapter(on_usage),
     )
 
     results: list[dict | None] = [None, None]
@@ -9590,6 +10180,10 @@ def test_run_health_sweep_staleness_check_job_alerts_when_stale(monkeypatch):
         "scan_worker.jobs.get_seconds_since_last_health_check",
         lambda dsn: HEALTH_SWEEP_STALENESS_THRESHOLD_SECONDS + 1,
     )
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_health_check_targets_all",
+        lambda dsn: [{"target_id": 1}],
+    )
     alerts = []
     monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
 
@@ -9597,6 +10191,33 @@ def test_run_health_sweep_staleness_check_job_alerts_when_stale(monkeypatch):
 
     assert len(alerts) == 1
     assert alerts[0][0][0] == "health_sweep"
+
+
+def test_run_health_sweep_staleness_check_job_does_not_alert_when_no_current_targets(monkeypatch):
+    # Real false positive found live in production (2026-09-22): a target
+    # row survives an installation's air -> flash downgrade - the sweep
+    # correctly stops checking it forever, but endpoint_health's last-write
+    # timestamp stays frozen from before the downgrade, so
+    # seconds_since_last_check only ever grows. Without this check, this
+    # alerted every 6 hours indefinitely for a fully-expected,
+    # working-as-designed state (Aletheore's own dogfood install,
+    # downgraded to flash on purpose) - confirmed live: exactly one target
+    # row existed, joined to an installation on plan="flash", which
+    # list_health_check_targets_all's own AIR-exclusive query silently
+    # excludes.
+    from scan_worker.jobs import HEALTH_SWEEP_STALENESS_THRESHOLD_SECONDS, run_health_sweep_staleness_check_job
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_seconds_since_last_health_check",
+        lambda dsn: HEALTH_SWEEP_STALENESS_THRESHOLD_SECONDS + 1,
+    )
+    monkeypatch.setattr("scan_worker.jobs.list_health_check_targets_all", lambda dsn: [])
+    alerts = []
+    monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
+
+    run_health_sweep_staleness_check_job()
+
+    assert alerts == []
 
 
 def test_run_health_sweep_staleness_check_job_does_not_alert_when_fresh(monkeypatch):

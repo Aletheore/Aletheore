@@ -157,6 +157,59 @@ def test_java_empty_catch_block_comment_closing_on_same_line_as_catch_brace_is_f
     assert "empty body" in findings[0]["issue"]
 
 
+def test_java_catch_with_code_after_same_line_block_comment_is_not_flagged():
+    # Sibling gap to the "*/ }" fix above, found in a later audit: a block
+    # comment that opens AND closes on the same line, followed by a real
+    # statement on that same line (e.g. "/* note */ recover();"), was
+    # unconditionally discarded by the "if stripped.startswith('/*')"
+    # branch - misjudging a catch that actually recovers as empty/swallowed.
+    diff = (
+        "--- Service.java ---\n@@ -1,2 +1,5 @@\n"
+        "+    try {\n"
+        "+        doWork();\n"
+        "+    } catch (IOException e) {\n"
+        "+        /* handled elsewhere */ recover();\n"
+        "+    }\n"
+    )
+    file_contents = {
+        "Service.java": (
+            "void run() {\n"
+            "    try {\n"
+            "        doWork();\n"
+            "    } catch (IOException e) {\n"
+            "        /* handled elsewhere */ recover();\n"
+            "    }\n"
+            "}\n"
+        )
+    }
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert findings == []
+
+
+def test_java_catch_with_logging_after_same_line_block_comment_is_not_flagged():
+    diff = (
+        "--- Service.java ---\n@@ -1,2 +1,5 @@\n"
+        "+    try {\n"
+        "+        doWork();\n"
+        "+    } catch (IOException e) {\n"
+        "+        /* network hiccup */ logger.error(\"failed\", e);\n"
+        "+    }\n"
+    )
+    file_contents = {
+        "Service.java": (
+            "void run() {\n"
+            "    try {\n"
+            "        doWork();\n"
+            "    } catch (IOException e) {\n"
+            "        /* network hiccup */ logger.error(\"failed\", e);\n"
+            "    }\n"
+            "}\n"
+        )
+    }
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert findings == []
+
+
 def test_java_catch_with_real_handling_is_not_flagged():
     diff = (
         "--- Service.java ---\n@@ -1,2 +1,5 @@\n"
@@ -686,6 +739,71 @@ def test_go_direct_exec_command_is_not_flagged():
     assert findings == []
 
 
+def test_go_asymmetric_cache_trust_is_flagged():
+    # Real shape from grafana/grafana#103633: a new denial-cache hit
+    # returns immediately, but a cache hit via a getCached* helper only
+    # short-circuits for one of its two outcomes.
+    diff = (
+        "--- service.go ---\n@@ -1,1 +1,20 @@\n"
+        "-\t// no-op\n"
+        "+\tif _, ok := s.permDenialCache.Get(ctx, key); ok {\n"
+        "+\t\ts.metrics.Inc()\n"
+        "+\t\treturn &Response{Allowed: false}, nil\n"
+        "+\t}\n"
+        "+\n"
+        "+\tcachedPerms, err := s.getCachedIdentityPermissions(ctx, ns, action)\n"
+        "+\tif err == nil {\n"
+        "+\t\tallowed, err := s.checkPermission(ctx, cachedPerms, req)\n"
+        "+\t\tif err != nil {\n"
+        "+\t\t\treturn deny, err\n"
+        "+\t\t}\n"
+        "+\t\tif allowed {\n"
+        "+\t\t\treturn &Response{Allowed: allowed}, nil\n"
+        "+\t\t}\n"
+        "+\t}\n"
+        "+\n"
+        "+\tpermissions, err := s.getIdentityPermissions(ctx, ns, action)\n"
+    )
+    file_contents = {"service.go": ""}
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert any("don't get the same trust" in f["issue"] for f in findings)
+
+
+def test_go_symmetric_cache_guards_both_returning_is_not_flagged():
+    diff = (
+        "--- service.go ---\n@@ -1,1 +1,10 @@\n"
+        "-\t// no-op\n"
+        "+\tif _, ok := s.permCache.Get(ctx, key); ok {\n"
+        "+\t\treturn &Response{Allowed: true}, nil\n"
+        "+\t}\n"
+        "+\n"
+        "+\tif _, ok := s.permDenialCache.Get(ctx, key); ok {\n"
+        "+\t\treturn &Response{Allowed: false}, nil\n"
+        "+\t}\n"
+    )
+    file_contents = {"service.go": ""}
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert findings == []
+
+
+def test_go_single_cache_guard_is_not_flagged():
+    # Needs at least two distinct cache-like guards to say anything about
+    # asymmetry - one guard alone has nothing to be asymmetric relative to.
+    diff = (
+        "--- service.go ---\n@@ -1,1 +1,10 @@\n"
+        "-\t// no-op\n"
+        "+\tcachedPerms, err := s.getCachedIdentityPermissions(ctx, ns, action)\n"
+        "+\tif err == nil {\n"
+        "+\t\tif allowed {\n"
+        "+\t\t\treturn &Response{Allowed: allowed}, nil\n"
+        "+\t\t}\n"
+        "+\t}\n"
+    )
+    file_contents = {"service.go": ""}
+    findings = find_semantic_regressions(diff, file_contents, "")
+    assert findings == []
+
+
 def test_java_shaped_text_in_a_python_docstring_is_not_flagged():
     # Real false positive found independently by GLM-5.3-Flash reviewing
     # PR #725 with PR-Agent's own prompt structure (a genuinely different
@@ -759,3 +877,9 @@ def test_resource_leak_nearby_window_indexes_by_real_newline_lines_not_splitline
     findings = find_semantic_regressions(diff, file_contents, "")
 
     assert findings == []
+
+
+# find_static_analysis_regressions and its tests were removed 2026-09-21
+# along with the function itself - see semantic_checks.py's comment at the
+# old call site for why (a real, controlled experiment measured it making
+# Flash Review's recall/precision worse, not better).

@@ -105,6 +105,12 @@ def _endpoint_block(evidence: dict) -> dict:
     )
 
 
+def _static_analysis_block(evidence: dict) -> dict:
+    return evidence["security"].get(
+        "static_analysis", {"checked": False, "reason": "not present in older evidence", "findings": []}
+    )
+
+
 def _compute_curated_diff(old: dict, new: dict) -> dict:
     result: dict = {}
     caveats = []
@@ -151,6 +157,18 @@ def _compute_curated_diff(old: dict, new: dict) -> dict:
             "not necessarily real changes"
         )
 
+    old_static_analysis = _static_analysis_block(old)
+    new_static_analysis = _static_analysis_block(new)
+    old_static_analysis_checked = old_static_analysis["checked"]
+    new_static_analysis_checked = new_static_analysis["checked"]
+    if old_static_analysis_checked != new_static_analysis_checked:
+        caveats.append(
+            "static analysis scanning state changed between scans "
+            f"(was checked={old_static_analysis_checked}, now checked={new_static_analysis_checked}) - "
+            "new/resolved static analysis findings below may reflect scanning being "
+            "toggled on/off, not necessarily real changes"
+        )
+
     if caveats:
         result["caveats"] = caveats
 
@@ -189,6 +207,20 @@ def _compute_curated_diff(old: dict, new: dict) -> dict:
     new_vulns = filter_by_severity(new_vulns, severity_threshold)
     resolved_vulns = filter_by_severity(resolved_vulns, severity_threshold)
     result["vulnerabilities"] = {"new": new_vulns, "resolved": resolved_vulns}
+
+    # (tool, rule_id, path, line) - the exact same identity Semgrep/gosec/
+    # Bandit/Trivy/Bearer/Joern/SonarQube findings already use for
+    # dismissal tracking (see dismissed_findings.py) - a moved-but-
+    # unchanged finding (line shift from unrelated edits elsewhere in the
+    # file) reads as both a new and a resolved entry here, the same known
+    # limitation _new_and_resolved already has for every other category
+    # above, not something unique to this one.
+    new_static_analysis, resolved_static_analysis = _new_and_resolved(
+        old_static_analysis["findings"],
+        new_static_analysis["findings"],
+        ("tool", "rule_id", "path", "line"),
+    )
+    result["static_analysis"] = {"new": new_static_analysis, "resolved": resolved_static_analysis}
 
     new_violations, resolved_violations = _new_and_resolved(
         old["architecture"]["layer_violations"]["violations"],

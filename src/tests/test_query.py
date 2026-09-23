@@ -536,6 +536,7 @@ def test_query_functions_registry_has_all_kinds_with_correct_requires_target():
         "secrets": True,
         "vulnerabilities": False,
         "licenses": False,
+        "static-analysis": False,
         "endpoints": False,
         "cluster": True,
         "layer-violations": False,
