@@ -452,26 +452,40 @@ def _checkout_sha(dest: Path, sha: str, pr_number: int | None, *, force: bool = 
         )
 
 
-def _shallow_fetch_and_checkout(dest: Path, sha: str, pr_number: int | None) -> None:
-    """Fetches exactly one commit (`--depth 1`) by its SHA and checks it
-    out, instead of `_checkout_sha`'s approach of cloning full history
-    first - real bandwidth/storage savings, confirmed live: GitHub allows
-    fetching an arbitrary commit SHA directly and shallowly, not just a
-    branch/tag tip, as long as it's reachable from some advertised ref (a
-    branch, a tag, or - the same real scenario `_checkout_sha` handles - a
-    still-live PR ref even after its own branch is deleted). Only safe for
-    a checkout nothing will ever need to `git diff` against its own
-    history later - see this function's callers for why that's true here
-    and never true for `_ensure_persistent_checkout`, which keeps full
-    history on purpose to make incremental scanning possible.
+def _fetch_and_checkout(dest: Path, sha: str, pr_number: int | None) -> None:
+    """Fetches one commit SHA (its full ancestry, not `--depth 1`) and
+    checks it out. GitHub allows fetching an arbitrary commit SHA
+    directly, not just a branch/tag tip, as long as it's reachable from
+    some advertised ref (a branch, a tag, or - the same real scenario
+    `_checkout_sha` handles - a still-live PR ref even after its own
+    branch is deleted).
+
+    Real bug this replaced: an earlier version of this function used
+    `--depth 1`, on the theory that a one-shot checkout (base_sha, a PR
+    head, a first-connect scan) never needs its own history and so
+    shouldn't pay to fetch it. False for every real caller - `_clone_ref`
+    and `_clone_pr_head` both feed straight into `_run_scan`, which always
+    runs `find_secrets_in_history` and `analyze_git` (full `git log`
+    walks), gated only by GRAPH_COLD_SYNC_DEPTH_CAP/
+    SECRETS_HISTORY_DEPTH_CAP - both in the tens of thousands of commits,
+    so large they never bind on a real repo and every scan has always
+    effectively walked full history. A depth-1 checkout has exactly one
+    commit, so those walks silently collapsed to "almost nothing changed
+    since forever" instead of erroring - caught live on PR #775, where the
+    base-side history-secrets set came back empty and the evidence-diff
+    comment reported the checkout's entire real history (1241 commits) as
+    newly introduced. Fetching one ref's full ancestry (this function)
+    instead of `git clone`'s every-branch-and-tag (the shape this
+    replaced originally) is still a real, smaller transfer - just not as
+    small as `--depth 1`, which isn't safe for any current caller.
     """
     try:
-        subprocess.run(["git", "fetch", "-q", "--depth", "1", "origin", sha], cwd=dest, check=True)
+        subprocess.run(["git", "fetch", "-q", "origin", sha], cwd=dest, check=True)
     except subprocess.CalledProcessError:
         if pr_number is None:
             raise
         subprocess.run(
-            ["git", "fetch", "-q", "--depth", "1", "origin", f"refs/pull/{pr_number}/head"],
+            ["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
             cwd=dest,
             check=True,
         )
@@ -506,20 +520,17 @@ def _clone_ref(url: str, ref: str, dest: Path, pr_number: int | None = None) -> 
     # reason: `dest/.git` can exist (and so need the scrub) after either
     # one, even if the fetch that follows never gets that far.
     #
-    # `git init` + `git remote add` + a shallow single-SHA fetch here
-    # instead of `git clone --no-checkout` (full history) - this checkout
-    # is thrown away after one scan (base_sha, a PR head, or a first-time
-    # connect scan; never reused, never `git diff`-ed against later), so
-    # there's no reason to pay for the repo's entire history just to read
-    # one commit's tree. Real, measured savings on a real repo: a full
-    # clone pulled 2.6M for a small, young repo - a large or old one (the
-    # actual multi-tenant hosted case this matters for) would see a far
-    # bigger gap. See _ensure_persistent_checkout's own docstring for why
-    # its checkouts deliberately stay full-history instead.
+    # `git init` + `git remote add` + a single-ref fetch here instead of
+    # `git clone --no-checkout` (which pulls every branch and tag) - this
+    # checkout only ever needs the one ref's own ancestry (base_sha, a PR
+    # head, or a first-time connect scan), so fetching just that ref is
+    # still a real transfer saving over a full clone even though (see
+    # _fetch_and_checkout's docstring) it can't go shallow: `_run_scan`
+    # always walks this checkout's real git history.
     try:
         _run_git(["git", "init", "-q", str(dest)])
         _run_git(["git", "remote", "add", "origin", url], cwd=dest)
-        _shallow_fetch_and_checkout(dest, ref, pr_number)
+        _fetch_and_checkout(dest, ref, pr_number)
     finally:
         if (dest / ".git").exists():
             subprocess.run(
@@ -1665,19 +1676,22 @@ def _clone_pr_head(url: str, pr_number: int, dest: Path) -> None:
     # clone), so the scrub can only happen after that fetch, but nothing
     # here needs it afterward either.
     #
-    # `git init` + `git remote add` + a shallow `refs/pull/<n>/head` fetch,
-    # same real reasoning as _clone_ref's own shallow rewrite - this always
-    # already knows its PR number (a managed audit is invoked with one
+    # `git init` + `git remote add` + a `refs/pull/<n>/head` fetch, same
+    # real reasoning as _clone_ref's own rewrite - this always already
+    # knows its PR number (a managed audit is invoked with one
     # explicitly), so unlike _clone_ref it never needs a bare-SHA attempt
-    # first. The old shape paid for the repo's entire history via `git
-    # clone --no-checkout` and THEN fetched the PR ref on top of that -
-    # strictly more wasted transfer than _clone_ref's old version, not
-    # just the same amount.
+    # first. Not `--depth 1`: `_run_scan` (this checkout's only consumer)
+    # always walks real git history (find_secrets_in_history, analyze_git)
+    # - see _fetch_and_checkout's docstring for the real bug a shallow
+    # fetch caused here. The old shape paid for the repo's entire history
+    # via `git clone --no-checkout` (every branch and tag) and THEN
+    # fetched the PR ref on top of that - fetching just the one ref is
+    # still a real, smaller transfer than that, just not shallow.
     try:
         _run_git(["git", "init", "-q", str(dest)])
         _run_git(["git", "remote", "add", "origin", url], cwd=dest)
         subprocess.run(
-            ["git", "fetch", "-q", "--depth", "1", "origin", f"refs/pull/{pr_number}/head"],
+            ["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
             cwd=dest,
             check=True,
         )

@@ -361,7 +361,7 @@ def test_clone_ref_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch):
     credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
     _clone_ref(credentialed_url, "somesha", dest)
 
-    assert ["git", "fetch", "-q", "--depth", "1", "origin", "somesha"] in calls
+    assert ["git", "fetch", "-q", "origin", "somesha"] in calls
     set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
     assert set_url_calls, "expected a 'git remote set-url' call scrubbing the clone"
     assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
@@ -370,7 +370,7 @@ def test_clone_ref_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch):
 
 def test_clone_ref_scrubs_the_token_even_when_the_fetch_fails(tmp_path, monkeypatch):
     # Proves the scrub runs from a finally block, not just after a
-    # successful fetch/checkout - a failed shallow fetch must not leave
+    # successful fetch/checkout - a failed fetch must not leave
     # the credentialed .git/config behind for run_job_temp_dir_cleanup_job's
     # 6-hour sweep to be the only thing standing between a live token and
     # disk. No pr_number here, so the failure must surface immediately -
@@ -472,8 +472,8 @@ def test_clone_ref_recovers_a_deleted_branchs_head_via_the_pr_ref(tmp_path, monk
     credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
     _clone_ref(credentialed_url, "deletedbranchsha", dest, pr_number=25)
 
-    assert ["git", "fetch", "-q", "--depth", "1", "origin", "deletedbranchsha"] in calls
-    assert ["git", "fetch", "-q", "--depth", "1", "origin", "refs/pull/25/head"] in calls
+    assert ["git", "fetch", "-q", "origin", "deletedbranchsha"] in calls
+    assert ["git", "fetch", "-q", "origin", "refs/pull/25/head"] in calls
     assert ["git", "checkout", "-q", "FETCH_HEAD"] in calls
     # Still scrubs the token afterward - the PR-ref fallback must not
     # bypass the same credential-scrub finally block every other path here
@@ -560,7 +560,7 @@ def test_clone_pr_head_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch
     credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
     _clone_pr_head(credentialed_url, 42, dest)
 
-    assert ["git", "fetch", "-q", "--depth", "1", "origin", "refs/pull/42/head"] in calls
+    assert ["git", "fetch", "-q", "origin", "refs/pull/42/head"] in calls
     set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
     assert set_url_calls, "expected a 'git remote set-url' call scrubbing the clone"
     assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
