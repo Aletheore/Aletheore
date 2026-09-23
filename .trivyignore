@@ -48,6 +48,27 @@ stripe-secret-token
 CVE-2026-84304
 CVE-2026-84445
 
+# CVE-2026-0994 (protobuf, scan-worker image only): a HIGH denial-of-
+# service via recursion-depth bypass during protobuf message parsing,
+# fixed only in protobuf>=5.29.6/6.33.5. Pulled in transitively by
+# semgrep (added to Dockerfile.scan-worker/requirements.lock.txt to fix
+# #781 - semgrep was never actually installed in production before that)
+# via its own OpenTelemetry telemetry stack (opentelemetry-exporter-otlp-
+# proto-http -> opentelemetry-proto, both pinned to 1.25.0), which caps
+# protobuf<5.0 - confirmed unresolvable to bump: pip-compile reports a
+# real conflict, no newer opentelemetry-proto release semgrep's own lock
+# accepts relaxes this cap as of 2026-09-23.
+#
+# Accepted because this protobuf usage is confined to OpenTelemetry
+# SERIALIZING semgrep's own outbound telemetry spans for export - not
+# deserializing protobuf messages from any external or attacker-supplied
+# source. semgrep runs here only as a subprocess CLI producing JSON on
+# stdout (semgrep_scanner.py); nothing in this scan-worker's usage ever
+# receives or parses a protobuf message from a PR author, a scanned
+# repo's contents, or any other untrusted input - the vulnerable
+# recursive-parsing code path is never reached.
+CVE-2026-0994
+
 # github-app-token: same situation as stripe-secret-token above, added by
 # #527. KNOWN_VENDOR_EXAMPLE_VALUES also contains two of GitHub's own
 # published OpenAPI-spec example tokens verbatim (see secrets.py's own

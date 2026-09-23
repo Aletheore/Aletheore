@@ -17,16 +17,31 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git curl unzip default-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 
-# Trivy and PMD (static_analysis/trivy_scanner.py, pmd_scanner.py) shell out
-# to these binaries via shutil.which() and degrade to "not installed, zero
-# findings" when absent - neither scanner test exercises the real binary
-# (every test patches shutil.which), so a missing install here never fails
-# CI, it just makes both scanners silently no-op in production. Pinned to
-# the exact versions this integration was evaluated against (see
+# Trivy, PMD, and gosec (static_analysis/trivy_scanner.py, pmd_scanner.py,
+# gosec_scanner.py) shell out to these binaries via shutil.which() and
+# degrade to "not installed, zero findings" when absent - neither scanner
+# test exercises the real binary (every test patches shutil.which), so a
+# missing install here never fails CI, it just makes the scanner silently
+# no-op in production. Real gap found live (2026-09-23, stress-testing the
+# scanner integration): gosec, along with Semgrep and Bandit (both now
+# installed via requirements.lock.txt instead - see the pip install above),
+# were never added here when they were first wired into
+# static_analysis/__init__.py's always-on _SCANNERS tuple - only Trivy and
+# PMD ever got a Dockerfile install, so gosec/Semgrep/Bandit have been
+# silently absent from every real production PR scan's evidence since
+# always-on scanning shipped, not just something this session broke.
+# Confirmed live: `which gosec semgrep bandit` inside the running
+# production container returned nothing for all three; `has_real_file`
+# early-returns before the missing-binary check for repos with no matching
+# source (e.g. gosec on a Python-only repo), which is why this silently
+# read as "checked: true, 0 findings" instead of surfacing as an error
+# anywhere.
+#
+# Pinned to the exact versions this integration was evaluated against (see
 # docs/audits/deterministic_scanner_evaluation.md and pmd_scanner.py's
 # _NOISY_RULES, tuned against real 7.27.0 output), with a checksum verified
-# against each release's own published artifact - Trivy publishes
-# trivy_0.74.0_checksums.txt directly; PMD publishes only a GPG signature
+# against each release's own published artifact - Trivy and gosec both
+# publish a checksums.txt directly; PMD publishes only a GPG signature
 # (.asc) for this asset, so the pinned hash below was computed locally from
 # the real, currently-published pmd-dist-7.27.0-bin.zip rather than left
 # unverified.
@@ -35,6 +50,11 @@ RUN curl -sfL -o /tmp/trivy.tar.gz \
     && echo "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a  /tmp/trivy.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy \
     && rm /tmp/trivy.tar.gz \
+    && curl -sfL -o /tmp/gosec.tar.gz \
+      https://github.com/securego/gosec/releases/download/v2.29.0/gosec_2.29.0_linux_amd64.tar.gz \
+    && echo "6431b119741c1f4a50fdfcf94e782e16b9e642afc8c7fa9b5d39d48bf3003095  /tmp/gosec.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/gosec.tar.gz -C /usr/local/bin gosec \
+    && rm /tmp/gosec.tar.gz \
     && curl -sfL -o /tmp/pmd-dist.zip \
       "https://github.com/pmd/pmd/releases/download/pmd_releases%2F7.27.0/pmd-dist-7.27.0-bin.zip" \
     && echo "4ae396ffaf2b0d3ef0b73a10b2925e77066f73d57a4ce9078c60e7302bcddec9  /tmp/pmd-dist.zip" | sha256sum -c - \
