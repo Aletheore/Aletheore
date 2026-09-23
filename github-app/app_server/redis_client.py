@@ -12,7 +12,22 @@ from app_server.config import get_settings
 # the count is self-maintained and decays on its own once 5xxs stop for a
 # full window, instead of needing an explicit reset anywhere.
 WEBHOOK_5XX_COUNT_KEY = "ops_monitor:webhook_5xx:count"
-WEBHOOK_5XX_WINDOW_SECONDS = 900
+# Real bug found in a backward audit: this used to be 900s, longer than
+# jobs.py's OPS_THRESHOLD_DURATION_SECONDS (600s) that _check_webhook_errors
+# gates on. _check_threshold_duration's "sustained above threshold" logic
+# assumes current_value is a live gauge that drops the instant the real
+# condition resolves (true for queue depth/failed jobs), but this counter
+# only decays via its own TTL - so one single, already-retried 5xx kept
+# current_value > threshold continuously for the full 600s bar regardless of
+# whether any further failures ever happened, indistinguishable from a
+# genuinely recurring failure. Must stay strictly less than
+# OPS_THRESHOLD_DURATION_SECONDS so an isolated failure's counter always
+# decays back to 0 (and _check_threshold_duration's own current_value <=
+# threshold: delete state_key; return early-return fires) before the 600s
+# sustained check can, while a genuinely recurring failure - which keeps
+# refreshing this TTL on every new 5xx - still stays elevated continuously
+# past 600s and alerts correctly.
+WEBHOOK_5XX_WINDOW_SECONDS = 300
 
 
 def record_webhook_5xx(redis_conn: Redis) -> None:
