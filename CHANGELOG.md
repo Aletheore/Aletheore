@@ -3,6 +3,21 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.20 — 2026-09-23
+
+**Security fix: ReDoS in `.csproj` license detection (GHSA-66qv-fmhr-gpj8)**
+
+`aletheore scan` could be hung for minutes by a small, easily-crafted `.csproj`
+file with an unclosed `<PackageLicenseExpression>` tag - the regex used to
+extract the license expression had three overlapping quantifiers, causing
+cubic-time backtracking on a long run of whitespace with no closing tag.
+Reported responsibly via GitHub private vulnerability disclosure by
+**Filip Kulisiewicz ([@KulFilip](https://github.com/KulFilip))**, with a
+working proof-of-concept and a correct proposed fix. Fixed by removing the
+overlapping quantifiers and trimming the captured value once, after
+matching, instead of as part of the pattern - functionally identical
+matching behavior, no more pathological backtracking.
+
 ## 0.9.19 — 2026-09-23
 
 **Deterministic static-analysis scanning (#750, #763, #772)**
