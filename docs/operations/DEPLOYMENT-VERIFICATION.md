@@ -4,8 +4,25 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-09-13
-**Snapshot Freshness:** CURRENT as of 2026-09-13 (second deploy) - production was redeployed to
+**Last Updated:** 2026-09-21
+**Snapshot Freshness:** CURRENT as of 2026-09-21 - production was redeployed to `master` (commit
+`d832130`, tagged `github-app-deploy-2026-09-21`) and re-verified live via SSH the same session.
+2 commits since the previous deploy tag (`github-app-deploy-2026-09-19-2`), no migrations - see
+`github-app/CHANGELOG.md`'s "2026-09-21" entry for the full writeup. One real production
+incident, caught live (an alert email roughly every 3 minutes for 12+ hours) and fixed the same
+session: `error_alerts.py`'s alert-cooldown was a process-local dict that never actually survived
+`scan_worker.worker`'s fork-per-job RQ `Worker`, so `run_health_sweep_staleness_check_job` (and
+any other direct `send_error_alert` caller) re-alerted on every ~180s tick instead of respecting
+its intended 6-hour cooldown - moved to a Redis key with a TTL, atomic across every forked job
+process and both `scan-worker` replicas. `app-server`, `scan-worker`, `scan-worker-2`,
+`health-worker`, and `scheduler` all rebuilt and force-recreated (the fix touches
+`app_server/error_alerts.py` and `app_server/main.py`, both imported by every one of them);
+confirmed healthy via `docker compose ps` (all `healthy`), zero errors in any of the five
+services' logs since restart, and the fix confirmed present in the *running* `scan-worker`
+container's actual source via `inspect.getsource` (asserted `_ALERT_COOLDOWN_KEY_PREFIX` and
+`get_redis_client` present, `_last_alert_at` gone) - not re-read from the repo.
+
+**Previous:** CURRENT as of 2026-09-13 (second deploy) - production was redeployed to
 `master` (commit `47ee0ab`, tagged `github-app-deploy-2026-09-13-2`) and re-verified live via SSH
 the same session. 6 commits since the first 2026-09-13 deploy tag (`github-app-deploy-2026-09-13`),
 no migrations - see `github-app/CHANGELOG.md`'s "2026-09-13 (second deploy)" entry for the full
