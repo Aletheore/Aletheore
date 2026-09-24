@@ -395,3 +395,47 @@ async def test_request_logging_middleware_logs_structured_fields(caplog):
     assert record.status_code == response.status_code
     assert record.duration_ms >= 0
     assert record.request_id == response.headers["X-Request-ID"]
+
+
+@pytest.mark.asyncio
+async def test_client_disconnect_is_not_a_bug_alert_or_a_webhook_5xx(monkeypatch):
+    """Seen in production 2026-09-24: GitHub hung up mid-delivery, which was
+    emailed as an app_server bug and counted as a /webhook 5xx, and that one
+    event kept ops_monitor.webhook_5xx alerting 15 minutes later. A caller
+    hanging up is neither."""
+    from starlette.requests import ClientDisconnect, Request
+
+    from app_server.main import handle_unexpected_exception
+
+    alerts = []
+    counted = []
+    monkeypatch.setattr("app_server.main.send_error_alert", lambda *a, **k: alerts.append(a))
+    monkeypatch.setattr("app_server.redis_client.record_webhook_5xx", lambda conn: counted.append(1))
+    monkeypatch.setattr("app_server.redis_client.get_redis_client", lambda: object())
+
+    scope = {"type": "http", "method": "POST", "path": "/webhook", "headers": []}
+    response = await handle_unexpected_exception(Request(scope), ClientDisconnect())
+
+    assert alerts == []
+    assert counted == []
+    assert response.status_code == 499
+
+
+@pytest.mark.asyncio
+async def test_other_webhook_exceptions_still_alert_and_count(monkeypatch):
+    from starlette.requests import Request
+
+    from app_server.main import handle_unexpected_exception
+
+    alerts = []
+    counted = []
+    monkeypatch.setattr("app_server.main.send_error_alert", lambda *a, **k: alerts.append(a))
+    monkeypatch.setattr("app_server.redis_client.record_webhook_5xx", lambda conn: counted.append(1))
+    monkeypatch.setattr("app_server.redis_client.get_redis_client", lambda: object())
+
+    scope = {"type": "http", "method": "POST", "path": "/webhook", "headers": []}
+    response = await handle_unexpected_exception(Request(scope), RuntimeError("boom"))
+
+    assert len(alerts) == 1
+    assert counted == [1]
+    assert response.status_code == 500
