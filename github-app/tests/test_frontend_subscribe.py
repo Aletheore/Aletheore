@@ -205,6 +205,10 @@ def test_credits_page_embeds_only_the_installation_id_not_any_secret(monkeypatch
     # No placeholder left un-substituted, and the page never inlines a checkout
     # token (that is minted per request by the API, after authorization).
     assert "__INSTALLATION_ID__" not in html and "__PADDLE" not in html
+    # The publishable token reaches the page as a data attribute, never as a script string literal
+    # (a literal `token: '...'` also trips secret scanners).
+    assert 'data-paddle-client-token="live_publishable_token"' in html
+    assert "token: '" not in html
     assert "checkout_installation_token" in html  # read from the API response only
 
 

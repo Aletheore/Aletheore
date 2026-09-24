@@ -2941,9 +2941,12 @@ async function buyCredit(btn) {
   }
 }
 if (typeof Paddle !== 'undefined') {
-  Paddle.Environment.set('__PADDLE_ENV__');
+  // Paddle's publishable client token and environment ride on data attributes of the
+  // page wrapper (rendered server-side), not string literals in this script.
+  const paddleConfig = document.getElementById('credits-root').dataset;
+  Paddle.Environment.set(paddleConfig.paddleEnv);
   Paddle.Initialize({
-    token: '__PADDLE_TOKEN__',
+    token: paddleConfig.paddleClientToken,
     eventCallback: function (event) {
       if (!event || !event.name || !document.getElementById('topup-status')) return;
       if (event.name === 'checkout.loaded') {
@@ -2973,14 +2976,12 @@ def _credits_page(installation_id: int) -> str:
     settings = get_settings()
     script = (
         _CREDITS_JS.replace("__INSTALLATION_ID__", str(int(installation_id)))
-        .replace("__PADDLE_ENV__", settings.paddle_environment)
-        .replace("__PADDLE_TOKEN__", settings.paddle_client_token)
     )
     return f"""<!DOCTYPE html>
 <title>AI credit — Aletheore</title>
 {ICONS_LINK}
 {STYLE}
-<div class="picker-wrap">
+<div class="picker-wrap" id="credits-root" data-paddle-env="{escape(settings.paddle_environment)}" data-paddle-client-token="{escape(settings.paddle_client_token)}">
   <div class="picker-head">
     <h1>AI credit</h1>
     <div><a class="btn" href="/dashboard">All organizations</a> <a class="btn" href="/auth/logout">Sign out</a></div>
