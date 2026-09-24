@@ -96,7 +96,29 @@ function shadeNavOnScroll() {
   window.addEventListener("scroll", update, { passive: true });
 }
 
+function setupFollowDialog() {
+  const dialog = document.getElementById("follow-dialog");
+  // Without <dialog> support the trigger stays a plain link to LinkedIn.
+  if (!dialog || typeof dialog.showModal !== "function") return;
+
+  document.querySelectorAll("[data-follow-open]").forEach((trigger) => {
+    trigger.addEventListener("click", (event) => {
+      event.preventDefault();
+      dialog.showModal();
+    });
+  });
+
+  // A click on the backdrop lands on the dialog element itself (the padding
+  // lives on the inner body), so that is the "click outside" signal.
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog || event.target.closest("[data-follow-close]")) {
+      dialog.close();
+    }
+  });
+}
+
 renderShowcaseCards();
 animateProofZoneOnScroll();
 revealOnScroll();
 shadeNavOnScroll();
+setupFollowDialog();
