@@ -1,5 +1,8 @@
+import sys
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from aletheore.scanner.graph import build_module_graph
 from conftest import symbol_names
@@ -74,13 +77,37 @@ def _measure_boundary_rss_for_csharp_repo(file_count: int, out_queue) -> None:
 
 def _boundary_rss_delta_for_csharp_repo(file_count: int) -> int:
     import multiprocessing
+    import queue
 
+    # Real hang found on Windows CI: _measure_boundary_rss_for_csharp_repo's
+    # `import resource` (POSIX-only) raised ModuleNotFoundError inside the
+    # spawned child before it ever reached out_queue.put() - the child died,
+    # but this parent's bare out_queue.get() has no timeout, so it blocked
+    # forever waiting for a result that would never arrive. The caller below
+    # also skips this test outright on Windows (resource.getrusage has no
+    # replacement there), but a crashed child is a real failure mode on any
+    # platform (an OOM kill, for instance), so the parent needs to fail fast
+    # with a clear error instead of hanging regardless of why the child died.
     ctx = multiprocessing.get_context("spawn")
     out_queue: multiprocessing.Queue = ctx.Queue()
     process = ctx.Process(target=_measure_boundary_rss_for_csharp_repo, args=(file_count, out_queue))
     process.start()
-    result = out_queue.get()
+    try:
+        result = out_queue.get(timeout=60)
+    except queue.Empty:
+        process.terminate()
+        process.join(timeout=5)
+        raise RuntimeError(
+            f"_measure_boundary_rss_for_csharp_repo subprocess produced no result within 60s "
+            f"(exitcode={process.exitcode!r}) - it likely crashed before calling out_queue.put(); "
+            "see its stderr above in the test output for the real traceback"
+        ) from None
     process.join()
+    if process.exitcode != 0:
+        raise RuntimeError(
+            f"_measure_boundary_rss_for_csharp_repo subprocess exited with code {process.exitcode} "
+            "after putting a result - unexpected, treat the result as unreliable"
+        )
     return result
 
 
@@ -362,6 +389,12 @@ def test_build_module_graph_never_holds_every_csharp_files_tree_at_once(tmp_path
     assert peak_trees_in_one_local["value"] < file_count
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="measures RSS via the POSIX resource module (resource.getrusage) inside a spawned "
+    "subprocess - resource doesn't exist on Windows at all, so the subprocess crashes on import "
+    "before it can report anything; not measurable there, not a code bug",
+)
 def test_build_module_graph_csharp_prepass_boundary_rss_does_not_scale_with_repo_size(tmp_path):
     # Secondary, corroborating check for the same invariant the frame-
     # inspection test above proves directly - see the Java equivalent in
