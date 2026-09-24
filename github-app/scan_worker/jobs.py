@@ -93,6 +93,7 @@ from scan_worker.db import (
     insert_endpoint_health,
     insert_flash_review_finding_comment,
     insert_repo_history,
+    insert_review_history,
     installation_spend_lock,
     release_flash_review_count_reservation,
     release_llm_spend_reservation,
@@ -2038,6 +2039,32 @@ def run_managed_audit_api_job(
 
 
 @log_job
+def _record_review_outcome(
+    settings,
+    installation_id: int,
+    repo_full_name: str,
+    pr_number: int,
+    outcome: str,
+    finding_count: int = 0,
+    skip_reason: str | None = None,
+) -> None:
+    """Best-effort write to flash_review_history for the Flash credits
+    page's review-history list - must never break the actual review (a
+    logging side-channel failing is not a reason to fail, or worse retry,
+    a review that already ran). Same pattern as
+    _post_flash_review_failure_comment's own except-and-log."""
+    try:
+        insert_review_history(
+            settings.database_url, installation_id, repo_full_name, pr_number,
+            outcome, finding_count=finding_count, skip_reason=skip_reason,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "failed to record review history for installation=%s repo=%s pr=%s (%s)",
+            installation_id, repo_full_name, pr_number, exc,
+        )
+
+
 def run_flash_review_job(
     installation_id: int,
     repo_full_name: str,
@@ -2055,11 +2082,19 @@ def run_flash_review_job(
     if not check_and_reserve_monthly_repo_scan_slot(
         settings.database_url, installation_id, repo_full_name, MAX_SCANNED_REPOS_PER_MONTH
     ):
+        _record_review_outcome(
+            settings, installation_id, repo_full_name, pr_number,
+            "skipped", skip_reason="monthly repo scan limit reached",
+        )
         return
 
     if not check_and_reserve_flash_review_attempt(
         settings.database_url, installation_id, repo_full_name, pr_number
     ):
+        _record_review_outcome(
+            settings, installation_id, repo_full_name, pr_number,
+            "skipped", skip_reason="already reviewed this commit, or reviewed too recently",
+        )
         return
 
     # Both caps are reserved atomically up front via a single UPSERT each
@@ -2087,6 +2122,10 @@ def run_flash_review_job(
         if not reserve_flash_review_count(
             settings.database_url, installation_id, MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH
         ):
+            _record_review_outcome(
+                settings, installation_id, repo_full_name, pr_number,
+                "skipped", skip_reason="free tier review limit reached this month",
+            )
             return
     else:
         # Paid plans have no review-count cap (limit=None still counts the
@@ -2118,6 +2157,10 @@ def run_flash_review_job(
             settings.database_url, installation_id, reserved_spend, feature="flash_review"
         ):
             release_flash_review_count_reservation(settings.database_url, installation_id)
+            _record_review_outcome(
+                settings, installation_id, repo_full_name, pr_number,
+                "skipped", skip_reason="AI credit exhausted",
+            )
             return
 
     review_ran = False
@@ -2723,6 +2766,10 @@ def _run_flash_review(
                     "free-tier: no provider keys configured, skipping review for %s#%s",
                     repo_full_name, pr_number,
                 )
+                _record_review_outcome(
+                    settings, installation_id, repo_full_name, pr_number,
+                    "skipped", skip_reason="no free-tier provider keys configured",
+                )
                 return False
 
         findings = review_diff(
@@ -2806,6 +2853,10 @@ def _run_flash_review(
     # caller (run_flash_review_job) releases this review's reservation
     # when it sees False returned here.
     if free_tier_exhausted["value"]:
+        _record_review_outcome(
+            settings, installation_id, repo_full_name, pr_number,
+            "skipped", skip_reason="all free-tier providers failed",
+        )
         return False
 
     # The review-count reservation already happened atomically up front (see
@@ -2985,6 +3036,10 @@ def _run_flash_review(
     upsert_pr_comment(client, token, repo_full_name, pr_number, body, marker=FLASH_REVIEW_MARKER)
     set_last_reviewed_sha(
         settings.database_url, installation_id, repo_full_name, pr_number, head_sha
+    )
+    _record_review_outcome(
+        settings, installation_id, repo_full_name, pr_number,
+        "posted" if posted_count else "clean", finding_count=posted_count,
     )
     return True
 

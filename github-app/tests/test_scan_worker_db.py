@@ -42,6 +42,7 @@ from scan_worker.db import (
     get_wiki_overview,
     insert_endpoint_health,
     insert_repo_history,
+    insert_review_history,
     installation_spend_lock,
     repo_checkout_lock,
     REPO_CHECKOUT_LOCK_NAMESPACE,
@@ -98,6 +99,38 @@ async def _insert_health_target(pool, installation_id: int, repo_full_name: str,
         f"INSERT INTO health_check_targets ({', '.join(columns)}) VALUES ({placeholders}) RETURNING id",
         *params,
     )
+
+
+@pytest.mark.asyncio
+async def test_insert_review_history_writes_a_real_row(pool):
+    await _insert_installation(pool, 360, "review-history", plan="flash")
+
+    insert_review_history(TEST_DATABASE_URL, 360, "review-history/repo", 42, "posted", finding_count=2)
+
+    row = await pool.fetchrow(
+        "SELECT * FROM flash_review_history WHERE installation_id = $1", 360
+    )
+    assert row["repo_full_name"] == "review-history/repo"
+    assert row["pr_number"] == 42
+    assert row["outcome"] == "posted"
+    assert row["finding_count"] == 2
+    assert row["skip_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_insert_review_history_records_skip_reason(pool):
+    await _insert_installation(pool, 361, "review-history-skip", plan="flash")
+
+    insert_review_history(
+        TEST_DATABASE_URL, 361, "review-history-skip/repo", 7, "skipped", skip_reason="AI credit exhausted"
+    )
+
+    row = await pool.fetchrow(
+        "SELECT * FROM flash_review_history WHERE installation_id = $1", 361
+    )
+    assert row["outcome"] == "skipped"
+    assert row["finding_count"] == 0
+    assert row["skip_reason"] == "AI credit exhausted"
 
 
 @pytest.mark.asyncio
