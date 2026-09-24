@@ -2219,6 +2219,17 @@ def _cross_file_check_runs_for(plan: str, is_free_tier: bool) -> int:
     return 2 if plan == "air" else 1
 
 
+_OFF_VALUES = frozenset({"off", "0", "false", "no"})
+
+
+def _env_switched_off(name: str) -> bool:
+    """Kill-switch parsing for the default-on flags: "off", "0", "false" or "no" in any case
+    (surrounding whitespace ignored) turns the feature off. Anything else, including unset, leaves
+    it on. Deliberately not exact-match "off": a person disabling a feature with "0" or "false"
+    would otherwise silently keep paying for it."""
+    return os.environ.get(name, "").strip().lower() in _OFF_VALUES
+
+
 def _share_pr_context_for(is_free_tier: bool) -> bool:
     """Whether each per-file generation call is also shown the rest of the PR's patches.
 
@@ -2230,7 +2241,7 @@ def _share_pr_context_for(is_free_tier: bool) -> bool:
     heavy user gets roughly 485 average-size reviews per credit instead of ~1,850. Never for free
     tier: per-file generation is paid-tier only.
     """
-    return not is_free_tier and os.environ.get("FLASH_REVIEW_SHARE_PR_CONTEXT") != "off"
+    return not is_free_tier and not _env_switched_off("FLASH_REVIEW_SHARE_PR_CONTEXT")
 
 
 # Matches the 4 severity labels flash_review._rank_findings_with_severity's

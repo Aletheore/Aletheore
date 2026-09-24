@@ -10888,7 +10888,13 @@ def test_cross_file_check_model_has_a_price_so_its_spend_can_be_accounted():
 
 @pytest.mark.parametrize(
     "env_value,is_free_tier,expected",
-    [(None, False, True), ("on", False, True), ("off", False, False), ("on", True, False), (None, True, False)],
+    [
+        (None, False, True), ("on", False, True), ("off", False, False), ("on", True, False), (None, True, False),
+        # Common ways of writing "off" must all disable it, in any case, with stray whitespace.
+        ("0", False, False), ("false", False, False), ("No", False, False), (" OFF ", False, False),
+        # An unrecognised value leaves the (default-on) feature on.
+        ("maybe", False, True),
+    ],
 )
 def test_share_pr_context_for_is_on_by_default_off_via_kill_switch_and_never_for_free_tier(monkeypatch, env_value, is_free_tier, expected):
     from scan_worker.jobs import _share_pr_context_for
