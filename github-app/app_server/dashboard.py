@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from pydantic import BaseModel
 
 from aletheore.evidence_resolution import resolve_code_evidence
 from scan_worker.github_api import fetch_file_content
@@ -11,6 +12,8 @@ from scan_worker.live_wiki import build_file_fallback_detail
 from app_server.admin import (
     _administered_installation_ids_for_session_or_401,
     _github_http_client,
+    _has_real_admin_permission,
+    _looks_like_email,
     _monitored_endpoint_keys,
     _repo_installation_id,
     _require_admin_installation,
@@ -33,15 +36,20 @@ from app_server.db import (
     get_public_status_enabled,
     get_recent_endpoint_health,
     get_recent_history,
+    get_review_history,
     get_wiki_build_status,
     get_wiki_overview,
     get_wiki_subsystem,
+    is_installation_member,
     list_docs_symbols,
     list_repos_for_installations,
     list_wiki_subsystems,
+    record_admin_action,
+    set_alert_email,
 )
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.github_pagination import fetch_paginated_github_collection
+from app_server.paddle_client import PaddleAPIError, create_portal_session
 from app_server.paddle_pricing import CREDIT_TOPUP_PRICE_ID
 
 dashboard_router = APIRouter()
@@ -222,17 +230,16 @@ async def list_my_repos(request: Request):
     return {"repos": result, "billing_accounts": billing_accounts}
 
 
-@dashboard_router.get("/app/installations/{installation_id}/credits")
-async def get_credits(installation_id: int, request: Request):
-    """Credit balance and top-up checkout data for one paid installation.
-
-    Gated on session + "administers this installation" only, deliberately not
-    on the AIR plan gate every other /app route uses: a Flash installation has
-    no dashboard, so this is the only place its owner can see the balance or
-    buy more. Buying credit only ever adds to the installation's own balance,
-    so nothing sensitive is exposed beyond the balance itself. Free (or lapsed)
-    installations get the same 404 as an installation the caller doesn't
-    administer, so the response never reveals which installations exist.
+async def _require_paid_installation_or_404(request: Request, installation_id: int) -> dict:
+    """Session + "administers this installation" only - deliberately not the
+    AIR-only admin.py gate. A Flash installation has no managed dashboard, so
+    the handful of /app/installations/{id}/... routes built on this are the
+    only place its owner can reach these low-risk, installation-scoped
+    preferences (credit balance/top-up, alert email, review history) - none
+    of them expose or move anything beyond this one installation's own data.
+    Free (or lapsed) installations get the same 404 as an installation the
+    caller doesn't administer, so the response never reveals which
+    installations exist.
     """
     session = await get_current_session(request)
     if session is None:
@@ -245,6 +252,13 @@ async def get_credits(installation_id: int, request: Request):
     installation = await get_installation(pool, installation_id)
     if installation is None or installation["plan"] not in ("flash", "air"):
         raise HTTPException(status_code=404, detail="no such installation")
+    return installation
+
+
+@dashboard_router.get("/app/installations/{installation_id}/credits")
+async def get_credits(installation_id: int, request: Request):
+    """Credit balance and top-up checkout data for one paid installation."""
+    installation = await _require_paid_installation_or_404(request, installation_id)
 
     return {
         "installation_id": installation_id,
@@ -259,6 +273,131 @@ async def get_credits(installation_id: int, request: Request):
             installation_id, get_settings().session_secret
         ),
         "credit_topup_price_id": CREDIT_TOPUP_PRICE_ID,
+    }
+
+
+async def _require_installation_admin_permission_or_404(request: Request, installation_id: int) -> dict:
+    """A stronger bar than _require_paid_installation_or_404, for anything
+    sensitive enough that a merely-administered installation shouldn't be
+    enough - the same reasoning admin.py's get_billing_portal_url docstring
+    gives for its own identical problem: the coarse administered-
+    installations set GitHub documents as including anyone with READ access
+    to a single repo the app covers, which is not enough to trust with an
+    email address that also receives AIR's own endpoint-health alerts (see
+    _send_alerts_if_configured in scan_worker/jobs.py), or the ability to
+    redirect or clear it.
+
+    An already-seated member is trusted outright (paid access was already
+    vetted when they were added, mirroring _require_seat_if_paid). Anyone
+    else needs their real per-repo GitHub permission verified via
+    _has_real_admin_permission, checked against any one repo this
+    installation actually covers (list_repos_for_installations, keyed by
+    repo_history - a Flash install that has run at least one review has
+    one). Fails closed with no covered repo yet: there is nothing to check
+    real permission against, and "unable to verify" must never be treated
+    as "verified", same rule _has_real_admin_permission's own docstring
+    states for the identical situation.
+    """
+    installation = await _require_paid_installation_or_404(request, installation_id)
+    session = await get_current_session(request)
+    pool = request.app.state.db_pool
+    if await is_installation_member(pool, installation_id, session["github_login"]):
+        return installation
+    repos = await list_repos_for_installations(pool, [installation_id])
+    if not repos or not await _has_real_admin_permission(
+        installation_id, session["github_login"], repos[0]["repo_full_name"]
+    ):
+        raise HTTPException(
+            status_code=403, detail="you do not have admin access to this installation on GitHub"
+        )
+    return installation
+
+
+@dashboard_router.get("/app/installations/{installation_id}/alert-email")
+async def get_installation_alert_email(installation_id: int, request: Request):
+    installation = await _require_installation_admin_permission_or_404(request, installation_id)
+    return {"alert_email": installation.get("alert_email")}
+
+
+class SetInstallationAlertEmailRequest(BaseModel):
+    alert_email: str | None = None
+
+
+@dashboard_router.post("/app/installations/{installation_id}/alert-email")
+async def set_installation_alert_email(
+    installation_id: int, request: Request, body: SetInstallationAlertEmailRequest
+):
+    await _require_installation_admin_permission_or_404(request, installation_id)
+    if body.alert_email and not _looks_like_email(body.alert_email):
+        raise HTTPException(status_code=400, detail="that doesn't look like a valid email address")
+    pool = request.app.state.db_pool
+    await set_alert_email(pool, installation_id, body.alert_email)
+    session = await get_current_session(request)
+    await record_admin_action(pool, installation_id, session["github_login"], "alert_email_changed")
+    return {"alert_email": body.alert_email}
+
+
+@dashboard_router.get("/app/installations/{installation_id}/billing-portal")
+async def get_installation_billing_portal_url(installation_id: int, request: Request):
+    """The Flash-side equivalent of admin.py's get_billing_portal_url, for
+    the standalone /credits/{id} page - which has no org/repo in its own
+    context to hand that route's org/repo-keyed permission check. Gated by
+    the same real-admin-or-seated bar as that route
+    (_require_installation_admin_permission_or_404), checked against any
+    repo this installation covers instead of one from the URL path -
+    that's the actual difference, not a weaker check.
+    """
+    installation = await _require_installation_admin_permission_or_404(request, installation_id)
+    customer_id = installation.get("paddle_customer_id")
+    if not customer_id:
+        raise HTTPException(
+            status_code=400, detail="no billing account on file yet - subscribe first to set one up"
+        )
+    subscription_id = installation.get("paddle_subscription_id")
+    subscription_ids = [subscription_id] if subscription_id else None
+
+    settings = get_settings()
+    try:
+        session_data = await asyncio.to_thread(
+            create_portal_session, settings.paddle_api_key, customer_id, subscription_ids
+        )
+    except PaddleAPIError as exc:
+        logging.getLogger("app_server.dashboard").error(
+            "billing portal session failed for installation %s (customer %s): %s",
+            installation_id, customer_id, exc,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Could not open the billing portal right now - please try again, or contact support if this keeps happening.",
+        ) from exc
+
+    urls = session_data.get("urls", {})
+    subscription_urls = urls.get("subscriptions") or []
+    url = subscription_urls[0]["update_subscription_payment_method"] if subscription_urls else None
+    if url is None:
+        url = urls.get("general", {}).get("overview")
+    if url is None:
+        raise HTTPException(status_code=502, detail="Paddle did not return a portal URL")
+    return {"url": url}
+
+
+@dashboard_router.get("/app/installations/{installation_id}/review-history")
+async def get_installation_review_history(installation_id: int, request: Request):
+    await _require_paid_installation_or_404(request, installation_id)
+    pool = request.app.state.db_pool
+    rows = await get_review_history(pool, installation_id)
+    return {
+        "reviews": [
+            {
+                "repo_full_name": r["repo_full_name"],
+                "pr_number": r["pr_number"],
+                "outcome": r["outcome"],
+                "finding_count": r["finding_count"],
+                "skip_reason": r["skip_reason"],
+                "reviewed_at": r["reviewed_at"].isoformat(),
+            }
+            for r in rows
+        ]
     }
 
 

@@ -1679,6 +1679,26 @@ async def set_alert_email(pool: asyncpg.Pool, installation_id: int, email: str |
     )
 
 
+async def get_review_history(pool: asyncpg.Pool, installation_id: int, limit: int = 20) -> list[dict]:
+    """Most recent Flash Review outcomes for an installation, across every
+    repo it covers (a Flash org can have more than one) - see migration 069
+    for why this table exists at all. Rows only appear once the jobs.py
+    write-hook lands (a separate PR); until then this is correctly empty,
+    not broken."""
+    rows = await pool.fetch(
+        """
+        SELECT repo_full_name, pr_number, outcome, finding_count, skip_reason, reviewed_at
+        FROM flash_review_history
+        WHERE installation_id = $1
+        ORDER BY reviewed_at DESC
+        LIMIT $2
+        """,
+        installation_id,
+        limit,
+    )
+    return [dict(row) for row in rows]
+
+
 async def set_pushover_user_key(pool: asyncpg.Pool, installation_id: int, user_key: str | None) -> None:
     await pool.execute(
         "UPDATE installations SET pushover_user_key = $2, updated_at = now() WHERE installation_id = $1",
