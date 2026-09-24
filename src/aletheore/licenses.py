@@ -596,19 +596,21 @@ def _license_cache_key(ecosystem: str, name: str, version: str) -> str:
 
 def _load_license_cache(cache_path: Path) -> dict[str, dict]:
     try:
-        return json.loads(cache_path.read_text())
-    except (OSError, json.JSONDecodeError):
+        return json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}
 
 
 def _save_license_cache(cache_path: Path, cache: dict[str, dict]) -> None:
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps(cache))
-    except OSError:
+        cache_path.write_text(json.dumps(cache), encoding="utf-8")
+    except (OSError, UnicodeEncodeError):
         # Best-effort: a failure to persist the cache must never fail the
         # license check itself - it only costs the next scan (of this or any
-        # other repo) its cache hit, not correctness.
+        # other repo) its cache hit, not correctness. Same explicit-encoding
+        # pin as the AIR evidence pair and the vulnerability cache: license
+        # metadata (name, author) is arbitrary text, not ASCII-only.
         pass
 
 

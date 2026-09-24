@@ -600,6 +600,30 @@ def test_invoke_raises_clean_error_on_undecodable_evidence(tmp_path):
             adapter.invoke("audit this repo", cwd=str(repo))
 
 
+def test_invoke_raises_clean_error_on_non_utf8_evidence_bytes(tmp_path):
+    # Real bug: evidence_path.read_text() used to omit encoding entirely,
+    # falling back to Path.write_text()'s locale-dependent default - UTF-8
+    # on the POSIX systems this is normally developed/tested on, but
+    # Windows' default text encoding is still the legacy ANSI codepage, not
+    # UTF-8. air.toon is now always written with encoding="utf-8"
+    # explicitly (see write_evidence), but a file written by an older
+    # build, or hand-edited, or copied from a non-UTF-8 source can still
+    # contain bytes that aren't valid UTF-8 - read_text(encoding="utf-8")
+    # then raises UnicodeDecodeError, a ValueError subclass, not an
+    # OSError, so it needs its own except clause rather than falling
+    # through the existing `except OSError` to crash with a raw traceback,
+    # exactly the failure class test_invoke_raises_clean_error_on_undecodable_evidence
+    # above already closed for malformed-but-valid-UTF-8 content.
+    repo = tmp_path / "repo"
+    (repo / ".aletheore").mkdir(parents=True)
+    (repo / ".aletheore" / "air.toon").write_bytes(b"\xff\xfe not valid utf-8")
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        with pytest.raises(AdapterInvocationError, match="could not decode evidence"):
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+
 @patch("aletheore.adapters.openai_compatible.OpenAI")
 def test_read_evidence_section_reports_encoding_failure_instead_of_crashing(
     mock_openai_class, tmp_path

@@ -104,7 +104,7 @@ def build_history_summary(repo_path: Path) -> list[dict]:
     result = []
     for snapshot_path in list_snapshots(repo_path):
         try:
-            evidence = json.loads(snapshot_path.read_text())
+            evidence = json.loads(snapshot_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             continue
         # Real bug found via audit: this indexed straight into

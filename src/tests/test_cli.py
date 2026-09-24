@@ -227,6 +227,54 @@ def test_main_with_no_command_shows_support_contact():
     assert "support@aletheore.com" in result.output
 
 
+def test_main_pins_stdout_and_stderr_to_utf8_before_running_the_cli(monkeypatch):
+    # Real risk, same root cause as the file-I/O encoding fixes elsewhere in
+    # this codebase (see test_evidence.py): PEP 528 forces UTF-8 for
+    # Windows' literal interactive console since Python 3.6, but that
+    # guarantee doesn't extend to redirected/piped stdout
+    # (`aletheore scan > out.txt`) - those still fall back to the OS's
+    # legacy locale-default codepage. This CLI's dozens of print()/
+    # console.print() calls can carry non-ASCII, repo-derived content
+    # (file paths, commit metadata, exception messages), so main() pins
+    # both streams to UTF-8 once, before app() runs.
+    from aletheore.cli import main
+
+    reconfigure_calls = []
+
+    class _FakeStream:
+        def reconfigure(self, **kwargs):
+            reconfigure_calls.append(kwargs)
+
+    monkeypatch.setattr("aletheore.cli.sys.stdout", _FakeStream())
+    monkeypatch.setattr("aletheore.cli.sys.stderr", _FakeStream())
+    monkeypatch.setattr("aletheore.cli.app", lambda: None)
+
+    main()
+
+    assert reconfigure_calls == [
+        {"encoding": "utf-8", "errors": "backslashreplace"},
+        {"encoding": "utf-8", "errors": "backslashreplace"},
+    ]
+
+
+def test_main_tolerates_a_stdout_stream_with_no_reconfigure_method(monkeypatch):
+    # pytest's own capture, some CI runners, and frozen/embedded
+    # interpreters can replace sys.stdout/stderr with a stream that has no
+    # reconfigure() (added to TextIOWrapper in Python 3.7) - main() must
+    # not crash the CLI on startup just because encoding-pinning isn't
+    # available in that environment.
+    from aletheore.cli import main
+
+    class _StreamWithNoReconfigure:
+        pass
+
+    monkeypatch.setattr("aletheore.cli.sys.stdout", _StreamWithNoReconfigure())
+    monkeypatch.setattr("aletheore.cli.sys.stderr", _StreamWithNoReconfigure())
+    monkeypatch.setattr("aletheore.cli.app", lambda: None)
+
+    main()  # must not raise
+
+
 def test_main_with_no_command_prints_update_notice_when_available():
     with patch("aletheore.cli._check_for_update", return_value="update available: 9.9.9"):
         result = runner.invoke(app, [])

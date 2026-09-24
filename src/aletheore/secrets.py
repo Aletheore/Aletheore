@@ -637,6 +637,7 @@ def find_secrets_in_history(
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         text=True,
+        encoding="utf-8",
         errors="ignore",
     )
 

@@ -582,9 +582,9 @@ def _audit(
         return 1
 
     report_file = Path(report_path)
-    report_text = report_file.read_text()
+    report_text = report_file.read_text(encoding="utf-8")
     verification_section = citation_verification_section(report_text, repo)
-    report_file.write_text(report_text + verification_section)
+    report_file.write_text(report_text + verification_section, encoding="utf-8")
 
     result_lines = [f"Report written to {report_path}"]
     if "could not be verified" in verification_section:
@@ -641,7 +641,7 @@ def _managed_audit(
         return 1
 
     report_path = repo / ".aletheore" / "audit-report.md"
-    report_path.write_text(report_text)
+    report_path.write_text(report_text, encoding="utf-8")
     _print_result("Managed audit complete", [f"Report written to {report_path}"])
     return 0
 
@@ -1035,7 +1035,7 @@ def _verify(report_path: str, repo_path: str) -> int:
         )
         return 1
 
-    report_text = report_file.read_text()
+    report_text = report_file.read_text(encoding="utf-8")
     result = verify_citations(report_text, evidence, fetch_line_count=local_line_count_fetcher(repo))
     total = result["total_citations"]
     verified = len(result["verified"])
@@ -1259,7 +1259,7 @@ def _write_config_file_no_symlink_follow(config_path: Path, content: str) -> Non
     """
     no_follow = getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(str(config_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | no_follow, 0o644)
-    with os.fdopen(fd, "w") as f:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(content)
 
 
@@ -1279,8 +1279,8 @@ def _write_json_mcp_client_config(
         return f"skipped (path escapes the repo via a symlink): {config_path}"
     if config_path.exists():
         try:
-            data = json.loads(config_path.read_text())
-        except json.JSONDecodeError:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
             return f"skipped (existing file is not valid JSON): {config_path}"
         if not isinstance(data, dict):
             return f"skipped (existing file's top level is not a JSON object): {config_path}"
@@ -1307,7 +1307,7 @@ def _write_json_mcp_client_config(
         # a symlink here is the user's own, legitimate choice (e.g.
         # dotfiles synced through a symlinked config directory), not
         # attacker-controlled repo content, so it's followed as before.
-        config_path.write_text(content)
+        config_path.write_text(content, encoding="utf-8")
     return f"{'updated' if already_present else 'wrote'} {config_path}"
 
 
@@ -1318,8 +1318,8 @@ def _write_toml_mcp_client_config(
         return f"skipped (path escapes the repo via a symlink): {config_path}"
     if config_path.exists():
         try:
-            data = tomllib.loads(config_path.read_text())
-        except tomllib.TOMLDecodeError:
+            data = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        except (UnicodeDecodeError, tomllib.TOMLDecodeError):
             return f"skipped (existing file is not valid TOML): {config_path}"
         if not isinstance(data, dict):
             return f"skipped (existing file's top level is not a TOML table): {config_path}"
@@ -1342,7 +1342,7 @@ def _write_toml_mcp_client_config(
         except OSError:
             return f"skipped (path escapes the repo via a symlink): {config_path}"
     else:
-        config_path.write_text(content)
+        config_path.write_text(content, encoding="utf-8")
     return f"{'updated' if already_present else 'wrote'} {config_path}"
 
 
@@ -1756,7 +1756,7 @@ def init(
         "disabled_checks": [],
         "severity_threshold": None,
     }
-    config_path.write_text(json.dumps(default_config, indent=2) + "\n")
+    config_path.write_text(json.dumps(default_config, indent=2) + "\n", encoding="utf-8")
     console.print(f"[bold green]Wrote {config_path}[/bold green]")
     # A Table (not console.print per key) so a description that wraps to a
     # second line lands under the key column instead of the terminal's left
@@ -2064,6 +2064,25 @@ def status() -> None:
 
 
 def main() -> None:
+    # Windows: PEP 528 already forces UTF-8 for the literal interactive
+    # console since Python 3.6, but that guarantee doesn't extend to
+    # redirected/piped output (`aletheore scan > out.txt`, or any non-tty
+    # stdout) - those fall back to the OS's legacy locale-default codepage,
+    # the exact same gap already fixed for file I/O throughout this
+    # codebase (see write_evidence). Every print()/console.print() call
+    # here can carry non-ASCII, repo-derived content (file paths, endpoint
+    # routes, exception messages, commit metadata), so stdout/stderr are
+    # pinned to UTF-8 once, here, rather than passing encoding at each of
+    # this CLI's dozens of individual print() call sites. errors=
+    # "backslashreplace" (not the default "strict") means a
+    # still-unencodable byte degrades to a visible escape in the rare
+    # non-UTF-8-terminal case, matching this file's off-crash-path
+    # printed-error philosophy, rather than crashing the CLI while it's
+    # trying to report an unrelated error.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
     app()
 
 

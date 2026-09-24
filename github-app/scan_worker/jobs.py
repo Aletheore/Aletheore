@@ -1360,8 +1360,8 @@ def run_pr_scan_job(
 
             base_evidence_path = _run_scan(base_dir)
             head_evidence_path = _run_scan(head_dir, unchanged_scan_cache_path=unchanged_scan_cache_path)
-            old = json.loads(base_evidence_path.read_text())
-            new = json.loads(head_evidence_path.read_text())
+            old = json.loads(base_evidence_path.read_text(encoding="utf-8"))
+            new = json.loads(head_evidence_path.read_text(encoding="utf-8"))
             diff = compute_diff(old, new, full=False)
             dismissed = get_dismissed_identity_keys(settings.database_url, installation_id, repo_full_name)
             # history_secrets shares the same (path, pattern, match_preview) identity
@@ -1542,7 +1542,7 @@ def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
             _clone_ref(clone_url, head_sha, repo_dir)
 
             evidence_path = _run_scan(repo_dir)
-            evidence = json.loads(evidence_path.read_text())
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
             evidence = _sync_persistent_git_graph(installation_id, repo_full_name, repo_dir, evidence)
             _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
         _insert_history(installation_id, repo_full_name, evidence, head_sha=head_sha)
@@ -1619,7 +1619,7 @@ def run_push_scan_job(
             )
 
             evidence_path = _run_scan(repo_dir)
-            evidence = json.loads(evidence_path.read_text())
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
             evidence = _sync_persistent_git_graph(installation_id, repo_full_name, repo_dir, evidence)
             _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
         history_id = _insert_history(installation_id, repo_full_name, evidence, head_sha=head_sha)
@@ -1842,7 +1842,7 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
         _clone_pr_head(_clone_url(repo_full_name, token), pr_number, repo_dir)
         evidence_path = _run_scan(repo_dir)
 
-        evidence = json.loads(evidence_path.read_text())
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
         cooldown_seconds = cooldown_seconds_for_loc(total_loc_from_evidence(evidence))
         client = get_github_api_client()
 
@@ -1995,8 +1995,10 @@ def run_managed_audit_api_job(
         else:
             aletheore_dir = job_dir / ".aletheore"
             aletheore_dir.mkdir(parents=True, exist_ok=True)
-            (aletheore_dir / "air.toon").write_text(evidence)
-            (aletheore_dir / "air.json").write_text(json.dumps({"managed_evidence": True}))
+            (aletheore_dir / "air.toon").write_text(evidence, encoding="utf-8")
+            (aletheore_dir / "air.json").write_text(
+                json.dumps({"managed_evidence": True}), encoding="utf-8"
+            )
         spend_budget = _IncrementalSpendBudget(
             settings.database_url,
             installation_id,

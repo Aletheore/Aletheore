@@ -127,9 +127,19 @@ class AnthropicAdapter(AgentAdapter):
         evidence_path = Path(cwd) / ".aletheore" / "air.toon"
 
         try:
-            evidence = toon.decode(evidence_path.read_text())
+            evidence = toon.decode(evidence_path.read_text(encoding="utf-8"))
         except OSError as exc:
             raise AdapterInvocationError(f"could not read evidence at {evidence_path}") from exc
+        except UnicodeDecodeError as exc:
+            # Same failure class as the ToonDecodeError case below (a
+            # malformed air.toon crashing with a raw traceback instead of a
+            # clean adapter error) - reachable if air.toon was ever written
+            # with a non-UTF-8 default encoding (e.g. by an older build on
+            # Windows, whose default text encoding isn't UTF-8) before this
+            # write path pinned encoding="utf-8" explicitly.
+            raise AdapterInvocationError(
+                f"could not decode evidence at {evidence_path}: {exc}"
+            ) from exc
         except toon.ToonDecodeError as exc:
             raise AdapterInvocationError(
                 f"could not decode evidence at {evidence_path}: {exc}"

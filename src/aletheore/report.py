@@ -102,6 +102,6 @@ def run_reasoning_phase(adapter: AgentAdapter, repo_path: str, manual_dir: str) 
         # visibly mark it: silently presenting raw stdout as if it were a
         # contract-compliant report hid exactly the kind of bypass this
         # project's evidence-grounding premise exists to catch.
-        report_path.write_text(RAW_OUTPUT_FALLBACK_NOTICE + output)
+        report_path.write_text(RAW_OUTPUT_FALLBACK_NOTICE + output, encoding="utf-8")
 
     return str(report_path)
