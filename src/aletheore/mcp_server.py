@@ -266,7 +266,17 @@ def _search_files(repo_path: Path, pattern: str, regex: bool, path_glob: str | N
         except OSError:
             continue
 
-        for line_no, line in enumerate(text.splitlines(), start=1):
+        # split("\n"), never splitlines() - same real bug class already
+        # found and fixed elsewhere in this codebase (jobs.py's
+        # _fetch_symbol_source, flash_review.py's _clickable_suggestion,
+        # semantic_checks.py's line-window helpers): splitlines() also
+        # breaks on \v, \f, \x1c-\x1e, NEL, LS, and PS, none of which a
+        # human, an editor, or grep treat as a line boundary. Any file
+        # containing one of those characters earlier than a match makes
+        # this report a line_no off from the file's real \n-based line -
+        # a wrong file:line citation from a tool whose own guarantee is
+        # "every result cites a real file:line, nothing is invented."
+        for line_no, line in enumerate(text.split("\n"), start=1):
             found = compiled.search(line) is not None if compiled else pattern in line
             if found:
                 if len(matches) >= _SEARCH_MATCH_CAP or total_chars >= _SEARCH_TOTAL_CHAR_BUDGET:

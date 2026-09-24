@@ -1038,6 +1038,26 @@ async def test_aletheore_search_truncates_a_single_very_long_matched_line(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_aletheore_search_reports_real_newline_line_numbers_not_splitlines(tmp_path):
+    # Real bug found in a backward audit, same class already fixed in
+    # jobs.py/flash_review.py/semantic_checks.py: str.splitlines() also
+    # breaks on \v, \f, \x1c-\x1e, NEL, LS, and PS, none of which a human,
+    # an editor, or grep treat as a line boundary (they only ever split on
+    # "\n"). A file containing one of those characters before a match used
+    # to shift every reported line_no after it - a wrong file:line citation
+    # from a tool whose own guarantee is "every result cites a real
+    # file:line, nothing is invented."
+    content = "one\x0ctwo\nMATCH_ME three\n"
+    repo = make_repo_with_files(tmp_path, {"weird.py": content})
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_search", {"pattern": "MATCH_ME"})
+
+    matches = tool_result_body(result)["result"]["matches"]
+    assert matches == [{"path": "weird.py", "line": 2, "text": "MATCH_ME three"}]
+
+
+@pytest.mark.asyncio
 async def test_aletheore_search_stops_early_on_total_char_budget_even_under_the_match_cap(tmp_path):
     # Confirmed live: an unscoped search on a common word returned a result
     # an MCP client rejected for exceeding its own size limit, well under
