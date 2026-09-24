@@ -204,7 +204,7 @@ def load_verifiable_evidence(repo_path: Path) -> dict | None:
     unavailable rather than as failure.
     """
     try:
-        evidence = json.loads((repo_path / ".aletheore" / "air.json").read_text())
+        evidence = json.loads((repo_path / ".aletheore" / "air.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(evidence, dict):

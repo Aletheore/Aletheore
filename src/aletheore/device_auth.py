@@ -121,6 +121,7 @@ def infer_org_from_cwd_git_remote(
             ["git", "remote", "get-url", "origin"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=5,
             check=True,
         )

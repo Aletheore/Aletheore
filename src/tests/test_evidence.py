@@ -721,6 +721,99 @@ def test_write_evidence_also_writes_a_toon_copy(tmp_path):
     assert toon.decode(toon_path.read_text()) == evidence
 
 
+def test_write_evidence_pins_utf8_encoding_for_both_air_json_and_air_toon(tmp_path, monkeypatch):
+    # Real bug: both write_text() calls in write_evidence() used to omit
+    # encoding entirely, falling back to Path.write_text()'s
+    # locale-dependent default. On POSIX that default is UTF-8 (so this
+    # never surfaced in local dev or CI, both POSIX), but Windows' default
+    # text encoding is still the legacy ANSI codepage (e.g. cp1252), not
+    # UTF-8 - unlike this same file's own explicit-encoding convention two
+    # functions up in _ensure_aletheore_dir_gitignored. Evidence carries
+    # arbitrary non-ASCII bytes straight out of the scanned repo's own
+    # source (docstrings, string literals, file paths) with no
+    # sanitization, so a Windows scan writing air.json/air.toon without a
+    # pinned encoding either crashes mid-scan with UnicodeEncodeError or
+    # silently writes codepage-mangled bytes that a UTF-8 reader (this MCP
+    # server, CI, a different OS) can't decode back correctly.
+    #
+    # A real cp1252-default Windows environment can't be faithfully
+    # simulated here: Path.write_text()'s no-encoding fallback resolves via
+    # a C-level locale lookup, not the patchable locale.getpreferredencoding
+    # Python function (confirmed directly - patching it has no effect on
+    # write_text()'s actual chosen encoding). So this asserts the fix at
+    # the level that's actually deterministic across every OS: that both
+    # calls pass encoding="utf-8" explicitly, exactly as the codebase's own
+    # established convention already does one call above them.
+    original_write_text = Path.write_text
+    seen_encodings: dict[str, object] = {}
+
+    def spy_write_text(self, data, *args, **kwargs):
+        seen_encodings[self.name] = kwargs.get("encoding")
+        return original_write_text(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", spy_write_text)
+
+    repo = make_repo(tmp_path)
+    evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
+    write_evidence(evidence, repo)
+
+    assert seen_encodings["air.json"] == "utf-8"
+    assert seen_encodings["air.toon"] == "utf-8"
+
+
+def test_air_toon_unicode_content_cannot_be_written_with_a_windows_legacy_codepage():
+    # Confirmed live on an actual Windows machine: a real scan crashed
+    # writing air.toon (after air.json had already been written
+    # successfully) because the scanned repo's own source contained U+2220
+    # ("angle", the math symbol - not exotic, an ordinary character a
+    # comment or docstring can contain). Windows' pre-UTF-8 default text
+    # encoding (a legacy codepage, e.g. cp1252) can't represent it at all,
+    # so the old write_text(to_toon(evidence)) call with no encoding raised
+    # UnicodeEncodeError - which the surrounding try/except here only ever
+    # caught for ToonEncodingError (raised inside to_toon() itself), not for
+    # exceptions from the write_text() call, so it wasn't caught anywhere
+    # and crashed the whole command. UTF-8 (this codebase's now-pinned
+    # encoding, see the test above) represents every Unicode codepoint, so
+    # pinning it closes this off entirely rather than needing to also widen
+    # the except clause to paper over it.
+    import pytest
+
+    from aletheore.toon_encoding import to_toon
+
+    evidence = minimal_air_evidence()
+    evidence["repo_path"] = "C:/Users/example/\u2220-project"
+    encoded = to_toon(evidence)
+
+    with pytest.raises(UnicodeEncodeError):
+        encoded.encode("cp1252")
+
+    encoded.encode("utf-8")  # never raises - this is what write_evidence now pins
+
+
+def test_load_evidence_file_reads_air_json_with_pinned_utf8_encoding(tmp_path, monkeypatch):
+    # Same root cause as the write-side test above, on the read path:
+    # load_evidence_file's read_text() call used to omit encoding, so on a
+    # non-UTF-8-default platform it would decode air.json's UTF-8 bytes
+    # (written by the now-fixed write side) using the wrong codepage,
+    # corrupting or crashing on any non-ASCII content instead of reading it
+    # back correctly.
+    evidence_path = tmp_path / "air.json"
+    evidence_path.write_text(json.dumps(minimal_air_evidence()), encoding="utf-8")
+
+    original_read_text = Path.read_text
+    seen_encodings: dict[str, object] = {}
+
+    def spy_read_text(self, *args, **kwargs):
+        seen_encodings[self.name] = kwargs.get("encoding")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", spy_read_text)
+
+    load_evidence_file(evidence_path)
+
+    assert seen_encodings["air.json"] == "utf-8"
+
+
 def test_write_evidence_survives_a_toon_encoding_failure(tmp_path, monkeypatch):
     import pytest
 

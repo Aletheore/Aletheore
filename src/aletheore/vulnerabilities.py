@@ -852,18 +852,23 @@ def _vulnerability_cache_key(ecosystem: str, name: str, version: str) -> str:
 
 def _load_vulnerability_cache(cache_path: Path) -> dict[str, dict]:
     try:
-        return json.loads(cache_path.read_text())
-    except (OSError, json.JSONDecodeError):
+        return json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}
 
 
 def _save_vulnerability_cache(cache_path: Path, cache: dict[str, dict]) -> None:
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps(cache))
-    except OSError:
+        cache_path.write_text(json.dumps(cache), encoding="utf-8")
+    except (OSError, UnicodeEncodeError):
         # Best-effort: a failure to persist the cache must never fail the
-        # vulnerability check itself.
+        # vulnerability check itself. OSV advisory text (summaries,
+        # descriptions) is arbitrary and not ASCII-only, so this needs the
+        # same explicit-encoding pin as the AIR evidence pair - and, since
+        # this cache's own comment already promises "must never fail",
+        # UnicodeEncodeError/UnicodeDecodeError need to be caught
+        # alongside OSError, not just implicitly avoided by pinning utf-8.
         pass
 
 

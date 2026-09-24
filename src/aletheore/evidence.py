@@ -103,7 +103,7 @@ def load_evidence_file(evidence_path: Path) -> dict:
     not help, and the caller needs to know which key is wrong rather than
     discovering it as a KeyError three modules away.
     """
-    evidence = json.loads(evidence_path.read_text())
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     written_version = evidence.get("aletheore_version") if isinstance(evidence, dict) else None
     if not is_evidence_version_compatible(written_version):
         raise IncompatibleEvidenceVersionError(
@@ -215,8 +215,8 @@ def _load_unchanged_scan_cache() -> tuple[dict[str, dict] | None, dict[str, list
     if not raw_path:
         return None, None
     try:
-        data = json.loads(Path(raw_path).read_text())
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(Path(raw_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None, None
     return data.get("modules"), data.get("endpoints")
 
@@ -264,8 +264,8 @@ def _load_local_scan_cache(
     if not cache_path.exists():
         return None, None
     try:
-        cache = json.loads(cache_path.read_text())
-    except (OSError, json.JSONDecodeError):
+        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None, None
 
     # A content hash alone says nothing about whether the *code* that
@@ -330,12 +330,17 @@ def _write_local_scan_cache(
                     "modules": modules_by_path,
                     "endpoints": endpoints_by_path,
                 }
-            )
+            ),
+            encoding="utf-8",
         )
-    except OSError:
+    except (OSError, UnicodeEncodeError):
         # Best-effort: a failure to write the cache (disk full, permissions)
         # must never fail the scan itself - it only costs the next run its
-        # incremental speedup, not correctness.
+        # incremental speedup, not correctness. modules_by_path carries real
+        # module data (docstrings, symbol names) straight out of the
+        # scanned repo, same non-ASCII exposure as air.json/air.toon, so
+        # this needs the same explicit-encoding pin plus catching
+        # UnicodeEncodeError alongside OSError.
         pass
 
 
@@ -720,7 +725,18 @@ def write_evidence(evidence: dict, repo_path: Path) -> Path:
     aletheore_dir = repo_path / ".aletheore"
     aletheore_dir.mkdir(parents=True, exist_ok=True)
     output_path = aletheore_dir / "air.json"
-    output_path.write_text(json.dumps(evidence, indent=2))
+    # Explicit encoding, not Path.write_text()'s locale-dependent default:
+    # Windows' default text encoding is still the legacy ANSI codepage (e.g.
+    # cp1252), not UTF-8, unlike every POSIX system this is normally
+    # developed and tested on. Evidence routinely carries non-ASCII bytes
+    # straight out of the scanned repo's own source (docstrings, string
+    # literals, file paths) with no sanitization, so a Windows-run scan
+    # writing air.json without a pinned encoding either raises
+    # UnicodeEncodeError mid-scan or silently writes codepage-mangled bytes
+    # that a UTF-8 reader (this MCP server, CI, a different OS) then can't
+    # decode correctly - the same class of bug already handled with an
+    # explicit encoding a few lines up in _ensure_aletheore_dir_gitignored.
+    output_path.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
 
     # A second, TOON-encoded copy exists specifically for the audit command's
     # coding-agent adapter to read instead of the JSON one - the agent's own
@@ -732,7 +748,7 @@ def write_evidence(evidence: dict, repo_path: Path) -> Path:
     # failure must never take scan down with it, since air.json (the file
     # that actually matters) is already written by this point.
     try:
-        (aletheore_dir / "air.toon").write_text(to_toon(evidence))
+        (aletheore_dir / "air.toon").write_text(to_toon(evidence), encoding="utf-8")
     except ToonEncodingError as exc:
         warnings.warn(
             f"could not write .aletheore/air.toon ({exc}) - air.json (the canonical "

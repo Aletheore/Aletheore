@@ -32,7 +32,7 @@ def _snapshot_sort_key(path: Path) -> tuple[str, int]:
     # cosmetic display-order noise: it discarded a newer scan's real
     # evidence while keeping an older one.
     try:
-        scanned_at = json.loads(path.read_text()).get("scanned_at", "")
+        scanned_at = json.loads(path.read_text(encoding="utf-8")).get("scanned_at", "")
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         # Flash Review finding: read_text() can raise UnicodeDecodeError
         # for a non-UTF-8 *.json file, which this only caught OSError/
@@ -69,7 +69,7 @@ def _save_json_with_rotation(data: dict, directory: Path, timestamp: str, keep: 
         snapshot_path = directory / f"{safe_name}-{suffix}.json"
         suffix += 1
 
-    snapshot_path.write_text(json.dumps(data, indent=2))
+    snapshot_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     _rotate(directory, keep)
     return snapshot_path
 

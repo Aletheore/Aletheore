@@ -330,6 +330,7 @@ def resolve_recent_commit(repo_path: Path, file_path: str, line: int | None = No
                 check=False,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 errors="ignore",
                 timeout=2,
             )
@@ -358,6 +359,7 @@ def resolve_recent_commit(repo_path: Path, file_path: str, line: int | None = No
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             errors="ignore",
             timeout=2,
         )
