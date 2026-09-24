@@ -463,7 +463,13 @@ def test_watch_rebuilds_on_a_real_edit_and_does_not_retrigger_itself(tmp_path):
     time.sleep(1.0)
 
     (repo / "app.py").write_text("def f():\n    return 2\n\ndef brand_new():\n    return 3\n")
-    time.sleep(4.0)
+    # Wait for the rebuild to finish rather than sleeping a fixed time: a busy
+    # CI runner (Windows) can take longer than any fixed guess, and the late
+    # "evidence updated" then landed inside the quiet window below and read as
+    # a retrigger. The retrigger check only starts once the rebuild is done.
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline and not any("evidence updated" in m for m in messages):
+        time.sleep(0.1)
     settled = len(messages)
     time.sleep(3.0)
 
