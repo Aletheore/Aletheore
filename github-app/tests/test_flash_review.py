@@ -4094,8 +4094,8 @@ def test_rank_findings_applies_rank_and_severity_from_response(mock_generation_a
     mock_adapter = MagicMock()
     mock_adapter.is_available.return_value = True
     mock_adapter.simple_completion.return_value = json.dumps([
-        {"file": "app.py", "line": 1, "rank": 1, "severity": "High"},
-        {"file": "app.py", "line": 40, "rank": 2, "severity": "Low"},
+        {"id": 1, "rank": 1, "severity": "High"},
+        {"id": 2, "rank": 2, "severity": "Low"},
     ])
     mock_generation_adapter.return_value = mock_adapter
 
@@ -4108,14 +4108,14 @@ def test_rank_findings_applies_rank_and_severity_from_response(mock_generation_a
 
 
 @patch("scan_worker.flash_review.flash_review_generation_adapter")
-def test_rank_findings_matches_response_entries_by_file_and_line_not_response_order(mock_generation_adapter):
+def test_rank_findings_matches_response_entries_by_id_not_response_order(mock_generation_adapter):
     mock_adapter = MagicMock()
     mock_adapter.is_available.return_value = True
-    # Response lists the second finding first - matching must be by
-    # (file, line) identity, not positional order.
+    # Response lists the second finding first - matching must be by the
+    # explicit id, not positional order.
     mock_adapter.simple_completion.return_value = json.dumps([
-        {"file": "app.py", "line": 40, "rank": 2, "severity": "Low"},
-        {"file": "app.py", "line": 1, "rank": 1, "severity": "High"},
+        {"id": 2, "rank": 2, "severity": "Low"},
+        {"id": 1, "rank": 1, "severity": "High"},
     ])
     mock_generation_adapter.return_value = mock_adapter
 
@@ -4169,7 +4169,7 @@ def test_rank_findings_fails_open_when_response_length_mismatches(mock_generatio
     mock_adapter.is_available.return_value = True
     # Only one entry for two findings.
     mock_adapter.simple_completion.return_value = json.dumps(
-        [{"file": "app.py", "line": 1, "rank": 1, "severity": "High"}]
+        [{"id": 1, "rank": 1, "severity": "High"}]
     )
     mock_generation_adapter.return_value = mock_adapter
 
@@ -4183,8 +4183,8 @@ def test_rank_findings_fails_open_on_invalid_severity_label(mock_generation_adap
     mock_adapter = MagicMock()
     mock_adapter.is_available.return_value = True
     mock_adapter.simple_completion.return_value = json.dumps([
-        {"file": "app.py", "line": 1, "rank": 1, "severity": "Extreme"},
-        {"file": "app.py", "line": 40, "rank": 2, "severity": "Low"},
+        {"id": 1, "rank": 1, "severity": "Extreme"},
+        {"id": 2, "rank": 2, "severity": "Low"},
     ])
     mock_generation_adapter.return_value = mock_adapter
 
@@ -4198,8 +4198,8 @@ def test_rank_findings_fails_open_on_duplicate_rank(mock_generation_adapter):
     mock_adapter = MagicMock()
     mock_adapter.is_available.return_value = True
     mock_adapter.simple_completion.return_value = json.dumps([
-        {"file": "app.py", "line": 1, "rank": 1, "severity": "High"},
-        {"file": "app.py", "line": 40, "rank": 1, "severity": "Low"},
+        {"id": 1, "rank": 1, "severity": "High"},
+        {"id": 2, "rank": 1, "severity": "Low"},
     ])
     mock_generation_adapter.return_value = mock_adapter
 
@@ -4212,10 +4212,10 @@ def test_rank_findings_fails_open_on_duplicate_rank(mock_generation_adapter):
 def test_rank_findings_fails_open_when_a_finding_is_not_covered(mock_generation_adapter):
     mock_adapter = MagicMock()
     mock_adapter.is_available.return_value = True
-    # Both entries describe the SAME finding (line 1) - line 40 never covered.
+    # Finding 2 is never covered - the response skips from id 1 to an id that doesn't exist.
     mock_adapter.simple_completion.return_value = json.dumps([
-        {"file": "app.py", "line": 1, "rank": 1, "severity": "High"},
-        {"file": "app.py", "line": 1, "rank": 2, "severity": "Low"},
+        {"id": 1, "rank": 1, "severity": "High"},
+        {"id": 3, "rank": 2, "severity": "Low"},
     ])
     mock_generation_adapter.return_value = mock_adapter
 
@@ -4284,8 +4284,8 @@ def test_review_diff_applies_rank_and_severity_when_rank_findings_is_true(mock_a
     mock_adapter.simple_completion.side_effect = [
         _pr_agent_yaml_response(_TWO_RAW_ISSUES),
         json.dumps([
-            {"file": "app.py", "line": 42, "rank": 1, "severity": "Critical"},
-            {"file": "app.py", "line": 43, "rank": 2, "severity": "Medium"},
+            {"id": 1, "rank": 1, "severity": "Critical"},
+            {"id": 2, "rank": 2, "severity": "Medium"},
         ]),
     ]
     mock_adapter_class.return_value = mock_adapter
@@ -4318,8 +4318,8 @@ def test_review_diff_caches_the_ranked_result_not_the_unranked_one(mock_adapter_
     mock_adapter.simple_completion.side_effect = [
         _pr_agent_yaml_response(_TWO_RAW_ISSUES),
         json.dumps([
-            {"file": "app.py", "line": 42, "rank": 1, "severity": "Critical"},
-            {"file": "app.py", "line": 43, "rank": 2, "severity": "Medium"},
+            {"id": 1, "rank": 1, "severity": "Critical"},
+            {"id": 2, "rank": 2, "severity": "Medium"},
         ]),
     ]
     mock_adapter_class.return_value = mock_adapter
@@ -4955,3 +4955,47 @@ def test_generate_findings_per_file_caps_smallest_patch_first_not_raw_order(monk
 
     assert set(called_files) == {"tiny.py", "large_b.py"}
     assert "large_a.py" not in called_files
+
+
+_TWO_FINDINGS_SAME_LOCATION = [
+    {"file": "app.py", "line": 15, "issue": "unhandled import rejection"},
+    {"file": "app.py", "line": 15, "issue": "possible shape mismatch on the same line"},
+]
+
+
+@patch("scan_worker.flash_review.flash_review_generation_adapter")
+def test_rank_findings_ranks_two_findings_that_share_a_file_and_line(mock_generation_adapter):
+    # Regression: matching by (file, line) collapsed these into one response entry, the
+    # unique-rank check failed, and the whole PR's ranking was silently discarded.
+    mock_adapter = MagicMock()
+    mock_adapter.is_available.return_value = True
+    mock_adapter.simple_completion.return_value = json.dumps([
+        {"id": 1, "rank": 2, "severity": "Medium"},
+        {"id": 2, "rank": 1, "severity": "High"},
+    ])
+    mock_generation_adapter.return_value = mock_adapter
+
+    ranked = _rank_findings_with_severity(_TWO_FINDINGS_SAME_LOCATION)
+
+    assert ranked[0]["issue"] == "unhandled import rejection"
+    assert ranked[0]["rank"] == 2 and ranked[0]["severity"] == "Medium"
+    assert ranked[1]["issue"] == "possible shape mismatch on the same line"
+    assert ranked[1]["rank"] == 1 and ranked[1]["severity"] == "High"
+
+
+@patch("scan_worker.flash_review.flash_review_generation_adapter")
+def test_rank_findings_fails_open_when_the_response_repeats_an_id(mock_generation_adapter):
+    mock_adapter = MagicMock()
+    mock_adapter.is_available.return_value = True
+    mock_adapter.simple_completion.return_value = json.dumps([
+        {"id": 1, "rank": 1, "severity": "High"},
+        {"id": 1, "rank": 2, "severity": "Low"},
+    ])
+    mock_generation_adapter.return_value = mock_adapter
+
+    assert _rank_findings_with_severity(_TWO_FINDINGS_SAME_LOCATION) == _TWO_FINDINGS_SAME_LOCATION
+
+
+def test_ranking_user_prompt_numbers_each_finding_from_one():
+    prompt = _ranking_user_prompt(_TWO_FINDINGS_SAME_LOCATION)
+    assert "Finding 1\n" in prompt and "Finding 2\n" in prompt
