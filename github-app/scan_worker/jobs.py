@@ -168,6 +168,7 @@ from scan_worker.managed_audit import run_managed_audit
 from scan_worker.model_tiers import (
     MANAGED_AUDIT_MODEL,
     PRO_MODEL,
+    CROSS_FILE_CHECK_MODEL,
     VERIFICATION_MODEL,
     flash_review_model_used,
     model_for_plan,
@@ -2160,6 +2161,7 @@ def run_flash_review_job(
             # file context again - unlike verification's real per-finding
             # DeepSeek cost, which is why that one stays AIR-only.
             rank_findings=not is_free_tier,
+            cross_file_check_runs=_cross_file_check_runs_for(installation["plan"], is_free_tier),
         )
     except Exception as exc:  # noqa: BLE001
         try:
@@ -2198,6 +2200,21 @@ def run_flash_review_job(
 
 def _flash_review_finding_type(finding: dict) -> str:
     return "flash_review_llm" if finding.get("source") == "llm" else "flash_review_semantic"
+
+
+def _cross_file_check_runs_for(plan: str, is_free_tier: bool) -> int:
+    """How many independent cross-file checks to run for this installation (0 = off).
+
+    OFF unless FLASH_REVIEW_CROSS_FILE_CHECK=on: the check drops findings, it was tuned on 13
+    PRs, and it should be enabled deliberately (and watched) rather than by merging. Never for
+    free tier - it calls OpenAI directly and its cost is priced into paid-plan spend
+    accounting only. AIR requires two agreeing checks (one check made 2 wrong drops of
+    golden-associated findings on AIR's measured set; agreement removed most of them); Flash's
+    single check lost no true positives or golden catches on its measured set.
+    """
+    if is_free_tier or os.environ.get("FLASH_REVIEW_CROSS_FILE_CHECK") != "on":
+        return 0
+    return 2 if plan == "air" else 1
 
 
 # Matches the 4 severity labels flash_review._rank_findings_with_severity's
@@ -2398,6 +2415,7 @@ def _run_flash_review(
     verify_with_second_model: bool = False,
     per_file_completeness: bool = False,
     rank_findings: bool = False,
+    cross_file_check_runs: int = 0,
 ) -> bool:
     """Returns True if a real review actually ran and its spend/count
     reservation (see run_flash_review_job) was trued up to reflect it -
@@ -2633,6 +2651,19 @@ def _run_flash_review(
             with spend_lock:
                 spend_accumulator["total"] += cost
 
+        def _on_cross_file_check_usage(
+            prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0
+        ) -> None:
+            # The cross-file check runs on CROSS_FILE_CHECK_MODEL (gpt-6-luna) regardless of
+            # which model generated the findings, so it is priced at that model's own rate -
+            # never flash_review_model's (GLM) or VERIFICATION_MODEL's (DeepSeek). Checks can
+            # run concurrently when agreement is required, hence the lock, same as
+            # _on_verification_usage above. Never invoked for free tier (see
+            # _cross_file_check_runs_for).
+            cost = cost_for_usage(CROSS_FILE_CHECK_MODEL, prompt_tokens, completion_tokens)
+            with spend_lock:
+                spend_accumulator["total"] += cost
+
         # Shared with _cache_write below so a cache-miss review only pays
         # for one embed_text call against the jina-embed sidecar for this
         # diff, not two (lookup used to embed diff_text, then store
@@ -2753,6 +2784,8 @@ def _run_flash_review(
             # _on_verification_usage exists specifically to avoid mispricing
             # DeepSeek tokens at flash_review_model's rate.
             rank_findings=rank_findings,
+            cross_file_check_runs=cross_file_check_runs,
+            on_cross_file_check_usage=_on_cross_file_check_usage,
         )
     # Every free-tier provider failed mid-review (see
     # _on_free_tier_exhausted above) - this review never actually ran, the

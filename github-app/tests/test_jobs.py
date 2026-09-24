@@ -10853,3 +10853,36 @@ def test_evidence_by_head_sha_or_none_swallows_any_exception():
     )
 
     assert result is None
+
+
+@pytest.mark.parametrize(
+    "env_value,plan,is_free_tier,expected",
+    [
+        (None, "flash", False, 0),          # off by default
+        (None, "air", False, 0),
+        ("off", "air", False, 0),
+        ("yes", "air", False, 0),           # only the exact value "on" enables it
+        ("on", "flash", False, 1),          # Flash: one check
+        ("on", "air", False, 2),            # AIR: two agreeing checks
+        ("on", "flash", True, 0),           # never for free tier, even when enabled
+    ],
+)
+def test_cross_file_check_runs_for_is_off_unless_enabled_and_never_for_free_tier(
+    monkeypatch, env_value, plan, is_free_tier, expected
+):
+    from scan_worker.jobs import _cross_file_check_runs_for
+
+    if env_value is None:
+        monkeypatch.delenv("FLASH_REVIEW_CROSS_FILE_CHECK", raising=False)
+    else:
+        monkeypatch.setenv("FLASH_REVIEW_CROSS_FILE_CHECK", env_value)
+    assert _cross_file_check_runs_for(plan, is_free_tier) == expected
+
+
+def test_cross_file_check_model_has_a_price_so_its_spend_can_be_accounted():
+    from app_server.llm_cost import cost_for_usage
+    from scan_worker.model_tiers import CROSS_FILE_CHECK_MODEL
+
+    # cost_for_usage raises KeyError for a model missing from the rate table, which would turn
+    # every review with the check enabled into a failed spend-accounting call.
+    assert cost_for_usage(CROSS_FILE_CHECK_MODEL, 1_000_000, 1_000_000) == pytest.approx(0.10 + 0.50)
