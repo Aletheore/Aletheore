@@ -3122,7 +3122,7 @@ async function loadCredits() {
     '</div>' +
     '<div class="settings-block">' +
       '<div class="settings-block-label">Alert email</div>' +
-      '<div class="settings-block-hint">Used for a low-credit warning (reviews pause silently below $0 &mdash; this is the only notice you get before that happens) and for endpoint-health alerts if you have monitored endpoints configured.</div>' +
+      '<div class="settings-block-hint">Used for the low-credit warning, which is the only notice you get before reviews pause at $0, and for endpoint-health alerts if you have monitored endpoints configured.</div>' +
       '<div class="form-row" style="margin-top: 10px;">' +
         '<input class="field" id="alert-email-input" type="email" placeholder="you@example.com" style="flex: 1 1 220px;">' +
         '<button class="btn" id="alert-email-save">Save</button>' +
@@ -3131,7 +3131,7 @@ async function loadCredits() {
     '</div>' +
     '<div class="settings-block">' +
       '<div class="settings-block-label">Billing</div>' +
-      '<div class="settings-block-hint"><a href="#" id="billing-portal-link">Manage billing</a> &mdash; update your payment method or view invoices.</div>' +
+      '<div class="settings-block-hint"><a href="#" id="billing-portal-link">Manage billing</a> to update your payment method or view invoices.</div>' +
       '<div id="billing-portal-status" class="settings-block-hint"></div>' +
     '</div>' +
     '<div class="settings-block">' +
