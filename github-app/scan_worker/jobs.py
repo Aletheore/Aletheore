@@ -2038,7 +2038,6 @@ def run_managed_audit_api_job(
         shutil.rmtree(job_dir, ignore_errors=True)
 
 
-@log_job
 def _record_review_outcome(
     settings,
     installation_id: int,
@@ -2047,12 +2046,29 @@ def _record_review_outcome(
     outcome: str,
     finding_count: int = 0,
     skip_reason: str | None = None,
+    is_free_tier: bool = False,
 ) -> None:
     """Best-effort write to flash_review_history for the Flash credits
     page's review-history list - must never break the actual review (a
     logging side-channel failing is not a reason to fail, or worse retry,
     a review that already ran). Same pattern as
-    _post_flash_review_failure_comment's own except-and-log."""
+    _post_flash_review_failure_comment's own except-and-log.
+
+    Deliberately undecorated - @log_job belongs on the real job entry
+    point (run_flash_review_job) so its start/end logging and
+    send_error_alert-on-crash keep working; a peer review caught this
+    landing on this helper instead in an earlier revision, which would
+    have silently killed crash alerting for every Flash Review job.
+
+    No-ops for free tier: the read route
+    (/app/installations/{id}/review-history) requires plan in
+    ("flash", "air") the same as /credits/{id} itself, so a free-tier
+    installation can never reach a page that would show these rows -
+    every free-tier write here would be permanent, unread dead weight on
+    what is this job's highest-volume path.
+    """
+    if is_free_tier:
+        return
     try:
         insert_review_history(
             settings.database_url, installation_id, repo_full_name, pr_number,
@@ -2065,6 +2081,7 @@ def _record_review_outcome(
         )
 
 
+@log_job
 def run_flash_review_job(
     installation_id: int,
     repo_full_name: str,
@@ -2084,17 +2101,17 @@ def run_flash_review_job(
     ):
         _record_review_outcome(
             settings, installation_id, repo_full_name, pr_number,
-            "skipped", skip_reason="monthly repo scan limit reached",
+            "skipped", skip_reason="monthly repo scan limit reached", is_free_tier=is_free_tier,
         )
         return
 
+    # Not recorded to history: this is a dedupe/debounce (already reviewed
+    # this sha, or reviewed too recently), not a meaningful "did Flash
+    # Review run" event - a retried webhook would otherwise spam identical
+    # rows for a PR nothing actually happened on.
     if not check_and_reserve_flash_review_attempt(
         settings.database_url, installation_id, repo_full_name, pr_number
     ):
-        _record_review_outcome(
-            settings, installation_id, repo_full_name, pr_number,
-            "skipped", skip_reason="already reviewed this commit, or reviewed too recently",
-        )
         return
 
     # Both caps are reserved atomically up front via a single UPSERT each
@@ -2119,13 +2136,12 @@ def run_flash_review_job(
     # of the check.
     reserved_spend = 0.0
     if is_free_tier:
+        # Not recorded to history - always free tier here, and
+        # _record_review_outcome no-ops for free tier anyway (see its own
+        # docstring: the read route 404s free installs).
         if not reserve_flash_review_count(
             settings.database_url, installation_id, MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH
         ):
-            _record_review_outcome(
-                settings, installation_id, repo_full_name, pr_number,
-                "skipped", skip_reason="free tier review limit reached this month",
-            )
             return
     else:
         # Paid plans have no review-count cap (limit=None still counts the
@@ -2210,6 +2226,16 @@ def run_flash_review_job(
                 pr_number,
                 comment_exc,
             )
+        # A crash otherwise recorded nothing - "did Flash Review even run on
+        # my last PR" was unanswered exactly when it matters most. Generic
+        # message, not str(exc): this table is read back on a customer-
+        # facing page, and an exception's text can carry internals (a
+        # stack-adjacent value, a URL, a token fragment) that were never
+        # meant to be customer-visible.
+        _record_review_outcome(
+            settings, installation_id, repo_full_name, pr_number,
+            "failed", skip_reason="review failed unexpectedly", is_free_tier=is_free_tier,
+        )
     finally:
         # A reservation that never became a real review (every free-tier
         # provider failed, no provider keys configured, or an unrelated
@@ -2766,10 +2792,9 @@ def _run_flash_review(
                     "free-tier: no provider keys configured, skipping review for %s#%s",
                     repo_full_name, pr_number,
                 )
-                _record_review_outcome(
-                    settings, installation_id, repo_full_name, pr_number,
-                    "skipped", skip_reason="no free-tier provider keys configured",
-                )
+                # Not recorded to history - always free tier here (only
+                # reachable when is_free_tier, see above), and the read
+                # route 404s free installs anyway.
                 return False
 
         findings = review_diff(
@@ -2853,10 +2878,9 @@ def _run_flash_review(
     # caller (run_flash_review_job) releases this review's reservation
     # when it sees False returned here.
     if free_tier_exhausted["value"]:
-        _record_review_outcome(
-            settings, installation_id, repo_full_name, pr_number,
-            "skipped", skip_reason="all free-tier providers failed",
-        )
+        # Not recorded to history - always free tier here (this path only
+        # runs inside `if is_free_tier:` above), and the read route 404s
+        # free installs anyway.
         return False
 
     # The review-count reservation already happened atomically up front (see
@@ -3037,9 +3061,23 @@ def _run_flash_review(
     set_last_reviewed_sha(
         settings.database_url, installation_id, repo_full_name, pr_number, head_sha
     )
+    # "clean" must mean "nothing held up" (genuinely clean, everything
+    # already dismissed, or rejected by grounding/verification) - not
+    # "we found real issues but couldn't tell you", which is what
+    # `posted_count == 0` alone would wrongly conflate whenever
+    # findings_to_post was non-empty but every post attempt failed. That
+    # case is a real operational failure, distinct from both a clean diff
+    # and an unhandled exception (see the except-path "failed" write above).
+    if posted_count:
+        history_outcome, history_skip_reason = "posted", None
+    elif findings_to_post:
+        history_outcome, history_skip_reason = "failed", "findings held up but none could be posted"
+    else:
+        history_outcome, history_skip_reason = "clean", None
     _record_review_outcome(
         settings, installation_id, repo_full_name, pr_number,
-        "posted" if posted_count else "clean", finding_count=posted_count,
+        history_outcome, finding_count=posted_count, skip_reason=history_skip_reason,
+        is_free_tier=is_free_tier,
     )
     return True
 
