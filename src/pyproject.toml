@@ -110,7 +110,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pytest-cov>=5.0"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pytest-cov>=5.0", "pytest-timeout>=2.3"]
 
 [project.urls]
 Homepage = "https://github.com/Aletheore/Aletheore"
@@ -132,3 +132,18 @@ aletheore = ["static/*.png", "manual/*.md", "data/*.json"]
 
 [tool.pytest.ini_options]
 addopts = ["-p", "no:randomly"]
+# Real incident: PR #792's pytest-windows job silently ate its entire 30-minute
+# job timeout with zero diagnostic output - pytest's own progress showed 44% and
+# then nothing until the job was killed, so the failure carried no information
+# about which test was actually stuck. This makes any single stuck test fail
+# fast (120s - generous next to every real test's sub-second runtime, confirmed
+# directly: no test in this suite legitimately sleeps or waits anywhere close to
+# that) with a named traceback instead of silently consuming the whole CI job.
+# "thread" method, not the default "signal": signal-based timeouts don't work
+# inside a test that itself uses subprocesses or multiprocessing (this suite has
+# both - ProcessPoolExecutor in test_graph_parallel.py, real git subprocess
+# calls in test_secrets.py/test_evidence_resolution.py), and signal-based
+# timeouts aren't available on Windows at all, which is exactly the platform
+# this exists to diagnose.
+timeout = 120
+timeout_method = "thread"
