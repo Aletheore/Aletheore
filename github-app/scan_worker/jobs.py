@@ -4772,6 +4772,9 @@ def _enqueue_credit_balance_email(template_name: str, installation_id: int, row:
                 "plan": row.get("plan", ""),
                 "base_credit_remaining_usd": float(row.get("base_credit_remaining_usd", 0)),
                 "topup_credit_balance_usd": float(row.get("topup_credit_balance_usd", 0)),
+                # So the email can link a Flash customer (no dashboard) to the
+                # standalone credit page for this exact installation.
+                "installation_id": installation_id,
             },
             to_email=alert_email,
             installation_id=installation_id,
