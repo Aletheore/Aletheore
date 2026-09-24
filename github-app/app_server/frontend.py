@@ -298,10 +298,12 @@ table.findings tr:last-child td { border-bottom: none; }
 .docs-commit-desc { font-size: 12.5px; color: var(--slate-600); line-height: 1.55; }
 .docs-commit-desc a { font-weight: 650; }
 .diagram-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 4px; background: var(--slate-50); padding: 14px; }
-.graph-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+.graph-card { border: 1px solid var(--border); border-radius: 4px; background: var(--paper); margin-bottom: 20px; }
+.graph-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .graph-toolbar select { font-family: var(--font-sans); font-size: 12.5px; border: 1px solid var(--border-strong); border-radius: 4px; padding: 6px 8px; background: var(--paper); color: var(--ink-900); }
 .graph-toolbar .hint { font-size: 11.5px; color: var(--slate-400); font-family: var(--font-mono); }
-svg#depgraph { width: 100%; height: 440px; display: block; border: 1px solid var(--border); border-radius: 4px; background: var(--paper); cursor: grab; }
+.graph-wrap { position: relative; }
+svg#depgraph { width: 100%; height: 440px; display: block; background: var(--paper); cursor: grab; }
 svg#depgraph:active { cursor: grabbing; }
 .g-node circle { fill: var(--paper); stroke: var(--ink-900); stroke-width: 1.4; cursor: grab; }
 .g-node.hub circle { stroke: var(--accent); stroke-width: 1.8; }
@@ -312,7 +314,11 @@ svg#depgraph:active { cursor: grabbing; }
 .g-edge.g-edge-ambiguous { stroke-dasharray: 3 3; }
 .g-edge.dim { stroke: var(--border); }
 .g-edge.lit { stroke: var(--accent); stroke-width: 1.4; }
-.graph-hover-info { margin-top: 8px; font-family: var(--font-mono); font-size: 12px; color: var(--slate-600); min-height: 16px; }
+.graph-hover-info { padding: 10px 16px; border-top: 1px solid var(--border); font-family: var(--font-mono); font-size: 12px; color: var(--slate-600); min-height: 16px; }
+.cluster-item { border: 1px solid var(--border); border-radius: 4px; padding: 12px 14px; background: var(--paper); margin-bottom: 20px; }
+.cluster-item .name { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.cluster-item .count { font-family: var(--font-mono); font-size: 11.5px; color: var(--slate-600); }
+.callout { border: 1px solid var(--border); border-left: 2px solid var(--slate-600); padding: 12px 14px; font-size: 12.5px; color: var(--slate-600); line-height: 1.55; margin-bottom: 20px; border-radius: 0 4px 4px 0; }
 .diagram-wrap .mermaid { display: flex; justify-content: center; min-width: max-content; }
 .diagram-wrap.diagram-zoomable { cursor: zoom-in; }
 .diagram-wrap.diagram-zoomable::after { content: "Click to open full diagram"; display: block; margin-top: 8px; color: var(--slate-400); font-size: 11px; text-align: center; }
@@ -1492,21 +1498,20 @@ WIKI_HTML = _page_head("AIRview — {repo} — Aletheore") + _shell(
     "wiki",
     _topbar("AIRview")
     + """
-    <section class="section">
+    <p class="section-sub" style="margin: -0.6rem 0 1.2rem;">Generated from the real module dependency graph - the same evidence the architecture wiki below reads too, just explorable instead of static.</p>
+    <section class="section" id="graph-section">
       <div class="section-head">
-        <div class="section-title"><i class="ti ti-book-2" aria-hidden="true"></i>AIRview</div>
-        <span class="section-sub">Regenerated automatically on every push</span>
+        <div class="section-title"><i class="ti ti-affiliate" aria-hidden="true"></i>Interactive dependency graph</div>
+        <span class="section-sub">Drag a node, scroll to zoom, hover to trace imports</span>
       </div>
-      <div class="section-body" id="wiki-body"><div class="empty-state">Loading&hellip;</div></div>
+      <div class="section-body" id="graph-body"><div class="empty-state">Loading&hellip;</div></div>
     </section>
     <section class="section">
       <div class="section-head">
-        <div class="section-title"><i class="ti ti-affiliate" aria-hidden="true"></i>Interactive dependency graph</div>
-        <span class="section-sub" id="graph-section-sub">Same evidence as the diagram above, explorable</span>
+        <div class="section-title"><i class="ti ti-book-2" aria-hidden="true"></i>Architecture wiki</div>
+        <span class="section-sub">Regenerated automatically on every push</span>
       </div>
-      <div class="section-body" id="graph-body">
-        <button class="btn" id="graph-load-btn" onclick="loadGraph()">Load graph</button>
-      </div>
+      <div class="section-body" id="wiki-body"><div class="empty-state">Loading&hellip;</div></div>
     </section>
 """
 ) + f"""
@@ -1793,14 +1798,11 @@ async function loadWiki() {{
   }}
 }}
 
-let graphLoaded = false;
 let graphNodes = [];
 let graphEdges = [];
 let graphAllClusters = [];
 
 async function loadGraph() {{
-  if (graphLoaded) return;
-  graphLoaded = true;
   const container = document.getElementById('graph-body');
   container.innerHTML = '<div class="empty-state">Loading&hellip;</div>';
   const res = await apiGet(base + '/graph');
@@ -1826,12 +1828,32 @@ async function loadGraph() {{
     }})
   );
   container.innerHTML =
-    '<div class="graph-toolbar">' +
-      '<select id="graph-cluster-select" onchange="renderGraphForCluster(this.value)">' + options.join('') + '</select>' +
-      '<span class="hint">drag &middot; scroll to zoom &middot; hover to trace imports</span>' +
+    '<div class="graph-card">' +
+      '<div class="graph-toolbar">' +
+        '<select id="graph-cluster-select" onchange="renderGraphForCluster(this.value)">' + options.join('') + '</select>' +
+        '<span class="hint">drag &middot; scroll to zoom &middot; hover to trace imports</span>' +
+        '<button class="btn" id="graph-reset-btn" onclick="document.getElementById(&#39;depgraph&#39;)._resetView()">Reset view</button>' +
+      '</div>' +
+      '<div class="graph-wrap"><svg id="depgraph" viewBox="0 0 900 440"></svg></div>' +
+      '<div class="graph-hover-info" id="graph-hover-info">Hover a module to see what it imports.</div>' +
     '</div>' +
-    '<svg id="depgraph" viewBox="0 0 900 440"></svg>' +
-    '<div class="graph-hover-info" id="graph-hover-info">Hover a module to see what it imports.</div>';
+    '<div class="cluster-item" id="cluster-summary-item">' +
+      '<div class="name">Clusters</div>' +
+      '<div class="count" id="cluster-summary">computing&hellip;</div>' +
+    '</div>' +
+    '<div class="callout">' +
+      'This graph is real, not a static image - genuine force-directed physics (repulsion + spring edges), running against this repo\\'s real module names and import edges. The architecture wiki below is generated from the same evidence, just as a static diagram with AI-written subsystem descriptions.' +
+    '</div>';
+
+  const namedClusters = graphAllClusters.filter(function (c) {{ return c.modules.length > 1; }});
+  const singletonCount = graphAllClusters.length - namedClusters.length;
+  let clusterSummaryText = namedClusters.length
+    ? namedClusters.map(function (c) {{ return c.name + ' (' + c.modules.length + ' modules)'; }}).join(', ')
+    : 'No clusters detected yet.';
+  if (singletonCount > 0) {{
+    clusterSummaryText += (namedClusters.length ? ', and ' : '') + singletonCount + ' single-module cluster' + (singletonCount === 1 ? '' : 's') + '.';
+  }}
+  document.getElementById('cluster-summary').textContent = clusterSummaryText;
 
   // A repo-wide graph is unreadable past a couple hundred nodes and the
   // naive O(n^2) repulsion below would visibly lag - default to the
@@ -1987,6 +2009,12 @@ function runForceGraph(rawNodes, rawEdges) {{
     zoom = Math.max(0.5, Math.min(2.5, zoom - ev.deltaY * 0.001));
     world.setAttribute('transform', 'scale(' + zoom + ')');
   }};
+  svg._resetView = function () {{
+    zoom = 1;
+    world.setAttribute('transform', 'scale(1)');
+    nodes.forEach(function (n) {{ n.fx = null; n.fy = null; }});
+    if (!ticking) {{ ticking = true; tick(); }}
+  }};
 
   const hoverInfo = document.getElementById('graph-hover-info');
   nodeEls.forEach(function (g, i) {{
@@ -2008,6 +2036,7 @@ function runForceGraph(rawNodes, rawEdges) {{
   }});
 }}
 
+loadGraph();
 loadWiki();
 loadPlanBadge();
 </script>
