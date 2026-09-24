@@ -10884,3 +10884,17 @@ def test_cross_file_check_model_has_a_price_so_its_spend_can_be_accounted():
     # cost_for_usage raises KeyError for a model missing from the rate table, which would turn
     # every review with the check enabled into a failed spend-accounting call.
     assert cost_for_usage(CROSS_FILE_CHECK_MODEL, 1_000_000, 1_000_000) == pytest.approx(0.10 + 0.50)
+
+
+@pytest.mark.parametrize(
+    "env_value,is_free_tier,expected",
+    [(None, False, False), ("off", False, False), ("yes", False, False), ("on", False, True), ("on", True, False)],
+)
+def test_share_pr_context_for_is_off_unless_enabled_and_never_for_free_tier(monkeypatch, env_value, is_free_tier, expected):
+    from scan_worker.jobs import _share_pr_context_for
+
+    if env_value is None:
+        monkeypatch.delenv("FLASH_REVIEW_SHARE_PR_CONTEXT", raising=False)
+    else:
+        monkeypatch.setenv("FLASH_REVIEW_SHARE_PR_CONTEXT", env_value)
+    assert _share_pr_context_for(is_free_tier) is expected

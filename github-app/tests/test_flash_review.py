@@ -10,6 +10,10 @@ from scan_worker.flash_review import (
     CROSS_FILE_CHECK_SYSTEM_PROMPT,
     RANKING_SYSTEM_PROMPT,
     _check_findings_against_whole_diff,
+    _build_other_files_context,
+    _build_per_file_user_prompt,
+    _generate_findings_per_file,
+    _same_file,
     VERIFICATION_SYSTEM_PROMPT,
     files_missing_from_review_context,
     _build_flash_review_user_prompt,
@@ -5193,3 +5197,107 @@ def test_review_diff_only_sends_llm_findings_to_the_check_and_leaves_semantic_on
     sent = mock_check.call_args.args[0]
     assert sent and all(f["source"] == "llm" for f in sent)
     assert [f["source"] for f in findings] == ["semantic"]
+
+
+# ---- per-file generation with the rest of the PR as context ----
+
+_PATCHES = (
+    ("schema.prisma", "@@ -1,1 +1,2 @@\n+  backupCodes String?"),
+    ("migration.sql", "@@ -0,0 +1,1 @@\n+ALTER TABLE users ADD COLUMN backup_codes TEXT;"),
+    ("package-lock.json", "@@ -1 +1 @@\n+lock noise"),
+    ("big.ts", "@@ -1,1 +1,1 @@\n+" + "x" * 500),
+)
+
+
+def test_other_files_context_excludes_own_file_and_non_substantive_paths_smallest_first():
+    ctx = _build_other_files_context("schema.prisma", _PATCHES)
+    assert "--- schema.prisma ---" not in ctx
+    assert "package-lock.json" not in ctx
+    assert ctx.index("--- migration.sql ---") < ctx.index("--- big.ts ---")
+
+
+def test_other_files_context_names_files_that_do_not_fit_the_budget():
+    ctx = _build_other_files_context("schema.prisma", _PATCHES, max_chars=120)
+    assert "--- migration.sql ---" in ctx
+    assert "--- big.ts ---" not in ctx
+    assert "Not shown, too large to include: big.ts" in ctx
+
+
+def test_other_files_context_is_empty_when_there_is_nothing_else_to_show():
+    assert _build_other_files_context("only.py", (("only.py", "@@ -1 +1 @@\n+x"),)) == ""
+    assert _build_other_files_context("a.py", (("a.py", "@@ -1 +1 @@\n+x"), ("yarn.lock", "@@ -1 +1 @@\n+y"))) == ""
+
+
+@pytest.mark.parametrize(
+    "reported,filename,expected",
+    [
+        ("app.py", "app.py", True),
+        ("b/app.py", "app.py", True),
+        ("./src/app.py", "src/app.py", True),
+        ("app.py", "src/app.py", True),          # bare basename of the right file
+        ("src/app.py", "app.py", True),
+        ("other.py", "app.py", False),
+        ("myapp.py", "app.py", False),           # suffix must fall on a path boundary
+        ("src/other/app.py", "src/app.py", False),
+    ],
+)
+def test_same_file_matches_on_path_boundaries_only(reported, filename, expected):
+    assert _same_file(reported, filename) is expected
+
+
+def test_per_file_prompt_is_unchanged_without_context_and_scoped_with_it():
+    plain = _build_per_file_user_prompt("t", "a.py", "@@ -1 +1 @@\n+x")
+    assert "CONTEXT ONLY" not in plain
+    with_ctx = _build_per_file_user_prompt("t", "a.py", "@@ -1 +1 @@\n+x", "--- b.py ---\n@@ -1 +1 @@\n+y")
+    assert with_ctx.startswith(plain)
+    assert "CONTEXT ONLY" in with_ctx and "--- b.py ---" in with_ctx
+    assert "do NOT report issues" in with_ctx
+
+
+def _issue(file, line, body):
+    return {"relevant_file": file, "start_line": line, "end_line": line, "issue_header": "H", "issue_content": body}
+
+
+def test_per_file_generation_with_shared_context_keeps_only_each_calls_own_file_findings():
+    # The same mocked response comes back for BOTH files' calls, so each call sees one finding
+    # about itself and one about the other file. Only the one about itself may survive.
+    adapter = MagicMock()
+    adapter.simple_completion.return_value = _pr_agent_yaml_response([
+        _issue("schema.prisma", 2, "about schema"),
+        _issue("migration.sql", 1, "about migration"),
+    ])
+    findings = _generate_findings_per_file(_PATCHES[:2], "title", adapter, share_pr_context=True)
+    assert sorted((f["file"], f["issue"]) for f in findings) == [
+        ("migration.sql", "H: about migration"),
+        ("schema.prisma", "H: about schema"),
+    ]
+
+
+def test_per_file_generation_does_not_filter_when_no_other_file_is_shown():
+    # A one-file PR shows the model nothing else, so there is nothing to be tempted by - the
+    # off-file guard stays inactive and behavior matches the no-sharing path.
+    adapter = MagicMock()
+    adapter.simple_completion.return_value = _pr_agent_yaml_response([_issue("whatever.py", 2, "text")])
+    findings = _generate_findings_per_file(_PATCHES[:1], "title", adapter, share_pr_context=True)
+    assert [f["file"] for f in findings] == ["schema.prisma"]
+
+
+def test_per_file_generation_shows_each_call_the_other_files_when_sharing_context():
+    adapter = MagicMock()
+    adapter.simple_completion.return_value = _pr_agent_yaml_response([])
+    _generate_findings_per_file(_PATCHES[:2], "title", adapter, share_pr_context=True)
+    prompts = [call.args[1] for call in adapter.simple_completion.call_args_list]
+    assert len(prompts) == 2
+    schema_prompt = next(p for p in prompts if "backupCodes String?" in p and "CONTEXT ONLY" in p)
+    assert "ALTER TABLE users ADD COLUMN backup_codes TEXT;" in schema_prompt
+
+
+def test_per_file_generation_without_shared_context_behaves_exactly_as_before():
+    adapter = MagicMock()
+    adapter.simple_completion.return_value = _pr_agent_yaml_response([_issue("wrong-echoed-name.py", 3, "text")])
+    findings = _generate_findings_per_file(_PATCHES[:2], "title", adapter)
+    prompts = [call.args[1] for call in adapter.simple_completion.call_args_list]
+    assert all("CONTEXT ONLY" not in p for p in prompts)
+    # Unchanged legacy behavior: with no other files visible, the echoed name is ignored and the
+    # real filename is force-set (findings are NOT dropped for a mismatched echo).
+    assert {f["file"] for f in findings} == {"schema.prisma", "migration.sql"}

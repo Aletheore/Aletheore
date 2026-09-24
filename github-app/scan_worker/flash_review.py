@@ -2734,7 +2734,68 @@ its own full, dedicated review pass - do not under-report it because other files
 the same PR. List every real issue you find in THIS file, not just the first or most obvious one."""
 
 
-def _build_per_file_user_prompt(pr_title: str, filename: str, patch: str) -> str:
+# Cap on how much of the OTHER files' patches one per-file call is shown. Per-file generation runs
+# one call per changed file, so this multiplies input tokens by roughly the file count - the cap
+# bounds that. Smallest patches are included first (same smallest-first philosophy as the file
+# ordering above); anything that doesn't fit is named but not shown.
+MAX_PR_CONTEXT_CHARS = 120_000
+
+_OTHER_FILES_CONTEXT_SUFFIX = """
+
+The rest of this pull request's changes follow, for CONTEXT ONLY. You are reviewing {filename} and \
+nothing else here: each of the other files gets its own separate review pass, so do NOT report issues \
+located in any other file, and every finding you write must be about {filename}. Their only purpose is \
+this: before you claim that something in {filename} is missing, unhandled, unregistered, unvalidated, \
+unencrypted, unused, or lost, check whether one of these other changed files provides it, and if one \
+does, do not report that claim.
+
+{other_files_context}"""
+
+
+def _build_other_files_context(
+    filename: str, diff_patches: tuple[tuple[str, str], ...], max_chars: int = MAX_PR_CONTEXT_CHARS
+) -> str:
+    """The rest of the PR's substantive patches (everything except `filename`), smallest first,
+    up to max_chars. "" when there is nothing else to show."""
+    others = sorted(
+        (
+            (name, patch) for name, patch in diff_patches
+            if name != filename and patch.strip() and not _is_non_substantive_path(name)
+        ),
+        key=lambda item: len(item[1]),
+    )
+    parts: list[str] = []
+    used = 0
+    omitted: list[str] = []
+    for name, patch in others:
+        block = f"--- {name} ---\n{patch}"
+        if used + len(block) > max_chars:
+            omitted.append(name)
+            continue
+        parts.append(block)
+        used += len(block) + 2
+    text = "\n\n".join(parts)
+    if omitted:
+        text += ("\n\n" if text else "") + "(Not shown, too large to include: " + ", ".join(omitted) + ")"
+    return text
+
+
+def _same_file(reported: str, filename: str) -> bool:
+    """Whether a path the model echoed refers to `filename`, tolerating a/ b/ ./ prefixes and a
+    bare basename or partial path (a suffix match on a path boundary)."""
+    def norm(path: str) -> str:
+        path = path.strip().replace("\\", "/")
+        for prefix in ("a/", "b/", "./"):
+            if path.startswith(prefix):
+                path = path[len(prefix):]
+        return path
+    a, b = norm(reported), norm(filename)
+    return a == b or a.endswith("/" + b) or b.endswith("/" + a)
+
+
+def _build_per_file_user_prompt(
+    pr_title: str, filename: str, patch: str, other_files_context: str = ""
+) -> str:
     """Same PR-Agent user-prompt template _build_flash_review_user_prompt
     fills, scoped to one file's own raw patch instead of the whole PR's
     concatenated, trimmed diff_text - see _generate_findings_per_file for
@@ -2749,13 +2810,19 @@ def _build_per_file_user_prompt(pr_title: str, filename: str, patch: str) -> str
         title=pr_title,
         diff=diff_text,
     )
-    return prompt + _PER_FILE_COMPLETENESS_SUFFIX
+    prompt += _PER_FILE_COMPLETENESS_SUFFIX
+    if other_files_context:
+        prompt += _OTHER_FILES_CONTEXT_SUFFIX.format(
+            filename=filename, other_files_context=other_files_context
+        )
+    return prompt
 
 
 def _generate_findings_per_file(
     diff_patches: tuple[tuple[str, str], ...],
     pr_title: str,
     adapter,
+    share_pr_context: bool = False,
 ) -> list[dict]:
     """Runs Flash Review's real generation call once per changed file
     instead of once for the whole PR, then concatenates every file's
@@ -2806,7 +2873,8 @@ def _generate_findings_per_file(
 
     def _review_one_file(item: tuple[str, str]) -> list[dict]:
         filename, patch = item
-        user_prompt = _build_per_file_user_prompt(pr_title, filename, patch)
+        other_files_context = _build_other_files_context(filename, diff_patches) if share_pr_context else ""
+        user_prompt = _build_per_file_user_prompt(pr_title, filename, patch, other_files_context)
         try:
             raw = adapter.simple_completion(FLASH_REVIEW_SYSTEM_PROMPT, user_prompt, cwd=".")
         except Exception as exc:
@@ -2817,6 +2885,17 @@ def _generate_findings_per_file(
             return []
         issues = _extract_pr_agent_yaml_issues(raw) or []
         file_findings = _findings_from_issues(issues)
+        if other_files_context:
+            # finding["file"] is force-set below, so once other files are visible a finding the
+            # model wrote about ANOTHER file would be silently misattributed to this one. Drop
+            # any finding whose own echoed file isn't this file.
+            on_this_file = [f for f in file_findings if _same_file(f["file"], filename)]
+            if len(on_this_file) != len(file_findings):
+                logger.info(
+                    "flash review per-file: dropped %d off-file finding(s) for %s",
+                    len(file_findings) - len(on_this_file), filename,
+                )
+            file_findings = on_this_file
         for finding in file_findings:
             finding["file"] = filename
         return file_findings
@@ -2850,6 +2929,7 @@ def review_diff(
     rank_findings: bool = False,
     cross_file_check_runs: int = 0,
     on_cross_file_check_usage: Callable[[int, int, int], None] | None = None,
+    share_pr_context_per_file: bool = False,
 ) -> list[dict]:
     if not diff_text.strip():
         return []
@@ -3014,7 +3094,9 @@ def review_diff(
             adapter = flash_review_generation_adapter(
                 on_usage=on_usage, fallback_model=FLASH_REVIEW_FALLBACK_MODEL
             )
-        findings = _generate_findings_per_file(diff_patches, pr_title, adapter)
+        findings = _generate_findings_per_file(
+            diff_patches, pr_title, adapter, share_pr_context=share_pr_context_per_file
+        )
     else:
         if adapter is not None:
             raw_output = _call_adapter(adapter)

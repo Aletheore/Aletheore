@@ -2162,6 +2162,7 @@ def run_flash_review_job(
             # DeepSeek cost, which is why that one stays AIR-only.
             rank_findings=not is_free_tier,
             cross_file_check_runs=_cross_file_check_runs_for(installation["plan"], is_free_tier),
+            share_pr_context_per_file=_share_pr_context_for(is_free_tier),
         )
     except Exception as exc:  # noqa: BLE001
         try:
@@ -2215,6 +2216,19 @@ def _cross_file_check_runs_for(plan: str, is_free_tier: bool) -> int:
     if is_free_tier or os.environ.get("FLASH_REVIEW_CROSS_FILE_CHECK") != "on":
         return 0
     return 2 if plan == "air" else 1
+
+
+def _share_pr_context_for(is_free_tier: bool) -> bool:
+    """Whether each per-file generation call is also shown the rest of the PR's patches.
+
+    OFF unless FLASH_REVIEW_SHARE_PR_CONTEXT=on. It changes what the model sees on every call
+    and multiplies generation input tokens by ~4.6x (measured: $0.0027 -> $0.0103 per PR on the
+    13-case corpus, whose PRs average 10.6 files), which matters for the Flash plan's $5 base
+    credit - a heavy user would get roughly 485 average-size reviews per credit instead of
+    ~1,850 (plan cap: 800/month) - so rolling it out is a deliberate call, not a side effect of
+    merging. Never for free tier: per-file generation is paid-tier only.
+    """
+    return not is_free_tier and os.environ.get("FLASH_REVIEW_SHARE_PR_CONTEXT") == "on"
 
 
 # Matches the 4 severity labels flash_review._rank_findings_with_severity's
@@ -2416,6 +2430,7 @@ def _run_flash_review(
     per_file_completeness: bool = False,
     rank_findings: bool = False,
     cross_file_check_runs: int = 0,
+    share_pr_context_per_file: bool = False,
 ) -> bool:
     """Returns True if a real review actually ran and its spend/count
     reservation (see run_flash_review_job) was trued up to reflect it -
@@ -2786,6 +2801,7 @@ def _run_flash_review(
             rank_findings=rank_findings,
             cross_file_check_runs=cross_file_check_runs,
             on_cross_file_check_usage=_on_cross_file_check_usage,
+            share_pr_context_per_file=share_pr_context_per_file,
         )
     # Every free-tier provider failed mid-review (see
     # _on_free_tier_exhausted above) - this review never actually ran, the
