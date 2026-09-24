@@ -399,13 +399,16 @@ python scripts/score_fallback_judge.py</code></pre>
         </div>
 
         <div class="dogfood-callout">
-          <p><strong>The gap we found and closed:</strong> before this fix, about 13 of Aletheore's
-            ~96 findings per run were confirmed false positives, and most were claims about one
-            file that another file in the same pull request contradicts ("no migration is
-            included", "this field is never registered"). Each per-file review call saw only its
-            own patch. Showing every call the rest of the pull request raised Flash precision from
-            71.5% to 92.6% (a 20.4-point gain, 95% interval +7 to +31) with recall unchanged, and
-            AIR from 79.7% to 93.3%. Confirmed false positives fell to about 2 per run on Flash.</p>
+          <p><strong>The gap we found and closed:</strong> before this fix, of Aletheore's ~96
+            findings per run, about 13 were confirmed false positives and about 14 more were ones
+            the judge could not confirm as accurate; precision counts both against us, which is
+            why it was 71.5%. Most of these were claims about one file that another file in the
+            same pull request contradicts ("no migration is included", "this field is never
+            registered"), because each per-file review call saw only its own patch. Showing every
+            call the rest of the pull request raised Flash precision from 71.5% to 92.6% (a
+            20.4-point gain, 95% interval +7 to +31) with recall unchanged, and AIR from 79.7% to
+            93.3%. On Flash, confirmed false positives fell to about 2 per run and unconfirmed
+            findings to about 5.</p>
         </div>
 
         <div class="dogfood-callout">
