@@ -569,7 +569,12 @@ PICKER_HTML = f"""<!DOCTYPE html>
   const res = await apiGet('/app/repos');
   if (!res) return;
   const data = await res.json();
-  if (data.repos.length === 0) {{
+  // Flash installations have no dashboard, but their owner still needs to see
+  // the AI credit balance and buy more - listed here next to any AIR repos,
+  // because one login can administer both (AIR on a personal account, Flash
+  // on an org).
+  const billingAccounts = data.billing_accounts || [];
+  if (data.repos.length === 0 && billingAccounts.length === 0) {{
     body.innerHTML = '<div class="empty-state">No managed repositories yet. Aletheore Community (free) runs self-service - the CLI, the free GitHub Action, and free GitHub App usage all work without a hosted dashboard, so a free installation won\\'t appear here. Install the Aletheore GitHub App on an organization and subscribe to AIR to get a managed dashboard.</div>';
     return;
   }}
@@ -603,6 +608,20 @@ PICKER_HTML = f"""<!DOCTYPE html>
     group.innerHTML = '<div class="picker-org-label">' + escapeHtml(org) + '</div><div class="picker-grid">' + grid + '</div>';
     body.appendChild(group);
   }});
+  if (billingAccounts.length > 0) {{
+    const flashGroup = document.createElement('div');
+    flashGroup.className = 'picker-org-group';
+    const flashGrid = billingAccounts.map(function (a) {{
+      return '<a class="picker-card" href="/credits/' + encodeURIComponent(a.installation_id) + '">' +
+        '<div class="picker-card-icon"><i class="ti ti-coin" aria-hidden="true"></i></div>' +
+        '<div class="picker-card-body"><div class="picker-repo">' + escapeHtml(a.account_login) + '</div>' +
+        '<span class="picker-plan paid">' + escapeHtml(planDisplayName(a.plan)) + '</span>' +
+        '<div class="picker-pending-note">$' + Number(a.credit_remaining_usd).toFixed(2) + ' AI credit &middot; buy more</div></div>' +
+        '<i class="ti ti-chevron-right picker-card-arrow" aria-hidden="true"></i></a>';
+    }}).join('');
+    flashGroup.innerHTML = '<div class="picker-org-label">Flash organizations (AI credit)</div><div class="picker-grid">' + flashGrid + '</div>';
+    body.appendChild(flashGroup);
+  }}
 }})();
 </script>
 """
@@ -2848,6 +2867,142 @@ document.getElementById("continue-checkout").addEventListener("click", (event) =
 }});
 </script>
 """
+
+
+_CREDITS_JS = """
+const installationId = __INSTALLATION_ID__;
+const creditsApi = '/app/installations/' + installationId + '/credits';
+function setStatus(text, color) {
+  const el = document.getElementById('topup-status');
+  el.textContent = text;
+  el.style.color = color || '';
+}
+async function loadCredits() {
+  const body = document.getElementById('credits-body');
+  const res = await fetch(creditsApi);
+  if (res.status === 401) { window.location.href = '/auth/logout'; return; }
+  if (!res.ok) {
+    body.innerHTML = '<div class="empty-state">This installation has no paid Aletheore plan, or your GitHub account does not administer it. <a href="/dashboard">Back to your organizations</a></div>';
+    return;
+  }
+  const data = await res.json();
+  const base = data.base_credit_remaining_usd || 0;
+  const topup = data.topup_credit_balance_usd || 0;
+  window._creditTopupPriceId = data.credit_topup_price_id;
+  body.innerHTML =
+    '<div class="settings-block">' +
+      '<div class="settings-block-label">' + escapeHtml(data.account_login) + ' &middot; ' + escapeHtml(planDisplayName(data.plan)) + '</div>' +
+      '<div class="settings-block-hint">$' + (base + topup).toFixed(2) + ' AI credit available for reviews and builds</div>' +
+      '<div class="settings-block-hint">$' + base.toFixed(2) + ' included this month' +
+        (topup > 0 ? ' + $' + topup.toFixed(2) + ' purchased (never expires)' : '') + '</div>' +
+      '<div class="form-row" style="margin-top: 10px;">' +
+        '<input type="number" id="topup-amount" min="5" step="1" value="10" style="width: 80px;">' +
+        '<button class="btn btn-accent" id="topup-button" style="margin-left: 6px;">Buy more credit</button>' +
+      '</div>' +
+      '<div id="topup-status" class="settings-block-hint"></div>' +
+      '<div class="settings-block-hint">One-time purchase, $1 per credit, minimum $5. Purchased credit never expires. When your credit runs out, automatic AI reviews pause until your plan renews or you buy more.</div>' +
+    '</div>';
+  document.getElementById('topup-button').addEventListener('click', function () { buyCredit(this); });
+}
+async function buyCredit(btn) {
+  if (typeof Paddle === 'undefined') {
+    setStatus('Checkout is unavailable right now - try disabling any ad/script blocker and reload.');
+    return;
+  }
+  // Number() plus an integer check rejects "7.9" and "1e5" instead of quietly
+  // charging a different amount than what is on screen.
+  const rawAmount = Number(document.getElementById('topup-amount').value);
+  const amount = Number.isInteger(rawAmount) ? rawAmount : NaN;
+  if (!amount || amount < 5) {
+    setStatus('Minimum purchase is $5.');
+    return;
+  }
+  btn.disabled = true;
+  setStatus('Opening checkout...');
+  try {
+    window._creditCheckoutCompleted = false;
+    // The checkout token has a 30-minute TTL, so it is re-fetched at click time
+    // instead of reusing the page-load copy.
+    const res = await fetch(creditsApi);
+    if (!res.ok) { setStatus('Could not start checkout - try again.', 'var(--critical)'); return; }
+    const data = await res.json();
+    Paddle.Checkout.open({
+      items: [{ priceId: data.credit_topup_price_id, quantity: amount }],
+      customData: { installation_token: data.checkout_installation_token },
+      ...(data.paddle_customer_id ? { customer: { id: data.paddle_customer_id } } : {}),
+      settings: {
+        displayMode: 'overlay',
+        variant: 'one-page',
+        successUrl: 'https://app.aletheore.com/credits/' + installationId,
+      },
+    });
+  } finally {
+    btn.disabled = false;
+  }
+}
+if (typeof Paddle !== 'undefined') {
+  Paddle.Environment.set('__PADDLE_ENV__');
+  Paddle.Initialize({
+    token: '__PADDLE_TOKEN__',
+    eventCallback: function (event) {
+      if (!event || !event.name || !document.getElementById('topup-status')) return;
+      if (event.name === 'checkout.loaded') {
+        setStatus('');
+      } else if (event.name === 'checkout.completed') {
+        window._creditCheckoutCompleted = true;
+        setStatus('Purchase complete - your balance updates once the payment is confirmed.', 'var(--success)');
+      } else if (event.name === 'checkout.closed' && !window._creditCheckoutCompleted) {
+        setStatus('');
+      } else if (event.name === 'checkout.error') {
+        setStatus('Checkout error - try again.', 'var(--critical)');
+      }
+    },
+  });
+}
+loadCredits();
+"""
+
+
+def _credits_page(installation_id: int) -> str:
+    """Standalone AI-credit page for one installation: balance plus a one-time
+    top-up checkout. Exists because a Flash installation has no managed
+    dashboard (the settings page, which holds the same controls for AIR, is
+    AIR-only), so without this a Flash customer who runs out of credit has no
+    way to buy more. Data comes from /app/installations/{id}/credits, which does
+    the real authorization; nothing sensitive is baked into this HTML."""
+    settings = get_settings()
+    script = (
+        _CREDITS_JS.replace("__INSTALLATION_ID__", str(int(installation_id)))
+        .replace("__PADDLE_ENV__", settings.paddle_environment)
+        .replace("__PADDLE_TOKEN__", settings.paddle_client_token)
+    )
+    return f"""<!DOCTYPE html>
+<title>AI credit — Aletheore</title>
+{ICONS_LINK}
+{STYLE}
+<div class="picker-wrap">
+  <div class="picker-head">
+    <h1>AI credit</h1>
+    <div><a class="btn" href="/dashboard">All organizations</a> <a class="btn" href="/auth/logout">Sign out</a></div>
+  </div>
+  <div id="credits-body"><div class="empty-state">Loading&hellip;</div></div>
+</div>
+<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
+<script>
+{FETCH_HELPERS}
+{script}
+</script>
+"""
+
+
+@frontend_router.get("/credits/{installation_id}", response_class=HTMLResponse)
+async def credits_page(installation_id: int, request: Request):
+    session = await get_current_session(request)
+    if session is None:
+        return RedirectResponse(
+            url=f"/auth/login?next={quote(f'/credits/{installation_id}', safe='')}", status_code=307
+        )
+    return _no_store_html(_credits_page(installation_id))
 
 
 @frontend_router.get("/subscribe", response_class=HTMLResponse)

@@ -2257,6 +2257,7 @@ async def test_reserve_llm_spend_low_balance_triggers_email_enqueue(pool, monkey
         "plan": "flash",
         "base_credit_remaining_usd": pytest.approx(0.70),
         "topup_credit_balance_usd": pytest.approx(0.00),
+        "installation_id": installation_id,
     }
 
 
@@ -2366,6 +2367,7 @@ async def test_reserve_llm_spend_rejection_triggers_exhausted_email(pool, monkey
         "plan": "flash",
         "base_credit_remaining_usd": pytest.approx(0.01),
         "topup_credit_balance_usd": pytest.approx(0.00),
+        "installation_id": installation_id,
     }
 
 

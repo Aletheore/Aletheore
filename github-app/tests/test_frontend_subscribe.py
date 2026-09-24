@@ -189,3 +189,42 @@ async def test_multiple_installations_shows_selection(pool, monkeypatch):
     assert "acme" in response.text
     assert "beta-corp" in response.text
     assert "pri_01kyhevc9xn6z2nghmy8057jvp" in response.text  # air yearly price id
+
+
+def test_credits_page_embeds_only_the_installation_id_not_any_secret(monkeypatch):
+    monkeypatch.setenv("PADDLE_CLIENT_TOKEN", "live_publishable_token")
+    from app_server.config import get_settings
+    from app_server.frontend import _credits_page
+
+    get_settings.cache_clear()
+    html = _credits_page(4321)
+    get_settings.cache_clear()
+
+    assert "const installationId = 4321;" in html
+    assert "/app/installations/' + installationId + '/credits" in html
+    # No placeholder left un-substituted, and the page never inlines a checkout
+    # token (that is minted per request by the API, after authorization).
+    assert "__INSTALLATION_ID__" not in html and "__PADDLE" not in html
+    assert "checkout_installation_token" in html  # read from the API response only
+
+
+@pytest.mark.asyncio
+async def test_credits_route_redirects_to_login_and_back_when_signed_out(pool):
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/credits/555", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/auth/login?next=%2Fcredits%2F555"
+
+
+@pytest.mark.asyncio
+async def test_credits_route_serves_the_page_when_signed_in(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[555])
+    async with client:
+        response = await client.get("/credits/555")
+
+    assert response.status_code == 200
+    assert "const installationId = 555;" in response.text
+    assert "no-store" in response.headers.get("cache-control", "")
