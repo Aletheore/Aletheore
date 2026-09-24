@@ -5215,7 +5215,7 @@ def test_flash_review_job_passes_changed_file_contents_to_review_diff(monkeypatc
     assert captured["file_contents"] == {"app.py": "real content of app.py"}
 
 
-def test_flash_review_job_requests_second_model_verification_on_paid_plan(monkeypatch):
+def test_flash_review_job_does_not_request_second_model_verification_on_air_plan(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
@@ -5264,10 +5264,12 @@ def test_flash_review_job_requests_second_model_verification_on_paid_plan(monkey
     )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
-    assert captured["verify_with_second_model"] is True
+    # AIR's second-model verification pass was dropped: with shared per-file PR
+    # context it added ~1 pt of precision for ~5x the generation cost.
+    assert captured["verify_with_second_model"] is False
+    # on_verification_usage is still wired: suggestion-correctness verification
+    # (below) uses the same callback and runs on every paid plan.
     assert callable(captured["on_verification_usage"])
-    # Suggestion-correctness verification runs on every paid plan
-    # regardless of verify_with_second_model - AIR gets both.
     assert captured["verify_suggestions"] is True
     # AIR gets per-file completeness too - not gated the same as
     # verify_with_second_model (that one's plan-specific; this one's
