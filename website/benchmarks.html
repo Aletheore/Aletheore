@@ -385,15 +385,15 @@ python scripts/score_fallback_judge.py</code></pre>
         <div class="dogfood-table-wrap">
           <table class="dogfood-table">
             <thead>
-              <tr><th>Tool</th><th>Recall</th><th>Precision</th><th>Findings per run</th></tr>
+              <tr><th>Tool</th><th>Golden bugs caught (of 44)</th><th>Recall</th><th>Precision</th><th>Accurate findings</th></tr>
             </thead>
             <tbody>
-              <tr><td><strong>Aletheore Flash</strong></td><td><strong>53.4%</strong> [39-68]</td><td><strong>92.6%</strong> [86-96]</td><td>94</td></tr>
-              <tr><td><strong>Aletheore AIR</strong></td><td><strong>51.1%</strong> [37-65]</td><td><strong>93.3%</strong> [87-98]</td><td>92</td></tr>
-              <tr><td>GitHub Copilot</td><td>59.1% [40-76]</td><td>89.6% [82-98]</td><td>80</td></tr>
-              <tr><td>GitLab Duo</td><td>50.0% [38-63]</td><td>95.1% [85-100]</td><td>41</td></tr>
-              <tr><td>Qodo</td><td>22.7% [10-38]</td><td>100% [100-100]</td><td>37</td></tr>
-              <tr><td><em>Aletheore Flash, before the fix below</em></td><td>52.3% [39-66]</td><td>71.5% [63-82]</td><td>96</td></tr>
+              <tr><td><strong>Aletheore Flash</strong></td><td><strong>23.5</strong></td><td><strong>53.4%</strong> [39-68]</td><td><strong>92.6%</strong> [86-96]</td><td><strong>87.5</strong> of 94.5</td></tr>
+              <tr><td><strong>Aletheore AIR</strong></td><td><strong>22.5</strong></td><td><strong>51.1%</strong> [37-65]</td><td><strong>93.3%</strong> [87-98]</td><td><strong>86.5</strong> of 92.5</td></tr>
+              <tr><td>GitHub Copilot</td><td>26.0</td><td>59.1% [40-76]</td><td>89.6% [82-98]</td><td>60.0 of 67</td></tr>
+              <tr><td>GitLab Duo</td><td>22.0</td><td>50.0% [38-63]</td><td>95.1% [85-100]</td><td>39.0 of 41</td></tr>
+              <tr><td>Qodo</td><td>10.0</td><td>22.7% [10-38]</td><td>100% [100-100]</td><td>24.0 of 24</td></tr>
+              <tr><td><em>Aletheore Flash, before the fix below</em></td><td>23.0</td><td>52.3% [39-66]</td><td>71.5% [63-82]</td><td>69.0 of 96.5</td></tr>
             </tbody>
           </table>
         </div>
@@ -412,9 +412,19 @@ python scripts/score_fallback_judge.py</code></pre>
           <p><strong>How to read this:</strong> against GitLab Duo and Copilot, Aletheore is in the
             same range on both measures, not ahead; Copilot's recall is numerically higher, and no
             difference between Aletheore and either of them is statistically significant. Against Qodo it is a
-            trade-off: recall is about 30 points higher, but Qodo reported far fewer findings
-            (37 against our 94) and every one was accurate, so its precision is higher. We return
-            two to three times as many findings as GitLab Duo at similar measured accuracy.</p>
+            trade-off: recall is about 30 points higher, but Qodo made far fewer findings
+            (24 real ones against our 94) and every one was accurate, so its precision is higher.</p>
+        </div>
+
+        <div class="dogfood-callout">
+          <p><strong>Bugs caught, and where our real lead is:</strong> on the 44 human-identified
+            bugs, the tools are level: Aletheore catches 23.5 per run, GitLab Duo 22.0, Copilot 26.0
+            (the highest) and Qodo 10.0. Where the gap is large is the volume of <em>accurate</em>
+            findings: about 87 per run against 60, 39 and 24, roughly 1.5 to 3.6 times as many.
+            Those extra findings are accurate, specific claims about the diff, but most are not
+            among the 44 golden bugs (many are test-coverage, maintainability and edge-case
+            observations), so read it as breadth of accurate feedback, not as more bugs caught.
+            "Accurate findings" excludes summary comments and other non-findings.</p>
         </div>
 
         <div class="dogfood-callout">
