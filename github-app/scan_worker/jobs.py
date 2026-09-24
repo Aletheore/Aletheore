@@ -2125,9 +2125,12 @@ def run_flash_review_job(
         review_ran = _run_flash_review(
             settings, installation_id, repo_full_name, pr_number, base_sha, head_sha,
             reserved_spend, is_free_tier=is_free_tier,
-            verify_with_second_model=(installation["plan"] == "air"),
-            # Both paid tiers (flash, air) - not is_free_tier, not plan-
-            # specific like verify_with_second_model above. See
+            # No plan requests the second-model verification pass any more (it
+            # was AIR-only): with shared per-file PR context on, it added ~1 pt
+            # of precision at ~5x the generation cost and rejected a few real
+            # findings. verify_with_second_model stays False here; the
+            # capability remains in flash_review for benchmarks.
+            # Both paid tiers (flash, air) - not is_free_tier. See
             # per_file_completeness's own comment at the review_diff call
             # site for the real cost numbers behind this split.
             per_file_completeness=not is_free_tier,
