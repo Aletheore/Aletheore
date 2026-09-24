@@ -2,7 +2,7 @@ import json
 import subprocess
 from unittest.mock import MagicMock, patch
 
-from aletheore.static_analysis.semgrep_scanner import check_semgrep
+from aletheore.static_analysis.semgrep_scanner import _relative_path, check_semgrep
 
 
 def _mock_run(returncode: int, stdout: str = "", stderr: str = "") -> MagicMock:
@@ -55,6 +55,46 @@ def test_check_semgrep_normalizes_a_real_finding_shape(tmp_path):
             "message": "Importing text/template risks XSS.",
         }
     ]
+
+
+def test_relative_path_normalizes_to_forward_slashes_even_on_windows(tmp_path, monkeypatch):
+    # Real bug found on Windows CI: _relative_path used str(Path(...)),
+    # which renders with the OS's native separator - a backslash-joined
+    # path on Windows (confirmed live: a real semgrep finding came back as
+    # 'pkg\\queries.go') - while every other path in this codebase's
+    # evidence (graph.py's _rel(), secrets.py's iter_all_files,
+    # mcp_server.py's _search_files) uses .as_posix() specifically so
+    # paths are comparable and joinable regardless of the scanning host's
+    # OS. This can't be reproduced by just running on this (POSIX) machine
+    # - str(PosixPath(...)) already uses forward slashes here, so the bug
+    # is invisible on the exact platform this suite normally runs on.
+    # Simulates Windows' real Path.relative_to() return shape directly (a
+    # PureWindowsPath, exactly what a real Windows host's pathlib returns)
+    # rather than requiring an actual Windows machine to prove the fix.
+    from pathlib import Path, PureWindowsPath
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    raw_path = str(repo / "pkg" / "queries.go")
+    expected_target = repo.resolve() / "pkg" / "queries.go"
+    windows_relative = PureWindowsPath("pkg", "queries.go")
+    original_relative_to = Path.relative_to
+
+    def patched_relative_to(self, other):
+        # Scoped to this exact call (matching this test's own resolved
+        # paths) rather than every Path.relative_to() call process-wide -
+        # a global patch also intercepts pytest's own internal path
+        # handling, corrupting unrelated test IDs/output.
+        if self == expected_target and other == repo.resolve():
+            return windows_relative
+        return original_relative_to(self, other)
+
+    monkeypatch.setattr(Path, "relative_to", patched_relative_to)
+
+    result = _relative_path(raw_path, repo)
+
+    assert result == "pkg/queries.go"
+    assert "\\" not in result
 
 
 def test_check_semgrep_survives_explicit_null_in_nested_fields(tmp_path):
