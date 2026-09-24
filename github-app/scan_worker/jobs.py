@@ -2221,14 +2221,15 @@ def _cross_file_check_runs_for(plan: str, is_free_tier: bool) -> int:
 def _share_pr_context_for(is_free_tier: bool) -> bool:
     """Whether each per-file generation call is also shown the rest of the PR's patches.
 
-    OFF unless FLASH_REVIEW_SHARE_PR_CONTEXT=on. It changes what the model sees on every call
-    and multiplies generation input tokens by ~4.6x (measured: $0.0027 -> $0.0103 per PR on the
-    13-case corpus, whose PRs average 10.6 files), which matters for the Flash plan's $5 base
-    credit - a heavy user would get roughly 485 average-size reviews per credit instead of
-    ~1,850 (plan cap: 800/month) - so rolling it out is a deliberate call, not a side effect of
-    merging. Never for free tier: per-file generation is paid-tier only.
+    ON by default for paid tiers; FLASH_REVIEW_SHARE_PR_CONTEXT=off is the kill switch. On the
+    13-case real-PR corpus it took Flash precision from 71.5% to 92.6% at unchanged recall, because
+    the false positives were claims made blind to another file in the same PR. The price is
+    ~4.6x generation input tokens (measured: $0.0027 -> $0.0103 per PR, whose PRs average 10.6
+    files), which matters for the Flash plan's $5 base credit: a heavy user gets roughly 485
+    average-size reviews per credit instead of ~1,850 (plan cap: 800/month). Never for free tier:
+    per-file generation is paid-tier only.
     """
-    return not is_free_tier and os.environ.get("FLASH_REVIEW_SHARE_PR_CONTEXT") == "on"
+    return not is_free_tier and os.environ.get("FLASH_REVIEW_SHARE_PR_CONTEXT") != "off"
 
 
 # Matches the 4 severity labels flash_review._rank_findings_with_severity's

@@ -10888,9 +10888,9 @@ def test_cross_file_check_model_has_a_price_so_its_spend_can_be_accounted():
 
 @pytest.mark.parametrize(
     "env_value,is_free_tier,expected",
-    [(None, False, False), ("off", False, False), ("yes", False, False), ("on", False, True), ("on", True, False)],
+    [(None, False, True), ("on", False, True), ("off", False, False), ("on", True, False), (None, True, False)],
 )
-def test_share_pr_context_for_is_off_unless_enabled_and_never_for_free_tier(monkeypatch, env_value, is_free_tier, expected):
+def test_share_pr_context_for_is_on_by_default_off_via_kill_switch_and_never_for_free_tier(monkeypatch, env_value, is_free_tier, expected):
     from scan_worker.jobs import _share_pr_context_for
 
     if env_value is None:
