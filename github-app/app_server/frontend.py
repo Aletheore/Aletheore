@@ -104,7 +104,7 @@ a { color: var(--accent); }
 .gh-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .signin-divider { border-top: 1px solid var(--border); margin: 1.75rem 0 1.25rem; }
 .scope-list { display: flex; flex-direction: column; gap: 8px; }
-.scope-row { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--slate-600); line-height: 1.5; }
+.scope-row { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--slate-600); line-height: normal; }
 .scope-row .mark { font-family: var(--font-mono); color: var(--slate-400); font-size: 11px; flex-shrink: 0; }
 .scope-note code { font-family: var(--font-mono); font-size: 11px; color: var(--slate-500); }
 .signin-fine-print { font-size: 11.5px; color: var(--slate-400); line-height: 1.6; margin-top: 1rem; margin-bottom: 0; text-align: center; }
