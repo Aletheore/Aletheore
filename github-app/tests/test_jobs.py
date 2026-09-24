@@ -55,6 +55,18 @@ def _noop_wiki_write_lock(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _noop_review_history(monkeypatch):
+    # insert_review_history (see scan_worker/db.py) opens a real psycopg
+    # connection the same way repo_checkout_lock/wiki_write_lock above do -
+    # same reason, same fix. Called from _record_review_outcome at every
+    # exit point of run_flash_review_job/_run_flash_review, so every
+    # existing Flash Review test here would otherwise hang on a fake DSN.
+    # Its own correctness has its own real-Postgres test in
+    # test_scan_worker_db.py.
+    monkeypatch.setattr("scan_worker.jobs.insert_review_history", lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
 def _pr_is_open_by_default(monkeypatch):
     # run_pr_scan_job now checks the PR is still open before attempting a
     # checkout that's doomed once its branch is gone (see

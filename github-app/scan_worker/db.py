@@ -827,6 +827,35 @@ def set_last_reviewed_sha(
         conn.commit()
 
 
+def insert_review_history(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    pr_number: int,
+    outcome: str,
+    finding_count: int = 0,
+    skip_reason: str | None = None,
+) -> None:
+    """Logs one Flash Review run's outcome for the "review history" list on
+    the Flash credits page (app_server/db.py's async get_review_history
+    reads it back). See migration 069 for why this table exists - a genuine
+    gap, no existing table recorded per-PR outcome. Called from
+    run_flash_review_job/_run_flash_review, which use this module's sync
+    psycopg pool, not app_server's asyncpg one - kept here as a separate
+    write path into the same table rather than reused across services."""
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO flash_review_history
+                    (installation_id, repo_full_name, pr_number, outcome, finding_count, skip_reason)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (installation_id, repo_full_name, pr_number, outcome, finding_count, skip_reason),
+            )
+        conn.commit()
+
+
 def get_installation(dsn: str, installation_id: int) -> dict | None:
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
