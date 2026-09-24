@@ -298,6 +298,21 @@ table.findings tr:last-child td { border-bottom: none; }
 .docs-commit-desc { font-size: 12.5px; color: var(--slate-600); line-height: 1.55; }
 .docs-commit-desc a { font-weight: 650; }
 .diagram-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 4px; background: var(--slate-50); padding: 14px; }
+.graph-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+.graph-toolbar select { font-family: var(--font-sans); font-size: 12.5px; border: 1px solid var(--border-strong); border-radius: 4px; padding: 6px 8px; background: var(--paper); color: var(--ink-900); }
+.graph-toolbar .hint { font-size: 11.5px; color: var(--slate-400); font-family: var(--font-mono); }
+svg#depgraph { width: 100%; height: 440px; display: block; border: 1px solid var(--border); border-radius: 4px; background: var(--paper); cursor: grab; }
+svg#depgraph:active { cursor: grabbing; }
+.g-node circle { fill: var(--paper); stroke: var(--ink-900); stroke-width: 1.4; cursor: grab; }
+.g-node.hub circle { stroke: var(--accent); stroke-width: 1.8; }
+.g-node text { font-family: var(--font-mono); font-size: 10px; fill: var(--ink-900); pointer-events: none; }
+.g-node.dim circle { stroke: var(--border-strong); }
+.g-node.dim text { fill: var(--slate-400); }
+.g-edge { stroke: var(--border-strong); stroke-width: 1; }
+.g-edge.g-edge-ambiguous { stroke-dasharray: 3 3; }
+.g-edge.dim { stroke: var(--border); }
+.g-edge.lit { stroke: var(--accent); stroke-width: 1.4; }
+.graph-hover-info { margin-top: 8px; font-family: var(--font-mono); font-size: 12px; color: var(--slate-600); min-height: 16px; }
 .diagram-wrap .mermaid { display: flex; justify-content: center; min-width: max-content; }
 .diagram-wrap.diagram-zoomable { cursor: zoom-in; }
 .diagram-wrap.diagram-zoomable::after { content: "Click to open full diagram"; display: block; margin-top: 8px; color: var(--slate-400); font-size: 11px; text-align: center; }
@@ -1481,6 +1496,15 @@ WIKI_HTML = _page_head("AIRview — {repo} — Aletheore") + _shell(
       </div>
       <div class="section-body" id="wiki-body"><div class="empty-state">Loading&hellip;</div></div>
     </section>
+    <section class="section">
+      <div class="section-head">
+        <div class="section-title"><i class="ti ti-affiliate" aria-hidden="true"></i>Interactive dependency graph</div>
+        <span class="section-sub" id="graph-section-sub">Same evidence as the diagram above, explorable</span>
+      </div>
+      <div class="section-body" id="graph-body">
+        <button class="btn" id="graph-load-btn" onclick="loadGraph()">Load graph</button>
+      </div>
+    </section>
 """
 ) + f"""
 <script>
@@ -1764,6 +1788,221 @@ async function loadWiki() {{
   if ((data.subsystems || []).length === 0) {{
     grid.outerHTML = '<div class="empty-state">No subsystems generated yet.</div>';
   }}
+}}
+
+let graphLoaded = false;
+let graphNodes = [];
+let graphEdges = [];
+let graphAllClusters = [];
+
+async function loadGraph() {{
+  if (graphLoaded) return;
+  graphLoaded = true;
+  const container = document.getElementById('graph-body');
+  container.innerHTML = '<div class="empty-state">Loading&hellip;</div>';
+  const res = await apiGet(base + '/graph');
+  if (!res) {{ container.innerHTML = '<div class="empty-state">Graph unavailable.</div>'; return; }}
+  if (res.status === 402) {{
+    container.innerHTML = lockedFeature(
+      'AIRview is a paid feature',
+      'A live, explorable map of every module and import in this repo.',
+      {WIKI_LOCKED_PREVIEW!r}
+    );
+    return;
+  }}
+  if (res.status === 404) {{ container.innerHTML = '<div class="empty-state">No scan evidence yet.</div>'; return; }}
+  if (!res.ok) {{ container.innerHTML = '<div class="empty-state">Graph unavailable.</div>'; return; }}
+  const data = await res.json();
+  graphAllClusters = data.clusters || [];
+  graphNodes = data.nodes || [];
+  graphEdges = data.edges || [];
+
+  const options = ['<option value="all">All modules (' + graphNodes.length + ')</option>'].concat(
+    graphAllClusters.map(function (c) {{
+      return '<option value="' + c.id + '">' + escapeHtml(c.name) + ' (' + c.modules.length + ')</option>';
+    }})
+  );
+  container.innerHTML =
+    '<div class="graph-toolbar">' +
+      '<select id="graph-cluster-select" onchange="renderGraphForCluster(this.value)">' + options.join('') + '</select>' +
+      '<span class="hint">drag &middot; scroll to zoom &middot; hover to trace imports</span>' +
+    '</div>' +
+    '<svg id="depgraph" viewBox="0 0 900 440"></svg>' +
+    '<div class="graph-hover-info" id="graph-hover-info">Hover a module to see what it imports.</div>';
+
+  // A repo-wide graph is unreadable past a couple hundred nodes and the
+  // naive O(n^2) repulsion below would visibly lag - default to the
+  // largest cluster instead of "all" once the graph is big enough that
+  // either problem would actually show up.
+  const select = document.getElementById('graph-cluster-select');
+  if (graphNodes.length > 150 && graphAllClusters.length > 0) {{
+    const largest = graphAllClusters.reduce(function (a, b) {{ return b.modules.length > a.modules.length ? b : a; }});
+    select.value = String(largest.id);
+  }}
+  renderGraphForCluster(select.value);
+}}
+
+function renderGraphForCluster(clusterValue) {{
+  const nodeSet = clusterValue === 'all' ? null : new Set(
+    (graphAllClusters.find(function (c) {{ return String(c.id) === String(clusterValue); }}) || {{ modules: [] }}).modules
+  );
+  const nodes = nodeSet ? graphNodes.filter(function (n) {{ return nodeSet.has(n.id); }}) : graphNodes;
+  const nodeIds = new Set(nodes.map(function (n) {{ return n.id; }}));
+  const edges = graphEdges.filter(function (e) {{ return nodeIds.has(e.source) && nodeIds.has(e.target); }});
+  runForceGraph(nodes, edges);
+}}
+
+function runForceGraph(rawNodes, rawEdges) {{
+  const existingSvg = document.getElementById('depgraph');
+  // Every cluster-filter change calls this again - without stopping the
+  // previous run's loop first, each switch left its old
+  // requestAnimationFrame(tick) chain running forever alongside the new
+  // one (a real bug: found in review, before this the graph never
+  // settled and burned CPU indefinitely on repeated filter changes).
+  if (existingSvg._stopGraphTick) existingSvg._stopGraphTick();
+
+  const W = 900, H = 440;
+  const degree = {{}};
+  rawEdges.forEach(function (e) {{ degree[e.source] = (degree[e.source] || 0) + 1; degree[e.target] = (degree[e.target] || 0) + 1; }});
+  const nodes = rawNodes.map(function (n, i) {{
+    const angle = (i / Math.max(rawNodes.length, 1)) * Math.PI * 2;
+    return {{
+      id: n.id, hub: (degree[n.id] || 0) >= 6,
+      x: W / 2 + Math.cos(angle) * 220, y: H / 2 + Math.sin(angle) * 160,
+      vx: 0, vy: 0, fx: null, fy: null,
+    }};
+  }});
+  const byId = {{}};
+  nodes.forEach(function (n) {{ byId[n.id] = n; }});
+  const edges = rawEdges
+    .map(function (e) {{ return {{ source: byId[e.source], target: byId[e.target], ambiguous: !!e.ambiguous }}; }})
+    .filter(function (e) {{ return e.source && e.target; }});
+  const neighborsOf = {{}};
+  nodes.forEach(function (n) {{ neighborsOf[n.id] = new Set(); }});
+  edges.forEach(function (e) {{ neighborsOf[e.source.id].add(e.target.id); neighborsOf[e.target.id].add(e.source.id); }});
+
+  const svg = document.getElementById('depgraph');
+  svg.innerHTML = '';
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const world = document.createElementNS(svgNS, 'g');
+  svg.appendChild(world);
+
+  const edgeEls = edges.map(function (e) {{
+    const line = document.createElementNS(svgNS, 'line');
+    line.setAttribute('class', 'g-edge' + (e.ambiguous ? ' g-edge-ambiguous' : ''));
+    world.appendChild(line);
+    return line;
+  }});
+  const nodeEls = nodes.map(function (n) {{
+    const g = document.createElementNS(svgNS, 'g');
+    g.setAttribute('class', 'g-node' + (n.hub ? ' hub' : ''));
+    const circle = document.createElementNS(svgNS, 'circle');
+    circle.setAttribute('r', n.hub ? 8 : 5);
+    g.appendChild(circle);
+    const text = document.createElementNS(svgNS, 'text');
+    text.textContent = n.id.length > 40 ? '…' + n.id.slice(-37) : n.id;
+    text.setAttribute('x', n.hub ? 12 : 9);
+    text.setAttribute('y', 4);
+    g.appendChild(text);
+    world.appendChild(g);
+    n._el = g;
+    return g;
+  }});
+
+  function render() {{
+    edges.forEach(function (e, i) {{
+      edgeEls[i].setAttribute('x1', e.source.x); edgeEls[i].setAttribute('y1', e.source.y);
+      edgeEls[i].setAttribute('x2', e.target.x); edgeEls[i].setAttribute('y2', e.target.y);
+    }});
+    nodes.forEach(function (n) {{ n._el.setAttribute('transform', 'translate(' + n.x + ',' + n.y + ')'); }});
+  }}
+
+  let dragging = null;
+  let ticking = true;
+  function tick() {{
+    if (!ticking) return;
+    for (let i = 0; i < nodes.length; i++) {{
+      for (let j = i + 1; j < nodes.length; j++) {{
+        const a = nodes[i], b = nodes[j];
+        const dx = a.x - b.x, dy = a.y - b.y;
+        const dist2 = dx * dx + dy * dy || 0.01;
+        const dist = Math.sqrt(dist2);
+        const force = 900 / dist2;
+        const fx = (dx / dist) * force, fy = (dy / dist) * force;
+        a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+      }}
+    }}
+    edges.forEach(function (e) {{
+      const a = e.source, b = e.target;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const force = (dist - 100) * 0.02;
+      const fx = (dx / dist) * force, fy = (dy / dist) * force;
+      a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+    }});
+    let totalSpeed = 0;
+    nodes.forEach(function (n) {{
+      n.vx += (W / 2 - n.x) * 0.001; n.vy += (H / 2 - n.y) * 0.001;
+      if (n.fx != null) {{ n.x = n.fx; n.y = n.fy; n.vx = 0; n.vy = 0; return; }}
+      n.vx *= 0.82; n.vy *= 0.82;
+      n.x = Math.max(16, Math.min(W - 16, n.x + n.vx));
+      n.y = Math.max(16, Math.min(H - 16, n.y + n.vy));
+      totalSpeed += Math.abs(n.vx) + Math.abs(n.vy);
+    }});
+    render();
+    // Stop scheduling once the layout has settled (or there's nothing to
+    // move) instead of running an O(n^2) loop forever - a drag restarts it
+    // below, since a dragged node's own movement still needs to push its
+    // neighbors even after the rest had gone quiet.
+    if (dragging || totalSpeed > 0.05) {{
+      requestAnimationFrame(tick);
+    }} else {{
+      ticking = false;
+    }}
+  }}
+  tick();
+  svg._stopGraphTick = function () {{ ticking = false; }};
+
+  svg.onpointerdown = function (ev) {{
+    const target = ev.target.closest('.g-node');
+    if (!target) return;
+    dragging = nodes[nodeEls.indexOf(target)];
+    svg.setPointerCapture(ev.pointerId);
+    if (!ticking) {{ ticking = true; tick(); }}
+  }};
+  svg.onpointermove = function (ev) {{
+    if (!dragging) return;
+    const rect = svg.getBoundingClientRect();
+    dragging.fx = (ev.clientX - rect.left) * (W / rect.width);
+    dragging.fy = (ev.clientY - rect.top) * (H / rect.height);
+  }};
+  svg.onpointerup = function () {{ if (dragging) {{ dragging.fx = null; dragging.fy = null; dragging = null; }} }};
+
+  let zoom = 1;
+  svg.onwheel = function (ev) {{
+    ev.preventDefault();
+    zoom = Math.max(0.5, Math.min(2.5, zoom - ev.deltaY * 0.001));
+    world.setAttribute('transform', 'scale(' + zoom + ')');
+  }};
+
+  const hoverInfo = document.getElementById('graph-hover-info');
+  nodeEls.forEach(function (g, i) {{
+    g.onpointerenter = function () {{
+      const n = nodes[i];
+      const neighbors = neighborsOf[n.id];
+      nodeEls.forEach(function (g2, j) {{ g2.classList.toggle('dim', j !== i && !neighbors.has(nodes[j].id)); }});
+      edgeEls.forEach(function (el, k) {{
+        const lit = edges[k].source.id === n.id || edges[k].target.id === n.id;
+        el.classList.toggle('lit', lit); el.classList.toggle('dim', !lit);
+      }});
+      hoverInfo.textContent = n.id + '  ->  ' + (Array.from(neighbors).join(', ') || '(no resolved imports)');
+    }};
+    g.onpointerleave = function () {{
+      nodeEls.forEach(function (g2) {{ g2.classList.remove('dim'); }});
+      edgeEls.forEach(function (el) {{ el.classList.remove('lit'); el.classList.remove('dim'); }});
+      hoverInfo.textContent = 'Hover a module to see what it imports.';
+    }};
+  }});
 }}
 
 loadWiki();

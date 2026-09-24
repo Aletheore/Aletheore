@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
+from aletheore.architecture import build_graph_summary
 from aletheore.evidence_resolution import resolve_code_evidence
 from scan_worker.github_api import fetch_file_content
 from scan_worker.live_wiki import build_file_fallback_detail
@@ -627,6 +628,33 @@ async def get_dashboard_wiki(org: str, repo: str, request: Request):
             for s in subsystems
         ],
     }
+
+
+@dashboard_router.get("/app/{org}/{repo}/graph")
+async def get_dashboard_graph(org: str, repo: str, request: Request):
+    installation = await _require_admin_installation(request, org, repo)
+    pool = request.app.state.db_pool
+    installation_id = installation["installation_id"]
+    repo_full_name = f"{org}/{repo}"
+
+    evidence = await get_latest_evidence(pool, installation_id, repo_full_name)
+    if evidence is None:
+        raise HTTPException(status_code=404, detail="no scan evidence yet")
+
+    summary = build_graph_summary(evidence)
+
+    # Cluster ids have no name in scan evidence (architecture.build_clusters
+    # only assigns an integer id) - borrow the names Live Wiki's LLM pass
+    # already gave them (subsystem_id there is str(cluster["id"]), see
+    # live_wiki.py) rather than showing "Cluster 3" to someone who's already
+    # seen the named version on the AIRview wiki page. Falls back to a plain
+    # numbered label for a repo whose wiki hasn't built yet.
+    subsystems = await list_wiki_subsystems(pool, installation_id, repo_full_name)
+    names_by_id = {int(s["subsystem_id"]): s["name"] for s in subsystems}
+    for cluster in summary["clusters"]:
+        cluster["name"] = names_by_id.get(cluster["id"], f"Cluster {cluster['id']}")
+
+    return {"repo_full_name": repo_full_name, **summary}
 
 
 @dashboard_router.get("/app/{org}/{repo}/wiki/{subsystem_id}")

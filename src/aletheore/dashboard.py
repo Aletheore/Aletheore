@@ -7,6 +7,7 @@ from starlette.applications import Starlette
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.routing import Route
 
+from aletheore.architecture import build_graph_summary
 from aletheore.evidence import (
     IncompatibleEvidenceVersionError,
     MalformedEvidenceError,
@@ -14,7 +15,6 @@ from aletheore.evidence import (
 )
 from aletheore.history import list_snapshots
 from aletheore.mcp_server import build_server, read_evidence
-from aletheore.wiki_diagrams import _ambiguous_edges
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -135,42 +135,6 @@ def build_history_summary(repo_path: Path) -> list[dict]:
             continue
         result.append(entry)
     return result
-
-
-def build_graph_summary(evidence: dict) -> dict:
-    dependency_graph = evidence["repository"]["dependency_graph"]
-    clusters = evidence["architecture"]["clusters"]
-    # Unlike wiki_diagrams.py's static mermaid builders (which exclude these
-    # entirely - a rendered mermaid edge has no way to look "less certain"),
-    # this graph is interactive, so an edge whose resolution was genuinely
-    # uncertain (currently C# type-reference edges kept despite more than
-    # one file declaring that type name - see scanner/graph.py's
-    # _csharp_type_reference_targets) is still drawn, just marked so the
-    # frontend can dim/dash it rather than presenting it identically to a
-    # certain edge. A source-root/prefix tiebreak among real candidates
-    # ("inferred") is not marked - that resolution is generally still
-    # correct, unlike genuine which-of-several-files uncertainty.
-    ambiguous = _ambiguous_edges(evidence["repository"].get("modules", []))
-
-    node_to_cluster: dict[str, int] = {}
-    for cluster in clusters:
-        for module in cluster["modules"]:
-            node_to_cluster[module] = cluster["id"]
-
-    nodes = [
-        {"id": node, "cluster": node_to_cluster.get(node)}
-        for node in dependency_graph["nodes"]
-    ]
-    edges = [
-        {
-            "source": edge[0],
-            "target": edge[1],
-            **({"ambiguous": True} if (edge[0], edge[1]) in ambiguous else {}),
-        }
-        for edge in dependency_graph["edges"]
-    ]
-
-    return {"nodes": nodes, "edges": edges, "clusters": clusters}
 
 
 async def _sleep_unless_shutting_down(seconds: float, shutdown: asyncio.Event | None) -> bool:
