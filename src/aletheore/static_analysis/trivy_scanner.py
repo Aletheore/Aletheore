@@ -150,7 +150,18 @@ def check_trivy(repo_path: Path, timeout: int | None = None) -> dict:
             # secrets.py's own convention (a salted hash OF the real value)
             # is for - telling two different real secrets apart, or noticing
             # a flagged secret was rotated to a different value.
-            preview = _redact_secret_value(secret.get("Match", ""), salt)
+            # Flash Review finding on this same fix: secret.get("Match", "")
+            # silently falls back to hashing the empty string when Trivy
+            # omits Match (reportedly never happens in real output, but
+            # nothing guarantees it), producing an identical, real-looking
+            # "sha256:..." preview for every such finding regardless of
+            # rule/location - masking the fact that no match text was
+            # available at all, rather than just being a low-signal preview.
+            # A literal, distinct sentinel makes that case observable instead
+            # of indistinguishable from a genuine (if unlikely) hash
+            # collision.
+            match = secret.get("Match")
+            preview = _redact_secret_value(match, salt) if match else "unavailable"
             findings.append(
                 {
                     "tool": "trivy",
