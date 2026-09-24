@@ -920,7 +920,7 @@ def test_run_pr_scan_job_excludes_a_dismissed_secret_from_the_pr_comment(
     assert "Secrets" not in posted["body"]
 
 
-def test_check_run_failure_does_not_overwrite_diff_comment(bare_repo_with_two_commits, monkeypatch):
+def test_check_run_failure_does_not_overwrite_diff_comment(bare_repo_with_two_commits, monkeypatch, caplog):
     bare_path, base_sha, head_sha = bare_repo_with_two_commits
     posted = {}
 
@@ -945,16 +945,22 @@ def test_check_run_failure_does_not_overwrite_diff_comment(bare_repo_with_two_co
     monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", raise_error)
     monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: None)
 
-    run_pr_scan_job(
-        installation_id=1,
-        repo_full_name="octocat/hello-world",
-        pr_number=7,
-        base_sha=base_sha,
-        head_sha=head_sha,
-    )
+    with caplog.at_level("WARNING", logger="scan_worker.jobs"):
+        run_pr_scan_job(
+            installation_id=1,
+            repo_full_name="octocat/hello-world",
+            pr_number=7,
+            base_sha=base_sha,
+            head_sha=head_sha,
+        )
 
     assert "Secrets" in posted["body"]
     assert "couldn't complete this scan" not in posted["body"]
+    # Real gap found auditing #771 (which fixed this same silent-swallow for
+    # the static-analysis check run and flagged this and 2 other sibling
+    # call sites as the same pre-existing bug): a persistently broken check
+    # run was otherwise invisible to operators - no log anywhere.
+    assert any("flash review check run failed" in record.message for record in caplog.records)
 
 
 def test_temp_dir_cleaned_up_on_success(bare_repo_with_two_commits, monkeypatch):
