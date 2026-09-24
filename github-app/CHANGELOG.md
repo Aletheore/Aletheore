@@ -18,6 +18,45 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-09-25
+
+69 commits since the previous deploy (`github-app-deploy-2026-09-23-5`), tagged
+`github-app-deploy-2026-09-25` (commit `1d4da1f`), 1 migration (069). All five code services
+(`app-server`, `scan-worker`, `scan-worker-2`, `health-worker`, `scheduler`) rebuilt and
+force-recreated; `jina-embed` unchanged.
+
+Flash Review and credit:
+
+- **Shared per-file PR context is on by default** (kill switch `FLASH_REVIEW_SHARE_PR_CONTEXT=off`).
+  Measured on 13 real PRs: +20 points of precision on Flash and +13 on AIR, no recall change.
+  Also new: cross-file contradiction check, findings ranked by severity (#793) with id-based
+  matching, and a deterministic "Blast radius" section in the review summary.
+- **Paid-plan review-count caps removed** (flash 800, air 500): the AI-credit balance is the only
+  limit. **AIR's second-model verification pass dropped** and no longer advertised.
+- **Standalone AI-credit page** (#800) so Flash customers can see balance and buy credit, with an
+  alert email, billing-portal link and a per-PR review history (migration 069,
+  `flash_review_history`); alert-email and billing-portal writes need a seat or real GitHub admin
+  permission on a repo the installation covers. Stepper for the top-up amount, max 1000.
+- **Dashboard theme redesign** and an interactive dependency graph in hosted AIRview.
+
+Fixes found in production the same day:
+
+- **#815 - one minified file blocked the whole repo's durable code graph sync.** The symbol insert
+  had no `ON CONFLICT` clause, so two same-name symbols on one line (minified JS) aborted the
+  transaction; 36 `UniqueViolation` warnings in 24h on `website/vendor/chart.umd.min.js`.
+- **#816 - two false alarms.** `ops_monitor.failed_jobs.<queue>` counted every entry in RQ's
+  failed registry (kept a year), so 26 scans that failed Sep 19-23 kept alerting; it now counts only
+  failures in the last hour (`ALETHEORE_OPS_FAILED_JOBS_WINDOW_SECONDS`). A `ClientDisconnect` was
+  emailed as a bug and counted as a `/webhook` 5xx; it is now logged, answered 499, not counted.
+- **#787 - webhook 5xx counter window** (900s to 300s) now live; this is what turned one
+  disconnect into a 15-minute-later alert.
+- **#811 - privacy policy** now discloses the free-tier LLM providers (Groq, Gemini, OpenAI
+  free tier, OpenRouter).
+- Also: #785, #786, #788, #789, #790, and Windows CI fixes (#792, #794).
+
+The `Aletheore` installation (147514632) was moved back from `flash` to `air` in the database so
+the public status page (endpoint monitoring is AIR-only) reports again. Not part of the code deploy.
+
 ## 2026-09-22
 
 4 commits since the previous deploy, tagged `github-app-deploy-2026-09-22` (commit `4abeae9`),
