@@ -4164,6 +4164,22 @@ def test_rank_findings_fails_open_on_malformed_json(mock_generation_adapter):
 
 
 @patch("scan_worker.flash_review.flash_review_generation_adapter")
+def test_rank_findings_rejects_a_boolean_rank_instead_of_treating_it_as_an_int(mock_generation_adapter):
+    # bool is an int subclass, so `"rank": true` used to pass validation and attach True as a rank.
+    # The id field already had this guard; rank must match it. A bad entry fails the whole
+    # ranking open (findings posted unranked) rather than posting a bogus rank.
+    mock_adapter = MagicMock()
+    mock_adapter.is_available.return_value = True
+    mock_adapter.simple_completion.return_value = json.dumps([
+        {"id": 1, "rank": True, "severity": "High"},
+        {"id": 2, "rank": 2, "severity": "Low"},
+    ])
+    mock_generation_adapter.return_value = mock_adapter
+
+    assert _rank_findings_with_severity(_TWO_FINDINGS) == _TWO_FINDINGS
+
+
+@patch("scan_worker.flash_review.flash_review_generation_adapter")
 def test_rank_findings_fails_open_when_response_length_mismatches(mock_generation_adapter):
     mock_adapter = MagicMock()
     mock_adapter.is_available.return_value = True
