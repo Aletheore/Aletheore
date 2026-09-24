@@ -10,17 +10,24 @@
 -- asking "did Flash Review even run on my last PR" currently has no answer
 -- anywhere in the schema.
 --
--- outcome is the three shapes a Flash Review run actually ends in: it
--- posted at least one finding, it ran clean (no findings), or it was
--- skipped before running (free-tier exhausted, spend-reservation failure,
--- etc - skip_reason records which). finding_count is 0 for clean and
--- skipped rows.
+-- outcome is the four shapes a Flash Review run actually ends in: it
+-- posted at least one finding, it ran clean (nothing held up - a genuinely
+-- clean diff, everything already dismissed, or rejected by grounding/
+-- verification), it was skipped before running (free-tier exhausted,
+-- spend-reservation exhausted, etc), or it failed (an unhandled exception,
+-- or real findings held up but every post attempt to GitHub failed - the
+-- latter is deliberately not "clean", which would wrongly read as "we
+-- checked, no issues" when the truth is "we found something and couldn't
+-- tell you"). skip_reason doubles as a free-text detail for both skipped
+-- and failed rows (never the raw exception text for a failure - this table
+-- is read back on a customer-facing page). finding_count is 0 except on a
+-- posted row.
 CREATE TABLE IF NOT EXISTS flash_review_history (
     id              BIGSERIAL PRIMARY KEY,
     installation_id BIGINT NOT NULL REFERENCES installations(installation_id) ON DELETE CASCADE,
     repo_full_name  TEXT NOT NULL,
     pr_number       INT NOT NULL,
-    outcome         TEXT NOT NULL CHECK (outcome IN ('posted', 'clean', 'skipped')),
+    outcome         TEXT NOT NULL CHECK (outcome IN ('posted', 'clean', 'skipped', 'failed')),
     finding_count   INT NOT NULL DEFAULT 0,
     skip_reason     TEXT,
     reviewed_at     TIMESTAMPTZ NOT NULL DEFAULT now()

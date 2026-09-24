@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from aletheore.evidence import EVIDENCE_VERSION
 from app_server.auth import encrypt_access_token, sign_session_id
 from app_server.db import (
+    add_installation_member,
     create_session,
     hide_repo,
     insert_repo_history,
@@ -150,6 +151,10 @@ def _evidence_with_module(module_path: str, function_name: str, docstring: str |
 
 async def _async_true(*args, **kwargs) -> bool:
     return True
+
+
+async def _async_false(*args, **kwargs) -> bool:
+    return False
 
 
 async def _logged_in_client(pool, monkeypatch, administered_ids):
@@ -374,6 +379,187 @@ async def test_credits_404s_a_free_installation(pool, monkeypatch):
         response = await client.get("/app/installations/735/credits")
 
     assert response.status_code == 404
+
+
+# alert_email is a stronger bar than credits/review-history: it also
+# receives AIR endpoint-health alerts and can be changed, not just read, so
+# _require_paid_installation_or_404's coarse "administers this installation"
+# check (which GitHub documents as including anyone with mere read access
+# to one covered repo) is not enough - _has_real_admin_permission or a real
+# installation_members seat is required, same bar as admin.py's own
+# billing-portal route. Note _logged_in_client's own _async_true patch on
+# app_server.admin._has_real_admin_permission does NOT affect these tests:
+# that name is bound separately inside app_server.dashboard (a `from ...
+# import` binds a new name in the importing module, unaffected by
+# patching the origin module's attribute afterward) - the routes under
+# test call app_server.dashboard._has_real_admin_permission, which must be
+# patched explicitly per test.
+
+
+@pytest.mark.asyncio
+async def test_alert_email_requires_login(pool):
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/app/installations/740/alert-email")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_alert_email_denies_a_non_admin_in_the_coarse_installations_set(pool, monkeypatch):
+    await upsert_installation(pool, 740, "my-org")
+    await set_installation_plan(pool, 740, "flash")
+    await insert_repo_history(
+        pool, 740, "my-org/repo", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[740])
+    monkeypatch.setattr("app_server.dashboard._has_real_admin_permission", _async_false)
+
+    async with client:
+        response = await client.get("/app/installations/740/alert-email")
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_alert_email_denies_when_no_covered_repo_exists(pool, monkeypatch):
+    # A brand-new installation with zero reviewed repos has nothing to
+    # verify real GitHub permission against - fails closed, same rule
+    # _has_real_admin_permission's own docstring states for the identical
+    # "unable to verify" situation.
+    await upsert_installation(pool, 741, "my-org")
+    await set_installation_plan(pool, 741, "flash")
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[741])
+    monkeypatch.setattr("app_server.dashboard._has_real_admin_permission", _async_true)
+
+    async with client:
+        response = await client.get("/app/installations/741/alert-email")
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_alert_email_allows_a_real_admin_with_a_covered_repo(pool, monkeypatch):
+    await upsert_installation(pool, 742, "my-org")
+    await set_installation_plan(pool, 742, "flash")
+    await pool.execute("UPDATE installations SET alert_email = 'owner@example.com' WHERE installation_id = 742")
+    await insert_repo_history(
+        pool, 742, "my-org/repo", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[742])
+    monkeypatch.setattr("app_server.dashboard._has_real_admin_permission", _async_true)
+
+    async with client:
+        response = await client.get("/app/installations/742/alert-email")
+
+    assert response.status_code == 200
+    assert response.json()["alert_email"] == "owner@example.com"
+
+
+@pytest.mark.asyncio
+async def test_alert_email_allows_a_seated_member_without_a_github_check(pool, monkeypatch):
+    # A seated member is trusted outright - paid access was already vetted
+    # when they were added - so this must succeed even when the real-admin
+    # GitHub check would fail (or there is no covered repo at all to check
+    # it against).
+    await upsert_installation(pool, 743, "my-org")
+    await set_installation_plan(pool, 743, "flash")
+    await add_installation_member(pool, 743, "octocat", "octocat")
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[743])
+    monkeypatch.setattr("app_server.dashboard._has_real_admin_permission", _async_false)
+
+    async with client:
+        response = await client.get("/app/installations/743/alert-email")
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_set_alert_email_rejects_an_invalid_address(pool, monkeypatch):
+    await upsert_installation(pool, 744, "my-org")
+    await set_installation_plan(pool, 744, "flash")
+    await add_installation_member(pool, 744, "octocat", "octocat")
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[744])
+
+    async with client:
+        response = await client.post("/app/installations/744/alert-email", json={"alert_email": "not-an-email"})
+
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_set_alert_email_saves_and_records_an_audit_row(pool, monkeypatch):
+    await upsert_installation(pool, 745, "my-org")
+    await set_installation_plan(pool, 745, "flash")
+    await add_installation_member(pool, 745, "octocat", "octocat")
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[745])
+
+    async with client:
+        response = await client.post("/app/installations/745/alert-email", json={"alert_email": "new@example.com"})
+
+    assert response.status_code == 200
+    row = await pool.fetchrow("SELECT alert_email FROM installations WHERE installation_id = 745")
+    assert row["alert_email"] == "new@example.com"
+    audit_row = await pool.fetchrow(
+        "SELECT action, actor_login FROM admin_action_log WHERE installation_id = 745"
+    )
+    assert audit_row["action"] == "alert_email_changed"
+    assert audit_row["actor_login"] == "octocat"
+
+
+@pytest.mark.asyncio
+async def test_set_alert_email_denies_a_non_admin_in_the_coarse_installations_set(pool, monkeypatch):
+    await upsert_installation(pool, 746, "my-org")
+    await set_installation_plan(pool, 746, "flash")
+    await insert_repo_history(
+        pool, 746, "my-org/repo", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[746])
+    monkeypatch.setattr("app_server.dashboard._has_real_admin_permission", _async_false)
+
+    async with client:
+        response = await client.post("/app/installations/746/alert-email", json={"alert_email": "attacker@example.com"})
+
+    assert response.status_code == 403
+    row = await pool.fetchrow("SELECT alert_email FROM installations WHERE installation_id = 746")
+    assert row["alert_email"] is None
+
+
+@pytest.mark.asyncio
+async def test_billing_portal_denies_a_non_admin_in_the_coarse_installations_set(pool, monkeypatch):
+    await upsert_installation(pool, 747, "my-org")
+    await set_installation_plan(pool, 747, "flash")
+    await insert_repo_history(
+        pool, 747, "my-org/repo", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[747])
+    monkeypatch.setattr("app_server.dashboard._has_real_admin_permission", _async_false)
+
+    async with client:
+        response = await client.get("/app/installations/747/billing-portal")
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_billing_portal_returns_a_url_for_a_seated_member(pool, monkeypatch):
+    await upsert_installation(pool, 748, "my-org")
+    await set_installation_plan(pool, 748, "flash")
+    await add_installation_member(pool, 748, "octocat", "octocat")
+    await pool.execute(
+        "UPDATE installations SET paddle_customer_id = 'ctm_test' WHERE installation_id = 748"
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[748])
+    monkeypatch.setattr(
+        "app_server.dashboard.create_portal_session",
+        lambda *a, **k: {"urls": {"general": {"overview": "https://paddle.example/portal/ctm_test"}}},
+    )
+
+    async with client:
+        response = await client.get("/app/installations/748/billing-portal")
+
+    assert response.status_code == 200
+    assert response.json()["url"] == "https://paddle.example/portal/ctm_test"
 
 
 @pytest.mark.asyncio

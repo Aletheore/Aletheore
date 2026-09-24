@@ -1699,30 +1699,6 @@ async def get_review_history(pool: asyncpg.Pool, installation_id: int, limit: in
     return [dict(row) for row in rows]
 
 
-async def insert_review_history(
-    pool: asyncpg.Pool,
-    installation_id: int,
-    repo_full_name: str,
-    pr_number: int,
-    outcome: str,
-    finding_count: int = 0,
-    skip_reason: str | None = None,
-) -> None:
-    await pool.execute(
-        """
-        INSERT INTO flash_review_history
-            (installation_id, repo_full_name, pr_number, outcome, finding_count, skip_reason)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        """,
-        installation_id,
-        repo_full_name,
-        pr_number,
-        outcome,
-        finding_count,
-        skip_reason,
-    )
-
-
 async def set_pushover_user_key(pool: asyncpg.Pool, installation_id: int, user_key: str | None) -> None:
     await pool.execute(
         "UPDATE installations SET pushover_user_key = $2, updated_at = now() WHERE installation_id = $1",
