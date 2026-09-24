@@ -131,8 +131,14 @@ def check_pmd(repo_path: Path, timeout: int | None = None) -> dict:
         # relativizes for) - so paths line up with every other tool's
         # `path` field and with the diff-scoping this evidence feeds
         # elsewhere in the pipeline.
+        # Real bug found on Windows CI (same pattern, same fix, as
+        # semgrep_scanner.py's identical helper): str(Path(...)) renders
+        # with the OS's native separator - a backslash-joined path on
+        # Windows - while every other path in this codebase's evidence
+        # uses .as_posix() specifically so paths are comparable and
+        # joinable regardless of the scanning host's OS.
         try:
-            path = str(Path(raw_path).resolve().relative_to(repo_path.resolve()))
+            path = Path(raw_path).resolve().relative_to(repo_path.resolve()).as_posix()
         except ValueError:
             path = raw_path
         for violation in file_entry.get("violations") or []:

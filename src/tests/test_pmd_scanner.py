@@ -71,6 +71,58 @@ def test_check_pmd_normalizes_a_real_finding_shape(tmp_path):
     ]
 
 
+def test_check_pmd_normalizes_path_to_forward_slashes_even_on_windows(tmp_path, monkeypatch):
+    # Real bug found on Windows CI in semgrep_scanner.py's identical
+    # pattern, audited into every scanner sharing it: str(Path(...))
+    # renders with the OS's native separator - a backslash-joined path on
+    # Windows - while every other path in this codebase's evidence uses
+    # .as_posix(). Can't be reproduced by just running on this (POSIX)
+    # machine - str(PosixPath(...)) already uses forward slashes here - so
+    # this simulates Windows' real Path.relative_to() return shape
+    # directly (a PureWindowsPath) rather than requiring an actual Windows
+    # machine to prove the fix.
+    from pathlib import Path, PureWindowsPath
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "App.java").write_text("public class App {}\n")
+    abs_path = tmp_path / "src" / "App.java"
+    expected_target = abs_path.resolve()
+    windows_relative = PureWindowsPath("src", "App.java")
+    original_relative_to = Path.relative_to
+
+    def patched_relative_to(self, other):
+        if self == expected_target and other == tmp_path.resolve():
+            return windows_relative
+        return original_relative_to(self, other)
+
+    monkeypatch.setattr(Path, "relative_to", patched_relative_to)
+
+    payload = {
+        "files": [
+            {
+                "filename": str(abs_path),
+                "violations": [
+                    {
+                        "beginline": 4,
+                        "rule": "SystemPrintln",
+                        "ruleset": "Best Practices",
+                        "priority": 2,
+                        "description": "Usage of System.out/err",
+                    }
+                ],
+            }
+        ]
+    }
+    mock_result = _mock_run(4, stdout=json.dumps(payload))
+
+    with patch("aletheore.static_analysis.pmd_scanner.shutil.which", return_value="/usr/local/bin/pmd"), \
+         patch("aletheore.static_analysis.pmd_scanner.subprocess.run", return_value=mock_result):
+        result = check_pmd(tmp_path)
+
+    assert result["findings"][0]["path"] == "src/App.java"
+    assert "\\" not in result["findings"][0]["path"]
+
+
 def test_check_pmd_maps_security_ruleset_to_vulnerability_type(tmp_path):
     (tmp_path / "App.java").write_text("public class App {}\n")
     payload = {

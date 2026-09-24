@@ -88,6 +88,29 @@ def test_check_vulnerabilities_degrades_gracefully_on_network_failure(tmp_path):
     assert result["findings"] == []
 
 
+def test_check_vulnerabilities_degrades_gracefully_when_a_manifest_read_fails(tmp_path):
+    # Real gap found via audit: none of the _parse_*_pins() functions guard
+    # their own read_text() against a manifest disappearing between its
+    # exists() check and the read (a real TOCTOU race on any OS) or against
+    # a path exceeding Windows' legacy MAX_PATH limit - an OSError there
+    # used to crash the whole scan instead of degrading just this section,
+    # the same way an OSV.dev network failure already degrades gracefully
+    # (test above).
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("fastapi==0.100.0\n")
+
+    with patch(
+        "aletheore.vulnerabilities.Path.read_text",
+        side_effect=OSError("simulated: path too long"),
+    ):
+        result = check_vulnerabilities(repo)
+
+    assert result["checked"] is False
+    assert "path too long" in result["reason"]
+    assert result["findings"] == []
+
+
 def test_check_vulnerabilities_no_pins_short_circuits_without_network_call(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

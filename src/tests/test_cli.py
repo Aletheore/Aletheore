@@ -361,13 +361,20 @@ def test_aletheore_command_falls_back_to_bare_name_when_not_resolvable(monkeypat
 
 
 def test_stdio_entry_includes_type_only_when_asked(monkeypatch, tmp_path):
+    # str(Path("/repo")), not a hardcoded "/repo" literal: _stdio_entry just
+    # stringifies whatever Path it's given, and on Windows that renders with
+    # backslashes ("\\repo") - correctly reflecting how a real Windows repo
+    # path would look to the MCP client actually spawning this command, not
+    # a bug. A hardcoded POSIX-style literal here tested this test's own
+    # assumption, not the function.
+    repo_path_str = str(Path("/repo"))
     _no_command_resolvable(monkeypatch, tmp_path)
 
     entry_with_type = _stdio_entry(Path("/repo"), include_type=True)
     entry_without_type = _stdio_entry(Path("/repo"), include_type=False)
 
-    assert entry_with_type == {"type": "stdio", "command": "aletheore", "args": ["mcp", "/repo"]}
-    assert entry_without_type == {"command": "aletheore", "args": ["mcp", "/repo"]}
+    assert entry_with_type == {"type": "stdio", "command": "aletheore", "args": ["mcp", repo_path_str]}
+    assert entry_without_type == {"command": "aletheore", "args": ["mcp", repo_path_str]}
 
 
 def test_stdio_entry_writes_resolved_absolute_path_when_found(monkeypatch, tmp_path):
@@ -376,7 +383,7 @@ def test_stdio_entry_writes_resolved_absolute_path_when_found(monkeypatch, tmp_p
 
     entry = _stdio_entry(Path("/repo"), include_type=False)
 
-    assert entry == {"command": "/usr/local/bin/aletheore", "args": ["mcp", "/repo"]}
+    assert entry == {"command": "/usr/local/bin/aletheore", "args": ["mcp", str(Path("/repo"))]}
 
 
 def test_opencode_entry_uses_single_command_array_not_command_plus_args(monkeypatch, tmp_path):
@@ -384,7 +391,7 @@ def test_opencode_entry_uses_single_command_array_not_command_plus_args(monkeypa
 
     entry = _opencode_entry(Path("/repo"))
 
-    assert entry == {"type": "local", "command": ["aletheore", "mcp", "/repo"], "enabled": True}
+    assert entry == {"type": "local", "command": ["aletheore", "mcp", str(Path("/repo"))], "enabled": True}
 
 
 def test_write_json_mcp_client_config_refuses_a_symlinked_config_file(tmp_path):
@@ -448,6 +455,13 @@ def test_write_json_mcp_client_config_without_repo_path_keeps_the_prior_global_b
     assert json.loads(config_path.read_text()) == {"mcpServers": {"aletheore": entry}}
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="O_NOFOLLOW doesn't exist on Windows - _write_config_file_no_symlink_follow's "
+    "own docstring already documents this exact platform limitation: no O_NOFOLLOW support "
+    "means falling back to the pre-existing follow-symlink behavior there, not a bug this "
+    "test should fail on",
+)
 def test_write_config_file_no_symlink_follow_refuses_a_symlinked_leaf(tmp_path):
     # Flash Review finding on PR #603: _config_path_escapes_repo's
     # resolve()-then-check happens as a separate step from the later
@@ -626,10 +640,20 @@ def _isolate_claude_desktop_home(monkeypatch, tmp_path) -> Path:
     outside the repo entirely - every test that runs a default (no
     --target) install must isolate this or it would write into whatever
     machine happens to run the suite. Forces macOS so behavior is
-    deterministic across dev machines and CI regardless of host OS."""
+    deterministic across dev machines and CI regardless of host OS.
+
+    Real gap found on Windows CI: setting $HOME doesn't actually achieve
+    that stated goal - Path.home() ignores $HOME on Windows entirely (it
+    reads %USERPROFILE% instead), so _claude_desktop_config_path()'s darwin
+    branch (Path.home() / "Library" / ...) silently fell back to the real
+    machine's actual home directory instead of fake_home whenever this
+    suite ran on a real Windows box, regardless of the sys.platform patch.
+    Patching Path.home itself is genuinely OS-independent, unlike patching
+    the env var it happens to read on POSIX.
+    """
     fake_home = tmp_path / "fake-home"
     monkeypatch.setattr("aletheore.cli.sys.platform", "darwin")
-    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setattr("aletheore.cli.Path.home", lambda: fake_home)
     return fake_home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
 
 
@@ -673,8 +697,13 @@ def test_mcp_install_default_now_includes_codex_cli(tmp_path, monkeypatch):
 
 
 def test_claude_desktop_config_path_on_macos(monkeypatch, tmp_path):
+    # Path.home patched directly, not $HOME - see _isolate_claude_desktop_home's
+    # docstring, same gap, same fix: Path.home() ignores $HOME on Windows
+    # entirely (it reads %USERPROFILE% instead), so this test's simulated
+    # darwin branch silently fell back to the real machine's actual home
+    # directory whenever the suite ran on a real Windows box.
     monkeypatch.setattr("aletheore.cli.sys.platform", "darwin")
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("aletheore.cli.Path.home", lambda: tmp_path)
 
     assert _claude_desktop_config_path() == (
         tmp_path / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
@@ -702,9 +731,11 @@ def test_claude_desktop_config_path_on_linux_is_none(monkeypatch):
 
 
 def test_mcp_install_writes_claude_desktop_target(tmp_path, monkeypatch):
+    # Path.home patched directly, not $HOME - see _isolate_claude_desktop_home's
+    # docstring, same gap, same fix.
     fake_home = tmp_path / "fake-home"
     monkeypatch.setattr("aletheore.cli.sys.platform", "darwin")
-    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setattr("aletheore.cli.Path.home", lambda: fake_home)
     install_target = tmp_path / "install-target"
     install_target.mkdir()
     _no_command_resolvable(monkeypatch, tmp_path)
@@ -725,9 +756,11 @@ def test_mcp_install_writes_claude_desktop_target(tmp_path, monkeypatch):
 def test_mcp_install_claude_desktop_keys_by_repo_so_a_second_repo_does_not_clobber_the_first(
     tmp_path, monkeypatch
 ):
+    # Path.home patched directly, not $HOME - see _isolate_claude_desktop_home's
+    # docstring, same gap, same fix.
     fake_home = tmp_path / "fake-home"
     monkeypatch.setattr("aletheore.cli.sys.platform", "darwin")
-    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setattr("aletheore.cli.Path.home", lambda: fake_home)
     _no_command_resolvable(monkeypatch, tmp_path)
     repo_a = tmp_path / "repo-a"
     repo_b = tmp_path / "repo-b"
@@ -750,9 +783,11 @@ def test_mcp_install_claude_desktop_keys_by_full_path_not_just_basename(tmp_path
     # `~/work/client-b/backend`), silently overwriting one repo's entry
     # with the other's - exactly the class of bug this keying scheme was
     # written to prevent, just not fully closed by name alone.
+    # Path.home patched directly, not $HOME - see _isolate_claude_desktop_home's
+    # docstring, same gap, same fix.
     fake_home = tmp_path / "fake-home"
     monkeypatch.setattr("aletheore.cli.sys.platform", "darwin")
-    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setattr("aletheore.cli.Path.home", lambda: fake_home)
     _no_command_resolvable(monkeypatch, tmp_path)
     client_a = tmp_path / "client-a" / "backend"
     client_b = tmp_path / "client-b" / "backend"

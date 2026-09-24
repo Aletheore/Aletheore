@@ -117,7 +117,17 @@ def _locked_rw_credentials_file(credentials_path: Path):
     # leaving the file briefly world/group-readable.
     fd = os.open(str(credentials_path), os.O_RDWR | os.O_CREAT, 0o600)
     try:
-        os.fchmod(fd, 0o600)
+        # Real bug found on Windows: os.fchmod doesn't exist there at all
+        # (unlike os.chmod, which does but only toggles the read-only
+        # attribute, not real POSIX owner/group/other bits) - this call was
+        # unconditional, so every credential save/read/clear on Windows
+        # crashed with AttributeError before ever reaching the locking
+        # below, which *was* already correctly platform-conditional.
+        # POSIX-style "restrictive permissions" has no real Windows
+        # equivalent to fall back to, so this is skipped there entirely
+        # rather than best-effort-approximated with os.chmod.
+        if sys.platform != "win32":
+            os.fchmod(fd, 0o600)
         if sys.platform == "win32":
             import msvcrt
 

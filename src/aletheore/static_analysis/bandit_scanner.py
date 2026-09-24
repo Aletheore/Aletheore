@@ -36,8 +36,14 @@ def _relative_path(raw_path: str, repo_path: Path) -> str:
     # clean repo-relative one. Joining onto repo_path explicitly first
     # anchors the resolve() to the right base regardless of the calling
     # process's own cwd.
+    # Real bug found on Windows CI (same pattern, same fix, as
+    # semgrep_scanner.py's identical helper): str(Path(...)) renders with
+    # the OS's native separator - a backslash-joined path on Windows -
+    # while every other path in this codebase's evidence uses .as_posix()
+    # specifically so paths are comparable and joinable regardless of the
+    # scanning host's OS.
     try:
-        return str((repo_path / raw_path).resolve().relative_to(repo_path.resolve()))
+        return (repo_path / raw_path).resolve().relative_to(repo_path.resolve()).as_posix()
     except ValueError:
         return raw_path
 
