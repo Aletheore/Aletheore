@@ -2051,6 +2051,80 @@ async def test_dashboard_wiki_subsystem_404s_for_unknown_id(pool, monkeypatch):
     assert response.status_code == 404
 
 
+def _graph_evidence() -> dict:
+    return {
+        "aletheore_version": EVIDENCE_VERSION,
+        "repository": {
+            "modules": [{"path": "a.py"}, {"path": "b.py"}],
+            "dependency_graph": {"nodes": ["a.py", "b.py"], "edges": [["a.py", "b.py"]]},
+        },
+        "architecture": {"clusters": [{"id": 0, "modules": ["a.py", "b.py"], "internal_edges": 1}]},
+    }
+
+
+@pytest.mark.asyncio
+async def test_dashboard_graph_requires_login(pool):
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/app/octocat/hello-world/graph")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_dashboard_graph_requires_paid_plan(pool, monkeypatch):
+    await upsert_installation(pool, 606, "octocat")  # defaults to plan='free'
+    await insert_repo_history(pool, 606, "octocat/hello-world", datetime.now(timezone.utc), _graph_evidence())
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[606])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/graph")
+    assert response.status_code == 402
+
+
+@pytest.mark.asyncio
+async def test_dashboard_graph_404s_with_no_evidence_yet(pool, monkeypatch):
+    await upsert_installation(pool, 607, "octocat")
+    await set_installation_plan(pool, 607, "air")
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[607])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/graph")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_dashboard_graph_returns_nodes_edges_and_named_clusters(pool, monkeypatch):
+    await upsert_installation(pool, 608, "octocat")
+    await set_installation_plan(pool, 608, "air")
+    await insert_repo_history(pool, 608, "octocat/hello-world", datetime.now(timezone.utc), _graph_evidence())
+    await _seed_wiki_subsystem(pool, 608, "octocat/hello-world", "0", name="Core")
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[608])
+
+    async with client:
+        response = await client.get("/app/octocat/hello-world/graph")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {n["id"] for n in body["nodes"]} == {"a.py", "b.py"}
+    assert body["edges"] == [{"source": "a.py", "target": "b.py"}]
+    assert body["clusters"] == [{"id": 0, "modules": ["a.py", "b.py"], "internal_edges": 1, "name": "Core"}]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_graph_falls_back_to_numbered_cluster_name_without_a_wiki(pool, monkeypatch):
+    # No Live Wiki build yet (or none for this cluster id) - the graph must
+    # still render, just without a human name for the cluster.
+    await upsert_installation(pool, 609, "octocat")
+    await set_installation_plan(pool, 609, "air")
+    await insert_repo_history(pool, 609, "octocat/hello-world", datetime.now(timezone.utc), _graph_evidence())
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[609])
+
+    async with client:
+        response = await client.get("/app/octocat/hello-world/graph")
+
+    assert response.status_code == 200
+    assert response.json()["clusters"][0]["name"] == "Cluster 0"
+
+
 @pytest.mark.asyncio
 async def test_dashboard_docs_requires_login(pool):
     app.state.db_pool = pool

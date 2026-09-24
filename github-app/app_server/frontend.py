@@ -1853,6 +1853,14 @@ function renderGraphForCluster(clusterValue) {{
 }}
 
 function runForceGraph(rawNodes, rawEdges) {{
+  const existingSvg = document.getElementById('depgraph');
+  // Every cluster-filter change calls this again - without stopping the
+  // previous run's loop first, each switch left its old
+  // requestAnimationFrame(tick) chain running forever alongside the new
+  // one (a real bug: found in review, before this the graph never
+  // settled and burned CPU indefinitely on repeated filter changes).
+  if (existingSvg._stopGraphTick) existingSvg._stopGraphTick();
+
   const W = 900, H = 440;
   const degree = {{}};
   rawEdges.forEach(function (e) {{ degree[e.source] = (degree[e.source] || 0) + 1; degree[e.target] = (degree[e.target] || 0) + 1; }});
@@ -1892,7 +1900,7 @@ function runForceGraph(rawNodes, rawEdges) {{
     circle.setAttribute('r', n.hub ? 8 : 5);
     g.appendChild(circle);
     const text = document.createElementNS(svgNS, 'text');
-    text.textContent = n.id.length > 40 ? '&hellip;' + n.id.slice(-37) : n.id;
+    text.textContent = n.id.length > 40 ? '…' + n.id.slice(-37) : n.id;
     text.setAttribute('x', n.hub ? 12 : 9);
     text.setAttribute('y', 4);
     g.appendChild(text);
@@ -1909,6 +1917,7 @@ function runForceGraph(rawNodes, rawEdges) {{
     nodes.forEach(function (n) {{ n._el.setAttribute('transform', 'translate(' + n.x + ',' + n.y + ')'); }});
   }}
 
+  let dragging = null;
   let ticking = true;
   function tick() {{
     if (!ticking) return;
@@ -1931,25 +1940,35 @@ function runForceGraph(rawNodes, rawEdges) {{
       const fx = (dx / dist) * force, fy = (dy / dist) * force;
       a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
     }});
+    let totalSpeed = 0;
     nodes.forEach(function (n) {{
       n.vx += (W / 2 - n.x) * 0.001; n.vy += (H / 2 - n.y) * 0.001;
       if (n.fx != null) {{ n.x = n.fx; n.y = n.fy; n.vx = 0; n.vy = 0; return; }}
       n.vx *= 0.82; n.vy *= 0.82;
       n.x = Math.max(16, Math.min(W - 16, n.x + n.vx));
       n.y = Math.max(16, Math.min(H - 16, n.y + n.vy));
+      totalSpeed += Math.abs(n.vx) + Math.abs(n.vy);
     }});
     render();
-    requestAnimationFrame(tick);
+    // Stop scheduling once the layout has settled (or there's nothing to
+    // move) instead of running an O(n^2) loop forever - a drag restarts it
+    // below, since a dragged node's own movement still needs to push its
+    // neighbors even after the rest had gone quiet.
+    if (dragging || totalSpeed > 0.05) {{
+      requestAnimationFrame(tick);
+    }} else {{
+      ticking = false;
+    }}
   }}
   tick();
   svg._stopGraphTick = function () {{ ticking = false; }};
 
-  let dragging = null;
   svg.onpointerdown = function (ev) {{
     const target = ev.target.closest('.g-node');
     if (!target) return;
     dragging = nodes[nodeEls.indexOf(target)];
     svg.setPointerCapture(ev.pointerId);
+    if (!ticking) {{ ticking = true; tick(); }}
   }};
   svg.onpointermove = function (ev) {{
     if (!dragging) return;
