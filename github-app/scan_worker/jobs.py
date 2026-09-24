@@ -58,6 +58,7 @@ from app_server.rate_limit import (
 from app_server.url_validation import UnsafeURLError, validate_and_pin_https_url
 from aletheore.docs_reference import build_api_reference
 from scan_worker import live_docs, live_wiki
+from scan_worker.blast_radius_summary import blast_radius_summary
 from scan_worker.db import (
     apply_monthly_credit_reset,
     check_and_reserve_flash_review_attempt,
@@ -2987,6 +2988,10 @@ def _run_flash_review(
     if findings:
         body += f"\n\n_Grounding: {kept} of {proposed} proposed finding(s) held up against this diff._"
 
+    body += _blast_radius_section_for(
+        settings.database_url, installation_id, repo_full_name, head_sha, changed_files
+    )
+
     upsert_pr_comment(client, token, repo_full_name, pr_number, body, marker=FLASH_REVIEW_MARKER)
     set_last_reviewed_sha(
         settings.database_url, installation_id, repo_full_name, pr_number, head_sha
@@ -3195,6 +3200,31 @@ def _evidence_by_head_sha_or_none(
         )
     except Exception:  # noqa: BLE001
         return None
+
+
+def _blast_radius_section_for(
+    dsn: str, installation_id: int, repo_full_name: str, head_sha: str, changed_files: list[str]
+) -> str:
+    """The "Blast radius" block for the summary comment, or "".
+
+    Deliberately reads only the scan evidence recorded for this PR's own head_sha, never the
+    "latest evidence for the repo" fallback _evidence_for_review_or_latest allows: that fallback can
+    describe a different branch, and an import graph from the wrong code would be a confident
+    wrong answer. run_pr_scan_job and this job run independently, so when the exact scan hasn't
+    landed yet the section is simply omitted (the next review of this PR includes it). Off with
+    FLASH_REVIEW_BLAST_RADIUS=off. No LLM call, one small DB read, and never able to fail the review.
+    """
+    if os.environ.get("FLASH_REVIEW_BLAST_RADIUS") == "off":
+        return ""
+    try:
+        evidence = _evidence_by_head_sha_or_none(dsn, installation_id, repo_full_name, head_sha)
+        return blast_radius_summary(evidence, list(changed_files))
+    except Exception:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "blast radius section failed for installation=%s repo=%s", installation_id, repo_full_name,
+            exc_info=True,
+        )
+        return ""
 
 
 def _evidence_for_review_or_latest(
