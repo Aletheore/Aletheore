@@ -2225,9 +2225,9 @@ def _share_pr_context_for(is_free_tier: bool) -> bool:
     13-case real-PR corpus it took Flash precision from 71.5% to 92.6% at unchanged recall, because
     the false positives were claims made blind to another file in the same PR. The price is
     ~4.6x generation input tokens (measured: $0.0027 -> $0.0103 per PR, whose PRs average 10.6
-    files), which matters for the Flash plan's $5 base credit: a heavy user gets roughly 485
-    average-size reviews per credit instead of ~1,850 (plan cap: 800/month). Never for free tier:
-    per-file generation is paid-tier only.
+    files), which matters for the Flash plan's $5 base credit, the only limit on a paid plan: a
+    heavy user gets roughly 485 average-size reviews per credit instead of ~1,850. Never for free
+    tier: per-file generation is paid-tier only.
     """
     return not is_free_tier and os.environ.get("FLASH_REVIEW_SHARE_PR_CONTEXT") != "off"
 
