@@ -2162,6 +2162,7 @@ def run_flash_review_job(
             # DeepSeek cost, which is why that one stays AIR-only.
             rank_findings=not is_free_tier,
             cross_file_check_runs=_cross_file_check_runs_for(installation["plan"], is_free_tier),
+            share_pr_context_per_file=_share_pr_context_for(is_free_tier),
         )
     except Exception as exc:  # noqa: BLE001
         try:
@@ -2215,6 +2216,31 @@ def _cross_file_check_runs_for(plan: str, is_free_tier: bool) -> int:
     if is_free_tier or os.environ.get("FLASH_REVIEW_CROSS_FILE_CHECK") != "on":
         return 0
     return 2 if plan == "air" else 1
+
+
+_OFF_VALUES = frozenset({"off", "0", "false", "no"})
+
+
+def _env_switched_off(name: str) -> bool:
+    """Kill-switch parsing for the default-on flags: "off", "0", "false" or "no" in any case
+    (surrounding whitespace ignored) turns the feature off. Anything else, including unset, leaves
+    it on. Deliberately not exact-match "off": a person disabling a feature with "0" or "false"
+    would otherwise silently keep paying for it."""
+    return os.environ.get(name, "").strip().lower() in _OFF_VALUES
+
+
+def _share_pr_context_for(is_free_tier: bool) -> bool:
+    """Whether each per-file generation call is also shown the rest of the PR's patches.
+
+    ON by default for paid tiers; FLASH_REVIEW_SHARE_PR_CONTEXT=off is the kill switch. On the
+    13-case real-PR corpus it took Flash precision from 71.5% to 92.6% at unchanged recall, because
+    the false positives were claims made blind to another file in the same PR. The price is
+    ~4.6x generation input tokens (measured: $0.0027 -> $0.0103 per PR, whose PRs average 10.6
+    files), which matters for the Flash plan's $5 base credit, the only limit on a paid plan: a
+    heavy user gets roughly 485 average-size reviews per credit instead of ~1,850. Never for free
+    tier: per-file generation is paid-tier only.
+    """
+    return not is_free_tier and not _env_switched_off("FLASH_REVIEW_SHARE_PR_CONTEXT")
 
 
 # Matches the 4 severity labels flash_review._rank_findings_with_severity's
@@ -2416,6 +2442,7 @@ def _run_flash_review(
     per_file_completeness: bool = False,
     rank_findings: bool = False,
     cross_file_check_runs: int = 0,
+    share_pr_context_per_file: bool = False,
 ) -> bool:
     """Returns True if a real review actually ran and its spend/count
     reservation (see run_flash_review_job) was trued up to reflect it -
@@ -2786,6 +2813,7 @@ def _run_flash_review(
             rank_findings=rank_findings,
             cross_file_check_runs=cross_file_check_runs,
             on_cross_file_check_usage=_on_cross_file_check_usage,
+            share_pr_context_per_file=share_pr_context_per_file,
         )
     # Every free-tier provider failed mid-review (see
     # _on_free_tier_exhausted above) - this review never actually ran, the
