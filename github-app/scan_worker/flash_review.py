@@ -2002,8 +2002,8 @@ def _validate_findings(
     # gated behind verify_with_second_model (the AIR-only grounding
     # recheck in _verify_findings_with_second_model): the Flash tier's own
     # design deliberately skips dual-agent generation verification (see
-    # MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH's comment - "solo Luna
-    # generation, no dual-agent verification") to hit its cost target,
+    # the Flash plan's "solo Luna generation, no dual-agent verification"
+    # validation) to hit its cost target,
     # which makes Flash tier findings *more* exposed to a wrong-direction
     # one-click substitution than AIR's, not less. Gating this check to
     # AIR only would leave the tier that needs it most unprotected. Real
@@ -2722,8 +2722,8 @@ def review_diff(
         # Bypasses the single whole-diff call entirely - see
         # _generate_findings_per_file for why. Never combined with
         # adapter_chain (free tier): flash/free tier's cost model was
-        # validated on one generation call per review (see
-        # MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH's own sizing comment),
+        # validated on one generation call per review (the original
+        # 800-review/month sizing),
         # and per-file completeness multiplies call count by roughly the
         # PR's changed-file count - a caller passing both gets the
         # single-call path instead of silently blowing that budget.

@@ -62,6 +62,7 @@ from scan_worker.db import (
     record_wiki_catchup_swept,
     release_flash_review_count_reservation,
     release_llm_spend_reservation,
+    get_flash_review_count_this_month,
     reserve_flash_review_count,
     reserve_llm_spend,
     set_last_reviewed_sha,
@@ -1133,6 +1134,14 @@ async def test_reserve_flash_review_count_allows_up_to_limit_then_blocks(pool):
     second = reserve_flash_review_count(TEST_DATABASE_URL, 401, limit=2)
     third = reserve_flash_review_count(TEST_DATABASE_URL, 401, limit=2)
     assert (first, second, third) == (True, True, False)
+
+
+@pytest.mark.asyncio
+async def test_reserve_flash_review_count_with_no_limit_never_blocks_but_still_counts(pool):
+    await _insert_installation(pool, 405, "a")
+    results = [reserve_flash_review_count(TEST_DATABASE_URL, 405, limit=None) for _ in range(5)]
+    assert results == [True] * 5
+    assert get_flash_review_count_this_month(TEST_DATABASE_URL, 405) == 5
 
 
 @pytest.mark.asyncio

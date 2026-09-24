@@ -374,7 +374,7 @@ def get_flash_review_count_this_month(dsn: str, installation_id: int) -> int:
             return int(row[0]) if row else 0
 
 
-def reserve_flash_review_count(dsn: str, installation_id: int, limit: int) -> bool:
+def reserve_flash_review_count(dsn: str, installation_id: int, limit: int | None) -> bool:
     """Atomically checks the review-count cap and reserves a slot in one
     statement, the same INSERT...ON CONFLICT...WHERE...RETURNING shape as
     check_and_reserve_flash_review_attempt below. installation_spend_lock's
@@ -391,20 +391,36 @@ def reserve_flash_review_count(dsn: str, installation_id: int, limit: int) -> bo
     increment - nothing to undo) if the cap was already reached. Call
     release_flash_review_count_reservation if the reserved review then
     never actually runs (e.g. every free-tier provider failed, or an
-    unrelated exception aborted the job before it produced a result)."""
+    unrelated exception aborted the job before it produced a result).
+
+    `limit=None` means no cap: the review is still counted (the admin
+    month-to-date figure reads this table) but never refused. Paid plans use
+    this - their ceiling is the dollar credit balance, not a review count."""
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO flash_review_monthly_count (installation_id, month, review_count)
-                VALUES (%s, date_trunc('month', now())::date, 1)
-                ON CONFLICT (installation_id, month) DO UPDATE
-                SET review_count = flash_review_monthly_count.review_count + 1
-                WHERE flash_review_monthly_count.review_count < %s
-                RETURNING review_count
-                """,
-                (installation_id, limit),
-            )
+            if limit is None:
+                cur.execute(
+                    """
+                    INSERT INTO flash_review_monthly_count (installation_id, month, review_count)
+                    VALUES (%s, date_trunc('month', now())::date, 1)
+                    ON CONFLICT (installation_id, month) DO UPDATE
+                    SET review_count = flash_review_monthly_count.review_count + 1
+                    RETURNING review_count
+                    """,
+                    (installation_id,),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO flash_review_monthly_count (installation_id, month, review_count)
+                    VALUES (%s, date_trunc('month', now())::date, 1)
+                    ON CONFLICT (installation_id, month) DO UPDATE
+                    SET review_count = flash_review_monthly_count.review_count + 1
+                    WHERE flash_review_monthly_count.review_count < %s
+                    RETURNING review_count
+                    """,
+                    (installation_id, limit),
+                )
             row = cur.fetchone()
         conn.commit()
     return row is not None
