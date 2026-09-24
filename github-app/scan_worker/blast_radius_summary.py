@@ -5,9 +5,12 @@ evidence's import graph (aletheore.query.find_blast_radius). No model is involve
 guessed: the caller only passes evidence scanned at the PR's own head commit, and this returns ""
 when there is no such evidence or none of the changed files is a module the scan knows about.
 """
+import logging
 from pathlib import Path
 
 from aletheore.query import find_blast_radius
+
+logger = logging.getLogger(__name__)
 
 MAX_TARGETS_SHOWN = 6
 MAX_DEPENDENTS_PER_TARGET = 4
@@ -38,6 +41,7 @@ def blast_radius_summary(evidence: dict | None, changed_files: list[str]) -> str
         try:
             radius = find_blast_radius(evidence, Path("."), path)
         except Exception:  # noqa: BLE001 - a malformed module entry must never block the review
+            logger.debug("blast radius skipped %s: malformed module entry", path, exc_info=True)
             continue
         analysed += 1
         # Files already in this PR are being reviewed anyway; the useful signal is who ELSE is affected.
