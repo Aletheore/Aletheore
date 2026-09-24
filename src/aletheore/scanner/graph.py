@@ -3447,23 +3447,25 @@ def _init_worker(
     _worker_state["parser"] = Parser()
 
 
-_PARSE_FAILURE_MARKER = "__aletheore_parse_failure__"
-
-
-def _worker_parse_and_extract_one(path: Path) -> dict:
+def _worker_parse_and_extract_one(path: Path) -> tuple[bool, dict]:
     # Caught here, inside the worker, rather than left to propagate through
     # the pool boundary: ProcessPoolExecutor.map() re-raises a worker's
     # exception when the caller's iteration reaches that result, which
     # would crash the entire scan on one unreadable file (permission
     # denied, a mid-scan race, or a path exceeding Windows' legacy MAX_PATH
     # limit) instead of degrading to an unparseable-files entry the way
-    # every other per-file failure class in this module already does. A
-    # marker dict (not an exception, not None - map() still needs one
-    # return value per input) lets _parse_many_in_parallel below tell a
-    # real module apart from a failure without changing this function's
-    # return type.
+    # every other per-file failure class in this module already does.
+    #
+    # Flash Review finding on an earlier version of this fix: a magic dict
+    # key (e.g. "__marker__") distinguishing a failure payload from a real
+    # module dict is only safe as long as no real module ever happens to
+    # have that key - a real, if unlikely, footgun if this dict's shape
+    # ever grows a colliding field. A (success, payload) tuple makes success
+    # a structural property of the return value (its own position) rather
+    # than a convention about payload content, so it can never collide with
+    # anything _extract_module's dict shape does or ever will contain.
     try:
-        return _parse_and_extract_one(
+        return True, _parse_and_extract_one(
             path,
             _worker_state["repo_path"],
             _worker_state["parser"],
@@ -3473,8 +3475,7 @@ def _worker_parse_and_extract_one(path: Path) -> dict:
             _worker_state["php_psr4_map"],
         )
     except OSError as exc:
-        return {
-            "__marker__": _PARSE_FAILURE_MARKER,
+        return False, {
             "path": _rel(_worker_state["repo_path"], path),
             "reason": f"could not read file: {exc}",
         }
@@ -3595,11 +3596,11 @@ def _parse_many_in_parallel(
         results = list(executor.map(_worker_parse_and_extract_one, paths))
     modules = []
     failures = []
-    for result in results:
-        if result.get("__marker__") == _PARSE_FAILURE_MARKER:
-            failures.append({"path": result["path"], "reason": result["reason"]})
+    for ok, payload in results:
+        if ok:
+            modules.append(payload)
         else:
-            modules.append(result)
+            failures.append(payload)
     return modules, failures
 
 
