@@ -11012,3 +11012,110 @@ def test_share_pr_context_for_is_on_by_default_off_via_kill_switch_and_never_for
     else:
         monkeypatch.setenv("FLASH_REVIEW_SHARE_PR_CONTEXT", env_value)
     assert _share_pr_context_for(is_free_tier) is expected
+
+
+def _failed_job(ended_seconds_ago, now):
+    from datetime import datetime, timezone
+
+    class _J:
+        started_at = None
+        created_at = datetime.fromtimestamp(now - 10_000_000, tz=timezone.utc)
+        ended_at = datetime.fromtimestamp(now - ended_seconds_ago, tz=timezone.utc)
+
+    return _J()
+
+
+def _ops_monitor_with_failed_registry(monkeypatch, failed_jobs, now):
+    """Runs run_ops_monitor_job with `failed_jobs` sitting in the scans failed
+    registry. Returns the alerts sent."""
+    from scan_worker import jobs
+
+    redis_conn = _FakeRedis(now_fn=lambda: now[0])
+    alerts = []
+
+    class FakeQueue:
+        def __init__(self, name, connection):
+            self.name = name
+            self.count = 0
+
+    class FakeFailedRegistry:
+        def __init__(self, queue):
+            self.count = len(failed_jobs) if queue.name == "scans" else 0
+
+        def get_job_ids(self, start, end):
+            return [f"job-{i}" for i in range(len(failed_jobs))]
+
+    monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
+    monkeypatch.setattr("scan_worker.jobs._check_app_health", lambda redis_conn, url: None)
+    monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs._check_free_tier_provider_keys", lambda redis_conn: None)
+    monkeypatch.setattr("scan_worker.jobs._check_webhook_errors", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs.Queue", FakeQueue)
+    monkeypatch.setattr("scan_worker.jobs.FailedJobRegistry", FakeFailedRegistry)
+    monkeypatch.setattr(jobs.Job, "fetch_many", staticmethod(lambda ids, connection: failed_jobs))
+    monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
+    monkeypatch.setattr(jobs.time, "time", lambda: now[0])
+    return alerts
+
+
+def test_ops_monitor_does_not_alert_on_old_failed_jobs_left_in_the_registry(monkeypatch):
+    """Real incident (2026-09-24): 26 scan jobs that failed between Sep 19 and
+    Sep 23 stayed in RQ's failed registry (kept a year), so the failed-jobs
+    alert kept firing every 6h with no new failure. Old failures must not page."""
+    from scan_worker.jobs import OPS_THRESHOLD_DURATION_SECONDS, run_ops_monitor_job
+
+    now = [1_800_000_000.0]
+    old = [_failed_job(3 * 86400 + i, now[0]) for i in range(26)]
+    alerts = _ops_monitor_with_failed_registry(monkeypatch, old, now)
+
+    run_ops_monitor_job()
+    now[0] += OPS_THRESHOLD_DURATION_SECONDS + 1
+    run_ops_monitor_job()
+
+    assert alerts == []
+
+
+def test_ops_monitor_still_alerts_on_recent_failed_jobs(monkeypatch):
+    from scan_worker.jobs import OPS_THRESHOLD_DURATION_SECONDS, run_ops_monitor_job
+
+    now = [1_800_000_000.0]
+    recent = [_failed_job(60, now[0])]
+    alerts = _ops_monitor_with_failed_registry(monkeypatch, recent, now)
+
+    run_ops_monitor_job()
+    assert alerts == []  # just started, not yet sustained
+    now[0] += OPS_THRESHOLD_DURATION_SECONDS + 1
+    # keep the failure "recent" as time moves on (it is still inside the window)
+    recent[0] = _failed_job(60 + OPS_THRESHOLD_DURATION_SECONDS, now[0])
+    run_ops_monitor_job()
+
+    assert len(alerts) == 1
+    assert alerts[0][0][0] == "ops_monitor.failed_jobs.scans"
+
+
+def test_recent_failed_job_count_only_counts_failures_inside_the_window():
+    from datetime import datetime, timezone
+
+    from scan_worker import jobs
+
+    now = 1_800_000_000.0
+
+    class Registry:
+        count = 4
+
+        def get_job_ids(self, start, end):
+            return ["a", "b", "c", "d"]
+
+    naive_recent = _failed_job(120, now)
+    naive_recent.ended_at = datetime.fromtimestamp(now - 120, tz=timezone.utc).replace(tzinfo=None)  # tz-naive UTC
+    no_end_time = _failed_job(0, now)
+    no_end_time.ended_at = None
+    no_end_time.created_at = datetime.fromtimestamp(now - 30, tz=timezone.utc)
+    fetched = [naive_recent, _failed_job(7200, now), None, no_end_time]
+
+    original = jobs.Job.fetch_many
+    jobs.Job.fetch_many = staticmethod(lambda ids, connection: fetched)
+    try:
+        assert jobs._recent_failed_job_count(Registry(), object(), now, 3600) == 2
+    finally:
+        jobs.Job.fetch_many = original

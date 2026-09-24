@@ -16,6 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from rq import Queue, get_current_job
+from rq.job import Job
 from rq.registry import FailedJobRegistry
 
 from app_server.audit_signing import content_hash, public_key_hex_from_private, sign_report
@@ -4245,12 +4246,22 @@ OPS_APP_HEALTH_URL_ENV = "ALETHEORE_APP_HEALTH_URL"
 OPS_BACKUP_DIR_ENV = "ALETHEORE_BACKUP_DIR"
 OPS_QUEUE_DEPTH_THRESHOLD_ENV = "ALETHEORE_OPS_QUEUE_DEPTH_THRESHOLD"
 OPS_FAILED_JOBS_THRESHOLD_ENV = "ALETHEORE_OPS_FAILED_JOBS_THRESHOLD"
+OPS_FAILED_JOBS_WINDOW_SECONDS_ENV = "ALETHEORE_OPS_FAILED_JOBS_WINDOW_SECONDS"
 OPS_WEBHOOK_5XX_THRESHOLD_ENV = "ALETHEORE_OPS_WEBHOOK_5XX_THRESHOLD"
 
 OPS_DEFAULT_APP_HEALTH_URL = "http://app-server:8000/healthz"
 OPS_DEFAULT_BACKUP_DIR = "/app/backups"
 OPS_DEFAULT_QUEUE_DEPTH_THRESHOLD = 25
 OPS_DEFAULT_FAILED_JOBS_THRESHOLD = 0
+# Only failures newer than this count toward the failed-jobs alert. RQ keeps a
+# failed job in FailedJobRegistry for a year, so counting the whole registry
+# meant one old failure kept the alert firing (every 6h) for as long as
+# nobody cleared it by hand: on 2026-09-24, 26 scans that had failed between
+# Sep 19 and Sep 23 were still paging.
+OPS_DEFAULT_FAILED_JOBS_WINDOW_SECONDS = 3600
+# How many of the newest registry entries are inspected per run. The registry
+# is ordered oldest to newest, and this only has to reach back one window.
+OPS_FAILED_JOBS_INSPECT_LIMIT = 200
 OPS_DEFAULT_WEBHOOK_5XX_THRESHOLD = 0
 OPS_THRESHOLD_DURATION_SECONDS = 600
 # Not a bare 24h (86400s): the backup cron fires at a fixed wall-clock time
@@ -4445,12 +4456,42 @@ def _check_threshold_duration(
     )
 
 
+def _recent_failed_job_count(registry, redis_conn, now: float, window_seconds: int) -> int:
+    """Failed jobs in `registry` that failed within the last `window_seconds`.
+
+    A failure only alerts while it is recent, so an old, already-investigated
+    failure does not keep paging: the condition ends on its own once failures
+    stop, exactly like the queue-depth check. A job whose end time is missing
+    falls back to when it started or was created rather than being dropped, so
+    a job that died without recording an end time still counts while it is new.
+    """
+    if registry.count == 0:
+        return 0
+    cutoff = now - window_seconds
+    recent = 0
+    job_ids = registry.get_job_ids(-OPS_FAILED_JOBS_INSPECT_LIMIT, -1)
+    for job in Job.fetch_many(job_ids, connection=redis_conn):
+        if job is None:
+            continue
+        failed_at = job.ended_at or job.started_at or job.created_at
+        if failed_at is None:
+            continue
+        if failed_at.tzinfo is None:
+            failed_at = failed_at.replace(tzinfo=timezone.utc)
+        if failed_at.timestamp() >= cutoff:
+            recent += 1
+    return recent
+
+
 def _check_queue_alerts(redis_conn, now: float) -> None:
     queue_depth_threshold = _env_int(
         OPS_QUEUE_DEPTH_THRESHOLD_ENV, OPS_DEFAULT_QUEUE_DEPTH_THRESHOLD
     )
     failed_jobs_threshold = _env_int(
         OPS_FAILED_JOBS_THRESHOLD_ENV, OPS_DEFAULT_FAILED_JOBS_THRESHOLD
+    )
+    failed_jobs_window = _env_int(
+        OPS_FAILED_JOBS_WINDOW_SECONDS_ENV, OPS_DEFAULT_FAILED_JOBS_WINDOW_SECONDS
     )
     for queue_name in OPS_MONITORED_QUEUES:
         queue = Queue(queue_name, connection=redis_conn)
@@ -4463,7 +4504,9 @@ def _check_queue_alerts(redis_conn, now: float) -> None:
             threshold=queue_depth_threshold,
             now=now,
         )
-        failed_count = FailedJobRegistry(queue=queue).count
+        failed_count = _recent_failed_job_count(
+            FailedJobRegistry(queue=queue), redis_conn, now, failed_jobs_window
+        )
         _check_threshold_duration(
             redis_conn,
             state_key=f"ops_monitor:failed_jobs:{queue_name}:first_seen",

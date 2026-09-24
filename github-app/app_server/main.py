@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.requests import ClientDisconnect
 
 from app_server.admin import admin_router
 from app_server.auth import auth_router
@@ -120,6 +121,19 @@ async def log_requests(request: Request, call_next):
 
 @app.exception_handler(Exception)
 async def handle_unexpected_exception(request: Request, exc: Exception) -> JSONResponse:
+    if isinstance(exc, ClientDisconnect):
+        # The caller hung up before we finished reading the request (GitHub
+        # timing out mid-delivery, a dropped connection). Nothing on our side
+        # failed, and nobody is left to receive a response, so this is neither
+        # a bug alert nor a 5xx for the webhook counter. It is still logged: on
+        # /webhook it can mean one delivery was lost (GitHub's Recent Deliveries
+        # can redeliver it). Seen 2026-09-24: one disconnect kept
+        # ops_monitor.webhook_5xx alerting 15 minutes later.
+        logging.getLogger("app_server.errors").warning(
+            "client disconnected before the request finished",
+            extra={"method": request.method, "path": request.url.path},
+        )
+        return JSONResponse(status_code=499, content={"detail": "client closed request"})
     # FastAPI's default HTTPException handler stays in effect for
     # HTTPException specifically (a more specific handler is already
     # registered for it) - this only ever catches something nobody
