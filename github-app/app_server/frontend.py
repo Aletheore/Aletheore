@@ -90,16 +90,23 @@ a { color: var(--accent); }
 
 /* ---- Sign-in ---- */
 .signin { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 4rem 1.5rem; }
-.signin-card { width: 100%; max-width: 430px; background: var(--paper);
-  border: 1px solid var(--border); border-radius: 4px; padding: 2.5rem 2.2rem; text-align: center; }
-.wordmark { font-family: var(--font-sans); font-weight: 760; font-size: 25px; color: var(--ink-900); margin: 0 0 7px; }
-.tagline { font-size: 13.5px; color: var(--slate-600); margin: 0 0 2rem; line-height: 1.6; }
+.signin-card { width: 100%; max-width: 380px; background: var(--paper);
+  border: 1px solid var(--border); border-radius: 4px; padding: 2.5rem 2.25rem 2rem; text-align: left; }
+.signin-brand { display: flex; align-items: center; gap: 9px; margin-bottom: 1.75rem; }
+.signin-brand-mark { width: 26px; height: 26px; border: 1.5px solid var(--ink-900); border-radius: 4px;
+  display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 13px; font-weight: 700; }
+.signin-brand-name { font-weight: 650; font-size: 16px; letter-spacing: -0.01em; }
+.signin-card h1 { font-size: 18px; font-weight: 650; margin: 0 0 6px; letter-spacing: -0.01em; }
+.tagline { font-size: 13px; color: var(--slate-600); margin: 0 0 1.6rem; line-height: 1.5; max-width: 30ch; }
 .gh-btn { width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; background: var(--ink-900); color: var(--paper);
-  border: none; border-radius: 9px; font-family: var(--font-sans); font-size: 14px; font-weight: 650; padding: 12px 16px; cursor: pointer; text-decoration: none; }
+  border: none; border-radius: 4px; font-family: var(--font-sans); font-size: 14px; font-weight: 650; padding: 12px 16px; cursor: pointer; text-decoration: none; }
 .gh-btn:hover { background: var(--ink-700); }
 .gh-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.scope-note { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--border); font-size: 12px; color: var(--slate-600); line-height: 1.6; text-align: left; }
+.signin-divider { border-top: 1px solid var(--border); margin: 1.75rem 0 1.25rem; }
+.scope-note { font-size: 12px; color: var(--slate-600); line-height: 1.6; text-align: left; }
 .scope-note code { font-family: var(--font-mono); font-size: 11px; color: var(--slate-500); }
+.signin-fine-print { font-size: 11.5px; color: var(--slate-400); line-height: 1.6; margin-top: 1rem; margin-bottom: 0; text-align: center; }
+.signin-fine-print a { color: var(--slate-600); }
 
 /* ---- Repo picker ---- */
 .picker-wrap { max-width: 980px; margin: 0 auto; padding: 3.4rem 1.75rem; }
@@ -518,16 +525,24 @@ SIGNIN_HTML = f"""<!DOCTYPE html>
 {STYLE}
 <div class="signin">
   <div class="signin-card">
-    <h1 class="sr-only">Sign in to Aletheore</h1>
-    <p class="wordmark">Aletheore</p>
-    <p class="tagline">Evidence-grounded audits for your repositories.<br>Sign in to see findings for the orgs you administer.</p>
+    <div class="signin-brand"><span class="signin-brand-mark">A</span><span class="signin-brand-name">Aletheore</span></div>
+    <h1>Sign in to Aletheore</h1>
+    <p class="tagline">Scan, review, and monitor your repositories.</p>
     <a class="gh-btn" href="/auth/login">
-      <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"></path></svg>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>
       Continue with GitHub
     </a>
+    <div class="signin-divider"></div>
     <div class="scope-note">
+      <!-- PENDING: this exact wording is flagged for a 3-way decision (user +
+      this session + the peer session) between the current GitHub-permission-
+      scope disclosure below and the mockup's friendlier "you choose which
+      repos to connect" framing - do not resolve unilaterally, see the
+      dashboard-restructure PR checklist. Left as the real, accurate
+      disclosure in the meantime. -->
       Requests read access to repository contents and metadata, and permission to post check runs and comments. We never request write access to code.
     </div>
+    <p class="signin-fine-print">By continuing you agree to the <a href="https://www.aletheore.com/terms.html">Terms</a> and <a href="https://www.aletheore.com/privacy.html">Privacy Policy</a>.</p>
   </div>
 </div>
 """
