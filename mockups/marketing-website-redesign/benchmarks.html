@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aletheore — Benchmarks (preview)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+  .bench-hero { padding: 48px 0 8px; display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 40px; align-items: start; }
+  @media (max-width: 860px) { .bench-hero { grid-template-columns: 1fr; } }
+  .bench-hero h1 { font-family: var(--font-display); font-size: 32px; font-weight: 700; letter-spacing: -0.01em; margin: 8px 0 14px; }
+  .bench-hero p { font-size: 14.5px; color: var(--ink-muted); line-height: 1.65; }
+  .repro-card { border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+  .repro-head { background: var(--ink); color: var(--paper); font-family: var(--font-mono); font-size: 12px; padding: 9px 14px; }
+  .repro-body { background: #0F0D09; padding: 16px 18px; }
+  .repro-body .line { font-family: var(--font-mono); font-size: 12px; color: #D8D2C5; line-height: 1.8; }
+  .repro-body .line::before { content: "$ "; color: #7A9E7E; }
+
+  .stat-band { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; margin: 36px 0; }
+  @media (max-width: 700px) { .stat-band { grid-template-columns: 1fr; } }
+  .stat-band .cell { background: var(--paper-raised); padding: 22px; text-align: center; }
+  .stat-band .n { font-family: var(--font-display); font-size: 26px; font-weight: 700; }
+  .stat-band .l { font-size: 12px; color: var(--ink-muted); margin-top: 6px; line-height: 1.4; }
+
+  .warn-list { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; margin-top: 24px; }
+  .warn-row { display: flex; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--ink-muted); line-height: 1.6; }
+  .warn-row:last-child { border-bottom: none; }
+  .warn-row .mark { color: var(--stamp); font-weight: 700; flex-shrink: 0; }
+  .warn-row a { color: var(--ink); }
+
+  .close-cta { border: 1px solid var(--line); background: var(--ink); color: var(--paper); border-radius: 4px; padding: 40px; text-align: center; margin: 40px 0; }
+  .close-cta h2 { font-family: var(--font-display); font-size: 24px; font-weight: 700; margin: 0 0 10px; }
+  .close-cta p { font-size: 13.5px; color: #B9B1A4; max-width: 60ch; margin: 0 auto 22px; line-height: 1.6; }
+  .close-cta .btn-outline { border-color: #4A443B; color: var(--paper); }
+  .close-cta .btn-outline:hover { background: rgba(255,255,255,0.06); }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="wordmark" href="index.html"><span class="wordmark-mark">A</span>Aletheore</a>
+    <div class="nav-links">
+      <a href="pricing.html">Pricing</a>
+      <a href="developers.html">Developers</a>
+      <a href="benchmarks.html">Benchmarks</a>
+      <a href="dogfooding.html">Proof</a>
+      <a href="status.html">Status</a>
+      <a href="https://github.com/Aletheore/Aletheore">GitHub</a>
+      <a href="https://www.linkedin.com/company/aletheore">Follow us</a>
+      <a class="btn btn-primary" href="#">Start free audit</a>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+  <section class="bench-hero">
+    <div>
+      <p class="section-label">§ benchmarked, not just claimed</p>
+      <h1>We publish the rows we lose, too.</h1>
+      <p>A separate, public repository measures Aletheore head-to-head against RepoWise — locating code, generated docs, PR review quality, and what a bare LLM gets wrong that a deterministic scanner gets right. Every retrieval number below recomputes from raw results with no API key and no network; every PR-review number comes from real API runs with the actual production model.</p>
+    </div>
+    <div class="repro-card">
+      <div class="repro-head">Reproduce it yourself</div>
+      <div class="repro-body">
+        <div class="line">git clone https://github.com/Aletheore/aletheore-benchmarks</div>
+        <div class="line">cd aletheore-benchmarks</div>
+        <div class="line">python scripts/score_fallback_judge.py</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" style="padding-bottom:0;">
+    <div class="section-head">
+      <p class="section-label">§ locating code · same questions, same ground truth</p>
+      <h2>Every shared corpus, both systems, best RepoWise mode.</h2>
+      <p>RepoWise searches its own generated wiki, so each corpus had one built for it first. All 7 shared corpora, top-1 accuracy.</p>
+    </div>
+    <div class="stat-band">
+      <div class="cell"><div class="n">5–0–2</div><div class="l">wins–losses–ties on top-1,<br>all 7 shared corpora</div></div>
+      <div class="cell"><div class="n">$0.00</div><div class="l">to build a searchable index,<br>vs. RepoWise's $1.85</div></div>
+      <div class="cell"><div class="n">93.3%</div><div class="l">cross-language top-5<br>accuracy</div></div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="section-head">
+      <p class="section-label">§ PR review · 13 real pull requests, one judge for every tool</p>
+      <h2>In the same range as the leading reviewers, after closing a precision gap of our own.</h2>
+      <p>44 human-identified bugs across 13 real pull requests from sentry, grafana, cal.com and keycloak, scored by a blinded judge (gpt-6-luna) told nothing about which tool wrote what.</p>
+    </div>
+    <div class="chart">
+      <div class="chart-title">Recall — bugs actually caught, of 44</div>
+      <div class="bar-row is-aletheore"><div class="name">Aletheore Flash</div><div class="bar-track"><div class="bar-fill" style="width:53.4%"></div></div><div class="val">53.4%</div></div>
+      <div class="bar-row"><div class="name">GitHub Copilot</div><div class="bar-track"><div class="bar-fill" style="width:59.1%"></div></div><div class="val">59.1%</div></div>
+      <div class="bar-row is-aletheore"><div class="name">Aletheore AIR</div><div class="bar-track"><div class="bar-fill" style="width:51.1%"></div></div><div class="val">51.1%</div></div>
+      <div class="bar-row"><div class="name">GitLab Duo</div><div class="bar-track"><div class="bar-fill" style="width:50.0%"></div></div><div class="val">50.0%</div></div>
+      <div class="bar-row"><div class="name">Qodo</div><div class="bar-track"><div class="bar-fill" style="width:22.7%"></div></div><div class="val">22.7%</div></div>
+    </div>
+    <p class="chart-note">95% intervals from resampling the 13 pull requests are wide (±14-18 points) — read this as "in the same range," not a ranked leaderboard. No difference between Aletheore and Copilot or GitLab here is statistically significant.</p>
+
+    <div class="chart" style="margin-top:36px;">
+      <div class="chart-title">Precision — confirmed-accurate findings, as a share of everything flagged</div>
+      <div class="bar-row"><div class="name">Qodo</div><div class="bar-track"><div class="bar-fill" style="width:100%"></div></div><div class="val">100%</div></div>
+      <div class="bar-row"><div class="name">GitLab Duo</div><div class="bar-track"><div class="bar-fill" style="width:95.1%"></div></div><div class="val">95.1%</div></div>
+      <div class="bar-row is-aletheore"><div class="name">Aletheore AIR</div><div class="bar-track"><div class="bar-fill" style="width:93.3%"></div></div><div class="val">93.3%</div></div>
+      <div class="bar-row is-aletheore"><div class="name">Aletheore Flash</div><div class="bar-track"><div class="bar-fill" style="width:92.6%"></div></div><div class="val">92.6%</div></div>
+      <div class="bar-row"><div class="name">GitHub Copilot</div><div class="bar-track"><div class="bar-fill" style="width:89.6%"></div></div><div class="val">89.6%</div></div>
+      <div class="bar-row" style="opacity:0.55;"><div class="name"><em>Flash, before the fix</em></div><div class="bar-track"><div class="bar-fill" style="width:71.5%"></div></div><div class="val">71.5%</div></div>
+    </div>
+
+    <div class="chart" style="margin-top:36px;">
+      <div class="chart-title">Accurate findings per run, in absolute terms — not a rate</div>
+      <div class="bar-row is-aletheore"><div class="name">Aletheore Flash</div><div class="bar-track"><div class="bar-fill" style="width:100%"></div></div><div class="val">87.5</div></div>
+      <div class="bar-row is-aletheore"><div class="name">Aletheore AIR</div><div class="bar-track"><div class="bar-fill" style="width:98.9%"></div></div><div class="val">86.5</div></div>
+      <div class="bar-row"><div class="name">GitHub Copilot</div><div class="bar-track"><div class="bar-fill" style="width:68.6%"></div></div><div class="val">60.0</div></div>
+      <div class="bar-row"><div class="name">GitLab Duo</div><div class="bar-track"><div class="bar-fill" style="width:44.6%"></div></div><div class="val">39.0</div></div>
+      <div class="bar-row"><div class="name">Qodo</div><div class="bar-track"><div class="bar-fill" style="width:27.4%"></div></div><div class="val">24.0</div></div>
+    </div>
+    <p class="chart-note">Precision rates land in the same range across most tools — the raw count of real, accurate issues surfaced does not. Aletheore finds about 1.5x Copilot's total, 2.2x GitLab's, and 3.6x Qodo's. Qodo's near-100% precision comes from making far fewer findings in the first place (24 total, all accurate) — a real trade-off, not a flaw either way.</p>
+  </section>
+
+  <section class="block" style="padding-bottom:0;">
+    <div class="section-head">
+      <p class="section-label">§ same evidence, half the tokens</p>
+      <h2>TOON vs. raw JSON, measured on this exact repo's own self-scan.</h2>
+    </div>
+    <div class="token-compare">
+      <div class="token-col">
+        <div class="token-track"><div class="token-bar" style="height:100%"></div></div>
+        <div class="token-value">1,174,274</div>
+        <div class="token-label">air.json<br>tokens</div>
+      </div>
+      <div class="token-col is-toon">
+        <div class="token-track"><div class="token-bar" style="height:52.8%"></div></div>
+        <div class="token-value">619,575</div>
+        <div class="token-label">air.toon<br>tokens</div>
+      </div>
+    </div>
+    <p class="chart-note">47.2% fewer tokens, same evidence — every coding agent that reads this file pays less to do it. Measured live with the o200k_base tokenizer on a fresh self-scan of this exact repository.</p>
+  </section>
+
+  <section class="block">
+    <div class="section-head">
+      <p class="section-label">§ where we lose</p>
+      <h2>Stated here rather than in a footnote.</h2>
+    </div>
+    <div class="warn-list">
+      <div class="warn-row"><span class="mark">⚠</span>Five of eight corpora score below 35% top-1 under vocabulary-avoiding phrasing, though most of that gap is our question authoring, not the product — every one recovers 20-47 points when asked in the project's own terms.</div>
+      <div class="warn-row"><span class="mark">⚠</span>AIRview writes a page for only 21 of 100 changed files on Flask's last 30 commits; the rest are served by a deterministic fallback, not the generated wiki this project is named for.</div>
+      <div class="warn-row"><span class="mark">⚠</span>"How does X work?" comprehension is close, not a clean win — AIRview scores 2.00 against RepoWise's 1.77 on a blind 0-3 judge, averaged across five languages, but most per-corpus gaps sit inside that run's own measured judge noise. Read this as "roughly at parity, leaning ahead," not a decisive lead.</div>
+      <div class="warn-row"><span class="mark">⚠</span>Our local setup was slower than Graphify's — scanning and indexing ERPNext took ~23 minutes against their ~1 minute. We found the real bottleneck (dead-code detection, 77% of scan time) and fixed it: 53.23s vs the old 236.02s, 4.4x faster, verified live. Indexing (~19min, a separate I/O-bound step) is now the honest remaining gap.</div>
+      <div class="warn-row"><span class="mark">⚠</span>The PR-review comparison rests on 13 pull requests, so its intervals are wide and small differences between tools are noise. Our cross-file-false-positive fix was developed while looking at these same pull requests and has not been checked on unseen ones. The other tools' rows are single runs from before 2026-09-23.</div>
+    </div>
+  </section>
+
+  <div class="close-cta">
+    <h2>Every number above is in a public repo, with the raw results.</h2>
+    <p>418 questions across 12 corpora and 11 languages, a 50-case PR-review corpus, and the deterministic-vs-LLM writeup — all reproducible, all checked against real Aletheore output, not a mockup.</p>
+    <div class="hero-actions" style="justify-content:center;">
+      <a class="btn btn-primary" style="background:var(--paper);color:var(--ink);" href="https://github.com/Aletheore/aletheore-benchmarks">View aletheore-benchmarks on GitHub</a>
+      <a class="btn btn-outline" href="dogfooding.html">See a raw scan instead</a>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="wrap foot-inner">
+    <span>© 2026 Aletheore</span>
+    <div class="foot-links"><a href="privacy.html">Privacy</a><a href="#">Terms</a><a href="status.html">Status</a><a href="https://github.com/Aletheore/Aletheore">GitHub</a></div>
+  </div>
+</footer>
+
+</body>
+</html>

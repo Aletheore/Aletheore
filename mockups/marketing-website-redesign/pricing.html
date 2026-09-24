@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aletheore — Pricing (preview)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+  .page-head { padding: 48px 0 32px; text-align: center; }
+  .page-head h1 { font-family: var(--font-display); font-size: 32px; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 10px; }
+  .page-head p { font-size: 15px; color: var(--ink-muted); max-width: 56ch; margin: 0 auto; line-height: 1.6; }
+  .plans { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; margin-bottom: 40px; }
+  @media (max-width: 860px) { .plans { grid-template-columns: 1fr; } }
+  .plan { background: var(--paper-raised); padding: 28px 26px; display: flex; flex-direction: column; }
+  .plan.is-flagship { background: var(--ink); color: var(--paper); }
+  .plan .name { font-family: var(--font-display); font-weight: 700; font-size: 16px; margin-bottom: 4px; }
+  .plan .price { font-family: var(--font-mono); font-size: 30px; font-weight: 700; margin: 10px 0 4px; }
+  .plan .price small { font-size: 13px; font-weight: 500; color: var(--ink-muted); }
+  .plan.is-flagship .price small { color: #B9B1A4; }
+  .plan .desc { font-size: 12.5px; color: var(--ink-muted); margin-bottom: 18px; min-height: 34px; }
+  .plan.is-flagship .desc { color: #B9B1A4; }
+  .plan ul { list-style: none; margin: 0 0 20px; padding: 0; display: flex; flex-direction: column; gap: 9px; flex: 1; }
+  .plan li { font-size: 12.5px; padding-left: 16px; position: relative; }
+  .plan li::before { content: "✓"; position: absolute; left: 0; color: var(--stamp); font-weight: 700; }
+  .plan.is-flagship li::before { color: #E8A98F; }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="wordmark" href="index.html"><span class="wordmark-mark">A</span>Aletheore</a>
+    <div class="nav-links">
+      <a href="pricing.html">Pricing</a>
+      <a href="developers.html">Developers</a>
+      <a href="benchmarks.html">Benchmarks</a>
+      <a href="dogfooding.html">Proof</a>
+      <a href="status.html">Status</a>
+      <a href="https://github.com/Aletheore/Aletheore">GitHub</a>
+      <a href="https://www.linkedin.com/company/aletheore">Follow us</a>
+      <a class="btn btn-primary" href="#">Start free audit</a>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+  <div class="page-head">
+    <p class="section-label" style="text-align:center;">§ pricing</p>
+    <h1>Free where it can be. Paid where AI actually runs.</h1>
+    <p>The deterministic scanner is free forever. You only pay once AI enters the picture — reviews, audits, docs.</p>
+  </div>
+
+  <div class="plans">
+    <div class="plan">
+      <div class="name">Community</div>
+      <div class="price">$0</div>
+      <div class="desc">CLI, free GitHub Action, free GitHub App usage. Fully self-service.</div>
+      <ul>
+        <li>Deterministic scan, all 13 languages</li>
+        <li>Secrets, vulnerabilities, licenses</li>
+        <li>Dead code &amp; git hotspots</li>
+        <li>MCP server for coding agents</li>
+      </ul>
+      <a class="btn btn-outline" href="#" style="justify-content:center;">Install free</a>
+    </div>
+    <div class="plan is-flagship">
+      <div class="name">Flash</div>
+      <div class="price">$8<small>/mo</small></div>
+      <div class="desc">Automatic PR reviews on every push. $5 of AI credit a month, about 400 reviews.</div>
+      <ul>
+        <li>Everything in Community</li>
+        <li>Automatic Flash reviews, every push</li>
+        <li>Low-credit email alert</li>
+        <li>Review history</li>
+      </ul>
+      <a class="btn btn-primary" href="#" style="justify-content:center;background:var(--paper);color:var(--ink);">Start Flash</a>
+    </div>
+    <div class="plan">
+      <div class="name">AIR</div>
+      <div class="price">$29.99<small>/mo</small></div>
+      <div class="desc">Up to 3 team seats, $18 of AI credit a month. Everything in Flash plus the managed dashboard.</div>
+      <ul>
+        <li>Everything in Flash</li>
+        <li>AIRview architecture maps</li>
+        <li>AI-generated Docs</li>
+        <li>Endpoint health monitoring, Slack/Teams alerts</li>
+        <li>3 seats included, +$6.99/seat</li>
+      </ul>
+      <a class="btn btn-outline" href="#" style="justify-content:center;">Start AIR</a>
+    </div>
+  </div>
+
+  <section class="block" style="padding-top:0;">
+    <div class="section-head">
+      <p class="section-label">§ what the credit actually buys</p>
+      <h2>Same $1 = 1 credit. AIR just starts with more.</h2>
+      <p>Credit is shared across everything AI touches — reviews, audits, Docs generation. It never expires once purchased; the monthly allotment resets each cycle.</p>
+    </div>
+    <div class="credit-meter">
+      <div class="row"><span class="name">Flash — $5/mo included</span><span>~400 reviews/mo</span></div>
+      <div class="track"><div class="fill" style="width:22%;"></div></div>
+    </div>
+    <div class="credit-meter">
+      <div class="row"><span class="name">AIR — $18/mo included</span><span>~1,450 reviews/mo, or a mix with Docs/audits</span></div>
+      <div class="track"><div class="fill" style="width:80%;"></div></div>
+    </div>
+    <p class="chart-note">Both plans can buy more credit any time — it never expires, and reviews pause (not silently — you get an email first) rather than overcharge you.</p>
+  </section>
+
+  <section class="block">
+    <div class="proof-panel">
+      <div>
+        <p class="section-label">§ enterprise</p>
+        <h2>Need something custom?</h2>
+        <p style="font-size:13.5px;color:var(--ink-muted);line-height:1.6;margin-top:10px;">A larger team, a custom seat or repo allotment, a procurement or security questionnaire, or billing terms the self-serve plans don't cover — talk to us directly and we'll work out something that fits.</p>
+      </div>
+      <div style="text-align:right;">
+        <a class="btn btn-primary" href="mailto:support@aletheore.com?subject=Enterprise%20inquiry">Contact us</a>
+      </div>
+    </div>
+  </section>
+</div>
+
+<footer>
+  <div class="wrap foot-inner">
+    <span>© 2026 Aletheore</span>
+    <div class="foot-links"><a href="#">Privacy</a><a href="#">Terms</a><a href="#">Status</a><a href="#">GitHub</a></div>
+  </div>
+</footer>
+
+</body>
+</html>

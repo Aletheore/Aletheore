@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aletheore — preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="wordmark" href="index.html"><span class="wordmark-mark">A</span>Aletheore</a>
+    <div class="nav-links">
+      <a href="pricing.html">Pricing</a>
+      <a href="developers.html">Developers</a>
+      <a href="benchmarks.html">Benchmarks</a>
+      <a href="dogfooding.html">Proof</a>
+      <a href="status.html">Status</a>
+      <a href="https://github.com/Aletheore/Aletheore">GitHub</a>
+      <a href="https://www.linkedin.com/company/aletheore">Follow us</a>
+      <a class="btn btn-primary" href="#">Start free audit</a>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+  <section class="hero">
+    <div>
+      <h1>AI code intelligence that has to <span class="stamp-word">show its work.</span></h1>
+      <p class="lede">Aletheore reviews, audits, and monitors repositories with every finding traced back to source evidence: file, line, symbol, owner, commit, dependency, and risk.</p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="#">Start free audit</a>
+        <a class="btn btn-outline" href="#">View on GitHub</a>
+      </div>
+      <div class="hero-trust">
+        <span>Source-available</span>
+        <span>Local-first CLI</span>
+        <span>Hosted GitHub App</span>
+      </div>
+    </div>
+    <div class="exhibit">
+      <span class="exhibit-tag">EXHIBIT A</span>
+      <div class="exhibit-head">
+        <div class="exhibit-head-left"><span class="status-dot"></span>Production alert</div>
+        <span class="exhibit-resolved">resolved to code</span>
+      </div>
+      <div class="exhibit-route"><span class="method">GET</span>/v1/users<span class="down">is down</span></div>
+      <div class="exhibit-handled">handled by <strong>controllers/user.controller.ts:42</strong></div>
+      <dl class="exhibit-grid">
+        <div><dt>Symbol</dt><dd>listUsers</dd></div>
+        <div><dt>Owner</dt><dd>@platform</dd></div>
+        <div><dt>Commit</dt><dd>8f42c91</dd></div>
+        <div><dt>Risk</dt><dd style="color:var(--stamp);">High</dd></div>
+      </dl>
+      <p class="exhibit-note">Most tools say it failed. Aletheore shows where it is handled, who owns it, and what changed.</p>
+    </div>
+  </section>
+</div>
+
+<div class="evidence-strip">
+  <div class="wrap evidence-strip-inner">
+    <span class="evidence-strip-label">Every alert, review, audit, and query resolves back to</span>
+    <span class="field">file</span><span class="field">line</span><span class="field">symbol</span><span class="field">owner</span><span class="field">commit</span><span class="field">dependency</span><span class="field">risk</span>
+  </div>
+</div>
+
+<div class="wrap">
+  <section class="block">
+    <div class="section-head">
+      <p class="section-label">§ how resolution works</p>
+      <h2>Not "it broke." A chain you can walk.</h2>
+      <p>Every alert Aletheore raises is a resolved path, not a guess — click through and it is exactly this concrete, every time.</p>
+    </div>
+    <div class="flow-diagram">
+      <div class="flow-node"><div class="k">endpoint</div><div class="v">GET /v1/users</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node"><div class="k">handler</div><div class="v">user.controller.ts:42</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node"><div class="k">symbol</div><div class="v">listUsers</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node"><div class="k">owner</div><div class="v">@platform</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node"><div class="k">last touched</div><div class="v">8f42c91</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node terminus"><div class="k">verdict</div><div class="v">High risk</div></div>
+    </div>
+  </section>
+
+  <section class="block" id="features">
+    <div class="section-head">
+      <p class="section-label">§ what it covers</p>
+      <h2>One evidence layer. Four surfaces that read it.</h2>
+      <p>Run locally with the CLI, install as a GitHub App, or give coding agents a smaller evidence context through MCP.</p>
+    </div>
+    <div class="feature-grid">
+      <article class="feature-card">
+        <h3>Code Review</h3>
+        <p>Automatic PR comments and Flash reviews on every push, plus managed audits and branch-protection checks that cite the changed file and line.</p>
+        <ul><li>Review only what changed</li><li>Catch secrets before merge</li><li>Keep findings source-grounded</li></ul>
+      </article>
+      <article class="feature-card">
+        <h3>Repository Intelligence</h3>
+        <p>Architecture clusters, dependency graphs, hotspots, owners, dead code, and AIRview — auto-generated architecture maps — from the same canonical evidence.</p>
+        <ul><li>Understand unfamiliar repos faster</li><li>Map systems without hand-written docs</li><li>Give agents precise context</li></ul>
+      </article>
+      <article class="feature-card">
+        <h3>Security &amp; Dependencies</h3>
+        <p>Secrets, vulnerable packages, licenses, infrastructure, database usage, and AI usage are detected before an audit is written.</p>
+        <ul><li>13 language ecosystems</li><li>No fake coverage or invented signals</li><li>Risk tied to code evidence</li></ul>
+      </article>
+      <article class="feature-card">
+        <h3>Production Monitoring</h3>
+        <p>Source-mapped endpoint health checks alert when a route breaks and point back to the handler that owns it.</p>
+        <ul><li>Reachability and latency checks</li><li>Slack and Teams alerts</li><li>Status data grounded in source</li></ul>
+      </article>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="section-head">
+      <p class="section-label">§ AIRview, live</p>
+      <h2>This is a real dependency graph, not a screenshot.</h2>
+      <p>AIRview builds this from your own repo's real imports — drag a node, scroll to zoom, hover to trace what depends on what. This demo is graphed from Aletheore's own module names.</p>
+    </div>
+    <div class="graph-demo">
+      <div class="graph-demo-head">
+        <span class="label">aletheore / src/aletheore</span>
+        <span class="hint">drag · scroll to zoom · hover to trace</span>
+      </div>
+      <svg id="marketing-graph" viewBox="0 0 900 380"></svg>
+      <div class="graph-demo-foot" id="marketing-graph-info">Hover a module to see what it imports.</div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="proof-panel">
+      <div>
+        <p class="section-label">§ why it is different</p>
+        <h2>Most AI tools summarize. Aletheore resolves.</h2>
+        <p style="font-size:13.5px;color:var(--ink-muted);line-height:1.6;margin-top:10px;">Aletheore starts with deterministic repository evidence, then lets AI reason only over what the scanner can prove. Friendlier than raw static analysis, more trustworthy than a generic AI summary.</p>
+      </div>
+      <div class="stat-row">
+        <div class="stat"><div class="n">13</div><div class="l">language ecosystems</div></div>
+        <div class="stat"><div class="n">0</div><div class="l">LLM calls in the scan path</div></div>
+        <div class="stat"><div class="n">100%</div><div class="l">findings cite file:line</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="section-head">
+      <p class="section-label">§ proof</p>
+      <h2>Scanned for real. Not a mockup.</h2>
+      <p>Real public repositories, actually scanned by <code>aletheore scan</code> at pinned commits — the numbers below are read directly from that output.</p>
+    </div>
+    <div class="stress-block">
+      <span class="badge">Real stress test</span>
+      <h3>The Linux kernel.</h3>
+      <p>Not a curated sample — the actual torvalds/linux repository, cloned in full and scanned end to end: 94,849 files, 8.2GB, 1.46 million commits.</p>
+      <dl class="stress-grid">
+        <div class="cell"><dt>Files parsed</dt><dd>64,634</dd></div>
+        <div class="cell"><dt>Dependency edges</dt><dd>71,929</dd></div>
+        <div class="cell"><dt>Architecture clusters</dt><dd>29,428</dd></div>
+        <div class="cell"><dt>Commits analyzed</dt><dd>1,463,552</dd></div>
+        <div class="cell"><dt>License issues found</dt><dd>0</dd></div>
+        <div class="cell"><dt>Known vulnerabilities</dt><dd>0</dd></div>
+        <div class="cell"><dt>Scan time</dt><dd>4m 20s</dd></div>
+        <div class="cell"><dt>Evidence size</dt><dd>180MB → 74MB TOON</dd></div>
+      </dl>
+    </div>
+  </section>
+
+  <section class="block humanist">
+    <div>
+      <h2>Humanist tools for a technical world.</h2>
+      <p>Nothing leaves your machine when you run the deterministic local scan. Bring your own API key for AI-assisted audit reports, or skip them entirely — the evidence pipeline stands on its own.</p>
+      <ul>
+        <li>Source-available and local-first</li>
+        <li>Query, diff, dashboard, MCP, and reports all read the same evidence</li>
+        <li>Hosted paid-plan features use derived evidence, not raw source storage</li>
+      </ul>
+    </div>
+    <div class="humanist-term">
+      <span class="prompt">$</span> aletheore scan .<br>
+      Scanning /Users/you/your-repo...<br>
+      Detecting languages, frameworks, and build tools<br>
+      Building module dependency graph<br>
+      Checking dependency vulnerabilities<br>
+      Evidence written to .aletheore/air.json<br>
+      Snapshot saved to .aletheore/history/
+    </div>
+  </section>
+</div>
+
+<footer>
+  <div class="wrap foot-inner">
+    <span>© 2026 Aletheore</span>
+    <div class="foot-links">
+      <a href="privacy.html">Privacy</a>
+      <a href="#">Terms</a>
+      <a href="#">Status</a>
+      <a href="#">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  const nodesData = [
+    { id: "cli.py" }, { id: "evidence.py" }, { id: "scanner/graph.py" },
+    { id: "mcp_server.py" }, { id: "secrets.py" }, { id: "vulnerabilities.py" },
+    { id: "citation_verifier.py" }, { id: "dashboard.py" }, { id: "dead_code.py" },
+    { id: "endpoints.py" }, { id: "architecture.py" }, { id: "credentials.py" },
+    { id: "device_auth.py" }, { id: "evidence_resolution.py" }, { id: "ast_pattern.py" },
+    { id: "search_index.py" }, { id: "watch.py" }, { id: "report.py" },
+  ];
+  const edgeList = [
+    ["cli.py","evidence.py"],["cli.py","mcp_server.py"],["cli.py","dashboard.py"],
+    ["cli.py","report.py"],["cli.py","credentials.py"],["cli.py","device_auth.py"],
+    ["cli.py","search_index.py"],
+    ["evidence.py","scanner/graph.py"],["evidence.py","secrets.py"],["evidence.py","vulnerabilities.py"],
+    ["evidence.py","citation_verifier.py"],["evidence.py","dead_code.py"],["evidence.py","endpoints.py"],
+    ["evidence.py","architecture.py"],["evidence.py","evidence_resolution.py"],["evidence.py","watch.py"],
+    ["mcp_server.py","evidence.py"],["mcp_server.py","ast_pattern.py"],["mcp_server.py","citation_verifier.py"],
+    ["mcp_server.py","evidence_resolution.py"],["mcp_server.py","search_index.py"],
+    ["dashboard.py","evidence.py"],["dashboard.py","architecture.py"],
+    ["report.py","citation_verifier.py"],
+    ["dead_code.py","scanner/graph.py"],["architecture.py","scanner/graph.py"],
+  ];
+
+  const W = 900, H = 380;
+  const degree = {};
+  edgeList.forEach(function (e) { degree[e[0]] = (degree[e[0]]||0)+1; degree[e[1]] = (degree[e[1]]||0)+1; });
+  const nodes = nodesData.map(function (n, i) {
+    const angle = (i / nodesData.length) * Math.PI * 2;
+    return { id: n.id, hub: (degree[n.id]||0) >= 5, x: W/2 + Math.cos(angle)*220, y: H/2 + Math.sin(angle)*150, vx:0, vy:0, fx:null, fy:null };
+  });
+  const byId = {}; nodes.forEach(function (n) { byId[n.id] = n; });
+  const edges = edgeList.map(function (e) { return { source: byId[e[0]], target: byId[e[1]] }; }).filter(function (e) { return e.source && e.target; });
+  const neighborsOf = {}; nodes.forEach(function (n) { neighborsOf[n.id] = new Set(); });
+  edges.forEach(function (e) { neighborsOf[e.source.id].add(e.target.id); neighborsOf[e.target.id].add(e.source.id); });
+
+  const svgNS = "http://www.w3.org/2000/svg";
+  const svg = document.getElementById("marketing-graph");
+  const world = document.createElementNS(svgNS, "g");
+  svg.appendChild(world);
+
+  const edgeEls = edges.map(function () {
+    const line = document.createElementNS(svgNS, "line");
+    line.setAttribute("class", "g-edge");
+    world.appendChild(line);
+    return line;
+  });
+  const nodeEls = nodes.map(function (n) {
+    const g = document.createElementNS(svgNS, "g");
+    g.setAttribute("class", "g-node" + (n.hub ? " hub" : ""));
+    const circle = document.createElementNS(svgNS, "circle");
+    circle.setAttribute("r", n.hub ? 8 : 5);
+    g.appendChild(circle);
+    const text = document.createElementNS(svgNS, "text");
+    text.textContent = n.id;
+    text.setAttribute("x", n.hub ? 12 : 9);
+    text.setAttribute("y", 4);
+    g.appendChild(text);
+    world.appendChild(g);
+    n._el = g;
+    return g;
+  });
+
+  function render() {
+    edges.forEach(function (e, i) {
+      edgeEls[i].setAttribute("x1", e.source.x); edgeEls[i].setAttribute("y1", e.source.y);
+      edgeEls[i].setAttribute("x2", e.target.x); edgeEls[i].setAttribute("y2", e.target.y);
+    });
+    nodes.forEach(function (n) { n._el.setAttribute("transform", "translate(" + n.x + "," + n.y + ")"); });
+  }
+
+  let dragging = null;
+  let ticking = true;
+  function tick() {
+    if (!ticking) return;
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i], b = nodes[j];
+        const dx = a.x - b.x, dy = a.y - b.y;
+        const dist2 = dx*dx + dy*dy || 0.01;
+        const dist = Math.sqrt(dist2);
+        const force = 900 / dist2;
+        const fx = (dx/dist)*force, fy = (dy/dist)*force;
+        a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+      }
+    }
+    edges.forEach(function (e) {
+      const a = e.source, b = e.target;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const dist = Math.sqrt(dx*dx + dy*dy) || 0.01;
+      const force = (dist - 100) * 0.02;
+      const fx = (dx/dist)*force, fy = (dy/dist)*force;
+      a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+    });
+    let totalSpeed = 0;
+    nodes.forEach(function (n) {
+      n.vx += (W/2 - n.x) * 0.001; n.vy += (H/2 - n.y) * 0.001;
+      if (n.fx != null) { n.x = n.fx; n.y = n.fy; n.vx = 0; n.vy = 0; return; }
+      n.vx *= 0.82; n.vy *= 0.82;
+      n.x = Math.max(16, Math.min(W-16, n.x + n.vx));
+      n.y = Math.max(16, Math.min(H-16, n.y + n.vy));
+      totalSpeed += Math.abs(n.vx) + Math.abs(n.vy);
+    });
+    render();
+    if (dragging || totalSpeed > 0.05) { requestAnimationFrame(tick); } else { ticking = false; }
+  }
+  tick();
+
+  svg.onpointerdown = function (ev) {
+    const target = ev.target.closest(".g-node");
+    if (!target) return;
+    dragging = nodes[nodeEls.indexOf(target)];
+    svg.setPointerCapture(ev.pointerId);
+    if (!ticking) { ticking = true; tick(); }
+  };
+  svg.onpointermove = function (ev) {
+    if (!dragging) return;
+    const rect = svg.getBoundingClientRect();
+    dragging.fx = (ev.clientX - rect.left) * (W/rect.width);
+    dragging.fy = (ev.clientY - rect.top) * (H/rect.height);
+  };
+  svg.onpointerup = function () { if (dragging) { dragging.fx = null; dragging.fy = null; dragging = null; } };
+
+  let zoom = 1;
+  svg.onwheel = function (ev) {
+    ev.preventDefault();
+    zoom = Math.max(0.5, Math.min(2.5, zoom - ev.deltaY * 0.001));
+    world.setAttribute("transform", "scale(" + zoom + ")");
+  };
+
+  const hoverInfo = document.getElementById("marketing-graph-info");
+  nodeEls.forEach(function (g, i) {
+    g.onpointerenter = function () {
+      const n = nodes[i];
+      const neighbors = neighborsOf[n.id];
+      nodeEls.forEach(function (g2, j) { g2.classList.toggle("dim", j !== i && !neighbors.has(nodes[j].id)); });
+      edgeEls.forEach(function (el, k) {
+        const lit = edges[k].source.id === n.id || edges[k].target.id === n.id;
+        el.classList.toggle("lit", lit); el.classList.toggle("dim", !lit);
+      });
+      hoverInfo.textContent = n.id + "  ->  " + (Array.from(neighbors).join(", ") || "(no resolved imports)");
+    };
+    g.onpointerleave = function () {
+      nodeEls.forEach(function (g2) { g2.classList.remove("dim"); });
+      edgeEls.forEach(function (el) { el.classList.remove("lit"); el.classList.remove("dim"); });
+      hoverInfo.textContent = "Hover a module to see what it imports.";
+    };
+  });
+})();
+</script>
+</body>
+</html>

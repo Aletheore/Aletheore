@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aletheore — Developers (preview)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+  .page-head { padding: 48px 0 8px; }
+  .page-head h1 { font-family: var(--font-display); font-size: 32px; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 10px; }
+  .page-head p { font-size: 15px; color: var(--ink-muted); max-width: 62ch; line-height: 1.6; }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="wordmark" href="index.html"><span class="wordmark-mark">A</span>Aletheore</a>
+    <div class="nav-links">
+      <a href="pricing.html">Pricing</a>
+      <a href="developers.html">Developers</a>
+      <a href="benchmarks.html">Benchmarks</a>
+      <a href="dogfooding.html">Proof</a>
+      <a href="status.html">Status</a>
+      <a href="https://github.com/Aletheore/Aletheore">GitHub</a>
+      <a href="https://www.linkedin.com/company/aletheore">Follow us</a>
+      <a class="btn btn-primary" href="#">Start free audit</a>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+  <div class="page-head">
+    <p class="section-label">§ three surfaces, one evidence file</p>
+    <h1>Start local. Stay local as long as you want.</h1>
+    <p>Every surface below reads the exact same air.json — nothing is re-derived, re-guessed, or inconsistent between them.</p>
+  </div>
+
+  <section class="block">
+    <div class="pipeline">
+      <div class="pipe-stage">
+        <div class="k">$ aletheore scan</div>
+        <h4>Build the evidence</h4>
+        <p>Tree-sitter and git history produce air.json and air.toon. No LLM in the scan path, no account, no network access.</p>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-stage">
+        <div class="k">on: pull_request</div>
+        <h4>The GitHub App keeps watch</h4>
+        <p>Automatic PR comments, branch-protection checks, and Flash reviews on every push — same evidence, hosted.</p>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-stage">
+        <div class="k">$ aletheore mcp .</div>
+        <h4>Agents query it directly</h4>
+        <p>27+ read-only tools over stdio, TOON-encoded — a coding agent gets exact answers instead of re-reading files on every lookup.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="section-head">
+      <p class="section-label">§ real output</p>
+      <h2>What the CLI actually prints.</h2>
+    </div>
+    <div class="term">
+      <div class="line"><span class="prompt">$</span> <span class="cmd">aletheore scan .</span></div>
+      <div class="line out">Scanning 604 modules across 12 languages...</div>
+      <div class="line out">Dead code: 2 found, 0 false positives</div>
+      <div class="line out">Secrets: 0 found</div>
+      <div class="line out">Evidence written to .aletheore/air.json</div>
+    </div>
+    <div class="term">
+      <div class="line"><span class="prompt">$</span> <span class="cmd">aletheore query hotspots</span></div>
+      <div class="line out">1. scan_worker/jobs.py — 99.7th percentile churn, 89 commits/90d</div>
+      <div class="line out">2. app_server/frontend.py — 99.0th percentile churn, 44 commits/90d</div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="section-head">
+      <p class="section-label">§ MCP tools</p>
+      <h2>An agent gets exact answers, not a re-read of your repo.</h2>
+      <p>27 read-only tools by default, 32 with every effect permitted. A few of the most-used:</p>
+    </div>
+    <div class="feature-grid">
+      <article class="feature-card">
+        <h3>aletheore_overview()</h3>
+        <p>Languages, frameworks, monorepo structure, dependency-graph size, module/cluster counts, git age and commit cadence — the first call on any unfamiliar repo.</p>
+      </article>
+      <article class="feature-card">
+        <h3>aletheore_neighborhood(target)</h3>
+        <p>A module's imports, dependents, and cluster in one call instead of three round-trips.</p>
+      </article>
+      <article class="feature-card">
+        <h3>aletheore_ast_pattern(language, query)</h3>
+        <p>Structural search by shape, not words — a real tree-sitter S-expression query against every file of one language.</p>
+      </article>
+      <article class="feature-card">
+        <h3>aletheore_verify_citations(report_text)</h3>
+        <p>Checks every file:line citation in a report against real evidence and real file line counts — the same check `aletheore verify` runs in CI.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="section-head">
+      <p class="section-label">§ evidence contract</p>
+      <h2>One source of truth.</h2>
+      <p>Everything downstream reads the same deterministic evidence. AIRview, the dashboard, query, MCP, and audits do not invent files, routes, symbols, or owners that are not present in AIR.</p>
+    </div>
+    <div class="contract-list">
+      <article>
+        <h3>.aletheore/air.json</h3>
+        <p>Canonical repository evidence: modules, symbols, dependencies, endpoints, architecture, security, ownership, and history.</p>
+      </article>
+      <article>
+        <h3>.aletheore/air.toon</h3>
+        <p>TOON-encoded evidence for agent-facing and model-facing contexts where token cost matters.</p>
+      </article>
+      <article>
+        <h3>.aletheore/history/</h3>
+        <p>Snapshots used for changes, drift, and continuity between scans.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="section-head">
+      <p class="section-label">§ depth without mystery</p>
+      <h2>Technical surfaces that stay evidence-first.</h2>
+    </div>
+    <div class="tag-grid">
+      <div class="tag-card"><span class="tag">AIRview</span><h3>Architecture maps</h3><p>AI-written subsystem pages and dependency diagrams grounded in deterministic architecture clusters.</p></div>
+      <div class="tag-card"><span class="tag">MCP</span><h3>Agent context savings</h3><p>Agents request focused evidence instead of dragging entire repositories into model context.</p></div>
+      <div class="tag-card"><span class="tag">Security</span><h3>Risk resolution</h3><p>Secrets, vulnerabilities, dependencies, endpoints, and infrastructure findings trace back to source.</p></div>
+      <div class="tag-card"><span class="tag">Health</span><h3>Endpoint checks</h3><p><code>aletheore healthcheck</code> runs GET-only checks against mapped API endpoints and saves the result locally.</p></div>
+      <div class="tag-card"><span class="tag">Local</span><h3>Privacy by default</h3><p>The CLI scan runs locally. Managed and hosted flows use derived evidence according to the selected workflow.</p></div>
+    </div>
+  </section>
+</div>
+
+<footer>
+  <div class="wrap foot-inner">
+    <span>© 2026 Aletheore</span>
+    <div class="foot-links"><a href="#">Privacy</a><a href="#">Terms</a><a href="#">Status</a><a href="#">GitHub</a></div>
+  </div>
+</footer>
+
+</body>
+</html>
