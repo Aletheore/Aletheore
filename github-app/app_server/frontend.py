@@ -98,12 +98,14 @@ a { color: var(--accent); }
 .signin-brand-name { font-weight: 650; font-size: 16px; letter-spacing: -0.01em; }
 .signin-card h1 { font-size: 18px; font-weight: 650; margin: 0 0 6px; letter-spacing: -0.01em; }
 .tagline { font-size: 13px; color: var(--slate-600); margin: 0 0 1.6rem; line-height: 1.5; max-width: 30ch; }
-.gh-btn { width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; background: var(--ink-900); color: var(--paper);
-  border: none; border-radius: 4px; font-family: var(--font-sans); font-size: 14px; font-weight: 650; padding: 12px 16px; cursor: pointer; text-decoration: none; }
+.gh-btn { width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; background: var(--ink-900); color: var(--slate-50);
+  border: none; border-radius: 4px; font-family: var(--font-sans); font-size: 14px; font-weight: 600; padding: 12px 16px; cursor: pointer; text-decoration: none; }
 .gh-btn:hover { background: var(--ink-700); }
 .gh-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .signin-divider { border-top: 1px solid var(--border); margin: 1.75rem 0 1.25rem; }
-.scope-note { font-size: 12px; color: var(--slate-600); line-height: 1.6; text-align: left; }
+.scope-list { display: flex; flex-direction: column; gap: 8px; }
+.scope-row { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--slate-600); line-height: 1.5; }
+.scope-row .mark { font-family: var(--font-mono); color: var(--slate-400); font-size: 11px; flex-shrink: 0; }
 .scope-note code { font-family: var(--font-mono); font-size: 11px; color: var(--slate-500); }
 .signin-fine-print { font-size: 11.5px; color: var(--slate-400); line-height: 1.6; margin-top: 1rem; margin-bottom: 0; text-align: center; }
 .signin-fine-print a { color: var(--slate-600); }
@@ -533,14 +535,20 @@ SIGNIN_HTML = f"""<!DOCTYPE html>
       Continue with GitHub
     </a>
     <div class="signin-divider"></div>
-    <div class="scope-note">
-      <!-- PENDING: this exact wording is flagged for a 3-way decision (user +
-      this session + the peer session) between the current GitHub-permission-
-      scope disclosure below and the mockup's friendlier "you choose which
-      repos to connect" framing - do not resolve unilaterally, see the
-      dashboard-restructure PR checklist. Left as the real, accurate
-      disclosure in the meantime. -->
-      Requests read access to repository contents and metadata, and permission to post check runs and comments. We never request write access to code.
+    <div class="scope-list">
+      <div class="scope-row"><span class="mark">&#8212;</span>You choose which repositories to connect after signing in</div>
+      <div class="scope-row"><span class="mark">&#8212;</span>Nothing is scanned until you add a repo</div>
+      <!-- PENDING user wording approval (flagged by peer review, user asleep
+      when this was fixed): the mockup's original row 3 ("No telemetry, no
+      data retention beyond what your scan needs") contradicts privacy.html,
+      which says a working copy is kept on the scan worker between scans and
+      derived evidence is stored long-term until uninstall/deletion. "No
+      telemetry" itself is true and kept; the retention half is rewritten to
+      match reality. Row 4 is an addition, not a removal - it's the exact
+      disclosure this replaced, kept rather than dropped. Both rows need the
+      user's sign-off on wording, not just accuracy. -->
+      <div class="scope-row"><span class="mark">&#8212;</span>No telemetry. Scan results are kept for your dashboard until you remove the repo.</div>
+      <div class="scope-row"><span class="mark">&#8212;</span>Requests read access to repository contents and metadata, and permission to post check runs and comments. We never request write access to code.</div>
     </div>
     <p class="signin-fine-print">By continuing you agree to the <a href="https://www.aletheore.com/terms.html">Terms</a> and <a href="https://www.aletheore.com/privacy.html">Privacy Policy</a>.</p>
   </div>
