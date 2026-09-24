@@ -616,7 +616,7 @@ PICKER_HTML = f"""<!DOCTYPE html>
         '<div class="picker-card-icon"><i class="ti ti-coin" aria-hidden="true"></i></div>' +
         '<div class="picker-card-body"><div class="picker-repo">' + escapeHtml(a.account_login) + '</div>' +
         '<span class="picker-plan paid">' + escapeHtml(planDisplayName(a.plan)) + '</span>' +
-        '<div class="picker-pending-note">$' + Number(a.credit_remaining_usd).toFixed(2) + ' AI credit &middot; buy more</div></div>' +
+        '<div class="picker-pending-note">$' + (Number(a.credit_remaining_usd) || 0).toFixed(2) + ' AI credit &middot; buy more</div></div>' +
         '<i class="ti ti-chevron-right picker-card-arrow" aria-hidden="true"></i></a>';
     }}).join('');
     flashGroup.innerHTML = '<div class="picker-org-label">Flash organizations (AI credit)</div><div class="picker-grid">' + flashGrid + '</div>';
@@ -2881,8 +2881,13 @@ async function loadCredits() {
   const body = document.getElementById('credits-body');
   const res = await fetch(creditsApi);
   if (res.status === 401) { window.location.href = '/auth/logout'; return; }
-  if (!res.ok) {
+  if (res.status === 404) {
     body.innerHTML = '<div class="empty-state">This installation has no paid Aletheore plan, or your GitHub account does not administer it. <a href="/dashboard">Back to your organizations</a></div>';
+    return;
+  }
+  if (!res.ok) {
+    // A transient 5xx must not tell a paying customer they have no plan.
+    body.innerHTML = '<div class="empty-state">We could not load your credit balance right now. Please reload in a moment. <a href="/dashboard">Back to your organizations</a></div>';
     return;
   }
   const data = await res.json();
@@ -2998,11 +3003,13 @@ def _credits_page(installation_id: int) -> str:
 
 @frontend_router.get("/credits/{installation_id}", response_class=HTMLResponse)
 async def credits_page(installation_id: int, request: Request):
+    # GitHub installation ids are positive 64-bit integers; anything else is not an installation.
+    if not 0 < installation_id < 2**63:
+        raise HTTPException(status_code=404, detail="no such installation")
     session = await get_current_session(request)
     if session is None:
-        return RedirectResponse(
-            url=f"/auth/login?next={quote(f'/credits/{installation_id}', safe='')}", status_code=307
-        )
+        # The only variable part of this same-site redirect is a validated integer.
+        return RedirectResponse(url="/auth/login?next=%2Fcredits%2F" + str(installation_id), status_code=307)
     return _no_store_html(_credits_page(installation_id))
 
 

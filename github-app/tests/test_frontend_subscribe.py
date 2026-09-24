@@ -232,3 +232,22 @@ async def test_credits_route_serves_the_page_when_signed_in(pool, monkeypatch):
     assert response.status_code == 200
     assert "const installationId = 555;" in response.text
     assert "no-store" in response.headers.get("cache-control", "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_id", ["0", "-5", "9223372036854775808"])
+async def test_credits_route_404s_ids_that_cannot_be_installations(pool, bad_id):
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(f"/credits/{bad_id}", follow_redirects=False)
+    assert response.status_code == 404
+
+
+def test_credits_page_script_tells_a_server_error_apart_from_no_plan():
+    from app_server.frontend import _credits_page
+
+    html = _credits_page(1)
+    # 404 (not yours / no paid plan) and any other failure must not share one message.
+    assert "res.status === 404" in html
+    assert "could not load your credit balance" in html
