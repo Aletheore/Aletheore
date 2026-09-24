@@ -52,3 +52,35 @@ jobs:
           files: src/coverage.xml
           flags: cli-py${{ matrix.python-version }}
           fail_ci_if_error: false
+
+  # Runs the CLI tests on Windows, with the runner's real default locale. Every other job
+  # in this repo runs on Linux, which is how a whole class of bug (file I/O and subprocess
+  # text encoding falling back to the Windows codepage, fixed in #790) went unseen: Linux
+  # and macOS default to UTF-8, Windows does not.
+  #
+  # Do NOT set PYTHONUTF8 or PYTHONIOENCODING here - that would force UTF-8 and hide
+  # exactly the bugs this job exists to catch.
+  #
+  # A separate job rather than an `os` matrix axis on `pytest` above, so the existing
+  # `pytest (3.11)` / `pytest (3.12)` check names stay exactly as they are. The coverage
+  # gate is left off: its 85% threshold was calibrated on Linux, and platform-specific
+  # code paths would make it a false signal here.
+  pytest-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        working-directory: src
+        run: pip install -e ".[dev]"
+
+      - name: Run tests
+        working-directory: src
+        run: pytest
