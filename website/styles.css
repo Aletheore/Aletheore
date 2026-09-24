@@ -2199,3 +2199,113 @@ footer a:hover {
     transition: none;
   }
 }
+
+/* ---- Follow dialog ---- */
+.follow-dialog {
+  width: min(420px, calc(100vw - 32px));
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  background: #fff;
+  color: var(--text-primary);
+  box-shadow: 0 24px 60px rgba(24, 20, 15, 0.22);
+}
+
+.follow-dialog::backdrop {
+  background: rgba(24, 20, 15, 0.45);
+}
+
+.follow-dialog-body {
+  padding: 22px;
+}
+
+.follow-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.follow-dialog-head h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.follow-dialog-close {
+  width: 36px;
+  height: 36px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.follow-dialog-close:hover {
+  border-color: var(--border-subtle);
+  color: var(--text-primary);
+}
+
+.follow-dialog-sub {
+  margin: 6px 0 18px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.follow-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.follow-option {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.follow-option:hover,
+.follow-option:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.follow-option-icon {
+  flex: none;
+  width: 32px;
+  height: 32px;
+}
+
+.follow-option-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.follow-option-text strong {
+  font-size: 15px;
+}
+
+.follow-option-text small {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.follow-option-go {
+  color: var(--text-muted);
+  font-size: 18px;
+}
+
+.follow-option:hover .follow-option-go {
+  color: var(--accent);
+}
