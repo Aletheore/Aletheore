@@ -55,6 +55,62 @@ def _noop_wiki_write_lock(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _noop_review_history(monkeypatch):
+    # insert_review_history (see scan_worker/db.py) opens a real psycopg
+    # connection the same way repo_checkout_lock/wiki_write_lock above do -
+    # same reason, same fix. Called from _record_review_outcome at every
+    # exit point of run_flash_review_job/_run_flash_review, so every
+    # existing Flash Review test here would otherwise hang on a fake DSN.
+    # Its own correctness has its own real-Postgres test in
+    # test_scan_worker_db.py.
+    monkeypatch.setattr("scan_worker.jobs.insert_review_history", lambda *a, **k: None)
+
+
+def test_run_flash_review_job_is_the_real_decorated_job_entry_point():
+    # Regression test for a real bug a peer review caught: an earlier
+    # revision inserted _record_review_outcome between the @log_job line
+    # and `def run_flash_review_job`, so @log_job silently decorated the
+    # helper instead - run_flash_review_job lost its start/end logging and,
+    # worse, send_error_alert-on-crash (see app_server/logging_config.py's
+    # log_job), and every history write logged as if it were its own "job
+    # completed". None of the other 48 Flash Review tests here would have
+    # noticed, since log_job's own behavior isn't what any of them assert on.
+    import scan_worker.jobs as jobs_module
+
+    assert hasattr(jobs_module.run_flash_review_job, "__wrapped__")
+    assert not hasattr(jobs_module._record_review_outcome, "__wrapped__")
+
+
+def test_record_review_outcome_swallows_a_db_failure(monkeypatch):
+    # _record_review_outcome is a logging side-channel - a write failure
+    # here must never propagate and break (or worse, retry) a review that
+    # already ran.
+    from scan_worker.jobs import _record_review_outcome
+    from types import SimpleNamespace
+
+    def _boom(*a, **k):
+        raise RuntimeError("db is down")
+
+    monkeypatch.setattr("scan_worker.jobs.insert_review_history", _boom)
+    settings = SimpleNamespace(database_url="postgresql://unused")
+
+    _record_review_outcome(settings, 1, "octo/repo", 1, "posted", finding_count=1)  # must not raise
+
+
+def test_record_review_outcome_no_ops_for_free_tier(monkeypatch):
+    from scan_worker.jobs import _record_review_outcome
+    from types import SimpleNamespace
+
+    calls = []
+    monkeypatch.setattr("scan_worker.jobs.insert_review_history", lambda *a, **k: calls.append(a))
+    settings = SimpleNamespace(database_url="postgresql://unused")
+
+    _record_review_outcome(settings, 1, "octo/repo", 1, "posted", is_free_tier=True)
+
+    assert calls == []
+
+
+@pytest.fixture(autouse=True)
 def _pr_is_open_by_default(monkeypatch):
     # run_pr_scan_job now checks the PR is still open before attempting a
     # checkout that's doomed once its branch is gone (see
@@ -3803,10 +3859,22 @@ def test_flash_review_job_skips_when_spend_cap_reached(monkeypatch):
     monkeypatch.setattr(
         "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
     )
+    recorded = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.insert_review_history", lambda *a, **k: recorded.append((a, k))
+    )
+
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert llm_called == []
     assert released == [True]
+    # A paid plan hitting the spend cap is the one remaining "skipped" write
+    # (see _record_review_outcome's own docstring on why free-tier skips are
+    # never recorded) - real outcome-accuracy coverage, not just a no-op spy.
+    assert len(recorded) == 1
+    args, kwargs = recorded[0]
+    assert args[1:5] == (1, "octocat/hello-world", 42, "skipped")
+    assert kwargs == {"finding_count": 0, "skip_reason": "AI credit exhausted"}
 
 
 @pytest.mark.parametrize("plan", ["air", "flash"])
@@ -3987,6 +4055,10 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     monkeypatch.setattr(
         "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
     )
+    recorded = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.insert_review_history", lambda *a, **k: recorded.append((a, k))
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     # The finding itself now posts as its own inline review comment
@@ -3999,6 +4071,10 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     assert "real problem" in inline_comments[0][2]
     assert "1 finding(s) posted as inline review comment(s) below" in posted["body"]
     assert posted["marker"] == FLASH_REVIEW_MARKER
+    assert len(recorded) == 1
+    args, kwargs = recorded[0]
+    assert args[1:5] == (1, "octocat/hello-world", 42, "posted")
+    assert kwargs == {"finding_count": 1, "skip_reason": None}
     assert set_sha_calls == ["bbb"]
     # True-up delta, not the raw total: real cost (0.0 - review_diff is
     # mocked, no on_usage ever fires) minus the FLASH_REVIEW_SPEND_RESERVE_USD
@@ -4891,9 +4967,22 @@ def test_flash_review_job_posts_failure_comment_instead_of_raising(monkeypatch):
     monkeypatch.setattr(
         "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
     )
+    recorded = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.insert_review_history", lambda *a, **k: recorded.append((a, k))
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert posted["marker"] == FLASH_REVIEW_MARKER
+    # A crash otherwise recorded nothing at all - "did Flash Review even run
+    # on my last PR" was unanswered exactly when it matters. Never the raw
+    # exception text (str(exc)) - this table is read back on a customer-
+    # facing page.
+    assert len(recorded) == 1
+    args, kwargs = recorded[0]
+    assert args[1:5] == (1, "octocat/hello-world", 42, "failed")
+    assert kwargs["skip_reason"] == "review failed unexpectedly"
+    assert "GitHub API timed out" not in kwargs["skip_reason"]
     assert "couldn't complete this flash review" in posted["body"]
     assert "GitHub API timed out" in posted["body"]
 
@@ -5601,9 +5690,17 @@ def test_flash_review_job_posts_no_issues_found_when_findings_empty(monkeypatch)
     monkeypatch.setattr(
         "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
     )
+    recorded = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.insert_review_history", lambda *a, **k: recorded.append((a, k))
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert "no issues found" in posted["body"].lower()
+    assert len(recorded) == 1
+    args, kwargs = recorded[0]
+    assert args[1:5] == (1, "octocat/hello-world", 42, "clean")
+    assert kwargs == {"finding_count": 0, "skip_reason": None}
 
 
 def _wiki_evidence():
