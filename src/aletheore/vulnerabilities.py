@@ -882,18 +882,33 @@ def check_vulnerabilities(
     # matching comment in licenses.py's check_dependency_licenses.
     if cache_path is None:
         cache_path = DEFAULT_VULNERABILITY_CACHE_PATH
-    pins = (
-        _parse_pip_pins(repo_path)
-        + _parse_npm_pins(repo_path)
-        + _parse_go_pins(repo_path)
-        + _parse_cargo_pins(repo_path)
-        + _parse_maven_pins(repo_path)
-        + _parse_gemfile_lock_pins(repo_path)
-        + _parse_composer_pins(repo_path)
-        + _parse_nuget_pins(repo_path)
-        + _parse_gradle_pins(repo_path)
-        + _parse_swift_package_resolved_pins(repo_path)
-    )
+    try:
+        pins = (
+            _parse_pip_pins(repo_path)
+            + _parse_npm_pins(repo_path)
+            + _parse_go_pins(repo_path)
+            + _parse_cargo_pins(repo_path)
+            + _parse_maven_pins(repo_path)
+            + _parse_gemfile_lock_pins(repo_path)
+            + _parse_composer_pins(repo_path)
+            + _parse_nuget_pins(repo_path)
+            + _parse_gradle_pins(repo_path)
+            + _parse_swift_package_resolved_pins(repo_path)
+        )
+    except OSError as exc:
+        # Same "degrade this one section, not the whole scan" shape as the
+        # OSV.dev-unreachable case below, extended to cover the manifest
+        # reads above it: none of the _parse_*_pins() functions guard their
+        # own read_text()/read_bytes() calls (a manifest's exists() check
+        # followed by a separate read is a real TOCTOU race on any OS, and
+        # on Windows a manifest path can also fail this way if it exceeds
+        # the legacy MAX_PATH limit), so a failure here used to crash the
+        # whole scan instead of just leaving vulnerability data unavailable.
+        return {
+            "checked": False,
+            "reason": f"could not read a dependency manifest: {exc}",
+            "findings": [],
+        }
     if not pins:
         return {"checked": True, "reason": None, "findings": []}
 

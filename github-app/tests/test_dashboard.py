@@ -250,6 +250,133 @@ async def test_list_my_repos_excludes_free_plan_installations(pool, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_list_my_repos_lists_flash_orgs_as_billing_accounts_next_to_air_repos(pool, monkeypatch):
+    # The real mixed setup: one GitHub login administers an AIR installation
+    # (personal account) AND a Flash installation (an org). Flash has no
+    # dashboard, so it must never appear in `repos`, but its owner still needs
+    # the credit page - so it comes back as a billing account alongside the AIR repos.
+    await upsert_installation(pool, 720, "personal-account")
+    await set_installation_plan(pool, 720, "air")
+    await insert_repo_history(
+        pool, 720, "personal-account/app", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+    await upsert_installation(pool, 721, "my-org")
+    await set_installation_plan(pool, 721, "flash")
+    await pool.execute(
+        "UPDATE installations SET base_credit_remaining_usd = 3.25, topup_credit_balance_usd = 10 WHERE installation_id = 721"
+    )
+    await insert_repo_history(
+        pool, 721, "my-org/service", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+    # Free installation the caller administers, and a Flash one they do NOT.
+    await upsert_installation(pool, 722, "free-org")
+    await upsert_installation(pool, 723, "someone-elses-flash")
+    await set_installation_plan(pool, 723, "flash")
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[720, 721, 722])
+    async with client:
+        response = await client.get("/app/repos")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {r["repo_full_name"] for r in body["repos"]} == {"personal-account/app"}
+    assert body["billing_accounts"] == [
+        {
+            "installation_id": 721,
+            "account_login": "my-org",
+            "plan": "flash",
+            "credit_remaining_usd": pytest.approx(13.25),
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_my_repos_billing_accounts_empty_without_a_flash_installation(pool, monkeypatch):
+    await upsert_installation(pool, 724, "octocat")
+    await set_installation_plan(pool, 724, "air")
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[724])
+    async with client:
+        response = await client.get("/app/repos")
+
+    assert response.json()["billing_accounts"] == []
+
+
+@pytest.mark.asyncio
+async def test_credits_requires_login(pool):
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/app/installations/730/credits")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_credits_returns_balance_and_checkout_data_for_a_flash_installation(pool, monkeypatch):
+    await upsert_installation(pool, 731, "my-org")
+    await set_installation_plan(pool, 731, "flash")
+    await pool.execute(
+        "UPDATE installations SET base_credit_remaining_usd = 4.5, topup_credit_balance_usd = 2 WHERE installation_id = 731"
+    )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[731])
+    async with client:
+        response = await client.get("/app/installations/731/credits")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_login"] == "my-org"
+    assert body["plan"] == "flash"
+    assert body["base_credit_remaining_usd"] == 4.5
+    assert body["topup_credit_balance_usd"] == 2.0
+    assert body["credit_topup_price_id"]
+    # A signed token, never the raw installation id.
+    assert body["checkout_installation_token"] and body["checkout_installation_token"] != "731"
+
+
+@pytest.mark.asyncio
+async def test_credits_works_for_an_air_installation_too(pool, monkeypatch):
+    await upsert_installation(pool, 732, "personal-account")
+    await set_installation_plan(pool, 732, "air")
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[732])
+    async with client:
+        response = await client.get("/app/installations/732/credits")
+
+    assert response.status_code == 200
+    assert response.json()["plan"] == "air"
+
+
+@pytest.mark.asyncio
+async def test_credits_404s_an_installation_the_caller_does_not_administer(pool, monkeypatch):
+    await upsert_installation(pool, 733, "someone-else")
+    await set_installation_plan(pool, 733, "flash")
+    await upsert_installation(pool, 734, "mine")
+    await set_installation_plan(pool, 734, "flash")
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[734])
+    async with client:
+        not_mine = await client.get("/app/installations/733/credits")
+        nonexistent = await client.get("/app/installations/99999/credits")
+
+    # Identical response for "exists but isn't yours" and "doesn't exist".
+    assert not_mine.status_code == 404
+    assert nonexistent.status_code == 404
+    assert not_mine.json() == nonexistent.json()
+
+
+@pytest.mark.asyncio
+async def test_credits_404s_a_free_installation(pool, monkeypatch):
+    await upsert_installation(pool, 735, "free-org")  # plan defaults to free
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[735])
+    async with client:
+        response = await client.get("/app/installations/735/credits")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_list_my_repos_excludes_a_hidden_repo(pool, monkeypatch):
     # A repo the customer deselected from the installation
     # (installation_repositories/removed - see webhooks/installation.py's

@@ -3447,16 +3447,38 @@ def _init_worker(
     _worker_state["parser"] = Parser()
 
 
-def _worker_parse_and_extract_one(path: Path) -> dict:
-    return _parse_and_extract_one(
-        path,
-        _worker_state["repo_path"],
-        _worker_state["parser"],
-        _worker_state["python_source_roots"],
-        _worker_state["go_module_prefix"],
-        _worker_state["has_rust_crate_root"],
-        _worker_state["php_psr4_map"],
-    )
+def _worker_parse_and_extract_one(path: Path) -> tuple[bool, dict]:
+    # Caught here, inside the worker, rather than left to propagate through
+    # the pool boundary: ProcessPoolExecutor.map() re-raises a worker's
+    # exception when the caller's iteration reaches that result, which
+    # would crash the entire scan on one unreadable file (permission
+    # denied, a mid-scan race, or a path exceeding Windows' legacy MAX_PATH
+    # limit) instead of degrading to an unparseable-files entry the way
+    # every other per-file failure class in this module already does.
+    #
+    # Flash Review finding on an earlier version of this fix: a magic dict
+    # key (e.g. "__marker__") distinguishing a failure payload from a real
+    # module dict is only safe as long as no real module ever happens to
+    # have that key - a real, if unlikely, footgun if this dict's shape
+    # ever grows a colliding field. A (success, payload) tuple makes success
+    # a structural property of the return value (its own position) rather
+    # than a convention about payload content, so it can never collide with
+    # anything _extract_module's dict shape does or ever will contain.
+    try:
+        return True, _parse_and_extract_one(
+            path,
+            _worker_state["repo_path"],
+            _worker_state["parser"],
+            _worker_state["python_source_roots"],
+            _worker_state["go_module_prefix"],
+            _worker_state["has_rust_crate_root"],
+            _worker_state["php_psr4_map"],
+        )
+    except OSError as exc:
+        return False, {
+            "path": _rel(_worker_state["repo_path"], path),
+            "reason": f"could not read file: {exc}",
+        }
 
 
 # Explicit override, matching PARALLEL_PARSE_MIN_FILES's "no CLI flag"
@@ -3560,7 +3582,7 @@ def _parse_many_in_parallel(
     go_module_prefix: str | None,
     has_rust_crate_root: bool,
     php_psr4_map: dict[str, Path],
-) -> list[dict]:
+) -> tuple[list[dict], list[dict]]:
     with ProcessPoolExecutor(
         max_workers=_available_parallelism(),
         initializer=_init_worker,
@@ -3571,7 +3593,15 @@ def _parse_many_in_parallel(
         # unasserted anywhere - see the design doc), just keeps output
         # deterministic across runs rather than depending on which worker
         # happens to finish first.
-        return list(executor.map(_worker_parse_and_extract_one, paths))
+        results = list(executor.map(_worker_parse_and_extract_one, paths))
+    modules = []
+    failures = []
+    for ok, payload in results:
+        if ok:
+            modules.append(payload)
+        else:
+            failures.append(payload)
+    return modules, failures
 
 
 def build_module_graph(
@@ -3623,11 +3653,22 @@ def build_module_graph(
     for path in _iter_source_files(repo_path, ignored_paths):
         if path.suffix != ".java":
             continue
-        if path.stat().st_size > MAX_SOURCE_FILE_BYTES:
-            oversized_paths.add(path)
-            unparseable.append({"path": _rel(repo_path, path), "reason": "file exceeds size limit"})
+        try:
+            if path.stat().st_size > MAX_SOURCE_FILE_BYTES:
+                oversized_paths.add(path)
+                unparseable.append({"path": _rel(repo_path, path), "reason": "file exceeds size limit"})
+                continue
+            pre_source = path.read_bytes()
+        except OSError as exc:
+            # A per-file OSError here (permission denied, a race with the
+            # file being removed mid-scan, or - the real, reported trigger -
+            # a path exceeding Windows' legacy MAX_PATH limit) used to
+            # propagate uncaught and crash the entire scan on one
+            # unreadable file, unlike every other per-file failure class in
+            # this function (size limit, missing grammar), which already
+            # degrades to an unparseable-files entry instead.
+            unparseable.append({"path": _rel(repo_path, path), "reason": f"could not read file: {exc}"})
             continue
-        pre_source = path.read_bytes()
         tree = pre_parser.parse(pre_source)
         package = _extract_java_package(tree.root_node, pre_source)
         root = _java_source_root_for(path, package)
@@ -3654,11 +3695,16 @@ def build_module_graph(
     for path in _iter_source_files(repo_path, ignored_paths):
         if path.suffix not in (".kt", ".kts"):
             continue
-        if path.stat().st_size > MAX_SOURCE_FILE_BYTES:
-            oversized_paths.add(path)
-            unparseable.append({"path": _rel(repo_path, path), "reason": "file exceeds size limit"})
+        try:
+            if path.stat().st_size > MAX_SOURCE_FILE_BYTES:
+                oversized_paths.add(path)
+                unparseable.append({"path": _rel(repo_path, path), "reason": "file exceeds size limit"})
+                continue
+            pre_source = path.read_bytes()
+        except OSError as exc:
+            # Same reasoning as the Java pre-pass above.
+            unparseable.append({"path": _rel(repo_path, path), "reason": f"could not read file: {exc}"})
             continue
-        pre_source = path.read_bytes()
         tree = kotlin_pre_parser.parse(pre_source)
         package = _kotlin_package(tree.root_node, pre_source)
         root = _kotlin_source_root_for(path, package)
@@ -3685,12 +3731,19 @@ def build_module_graph(
     for path in _iter_source_files(repo_path, ignored_paths):
         if path.suffix != ".cs":
             continue
-        if path.stat().st_size > MAX_SOURCE_FILE_BYTES:
-            oversized_paths.add(path)
-            unparseable.append({"path": _rel(repo_path, path), "reason": "file exceeds size limit"})
+        try:
+            if path.stat().st_size > MAX_SOURCE_FILE_BYTES:
+                oversized_paths.add(path)
+                unparseable.append({"path": _rel(repo_path, path), "reason": "file exceeds size limit"})
+                continue
+            pre_source = path.read_bytes()
+        except OSError as exc:
+            # Same reasoning as the Java pre-pass above. Not added to
+            # csharp_source_paths below - _load_csharp_implicit_usings only
+            # needs paths it can actually read.
+            unparseable.append({"path": _rel(repo_path, path), "reason": f"could not read file: {exc}"})
             continue
         csharp_source_paths.append(path)
-        pre_source = path.read_bytes()
         tree = cs_pre_parser.parse(pre_source)
         namespace = _extract_csharp_namespace(tree.root_node, pre_source)
         result = _csharp_prefix_and_root_for(path, namespace)
@@ -3738,30 +3791,38 @@ def build_module_graph(
         language_name, ts_language = language_info
         if path in oversized_paths:
             continue
-        if path.stat().st_size > MAX_SOURCE_FILE_BYTES:
-            oversized_paths.add(path)
-            unparseable.append({"path": rel_path, "reason": "file exceeds size limit"})
-            continue
+        try:
+            if path.stat().st_size > MAX_SOURCE_FILE_BYTES:
+                oversized_paths.add(path)
+                unparseable.append({"path": rel_path, "reason": "file exceeds size limit"})
+                continue
 
-        if language_name in ("java", "kotlin", "csharp", "swift"):
-            # Re-parsed here rather than reusing a tree the pre-pass above
-            # held onto - see that pre-pass's own comment (audit finding
-            # 15). The pre-pass already had to parse every .java/.kt/.cs
-            # file once to read its package/namespace before any of them
-            # could have a source root inferred at all; this is
-            # deliberately a second parse per file, trading CPU for never
-            # holding more than about one file's tree in memory at a time.
-            # Swift never needed a per-file pre-parse in the first place
-            # (see swift_target_files above) but is processed here too,
-            # serially in-process, for the same reason the others are: the
-            # worker pool below has no java_source_roots/kotlin_source_roots/
-            # csharp_prefix_map/swift_target_files to resolve any of these
-            # four languages' imports with.
-            parser.language = ts_language
-            source = path.read_bytes()
-            tree = parser.parse(source)
-        else:
-            paths_needing_parse.append(path)
+            if language_name in ("java", "kotlin", "csharp", "swift"):
+                # Re-parsed here rather than reusing a tree the pre-pass above
+                # held onto - see that pre-pass's own comment (audit finding
+                # 15). The pre-pass already had to parse every .java/.kt/.cs
+                # file once to read its package/namespace before any of them
+                # could have a source root inferred at all; this is
+                # deliberately a second parse per file, trading CPU for never
+                # holding more than about one file's tree in memory at a time.
+                # Swift never needed a per-file pre-parse in the first place
+                # (see swift_target_files above) but is processed here too,
+                # serially in-process, for the same reason the others are: the
+                # worker pool below has no java_source_roots/kotlin_source_roots/
+                # csharp_prefix_map/swift_target_files to resolve any of these
+                # four languages' imports with.
+                parser.language = ts_language
+                source = path.read_bytes()
+                tree = parser.parse(source)
+            else:
+                paths_needing_parse.append(path)
+                continue
+        except OSError as exc:
+            # Same reasoning as the pre-pass loops above - a per-file
+            # OSError (permission denied, a mid-scan race, or a path
+            # exceeding Windows' legacy MAX_PATH limit) must degrade to an
+            # unparseable-files entry, not crash the whole scan.
+            unparseable.append({"path": rel_path, "reason": f"could not read file: {exc}"})
             continue
 
         modules.append(
@@ -3797,20 +3858,20 @@ def build_module_graph(
         and not _parallel_parse_disabled()
         and _available_parallelism() > 1
     ):
-        modules.extend(
-            _parse_many_in_parallel(
-                paths_needing_parse,
-                repo_path,
-                python_source_roots,
-                go_module_prefix,
-                has_rust_crate_root,
-                php_psr4_map,
-            )
+        parsed_modules, parse_failures = _parse_many_in_parallel(
+            paths_needing_parse,
+            repo_path,
+            python_source_roots,
+            go_module_prefix,
+            has_rust_crate_root,
+            php_psr4_map,
         )
+        modules.extend(parsed_modules)
+        unparseable.extend(parse_failures)
     else:
         for path in paths_needing_parse:
-            modules.append(
-                _parse_and_extract_one(
+            try:
+                module = _parse_and_extract_one(
                     path,
                     repo_path,
                     parser,
@@ -3819,7 +3880,13 @@ def build_module_graph(
                     has_rust_crate_root,
                     php_psr4_map,
                 )
-            )
+            except OSError as exc:
+                # Same reasoning as the pre-pass loops above.
+                unparseable.append(
+                    {"path": _rel(repo_path, path), "reason": f"could not read file: {exc}"}
+                )
+                continue
+            modules.append(module)
 
     # edges/imported_by_map reconstructed uniformly from every module's own
     # "imports" list, regardless of which of the four paths above produced

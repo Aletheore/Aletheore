@@ -653,19 +653,34 @@ def check_dependency_licenses(
     # definition time, before any test ever runs.
     if cache_path is None:
         cache_path = DEFAULT_LICENSE_CACHE_PATH
-    repo_license = detect_repo_license(repo_path)
-    pins = (
-        _parse_pip_pins(repo_path)
-        + _parse_npm_pins(repo_path)
-        + _parse_go_pins(repo_path)
-        + _parse_cargo_pins(repo_path)
-        + _parse_maven_pins(repo_path)
-        + _parse_gemfile_lock_pins(repo_path)
-        + _parse_composer_pins(repo_path)
-        + _parse_nuget_pins(repo_path)
-        + _parse_gradle_pins(repo_path)
-        + _parse_swift_package_resolved_pins(repo_path)
-    )
+    try:
+        repo_license = detect_repo_license(repo_path)
+        pins = (
+            _parse_pip_pins(repo_path)
+            + _parse_npm_pins(repo_path)
+            + _parse_go_pins(repo_path)
+            + _parse_cargo_pins(repo_path)
+            + _parse_maven_pins(repo_path)
+            + _parse_gemfile_lock_pins(repo_path)
+            + _parse_composer_pins(repo_path)
+            + _parse_nuget_pins(repo_path)
+            + _parse_gradle_pins(repo_path)
+            + _parse_swift_package_resolved_pins(repo_path)
+        )
+    except OSError as exc:
+        # Same reasoning as check_vulnerabilities' identical guard in
+        # vulnerabilities.py: none of the _parse_*_pins() functions (or
+        # detect_repo_license) guard their own read_text() calls against a
+        # manifest disappearing between its exists() check and the read (a
+        # real TOCTOU race on any OS), or against a path exceeding
+        # Windows' legacy MAX_PATH limit - a failure here used to crash the
+        # whole scan instead of just leaving license data unavailable.
+        return {
+            "checked": False,
+            "reason": f"could not read a dependency manifest: {exc}",
+            "repo_license": {"category": "unknown", "detected_from": None},
+            "findings": [],
+        }
     if not pins:
         return {"checked": True, "reason": None, "repo_license": repo_license, "findings": []}
 

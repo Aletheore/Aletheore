@@ -16,7 +16,7 @@ from app_server.admin import (
     _require_admin_installation,
     _require_seat_if_paid,
 )
-from app_server.auth import get_current_session
+from app_server.auth import get_current_session, sign_checkout_installation_id
 from app_server.config import get_settings
 from app_server.dismissed_findings import dismiss_finding, get_dismissed_identity_keys, undismiss_finding
 from app_server.db import (
@@ -42,6 +42,7 @@ from app_server.db import (
 )
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.github_pagination import fetch_paginated_github_collection
+from app_server.paddle_pricing import CREDIT_TOPUP_PRICE_ID
 
 dashboard_router = APIRouter()
 MIN_CHECKS_FOR_STALE_CONFIDENCE = 5
@@ -185,8 +186,26 @@ async def list_my_repos(request: Request):
             }
         )
 
+    # Flash installations have no managed dashboard, but their owners still
+    # need somewhere to see the AI credit balance and buy more (credit is the
+    # only limit on a paid plan). They are listed separately from `repos` so
+    # nothing that reads `repos` starts treating a Flash org as a dashboard.
+    # One login can administer installations on different plans (e.g. AIR on a
+    # personal account and Flash on an org), so this is collected alongside the
+    # AIR repos, never instead of them.
+    billing_accounts = []
     for installation_id in administered_ids:
         installation = await get_installation(pool, installation_id)
+        if installation is not None and installation["plan"] == "flash":
+            billing_accounts.append(
+                {
+                    "installation_id": installation_id,
+                    "account_login": installation["account_login"],
+                    "plan": installation["plan"],
+                    "credit_remaining_usd": float(installation["base_credit_remaining_usd"])
+                    + float(installation["topup_credit_balance_usd"]),
+                }
+            )
         # AIR-exclusive - no managed dashboard for flash either.
         if installation is None or installation["plan"] != "air":
             continue
@@ -199,7 +218,48 @@ async def list_my_repos(request: Request):
             )
         )
 
-    return {"repos": result}
+    billing_accounts.sort(key=lambda account: account["account_login"].lower())
+    return {"repos": result, "billing_accounts": billing_accounts}
+
+
+@dashboard_router.get("/app/installations/{installation_id}/credits")
+async def get_credits(installation_id: int, request: Request):
+    """Credit balance and top-up checkout data for one paid installation.
+
+    Gated on session + "administers this installation" only, deliberately not
+    on the AIR plan gate every other /app route uses: a Flash installation has
+    no dashboard, so this is the only place its owner can see the balance or
+    buy more. Buying credit only ever adds to the installation's own balance,
+    so nothing sensitive is exposed beyond the balance itself. Free (or lapsed)
+    installations get the same 404 as an installation the caller doesn't
+    administer, so the response never reveals which installations exist.
+    """
+    session = await get_current_session(request)
+    if session is None:
+        raise HTTPException(status_code=401, detail="login required")
+
+    pool = request.app.state.db_pool
+    administered_ids = await _administered_installation_ids_for_session_or_401(pool, session)
+    if installation_id not in administered_ids:
+        raise HTTPException(status_code=404, detail="no such installation")
+    installation = await get_installation(pool, installation_id)
+    if installation is None or installation["plan"] not in ("flash", "air"):
+        raise HTTPException(status_code=404, detail="no such installation")
+
+    return {
+        "installation_id": installation_id,
+        "account_login": installation["account_login"],
+        "plan": installation["plan"],
+        "base_credit_remaining_usd": float(installation["base_credit_remaining_usd"]),
+        "topup_credit_balance_usd": float(installation["topup_credit_balance_usd"]),
+        "paddle_customer_id": installation.get("paddle_customer_id"),
+        # Minted per request (30-minute TTL), same as the settings page's own
+        # top-up, so a tab left open re-fetches a fresh one at click time.
+        "checkout_installation_token": sign_checkout_installation_id(
+            installation_id, get_settings().session_secret
+        ),
+        "credit_topup_price_id": CREDIT_TOPUP_PRICE_ID,
+    }
 
 
 async def _require_dashboard_installation(request: Request, org: str, repo: str) -> tuple[dict, int]:

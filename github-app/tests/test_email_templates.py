@@ -215,3 +215,38 @@ def test_credit_exhausted_email_mentions_buying_more():
     assert "subject" in message and "html" in message and "text" in message
     # Must give the customer an actual next step, not just "you're out."
     assert "credit" in message["text"].lower()
+
+
+def test_credit_emails_link_a_flash_customer_to_their_credit_page():
+    # Flash has no dashboard, so the buy link must be the standalone credit page
+    # for this exact installation, and the copy must offer buying, not upgrading.
+    for build in (credit_low_balance_email, credit_exhausted_email):
+        message = build(
+            account_login="acme", plan="flash",
+            base_credit_remaining_usd=0.50, topup_credit_balance_usd=0.00,
+            installation_id=4242,
+        )
+        assert "https://app.aletheore.com/credits/4242" in message["html"]
+        assert "Buy more credit" in message["html"]
+        assert "Upgrade to AIR" not in message["html"]
+        assert "Upgrade to Aletheore AIR" not in message["text"]
+
+
+def test_credit_emails_still_say_upgrade_for_flash_without_an_installation_id():
+    # Old queued jobs (or callers) with no installation id can't be linked to a
+    # page, so they keep the previous "upgrade" behaviour rather than a dead link.
+    message = credit_low_balance_email(
+        account_login="acme", plan="flash",
+        base_credit_remaining_usd=0.50, topup_credit_balance_usd=0.00,
+    )
+    assert "Upgrade to AIR" in message["html"]
+    assert "/credits/" not in message["html"]
+
+
+def test_credit_emails_keep_air_on_its_dashboard():
+    message = credit_exhausted_email(
+        account_login="acme", plan="air",
+        base_credit_remaining_usd=0.00, topup_credit_balance_usd=0.00, installation_id=7,
+    )
+    assert "https://app.aletheore.com/dashboard" in message["html"]
+    assert "/credits/" not in message["html"]

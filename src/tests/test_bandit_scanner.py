@@ -1,7 +1,7 @@
 import json
 from unittest.mock import MagicMock, patch
 
-from aletheore.static_analysis.bandit_scanner import check_bandit
+from aletheore.static_analysis.bandit_scanner import _relative_path, check_bandit
 
 
 def _mock_run(returncode: int, stdout: str = "", stderr: str = "") -> MagicMock:
@@ -10,6 +10,38 @@ def _mock_run(returncode: int, stdout: str = "", stderr: str = "") -> MagicMock:
     result.stdout = stdout
     result.stderr = stderr
     return result
+
+
+def test_relative_path_normalizes_to_forward_slashes_even_on_windows(tmp_path, monkeypatch):
+    # Real bug found on Windows CI in semgrep_scanner.py's identical helper,
+    # audited into every scanner sharing the same str(Path(...)) pattern:
+    # it renders with the OS's native separator - a backslash-joined path
+    # on Windows - while every other path in this codebase's evidence uses
+    # .as_posix(). Can't be reproduced by just running on this (POSIX)
+    # machine - str(PosixPath(...)) already uses forward slashes here - so
+    # this simulates Windows' real Path.relative_to() return shape
+    # directly (a PureWindowsPath) rather than requiring an actual Windows
+    # machine to prove the fix.
+    from pathlib import Path, PureWindowsPath
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    raw_path = "./pkg/app.py"
+    expected_target = (repo / raw_path).resolve()
+    windows_relative = PureWindowsPath("pkg", "app.py")
+    original_relative_to = Path.relative_to
+
+    def patched_relative_to(self, other):
+        if self == expected_target and other == repo.resolve():
+            return windows_relative
+        return original_relative_to(self, other)
+
+    monkeypatch.setattr(Path, "relative_to", patched_relative_to)
+
+    result = _relative_path(raw_path, repo)
+
+    assert result == "pkg/app.py"
+    assert "\\" not in result
 
 
 def test_check_bandit_is_checked_true_with_no_findings_when_no_python_source(tmp_path):

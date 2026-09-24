@@ -2257,6 +2257,7 @@ async def test_reserve_llm_spend_low_balance_triggers_email_enqueue(pool, monkey
         "plan": "flash",
         "base_credit_remaining_usd": pytest.approx(0.70),
         "topup_credit_balance_usd": pytest.approx(0.00),
+        "installation_id": installation_id,
     }
 
 
@@ -2366,6 +2367,7 @@ async def test_reserve_llm_spend_rejection_triggers_exhausted_email(pool, monkey
         "plan": "flash",
         "base_credit_remaining_usd": pytest.approx(0.01),
         "topup_credit_balance_usd": pytest.approx(0.00),
+        "installation_id": installation_id,
     }
 
 
@@ -4184,6 +4186,63 @@ def test_flash_review_comment_body_falls_back_to_a_plain_fence_when_not_clickabl
     for body in (rejected, never_checked):
         assert "```suggestion" not in body
         assert "```\n    return a + b\n```" in body
+
+
+def test_flash_review_comment_body_prefixes_severity_when_present():
+    from scan_worker.jobs import _flash_review_comment_body
+
+    body = _flash_review_comment_body(
+        {"file": "app.py", "line": 12, "issue": "real problem", "severity": "Critical"}
+    )
+    assert body.startswith("🔴 **Critical**\n\nreal problem")
+
+
+def test_flash_review_comment_body_omits_severity_prefix_when_absent():
+    # Ranking is best-effort and fails open (see flash_review.
+    # _rank_findings_with_severity's own docstring) - a finding with no
+    # "severity" key at all (free tier, or a ranking call that failed this
+    # run) must render exactly as it always has, no empty prefix.
+    from scan_worker.jobs import _flash_review_comment_body
+
+    body = _flash_review_comment_body({"file": "app.py", "line": 12, "issue": "real problem"})
+    assert body.startswith("real problem")
+
+
+def test_flash_review_comment_body_omits_severity_prefix_for_an_unrecognized_label():
+    # Defensive: a value outside the 4 known labels must not be trusted
+    # into the rendered comment.
+    from scan_worker.jobs import _flash_review_comment_body
+
+    body = _flash_review_comment_body(
+        {"file": "app.py", "line": 12, "issue": "real problem", "severity": "Extreme"}
+    )
+    assert body.startswith("real problem")
+
+
+def test_flash_review_severity_breakdown_counts_in_fixed_order():
+    from scan_worker.jobs import _flash_review_severity_breakdown
+
+    findings = [
+        {"severity": "Low"},
+        {"severity": "Critical"},
+        {"severity": "Critical"},
+        {"severity": "Medium"},
+    ]
+    assert _flash_review_severity_breakdown(findings) == "(2 Critical, 1 Medium, 1 Low.)"
+
+
+def test_flash_review_severity_breakdown_empty_when_no_finding_has_a_severity():
+    from scan_worker.jobs import _flash_review_severity_breakdown
+
+    findings = [{"file": "app.py", "line": 1, "issue": "x"}, {"file": "app.py", "line": 2, "issue": "y"}]
+    assert _flash_review_severity_breakdown(findings) == ""
+
+
+def test_flash_review_severity_breakdown_omits_zero_count_labels():
+    from scan_worker.jobs import _flash_review_severity_breakdown
+
+    findings = [{"severity": "High"}]
+    assert _flash_review_severity_breakdown(findings) == "(1 High.)"
 
 
 def test_flash_review_job_attaches_symbol_attribution_from_deterministic_evidence(monkeypatch):

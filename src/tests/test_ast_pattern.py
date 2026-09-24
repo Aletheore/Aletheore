@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 from aletheore.ast_pattern import (
@@ -206,6 +208,10 @@ def test_search_ast_pattern_skips_a_file_over_the_size_cap(tmp_path):
     assert result["matches"] == []
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="chmod(0) doesn't make a file unreadable to its own owner on Windows",
+)
 def test_search_ast_pattern_skips_an_unreadable_file_without_losing_other_results(tmp_path):
     """Real regression: an unhandled OSError on one file used to crash the
     whole call, losing every other file's real matches too. A genuine

@@ -53,6 +53,18 @@ def test_embedded_script_blocks_are_valid_javascript(page_constant, tmp_path):
         )
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available in this environment")
+def test_credits_page_script_is_valid_javascript(tmp_path):
+    # Built by a function of the installation id, so it is not picked up by the
+    # *_HTML constant sweep above.
+    html = frontend._credits_page(123)
+    for i, script in enumerate(_SCRIPT_BLOCK.findall(html)):
+        js_file = tmp_path / f"credits_{i}.js"
+        js_file.write_text(script)
+        result = subprocess.run(["node", "--check", str(js_file)], capture_output=True, text=True)
+        assert result.returncode == 0, f"credits page script block {i} is not valid JavaScript:\n{result.stderr}"
+
+
 def test_wiki_markdown_escapes_before_promoting_tags():
     """AIRview file pages are model-written from repository content, so the
     renderer must escape first and only then promote markdown. If those steps

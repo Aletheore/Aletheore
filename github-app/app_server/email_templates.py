@@ -14,7 +14,8 @@ import re
 
 _LOGO_URL = "https://www.aletheore.com/assets/logo-mark.png"
 _PRICING_URL = "https://aletheore.com/pricing.html"
-_DASHBOARD_URL = "https://app.aletheore.com/dashboard"
+_APP_URL = "https://app.aletheore.com"
+_DASHBOARD_URL = f"{_APP_URL}/dashboard"
 _FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
 
 # Matches website/styles.css's --bg-cream/--text-primary/--accent palette,
@@ -366,8 +367,24 @@ def subscription_canceled_email(account_login: str, plan: str) -> dict:
     return {"subject": subject, "html": html, "text": text}
 
 
+def _credit_purchase_link(plan: str, installation_id: int | None) -> str | None:
+    """Where a customer on `plan` can actually buy more credit, or None when
+    they can't without upgrading. AIR buys from its dashboard settings; Flash
+    has no dashboard, so it buys from the standalone /credits page (needs the
+    installation id to link to it)."""
+    if plan == "air":
+        return _DASHBOARD_URL
+    if plan == "flash" and installation_id is not None:
+        return f"{_APP_URL}/credits/{installation_id}"
+    return None
+
+
 def credit_low_balance_email(
-    account_login: str, plan: str, base_credit_remaining_usd: float, topup_credit_balance_usd: float
+    account_login: str,
+    plan: str,
+    base_credit_remaining_usd: float,
+    topup_credit_balance_usd: float,
+    installation_id: int | None = None,
 ) -> dict:
     # base_credit_remaining_usd/topup_credit_balance_usd may arrive as
     # Decimal (asyncpg's NUMERIC type) once the real caller lands - coerce
@@ -375,17 +392,17 @@ def credit_low_balance_email(
     base_credit_remaining_usd = float(base_credit_remaining_usd)
     topup_credit_balance_usd = float(topup_credit_balance_usd)
     plan_name = _plan_display_name(plan)
-    is_air = plan == "air"
-    # The buy-more-credit flow lives on the AIR-only dashboard settings page
-    # (admin.py's _require_admin_installation 402s any other plan) - a
-    # non-AIR customer can't "buy more credit" at all without upgrading
-    # first, so both the copy and the CTA button need to say that, not
-    # dangle a promise the account can't act on.
-    cta_url = _DASHBOARD_URL if is_air else _PRICING_URL
-    cta_label = "Buy more credit" if is_air else "Upgrade to AIR"
+    # AIR buys credit from its dashboard settings page (admin.py's
+    # _require_admin_installation 402s any other plan), Flash from the
+    # standalone /credits page. Anyone else can't buy at all without
+    # upgrading first, so both the copy and the CTA button need to say that,
+    # not dangle a promise the account can't act on.
+    purchase_link = _credit_purchase_link(plan, installation_id)
+    cta_url = purchase_link or _PRICING_URL
+    cta_label = "Buy more credit" if purchase_link else "Upgrade to AIR"
     buy_more_line = (
-        "Buy more credit any time from your dashboard - it never expires."
-        if is_air
+        "Buy more credit any time - it never expires."
+        if purchase_link
         else "Upgrade to Aletheore AIR to buy more credit any time - it never expires."
     )
     combined = base_credit_remaining_usd + topup_credit_balance_usd
@@ -415,7 +432,11 @@ def credit_low_balance_email(
 
 
 def credit_exhausted_email(
-    account_login: str, plan: str, base_credit_remaining_usd: float, topup_credit_balance_usd: float
+    account_login: str,
+    plan: str,
+    base_credit_remaining_usd: float,
+    topup_credit_balance_usd: float,
+    installation_id: int | None = None,
 ) -> dict:
     # See credit_low_balance_email above - coerce Decimal/float args up
     # front so the (currently arithmetic-free, but future-proofed) usage
@@ -423,16 +444,16 @@ def credit_exhausted_email(
     base_credit_remaining_usd = float(base_credit_remaining_usd)
     topup_credit_balance_usd = float(topup_credit_balance_usd)
     plan_name = _plan_display_name(plan)
-    is_air = plan == "air"
-    # See credit_low_balance_email above - the buy-more-credit flow is
-    # AIR-only, so a non-AIR customer needs "upgrade" copy, not a promise
-    # to "buy more credit" they can't act on without upgrading first.
-    cta_url = _DASHBOARD_URL if is_air else _PRICING_URL
-    cta_label = "Buy more credit" if is_air else "Upgrade to AIR"
+    # See credit_low_balance_email above - a customer with no purchase page
+    # needs "upgrade" copy, not a promise to "buy more credit" they can't act
+    # on without upgrading first.
+    purchase_link = _credit_purchase_link(plan, installation_id)
+    cta_url = purchase_link or _PRICING_URL
+    cta_label = "Buy more credit" if purchase_link else "Upgrade to AIR"
     resume_line = (
         "Buy more credit any time to resume immediately, or wait for your next renewal "
         "when your included credit refreshes."
-        if is_air
+        if purchase_link
         else "Upgrade to Aletheore AIR to buy more credit and resume immediately, or wait "
         "for your next renewal when your included credit refreshes."
     )

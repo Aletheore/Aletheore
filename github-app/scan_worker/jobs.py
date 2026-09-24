@@ -2152,6 +2152,14 @@ def run_flash_review_job(
             # per_file_completeness's own comment at the review_diff call
             # site for the real cost numbers behind this split.
             per_file_completeness=not is_free_tier,
+            # Same gating as per_file_completeness, not verify_with_second_model:
+            # per_file_completeness is what created the triage problem this
+            # solves (far more findings per PR than before), on both paid
+            # tiers, so both need the fix. The call itself is cheap - it only
+            # reasons over already-generated findings' text, not diffs or
+            # file context again - unlike verification's real per-finding
+            # DeepSeek cost, which is why that one stays AIR-only.
+            rank_findings=not is_free_tier,
         )
     except Exception as exc:  # noqa: BLE001
         try:
@@ -2192,9 +2200,21 @@ def _flash_review_finding_type(finding: dict) -> str:
     return "flash_review_llm" if finding.get("source") == "llm" else "flash_review_semantic"
 
 
+# Matches the 4 severity labels flash_review._rank_findings_with_severity's
+# RANKING_SYSTEM_PROMPT asks for, exactly - a finding whose "severity" key
+# doesn't match one of these (or is absent - ranking is best-effort and
+# fails open, see that function's own docstring) renders with no prefix at
+# all, identical to before this feature existed.
+_SEVERITY_EMOJI = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🔵"}
+
+
 def _flash_review_comment_body(finding: dict) -> str:
     symbol = finding.get("symbol")
-    lines = [f"**`{symbol}`**\n\n{finding['issue']}" if symbol else finding["issue"]]
+    header = f"**`{symbol}`**\n\n{finding['issue']}" if symbol else finding["issue"]
+    severity = finding.get("severity")
+    if severity in _SEVERITY_EMOJI:
+        header = f"{_SEVERITY_EMOJI[severity]} **{severity}**\n\n{header}"
+    lines = [header]
     suggestion = finding.get("suggestion")
     if suggestion:
         # "```suggestion" only when flash_review.py's _suggestion_is_clickable
@@ -2211,6 +2231,31 @@ def _flash_review_comment_body(finding: dict) -> str:
         "raise it again on this repo._"
     )
     return "\n\n".join(lines)
+
+
+def _flash_review_severity_breakdown(findings: list[dict]) -> str:
+    """The actual triage view for the summary comment: GitHub controls
+    inline-comment order by file position, not by flash_review._rank_findings_
+    with_severity's rank, so a developer scanning "Files changed" can't tell
+    from position alone which of N findings matters most - this one-line
+    breakdown is where that's visible without opening each comment. Counted
+    over findings_to_post (everything identified this run), not only the
+    subset that successfully posted - the separate failed-post suffix already
+    discloses when those two counts differ.
+
+    Empty string, not a "0 Critical, 0 High..." line, whenever no finding
+    carries a severity at all - free tier (rank_findings is never enabled
+    there), or a ranking call that failed open this run (see that function's
+    own docstring) and left every finding unlabeled.
+    """
+    order = ("Critical", "High", "Medium", "Low")
+    counts = {label: 0 for label in order}
+    for finding in findings:
+        severity = finding.get("severity")
+        if severity in counts:
+            counts[severity] += 1
+    parts = [f"{counts[label]} {label}" for label in order if counts[label]]
+    return f"({', '.join(parts)}.)" if parts else ""
 
 
 _RESOLVED_PREFIX = "✅ _No longer detected as of `{sha}`._\n\n---\n\n"
@@ -2352,6 +2397,7 @@ def _run_flash_review(
     is_free_tier: bool = False,
     verify_with_second_model: bool = False,
     per_file_completeness: bool = False,
+    rank_findings: bool = False,
 ) -> bool:
     """Returns True if a real review actually ran and its spend/count
     reservation (see run_flash_review_job) was trued up to reflect it -
@@ -2700,6 +2746,13 @@ def _run_flash_review(
             # `adapter_chain is None` guard already makes this a no-op for
             # free tier regardless (free_tier_chain is never None there).
             per_file_completeness=per_file_completeness,
+            # Reuses _on_usage, not a dedicated ranking closure: this call
+            # runs on the exact same model as generation itself (see
+            # flash_review._rank_findings_with_severity's own docstring), so
+            # there is no separate rate to price it at the way
+            # _on_verification_usage exists specifically to avoid mispricing
+            # DeepSeek tokens at flash_review_model's rate.
+            rank_findings=rank_findings,
         )
     # Every free-tier provider failed mid-review (see
     # _on_free_tier_exhausted above) - this review never actually ran, the
@@ -2804,9 +2857,11 @@ def _run_flash_review(
             f" ({failed_new_posts} more finding(s) held up but couldn't be posted "
             "as an inline comment - see the job log for the real error.)"
         )
+        breakdown = _flash_review_severity_breakdown(findings_to_post)
+        breakdown_suffix = f" {breakdown}" if breakdown else ""
         body = (
             f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\n"
-            f"{posted_count} finding(s) posted as inline review comment(s) below.{suffix}"
+            f"{posted_count} finding(s) posted as inline review comment(s) below.{suffix}{breakdown_suffix}"
         )
     elif findings_to_post:
         # Every finding that held up failed to post (the failure path
@@ -4717,6 +4772,9 @@ def _enqueue_credit_balance_email(template_name: str, installation_id: int, row:
                 "plan": row.get("plan", ""),
                 "base_credit_remaining_usd": float(row.get("base_credit_remaining_usd", 0)),
                 "topup_credit_balance_usd": float(row.get("topup_credit_balance_usd", 0)),
+                # So the email can link a Flash customer (no dashboard) to the
+                # standalone credit page for this exact installation.
+                "installation_id": installation_id,
             },
             to_email=alert_email,
             installation_id=installation_id,
