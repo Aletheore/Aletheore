@@ -239,7 +239,14 @@ class CodeGraphStore:
                             cur.execute(
                                 "INSERT INTO code_graph_symbols "
                                 "(installation_id, repo_full_name, branch, path, name, kind, start_line, end_line) "
-                                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                                # The key is (path, name, start_line), so two symbols
+                                # with the same name starting on the same line are one
+                                # row here. Minified JS does this constantly (many
+                                # one-letter functions on line 13). Without this, the
+                                # first collision aborts the whole transaction and the
+                                # repo's durable graph stays stale on every scan.
+                                "ON CONFLICT DO NOTHING",
                                 (*ids, path, entry["name"], kind, entry["start_line"], entry["end_line"]),
                             )
 
