@@ -530,6 +530,8 @@ when started with `--agent`:
 aletheore mcp .
 ```
 
+**Windows: `ImportError: DLL load failed while importing _lancedb`.** This is Windows 11's Smart App Control silently blocking `_lancedb.dll` (from the `lancedb` package the semantic-search tools depend on), not a bug in this package. Check Windows Security → App & browser control → Smart App Control; turning it off resolves the import immediately, with no code changes needed. Microsoft only lets Smart App Control be turned off, not back on, without reinstalling Windows, so this is a one-way decision on the affected machine.
+
 #### Tool permissions
 
 Most of these tools only read `.aletheore/air.json`. A few do more, so each one carries standard
