@@ -2503,6 +2503,8 @@ def _rank_findings_with_severity(
                 or isinstance(entry.get("id"), bool)
                 or entry.get("severity") not in ("Critical", "High", "Medium", "Low")
                 or not isinstance(entry.get("rank"), int)
+                # bool is an int subclass: `"rank": true` must not pass as rank 1.
+                or isinstance(entry.get("rank"), bool)
             ):
                 raise ValueError(f"malformed ranking entry: {entry!r}")
             if entry["id"] in by_id:
@@ -2518,7 +2520,10 @@ def _rank_findings_with_severity(
             seen_ranks.add(entry["rank"])
             ranked.append({**finding, "rank": entry["rank"], "severity": entry["severity"]})
         return ranked
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
+        # Deliberately broad, not AdapterInvocationError: this block also has to absorb JSON that
+        # doesn't parse and every ValueError raised by the validation above, and ranking is
+        # decoration - any failure at all must fall back to posting the findings unranked.
         logger.warning(
             "flash review ranking failed (%s); posting findings unranked", type(exc).__name__
         )
