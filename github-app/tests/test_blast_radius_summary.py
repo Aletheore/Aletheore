@@ -64,7 +64,10 @@ def test_a_malformed_module_entry_never_raises(monkeypatch):
     assert blast_radius_summary(_evidence({"core.py": ["a.py"]}), ["core.py"]) == ""
 
 
-@pytest.mark.parametrize("env_value,expect_call", [(None, True), ("on", True), ("off", False)])
+@pytest.mark.parametrize(
+    "env_value,expect_call",
+    [(None, True), ("on", True), ("off", False), ("0", False), ("False", False), (" no ", False)],
+)
 def test_summary_section_only_reads_exact_head_sha_evidence_and_honours_the_switch(
     monkeypatch, env_value, expect_call
 ):

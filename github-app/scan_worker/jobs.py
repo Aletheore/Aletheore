@@ -3225,7 +3225,7 @@ def _blast_radius_section_for(
     landed yet the section is simply omitted (the next review of this PR includes it). Off with
     FLASH_REVIEW_BLAST_RADIUS=off. No LLM call, one small DB read, and never able to fail the review.
     """
-    if os.environ.get("FLASH_REVIEW_BLAST_RADIUS") == "off":
+    if _env_switched_off("FLASH_REVIEW_BLAST_RADIUS"):
         return ""
     try:
         evidence = _evidence_by_head_sha_or_none(dsn, installation_id, repo_full_name, head_sha)
