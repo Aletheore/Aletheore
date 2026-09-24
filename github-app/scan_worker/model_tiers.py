@@ -226,6 +226,33 @@ def writing_adapter_for(
     )
 
 
+CROSS_FILE_CHECK_MODEL = "gpt-6-luna"
+
+
+def cross_file_check_adapter(
+    on_usage: Callable[[int, int, int], None] | None = None,
+) -> OpenAICompatibleAdapter:
+    """The model for flash_review._check_findings_against_whole_diff. gpt-6-luna at
+    reasoning_effort=low, chosen by measurement, not price alone: on the 13-case
+    real-PR corpus it caught 9 confirmed false positives with zero true positives or
+    golden catches lost, at ~$0.001/PR. The same two candidate models that were
+    tried as the checker behaved very differently - deepseek-v4-flash dropped 5
+    golden-bug catches and 4 true positives while catching only 3 false positives,
+    so this is deliberately not verification_adapter().
+
+    Never the generator (GLM via IndieRouter), so it can't be checking its own work.
+    Needs OPENAI_API_KEY; without it the check is skipped and every finding stands.
+    """
+    return OpenAICompatibleAdapter(
+        name="OpenAI",
+        base_url="https://api.openai.com/v1",
+        api_key_env_var="OPENAI_API_KEY",
+        model=CROSS_FILE_CHECK_MODEL,
+        extra_body={"reasoning_effort": "low"},
+        on_usage=on_usage,
+    )
+
+
 FLASH_REVIEW_GENERATION_MODEL = "glm-5.3-flash"
 
 

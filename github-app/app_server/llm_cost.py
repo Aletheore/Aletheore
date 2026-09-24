@@ -22,6 +22,7 @@ MODEL_RATES_PER_MILLION_USD = {
     "deepseek-v4-pro": {"input": 1.32, "output": 3.96, "verified_at": "2026-08-29"},
     "deepseek-v4-flash": {"input": 0.44, "output": 1.32, "verified_at": "2026-08-29"},
     "gpt-5.6-luna": {"input": 0.20, "output": 1.20, "verified_at": "2026-08-09"},
+    "gpt-6-luna": {"input": 0.10, "output": 0.50, "verified_at": "2026-09-23"},
     # IndieRouter's own real rate card is quoted in INR (Rs 6.73/1M in,
     # Rs 22.43/1M out) - converted here at Rs 88/USD (this table's own
     # convention, every other rate quoted in USD) so cost_for_usage's
