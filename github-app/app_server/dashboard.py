@@ -640,6 +640,8 @@ async def get_dashboard_graph(org: str, repo: str, request: Request):
     evidence = await get_latest_evidence(pool, installation_id, repo_full_name)
     if evidence is None:
         raise HTTPException(status_code=404, detail="no scan evidence yet")
+    if not evidence.get("repository", {}).get("dependency_graph") or not evidence.get("architecture", {}).get("clusters"):
+        raise HTTPException(status_code=404, detail="latest scan evidence has no dependency graph yet")
 
     summary = build_graph_summary(evidence)
 

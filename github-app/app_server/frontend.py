@@ -301,9 +301,10 @@ table.findings tr:last-child td { border-bottom: none; }
 .graph-card { border: 1px solid var(--border); border-radius: 4px; background: var(--paper); margin-bottom: 20px; }
 .graph-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .graph-toolbar select { font-family: var(--font-sans); font-size: 12.5px; border: 1px solid var(--border-strong); border-radius: 4px; padding: 6px 8px; background: var(--paper); color: var(--ink-900); }
-.graph-toolbar .hint { font-size: 11.5px; color: var(--slate-400); font-family: var(--font-mono); }
+.graph-toolbar .hint { font-size: 12px; color: var(--slate-400); font-family: var(--font-mono); }
+#graph-reset-btn { font-weight: 600; padding: 7px 12px; }
 .graph-wrap { position: relative; }
-svg#depgraph { width: 100%; height: 440px; display: block; background: var(--paper); cursor: grab; }
+svg#depgraph { width: 100%; height: 460px; display: block; background: var(--paper); cursor: grab; }
 svg#depgraph:active { cursor: grabbing; }
 .g-node circle { fill: var(--paper); stroke: var(--ink-900); stroke-width: 1.4; cursor: grab; }
 .g-node.hub circle { stroke: var(--accent); stroke-width: 1.8; }
@@ -1499,13 +1500,7 @@ WIKI_HTML = _page_head("AIRview — {repo} — Aletheore") + _shell(
     _topbar("AIRview")
     + """
     <p class="section-sub" style="margin: -0.6rem 0 1.2rem;">Generated from the real module dependency graph - the same evidence the architecture wiki below reads too, just explorable instead of static.</p>
-    <section class="section" id="graph-section">
-      <div class="section-head">
-        <div class="section-title"><i class="ti ti-affiliate" aria-hidden="true"></i>Interactive dependency graph</div>
-        <span class="section-sub">Drag a node, scroll to zoom, hover to trace imports</span>
-      </div>
-      <div class="section-body" id="graph-body"><div class="empty-state">Loading&hellip;</div></div>
-    </section>
+    <div id="graph-body"><div class="empty-state">Loading&hellip;</div></div>
     <section class="section">
       <div class="section-head">
         <div class="section-title"><i class="ti ti-book-2" aria-hidden="true"></i>Architecture wiki</div>
@@ -1815,7 +1810,7 @@ async function loadGraph() {{
     );
     return;
   }}
-  if (res.status === 404) {{ container.innerHTML = '<div class="empty-state">No scan evidence yet.</div>'; return; }}
+  if (res.status === 404) {{ container.innerHTML = '<div class="empty-state">No dependency graph available yet.</div>'; return; }}
   if (!res.ok) {{ container.innerHTML = '<div class="empty-state">Graph unavailable.</div>'; return; }}
   const data = await res.json();
   graphAllClusters = data.clusters || [];
@@ -1831,10 +1826,10 @@ async function loadGraph() {{
     '<div class="graph-card">' +
       '<div class="graph-toolbar">' +
         '<select id="graph-cluster-select" onchange="renderGraphForCluster(this.value)">' + options.join('') + '</select>' +
-        '<span class="hint">drag &middot; scroll to zoom &middot; hover to trace imports</span>' +
+        '<span class="hint">drag nodes &middot; scroll to zoom &middot; hover to trace imports</span>' +
         '<button class="btn" id="graph-reset-btn" onclick="document.getElementById(&#39;depgraph&#39;)._resetView()">Reset view</button>' +
       '</div>' +
-      '<div class="graph-wrap"><svg id="depgraph" viewBox="0 0 900 440"></svg></div>' +
+      '<div class="graph-wrap"><svg id="depgraph" viewBox="0 0 900 460"></svg></div>' +
       '<div class="graph-hover-info" id="graph-hover-info">Hover a module to see what it imports.</div>' +
     '</div>' +
     '<div class="cluster-item" id="cluster-summary-item">' +
@@ -1886,7 +1881,7 @@ function runForceGraph(rawNodes, rawEdges) {{
   // settled and burned CPU indefinitely on repeated filter changes).
   if (existingSvg._stopGraphTick) existingSvg._stopGraphTick();
 
-  const W = 900, H = 440;
+  const W = 900, H = 460;
   const degree = {{}};
   rawEdges.forEach(function (e) {{ degree[e.source] = (degree[e.source] || 0) + 1; degree[e.target] = (degree[e.target] || 0) + 1; }});
   const nodes = rawNodes.map(function (n, i) {{
