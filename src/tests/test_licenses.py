@@ -432,6 +432,30 @@ def test_check_dependency_licenses_no_pins_short_circuits_without_network_call(t
     assert result["findings"] == []
 
 
+def test_check_dependency_licenses_degrades_gracefully_when_a_manifest_read_fails(tmp_path):
+    # Same gap, same fix, as check_vulnerabilities' identical test in
+    # test_vulnerabilities.py: neither detect_repo_license nor any of the
+    # _parse_*_pins() functions guard their own read_text() against a
+    # manifest disappearing between its exists() check and the read (a
+    # real TOCTOU race on any OS) or a path exceeding Windows' legacy
+    # MAX_PATH limit - an OSError there used to crash the whole scan
+    # instead of degrading just this section.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "package.json").write_text('{"dependencies": {"left-pad": "1.0.0"}}')
+
+    with patch(
+        "aletheore.licenses.Path.read_text",
+        side_effect=OSError("simulated: path too long"),
+    ):
+        result = check_dependency_licenses(repo)
+
+    assert result["checked"] is False
+    assert "path too long" in result["reason"]
+    assert result["repo_license"] == {"category": "unknown", "detected_from": None}
+    assert result["findings"] == []
+
+
 def test_check_dependency_licenses_second_scan_skips_network_call_entirely(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

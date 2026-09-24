@@ -1,6 +1,17 @@
 import json
+import sys
+
+import pytest
 
 from aletheore.credentials import clear_api_key, get_api_key, has_api_key, save_api_token
+
+# POSIX-only: Windows has no fchmod (skipped there entirely, see
+# _locked_rw_credentials_file) and st_mode's owner/group/other bits don't
+# mean the same thing there either - os.chmod on Windows only ever toggles
+# a single read-only attribute, never a real 0o600.
+_posix_only_permissions = pytest.mark.skipif(
+    sys.platform == "win32", reason="POSIX file permission bits don't apply on Windows"
+)
 
 
 def test_has_api_key_true_from_env_var(monkeypatch, tmp_path):
@@ -108,6 +119,7 @@ def test_get_api_key_still_prompts_when_a_custom_prompt_fn_is_supplied_even_off_
     assert result == "sk-from-double"
 
 
+@_posix_only_permissions
 def test_save_key_sets_restrictive_permissions(monkeypatch, tmp_path):
     monkeypatch.delenv("TESTPROVIDER_API_KEY", raising=False)
     creds_path = tmp_path / "creds.json"
@@ -119,6 +131,7 @@ def test_save_key_sets_restrictive_permissions(monkeypatch, tmp_path):
     assert mode == 0o600
 
 
+@_posix_only_permissions
 def test_save_key_tightens_permissions_on_a_pre_existing_looser_file(monkeypatch, tmp_path):
     # A file that already exists (e.g. from before this restrictive-
     # permissions fix, or seeded some other way) with looser permissions
@@ -243,6 +256,7 @@ def test_clear_api_key_removes_saved_key(tmp_path):
     assert not has_api_key("UNUSED_ENV", "aletheore-managed-audit", credentials_path=path)
 
 
+@_posix_only_permissions
 def test_clear_api_key_repairs_existing_file_permissions(tmp_path):
     path = tmp_path / "credentials.json"
     save_api_token("provider-a", "tok-a", path)

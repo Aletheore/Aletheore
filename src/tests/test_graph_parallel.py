@@ -167,7 +167,7 @@ def test_worker_pool_round_trip_is_actually_picklable(tmp_path):
     for i in range(5):
         (repo / f"mod{i}.py").write_text(f"VALUE_{i} = {i}\n\n\ndef get_{i}():\n    return VALUE_{i}\n")
 
-    modules = graph_module._parse_many_in_parallel(
+    modules, failures = graph_module._parse_many_in_parallel(
         paths=[repo / f"mod{i}.py" for i in range(5)],
         repo_path=repo,
         python_source_roots=[repo],
@@ -176,11 +176,82 @@ def test_worker_pool_round_trip_is_actually_picklable(tmp_path):
         php_psr4_map={},
     )
 
+    assert failures == []
     assert {m["path"] for m in modules} == {f"mod{i}.py" for i in range(5)}
     by_path = {m["path"]: m for m in modules}
     for i in range(5):
         funcs = {f["name"] for f in by_path[f"mod{i}.py"]["symbols"]["functions"]}
         assert f"get_{i}" in funcs
+
+
+def test_worker_pool_reports_an_unreadable_file_as_a_failure_not_a_crash(tmp_path):
+    # Real gap found via audit: a per-file OSError inside a pool worker
+    # (permission denied, a mid-scan race with the file being removed, or a
+    # path exceeding Windows' legacy MAX_PATH limit) used to propagate
+    # through ProcessPoolExecutor.map() uncaught, crashing the whole scan
+    # on one unreadable file - unlike every other per-file failure class in
+    # this module (oversized file, missing grammar), which already
+    # degrades to an unparseable-files entry instead. Simulates the
+    # trigger with a real, cross-platform-reliable OSError (a deleted
+    # file) rather than relying on OS-specific permission semantics that
+    # behave differently on Windows.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    good_paths = []
+    for i in range(4):
+        path = repo / f"mod{i}.py"
+        path.write_text(f"VALUE_{i} = {i}\n\n\ndef get_{i}():\n    return VALUE_{i}\n")
+        good_paths.append(path)
+    missing_path = repo / "gone.py"
+    missing_path.write_text("x = 1\n")
+    missing_path.unlink()
+
+    modules, failures = graph_module._parse_many_in_parallel(
+        paths=[*good_paths, missing_path],
+        repo_path=repo,
+        python_source_roots=[repo],
+        go_module_prefix=None,
+        has_rust_crate_root=False,
+        php_psr4_map={},
+    )
+
+    assert {m["path"] for m in modules} == {f"mod{i}.py" for i in range(4)}
+    assert len(failures) == 1
+    assert failures[0]["path"] == "gone.py"
+    assert "could not read file" in failures[0]["reason"]
+
+
+def test_build_module_graph_sequential_path_reports_an_unreadable_file_not_a_crash(
+    tmp_path, monkeypatch
+):
+    # Same gap as the pool-worker test above, on the sequential fallback
+    # this small repo naturally takes (below PARALLEL_PARSE_MIN_FILES, no
+    # monkeypatching needed to force it): _parse_and_extract_one's OSError
+    # used to propagate straight out of build_module_graph's sequential
+    # loop, crashing the whole scan instead of degrading to an
+    # unparseable-files entry the way every other per-file failure class
+    # already does. The walk discovers auth.py normally (it exists on
+    # disk, unlike the deleted-file simulation above) - read_bytes() is
+    # what fails, simulating a real mid-scan TOCTOU race or a Windows
+    # MAX_PATH failure that only surfaces at open() time, not at listing
+    # time.
+    repo = _make_multi_file_python_repo(tmp_path)
+    auth_path = repo / "app" / "auth.py"
+    original_read_bytes = Path.read_bytes
+
+    def flaky_read_bytes(self, *args, **kwargs):
+        if self == auth_path:
+            raise OSError("simulated: could not read auth.py")
+        return original_read_bytes(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_bytes", flaky_read_bytes)
+
+    modules, _graph, unparseable = build_module_graph(repo)
+
+    assert {m["path"] for m in modules} == {"app/__init__.py", "app/config.py", "app/main.py"}
+    assert len(unparseable) == 1
+    assert unparseable[0]["path"] == "app/auth.py"
+    assert "could not read file" in unparseable[0]["reason"]
 
 
 def test_extract_module_dispatches_python_and_returns_expected_shape(tmp_path):
