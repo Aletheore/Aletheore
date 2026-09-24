@@ -1,4 +1,5 @@
 import re
+import sys
 import threading
 from unittest.mock import MagicMock, patch
 
@@ -721,9 +722,20 @@ def test_auto_start_spawns_serve_and_returns_true_once_reachable(
 
     popen_args, popen_kwargs = mock_popen.call_args
     assert popen_args[0] == ["ollama", "serve"]
-    # POSIX detachment: puts the child in its own session so it survives
-    # this process exiting rather than being cleaned up together.
-    assert popen_kwargs.get("start_new_session") is True
+    # Real gap found on Windows CI: this test doesn't pin sys.platform (unlike
+    # test_auto_start_uses_windows_detachment_flags_not_start_new_session
+    # below, which deliberately does), so it runs the real detachment branch
+    # for whatever host actually runs it - start_new_session on POSIX,
+    # creationflags on win32 (confirmed live: Windows CI reported
+    # popen_kwargs == {..., "creationflags": 134218240}, no start_new_session
+    # key at all). The code was already correctly platform-conditional; only
+    # this assertion assumed POSIX unconditionally.
+    if sys.platform == "win32":
+        assert popen_kwargs.get("creationflags") is not None
+    else:
+        # POSIX detachment: puts the child in its own session so it survives
+        # this process exiting rather than being cleaned up together.
+        assert popen_kwargs.get("start_new_session") is True
     mock_get.assert_called_with("http://localhost:11434/api/tags", timeout=2.0)
 
 

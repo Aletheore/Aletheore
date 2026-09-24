@@ -67,6 +67,53 @@ def test_check_gosec_normalizes_a_real_finding_shape(tmp_path):
     ]
 
 
+def test_check_gosec_normalizes_path_to_forward_slashes_even_on_windows(tmp_path, monkeypatch):
+    # Real bug found on Windows CI in semgrep_scanner.py's identical
+    # pattern, audited into every scanner sharing it: str(Path(...))
+    # renders with the OS's native separator - a backslash-joined path on
+    # Windows - while every other path in this codebase's evidence uses
+    # .as_posix(). Can't be reproduced by just running on this (POSIX)
+    # machine - str(PosixPath(...)) already uses forward slashes here - so
+    # this simulates Windows' real Path.relative_to() return shape
+    # directly (a PureWindowsPath) rather than requiring an actual Windows
+    # machine to prove the fix.
+    from pathlib import Path, PureWindowsPath
+
+    (tmp_path / "cmd").mkdir()
+    (tmp_path / "cmd" / "main.go").write_text("package main\n")
+    abs_path = tmp_path / "cmd" / "main.go"
+    expected_target = abs_path.resolve()
+    windows_relative = PureWindowsPath("cmd", "main.go")
+    original_relative_to = Path.relative_to
+
+    def patched_relative_to(self, other):
+        if self == expected_target and other == tmp_path.resolve():
+            return windows_relative
+        return original_relative_to(self, other)
+
+    monkeypatch.setattr(Path, "relative_to", patched_relative_to)
+
+    payload = {
+        "Issues": [
+            {
+                "severity": "MEDIUM",
+                "rule_id": "G204",
+                "details": "Subprocess launched with variable",
+                "file": str(abs_path),
+                "line": "9",
+            }
+        ]
+    }
+    mock_result = _mock_run(1, stdout=json.dumps(payload))
+
+    with patch("aletheore.static_analysis.gosec_scanner.shutil.which", return_value="/usr/bin/gosec"), \
+         patch("aletheore.static_analysis.gosec_scanner.subprocess.run", return_value=mock_result):
+        result = check_gosec(tmp_path)
+
+    assert result["findings"][0]["path"] == "cmd/main.go"
+    assert "\\" not in result["findings"][0]["path"]
+
+
 def test_check_gosec_parses_a_multi_line_range(tmp_path):
     # gosec's own "line" field can be a "start-end" range for a multi-line
     # issue - real documented behavior, not hypothetical. The first number

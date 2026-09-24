@@ -64,8 +64,19 @@ def _scaled_timeout(repo_path: Path) -> int:
 
 
 def _relative_path(raw_path: str, repo_path: Path) -> str:
+    # Real bug found on Windows CI: str(Path(...)) renders with the OS's
+    # native separator - a backslash-joined path on Windows - while every
+    # other path in this codebase's evidence (module paths via graph.py's
+    # _rel(), secrets.py's iter_all_files, mcp_server.py's _search_files)
+    # uses .as_posix() specifically so paths are comparable and joinable
+    # regardless of the scanning host's OS. A finding's path here gets
+    # compared against those forward-slash paths elsewhere (evidence
+    # lookups, MCP tool target matching) and sent as-is to the GitHub
+    # Checks API for PR annotations, which - like git itself - always uses
+    # forward slashes; a backslash path silently fails every one of those
+    # comparisons instead of raising anything.
     try:
-        return str(Path(raw_path).resolve().relative_to(repo_path.resolve()))
+        return Path(raw_path).resolve().relative_to(repo_path.resolve()).as_posix()
     except ValueError:
         return raw_path
 
