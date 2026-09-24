@@ -130,6 +130,14 @@ a { color: var(--accent); }
 .btn-accent { background: var(--accent); color: #FFFFFF; border-color: var(--accent); }
 .btn-accent:hover { background: var(--accent-strong); }
 .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 500; padding: 2px 9px; border-radius: 4px; }
+.stepper { display: inline-flex; align-items: center; border: 1px solid var(--border-strong); border-radius: 4px; overflow: hidden; vertical-align: middle; }
+.stepper button { font-family: var(--font-mono); font-size: 15px; font-weight: 600; width: 30px; height: 30px; border: none; background: var(--paper);
+  color: var(--ink-900); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background-color 0.12s ease; }
+.stepper button:hover { background: var(--slate-100); }
+.stepper button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.stepper input[type="number"] { width: 56px; height: 30px; border: none; border-left: 1px solid var(--border-strong); border-right: 1px solid var(--border-strong);
+  text-align: center; font-family: var(--font-mono); font-size: 13px; background: var(--paper); color: var(--ink-900); -moz-appearance: textfield; }
+.stepper input[type="number"]::-webkit-outer-spin-button, .stepper input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .chip.critical { background: var(--critical-soft); color: var(--critical); }
 .chip.warning { background: var(--warning-soft); color: var(--warning); }
 .chip.success { background: var(--success-soft); color: var(--success); }
@@ -2598,7 +2606,11 @@ async function loadSettings() {{
         '<div class="settings-block-hint">$' + combinedCredit.toFixed(2) + ' total available for AI reviews and builds</div>' +
         (data.credit_topup_price_id
           ? '<div class="form-row" style="margin-top: 10px;">' +
-              '<input type="number" id="topup-amount" min="5" step="1" value="10" style="width: 80px;">' +
+              '<div class="stepper">' +
+              '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepDown()" aria-label="Decrease amount">&minus;</button>' +
+              '<input type="number" id="topup-amount" min="5" max="1000" step="5" value="10">' +
+              '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepUp()" aria-label="Increase amount">+</button>' +
+            '</div>' +
               '<button class="btn" onclick="buyCredit(this)" style="margin-left: 6px;">Buy more credit</button>' +
             '</div>' +
             '<div id="topup-status" class="settings-block-hint"></div>'
@@ -2859,7 +2871,11 @@ async function loadCredits() {
       '<div class="settings-block-hint">$' + base.toFixed(2) + ' included this month' +
         (topup > 0 ? ' + $' + topup.toFixed(2) + ' purchased (never expires)' : '') + '</div>' +
       '<div class="form-row" style="margin-top: 10px;">' +
-        '<input type="number" id="topup-amount" min="5" step="1" value="10" style="width: 80px;">' +
+        '<div class="stepper">' +
+              '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepDown()" aria-label="Decrease amount">&minus;</button>' +
+              '<input type="number" id="topup-amount" min="5" max="1000" step="5" value="10">' +
+              '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepUp()" aria-label="Increase amount">+</button>' +
+            '</div>' +
         '<button class="btn btn-accent" id="topup-button" style="margin-left: 6px;">Buy more credit</button>' +
       '</div>' +
       '<div id="topup-status" class="settings-block-hint"></div>' +
