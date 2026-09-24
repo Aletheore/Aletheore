@@ -4,8 +4,24 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-09-23
-**Snapshot Freshness:** CURRENT as of 2026-09-23 (third deploy) - production was redeployed to
+**Last Updated:** 2026-09-25
+**Snapshot Freshness:** CURRENT as of 2026-09-25 - production was redeployed to `master` (commit
+`1d4da1f`, tagged `github-app-deploy-2026-09-25`) and re-verified live via SSH the same session.
+69 commits since the previous deploy tag (`github-app-deploy-2026-09-23-5`), 1 migration (069,
+`flash_review_history`, confirmed applied) - see `github-app/CHANGELOG.md` for the full writeup.
+`app-server`, `scan-worker`, `scan-worker-2`, `health-worker`, and `scheduler` rebuilt and
+force-recreated (`jina-embed` untouched); all `healthy`, zero errors in any of the five services'
+logs since restart, `/healthz` and the public status API returning 200. Fixes confirmed present in
+the *running* containers' source by grepping the files inside them (not re-read from the repo):
+`_recent_failed_job_count` and `insert_review_history` in `scan_worker/jobs.py`, `ON CONFLICT DO
+NOTHING` in `scan_worker/code_graph_store.py`, `ClientDisconnect` in `app_server/main.py`,
+`WEBHOOK_5XX_WINDOW_SECONDS = 300` in `app_server/redis_client.py`, and the new
+`blast_radius_summary.py`. The new failed-jobs alert logic was confirmed live: `ops_monitor` ran
+three times after the restart and left no `failed_jobs` first-seen key in Redis, so the 26 old
+failed scans no longer count. The 26 old failed-job records were exported to a local backup and are
+still in the registry (their removal was not run).
+
+**Previous:** CURRENT as of 2026-09-23 (third deploy) - production was redeployed to
 `master` (commit `1618369`, tagged `github-app-deploy-2026-09-23-3`) and re-verified live via SSH
 the same session. 3 commits since the previous deploy tag (`github-app-deploy-2026-09-23-2`), no
 migrations - see `github-app/CHANGELOG.md` for the full writeup. Two real production bugs, both
