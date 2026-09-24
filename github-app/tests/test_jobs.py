@@ -10690,6 +10690,42 @@ def test_run_ops_monitor_job_alerts_when_webhook_5xxs_stay_above_threshold(monke
     assert "webhook 5xx responses=5" in alerts[0][0][2]
 
 
+def test_run_ops_monitor_job_does_not_alert_on_a_single_isolated_webhook_5xx(monkeypatch):
+    """Real bug found in a backward audit: WEBHOOK_5XX_WINDOW_SECONDS used to
+    be 900s, longer than OPS_THRESHOLD_DURATION_SECONDS (600s), so a single,
+    already-retried 5xx delivery - exactly the case this check's own
+    docstring says should NOT page - still passed the 600s sustained-duration
+    bar before its counter had a chance to decay via its own TTL. Unlike
+    test_run_ops_monitor_job_alerts_when_webhook_5xxs_stay_above_threshold
+    (which manually re-set()s the counter to a higher value to simulate more
+    deliveries failing), this exercises the real production shape: one
+    real record_webhook_5xx() call, then nothing further, with the fake
+    Redis's own TTL-based expiry actually running."""
+    from app_server.redis_client import record_webhook_5xx
+    from scan_worker import jobs
+    from scan_worker.jobs import OPS_THRESHOLD_DURATION_SECONDS, run_ops_monitor_job
+
+    now = {"t": 1000.0}
+    redis_conn = _FakeRedis(now_fn=lambda: now["t"])
+    alerts = []
+    monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
+    monkeypatch.setattr("scan_worker.jobs._check_app_health", lambda redis_conn, url: None)
+    monkeypatch.setattr("scan_worker.jobs._check_queue_alerts", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs._check_free_tier_provider_keys", lambda redis_conn: None)
+    monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
+    monkeypatch.setattr(jobs.time, "time", lambda: now["t"])
+
+    record_webhook_5xx(redis_conn)  # one isolated, already-retried failure
+    run_ops_monitor_job()
+    assert alerts == []
+
+    now["t"] += OPS_THRESHOLD_DURATION_SECONDS + 1
+    run_ops_monitor_job()
+
+    assert alerts == []
+
+
 def test_run_git_scrubs_credentialed_url_from_a_failed_clone_error(tmp_path):
     from scan_worker.jobs import _run_git
 
