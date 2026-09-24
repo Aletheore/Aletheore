@@ -166,12 +166,13 @@ a { color: var(--accent); }
 .copy-box .field { font-size: 11.5px; }
 
 /* ---- Dashboard shell ---- */
-.shell { display: grid; grid-template-columns: 238px minmax(0, 1fr); min-height: 100vh; }
-.sidebar { background: var(--slate-100); border-right: 1px solid var(--border); padding: 1rem; display: flex; flex-direction: column; gap: 1.45rem; position: sticky; top: 0; height: 100vh; }
-.org-switch { display: flex; align-items: center; gap: 9px; padding: 9px; border: 1px solid var(--border); border-radius: 4px; background: var(--paper); text-decoration: none; color: inherit; }
-.org-avatar { width: 22px; height: 22px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-strong); font-size: 11px; font-weight: 500; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.org-switch-label { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.org-switch-sub { font-size: 11px; color: var(--slate-600); }
+.shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100vh; }
+.sidebar { border-right: 1px solid var(--border); padding: 1rem; display: flex; flex-direction: column; gap: 1.45rem; position: sticky; top: 0; height: 100vh; }
+.brand { display: flex; align-items: center; gap: 8px; padding: 0 6px; }
+.brand-mark { width: 20px; height: 20px; border: 1.5px solid var(--ink-900); border-radius: 3px; display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 11px; font-weight: 700; flex-shrink: 0; }
+.brand-name { font-weight: 650; font-size: 14.5px; letter-spacing: -0.01em; }
+.nav-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--slate-400); flex-shrink: 0; }
+.nav-dot.paid { background: var(--accent); }
 .nav-group-label { font-size: 11px; color: var(--slate-400); padding: 0 8px; margin-bottom: 6px; }
 .nav-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
 .nav-item { display: flex; align-items: center; gap: 9px; padding: 8px 9px; border-radius: 4px; font-size: 13.5px; color: var(--ink-700); text-decoration: none; transition: background-color 0.12s ease, color 0.12s ease; }
@@ -186,13 +187,14 @@ a { color: var(--accent); }
 .plan-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 .plan-sub { font-size: 11px; color: var(--slate-600); margin-top: 3px; line-height: 1.5; }
 
-.main { padding: 1.7rem 2rem 3.25rem; min-width: 0; max-width: 1180px; margin: 0 auto; width: 100%; }
+.main { padding: 32px 48px 60px; min-width: 0; max-width: 1180px; margin: 0 auto; width: 100%; }
 .topbar { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: 1.4rem; flex-wrap: wrap; }
 .breadcrumb { font-size: 12px; color: var(--slate-600); }
 .breadcrumb b { color: var(--ink-900); font-weight: 500; }
 .breadcrumb a { color: var(--slate-600); text-decoration: none; }
 .breadcrumb a:hover { color: var(--ink-900); }
-.h1 { font-size: 26px; font-weight: 720; margin: 3px 0 0; }
+.h1 { font-size: 20px; font-weight: 650; letter-spacing: -0.01em; margin: 3px 0 0; }
+.repo-path { font-family: var(--font-mono); font-size: 13px; color: var(--slate-600); margin-top: 2px; }
 .topbar-right { font-size: 12px; color: var(--slate-600); }
 
 .dashboard-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
@@ -207,9 +209,10 @@ a { color: var(--accent); }
   background: var(--slate-100); padding: 7px 10px; color: var(--ink-700); font-size: 12px; white-space: nowrap; }
 .summary-chip i { color: var(--accent-strong); font-size: 14px; }
 
-.stat-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 1.7rem; }
-.stat-card { background: var(--paper); border: 1px solid var(--border); border-radius: 4px; padding: 15px; text-decoration: none; color: inherit; display: block; transition: background-color 0.12s ease, border-color 0.12s ease; }
-a.stat-card:hover { border-color: var(--border-strong); background: var(--slate-100); }
+.stat-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; margin-bottom: 1.7rem; }
+.stat-card { background: var(--paper); border-right: 1px solid var(--border); padding: 16px 18px; text-decoration: none; color: inherit; display: block; transition: background-color 0.12s ease; }
+.stat-card:last-child { border-right: none; }
+a.stat-card:hover { background: var(--slate-50); }
 a.stat-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .stat-label { font-size: 12px; color: var(--slate-600); }
 .stat-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 27px; font-weight: 720; margin-top: 5px; }
@@ -235,6 +238,18 @@ table.findings tr:last-child td { border-bottom: none; }
 .sev-stripe.critical { background: var(--critical); }
 .sev-stripe.warning { background: var(--warning); }
 .sev-stripe.neutral { background: var(--slate-400); }
+
+.finding-list { border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.finding-row { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 13px 16px; border-bottom: 1px solid var(--border); transition: background-color 0.12s ease; }
+.finding-row:last-child { border-bottom: none; }
+.finding-row:hover { background: var(--slate-50); }
+.sev-dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
+.sev-dot.critical { background: var(--critical); }
+.sev-dot.warning { background: var(--warning); }
+.sev-dot.minor { background: var(--slate-400); }
+.finding-row .msg { font-size: 13.5px; line-height: 1.5; }
+.finding-row .cite { font-family: var(--font-mono); font-size: 12px; color: var(--slate-600); margin-top: 4px; overflow-wrap: anywhere; }
+.finding-row .tool { font-family: var(--font-mono); font-size: 11px; color: var(--slate-400); border: 1px solid var(--border); border-radius: 3px; padding: 2px 6px; white-space: nowrap; align-self: start; }
 
 .deadcode-list, .dep-list { display: flex; flex-direction: column; }
 .deadcode-row { display: flex; align-items: baseline; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px; flex-wrap: wrap; }
@@ -366,6 +381,16 @@ svg#depgraph:active { cursor: grabbing; }
   padding: 16px 18px; margin-bottom: 16px; }
 .settings-block-label { font-size: 13px; font-weight: 600; margin-bottom: 9px; }
 .settings-block-hint { font-size: 11px; color: var(--slate-600); margin-top: 6px; }
+.credit-figure { font-family: var(--font-mono); font-size: 30px; font-weight: 650; letter-spacing: -0.01em; line-height: 1; }
+.credit-figure .of { font-size: 14px; color: var(--slate-600); font-weight: 500; margin-left: 6px; }
+.credit-meter { height: 4px; border-radius: 2px; background: var(--border); margin: 12px 0 4px; overflow: hidden; }
+.credit-meter-fill { height: 100%; background: var(--accent); }
+.credit-breakdown { font-size: 11px; color: var(--slate-400); display: flex; justify-content: space-between; margin-top: 8px; }
+.divider-label { font-size: 11px; color: var(--slate-400); margin: 16px 0 10px; display: flex; align-items: center; gap: 10px; }
+.divider-label::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.qty-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.status-line { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--slate-600); margin-top: 10px; }
+.status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
 .settings-help-links { display: flex; gap: 14px; margin-top: 8px; }
 .settings-help-links a { font-size: 11px; color: var(--accent-strong); text-decoration: none; font-weight: 500; }
 .settings-help-links a:hover { text-decoration: underline; }
@@ -390,9 +415,9 @@ svg#depgraph:active { cursor: grabbing; }
 .claim-option { display: flex; align-items: center; gap: 9px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 4px; }
 .claim-option input { accent-color: var(--accent); }
 
-@media (max-width: 720px) {
+@media (max-width: 860px) {
   .shell { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; flex-direction: column; overflow: visible; }
+  .sidebar { position: static; height: auto; flex-direction: column; overflow: visible; border-right: none; border-bottom: 1px solid var(--border); }
   .nav-list { flex-direction: row; flex-wrap: wrap; }
   .nav-item { white-space: nowrap; }
   .main { padding: 1.2rem 1rem 2.5rem; }
@@ -635,16 +660,13 @@ def _sidebar(active: str) -> str:
     settings_active = " active" if active == "settings" else ""
     return f"""
   <nav class="sidebar" aria-label="Dashboard navigation">
-    <a class="org-switch" href="/dashboard">
-      <span class="org-avatar" id="org-avatar"></span>
-      <div style="min-width:0;">
-        <div class="org-switch-label" id="side-repo"></div>
-        <div class="org-switch-sub" id="side-org"></div>
-      </div>
-      <i class="ti ti-chevron-down" style="margin-left:auto;color:var(--slate-400);" aria-hidden="true"></i>
-    </a>
+    <div class="brand"><span class="brand-mark">A</span><span class="brand-name">Aletheore</span></div>
     <div>
       <div class="nav-group-label">Repository</div>
+      <ul class="nav-list" id="repo-switch-list"><li><a class="nav-item" aria-hidden="true">&hellip;</a></li></ul>
+    </div>
+    <div>
+      <div class="nav-group-label">This repository</div>
       <ul class="nav-list">{repo_items}</ul>
     </div>
     <div>
@@ -680,9 +702,6 @@ const base = '/app/' + encodeURIComponent(org) + '/' + encodeURIComponent(repo);
 const adminBase = '/admin/' + encodeURIComponent(org) + '/' + encodeURIComponent(repo);
 const pageBase = '/dashboard/' + encodeURIComponent(org) + '/' + encodeURIComponent(repo);
 
-document.getElementById('side-org').textContent = org;
-document.getElementById('side-repo').textContent = repo;
-document.getElementById('org-avatar').textContent = org.slice(0, 2).toLowerCase();
 document.querySelectorAll('.nav-item[data-href]').forEach(function (el) {
   el.href = pageBase + el.dataset.href;
 });
@@ -692,20 +711,36 @@ if (cOrg) cOrg.textContent = org;
 if (cRepo) { cRepo.textContent = repo; cRepo.href = pageBase; }
 document.title = document.title.replace('{repo}', repo).replace('{org}', org);
 
+async function loadRepoSwitcher() {
+  const list = document.getElementById('repo-switch-list');
+  const res = await apiGet('/app/repos');
+  const repos = (res && res.ok ? (await res.json()).repos : []).filter(function (r) { return r.initialized; });
+  if (repos.length === 0) { list.innerHTML = ''; return; }
+  list.innerHTML = repos.map(function (r) {
+    const isActive = r.org === org && r.repo === repo;
+    return '<li><a class="nav-item' + (isActive ? ' active' : '') + '" href="/dashboard/' + encodeURIComponent(r.org) + '/' + encodeURIComponent(r.repo) + '">' +
+      '<span class="nav-dot paid"></span>' + escapeHtml(r.repo_full_name) + '</a></li>';
+  }).join('');
+}
+loadRepoSwitcher();
+
 async function loadPlanBadge() {
   const res = await apiGet(adminBase);
   const nameEl = document.getElementById('plan-name');
   const subEl = document.getElementById('plan-sub');
+  const planLineEl = document.getElementById('repo-plan-line');
   if (!res) return null;
   if (res.status === 402) {
     nameEl.textContent = planDisplayName('free');
     subEl.textContent = 'Upgrade for AIRview and settings.';
+    if (planLineEl) planLineEl.textContent = org + '/' + repo + ' · ' + planDisplayName('free') + ' plan';
     return 'free';
   }
   if (!res.ok) { nameEl.textContent = ''; subEl.textContent = ''; return null; }
   const data = await res.json();
   nameEl.textContent = planDisplayName(data.installation.plan);
   subEl.textContent = data.installation.plan === 'free' ? 'Upgrade for AIRview and settings.' : 'AIRview and priority scans included.';
+  if (planLineEl) planLineEl.textContent = org + '/' + repo + ' · ' + planDisplayName(data.installation.plan) + ' plan';
   return data;
 }
 """
@@ -740,13 +775,15 @@ def _page_head(title: str) -> str:
 {STYLE}"""
 
 
-def _topbar(h1: str, right_id: str = "") -> str:
+def _topbar(h1: str, right_id: str = "", sub_id: str = "") -> str:
     right = f'<div class="topbar-right" id="{right_id}"></div>' if right_id else ""
+    sub = f'<div class="repo-path" id="{sub_id}"></div>' if sub_id else ""
     return f"""
     <div class="topbar">
       <div>
         <div class="breadcrumb"><a id="crumb-org" href="/dashboard"></a> <span style="color:var(--slate-400);">/</span> <b><a id="crumb-repo"></a></b></div>
         <h1 class="h1">{h1}</h1>
+        {sub}
       </div>
       {right}
     </div>
@@ -769,7 +806,7 @@ def _shell(active: str, body: str) -> str:
 # ---------------------------------------------------------------------------
 OVERVIEW_HTML = _page_head("Overview — {repo} — Aletheore") + _shell(
     "overview",
-    _topbar("Overview", "last-scanned")
+    _topbar("Overview", "last-scanned", "repo-plan-line")
     + """
     <div id="top-error"></div>
     <div class="dashboard-summary">
@@ -796,6 +833,12 @@ OVERVIEW_HTML = _page_head("Overview — {repo} — Aletheore") + _shell(
         <a class="btn" data-href="/security">View all<i class="ti ti-arrow-right" style="font-size:13px;" aria-hidden="true"></i></a>
       </div>
       <div class="section-body" id="recent-security-body"><div class="empty-state">Loading&hellip;</div></div>
+    </section>
+    <section class="section" id="usage-section" style="display:none">
+      <div class="section-head">
+        <div class="section-title"><i class="ti ti-chart-bar" aria-hidden="true"></i>Usage</div>
+      </div>
+      <div class="section-body" id="usage-body"></div>
     </section>
 """
 ) + f"""
@@ -830,7 +873,8 @@ async function loadOverview() {{
   }}
   const latest = history[0];
   const evidence = latest.evidence || {{}};
-  document.getElementById('last-scanned').textContent = 'Last scanned ' + relativeTime(latest.scanned_at);
+  const headSha = evidence._scan_head_sha;
+  document.getElementById('last-scanned').textContent = 'last scan ' + relativeTime(latest.scanned_at) + (headSha ? ' · head ' + headSha.slice(0, 8) : '');
 
   const dismissedKeys = data.dismissed_finding_keys || {{ secret: [], vulnerability: [], static_analysis: [] }};
   const security = evidence.security || {{}};
@@ -875,22 +919,23 @@ async function loadOverview() {{
   }} else {{
     let rows = '';
     securePreview.forEach(function (f) {{
-      rows += '<tr><td><span class="sev-stripe critical"></span><span class="finding-title">Possible ' + escapeHtml(f.pattern) + ' secret</span></td>' +
-        '<td class="finding-cite">' + escapeHtml(f.path) + ':' + f.line + '</td>' +
-        '<td><span class="chip critical">Critical</span></td></tr>';
+      rows += '<div class="finding-row"><div class="sev-dot critical"></div><div><div class="msg">Possible ' + escapeHtml(f.pattern) + ' secret</div>' +
+        '<div class="cite">' + escapeHtml(f.path) + ':' + f.line + '</div></div>' +
+        '<div class="tool">trivy</div></div>';
     }});
     vulnPreview.forEach(function (f) {{
-      rows += '<tr><td><span class="sev-stripe warning"></span><span class="finding-title">' + escapeHtml(f.advisory_id) + ': ' + escapeHtml(f.summary || 'known vulnerability') + '</span></td>' +
-        '<td class="finding-cite">' + escapeHtml(f.package) + '@' + escapeHtml(f.installed_version) + '</td>' +
-        '<td><span class="chip warning">Warning</span></td></tr>';
+      rows += '<div class="finding-row"><div class="sev-dot warning"></div><div><div class="msg">' + escapeHtml(f.advisory_id) + ': ' + escapeHtml(f.summary || 'known vulnerability') + '</div>' +
+        '<div class="cite">' + escapeHtml(f.package) + '@' + escapeHtml(f.installed_version) + '</div></div>' +
+        '<div class="tool">osv</div></div>';
     }});
     staticAnalysisPreview.forEach(function (f) {{
       const sev = staticAnalysisSevChip(f.severity);
-      rows += '<tr><td><span class="sev-stripe ' + sev.stripe + '"></span><span class="finding-title">' + escapeHtml(f.message) + '</span></td>' +
-        '<td class="finding-cite">' + escapeHtml(f.path) + ':' + f.line + '</td>' +
-        '<td><span class="chip ' + sev.chip + '">' + sev.label + '</span></td></tr>';
+      const dotClass = sev.stripe === 'neutral' ? 'minor' : sev.stripe;
+      rows += '<div class="finding-row"><div class="sev-dot ' + dotClass + '"></div><div><div class="msg">' + escapeHtml(f.message) + '</div>' +
+        '<div class="cite">' + escapeHtml(f.path) + ':' + f.line + '</div></div>' +
+        '<div class="tool">' + escapeHtml(f.tool || 'static analysis') + '</div></div>';
     }});
-    recentBody.innerHTML = '<table class="findings"><thead><tr><th>Finding</th><th>Evidence</th><th>Severity</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    recentBody.innerHTML = '<div class="finding-list">' + rows + '</div>';
   }}
 }}
 
@@ -911,8 +956,55 @@ async function loadUptimeStat() {{
   document.getElementById('stat-uptime-sub').textContent = up + ' of ' + endpoints.length + ' endpoints up';
 }}
 
+async function loadUsage() {{
+  const section = document.getElementById('usage-section');
+  const body = document.getElementById('usage-body');
+  const res = await apiGet(adminBase);
+  if (!res || !res.ok) return;  // free/locked plan - no managed billing to show
+  const data = await res.json();
+  section.style.display = '';
+  const baseCredit = data.base_credit_remaining_usd || 0;
+  const topupCredit = data.topup_credit_balance_usd || 0;
+  const combinedCredit = baseCredit + topupCredit;
+  const allotment = data.base_credit_allotment_usd || 0;
+  const pct = allotment > 0 ? Math.max(0, Math.min(100, Math.round((baseCredit / allotment) * 100))) : 0;
+  const hasSubscription = !!data.installation.paddle_subscription_id;
+  const renewsAt = data.subscription_renews_at
+    ? new Date(data.subscription_renews_at).toLocaleDateString(undefined, {{ month: 'short', day: 'numeric' }})
+    : null;
+  // Buy actions link to Settings rather than duplicating buyCredit()/buySeat()'s
+  // real-money Paddle.Checkout.open() logic inline here - Settings is the one
+  // place that flow is hardened (double-click guards, token refresh, error
+  // recovery) and this page's own script has no Paddle SDK loaded to begin with.
+  body.innerHTML =
+    '<div class="settings-grid">' +
+      '<div class="settings-block">' +
+        '<div class="settings-block-label">Credit balance</div>' +
+        '<div class="credit-figure">$' + combinedCredit.toFixed(2) + (allotment > 0 ? ' <span class="of">of $' + allotment.toFixed(2) + '</span>' : '') + '</div>' +
+        (allotment > 0 ? '<div class="credit-meter"><div class="credit-meter-fill" style="width:' + pct + '%"></div></div>' : '') +
+        '<div class="credit-breakdown"><span>$' + allotment.toFixed(2) + ' included this month</span>' +
+          '<span>' + (topupCredit > 0 ? '+ $' + topupCredit.toFixed(2) + ' purchased, never expires' : '') + '</span>' +
+        '</div>' +
+        '<div class="divider-label">buy more credit</div>' +
+        '<a class="btn btn-accent" href="' + pageBase + '/settings">Buy credit</a>' +
+      '</div>' +
+      '<div class="settings-block">' +
+        '<div class="settings-block-label">Team seats</div>' +
+        '<div class="settings-block-hint">' + data.seat_limit + ' included &middot; ' + (data.members || []).length + ' in use</div>' +
+        '<div class="qty-row" style="margin-top:14px;">' +
+          '<a class="btn" href="' + pageBase + '/settings">Buy extra seat</a>' +
+          '<a class="btn" href="' + pageBase + '/settings">Manage billing</a>' +
+        '</div>' +
+        (hasSubscription
+          ? '<div class="status-line"><span class="status-dot"></span>Subscription active' + (renewsAt ? ', renews ' + renewsAt : '') + '</div>'
+          : '<div class="status-line"><span class="status-dot" style="background:var(--slate-400);"></span>No active subscription</div>') +
+      '</div>' +
+    '</div>';
+}}
+
 loadOverview();
 loadUptimeStat();
+loadUsage();
 loadPlanBadge();
 </script>
 """
