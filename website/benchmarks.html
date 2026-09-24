@@ -370,162 +370,70 @@ python scripts/score_fallback_judge.py</code></pre>
           the real production model, real API pricing: <strong>$0.9229</strong>.</p>
       </section>
 
-      <section class="developer-section dogfood-repo dogfood-repo-alt">
+      <section class="developer-section dogfood-repo dogfood-repo-alt" id="pr-review-head-to-head">
         <div class="section-heading dogfood-heading">
-          <p class="eyebrow">PR review · 5-way, named, and a real regression we found and fixed</p>
-          <h2>A benchmark found a real bug in our own product — so we shipped the fix the same night.</h2>
-          <p>Same 24-case corpus as the PR-Agent head-to-head, this time a 5-way comparison
-            (PR-Agent, DeepSource, Sourcery, Greptile, and Aletheore on its current production
-            model). Aletheore came in last on recall at first — not because the model or the
-            grounding architecture was weak, but because production was feeding Flash Review a
-            context block that was actively hurting it.</p>
+          <p class="eyebrow">PR review · 13 real pull requests, one judge for every tool</p>
+          <h2>In the same range as the leading reviewers, after closing a precision gap of our own.</h2>
+          <p>44 human-identified bugs across 13 real pull requests from sentry, grafana, cal.com
+            and keycloak. Every tool's findings, ours and theirs, go through the same blinded
+            judge (<code>gpt-6-luna</code>, told nothing about which tool wrote what), which scores
+            both <strong>recall</strong> (how many of the 44 bugs a finding actually catches) and
+            <strong>precision</strong> (how many findings are accurate, specific claims about the
+            diff). Brackets are 95% intervals from resampling the 13 pull requests.</p>
         </div>
 
         <div class="dogfood-table-wrap">
           <table class="dogfood-table">
             <thead>
-              <tr><th>Tool</th><th>Recall</th><th>False positives (4 clean cases)</th></tr>
+              <tr><th>Tool</th><th>Recall</th><th>Precision</th><th>Findings per run</th></tr>
             </thead>
             <tbody>
-              <tr><td>Greptile</td><td>95.0%</td><td>1</td></tr>
-              <tr><td><strong>Aletheore</strong> (current config, post-fix)</td><td><strong>90-95%</strong></td><td><strong>0-1</strong></td></tr>
-              <tr><td>PR-Agent / Qodo</td><td>92.5%</td><td>1</td></tr>
-              <tr><td>Sourcery</td><td>80.0%</td><td>0</td></tr>
-              <tr><td>DeepSource</td><td>5.0%</td><td>0</td></tr>
+              <tr><td><strong>Aletheore Flash</strong></td><td><strong>53.4%</strong> [39-68]</td><td><strong>92.6%</strong> [86-96]</td><td>94</td></tr>
+              <tr><td><strong>Aletheore AIR</strong></td><td><strong>51.1%</strong> [37-65]</td><td><strong>93.3%</strong> [87-98]</td><td>92</td></tr>
+              <tr><td>GitHub Copilot</td><td>59.1% [40-76]</td><td>89.6% [82-98]</td><td>80</td></tr>
+              <tr><td>GitLab Duo</td><td>50.0% [38-63]</td><td>95.1% [85-100]</td><td>41</td></tr>
+              <tr><td>Qodo</td><td>22.7% [10-38]</td><td>100% [100-100]</td><td>37</td></tr>
+              <tr><td><em>Aletheore Flash, before the fix below</em></td><td>52.3% [39-66]</td><td>71.5% [63-82]</td><td>96</td></tr>
             </tbody>
           </table>
         </div>
 
         <div class="dogfood-callout">
-          <p><strong>What actually happened:</strong> Flash Review builds two optional context
-            blocks beyond the diff — one resolving symbols the diff imports from unchanged files
-            (built to stop a confirmed hallucination class), and a newer one surfacing sibling
-            files in the same directory. A controlled test — same model, same corpus, only the
-            context varied, most configs run twice to separate real signal from model noise —
-            found the newer sibling-file context alone cost <strong>15-25 points of recall</strong>
-            and doubled the false-positive rate. The older, unrelated context block wasn't the
-            problem. Production was changed the same night: the sibling-file context is no longer
-            fed into live Flash Review prompts. A post-deploy verification run confirmed the fix
-            performs exactly as the isolation test predicted.</p>
+          <p><strong>The gap we found and closed:</strong> before this fix, about 13 of Aletheore's
+            ~96 findings per run were confirmed false positives, and most were claims about one
+            file that another file in the same pull request contradicts ("no migration is
+            included", "this field is never registered"). Each per-file review call saw only its
+            own patch. Showing every call the rest of the pull request raised Flash precision from
+            71.5% to 92.6% (a 20.4-point gain, 95% interval +7 to +31) with recall unchanged, and
+            AIR from 79.7% to 93.3%. Confirmed false positives fell to about 2 per run on Flash.</p>
         </div>
 
-        <p class="dogfood-p">We're publishing the regression, the isolation test, and the fix
-          together, not just the after-picture — including where this run's conclusion disagrees
-          with an earlier benchmark's finding about the same feature on a different corpus. Full
-          writeup, every run's numbers, and the raw per-case data in
-          <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/pr_review/README.md#experiment-6-5-way-named-comparison-same-corpus--and-a-real-production-fix-decided-by-the-results" rel="noopener">pr_review/README.md</a>.</p>
-      </section>
-
-      <section class="developer-section dogfood-repo dogfood-repo-alt">
-        <div class="section-heading dogfood-heading">
-          <p class="eyebrow">Deterministic analysis vs. bare LLM</p>
-          <h2>Can a bare LLM reproduce the scanner's answer, given the same data?</h2>
-          <p>Not "Aletheore vs. RepoWise" — for the parts of Aletheore that aren't an LLM call
-            at all (hotspots, ownership, dead code, computed from real git history and a real
-            import graph), what happens if a model is simply handed the same data and asked the
-            same question? On the flask corpus, given the exact git log slice and import
-            statements the scanner itself consumes:</p>
+        <div class="dogfood-callout">
+          <p><strong>How to read this:</strong> against GitLab Duo and Copilot, Aletheore is in the
+            same range on both measures, not ahead; Copilot's recall is numerically higher, and no
+            difference between Aletheore and either of them is statistically significant. Against Qodo it is a
+            trade-off: recall is about 30 points higher, but Qodo reported far fewer findings
+            (37 against our 94) and every one was accurate, so its precision is higher. We return
+            two to three times as many findings as GitLab Duo at similar measured accuracy.</p>
         </div>
 
-        <div class="dogfood-table-wrap">
-          <table class="dogfood-table">
-            <thead>
-              <tr><th></th><th>Aletheore</th><th>Bare LLM (gpt-5.6-luna)</th><th>Bare LLM (gpt-5.6-terra)</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>Hotspots (top 10)</td><td>exact, every run</td><td>declined — asked for real code instead</td><td>0/10 correct, 4 fabricated</td></tr>
-              <tr><td>Ownership (top 8)</td><td>exact</td><td>1/8 exact, drops a contributor</td><td>4/8 exact, still fabricates a person</td></tr>
-              <tr><td>Dead code</td><td>2/2, zero false positives</td><td>48 flagged, 4.2% precision</td><td>49 flagged, 4.1% precision</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p class="dogfood-p">Full methodology, including a real bug this testing surfaced, in
-          <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/DETERMINISTIC_VS_LLM.md" rel="noopener">DETERMINISTIC_VS_LLM.md</a>.</p>
-      </section>
-
-      <section class="developer-section dogfood-repo dogfood-repo-alt">
-        <div class="section-heading dogfood-heading">
-          <p class="eyebrow">Dead-code detection · Kotlin and Swift, vs. RepoWise</p>
-          <h2>Swift: a clean win. Kotlin: an exact match.</h2>
-          <p>A different axis from "how does X work?" above: which files does each tool correctly
-            leave alone as real, reachable code? Measured file-level (RepoWise also flags
-            unused-export symbols; Aletheore's dead-code module doesn't attempt that granularity,
-            so symbol-level findings are excluded from both sides).</p>
+        <div class="dogfood-callout">
+          <p><strong>Earlier, a benchmark found a regression in our own product:</strong> a newer
+            context block (sibling files in the same directory) cost 15-25 points of recall and
+            doubled false positives in a controlled test, and production stopped feeding it into
+            live reviews the same night. That history is published in
+            <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/pr_review/README.md#experiment-6-5-way-named-comparison-same-corpus--and-a-real-production-fix-decided-by-the-results" rel="noopener">Experiment 6</a>.</p>
         </div>
 
-        <div class="dogfood-table-wrap">
-          <table class="dogfood-table">
-            <thead>
-              <tr><th>Repo</th><th>Files</th><th>RepoWise false positives</th><th>Aletheore false positives</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>vapor/penny-bot (Swift)</td><td>168</td><td>60 (36%)</td><td><strong>0</strong></td></tr>
-              <tr><td>vapor/api-template (Swift)</td><td>10</td><td>6 (60%)</td><td><strong>0</strong></td></tr>
-              <tr><td>android/architecture-samples (Kotlin)</td><td>268</td><td>7</td><td><strong>7</strong>, same 7 files</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p class="dogfood-p">RepoWise's Swift support doesn't understand whole-module imports: a
-          Swift <code>import Foo</code> names a compiled target, not a file, so files referenced
-          only from outside Swift's import syntax (a Lambda handler invoked by the AWS runtime)
-          look completely unreachable to it. Getting Aletheore to 0 on Swift, and Kotlin from an
-          initial 31 down to an exact 7-vs-7 match with RepoWise, took five real fixes to
-          Aletheore's own scanner, found by re-running this comparison rather than trusting an
-          earlier pass: same-target and same-package implicit visibility, a manifest
-          string-interpolation parsing bug, and two missing import-resolution cases (top-level
-          Kotlin functions and constants). Full writeup and the fix history in
-          <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/LANGUAGE_COVERAGE.md" rel="noopener">LANGUAGE_COVERAGE.md</a>.</p>
-      </section>
+        <p class="dogfood-p"><strong>Tools not shown.</strong> CodeRabbit's terms bar publishing
+          benchmark results about it without consent, Cursor Bugbot's allow it only alongside
+          everything needed to replicate the test, and we removed Greptile's results because its
+          terms restrict sharing the service's results with third parties without written
+          authorization. We would add any of them if they agree.</p>
 
-      <section class="developer-section dogfood-repo dogfood-repo-alt">
-        <div class="section-heading dogfood-heading">
-          <p class="eyebrow">Head-to-head against Graphify · on their own primary-source corpus</p>
-          <h2>We ran their benchmark, not just ours.</h2>
-          <p><a href="https://github.com/Graphify-Labs/graphify" rel="noopener">Graphify</a> publishes
-            its own primary-source benchmark on <strong>ERPNext</strong> — a real ~1M-LOC Python
-            codebase, and the exact same corpus their own <code>BENCHMARKS.md</code> uses. Rather
-            than cite either tool's own numbers, we cloned ERPNext ourselves, ran both tools
-            ourselves under one shared agent loop and one anonymized judge, and published what
-            actually happened. A widely-circulated "70%/71.5x token reduction" figure attributed
-            to Graphify doesn't appear anywhere in their own repository — we don't use it here.</p>
-        </div>
-
-        <div class="toon-counters">
-          <div class="toon-counter">
-            <div class="toon-counter-value">100%</div>
-            <div class="toon-counter-label">coverage, tied with Graphify<br>once a bad ground-truth fact we caught was fixed</div>
-          </div>
-          <div class="toon-counter">
-            <div class="toon-counter-value">−36%</div>
-            <div class="toon-counter-label">tokens per query vs. Graphify,<br>the real, robust win</div>
-          </div>
-          <div class="toon-counter">
-            <div class="toon-counter-value">$0.19</div>
-            <div class="toon-counter-label">total real cost of the run,<br>45 harness + 90 judge calls</div>
-          </div>
-        </div>
-
-        <div class="dogfood-table-wrap">
-          <table class="dogfood-table">
-            <thead>
-              <tr><th></th><th>baseline (grep/read/list)</th><th>+ Aletheore</th><th>+ Graphify</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>Coverage (30 samples)</td><td>92.2%</td><td><strong>100.0%</strong></td><td>93.3%</td></tr>
-              <tr><td>Tokens/query, excl. one MAX_TURNS timeout</td><td>9,157</td><td>9,803</td><td>15,296</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p class="dogfood-p">A pre-publish review caught and fixed two real problems before this
-          shipped: one question's ground truth was factually wrong (all three tools had answered
-          it correctly and were wrongly capped), and the raw coverage gap was driven almost
-          entirely by one question where baseline and Graphify both hit their turn limit without
-          converging — a real, specific result, not a distributed lead. Only 2 of 15 questions
-          discriminate between Aletheore and Graphify at all once the ground truth is fixed —
-          honestly, that's a tie on quality. The number that holds up consistently, not as an
-          artifact of one question, is token cost: Aletheore answers for 36% fewer tokens than
-          Graphify. Full writeup, raw results, and the corrections themselves, in
-          <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/graphify_comparison/README.md" rel="noopener">graphify_comparison/README.md</a>.</p>
+        <p class="dogfood-p">Full method, per-comparison confidence intervals, the limitations
+          below, and a script that recomputes every number from the committed results with no API
+          key: <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/pr_review/README.md#experiment-8-symmetric-llm-judged-comparison-on-13-real-prs-2026-09-24" rel="noopener">pr_review/README.md, Experiment 8</a>.</p>
       </section>
 
       <section class="developer-section">
@@ -554,7 +462,15 @@ python scripts/score_fallback_judge.py</code></pre>
             detection, 77% of scan time, not parsing) and fixed it: shipped in aletheore 0.9.5,
             verified live against the installed PyPI release at 53.23s vs the old 236.02s -
             4.4x faster, real and confirmed. Indexing (~19min, a separate I/O-bound step) is
-            now the honest remaining gap, not scan.</p>
+            now the honest remaining gap, not scan.<br>
+            ⚠️ The PR-review comparison rests on 13 pull requests, so its intervals are wide
+            (about ±14 points on recall) and small differences between tools are noise. Our fix
+            for cross-file false positives was developed while looking at these same pull
+            requests and has not been checked on unseen ones. "Precision" counts any accurate,
+            specific claim about the diff, including test-coverage and style notes, so it
+            measures accuracy of claims, not how important they are. The benchmark runs the
+            diff-only generation path; the hosted product adds more context and checks. The
+            other tools' rows are single runs from before 2026-09-23.</p>
         </div>
       </section>
 
