@@ -2331,8 +2331,8 @@ async function buyCredit(btn) {{
   // quietly charging a different amount than what's on screen.
   const rawAmount = Number(document.getElementById('topup-amount').value);
   const amount = Number.isInteger(rawAmount) ? rawAmount : NaN;
-  if (!amount || amount < 5) {{
-    statusEl.textContent = 'Minimum purchase is $5.';
+  if (!amount || amount < 5 || amount > 1000) {{
+    statusEl.textContent = 'Enter an amount between $5 and $1000.';
     return;
   }}
   // Real gap found via audit: buySeat/removeSeat both guard against a
@@ -2892,8 +2892,8 @@ async function buyCredit(btn) {
   // charging a different amount than what is on screen.
   const rawAmount = Number(document.getElementById('topup-amount').value);
   const amount = Number.isInteger(rawAmount) ? rawAmount : NaN;
-  if (!amount || amount < 5) {
-    setStatus('Minimum purchase is $5.');
+  if (!amount || amount < 5 || amount > 1000) {
+    setStatus('Enter an amount between $5 and $1000.');
     return;
   }
   btn.disabled = true;
