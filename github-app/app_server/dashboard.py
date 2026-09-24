@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from pydantic import BaseModel
 
 from aletheore.evidence_resolution import resolve_code_evidence
 from scan_worker.github_api import fetch_file_content
@@ -11,6 +12,7 @@ from scan_worker.live_wiki import build_file_fallback_detail
 from app_server.admin import (
     _administered_installation_ids_for_session_or_401,
     _github_http_client,
+    _looks_like_email,
     _monitored_endpoint_keys,
     _repo_installation_id,
     _require_admin_installation,
@@ -33,12 +35,14 @@ from app_server.db import (
     get_public_status_enabled,
     get_recent_endpoint_health,
     get_recent_history,
+    get_review_history,
     get_wiki_build_status,
     get_wiki_overview,
     get_wiki_subsystem,
     list_docs_symbols,
     list_repos_for_installations,
     list_wiki_subsystems,
+    set_alert_email,
 )
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.github_pagination import fetch_paginated_github_collection
@@ -222,17 +226,16 @@ async def list_my_repos(request: Request):
     return {"repos": result, "billing_accounts": billing_accounts}
 
 
-@dashboard_router.get("/app/installations/{installation_id}/credits")
-async def get_credits(installation_id: int, request: Request):
-    """Credit balance and top-up checkout data for one paid installation.
-
-    Gated on session + "administers this installation" only, deliberately not
-    on the AIR plan gate every other /app route uses: a Flash installation has
-    no dashboard, so this is the only place its owner can see the balance or
-    buy more. Buying credit only ever adds to the installation's own balance,
-    so nothing sensitive is exposed beyond the balance itself. Free (or lapsed)
-    installations get the same 404 as an installation the caller doesn't
-    administer, so the response never reveals which installations exist.
+async def _require_paid_installation_or_404(request: Request, installation_id: int) -> dict:
+    """Session + "administers this installation" only - deliberately not the
+    AIR-only admin.py gate. A Flash installation has no managed dashboard, so
+    the handful of /app/installations/{id}/... routes built on this are the
+    only place its owner can reach these low-risk, installation-scoped
+    preferences (credit balance/top-up, alert email, review history) - none
+    of them expose or move anything beyond this one installation's own data.
+    Free (or lapsed) installations get the same 404 as an installation the
+    caller doesn't administer, so the response never reveals which
+    installations exist.
     """
     session = await get_current_session(request)
     if session is None:
@@ -245,6 +248,13 @@ async def get_credits(installation_id: int, request: Request):
     installation = await get_installation(pool, installation_id)
     if installation is None or installation["plan"] not in ("flash", "air"):
         raise HTTPException(status_code=404, detail="no such installation")
+    return installation
+
+
+@dashboard_router.get("/app/installations/{installation_id}/credits")
+async def get_credits(installation_id: int, request: Request):
+    """Credit balance and top-up checkout data for one paid installation."""
+    installation = await _require_paid_installation_or_404(request, installation_id)
 
     return {
         "installation_id": installation_id,
@@ -259,6 +269,48 @@ async def get_credits(installation_id: int, request: Request):
             installation_id, get_settings().session_secret
         ),
         "credit_topup_price_id": CREDIT_TOPUP_PRICE_ID,
+    }
+
+
+@dashboard_router.get("/app/installations/{installation_id}/alert-email")
+async def get_installation_alert_email(installation_id: int, request: Request):
+    installation = await _require_paid_installation_or_404(request, installation_id)
+    return {"alert_email": installation.get("alert_email")}
+
+
+class SetInstallationAlertEmailRequest(BaseModel):
+    alert_email: str | None = None
+
+
+@dashboard_router.post("/app/installations/{installation_id}/alert-email")
+async def set_installation_alert_email(
+    installation_id: int, request: Request, body: SetInstallationAlertEmailRequest
+):
+    await _require_paid_installation_or_404(request, installation_id)
+    if body.alert_email and not _looks_like_email(body.alert_email):
+        raise HTTPException(status_code=400, detail="that doesn't look like a valid email address")
+    pool = request.app.state.db_pool
+    await set_alert_email(pool, installation_id, body.alert_email)
+    return {"alert_email": body.alert_email}
+
+
+@dashboard_router.get("/app/installations/{installation_id}/review-history")
+async def get_installation_review_history(installation_id: int, request: Request):
+    await _require_paid_installation_or_404(request, installation_id)
+    pool = request.app.state.db_pool
+    rows = await get_review_history(pool, installation_id)
+    return {
+        "reviews": [
+            {
+                "repo_full_name": r["repo_full_name"],
+                "pr_number": r["pr_number"],
+                "outcome": r["outcome"],
+                "finding_count": r["finding_count"],
+                "skip_reason": r["skip_reason"],
+                "reviewed_at": r["reviewed_at"].isoformat(),
+            }
+            for r in rows
+        ]
     }
 
 

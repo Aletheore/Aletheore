@@ -2906,8 +2906,65 @@ async function loadCredits() {
       '</div>' +
       '<div id="topup-status" class="settings-block-hint"></div>' +
       '<div class="settings-block-hint">One-time purchase, $1 per credit, minimum $5. Purchased credit never expires. When your credit runs out, automatic AI reviews pause until your plan renews or you buy more.</div>' +
+    '</div>' +
+    '<div class="settings-block">' +
+      '<div class="settings-block-label">Low-credit alert</div>' +
+      '<div class="settings-block-hint">Reviews pause silently below $0 &mdash; this email is the only warning you get before that happens.</div>' +
+      '<div class="form-row" style="margin-top: 10px;">' +
+        '<input class="field" id="alert-email-input" type="email" placeholder="you@example.com" value="' + escapeHtml(data.alert_email || '') + '" style="flex: 1 1 220px;">' +
+        '<button class="btn" id="alert-email-save">Save</button>' +
+      '</div>' +
+      '<div id="alert-email-status" class="settings-block-hint"></div>' +
+    '</div>' +
+    '<div class="settings-block">' +
+      '<div class="settings-block-label">Review history</div>' +
+      '<div id="review-history-body"><div class="empty-state">Loading&hellip;</div></div>' +
     '</div>';
   document.getElementById('topup-button').addEventListener('click', function () { buyCredit(this); });
+  document.getElementById('alert-email-save').addEventListener('click', saveAlertEmail);
+  loadReviewHistory();
+}
+async function saveAlertEmail() {
+  const input = document.getElementById('alert-email-input');
+  const status = document.getElementById('alert-email-status');
+  const value = input.value.trim();
+  status.textContent = 'Saving...';
+  status.style.color = '';
+  const res = await fetch('/app/installations/' + installationId + '/alert-email', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ alert_email: value || null }),
+  });
+  const data = await res.json().catch(function () { return {}; });
+  if (!res.ok) {
+    status.textContent = data.detail || 'Could not save.';
+    status.style.color = 'var(--critical)';
+    return;
+  }
+  status.textContent = value ? 'Saved.' : 'Cleared - you will not get a low-credit email.';
+  status.style.color = 'var(--success)';
+}
+async function loadReviewHistory() {
+  const body = document.getElementById('review-history-body');
+  const res = await fetch('/app/installations/' + installationId + '/review-history');
+  if (!res.ok) { body.innerHTML = '<div class="empty-state">Could not load review history.</div>'; return; }
+  const data = await res.json();
+  const reviews = data.reviews || [];
+  if (reviews.length === 0) {
+    body.innerHTML = '<div class="empty-state">No reviews recorded yet.</div>';
+    return;
+  }
+  const outcomeLabel = { posted: 'commented', clean: 'clean', skipped: 'skipped' };
+  body.innerHTML = reviews.map(function (r) {
+    const when = new Date(r.reviewed_at).toLocaleString();
+    let detail = '';
+    if (r.outcome === 'posted') detail = r.finding_count + (r.finding_count === 1 ? ' finding' : ' findings');
+    else if (r.outcome === 'skipped') detail = escapeHtml(r.skip_reason || 'skipped');
+    return '<div class="token-row">' +
+      '<span>' + escapeHtml(r.repo_full_name) + ' #' + r.pr_number + '</span>' +
+      '<span class="token-meta">' + (outcomeLabel[r.outcome] || r.outcome) + (detail ? ' &middot; ' + detail : '') + ' &middot; ' + escapeHtml(when) + '</span>' +
+    '</div>';
+  }).join('');
 }
 async function buyCredit(btn) {
   if (typeof Paddle === 'undefined') {
