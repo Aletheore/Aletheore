@@ -282,3 +282,42 @@ async def test_load_all_endpoints_groups_by_file(pool):
     assert {e["path"] for e in endpoints["app.py"]} == {"/users"}
     assert len(endpoints["app.py"]) == 2
     assert len(endpoints["health.py"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_module_deltas_tolerates_same_name_symbols_on_one_line(pool):
+    """Minified JS puts many one-letter functions on a single line, so two
+    symbols can share (path, name, start_line), the symbols table's key.
+    That used to abort the whole transaction, leaving the repo's durable
+    graph stale on every scan (seen in production on a vendored chart.min.js).
+    """
+    await _insert_installation(pool, 716, "org")
+    store = CodeGraphStore(TEST_DATABASE_URL, 716, "org/repo")
+    modules = [
+        _module(
+            "vendor/chart.min.js",
+            "hash-min",
+            language="javascript",
+            functions=[
+                {"name": "s", "start_line": 13, "end_line": 13},
+                {"name": "s", "start_line": 13, "end_line": 13},
+                {"name": "t", "start_line": 13, "end_line": 13},
+            ],
+        ),
+        _module("app.py", "hash-app", functions=[{"name": "f", "start_line": 1, "end_line": 2}]),
+    ]
+
+    store.apply_module_deltas(
+        "main", modules, deleted_paths=[], new_sync_sha="s1", new_sync_at=datetime(2026, 9, 24)
+    )
+
+    rows = await pool.fetch(
+        "SELECT path, name FROM code_graph_symbols WHERE installation_id = $1 ORDER BY path, name", 716
+    )
+    assert [(r["path"], r["name"]) for r in rows] == [
+        ("app.py", "f"),
+        ("vendor/chart.min.js", "s"),
+        ("vendor/chart.min.js", "t"),
+    ]
+    # The rest of the batch was not rolled back.
+    assert store.load_content_hashes("main") == {"vendor/chart.min.js": "hash-min", "app.py": "hash-app"}
