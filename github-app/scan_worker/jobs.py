@@ -271,26 +271,14 @@ GRAPH_COLD_SYNC_DEPTH_CAP = 50_000
 # GRAPH_COLD_SYNC_DEPTH_CAP for that reason.
 SECRETS_HISTORY_DEPTH_CAP = 20_000
 
-# The real, customer-facing promise for AIR ($29.99/mo): up to 500 PR
-# reviews/month (raised from 300 - real customers were hitting the old cap
-# without difficulty). This is a usage ceiling for the promise itself, not a
-# cost-protection measure; the existing dollar-based monthly_cap_for_installation
-# check stays in place as a separate defense against a pathological
-# per-review cost blowing past what 500 reviews should ever cost - see
-# model_tiers.py/flash_review.py for which model that cost is actually
-# priced against (Luna, falling back to deepseek-v4-flash).
-MAX_FLASH_REVIEWS_PER_MONTH = 500
-# Free-tier cap held at 150 deliberately (not scaled with the paid cap
-# above) - free tier is meant to stay generous and reach more people, not
-# track paid 1:1.
+# Free-tier cap held at 150 deliberately - free tier is meant to stay generous
+# and reach more people. Paid plans (flash, air) have NO review-count cap: their
+# ceiling is the dollar credit balance (llm_cost.PLAN_BASE_CREDIT_USD, enforced by
+# reserve_llm_spend), which is what a review actually costs. The old 800 (flash) /
+# 500 (air) counts were promises from before the credit system and stopped binding
+# once the credit replaced them; reviews are still counted for the admin
+# month-to-date figure.
 MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH = 150
-# The "flash" plan's own cap - real, validated separately from AIR's 500,
-# not just a bigger/smaller multiple of it. 800/mo is the number this
-# tier's whole real cost/recall validation (compact + trimmed diff,
-# solo Luna generation, no dual-agent verification) was run against - see
-# model_tiers.py's plan-specific adapter choice and the real worst-case
-# cost figures that number was checked against before committing to it.
-MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH = 800
 DEFAULT_LLM_NEXT_CALL_RESERVE_USD = 0.001
 
 # Real bug found via independent audit of PR #562: DEFAULT_LLM_NEXT_CALL_
@@ -2101,20 +2089,9 @@ def run_flash_review_job(
         ):
             return
     else:
-        # flash's own real, separately-validated cap (800), not AIR's 500 -
-        # see MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH. Any other non-free
-        # plan value falls back to the AIR cap, matching this codebase's
-        # existing "only free is special-cased, everything else defaults
-        # to the paid shape" convention elsewhere.
-        review_count_cap = (
-            MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH
-            if installation["plan"] == "flash"
-            else MAX_FLASH_REVIEWS_PER_MONTH
-        )
-        if not reserve_flash_review_count(
-            settings.database_url, installation_id, review_count_cap
-        ):
-            return
+        # Paid plans have no review-count cap (limit=None still counts the
+        # review); the dollar reservation below is what bounds them.
+        reserve_flash_review_count(settings.database_url, installation_id, None)
         # reserve_llm_spend rejects the WHOLE reservation when the combined
         # balance is below the requested amount (its `>= %(reserve)s` WHERE
         # clause - deliberately untouched, that atomicity is what stops two
@@ -2772,8 +2749,7 @@ def _run_flash_review(
             # AIR-tier only (see _on_verification_usage) - explicit, not
             # derived from is_free_tier, because "paid" no longer means
             # "AIR" now that the flash plan exists: flash's whole real
-            # cost/recall validation (see MAX_FLASH_TIER_FLASH_REVIEWS_
-            # PER_MONTH) was run on solo generation, no second-model
+            # cost/recall validation was run on solo generation, no second-model
             # check - `not is_free_tier` would have silently given flash
             # dual-agent verification for free, the exact cost this plan
             # doesn't have room for. Free tier's own generation quality/

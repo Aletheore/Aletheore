@@ -102,9 +102,9 @@ def base_credit_for_plan(plan: str, extra_seats: int) -> float:
 # margin as ~28% and the rejected alternative's as ~13% - found via
 # independent audit). Deliberate: the context-cap raise was picked at
 # 1.25x specifically to keep this margin close to its original size rather
-# than eroding it for a bigger win. See jobs.py's
-# MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH for the real review-count cap
-# (800) this was checked against.
+# than eroding it for a bigger win. This was checked against an 800-review/
+# month workload; that count is no longer enforced (the credit balance is
+# the only paid-plan limit, see PLAN_BASE_CREDIT_USD).
 # air's real spend cap is a deliberately looser fraction of its price than
 # the shared 50% default below, raised from the derived $14.995 to a flat
 # $20 - real production repos vary far more in size than the fixed-cost

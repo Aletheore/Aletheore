@@ -3809,26 +3809,34 @@ def test_flash_review_job_skips_when_spend_cap_reached(monkeypatch):
     assert released == [True]
 
 
-def test_flash_review_job_skips_when_monthly_review_count_reached(monkeypatch):
+@pytest.mark.parametrize("plan", ["air", "flash"])
+def test_flash_review_job_has_no_review_count_cap_on_paid_plans(monkeypatch, plan):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr(
-        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": plan}
     )
     monkeypatch.setattr(
         "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
     )
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
-    # False = the atomic reservation itself found the count cap already
-    # reached - reserve_llm_spend must never even be attempted, since
-    # there's nothing to reserve it for.
-    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: False)
+    # Paid plans are bounded by the dollar credit, not a review count: the
+    # count is still recorded (limit=None) but must never gate the review, so
+    # reserve_llm_spend is reached even if the count call reports False.
+    count_limits = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.reserve_flash_review_count",
+        lambda dsn, installation_id, limit: count_limits.append(limit) or False,
+    )
     spend_reserve_called = []
     monkeypatch.setattr(
-        "scan_worker.jobs.reserve_llm_spend", lambda *a, **k: spend_reserve_called.append(True)
+        "scan_worker.jobs.reserve_llm_spend_with_email_hooks",
+        lambda *a, **k: spend_reserve_called.append(True) or False,
     )
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     llm_called = []
     monkeypatch.setattr("scan_worker.jobs.review_diff", lambda *a, **k: llm_called.append(True))
     from scan_worker.jobs import run_flash_review_job
@@ -3849,8 +3857,9 @@ def test_flash_review_job_skips_when_monthly_review_count_reached(monkeypatch):
     )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
+    assert count_limits == [None]
+    assert spend_reserve_called == [True]
     assert llm_called == []
-    assert spend_reserve_called == []
 
 
 def test_flash_review_job_skips_model_call_for_lockfile_only_diff(monkeypatch):
@@ -5342,8 +5351,7 @@ def test_flash_review_job_does_not_request_second_model_verification_on_flash_ti
     # dual-agent verification for free the moment it existed as a plan
     # value - flash's real cost/recall validation was run on solo
     # generation only, and has no room in its cap for that. Also confirms
-    # flash gets its own, separately-validated review-count cap (800),
-    # not AIR's 500.
+    # flash has no review-count cap (limit=None), only the dollar credit.
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "flash"})
     monkeypatch.setattr(
@@ -5383,13 +5391,12 @@ def test_flash_review_job_does_not_request_second_model_verification_on_flash_ti
     monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
-    from scan_worker.jobs import MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH, run_flash_review_job
+    from scan_worker.jobs import run_flash_review_job
 
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert captured["verify_with_second_model"] is False
-    assert reserve_calls == [MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH]
-    assert MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH == 800
+    assert reserve_calls == [None]
     # Unlike verify_with_second_model, suggestion-correctness verification
     # is NOT plan-gated to AIR - Flash tier's solo-Luna-generation design
     # (no dual-agent grounding check) makes it more exposed to a

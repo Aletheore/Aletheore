@@ -1182,8 +1182,7 @@ def test_review_diff_runs_suggestion_correctness_check_even_without_second_model
 ):
     # The suggestion-correctness gate must fire on the Flash tier too, not
     # just when verify_with_second_model=True (AIR-only grounding recheck)
-    # - Flash tier's own solo-Luna-generation design (see
-    # MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH's comment) makes it *more*
+    # - Flash tier's own solo-Luna-generation design makes it *more*
     # exposed to a wrong-direction clickable suggestion than AIR, not less.
     #
     # The finding-with-a-suggestion comes from find_semantic_regressions
