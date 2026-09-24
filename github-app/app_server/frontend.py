@@ -522,6 +522,7 @@ function renderWikiMarkdown(src) {
 """
 
 SIGNIN_HTML = f"""<!DOCTYPE html>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Aletheore</title>
 {ICONS_LINK}
 {STYLE}
@@ -556,6 +557,7 @@ SIGNIN_HTML = f"""<!DOCTYPE html>
 """
 
 PICKER_HTML = f"""<!DOCTYPE html>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Your repositories — Aletheore</title>
 {ICONS_LINK}
 {STYLE}
@@ -747,6 +749,7 @@ function lockedFeature(title, description, previewHtml) {{
 
 def _page_head(title: str) -> str:
     return f"""<!DOCTYPE html>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 {ICONS_LINK}
 {MERMAID_SCRIPT}
@@ -3308,6 +3311,7 @@ def _credits_page(installation_id: int) -> str:
         _CREDITS_JS.replace("__INSTALLATION_ID__", str(int(installation_id)))
     )
     return f"""<!DOCTYPE html>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI credit — Aletheore</title>
 {ICONS_LINK}
 {STYLE}
