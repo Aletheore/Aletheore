@@ -95,10 +95,19 @@ def check_pmd(repo_path: Path, timeout: int | None = None) -> dict:
         return {"checked": False, "reason": f"pmd failed to run: {exc}", "findings": []}
 
     # 0 = no violations, 4 = violations found (real PMD convention,
-    # confirmed live) - neither is a failure. Anything else (1 = a real
-    # configuration/runtime error, confirmed live via a bad ruleset name)
-    # is.
-    if result.returncode not in (0, 4):
+    # confirmed live) - neither is a failure. 5 is PMD's own documented
+    # code for "at least one recoverable error occurred, with additionally
+    # zero or more violations detected" (docs.pmd-code.org's CLI
+    # reference) - a single file PMD's parser chokes on (a newer Java
+    # syntax feature, a non-UTF8 file, a generated/vendored source file)
+    # produces exactly this on an otherwise-clean run. Treating 5 as a
+    # hard failure the same as 1 (a real config/runtime error, confirmed
+    # live via a bad ruleset name) silently discarded every real finding
+    # from every other file in the repo on the strength of one unparsable
+    # file - the JSON's `files` list is still authoritative for whichever
+    # files PMD did manage to check, same as this scanner already treats
+    # 0/1 exit for every sibling scanner in this package.
+    if result.returncode not in (0, 4, 5):
         return {
             "checked": False,
             "reason": f"pmd exited {result.returncode}: {(result.stderr or result.stdout)[-500:]}",

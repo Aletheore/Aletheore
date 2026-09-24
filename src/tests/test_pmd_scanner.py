@@ -152,3 +152,39 @@ def test_check_pmd_treats_exit_code_4_as_violations_found_not_a_failure(tmp_path
 
     assert result["checked"] is True
     assert result["findings"] == []
+
+
+def test_check_pmd_exit_code_5_still_reports_findings_from_files_that_did_parse(tmp_path):
+    # Real, documented PMD exit code (docs.pmd-code.org CLI reference): 5 =
+    # "at least one recoverable error has occurred [on some file PMD's
+    # parser couldn't handle]. There might be additionally zero or more
+    # violations detected [on the files it could]." One unparsable file
+    # (a newer Java syntax feature, a non-UTF8 source, a generated file)
+    # must not discard every real finding from the rest of the repo.
+    (tmp_path / "App.java").write_text("public class App {}\n")
+    abs_path = str(tmp_path / "App.java")
+    payload = {
+        "files": [
+            {
+                "filename": abs_path,
+                "violations": [
+                    {
+                        "rule": "NullAssignment",
+                        "ruleset": "Error Prone",
+                        "priority": 3,
+                        "beginline": 5,
+                        "description": "Assigning an Object to null",
+                    }
+                ],
+            }
+        ]
+    }
+    mock_result = _mock_run(5, stdout=json.dumps(payload), stderr="[ERROR] Cannot parse Other.java")
+
+    with patch("aletheore.static_analysis.pmd_scanner.shutil.which", return_value="/usr/local/bin/pmd"), \
+         patch("aletheore.static_analysis.pmd_scanner.subprocess.run", return_value=mock_result):
+        result = check_pmd(tmp_path)
+
+    assert result["checked"] is True
+    assert len(result["findings"]) == 1
+    assert result["findings"][0]["rule_id"] == "NullAssignment"
