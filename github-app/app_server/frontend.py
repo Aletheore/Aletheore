@@ -98,10 +98,9 @@ a { color: var(--accent); }
 .signin { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 4rem 1.5rem; }
 .signin-card { width: 100%; max-width: 380px; background: var(--paper);
   border: 1px solid var(--border); border-radius: 4px; padding: 2.5rem 2.25rem 2rem; text-align: left; }
-.signin-brand { display: flex; align-items: center; gap: 9px; margin-bottom: 1.75rem; }
-.signin-brand-mark { width: 26px; height: 26px; border: 1.5px solid var(--ink-900); border-radius: 4px;
-  display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 13px; font-weight: 700; }
-.signin-brand-name { font-weight: 650; font-size: 16px; letter-spacing: -0.01em; }
+.signin-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 1.75rem; }
+.signin-brand-mark { display: block; width: 28px; height: 28px; border-radius: 7px; flex-shrink: 0; }
+.signin-brand-name { font-weight: 700; font-size: 20px; letter-spacing: -0.01em; }
 .signin-card h1 { font-size: 18px; font-weight: 650; margin: 0 0 6px; letter-spacing: -0.01em; }
 .tagline { font-size: 13px; color: var(--slate-600); margin: 0 0 1.6rem; line-height: 1.5; max-width: 30ch; }
 .gh-btn { width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; background: var(--ink-900); color: var(--slate-50);
@@ -797,7 +796,7 @@ SIGNIN_HTML = f"""<!DOCTYPE html>
 {STYLE}
 <div class="signin">
   <div class="signin-card">
-    <div class="signin-brand"><span class="signin-brand-mark">A</span><span class="signin-brand-name">Aletheore</span></div>
+    <div class="signin-brand"><img class="signin-brand-mark" src="{BRAND_MARK_DATA_URI}" alt="" width="28" height="28"><span class="signin-brand-name">Aletheore</span></div>
     <h1>Sign in to Aletheore</h1>
     <p class="tagline">Scan, review, and monitor your repositories.</p>
     <a class="gh-btn" href="/auth/login">
