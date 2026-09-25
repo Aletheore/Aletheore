@@ -1200,7 +1200,17 @@ async function loadOverview() {{
 
   document.getElementById('stat-findings').textContent = totalFindings;
   document.getElementById('stat-findings').className = 'stat-value' + (totalFindings > 0 ? ' critical' : ' success');
-  document.getElementById('stat-findings-sub').textContent = secretFindings.length + ' secret, ' + vulnFindings.length + ' dependency, ' + staticAnalysisFindings.length + ' static analysis';
+  // Real bug found at both 375px and 1280px: the full "N secret, N
+  // dependency, N static analysis" text overflows the 204px cell at 11px
+  // and silently ellipsis-truncates the last category off - dropping real
+  // information the user needs to read. Never ellipsis a number/count;
+  // shorten labels and drop zero-count categories instead, so it always
+  // fits without losing anything real.
+  const findingSubParts = [];
+  if (secretFindings.length > 0) findingSubParts.push(secretFindings.length + ' secret' + (secretFindings.length === 1 ? '' : 's'));
+  if (vulnFindings.length > 0) findingSubParts.push(vulnFindings.length + ' dep' + (vulnFindings.length === 1 ? '' : 's'));
+  if (staticAnalysisFindings.length > 0) findingSubParts.push(staticAnalysisFindings.length + ' static');
+  document.getElementById('stat-findings-sub').textContent = findingSubParts.length ? findingSubParts.join(', ') : 'No findings';
 
   const deadCode = (evidence.repository || {{}}).dead_code || {{}};
   const unreachable = deadCode.unreachable_modules || [];
