@@ -382,14 +382,14 @@ table.findings tr:last-child td { border-bottom: none; }
 .docs-module-path { font-family: var(--font-mono); font-size: 13px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .docs-chip { font-family: var(--font-mono); font-size: 10.5px; color: var(--slate-600); border: 1px solid var(--border-strong); border-radius: 3px; padding: 1px 6px; flex-shrink: 0; }
 .docs-module-content { padding: 0 16px 16px 42px; border-top: 1px solid var(--border); }
-.docs-module-content-inner { font-size: 12px; color: var(--slate-600); padding: 14px 0 0; }
-.docs-symbol-row { border-bottom: 1px solid var(--border); padding: 10px 0; }
+.docs-module-content-inner { font-size: 12px; color: var(--slate-600); padding: 14px 0 0; min-width: 0; }
+.docs-symbol-row { border-bottom: 1px solid var(--border); padding: 10px 0; min-width: 0; }
 .docs-symbol-row:last-child { border-bottom: none; }
-.docs-symbol-row .sig { font-family: var(--font-mono); font-size: 12.5px; padding: 3px 0; }
+.docs-symbol-row .sig { font-family: var(--font-mono); font-size: 12.5px; padding: 3px 0; overflow-wrap: anywhere; min-width: 0; }
 .docs-symbol-row .sig .name { color: var(--ink-900); }
 .docs-symbol-row .sig .kind { color: var(--slate-400); margin-left: 8px; font-family: var(--font-sans); }
-.docs-symbol-row .desc { font-size: 12.5px; line-height: 1.6; color: var(--slate-600); margin: 6px 0; max-width: 72ch; }
-.docs-symbol-row .cite { font-family: var(--font-mono); font-size: 11px; color: var(--slate-400); }
+.docs-symbol-row .desc { font-size: 12.5px; line-height: 1.6; color: var(--slate-600); margin: 6px 0; max-width: 72ch; overflow-wrap: anywhere; min-width: 0; }
+.docs-symbol-row .cite { font-family: var(--font-mono); font-size: 11px; color: var(--slate-400); overflow-wrap: anywhere; min-width: 0; }
 .docs-symbol-row .flag { font-size: 11px; margin-left: 8px; }
 .docs-symbol-row .flag.undocumented { color: var(--slate-400); font-style: italic; }
 .docs-symbol-row .flag.ai { color: var(--accent-strong); }
