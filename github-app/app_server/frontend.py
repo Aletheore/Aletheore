@@ -192,7 +192,7 @@ a { color: var(--accent); }
 .breadcrumb b { color: var(--ink-900); font-weight: 500; }
 .breadcrumb a { color: var(--slate-600); text-decoration: none; }
 .breadcrumb a:hover { color: var(--ink-900); }
-.h1 { font-size: 26px; font-weight: 720; margin: 3px 0 0; }
+.h1 { font-size: 20px; font-weight: 650; margin: 3px 0 0; }
 .topbar-right { font-size: 12px; color: var(--slate-600); }
 
 .dashboard-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
@@ -1518,7 +1518,7 @@ WIKI_LOCKED_PREVIEW = (
 
 WIKI_HTML = _page_head("AIRview — {repo} — Aletheore") + _shell(
     "wiki",
-    _topbar("AIRview", show_breadcrumb=False, margin_bottom="0")
+    _topbar("AIRview", show_breadcrumb=False, margin_bottom="7px")
     + """
     <p class="airview-sub">Generated from the real module dependency graph - the same evidence the architecture wiki below reads too, just explorable instead of static.</p>
     <div id="graph-body"><div class="empty-state">Loading&hellip;</div></div>
