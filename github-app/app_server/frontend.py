@@ -194,7 +194,7 @@ a { color: var(--accent); }
 .breadcrumb a { color: var(--slate-600); text-decoration: none; }
 .breadcrumb a:hover { color: var(--ink-900); }
 .h1 { font-size: 20px; font-weight: 650; letter-spacing: -0.01em; margin: 3px 0 0; }
-.repo-path { font-family: var(--font-mono); font-size: 13px; color: var(--slate-600); margin-top: 2px; }
+.repo-path { font-family: var(--font-mono); font-size: 13px; color: var(--slate-600); }
 .topbar-right { font-size: 12px; color: var(--slate-400); font-family: var(--font-mono); }
 
 .dashboard-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
@@ -384,7 +384,7 @@ svg#depgraph:active { cursor: grabbing; }
   padding: 16px 18px; margin-bottom: 16px; }
 .settings-block-label { font-size: 13px; font-weight: 600; margin-bottom: 9px; }
 .settings-block-hint { font-size: 11px; color: var(--slate-600); margin-top: 6px; }
-.credit-figure { font-family: var(--font-mono); font-size: 30px; font-weight: 650; letter-spacing: -0.01em; line-height: 1; }
+.credit-figure { font-family: var(--font-mono); font-size: 34px; font-weight: 650; letter-spacing: -0.01em; line-height: 1; }
 .credit-figure .of { font-size: 14px; color: var(--slate-600); font-weight: 500; margin-left: 6px; }
 .credit-meter { height: 4px; border-radius: 2px; background: var(--border); margin: 12px 0 4px; overflow: hidden; }
 .credit-meter-fill { height: 100%; background: var(--accent); }
@@ -501,6 +501,22 @@ function relativeTime(iso) {
   if (hours < 24) return hours + ' hour' + (hours === 1 ? '' : 's') + ' ago';
   const days = Math.round(hours / 24);
   return days + ' day' + (days === 1 ? '' : 's') + ' ago';
+}
+// Compact unit (5m/2h/3d) for the Overview topbar's fine-print "last scan"
+// line, matching index.html's own compact style there - a separate
+// function rather than changing relativeTime()'s own output, since that
+// shared function's full-word format ("5 minutes ago") is also used in
+// several other, more prose-like contexts (endpoint health, token/member
+// lists) that aren't part of this mockup and shouldn't change with it.
+function compactRelativeTime(iso) {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + 'm ago';
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return hours + 'h ago';
+  const days = Math.round(hours / 24);
+  return days + 'd ago';
 }
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, function (c) {
@@ -950,11 +966,16 @@ def _topbar(h1: str, right_id: str = "", sub_id: str = "", show_breadcrumb: bool
         '<span style="color:var(--slate-400);">/</span> <b><a id="crumb-repo"></a></b></div>'
         if show_breadcrumb else ""
     )
+    # .h1's margin-top exists to space it away from the breadcrumb above it -
+    # with no breadcrumb, that margin just pushes the H1 down from where
+    # .main's own top padding already puts it, which is what the mockup's
+    # H1 sits flush at.
+    h1_style = "" if show_breadcrumb else ' style="margin-top:0"'
     return f"""
     <div class="topbar">
       <div>
         {breadcrumb}
-        <h1 class="h1">{h1}</h1>
+        <h1 class="h1"{h1_style}>{h1}</h1>
         {sub}
       </div>
       {right}
@@ -1064,7 +1085,7 @@ async function loadOverview() {{
   const latest = history[0];
   const evidence = latest.evidence || {{}};
   const headSha = evidence._scan_head_sha;
-  document.getElementById('last-scanned').textContent = 'last scan ' + relativeTime(latest.scanned_at) + (headSha ? ' · head ' + headSha.slice(0, 8) : '');
+  document.getElementById('last-scanned').textContent = 'last scan ' + compactRelativeTime(latest.scanned_at) + (headSha ? ' · head ' + headSha.slice(0, 8) : '');
 
   const dismissedKeys = data.dismissed_finding_keys || {{ secret: [], vulnerability: [], static_analysis: [] }};
   const security = evidence.security || {{}};
