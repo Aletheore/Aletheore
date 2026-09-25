@@ -167,18 +167,18 @@ a { color: var(--accent); }
 
 /* ---- Dashboard shell ---- */
 .shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100vh; }
-.sidebar { border-right: 1px solid var(--border); padding: 1rem; display: flex; flex-direction: column; gap: 1.45rem; position: sticky; top: 0; height: 100vh; }
+.sidebar { border-right: 1px solid var(--border); padding: 20px 14px; display: flex; flex-direction: column; gap: 1.45rem; position: sticky; top: 0; height: 100vh; }
 .brand { display: flex; align-items: center; gap: 8px; padding: 0 6px; }
 .brand-mark { width: 20px; height: 20px; border: 1.5px solid var(--ink-900); border-radius: 3px; display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 11px; font-weight: 700; flex-shrink: 0; }
 .brand-name { font-weight: 650; font-size: 14.5px; letter-spacing: -0.01em; }
 .nav-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--slate-400); flex-shrink: 0; }
 .nav-dot.paid { background: var(--accent); }
-.nav-group-label { font-size: 11px; color: var(--slate-400); padding: 0 8px; margin-bottom: 6px; }
+.nav-group-label { font-size: 11px; color: var(--slate-400); padding: 0 8px 6px; }
 .nav-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
-.nav-item { display: flex; align-items: center; gap: 9px; padding: 8px 9px; border-radius: 4px; font-size: 13.5px; color: var(--ink-700); text-decoration: none; transition: background-color 0.12s ease, color 0.12s ease; }
+.nav-item { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 4px; font-size: 13px; color: var(--ink-700); text-decoration: none; transition: background-color 0.12s ease, color 0.12s ease; }
 .nav-item i { font-size: 16px; color: var(--ink-700); opacity: 0.95; }
 .nav-item:hover { background: var(--paper); }
-.nav-item.active { background: var(--accent-soft); color: var(--accent-strong); font-weight: 500; }
+.nav-item.active { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
 .nav-item.active i { color: var(--accent-strong); }
 .nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .plan-badge-wrap { margin-top: auto; }
@@ -195,7 +195,7 @@ a { color: var(--accent); }
 .breadcrumb a:hover { color: var(--ink-900); }
 .h1 { font-size: 20px; font-weight: 650; letter-spacing: -0.01em; margin: 3px 0 0; }
 .repo-path { font-family: var(--font-mono); font-size: 13px; color: var(--slate-600); margin-top: 2px; }
-.topbar-right { font-size: 12px; color: var(--slate-600); }
+.topbar-right { font-size: 12px; color: var(--slate-400); font-family: var(--font-mono); }
 
 .dashboard-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
   margin-bottom: 1.15rem; border: 1px solid var(--border); border-radius: 4px;
@@ -215,11 +215,11 @@ a { color: var(--accent); }
 a.stat-card:hover { background: var(--slate-50); }
 a.stat-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .stat-label { font-size: 12px; color: var(--slate-600); }
-.stat-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 27px; font-weight: 720; margin-top: 5px; }
+.stat-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 26px; font-weight: 650; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .stat-value.critical { color: var(--critical); }
 .stat-value.warning { color: var(--warning); }
 .stat-value.success { color: var(--success); }
-.stat-delta { font-size: 11.5px; color: var(--slate-600); margin-top: 3px; }
+.stat-delta { font-size: 11px; color: var(--slate-400); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .section { background: var(--paper); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 1.15rem; scroll-margin-top: 1rem; overflow: hidden; }
 .section-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 18px; border-bottom: 1px solid var(--border); gap: 1rem; flex-wrap: wrap; }
@@ -227,6 +227,9 @@ a.stat-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
 .section-title i { font-size: 16px; color: var(--slate-400); }
 .section-sub { font-size: 12px; color: var(--slate-600); }
 .section-body { padding: 8px 18px 16px; }
+.plain-section-head { display: flex; align-items: center; justify-content: space-between; margin: 0 0 12px; }
+.plain-section-head h2 { font-size: 14px; font-weight: 650; margin: 0; }
+.plain-section-head .count { font-family: var(--font-mono); font-size: 12px; color: var(--slate-600); }
 
 table.findings { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.findings th { text-align: left; font-size: 11px; color: var(--slate-400); font-weight: 500; padding: 8px 8px; border-bottom: 1px solid var(--border); }
@@ -239,7 +242,7 @@ table.findings tr:last-child td { border-bottom: none; }
 .sev-stripe.warning { background: var(--warning); }
 .sev-stripe.neutral { background: var(--slate-400); }
 
-.finding-list { border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.finding-list { border: 1px solid var(--border); border-radius: 4px; overflow: hidden; margin-bottom: 1.7rem; }
 .finding-row { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 13px 16px; border-bottom: 1px solid var(--border); transition: background-color 0.12s ease; }
 .finding-row:last-child { border-bottom: none; }
 .finding-row:hover { background: var(--slate-50); }
@@ -389,6 +392,7 @@ svg#depgraph:active { cursor: grabbing; }
 .divider-label { font-size: 11px; color: var(--slate-400); margin: 16px 0 10px; display: flex; align-items: center; gap: 10px; }
 .divider-label::after { content: ""; flex: 1; height: 1px; background: var(--border); }
 .qty-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.qty-prefix { font-family: var(--font-mono); font-size: 13px; color: var(--slate-600); }
 .status-line { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--slate-600); margin-top: 10px; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
 .settings-help-links { display: flex; gap: 14px; margin-top: 8px; }
@@ -505,6 +509,10 @@ function escapeHtml(s) {
 }
 function planDisplayName(plan) {
   var names = { free: 'Aletheore Community', flash: 'Aletheore Flash', air: 'Aletheore AIR' };
+  return names[plan] || names.air;
+}
+function planShortName(plan) {
+  var names = { free: 'Community', flash: 'Flash', air: 'AIR' };
   return names[plan] || names.air;
 }
 // Minimal markdown for AIRview file pages. The text is model-written from
@@ -643,7 +651,7 @@ PICKER_HTML = f"""<!DOCTYPE html>
 
 _NAV_ITEMS = [
     ("overview", "", "ti-layout-dashboard", "Overview"),
-    ("security", "/security", "ti-shield-check", "Security findings"),
+    ("security", "/security", "ti-shield-check", "Findings"),
     ("deadcode", "/dead-code", "ti-trash", "Dead code"),
     ("health", "/health", "ti-activity", "Endpoint health"),
     ("wiki", "/wiki", "ti-book-2", "AIRview"),
@@ -733,14 +741,14 @@ async function loadPlanBadge() {
   if (res.status === 402) {
     nameEl.textContent = planDisplayName('free');
     subEl.textContent = 'Upgrade for AIRview and settings.';
-    if (planLineEl) planLineEl.textContent = org + '/' + repo + ' · ' + planDisplayName('free') + ' plan';
+    if (planLineEl) planLineEl.textContent = org + '/' + repo + ' · ' + planShortName('free') + ' plan';
     return 'free';
   }
   if (!res.ok) { nameEl.textContent = ''; subEl.textContent = ''; return null; }
   const data = await res.json();
   nameEl.textContent = planDisplayName(data.installation.plan);
   subEl.textContent = data.installation.plan === 'free' ? 'Upgrade for AIRview and settings.' : 'AIRview and priority scans included.';
-  if (planLineEl) planLineEl.textContent = org + '/' + repo + ' · ' + planDisplayName(data.installation.plan) + ' plan';
+  if (planLineEl) planLineEl.textContent = org + '/' + repo + ' · ' + planShortName(data.installation.plan) + ' plan';
   return data;
 }
 """
@@ -765,6 +773,161 @@ function lockedFeature(title, description, previewHtml) {{
 }}
 """
 
+# Shared by every page with real-money actions (Settings, Overview) - was
+# duplicated per-page (a second, separately-maintained copy already existed
+# for the standalone /credits page's own installation-scoped API shape,
+# _CREDITS_JS below). adminBase-based, not installation-id-based, since
+# every caller of this constant already has org/repo in scope. Each caller
+# sets window._reloadUsage to its own refresh function before invoking
+# these (loadSettings on Settings, loadUsage on Overview) instead of this
+# file hardcoding one page's refresh call - buySeat/removeSeat need to
+# re-render whichever page's seat UI actually called them.
+BILLING_ACTIONS_JS = """
+async function buySeat(btn) {
+  // Disabled for the whole round trip, not just re-enabled on failure like
+  // most other buttons on this page: real gap found via audit - buySeat/
+  // removeSeat are the only real-money actions on this page with no
+  // double-click guard at all. A second click landing before the first
+  // response comes back fires a second, genuinely separate POST /seats/buy
+  // - the backend's per-installation lock (admin.py's
+  // _seat_adjustment_lock) only serializes the two against each other, it
+  // does not collapse them into one purchase, so both succeed and the
+  // customer is billed for two extra seats from what looked like one
+  // click. window._reloadUsage() below re-renders this whole section
+  // (including this button) once the real seat count is known, so there
+  // is no separate re-enable path to also get right for the SUCCESS path -
+  // but that reasoning only covers success. Real gap found by Flash Review
+  // on this same change: on a genuine network failure (fetch() itself
+  // rejects, before res/data ever exist) the function exits via an
+  // unhandled exception, the refresh never runs, and the button - a
+  // real-money action - stays disabled forever with no page-reload-free
+  // recovery. try/finally re-enables on every exit; harmless on the
+  // success path too, since the refresh has already replaced this
+  // button's DOM node by the time finally runs.
+  btn.disabled = true;
+  const status = document.getElementById('seat-billing-status');
+  status.textContent = 'Updating billing...';
+  status.style.color = 'var(--slate-600)';
+  try {
+    const res = await fetch(adminBase + '/seats/buy', { method: 'POST' });
+    const data = await res.json().catch(function () { return {}; });
+    if (res.ok) {
+      status.textContent = 'Seat added - billing updated. Refreshing...';
+      status.style.color = 'var(--success)';
+      if (window._reloadUsage) window._reloadUsage();
+    } else {
+      status.textContent = data.detail || 'Could not buy a seat.';
+      status.style.color = 'var(--critical)';
+    }
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function removeSeat(btn) {
+  // See buySeat's comment - same double-click gap and same network-failure
+  // stuck-button gap, same fix for both.
+  btn.disabled = true;
+  const status = document.getElementById('seat-billing-status');
+  status.textContent = 'Updating billing...';
+  status.style.color = 'var(--slate-600)';
+  try {
+    const res = await fetch(adminBase + '/seats/remove', { method: 'POST' });
+    const data = await res.json().catch(function () { return {}; });
+    if (res.ok) {
+      status.textContent = 'Seat removed - billing updated. Refreshing...';
+      status.style.color = 'var(--success)';
+      if (window._reloadUsage) window._reloadUsage();
+    } else {
+      status.textContent = data.detail || 'Could not remove a seat.';
+      status.style.color = 'var(--critical)';
+    }
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function openBillingPortal() {
+  const status = document.getElementById('seat-billing-status');
+  if (status) { status.textContent = 'Opening billing portal...'; status.style.color = 'var(--slate-600)'; }
+  const res = await fetch(adminBase + '/billing-portal');
+  const data = await res.json().catch(function () { return {}; });
+  if (res.ok && data.url) {
+    window.location.href = data.url;
+    return;
+  }
+  if (status) {
+    status.textContent = data.detail || 'Could not open the billing portal.';
+    status.style.color = 'var(--critical)';
+  }
+}
+
+async function buyCredit(btn) {
+  const statusEl = document.getElementById('topup-status');
+  if (typeof Paddle === "undefined") {
+    statusEl.textContent = 'Checkout is unavailable right now - try disabling any ad/script blocker and reload.';
+    return;
+  }
+  // parseInt would accept "7.9" (silently truncated to 7) or "1e5" (parsed
+  // as 1) - Number() + an explicit integer check rejects both instead of
+  // quietly charging a different amount than what's on screen.
+  const rawAmount = Number(document.getElementById('topup-amount').value);
+  const amount = Number.isInteger(rawAmount) ? rawAmount : NaN;
+  if (!amount || amount < 5 || amount > 1000) {
+    statusEl.textContent = 'Enter an amount between $5 and $1000.';
+    return;
+  }
+  // Real gap found via audit: buySeat/removeSeat both guard against a
+  // rapid double-click firing two independent purchases (see buySeat's
+  // comment); this button had no guard at all - two clicks before the
+  // first apiGet() round trip returns could open two stacked
+  // Paddle.Checkout.open() overlays with two different signed
+  // checkout_installation_tokens. Re-enabled in finally - unlike
+  // buySeat/removeSeat, this button's DOM node is never replaced by a
+  // re-render, so it must actually come back (e.g. the customer closes
+  // the overlay without completing checkout and wants to try again).
+  btn.disabled = true;
+  statusEl.textContent = 'Opening checkout...';
+  statusEl.style.color = '';
+  try {
+    window._creditCheckoutCompleted = false;
+    // The installation token is minted with a 30-minute TTL (auth.py's
+    // sign_checkout_installation_id) - re-fetch it fresh here instead of
+    // reusing page-load time's copy, so a tab left open past 30 minutes
+    // doesn't send Paddle a token the webhook can no longer resolve (money
+    // taken, no credit granted). window._creditTopupPriceId is a static
+    // price id set once at page load and doesn't need refreshing.
+    const res = await apiGet(adminBase);
+    if (!res || !res.ok) {
+      statusEl.textContent = 'Could not start checkout - try again.';
+      return;
+    }
+    const data = await res.json();
+    // Associates the checkout with the installation's existing Paddle
+    // customer record (already returned in data.installation, same source
+    // /subscribe's checkout page reads for its own pwCustomer wiring) -
+    // without it, an existing subscriber topping up credit would re-enter
+    // their email and Paddle would silently open a second customer record,
+    // splitting billing history and producing a transaction whose
+    // customer_id the subscription webhook path can't attribute back to
+    // this installation.
+    const paddleCustomerId = data.installation && data.installation.paddle_customer_id;
+    Paddle.Checkout.open({
+      items: [{ priceId: window._creditTopupPriceId, quantity: amount }],
+      customData: { installation_token: data.checkout_installation_token },
+      ...(paddleCustomerId ? { customer: { id: paddleCustomerId } } : {}),
+      settings: {
+        displayMode: 'overlay',
+        variant: 'one-page',
+        successUrl: 'https://app.aletheore.com/dashboard',
+      },
+    });
+  } finally {
+    btn.disabled = false;
+  }
+}
+"""
+
 
 def _page_head(title: str) -> str:
     return f"""<!DOCTYPE html>
@@ -775,13 +938,22 @@ def _page_head(title: str) -> str:
 {STYLE}"""
 
 
-def _topbar(h1: str, right_id: str = "", sub_id: str = "") -> str:
+def _topbar(h1: str, right_id: str = "", sub_id: str = "", show_breadcrumb: bool = True) -> str:
     right = f'<div class="topbar-right" id="{right_id}"></div>' if right_id else ""
     sub = f'<div class="repo-path" id="{sub_id}"></div>' if sub_id else ""
+    # Overview's own mockup has no breadcrumb - the H1 line is the top of
+    # the page - but every other page's topbar keeps it, so this defaults
+    # to on and PAGE_HEAD_JS's existing crumb-org/crumb-repo population
+    # already null-checks both elements rather than assuming they exist.
+    breadcrumb = (
+        '<div class="breadcrumb"><a id="crumb-org" href="/dashboard"></a> '
+        '<span style="color:var(--slate-400);">/</span> <b><a id="crumb-repo"></a></b></div>'
+        if show_breadcrumb else ""
+    )
     return f"""
     <div class="topbar">
       <div>
-        <div class="breadcrumb"><a id="crumb-org" href="/dashboard"></a> <span style="color:var(--slate-400);">/</span> <b><a id="crumb-repo"></a></b></div>
+        {breadcrumb}
         <h1 class="h1">{h1}</h1>
         {sub}
       </div>
@@ -804,51 +976,72 @@ def _shell(active: str, body: str) -> str:
 # ---------------------------------------------------------------------------
 # Overview page - stats only, each stat links into its own detail page.
 # ---------------------------------------------------------------------------
-OVERVIEW_HTML = _page_head("Overview — {repo} — Aletheore") + _shell(
+# A function, not a plain module-level constant like the other _HTML pages -
+# same reason as _settings_html(): its Usage section needs a real inline
+# Paddle checkout (get_settings().paddle_client_token/paddle_environment),
+# and calling get_settings() at plain module-import time would make
+# importing this file require a fully configured settings environment.
+@lru_cache(maxsize=1)
+def _overview_html() -> str:
+    return _page_head("Overview — {repo} — Aletheore") + _shell(
     "overview",
-    _topbar("Overview", "last-scanned", "repo-plan-line")
+    _topbar("Overview", "last-scanned", "repo-plan-line", show_breadcrumb=False)
     + """
     <div id="top-error"></div>
-    <div class="dashboard-summary">
-      <div>
-        <div class="dashboard-summary-kicker">Repository watch</div>
-        <h2 id="summary-title">Evidence is loading</h2>
-        <p id="summary-copy">Aletheore is reading the latest AIR packet for this repository. Findings, code ownership, endpoint health, and AIRview all resolve back to scanner evidence.</p>
-      </div>
-      <div class="summary-chip-row">
-        <span class="summary-chip"><i class="ti ti-shield-check" aria-hidden="true"></i><span id="summary-risk">Risk loading</span></span>
-        <span class="summary-chip"><i class="ti ti-git-branch" aria-hidden="true"></i><span id="summary-scans">Scans loading</span></span>
-        <span class="summary-chip"><i class="ti ti-book-2" aria-hidden="true"></i>AIRview</span>
-      </div>
-    </div>
     <div class="stat-strip" id="stat-strip">
       <a class="stat-card" data-href="/security"><div class="stat-label">Open findings</div><div class="stat-value" id="stat-findings">&ndash;</div><div class="stat-delta" id="stat-findings-sub"></div></a>
       <a class="stat-card" data-href="/dead-code"><div class="stat-label">Dead code</div><div class="stat-value" id="stat-deadcode">&ndash;</div><div class="stat-delta" id="stat-deadcode-sub"></div></a>
       <a class="stat-card" data-href="/health"><div class="stat-label">Endpoint uptime</div><div class="stat-value" id="stat-uptime">&ndash;</div><div class="stat-delta" id="stat-uptime-sub"></div></a>
       <div class="stat-card"><div class="stat-label">Modules scanned</div><div class="stat-value" id="stat-modules">&ndash;</div><div class="stat-delta" id="stat-modules-sub"></div></div>
     </div>
-    <section class="section" id="recent-security">
-      <div class="section-head">
-        <div class="section-title"><i class="ti ti-shield-check" aria-hidden="true"></i>Recent security findings</div>
-        <a class="btn" data-href="/security">View all<i class="ti ti-arrow-right" style="font-size:13px;" aria-hidden="true"></i></a>
-      </div>
-      <div class="section-body" id="recent-security-body"><div class="empty-state">Loading&hellip;</div></div>
-    </section>
-    <section class="section" id="usage-section" style="display:none">
-      <div class="section-head">
-        <div class="section-title"><i class="ti ti-chart-bar" aria-hidden="true"></i>Usage</div>
-      </div>
-      <div class="section-body" id="usage-body"></div>
-    </section>
+    <div class="plain-section-head">
+      <h2>Recent findings</h2>
+      <div class="count" id="findings-count"></div>
+    </div>
+    <div id="recent-security-body"><div class="empty-state">Loading&hellip;</div></div>
+    <div class="plain-section-head" id="usage-head" style="display:none">
+      <h2>Usage</h2>
+    </div>
+    <div id="usage-body"></div>
 """
 ) + f"""
+<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
 <script>
 {FETCH_HELPERS}
 {PAGE_HEAD_JS}
 {CONFIRM_UPGRADE_JS}
+{BILLING_ACTIONS_JS}
 document.querySelectorAll('[data-href]').forEach(function (el) {{
   if (el.tagName === 'A' && el.dataset.href) el.href = pageBase + el.dataset.href;
 }});
+window._reloadUsage = loadUsage;
+
+// Same guarded pattern as Settings' own Paddle.Initialize() call - a
+// blocked cdn.paddle.com load must only disable the credit top-up button,
+// never take down the rest of this script (including loadOverview() at
+// the bottom, which renders the whole page).
+if (typeof Paddle !== "undefined") {{
+  Paddle.Environment.set("{get_settings().paddle_environment}");
+  Paddle.Initialize({{
+    token: "{get_settings().paddle_client_token}",
+    eventCallback: function (event) {{
+      const status = document.getElementById('topup-status');
+      if (!status || !event || !event.name) return;
+      if (event.name === 'checkout.loaded') {{
+        status.textContent = '';
+      }} else if (event.name === 'checkout.completed') {{
+        window._creditCheckoutCompleted = true;
+        status.textContent = 'Purchase complete - your balance updates once the payment is confirmed.';
+        status.style.color = 'var(--success)';
+      }} else if (event.name === 'checkout.closed' && !window._creditCheckoutCompleted) {{
+        status.textContent = '';
+      }} else if (event.name === 'checkout.error') {{
+        status.textContent = 'Checkout error - try again.';
+        status.style.color = 'var(--critical)';
+      }}
+    }},
+  }});
+}}
 
 async function loadOverview() {{
   const res = await apiGet(base);
@@ -864,10 +1057,7 @@ async function loadOverview() {{
   const history = data.history || [];
   if (history.length === 0) {{
     document.getElementById('last-scanned').textContent = 'No scans yet';
-    document.getElementById('summary-title').textContent = repo + ' is waiting for its first scan';
-    document.getElementById('summary-copy').textContent = 'Open a pull request or trigger a managed scan to populate evidence, health, and AIRview.';
-    document.getElementById('summary-risk').textContent = 'No evidence yet';
-    document.getElementById('summary-scans').textContent = '0 scans';
+    document.getElementById('findings-count').textContent = '';
     document.getElementById('recent-security-body').innerHTML = '<div class="empty-state">No scans yet - findings will appear after the first pull request is scanned.</div>';
     return;
   }}
@@ -888,12 +1078,7 @@ async function loadOverview() {{
     return (dismissedKeys.static_analysis || []).indexOf(findingIdentityKey('static_analysis', f)) === -1;
   }});
   const totalFindings = secretFindings.length + vulnFindings.length + staticAnalysisFindings.length;
-  document.getElementById('summary-title').textContent =
-    totalFindings === 0 ? repo + ' is clean in the latest scan' : repo + ' has ' + totalFindings + ' open finding' + (totalFindings === 1 ? '' : 's');
-  document.getElementById('summary-copy').textContent =
-    'Latest evidence covers ' + (((evidence.repository || {{}}).modules || []).length) + ' modules, source-mapped findings, dependency signals, and repository history. Use the left rail to drill into the exact file, line, owner, dependency, and risk.';
-  document.getElementById('summary-risk').textContent = totalFindings === 0 ? 'No open findings' : totalFindings + ' open findings';
-  document.getElementById('summary-scans').textContent = history.length + ' scan' + (history.length === 1 ? '' : 's');
+  document.getElementById('findings-count').textContent = totalFindings + ' open';
 
   document.getElementById('stat-findings').textContent = totalFindings;
   document.getElementById('stat-findings').className = 'stat-value' + (totalFindings > 0 ? ' critical' : ' success');
@@ -945,7 +1130,7 @@ async function loadUptimeStat() {{
   const data = await res.json();
   const endpoints = data.endpoints || [];
   if (endpoints.length === 0) {{
-    document.getElementById('stat-uptime').textContent = 'Not configured';
+    document.getElementById('stat-uptime').textContent = '–';
     document.getElementById('stat-uptime-sub').textContent = 'Add a target in Endpoint health';
     return;
   }}
@@ -957,44 +1142,60 @@ async function loadUptimeStat() {{
 }}
 
 async function loadUsage() {{
-  const section = document.getElementById('usage-section');
+  const section = document.getElementById('usage-head');
   const body = document.getElementById('usage-body');
   const res = await apiGet(adminBase);
   if (!res || !res.ok) return;  // free/locked plan - no managed billing to show
   const data = await res.json();
   section.style.display = '';
+  // Headline is base remaining only, measured against the real monthly
+  // allotment - matching index.html's own semantics ($12.40 of $18.00,
+  // purchased credit shown on its own breakdown line below). Mixing
+  // purchased credit into the headline would read as "$40 of $18" after
+  // a large top-up, which is not what "of $18" is supposed to mean.
   const baseCredit = data.base_credit_remaining_usd || 0;
   const topupCredit = data.topup_credit_balance_usd || 0;
-  const combinedCredit = baseCredit + topupCredit;
   const allotment = data.base_credit_allotment_usd || 0;
   const pct = allotment > 0 ? Math.max(0, Math.min(100, Math.round((baseCredit / allotment) * 100))) : 0;
   const hasSubscription = !!data.installation.paddle_subscription_id;
   const renewsAt = data.subscription_renews_at
     ? new Date(data.subscription_renews_at).toLocaleDateString(undefined, {{ month: 'short', day: 'numeric' }})
     : null;
-  // Buy actions link to Settings rather than duplicating buyCredit()/buySeat()'s
-  // real-money Paddle.Checkout.open() logic inline here - Settings is the one
-  // place that flow is hardened (double-click guards, token refresh, error
-  // recovery) and this page's own script has no Paddle SDK loaded to begin with.
+  window._creditTopupPriceId = data.credit_topup_price_id;
   body.innerHTML =
     '<div class="settings-grid">' +
       '<div class="settings-block">' +
         '<div class="settings-block-label">Credit balance</div>' +
-        '<div class="credit-figure">$' + combinedCredit.toFixed(2) + (allotment > 0 ? ' <span class="of">of $' + allotment.toFixed(2) + '</span>' : '') + '</div>' +
+        '<div class="credit-figure">$' + baseCredit.toFixed(2) + (allotment > 0 ? ' <span class="of">of $' + allotment.toFixed(2) + '</span>' : '') + '</div>' +
         (allotment > 0 ? '<div class="credit-meter"><div class="credit-meter-fill" style="width:' + pct + '%"></div></div>' : '') +
         '<div class="credit-breakdown"><span>$' + allotment.toFixed(2) + ' included this month</span>' +
           '<span>' + (topupCredit > 0 ? '+ $' + topupCredit.toFixed(2) + ' purchased, never expires' : '') + '</span>' +
         '</div>' +
-        '<div class="divider-label">buy more credit</div>' +
-        '<a class="btn btn-accent" href="' + pageBase + '/settings">Buy credit</a>' +
+        (data.credit_topup_price_id
+          ? '<div class="divider-label">buy more credit</div>' +
+            '<div class="qty-row">' +
+              '<span class="qty-prefix">$</span>' +
+              '<div class="stepper">' +
+                '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepDown()" aria-label="Decrease amount">&minus;</button>' +
+                '<input type="number" id="topup-amount" min="5" max="1000" step="5" value="10">' +
+                '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepUp()" aria-label="Increase amount">+</button>' +
+              '</div>' +
+              '<button class="btn btn-accent" onclick="buyCredit(this)">Buy credit</button>' +
+            '</div>' +
+            '<div id="topup-status" class="settings-block-hint"></div>' +
+            '<div class="settings-block-hint">$5 minimum &middot; charged once, added immediately</div>'
+          : '<div class="settings-block-hint" style="margin-top:10px;">Buying additional credit is coming soon.</div>') +
       '</div>' +
       '<div class="settings-block">' +
         '<div class="settings-block-label">Team seats</div>' +
         '<div class="settings-block-hint">' + data.seat_limit + ' included &middot; ' + (data.members || []).length + ' in use</div>' +
         '<div class="qty-row" style="margin-top:14px;">' +
-          '<a class="btn" href="' + pageBase + '/settings">Buy extra seat</a>' +
-          '<a class="btn" href="' + pageBase + '/settings">Manage billing</a>' +
+          (hasSubscription
+            ? '<button class="btn" onclick="buySeat(this)">Buy extra seat</button>'
+            : '') +
+          '<button class="btn" onclick="openBillingPortal()">Manage billing</button>' +
         '</div>' +
+        '<div id="seat-billing-status" class="settings-block-hint"></div>' +
         (hasSubscription
           ? '<div class="status-line"><span class="status-dot"></span>Subscription active' + (renewsAt ? ', renews ' + renewsAt : '') + '</div>'
           : '<div class="status-line"><span class="status-dot" style="background:var(--slate-400);"></span>No active subscription</div>') +
@@ -2599,149 +2800,8 @@ async function sendTestPushover() {{
   status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
 }}
 
-async function buySeat(btn) {{
-  // Disabled for the whole round trip, not just re-enabled on failure like
-  // most other buttons on this page: real gap found via audit - buySeat/
-  // removeSeat are the only real-money actions on this page with no
-  // double-click guard at all. A second click landing before the first
-  // response comes back fires a second, genuinely separate POST /seats/buy
-  // - the backend's per-installation lock (admin.py's
-  // _seat_adjustment_lock) only serializes the two against each other, it
-  // does not collapse them into one purchase, so both succeed and the
-  // customer is billed for two extra seats from what looked like one
-  // click. loadSettings() below re-renders this whole section (including
-  // this button) once the real seat count is known, so there is no
-  // separate re-enable path to also get right for the SUCCESS path - but
-  // that reasoning only covers success. Real gap found by Flash Review on
-  // this same change: on a genuine network failure (fetch() itself
-  // rejects, before res/data ever exist) the function exits via an
-  // unhandled exception, loadSettings() never runs, and the button - a
-  // real-money action - stays disabled forever with no page-reload-free
-  // recovery. try/finally re-enables on every exit; harmless on the
-  // success path too, since loadSettings() has already replaced this
-  // button's DOM node by the time finally runs.
-  btn.disabled = true;
-  const status = document.getElementById('seat-billing-status');
-  status.textContent = 'Updating billing...';
-  status.style.color = 'var(--slate-600)';
-  try {{
-    const res = await fetch(adminBase + '/seats/buy', {{ method: 'POST' }});
-    const data = await res.json().catch(function () {{ return {{}}; }});
-    if (res.ok) {{
-      status.textContent = 'Seat added - billing updated. Refreshing...';
-      status.style.color = 'var(--success)';
-      loadSettings();
-    }} else {{
-      status.textContent = data.detail || 'Could not buy a seat.';
-      status.style.color = 'var(--critical)';
-    }}
-  }} finally {{
-    btn.disabled = false;
-  }}
-}}
-
-async function removeSeat(btn) {{
-  // See buySeat's comment - same double-click gap and same network-failure
-  // stuck-button gap, same fix for both.
-  btn.disabled = true;
-  const status = document.getElementById('seat-billing-status');
-  status.textContent = 'Updating billing...';
-  status.style.color = 'var(--slate-600)';
-  try {{
-    const res = await fetch(adminBase + '/seats/remove', {{ method: 'POST' }});
-    const data = await res.json().catch(function () {{ return {{}}; }});
-    if (res.ok) {{
-      status.textContent = 'Seat removed - billing updated. Refreshing...';
-      status.style.color = 'var(--success)';
-      loadSettings();
-    }} else {{
-      status.textContent = data.detail || 'Could not remove a seat.';
-      status.style.color = 'var(--critical)';
-    }}
-  }} finally {{
-    btn.disabled = false;
-  }}
-}}
-
-async function openBillingPortal() {{
-  const status = document.getElementById('seat-billing-status');
-  if (status) {{ status.textContent = 'Opening billing portal...'; status.style.color = 'var(--slate-600)'; }}
-  const res = await fetch(adminBase + '/billing-portal');
-  const data = await res.json().catch(function () {{ return {{}}; }});
-  if (res.ok && data.url) {{
-    window.location.href = data.url;
-    return;
-  }}
-  if (status) {{
-    status.textContent = data.detail || 'Could not open the billing portal.';
-    status.style.color = 'var(--critical)';
-  }}
-}}
-
-async function buyCredit(btn) {{
-  const statusEl = document.getElementById('topup-status');
-  if (typeof Paddle === "undefined") {{
-    statusEl.textContent = 'Checkout is unavailable right now - try disabling any ad/script blocker and reload.';
-    return;
-  }}
-  // parseInt would accept "7.9" (silently truncated to 7) or "1e5" (parsed
-  // as 1) - Number() + an explicit integer check rejects both instead of
-  // quietly charging a different amount than what's on screen.
-  const rawAmount = Number(document.getElementById('topup-amount').value);
-  const amount = Number.isInteger(rawAmount) ? rawAmount : NaN;
-  if (!amount || amount < 5 || amount > 1000) {{
-    statusEl.textContent = 'Enter an amount between $5 and $1000.';
-    return;
-  }}
-  // Real gap found via audit: buySeat/removeSeat both guard against a
-  // rapid double-click firing two independent purchases (see buySeat's
-  // comment); this button had no guard at all - two clicks before the
-  // first apiGet() round trip returns could open two stacked
-  // Paddle.Checkout.open() overlays with two different signed
-  // checkout_installation_tokens. Re-enabled in finally - unlike
-  // buySeat/removeSeat, this button's DOM node is never replaced by a
-  // re-render, so it must actually come back (e.g. the customer closes
-  // the overlay without completing checkout and wants to try again).
-  btn.disabled = true;
-  statusEl.textContent = 'Opening checkout...';
-  statusEl.style.color = '';
-  try {{
-    window._creditCheckoutCompleted = false;
-    // The installation token is minted with a 30-minute TTL (auth.py's
-    // sign_checkout_installation_id) - re-fetch it fresh here instead of
-    // reusing loadSettings()'s page-load-time copy, so a tab left open past
-    // 30 minutes doesn't send Paddle a token the webhook can no longer
-    // resolve (money taken, no credit granted). window._creditTopupPriceId
-    // is a static price id set once at page load and doesn't need refreshing.
-    const res = await apiGet(adminBase);
-    if (!res || !res.ok) {{
-      statusEl.textContent = 'Could not start checkout - try again.';
-      return;
-    }}
-    const data = await res.json();
-    // Associates the checkout with the installation's existing Paddle
-    // customer record (already returned in data.installation, same source
-    // /subscribe's checkout page reads for its own pwCustomer wiring) -
-    // without it, an existing subscriber topping up credit would re-enter
-    // their email and Paddle would silently open a second customer record,
-    // splitting billing history and producing a transaction whose
-    // customer_id the subscription webhook path can't attribute back to
-    // this installation.
-    const paddleCustomerId = data.installation && data.installation.paddle_customer_id;
-    Paddle.Checkout.open({{
-      items: [{{ priceId: window._creditTopupPriceId, quantity: amount }}],
-      customData: {{ installation_token: data.checkout_installation_token }},
-      ...(paddleCustomerId ? {{ customer: {{ id: paddleCustomerId }} }} : {{}}),
-      settings: {{
-        displayMode: 'overlay',
-        variant: 'one-page',
-        successUrl: 'https://app.aletheore.com/dashboard',
-      }},
-    }});
-  }} finally {{
-    btn.disabled = false;
-  }}
-}}
+{BILLING_ACTIONS_JS}
+window._reloadUsage = loadSettings;
 
 // The danger zone renders on every plan, including free and lapsed - the
 // settings page 402s those customers out of everything else, but locking
@@ -3507,7 +3567,7 @@ async def dashboard_overview_page(org: str, repo: str, request: Request):
     redirect = await _require_session_or_redirect(request)
     if redirect is not None:
         return redirect
-    return _no_store_html(OVERVIEW_HTML)
+    return _no_store_html(_overview_html())
 
 
 @frontend_router.get("/dashboard/{org}/{repo}/security", response_class=HTMLResponse)
