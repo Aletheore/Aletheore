@@ -52,6 +52,12 @@ MERMAID_SCRIPT = (
     'crossorigin="anonymous"></script>'
 )
 
+# The real Aletheore mark (website/assets/logo-mark.png, downscaled to 96px so it stays crisp at 2x)
+# inlined as a data URI: the dashboard is served from app.aletheore.com, not the marketing site, and
+# the CSP already allows data: images. The approved mockups drew a placeholder "A" in a box here;
+# that placeholder was copied into production by mistake and is not the brand.
+BRAND_MARK_DATA_URI = "data:image/png;base64,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"
+
 STYLE = """
 <style>
 :root {
@@ -138,6 +144,14 @@ a { color: var(--accent); }
 .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .btn-accent { background: var(--accent); color: #FFFFFF; border-color: var(--accent); }
 .btn-accent:hover { background: var(--accent-strong); }
+/* docs.html's own .btn is solid dark (a different default than the
+   shared outline .btn most pages use for less-primary actions,
+   confirmed by comparing docs.html/index.html/flash.html - all solid -
+   against endpoints.html - outline, matching the shared default).
+   Scoped to this one button rather than touching the shared class,
+   which many other, non-primary buttons across every page also use. */
+#docs-download-link { background: var(--ink-900); color: #FBFAF7; border-color: var(--ink-900); font-size: 13px; font-weight: 600; padding: 8px 14px; }
+#docs-download-link:hover { background: var(--ink-700); }
 .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 500; padding: 2px 9px; border-radius: 4px; }
 .stepper { display: inline-flex; align-items: center; border: 1px solid var(--border-strong); border-radius: 4px; overflow: hidden; vertical-align: middle; }
 .stepper button { font-family: var(--font-mono); font-size: 15px; font-weight: 600; width: 30px; height: 30px; border: none; background: var(--paper);
@@ -175,34 +189,49 @@ a { color: var(--accent); }
 .copy-box .field { font-size: 11.5px; }
 
 /* ---- Dashboard shell ---- */
-.shell { display: grid; grid-template-columns: 238px minmax(0, 1fr); min-height: 100vh; }
-.sidebar { background: var(--slate-100); border-right: 1px solid var(--border); padding: 1rem; display: flex; flex-direction: column; gap: 1.45rem; position: sticky; top: 0; height: 100vh; }
-.org-switch { display: flex; align-items: center; gap: 9px; padding: 9px; border: 1px solid var(--border); border-radius: 4px; background: var(--paper); text-decoration: none; color: inherit; }
-.org-avatar { width: 22px; height: 22px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-strong); font-size: 11px; font-weight: 500; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.org-switch-label { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.org-switch-sub { font-size: 11px; color: var(--slate-600); }
-.nav-group-label { font-size: 11px; color: var(--slate-400); padding: 0 8px; margin-bottom: 6px; }
+.shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100vh; }
+.sidebar { border-right: 1px solid var(--border); padding: 20px 14px; display: flex; flex-direction: column; gap: 1.45rem; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+/* An org with many repos used to push "This repository", Settings and Sign out below the
+   fold, so reaching them meant scrolling the whole page. The repo list is now the one region
+   that shrinks and scrolls on its own; every other block keeps its size and stays in view. */
+.sidebar > * { flex-shrink: 0; }
+.sidebar > .nav-scroll { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.nav-scroll > .nav-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 0 6px; }
+.brand-mark { display: block; width: 28px; height: 28px; border-radius: 7px; flex-shrink: 0; }
+.brand-name { font-weight: 700; font-size: 20px; letter-spacing: -0.01em; }
+.nav-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--slate-400); flex-shrink: 0; }
+.nav-dot.paid { background: var(--accent); }
+.nav-group-label { font-size: 11px; color: var(--slate-400); padding: 0 8px 6px; }
 .nav-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
-.nav-item { display: flex; align-items: center; gap: 9px; padding: 8px 9px; border-radius: 4px; font-size: 13.5px; color: var(--ink-700); text-decoration: none; transition: background-color 0.12s ease, color 0.12s ease; }
+.nav-item { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 4px; font-size: 13px; color: var(--ink-700); text-decoration: none; transition: background-color 0.12s ease, color 0.12s ease; }
 .nav-item i { font-size: 16px; color: var(--ink-700); opacity: 0.95; }
 .nav-item:hover { background: var(--paper); }
-.nav-item.active { background: var(--accent-soft); color: var(--accent-strong); font-weight: 500; }
-.nav-item.active i { color: var(--accent-strong); }
+/* flash.html's own active nav item (verified against a real measurement:
+   mockup wants ink text at 600 weight over a 6% accent tint, not an
+   accent-colored label) - shell-wide, since every page shares this sidebar
+   markup. */
+.nav-item.active { background: color-mix(in srgb, var(--accent) 6%, var(--paper)); color: var(--ink-900); font-weight: 600; }
+.nav-item.active i { color: var(--ink-900); }
 .nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.nav-item.disabled { cursor: default; }
+.nav-item.disabled:hover { background: none; }
 .plan-badge-wrap { margin-top: auto; }
 .plan-card { background: var(--paper); border: 1px solid var(--border); border-radius: 4px; padding: 12px; }
 .plan-name { font-size: 12px; font-weight: 500; display: flex; align-items: center; gap: 6px; text-transform: capitalize; }
 .plan-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 .plan-sub { font-size: 11px; color: var(--slate-600); margin-top: 3px; line-height: 1.5; }
 
-.main { padding: 1.7rem 2rem 3.25rem; min-width: 0; max-width: 1180px; margin: 0 auto; width: 100%; }
+.main { padding: 32px 48px 60px; min-width: 0; max-width: 1180px; margin: 0 auto; width: 100%; }
 .topbar { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: 1.4rem; flex-wrap: wrap; }
 .breadcrumb { font-size: 12px; color: var(--slate-600); }
 .breadcrumb b { color: var(--ink-900); font-weight: 500; }
 .breadcrumb a { color: var(--slate-600); text-decoration: none; }
 .breadcrumb a:hover { color: var(--ink-900); }
-.h1 { font-size: 26px; font-weight: 720; margin: 3px 0 0; }
-.topbar-right { font-size: 12px; color: var(--slate-600); }
+.h1 { font-size: 20px; font-weight: 650; letter-spacing: -0.01em; margin: 3px 0 0; }
+.repo-path { font-family: var(--font-mono); font-size: 13px; color: var(--slate-600); }
+.page-sub { font-size: 13px; color: var(--slate-600); margin-top: 4px; }
+.topbar-right { font-size: 12px; color: var(--slate-400); font-family: var(--font-mono); }
 
 .dashboard-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
   margin-bottom: 1.15rem; border: 1px solid var(--border); border-radius: 4px;
@@ -216,23 +245,66 @@ a { color: var(--accent); }
   background: var(--slate-100); padding: 7px 10px; color: var(--ink-700); font-size: 12px; white-space: nowrap; }
 .summary-chip i { color: var(--accent-strong); font-size: 14px; }
 
-.stat-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 1.7rem; }
-.stat-card { background: var(--paper); border: 1px solid var(--border); border-radius: 4px; padding: 15px; text-decoration: none; color: inherit; display: block; transition: background-color 0.12s ease, border-color 0.12s ease; }
-a.stat-card:hover { border-color: var(--border-strong); background: var(--slate-100); }
+/* Adjacent vertical margins collapse to the LARGER value, they do not
+   add - .topbar's shared margin-bottom (22.4px) and this margin-top
+   collapse through #top-error's empty div between them. 28px here (not
+   22.4px + a delta) is what actually produces a 28px gap, matching
+   index.html's page-head-to-strip spacing. Scoped to #stat-strip rather
+   than raising .topbar itself, since other pages' own mockups want
+   different values there (endpoints.html's page-head is 24px, for one). */
+.stat-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; margin-top: 28px; margin-bottom: 1.7rem; }
+/* Endpoint health's 3-cell aggregate row - shares .stat-card/.stat-label/
+   .stat-value (identical cell treatment to Overview's own stat-strip,
+   confirmed by measuring both mockups) via its own grid column count and
+   page-specific vertical rhythm (24px above from endpoints.html's own
+   .page-head margin-bottom, 28px below to the first .section, both
+   margin-top on this element to collapse-to-larger against .topbar's
+   shared margin-bottom rather than stack on top of it). */
+.summary-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; margin-top: 24px; margin-bottom: 28px; }
+/* endpoints.html's own .summary-label/.summary-value gap is 8px, via the
+   label's margin-bottom, not the value's margin-top (which is 0, with
+   the value's line-height set to 1 explicitly) - scoped to #summary-row
+   rather than changing the shared .stat-label/.stat-value (also used by
+   Overview's own stat-strip, already pixel-measured and approved at a
+   different gap value; touching the shared rule would regress it). */
+#summary-row .stat-label { margin-bottom: 8px; }
+#summary-row .stat-value { margin-top: 0; line-height: 1; }
+#summary-row .stat-value .of { font-size: 15px; color: var(--slate-400); font-weight: 500; margin-left: 4px; }
+.stat-card { background: var(--paper); border-right: 1px solid var(--border); padding: 16px 18px; text-decoration: none; color: inherit; display: block; transition: background-color 0.12s ease; }
+.stat-card:last-child { border-right: none; }
+a.stat-card:hover { background: var(--slate-50); }
 a.stat-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .stat-label { font-size: 12px; color: var(--slate-600); }
-.stat-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 27px; font-weight: 720; margin-top: 5px; }
+.stat-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 26px; font-weight: 650; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .stat-value.critical { color: var(--critical); }
 .stat-value.warning { color: var(--warning); }
 .stat-value.success { color: var(--success); }
-.stat-delta { font-size: 11.5px; color: var(--slate-600); margin-top: 3px; }
+.stat-delta { font-size: 11px; color: var(--slate-400); margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .section { background: var(--paper); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 1.15rem; scroll-margin-top: 1rem; overflow: hidden; }
 .section-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 18px; border-bottom: 1px solid var(--border); gap: 1rem; flex-wrap: wrap; }
 .section-title { font-size: 14.5px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
 .section-title i { font-size: 16px; color: var(--slate-400); }
 .section-sub { font-size: 12px; color: var(--slate-600); }
+/* airview.html's own intro line is left plain (16px/400, ink), not the
+   muted-caption treatment .section-sub uses elsewhere on this same page
+   (the wiki section's "Regenerated automatically..." caption) - a
+   different, unmuted role for this one line, and the graph card sits
+   directly under it with no gap. */
+.airview-sub { font-size: 16px; font-weight: 400; color: var(--ink-900); margin: 0; }
 .section-body { padding: 8px 18px 16px; }
+.plain-section-head { display: flex; align-items: center; justify-content: space-between; margin: 0 0 12px; }
+.plain-section-head h2 { font-size: 14px; font-weight: 650; margin: 0; }
+.plain-section-head .count { font-family: var(--font-mono); font-size: 12px; color: var(--slate-600); }
+/* Overriding via margin-top on the head itself (not the previous element's
+   margin-bottom) so the two collapse to whichever is larger, matching
+   index.html's own per-gap measurements - #findings-head sits below
+   #stat-strip (27.2px margin-bottom) needing a 36px gap, #usage-head sits
+   below .finding-list (27.2px margin-bottom) needing a 40px gap, and
+   collapsing is exactly what makes max(27.2, 36)/max(27.2, 40) work
+   instead of stacking on top of the existing margin. */
+#findings-head { margin-top: 36px; }
+#usage-head { margin-top: 40px; }
 
 table.findings { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.findings th { text-align: left; font-size: 11px; color: var(--slate-400); font-weight: 500; padding: 8px 8px; border-bottom: 1px solid var(--border); }
@@ -245,36 +317,85 @@ table.findings tr:last-child td { border-bottom: none; }
 .sev-stripe.warning { background: var(--warning); }
 .sev-stripe.neutral { background: var(--slate-400); }
 
+.finding-list { border: 1px solid var(--border); border-radius: 4px; overflow: hidden; margin-bottom: 1.7rem; }
+.finding-row { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 13px 16px; border-bottom: 1px solid var(--border); transition: background-color 0.12s ease; }
+.finding-row:last-child { border-bottom: none; }
+.finding-row:hover { background: var(--slate-50); }
+.sev-dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
+.sev-dot.critical { background: var(--critical); }
+.sev-dot.warning { background: var(--warning); }
+.sev-dot.minor { background: var(--slate-400); }
+.finding-row .msg { font-size: 13.5px; line-height: 1.5; }
+.finding-row .cite { font-family: var(--font-mono); font-size: 12px; color: var(--slate-600); margin-top: 4px; overflow-wrap: anywhere; }
+.finding-row .tool { font-family: var(--font-mono); font-size: 11px; color: var(--slate-400); border: 1px solid var(--border); border-radius: 3px; padding: 2px 6px; white-space: nowrap; align-self: start; }
+
 .deadcode-list, .dep-list { display: flex; flex-direction: column; }
 .deadcode-row { display: flex; align-items: baseline; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px; flex-wrap: wrap; }
 .deadcode-row:last-child { border-bottom: none; }
 .deadcode-path { font-family: var(--font-mono); font-size: 12.5px; flex: 1 1 320px; min-width: 0; overflow-wrap: anywhere; }
 .deadcode-meta { font-size: 11.5px; color: var(--slate-600); }
 
-.health-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.health-row { display: flex; align-items: center; gap: 10px; padding: 10px 11px; background: var(--slate-100); border: 1px solid var(--border); border-radius: 9px; }
-.health-status { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.health-status.up { background: var(--success); }
-.health-status.down { background: var(--critical); }
-.health-endpoint { font-family: var(--font-mono); font-size: 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.health-latency { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 11.5px; color: var(--slate-600); }
-.health-checked { font-size: 10.5px; color: var(--slate-400); white-space: nowrap; }
+/* endpoints.html's flat, bordered row-list treatment - .health-grid used
+   to be a 2-column tile grid of rounded, slate-100-filled cards; each
+   target group now gets its own bordered .endpoint-list-style box, and
+   rows use endpoints.html's own 4-column grid (method tag, path, latency,
+   status pill) instead of a tile. Real per-target grouping (a mockup
+   with no target concept doesn't have to solve for) is preserved - only
+   the row/list chrome changed, not the grouping structure. */
+/* endpoints.html's own row treatment, reused by class name directly
+   (.method/.path/.latency/.status-pill) rather than reinvented - real
+   per-target grouping (a mockup with no target concept doesn't have to
+   solve for) is preserved via .health-grid/.health-target-group*, only
+   the row/list chrome inside each group changed to match the mockup. */
+.health-grid { border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.health-row { display: grid; grid-template-columns: 54px minmax(0, 1fr) auto auto; gap: 14px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.health-row:last-child { border-bottom: none; }
+.method { font-family: var(--font-mono); font-size: 11px; font-weight: 700; text-align: center; padding: 2px 0; border-radius: 3px; border: 1px solid var(--border-strong); color: var(--slate-600); }
+.method.get { color: #2E6B8A; border-color: #2E6B8A; }
+.method.post { color: var(--success); border-color: var(--success); }
+.method.delete { color: var(--critical); border-color: var(--critical); }
+.method.put, .method.patch { color: var(--warning); border-color: var(--warning); }
+.path { font-family: var(--font-mono); font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.path .file { color: var(--slate-400); font-size: 11.5px; margin-left: 8px; }
+.latency { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 12px; color: var(--slate-600); white-space: nowrap; }
+.status-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
+.status-pill .dot { width: 7px; height: 7px; border-radius: 50%; }
+.status-pill.up .dot { background: var(--success); }
+.status-pill.down .dot { background: var(--critical); }
+.status-pill.up { color: var(--success); }
+.status-pill.down { color: var(--critical); }
 .health-target-group { margin-bottom: 1.2rem; }
 .health-target-group:last-child { margin-bottom: 0; }
 .health-target-group-label { font-size: 12px; font-weight: 500; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
 .health-history { grid-column: 1 / -1; background: var(--slate-50); border-radius: 8px; padding: 8px 10px; margin: -4px 0 4px; }
 .health-history-list { display: flex; flex-direction: column; gap: 5px; }
 .health-history-row { display: flex; align-items: center; gap: 10px; font-size: 11.5px; }
+.health-checked { font-size: 11.5px; color: var(--slate-400); white-space: nowrap; }
 
 .wiki-banner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; background: var(--slate-100); border: 1px solid var(--border); border-radius: 4px; padding: 13px 15px; margin: 10px 0 14px; flex-wrap: wrap; }
 .wiki-banner-text { font-size: 12.5px; color: var(--ink-700); line-height: 1.5; max-width: 46ch; }
 .wiki-banner-text b { font-weight: 600; color: var(--ink-900); }
-.docs-overview { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center; border: 1px solid var(--border);
-  border-radius: 4px; padding: 16px; margin: 10px 0 16px; background: var(--paper); }
-.docs-overview-kicker { font-size: 11px; font-weight: 720; color: var(--accent-strong); }
-.docs-overview h2 { margin: 5px 0 5px; font-size: 20px; line-height: 1.2; }
-.docs-overview p { margin: 0; color: var(--slate-600); font-size: 13px; line-height: 1.55; max-width: 72ch; }
-.docs-overview-stats { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+/* docs.html's own plain stat-row (mono number + label pills) - replaces
+   the earlier .docs-overview kicker/heading/description card, which the
+   mockup has no equivalent of. */
+.stat-row { display: flex; gap: 24px; margin: 20px 0 28px; flex-wrap: wrap; }
+.stat-pill { font-family: var(--font-mono); }
+.stat-pill .n { font-size: 20px; font-weight: 650; }
+.stat-pill .l { font-size: 11.5px; color: var(--slate-600); font-family: var(--font-sans); margin-left: 6px; }
+/* docs.html's two-column layout: main content plus a sticky right rail
+   (Recently updated / Hotspots / Jump to). */
+.main-grid { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 44px; align-items: start; }
+.main-col { min-width: 0; }
+.rail { display: flex; flex-direction: column; gap: 20px; position: sticky; top: 32px; min-width: 0; }
+.rail-card { border: 1px solid var(--border); border-radius: 4px; padding: 14px 16px; background: var(--paper); }
+.rail-card h3 { font-size: 12px; font-weight: 650; margin: 0 0 10px; color: var(--slate-600); }
+.rail-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+.rail-row:last-child { border-bottom: none; padding-bottom: 0; }
+.rail-row .path { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-900); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.rail-row .meta { color: var(--slate-400); font-size: 11px; white-space: nowrap; flex-shrink: 0; }
+.rail-card a.rail-link { display: block; font-size: 12.5px; color: var(--slate-600); text-decoration: none; padding: 5px 0; }
+.rail-card a.rail-link:hover { color: var(--accent); }
+@media (max-width: 880px) { .main-grid { grid-template-columns: minmax(0, 1fr); } .rail { position: static; } }
 .docs-stat-pill { min-width: 104px; border: 1px solid var(--border); border-radius: 4px; background: var(--slate-100);
   padding: 10px 12px; }
 .docs-stat-value { font-family: var(--font-mono); font-size: 18px; font-weight: 720; color: var(--ink-900); }
@@ -282,24 +403,29 @@ table.findings tr:last-child td { border-bottom: none; }
 .docs-status-banner { border: 1px solid var(--border); border-radius: 4px; padding: 12px 14px; margin: 0 0 14px; font-size: 12.5px; line-height: 1.55; }
 .docs-status-banner.failed { border-color: var(--critical); background: var(--critical-soft); color: var(--critical); }
 .docs-status-banner.partial { border-color: var(--warning); background: var(--warning-soft); color: var(--warning); }
-.docs-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
-.docs-module-card { border: 1px solid var(--border); border-radius: 4px; background: var(--paper);
-  overflow: hidden; transition: border-color 0.15s ease, background-color 0.15s ease; }
-.docs-module-card[open] { grid-column: 1 / -1; border-color: var(--accent); }
-.docs-module-summary { list-style: none; cursor: pointer; padding: 14px 15px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; }
+/* docs.html's own flat-row module list, replacing the earlier 2-column
+   card grid - the mockup's own callout confirms the intent was a flat
+   bordered row with a rotating chevron, not a card-with-shadow rebuild. */
+.docs-grid { display: flex; flex-direction: column; }
+.docs-module-card { border: 1px solid var(--border); border-radius: 4px; margin-bottom: 8px; background: var(--paper); }
+.docs-module-summary { list-style: none; cursor: pointer; padding: 14.5px 16px; display: flex; align-items: center; gap: 12px; }
 .docs-module-summary::-webkit-details-marker { display: none; }
-.docs-module-title { display: flex; align-items: center; gap: 9px; min-width: 0; }
-.docs-module-title i { color: var(--accent-strong); font-size: 17px; flex-shrink: 0; }
-.docs-module-path { font-family: var(--font-mono); font-size: 12.5px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.docs-module-sub { margin-top: 4px; font-size: 11.5px; color: var(--slate-600); }
-.docs-module-meta { display: flex; align-items: center; gap: 7px; justify-content: flex-end; flex-wrap: wrap; }
-.docs-chip { display: inline-flex; align-items: center; gap: 5px; border-radius: 4px; padding: 4px 8px; background: var(--slate-100); color: var(--slate-600); font-size: 11px; white-space: nowrap; }
-.docs-chip.ai { background: var(--accent-soft); color: var(--accent-strong); }
-.docs-module-chevron { color: var(--slate-400); font-size: 16px; transition: transform 0.15s ease; }
-.docs-module-card[open] .docs-module-chevron { transform: rotate(180deg); }
-.docs-module-content { border-top: 1px solid var(--border); background: var(--slate-50); padding: 14px; }
-.docs-module-body { white-space: pre-wrap; font-size: 12px; line-height: 1.7; padding: 14px; margin: 0; font-family: var(--font-mono); color: var(--ink-700);
-  overflow-x: auto; border: 1px solid var(--border); border-radius: 4px; background: var(--slate-100); }
+.docs-module-chevron { font-family: var(--font-mono); font-size: 11px; color: var(--slate-400); transition: transform 0.15s ease; flex-shrink: 0; }
+.docs-module-card[open] .docs-module-chevron { transform: rotate(90deg); }
+.docs-module-path { font-family: var(--font-mono); font-size: 13px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docs-chip { font-family: var(--font-mono); font-size: 10.5px; color: var(--slate-600); border: 1px solid var(--border-strong); border-radius: 3px; padding: 1px 6px; flex-shrink: 0; }
+.docs-module-content { padding: 0 16px 16px 42px; border-top: 1px solid var(--border); }
+.docs-module-content-inner { font-size: 12px; color: var(--slate-600); padding: 14px 0 0; min-width: 0; }
+.docs-symbol-row { border-bottom: 1px solid var(--border); padding: 10px 0; min-width: 0; }
+.docs-symbol-row:last-child { border-bottom: none; }
+.docs-symbol-row .sig { font-family: var(--font-mono); font-size: 12.5px; padding: 3px 0; overflow-wrap: anywhere; min-width: 0; }
+.docs-symbol-row .sig .name { color: var(--ink-900); }
+.docs-symbol-row .sig .kind { color: var(--slate-400); margin-left: 8px; font-family: var(--font-sans); }
+.docs-symbol-row .desc { font-size: 12.5px; line-height: 1.6; color: var(--slate-600); margin: 6px 0; max-width: 72ch; overflow-wrap: anywhere; min-width: 0; }
+.docs-symbol-row .cite { font-family: var(--font-mono); font-size: 11px; color: var(--slate-400); overflow-wrap: anywhere; min-width: 0; }
+.docs-symbol-row .flag { font-size: 11px; margin-left: 8px; }
+.docs-symbol-row .flag.undocumented { color: var(--slate-400); font-style: italic; }
+.docs-symbol-row .flag.ai { color: var(--accent-strong); }
 .docs-commit-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid var(--border); border-radius: 4px; padding: 14px;
   background: var(--paper); }
 .docs-commit-copy { min-width: 0; }
@@ -307,10 +433,13 @@ table.findings tr:last-child td { border-bottom: none; }
 .docs-commit-desc { font-size: 12.5px; color: var(--slate-600); line-height: 1.55; }
 .docs-commit-desc a { font-weight: 650; }
 .diagram-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 4px; background: var(--slate-50); padding: 14px; }
-.graph-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+.graph-card { border: 1px solid var(--border); border-radius: 4px; background: var(--paper); margin-bottom: 23px; }
+.graph-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .graph-toolbar select { font-family: var(--font-sans); font-size: 12.5px; border: 1px solid var(--border-strong); border-radius: 4px; padding: 6px 8px; background: var(--paper); color: var(--ink-900); }
-.graph-toolbar .hint { font-size: 11.5px; color: var(--slate-400); font-family: var(--font-mono); }
-svg#depgraph { width: 100%; height: 440px; display: block; border: 1px solid var(--border); border-radius: 4px; background: var(--paper); cursor: grab; }
+.graph-toolbar .hint { font-size: 12px; color: var(--slate-400); font-family: var(--font-mono); }
+#graph-reset-btn { font-weight: 600; padding: 7px 12px; }
+.graph-wrap { position: relative; }
+svg#depgraph { width: 100%; height: 460px; display: block; background: var(--paper); cursor: grab; }
 svg#depgraph:active { cursor: grabbing; }
 .g-node circle { fill: var(--paper); stroke: var(--ink-900); stroke-width: 1.4; cursor: grab; }
 .g-node.hub circle { stroke: var(--accent); stroke-width: 1.8; }
@@ -321,7 +450,11 @@ svg#depgraph:active { cursor: grabbing; }
 .g-edge.g-edge-ambiguous { stroke-dasharray: 3 3; }
 .g-edge.dim { stroke: var(--border); }
 .g-edge.lit { stroke: var(--accent); stroke-width: 1.4; }
-.graph-hover-info { margin-top: 8px; font-family: var(--font-mono); font-size: 12px; color: var(--slate-600); min-height: 16px; }
+.graph-hover-info { padding: 10px 16px; border-top: 1px solid var(--border); font-family: var(--font-mono); font-size: 12px; color: var(--slate-600); min-height: 16px; }
+.cluster-item { border: 1px solid var(--border); border-radius: 4px; padding: 12px 14px; background: var(--paper); margin-bottom: 20px; }
+.cluster-item .name { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.cluster-item .count { font-family: var(--font-mono); font-size: 11.5px; color: var(--slate-600); }
+.callout { border: 1px solid var(--border); border-left: 2px solid var(--slate-600); padding: 12px 14px; font-size: 12.5px; color: var(--slate-600); line-height: 1.55; margin-bottom: 20px; border-radius: 0 4px 4px 0; }
 .diagram-wrap .mermaid { display: flex; justify-content: center; min-width: max-content; }
 .diagram-wrap.diagram-zoomable { cursor: zoom-in; }
 .diagram-wrap.diagram-zoomable::after { content: "Click to open full diagram"; display: block; margin-top: 8px; color: var(--slate-400); font-size: 11px; text-align: center; }
@@ -365,9 +498,82 @@ svg#depgraph:active { cursor: grabbing; }
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; align-items: start; }
 .settings-section { margin-top: 24px; }
 .settings-block { background: var(--paper); border: 1px solid var(--border); border-radius: 4px;
-  padding: 16px 18px; margin-bottom: 16px; }
-.settings-block-label { font-size: 13px; font-weight: 600; margin-bottom: 9px; }
-.settings-block-hint { font-size: 11px; color: var(--slate-600); margin-top: 6px; }
+  padding: 18px 20px; margin-bottom: 16px; }
+.settings-block-label { font-size: 13px; font-weight: 600; margin-bottom: 14px; }
+.settings-block-hint { font-size: 11px; color: var(--slate-600); margin-top: 6px; line-height: 1.5; }
+/* Overview's seats block renders an empty #seat-billing-status hint div
+   between the button row and the status line (populated only after a
+   buySeat/removeSeat click) - real gap found while pixel-matching the
+   seats block height against index.html's own seats block, which has no
+   such element: an empty block-level div still takes up a full
+   line-height + margin-top even with no text, adding height the mockup
+   never accounted for. */
+.settings-block-hint:empty { display: none; }
+.credit-figure { font-family: var(--font-mono); font-size: 34px; font-weight: 650; letter-spacing: -0.01em; line-height: 1; }
+.credit-figure .of { font-size: 14px; color: var(--slate-600); font-weight: 500; margin-left: 6px; }
+.credit-meter { height: 4px; border-radius: 2px; background: var(--border); margin: 14px 0 4px; overflow: hidden; }
+.credit-meter-fill { height: 100%; background: var(--accent); }
+.credit-breakdown { font-size: 11px; color: var(--slate-400); display: flex; justify-content: space-between; }
+/* #usage-body scopes this to Overview only (its id is unique to that page)
+   rather than raising the shared .settings-block-hint font-size, which
+   Settings' own many hint lines also use and hasn't been measured against
+   any mockup - index.html's dedicated .block-hint is 12px, 1px larger
+   than the shared 11px default. */
+#usage-body .settings-block-hint { font-size: 12px; }
+.divider-label { font-size: 11px; color: var(--slate-400); margin: 20px 0 12px; display: flex; align-items: center; gap: 10px; }
+.divider-label::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.qty-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.qty-prefix { font-family: var(--font-mono); font-size: 13px; color: var(--slate-600); }
+.status-line { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--slate-600); margin-top: 4px; }
+.status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
+/* ---- Flash dashboard (the credits page) - flash.html's own vocabulary
+   not otherwise shared. Everything else on that page (settings-grid,
+   credit-figure/meter, stepper, status-line) reuses Overview's already-
+   ported classes above. */
+.plan-pill { font-family: var(--font-mono); font-size: 11px; color: var(--slate-600); border: 1px solid var(--border-strong); border-radius: 3px; padding: 2px 7px; margin-left: 8px; vertical-align: middle; }
+.credit-hero { border: 1px solid var(--border); border-radius: 4px; padding: 22px 24px; background: var(--paper); margin-top: 28px; margin-bottom: 32px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px; align-items: center; }
+.credit-hero .credit-figure { font-size: 38px; }
+.credit-hero .credit-figure .of { font-size: 17px; }
+.credit-hero .credit-meter { max-width: 420px; margin: 16px 0 6px; }
+.credit-hero .credit-sub { font-size: 12px; color: var(--slate-600); }
+.credit-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+.credit-actions .qty-row { gap: 10px; }
+.credit-actions .stepper input[type="number"] { width: 46px; }
+/* flash.html's own .btn is 13px/600/8px-14px, a different size than the
+   shared default most pages use - scoped to this page's two hero/upgrade
+   buttons rather than touching the shared class, same reasoning as Docs'
+   own #docs-download-link scoping. Manage billing and Save keep the
+   smaller mockup-specified size, applied after so it wins the tie. */
+.credit-hero .btn, .upgrade-card .btn { font-size: 13px; font-weight: 600; padding: 8px 14px; }
+.credit-actions .btn-small { font-size: 12px; font-weight: 600; padding: 6px 10px; }
+#alert-email-save { font-size: 12px; font-weight: 600; padding: 6px 10px; }
+#topup-button { color: #FBFAF7; }
+#alert-email-input { background: #FBFAF7; font-family: var(--font-sans); font-size: 13px; }
+#flash-settings-grid { gap: 20px; }
+/* margin-bottom here is a real margin-collapse fix (same category as the
+   Docs work): a .form-row margin-top can never win this collapse against
+   the label's own larger margin-bottom (the max of the two adjacent
+   margins governs, not either set independently) - the label's own
+   margin-bottom is the side that actually has to move to close the
+   label-to-input gap by 2px. */
+#flash-settings-grid .settings-block-label { font-weight: 650; margin-bottom: 11px; }
+#flash-settings-grid .status-line { margin-top: 10px; }
+.install-tag { margin-left: auto; font-size: 10px; color: var(--slate-400); }
+.review-list { border: 1px solid var(--border); border-radius: 4px; overflow: hidden; margin-bottom: 32px; }
+.review-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto auto; gap: 14px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border); text-decoration: none; color: inherit; }
+.review-row:last-child { border-bottom: none; }
+.review-row:hover { background: var(--slate-100); }
+.review-status { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.review-status.commented { background: var(--warning); }
+.review-status.clean { background: var(--success); }
+.review-status.skipped, .review-status.failed { background: var(--slate-400); }
+.review-title { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.review-title .repo { color: var(--slate-600); font-family: var(--font-mono); font-size: 12px; margin-left: 6px; }
+.review-meta { font-size: 12px; color: var(--slate-600); font-family: var(--font-mono); white-space: nowrap; }
+.review-cost { font-size: 12px; color: var(--slate-400); font-family: var(--font-mono); white-space: nowrap; }
+.upgrade-card { border: 1px solid var(--border); border-radius: 4px; padding: 20px 22px; display: flex; justify-content: space-between; align-items: center; gap: 20px; flex-wrap: wrap; }
+.upgrade-card h3 { font-size: 14px; margin: 0 0 6px; font-weight: 650; }
+.upgrade-card p { font-size: 12.5px; color: var(--slate-600); margin: 0; max-width: 56ch; line-height: 1.55; }
 .settings-help-links { display: flex; gap: 14px; margin-top: 8px; }
 .settings-help-links a { font-size: 11px; color: var(--accent-strong); text-decoration: none; font-weight: 500; }
 .settings-help-links a:hover { text-decoration: underline; }
@@ -392,9 +598,11 @@ svg#depgraph:active { cursor: grabbing; }
 .claim-option { display: flex; align-items: center; gap: 9px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 4px; }
 .claim-option input { accent-color: var(--accent); }
 
-@media (max-width: 720px) {
+@media (max-width: 860px) {
   .shell { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; flex-direction: column; overflow: visible; }
+  .sidebar { position: static; height: auto; flex-direction: column; overflow: visible; border-right: none; border-bottom: 1px solid var(--border); }
+  .sidebar > .nav-scroll { flex: none; }
+  .nav-scroll > .nav-list { overflow: visible; }
   .nav-list { flex-direction: row; flex-wrap: wrap; }
   .nav-item { white-space: nowrap; }
   .main { padding: 1.2rem 1rem 2.5rem; }
@@ -402,11 +610,51 @@ svg#depgraph:active { cursor: grabbing; }
   .summary-chip-row { justify-content: flex-start; }
   .stat-strip { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .health-grid, .subsystem-grid, .settings-grid, .docs-grid { grid-template-columns: 1fr; }
+  .credit-hero { grid-template-columns: minmax(0, 1fr); }
+  .credit-actions { align-items: flex-start; }
   .docs-overview, .docs-module-summary, .docs-commit-card { grid-template-columns: 1fr; }
   .docs-overview-stats, .docs-module-meta { justify-content: flex-start; }
   .picker-head { align-items: flex-start; gap: 1rem; flex-direction: column; }
   .diagram-zoom-toolbar { left: 14px; right: 14px; transform: none; justify-content: center; flex-wrap: wrap; border-radius: 14px; }
   .diagram-zoom-hint { order: 2; width: 100%; text-align: center; }
+}
+
+/* Real bug found at a true 375px viewport (device-emulated, not a window
+   resize): 4 narrow .stat-strip cells (Overview) or 3 narrow
+   #summary-row cells (Endpoint health) squeeze .stat-value's 26px mono
+   figure past its own cell width, and .stat-value's overflow/ellipsis
+   rule (there to truncate a long text value like "Not configured")
+   silently clips a NUMBER instead ("98.7%" rendering as "98.…") - a
+   truncated stat is actively misleading, never acceptable, unlike a
+   truncated label or path. Shrinking the figure and cell padding a
+   further step below 860px's existing 2-column reflow keeps every
+   digit visible instead. */
+@media (max-width: 600px) {
+  .stat-card { padding: 12px; }
+  .stat-value { font-size: 20px; }
+  /* 3 narrow columns is tighter than Overview's own 4-strip (which only
+     drops to 2 columns, never lower) - stacking to one column is the
+     safer of the peer's two suggested fixes for this specific row count
+     at this width, guaranteed not to clip regardless of exact content
+     width rather than relying on the same 20px figure just barely fitting. */
+  .summary-row { grid-template-columns: 1fr; }
+  .summary-row .stat-card { border-right: none; border-bottom: 1px solid var(--border); }
+  .summary-row .stat-card:last-child { border-bottom: none; }
+  /* A real 375px bug: .review-title's desktop nowrap+ellipsis, fighting a
+     long status word (e.g. "review failed unexpectedly") for the row's
+     remaining space, could shrink the title to nothing but "A…" - clipping
+     the repo name and PR number entirely. Below 600px the row becomes two
+     lines instead: title (wrapping, never clipped) on its own row, meta
+     and cost on a second row sharing the space freed by wrapping. */
+  .review-row {
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+    grid-template-areas: "dot title title" "dot meta cost";
+    row-gap: 4px;
+  }
+  .review-status { grid-area: dot; margin-top: 4px; align-self: start; }
+  .review-title { grid-area: title; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+  .review-meta { grid-area: meta; }
+  .review-cost { grid-area: cost; text-align: right; }
 }
 
 </style>
@@ -475,6 +723,22 @@ function relativeTime(iso) {
   const days = Math.round(hours / 24);
   return days + ' day' + (days === 1 ? '' : 's') + ' ago';
 }
+// Compact unit (5m/2h/3d) for the Overview topbar's fine-print "last scan"
+// line, matching index.html's own compact style there - a separate
+// function rather than changing relativeTime()'s own output, since that
+// shared function's full-word format ("5 minutes ago") is also used in
+// several other, more prose-like contexts (endpoint health, token/member
+// lists) that aren't part of this mockup and shouldn't change with it.
+function compactRelativeTime(iso) {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + 'm ago';
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return hours + 'h ago';
+  const days = Math.round(hours / 24);
+  return days + 'd ago';
+}
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, function (c) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -482,6 +746,10 @@ function escapeHtml(s) {
 }
 function planDisplayName(plan) {
   var names = { free: 'Aletheore Community', flash: 'Aletheore Flash', air: 'Aletheore AIR' };
+  return names[plan] || names.air;
+}
+function planShortName(plan) {
+  var names = { free: 'Community', flash: 'Flash', air: 'AIR' };
   return names[plan] || names.air;
 }
 // Minimal markdown for AIRview file pages. The text is model-written from
@@ -524,6 +792,7 @@ function renderWikiMarkdown(src) {
 SIGNIN_HTML = f"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Aletheore</title>
+<link rel="icon" type="image/png" href="{BRAND_MARK_DATA_URI}">
 {ICONS_LINK}
 {STYLE}
 <div class="signin">
@@ -559,6 +828,7 @@ SIGNIN_HTML = f"""<!DOCTYPE html>
 PICKER_HTML = f"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Your repositories — Aletheore</title>
+<link rel="icon" type="image/png" href="{BRAND_MARK_DATA_URI}">
 {ICONS_LINK}
 {STYLE}
 <div class="picker-wrap">
@@ -634,7 +904,7 @@ PICKER_HTML = f"""<!DOCTYPE html>
 
 _NAV_ITEMS = [
     ("overview", "", "ti-layout-dashboard", "Overview"),
-    ("security", "/security", "ti-shield-check", "Security findings"),
+    ("security", "/security", "ti-shield-check", "Findings"),
     ("deadcode", "/dead-code", "ti-trash", "Dead code"),
     ("health", "/health", "ti-activity", "Endpoint health"),
     ("wiki", "/wiki", "ti-book-2", "AIRview"),
@@ -651,16 +921,13 @@ def _sidebar(active: str) -> str:
     settings_active = " active" if active == "settings" else ""
     return f"""
   <nav class="sidebar" aria-label="Dashboard navigation">
-    <a class="org-switch" href="/dashboard">
-      <span class="org-avatar" id="org-avatar"></span>
-      <div style="min-width:0;">
-        <div class="org-switch-label" id="side-repo"></div>
-        <div class="org-switch-sub" id="side-org"></div>
-      </div>
-      <i class="ti ti-chevron-down" style="margin-left:auto;color:var(--slate-400);" aria-hidden="true"></i>
-    </a>
-    <div>
+    <div class="brand"><img class="brand-mark" src="{BRAND_MARK_DATA_URI}" alt="" width="28" height="28"><span class="brand-name">Aletheore</span></div>
+    <div class="nav-scroll">
       <div class="nav-group-label">Repository</div>
+      <ul class="nav-list" id="repo-switch-list"><li><a class="nav-item" aria-hidden="true">&hellip;</a></li></ul>
+    </div>
+    <div>
+      <div class="nav-group-label">This repository</div>
       <ul class="nav-list">{repo_items}</ul>
     </div>
     <div>
@@ -696,9 +963,6 @@ const base = '/app/' + encodeURIComponent(org) + '/' + encodeURIComponent(repo);
 const adminBase = '/admin/' + encodeURIComponent(org) + '/' + encodeURIComponent(repo);
 const pageBase = '/dashboard/' + encodeURIComponent(org) + '/' + encodeURIComponent(repo);
 
-document.getElementById('side-org').textContent = org;
-document.getElementById('side-repo').textContent = repo;
-document.getElementById('org-avatar').textContent = org.slice(0, 2).toLowerCase();
 document.querySelectorAll('.nav-item[data-href]').forEach(function (el) {
   el.href = pageBase + el.dataset.href;
 });
@@ -708,20 +972,36 @@ if (cOrg) cOrg.textContent = org;
 if (cRepo) { cRepo.textContent = repo; cRepo.href = pageBase; }
 document.title = document.title.replace('{repo}', repo).replace('{org}', org);
 
+async function loadRepoSwitcher() {
+  const list = document.getElementById('repo-switch-list');
+  const res = await apiGet('/app/repos');
+  const repos = (res && res.ok ? (await res.json()).repos : []).filter(function (r) { return r.initialized; });
+  if (repos.length === 0) { list.innerHTML = ''; return; }
+  list.innerHTML = repos.map(function (r) {
+    const isActive = r.org === org && r.repo === repo;
+    return '<li><a class="nav-item' + (isActive ? ' active' : '') + '" href="/dashboard/' + encodeURIComponent(r.org) + '/' + encodeURIComponent(r.repo) + '">' +
+      '<span class="nav-dot paid"></span>' + escapeHtml(r.repo_full_name) + '</a></li>';
+  }).join('');
+}
+loadRepoSwitcher();
+
 async function loadPlanBadge() {
   const res = await apiGet(adminBase);
   const nameEl = document.getElementById('plan-name');
   const subEl = document.getElementById('plan-sub');
+  const planLineEl = document.getElementById('repo-plan-line');
   if (!res) return null;
   if (res.status === 402) {
     nameEl.textContent = planDisplayName('free');
     subEl.textContent = 'Upgrade for AIRview and settings.';
+    if (planLineEl) planLineEl.textContent = org + '/' + repo + ' · ' + planShortName('free') + ' plan';
     return 'free';
   }
   if (!res.ok) { nameEl.textContent = ''; subEl.textContent = ''; return null; }
   const data = await res.json();
   nameEl.textContent = planDisplayName(data.installation.plan);
   subEl.textContent = data.installation.plan === 'free' ? 'Upgrade for AIRview and settings.' : 'AIRview and priority scans included.';
+  if (planLineEl) planLineEl.textContent = org + '/' + repo + ' · ' + planShortName(data.installation.plan) + ' plan';
   return data;
 }
 """
@@ -746,23 +1026,211 @@ function lockedFeature(title, description, previewHtml) {{
 }}
 """
 
+# Shared by every page with real-money actions (Settings, Overview) - was
+# duplicated per-page (a second, separately-maintained copy already existed
+# for the standalone /credits page's own installation-scoped API shape,
+# _CREDITS_JS below). adminBase-based, not installation-id-based, since
+# every caller of this constant already has org/repo in scope. Each caller
+# sets window._reloadUsage to its own refresh function before invoking
+# these (loadSettings on Settings, loadUsage on Overview) instead of this
+# file hardcoding one page's refresh call - buySeat/removeSeat need to
+# re-render whichever page's seat UI actually called them.
+BILLING_ACTIONS_JS = """
+async function buySeat(btn) {
+  // Disabled for the whole round trip, not just re-enabled on failure like
+  // most other buttons on this page: real gap found via audit - buySeat/
+  // removeSeat are the only real-money actions on this page with no
+  // double-click guard at all. A second click landing before the first
+  // response comes back fires a second, genuinely separate POST /seats/buy
+  // - the backend's per-installation lock (admin.py's
+  // _seat_adjustment_lock) only serializes the two against each other, it
+  // does not collapse them into one purchase, so both succeed and the
+  // customer is billed for two extra seats from what looked like one
+  // click. window._reloadUsage() below re-renders this whole section
+  // (including this button) once the real seat count is known, so there
+  // is no separate re-enable path to also get right for the SUCCESS path -
+  // but that reasoning only covers success. Real gap found by Flash Review
+  // on this same change: on a genuine network failure (fetch() itself
+  // rejects, before res/data ever exist) the function exits via an
+  // unhandled exception, the refresh never runs, and the button - a
+  // real-money action - stays disabled forever with no page-reload-free
+  // recovery. try/finally re-enables on every exit; harmless on the
+  // success path too, since the refresh has already replaced this
+  // button's DOM node by the time finally runs.
+  btn.disabled = true;
+  const status = document.getElementById('seat-billing-status');
+  status.textContent = 'Updating billing...';
+  status.style.color = 'var(--slate-600)';
+  try {
+    const res = await fetch(adminBase + '/seats/buy', { method: 'POST' });
+    const data = await res.json().catch(function () { return {}; });
+    if (res.ok) {
+      status.textContent = 'Seat added - billing updated. Refreshing...';
+      status.style.color = 'var(--success)';
+      if (window._reloadUsage) window._reloadUsage();
+    } else {
+      status.textContent = data.detail || 'Could not buy a seat.';
+      status.style.color = 'var(--critical)';
+    }
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function removeSeat(btn) {
+  // See buySeat's comment - same double-click gap and same network-failure
+  // stuck-button gap, same fix for both.
+  btn.disabled = true;
+  const status = document.getElementById('seat-billing-status');
+  status.textContent = 'Updating billing...';
+  status.style.color = 'var(--slate-600)';
+  try {
+    const res = await fetch(adminBase + '/seats/remove', { method: 'POST' });
+    const data = await res.json().catch(function () { return {}; });
+    if (res.ok) {
+      status.textContent = 'Seat removed - billing updated. Refreshing...';
+      status.style.color = 'var(--success)';
+      if (window._reloadUsage) window._reloadUsage();
+    } else {
+      status.textContent = data.detail || 'Could not remove a seat.';
+      status.style.color = 'var(--critical)';
+    }
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function openBillingPortal() {
+  const status = document.getElementById('seat-billing-status');
+  if (status) { status.textContent = 'Opening billing portal...'; status.style.color = 'var(--slate-600)'; }
+  const res = await fetch(adminBase + '/billing-portal');
+  const data = await res.json().catch(function () { return {}; });
+  if (res.ok && data.url) {
+    window.location.href = data.url;
+    return;
+  }
+  if (status) {
+    status.textContent = data.detail || 'Could not open the billing portal.';
+    status.style.color = 'var(--critical)';
+  }
+}
+
+async function buyCredit(btn) {
+  const statusEl = document.getElementById('topup-status');
+  if (typeof Paddle === "undefined") {
+    statusEl.textContent = 'Checkout is unavailable right now - try disabling any ad/script blocker and reload.';
+    return;
+  }
+  // parseInt would accept "7.9" (silently truncated to 7) or "1e5" (parsed
+  // as 1) - Number() + an explicit integer check rejects both instead of
+  // quietly charging a different amount than what's on screen.
+  const rawAmount = Number(document.getElementById('topup-amount').value);
+  const amount = Number.isInteger(rawAmount) ? rawAmount : NaN;
+  if (!amount || amount < 5 || amount > 1000) {
+    statusEl.textContent = 'Enter an amount between $5 and $1000.';
+    return;
+  }
+  // Real gap found via audit: buySeat/removeSeat both guard against a
+  // rapid double-click firing two independent purchases (see buySeat's
+  // comment); this button had no guard at all - two clicks before the
+  // first apiGet() round trip returns could open two stacked
+  // Paddle.Checkout.open() overlays with two different signed
+  // checkout_installation_tokens. Re-enabled in finally - unlike
+  // buySeat/removeSeat, this button's DOM node is never replaced by a
+  // re-render, so it must actually come back (e.g. the customer closes
+  // the overlay without completing checkout and wants to try again).
+  btn.disabled = true;
+  statusEl.textContent = 'Opening checkout...';
+  statusEl.style.color = '';
+  try {
+    window._creditCheckoutCompleted = false;
+    // The installation token is minted with a 30-minute TTL (auth.py's
+    // sign_checkout_installation_id) - re-fetch it fresh here instead of
+    // reusing page-load time's copy, so a tab left open past 30 minutes
+    // doesn't send Paddle a token the webhook can no longer resolve (money
+    // taken, no credit granted). window._creditTopupPriceId is a static
+    // price id set once at page load and doesn't need refreshing.
+    const res = await apiGet(adminBase);
+    if (!res || !res.ok) {
+      statusEl.textContent = 'Could not start checkout - try again.';
+      return;
+    }
+    const data = await res.json();
+    // Associates the checkout with the installation's existing Paddle
+    // customer record (already returned in data.installation, same source
+    // /subscribe's checkout page reads for its own pwCustomer wiring) -
+    // without it, an existing subscriber topping up credit would re-enter
+    // their email and Paddle would silently open a second customer record,
+    // splitting billing history and producing a transaction whose
+    // customer_id the subscription webhook path can't attribute back to
+    // this installation.
+    const paddleCustomerId = data.installation && data.installation.paddle_customer_id;
+    Paddle.Checkout.open({
+      items: [{ priceId: window._creditTopupPriceId, quantity: amount }],
+      customData: { installation_token: data.checkout_installation_token },
+      ...(paddleCustomerId ? { customer: { id: paddleCustomerId } } : {}),
+      settings: {
+        displayMode: 'overlay',
+        variant: 'one-page',
+        successUrl: 'https://app.aletheore.com/dashboard',
+      },
+    });
+  } finally {
+    btn.disabled = false;
+  }
+}
+"""
+
 
 def _page_head(title: str) -> str:
     return f"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
+<link rel="icon" type="image/png" href="{BRAND_MARK_DATA_URI}">
 {ICONS_LINK}
 {MERMAID_SCRIPT}
 {STYLE}"""
 
 
-def _topbar(h1: str, right_id: str = "") -> str:
-    right = f'<div class="topbar-right" id="{right_id}"></div>' if right_id else ""
+def _topbar(h1: str, right_id: str = "", sub_id: str = "", show_breadcrumb: bool = True, sub_class: str = "repo-path", right_html: str = "", margin_bottom: str = "") -> str:
+    # right_html carries real markup (e.g. Docs' "Export as Markdown" link,
+    # which needs its own href/download attributes) - right_id alone only
+    # ever produces an empty div a script populates with text later, which
+    # can't express that.
+    right = right_html or (f'<div class="topbar-right" id="{right_id}"></div>' if right_id else "")
+    # sub_class defaults to Overview's mono "org/repo - plan" treatment;
+    # other pages needing a plain descriptive sentence under the H1 (e.g.
+    # Endpoint health's "Live checks against every mapped API endpoint...")
+    # pass "page-sub" instead - same slot, different mockup treatment.
+    sub = f'<div class="{sub_class}" id="{sub_id}"></div>' if sub_id else ""
+    # Overview's own mockup has no breadcrumb - the H1 line is the top of
+    # the page - but every other page's topbar keeps it, so this defaults
+    # to on and PAGE_HEAD_JS's existing crumb-org/crumb-repo population
+    # already null-checks both elements rather than assuming they exist.
+    breadcrumb = (
+        '<div class="breadcrumb"><a id="crumb-org" href="/dashboard"></a> '
+        '<span style="color:var(--slate-400);">/</span> <b><a id="crumb-repo"></a></b></div>'
+        if show_breadcrumb else ""
+    )
+    # .h1's margin-top exists to space it away from the breadcrumb above it -
+    # with no breadcrumb, that margin just pushes the H1 down from where
+    # .main's own top padding already puts it, which is what the mockup's
+    # H1 sits flush at.
+    h1_style = "" if show_breadcrumb else ' style="margin-top:0"'
+    # .topbar's shared margin-bottom (22.4px) is a fine default, but a page
+    # whose own mockup wants a smaller exact gap below its page-head
+    # (docs.html: 20px, via margin-collapse with .stat-row's own 20px
+    # margin-top; airview.html: 0px, its sub-line sitting flush against
+    # the H1) can't get there by adding more margin below - collapse
+    # only ever takes the larger side. margin_bottom overrides .topbar's
+    # own value directly for that one page instead.
+    topbar_style = f' style="margin-bottom:{margin_bottom}"' if margin_bottom else ""
     return f"""
-    <div class="topbar">
+    <div class="topbar"{topbar_style}>
       <div>
-        <div class="breadcrumb"><a id="crumb-org" href="/dashboard"></a> <span style="color:var(--slate-400);">/</span> <b><a id="crumb-repo"></a></b></div>
-        <h1 class="h1">{h1}</h1>
+        {breadcrumb}
+        <h1 class="h1"{h1_style}>{h1}</h1>
+        {sub}
       </div>
       {right}
     </div>
@@ -783,45 +1251,72 @@ def _shell(active: str, body: str) -> str:
 # ---------------------------------------------------------------------------
 # Overview page - stats only, each stat links into its own detail page.
 # ---------------------------------------------------------------------------
-OVERVIEW_HTML = _page_head("Overview — {repo} — Aletheore") + _shell(
+# A function, not a plain module-level constant like the other _HTML pages -
+# same reason as _settings_html(): its Usage section needs a real inline
+# Paddle checkout (get_settings().paddle_client_token/paddle_environment),
+# and calling get_settings() at plain module-import time would make
+# importing this file require a fully configured settings environment.
+@lru_cache(maxsize=1)
+def _overview_html() -> str:
+    return _page_head("Overview — {repo} — Aletheore") + _shell(
     "overview",
-    _topbar("Overview", "last-scanned")
+    _topbar("Overview", "last-scanned", "repo-plan-line", show_breadcrumb=False)
     + """
     <div id="top-error"></div>
-    <div class="dashboard-summary">
-      <div>
-        <div class="dashboard-summary-kicker">Repository watch</div>
-        <h2 id="summary-title">Evidence is loading</h2>
-        <p id="summary-copy">Aletheore is reading the latest AIR packet for this repository. Findings, code ownership, endpoint health, and AIRview all resolve back to scanner evidence.</p>
-      </div>
-      <div class="summary-chip-row">
-        <span class="summary-chip"><i class="ti ti-shield-check" aria-hidden="true"></i><span id="summary-risk">Risk loading</span></span>
-        <span class="summary-chip"><i class="ti ti-git-branch" aria-hidden="true"></i><span id="summary-scans">Scans loading</span></span>
-        <span class="summary-chip"><i class="ti ti-book-2" aria-hidden="true"></i>AIRview</span>
-      </div>
-    </div>
     <div class="stat-strip" id="stat-strip">
       <a class="stat-card" data-href="/security"><div class="stat-label">Open findings</div><div class="stat-value" id="stat-findings">&ndash;</div><div class="stat-delta" id="stat-findings-sub"></div></a>
       <a class="stat-card" data-href="/dead-code"><div class="stat-label">Dead code</div><div class="stat-value" id="stat-deadcode">&ndash;</div><div class="stat-delta" id="stat-deadcode-sub"></div></a>
       <a class="stat-card" data-href="/health"><div class="stat-label">Endpoint uptime</div><div class="stat-value" id="stat-uptime">&ndash;</div><div class="stat-delta" id="stat-uptime-sub"></div></a>
       <div class="stat-card"><div class="stat-label">Modules scanned</div><div class="stat-value" id="stat-modules">&ndash;</div><div class="stat-delta" id="stat-modules-sub"></div></div>
     </div>
-    <section class="section" id="recent-security">
-      <div class="section-head">
-        <div class="section-title"><i class="ti ti-shield-check" aria-hidden="true"></i>Recent security findings</div>
-        <a class="btn" data-href="/security">View all<i class="ti ti-arrow-right" style="font-size:13px;" aria-hidden="true"></i></a>
-      </div>
-      <div class="section-body" id="recent-security-body"><div class="empty-state">Loading&hellip;</div></div>
-    </section>
+    <div class="plain-section-head" id="findings-head">
+      <h2>Recent findings</h2>
+      <div class="count" id="findings-count"></div>
+    </div>
+    <div id="recent-security-body"><div class="empty-state">Loading&hellip;</div></div>
+    <div class="plain-section-head" id="usage-head" style="display:none">
+      <h2>Usage</h2>
+    </div>
+    <div id="usage-body"></div>
 """
 ) + f"""
+<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
 <script>
 {FETCH_HELPERS}
 {PAGE_HEAD_JS}
 {CONFIRM_UPGRADE_JS}
+{BILLING_ACTIONS_JS}
 document.querySelectorAll('[data-href]').forEach(function (el) {{
   if (el.tagName === 'A' && el.dataset.href) el.href = pageBase + el.dataset.href;
 }});
+window._reloadUsage = loadUsage;
+
+// Same guarded pattern as Settings' own Paddle.Initialize() call - a
+// blocked cdn.paddle.com load must only disable the credit top-up button,
+// never take down the rest of this script (including loadOverview() at
+// the bottom, which renders the whole page).
+if (typeof Paddle !== "undefined") {{
+  Paddle.Environment.set("{get_settings().paddle_environment}");
+  Paddle.Initialize({{
+    token: "{get_settings().paddle_client_token}",
+    eventCallback: function (event) {{
+      const status = document.getElementById('topup-status');
+      if (!status || !event || !event.name) return;
+      if (event.name === 'checkout.loaded') {{
+        status.textContent = '';
+      }} else if (event.name === 'checkout.completed') {{
+        window._creditCheckoutCompleted = true;
+        status.textContent = 'Purchase complete - your balance updates once the payment is confirmed.';
+        status.style.color = 'var(--success)';
+      }} else if (event.name === 'checkout.closed' && !window._creditCheckoutCompleted) {{
+        status.textContent = '';
+      }} else if (event.name === 'checkout.error') {{
+        status.textContent = 'Checkout error - try again.';
+        status.style.color = 'var(--critical)';
+      }}
+    }},
+  }});
+}}
 
 async function loadOverview() {{
   const res = await apiGet(base);
@@ -837,16 +1332,14 @@ async function loadOverview() {{
   const history = data.history || [];
   if (history.length === 0) {{
     document.getElementById('last-scanned').textContent = 'No scans yet';
-    document.getElementById('summary-title').textContent = repo + ' is waiting for its first scan';
-    document.getElementById('summary-copy').textContent = 'Open a pull request or trigger a managed scan to populate evidence, health, and AIRview.';
-    document.getElementById('summary-risk').textContent = 'No evidence yet';
-    document.getElementById('summary-scans').textContent = '0 scans';
+    document.getElementById('findings-count').textContent = '';
     document.getElementById('recent-security-body').innerHTML = '<div class="empty-state">No scans yet - findings will appear after the first pull request is scanned.</div>';
     return;
   }}
   const latest = history[0];
   const evidence = latest.evidence || {{}};
-  document.getElementById('last-scanned').textContent = 'Last scanned ' + relativeTime(latest.scanned_at);
+  const headSha = evidence._scan_head_sha;
+  document.getElementById('last-scanned').textContent = 'last scan ' + compactRelativeTime(latest.scanned_at) + (headSha ? ' · head ' + headSha.slice(0, 8) : '');
 
   const dismissedKeys = data.dismissed_finding_keys || {{ secret: [], vulnerability: [], static_analysis: [] }};
   const security = evidence.security || {{}};
@@ -860,16 +1353,21 @@ async function loadOverview() {{
     return (dismissedKeys.static_analysis || []).indexOf(findingIdentityKey('static_analysis', f)) === -1;
   }});
   const totalFindings = secretFindings.length + vulnFindings.length + staticAnalysisFindings.length;
-  document.getElementById('summary-title').textContent =
-    totalFindings === 0 ? repo + ' is clean in the latest scan' : repo + ' has ' + totalFindings + ' open finding' + (totalFindings === 1 ? '' : 's');
-  document.getElementById('summary-copy').textContent =
-    'Latest evidence covers ' + (((evidence.repository || {{}}).modules || []).length) + ' modules, source-mapped findings, dependency signals, and repository history. Use the left rail to drill into the exact file, line, owner, dependency, and risk.';
-  document.getElementById('summary-risk').textContent = totalFindings === 0 ? 'No open findings' : totalFindings + ' open findings';
-  document.getElementById('summary-scans').textContent = history.length + ' scan' + (history.length === 1 ? '' : 's');
+  document.getElementById('findings-count').textContent = totalFindings + ' open';
 
   document.getElementById('stat-findings').textContent = totalFindings;
   document.getElementById('stat-findings').className = 'stat-value' + (totalFindings > 0 ? ' critical' : ' success');
-  document.getElementById('stat-findings-sub').textContent = secretFindings.length + ' secret, ' + vulnFindings.length + ' dependency, ' + staticAnalysisFindings.length + ' static analysis';
+  // Real bug found at both 375px and 1280px: the full "N secret, N
+  // dependency, N static analysis" text overflows the 204px cell at 11px
+  // and silently ellipsis-truncates the last category off - dropping real
+  // information the user needs to read. Never ellipsis a number/count;
+  // shorten labels and drop zero-count categories instead, so it always
+  // fits without losing anything real.
+  const findingSubParts = [];
+  if (secretFindings.length > 0) findingSubParts.push(secretFindings.length + ' secret' + (secretFindings.length === 1 ? '' : 's'));
+  if (vulnFindings.length > 0) findingSubParts.push(vulnFindings.length + ' dep' + (vulnFindings.length === 1 ? '' : 's'));
+  if (staticAnalysisFindings.length > 0) findingSubParts.push(staticAnalysisFindings.length + ' static');
+  document.getElementById('stat-findings-sub').textContent = findingSubParts.length ? findingSubParts.join(', ') : 'No findings';
 
   const deadCode = (evidence.repository || {{}}).dead_code || {{}};
   const unreachable = deadCode.unreachable_modules || [];
@@ -891,22 +1389,23 @@ async function loadOverview() {{
   }} else {{
     let rows = '';
     securePreview.forEach(function (f) {{
-      rows += '<tr><td><span class="sev-stripe critical"></span><span class="finding-title">Possible ' + escapeHtml(f.pattern) + ' secret</span></td>' +
-        '<td class="finding-cite">' + escapeHtml(f.path) + ':' + f.line + '</td>' +
-        '<td><span class="chip critical">Critical</span></td></tr>';
+      rows += '<div class="finding-row"><div class="sev-dot critical"></div><div><div class="msg">Possible ' + escapeHtml(f.pattern) + ' secret</div>' +
+        '<div class="cite">' + escapeHtml(f.path) + ':' + f.line + '</div></div>' +
+        '<div class="tool">trivy</div></div>';
     }});
     vulnPreview.forEach(function (f) {{
-      rows += '<tr><td><span class="sev-stripe warning"></span><span class="finding-title">' + escapeHtml(f.advisory_id) + ': ' + escapeHtml(f.summary || 'known vulnerability') + '</span></td>' +
-        '<td class="finding-cite">' + escapeHtml(f.package) + '@' + escapeHtml(f.installed_version) + '</td>' +
-        '<td><span class="chip warning">Warning</span></td></tr>';
+      rows += '<div class="finding-row"><div class="sev-dot warning"></div><div><div class="msg">' + escapeHtml(f.advisory_id) + ': ' + escapeHtml(f.summary || 'known vulnerability') + '</div>' +
+        '<div class="cite">' + escapeHtml(f.package) + '@' + escapeHtml(f.installed_version) + '</div></div>' +
+        '<div class="tool">osv</div></div>';
     }});
     staticAnalysisPreview.forEach(function (f) {{
       const sev = staticAnalysisSevChip(f.severity);
-      rows += '<tr><td><span class="sev-stripe ' + sev.stripe + '"></span><span class="finding-title">' + escapeHtml(f.message) + '</span></td>' +
-        '<td class="finding-cite">' + escapeHtml(f.path) + ':' + f.line + '</td>' +
-        '<td><span class="chip ' + sev.chip + '">' + sev.label + '</span></td></tr>';
+      const dotClass = sev.stripe === 'neutral' ? 'minor' : sev.stripe;
+      rows += '<div class="finding-row"><div class="sev-dot ' + dotClass + '"></div><div><div class="msg">' + escapeHtml(f.message) + '</div>' +
+        '<div class="cite">' + escapeHtml(f.path) + ':' + f.line + '</div></div>' +
+        '<div class="tool">' + escapeHtml(f.tool || 'static analysis') + '</div></div>';
     }});
-    recentBody.innerHTML = '<table class="findings"><thead><tr><th>Finding</th><th>Evidence</th><th>Severity</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    recentBody.innerHTML = '<div class="finding-list">' + rows + '</div>';
   }}
 }}
 
@@ -916,7 +1415,7 @@ async function loadUptimeStat() {{
   const data = await res.json();
   const endpoints = data.endpoints || [];
   if (endpoints.length === 0) {{
-    document.getElementById('stat-uptime').textContent = 'Not configured';
+    document.getElementById('stat-uptime').textContent = '–';
     document.getElementById('stat-uptime-sub').textContent = 'Add a target in Endpoint health';
     return;
   }}
@@ -927,8 +1426,71 @@ async function loadUptimeStat() {{
   document.getElementById('stat-uptime-sub').textContent = up + ' of ' + endpoints.length + ' endpoints up';
 }}
 
+async function loadUsage() {{
+  const section = document.getElementById('usage-head');
+  const body = document.getElementById('usage-body');
+  const res = await apiGet(adminBase);
+  if (!res || !res.ok) return;  // free/locked plan - no managed billing to show
+  const data = await res.json();
+  section.style.display = '';
+  // Headline is base remaining only, measured against the real monthly
+  // allotment - matching index.html's own semantics ($12.40 of $18.00,
+  // purchased credit shown on its own breakdown line below). Mixing
+  // purchased credit into the headline would read as "$40 of $18" after
+  // a large top-up, which is not what "of $18" is supposed to mean.
+  const baseCredit = data.base_credit_remaining_usd || 0;
+  const topupCredit = data.topup_credit_balance_usd || 0;
+  const allotment = data.base_credit_allotment_usd || 0;
+  const pct = allotment > 0 ? Math.max(0, Math.min(100, Math.round((baseCredit / allotment) * 100))) : 0;
+  const hasSubscription = !!data.installation.paddle_subscription_id;
+  const renewsAt = data.subscription_renews_at
+    ? new Date(data.subscription_renews_at).toLocaleDateString(undefined, {{ month: 'short', day: 'numeric' }})
+    : null;
+  window._creditTopupPriceId = data.credit_topup_price_id;
+  body.innerHTML =
+    '<div class="settings-grid">' +
+      '<div class="settings-block">' +
+        '<div class="settings-block-label">Credit balance</div>' +
+        '<div class="credit-figure">$' + baseCredit.toFixed(2) + (allotment > 0 ? ' <span class="of">of $' + allotment.toFixed(2) + '</span>' : '') + '</div>' +
+        (allotment > 0 ? '<div class="credit-meter"><div class="credit-meter-fill" style="width:' + pct + '%"></div></div>' : '') +
+        '<div class="credit-breakdown"><span>$' + allotment.toFixed(2) + ' included this month</span>' +
+          '<span>' + (topupCredit > 0 ? '+ $' + topupCredit.toFixed(2) + ' purchased, never expires' : '') + '</span>' +
+        '</div>' +
+        (data.credit_topup_price_id
+          ? '<div class="divider-label">buy more credit</div>' +
+            '<div class="qty-row">' +
+              '<span class="qty-prefix">$</span>' +
+              '<div class="stepper">' +
+                '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepDown()" aria-label="Decrease amount">&minus;</button>' +
+                '<input type="number" id="topup-amount" min="5" max="1000" step="5" value="10">' +
+                '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepUp()" aria-label="Increase amount">+</button>' +
+              '</div>' +
+              '<button class="btn btn-accent" onclick="buyCredit(this)">Buy credit</button>' +
+            '</div>' +
+            '<div id="topup-status" class="settings-block-hint"></div>' +
+            '<div class="settings-block-hint">$5 minimum &middot; charged once, added immediately</div>'
+          : '<div class="settings-block-hint" style="margin-top:10px;">Buying additional credit is coming soon.</div>') +
+      '</div>' +
+      '<div class="settings-block">' +
+        '<div class="settings-block-label">Team seats</div>' +
+        '<div class="settings-block-hint">' + data.seat_limit + ' included &middot; ' + (data.members || []).length + ' in use</div>' +
+        '<div class="qty-row" style="margin-top:14px;">' +
+          (hasSubscription
+            ? '<button class="btn" onclick="buySeat(this)">Buy extra seat</button>'
+            : '') +
+          '<button class="btn" onclick="openBillingPortal()">Manage billing</button>' +
+        '</div>' +
+        '<div id="seat-billing-status" class="settings-block-hint"></div>' +
+        (hasSubscription
+          ? '<div class="status-line"><span class="status-dot"></span>Subscription active' + (renewsAt ? ', renews ' + renewsAt : '') + '</div>'
+          : '<div class="status-line"><span class="status-dot" style="background:var(--slate-400);"></span>No active subscription</div>') +
+      '</div>' +
+    '</div>';
+}}
+
 loadOverview();
 loadUptimeStat();
+loadUsage();
 loadPlanBadge();
 </script>
 """
@@ -1158,8 +1720,18 @@ loadPlanBadge();
 # ---------------------------------------------------------------------------
 HEALTH_HTML = _page_head("Endpoint health — {repo} — Aletheore") + _shell(
     "health",
-    _topbar("Endpoint health")
+    _topbar("Endpoint health", sub_id="health-sub", sub_class="page-sub", show_breadcrumb=False)
     + """
+    <div class="summary-row" id="summary-row" style="display:none">
+      <div class="stat-card"><div class="stat-label">Uptime, last 24h</div><div class="stat-value" id="summary-uptime">&ndash;</div></div>
+      <div class="stat-card"><div class="stat-label">Reachable now</div><div class="stat-value" id="summary-reachable">&ndash;</div></div>
+      <div class="stat-card"><div class="stat-label">Median latency</div><div class="stat-value" id="summary-latency">&ndash;</div></div>
+    </div>
+    <div class="plain-section-head" id="endpoints-list-head">
+      <h2>Endpoints</h2>
+      <div class="count" id="endpoints-list-count"></div>
+    </div>
+    <div id="health-body"><div class="empty-state">Loading&hellip;</div></div>
     <section class="section">
       <div class="section-head">
         <div class="section-title"><i class="ti ti-target-arrow" aria-hidden="true"></i>Monitored targets</div>
@@ -1180,13 +1752,6 @@ HEALTH_HTML = _page_head("Endpoint health — {repo} — Aletheore") + _shell(
         <span class="section-sub" id="endpoints-usage"></span>
       </div>
       <div class="section-body" id="endpoints-body"><div class="empty-state">Loading&hellip;</div></div>
-    </section>
-    <section class="section">
-      <div class="section-head">
-        <div class="section-title"><i class="ti ti-activity" aria-hidden="true"></i>Results</div>
-        <span class="section-sub">Most recent check per endpoint, per target</span>
-      </div>
-      <div class="section-body" id="health-body"><div class="empty-state">Loading&hellip;</div></div>
     </section>
     <section class="section" id="stale-endpoints-section" style="display:none;">
       <div class="section-head">
@@ -1319,6 +1884,44 @@ async function loadResults() {{
   if (!res.ok) {{ body.innerHTML = '<div class="empty-state">Health data unavailable.</div>'; return; }}
   const data = await res.json();
   const endpoints = data.endpoints || [];
+  document.getElementById('endpoints-list-count').textContent = endpoints.length + ' mapped';
+
+  const summaryRow = document.getElementById('summary-row');
+  if (endpoints.length === 0) {{
+    summaryRow.style.display = 'none';
+  }} else {{
+    summaryRow.style.display = '';
+    const uptimeEl = document.getElementById('summary-uptime');
+    if (data.uptime_pct_24h === null || data.uptime_pct_24h === undefined) {{
+      uptimeEl.textContent = '–';
+      uptimeEl.className = 'stat-value';
+    }} else {{
+      const pct = data.uptime_pct_24h * 100;
+      uptimeEl.textContent = pct.toFixed(1) + '%';
+      uptimeEl.className = 'stat-value' + (pct === 100 ? ' success' : pct < 90 ? ' critical' : ' warning');
+    }}
+    const up = endpoints.filter(function (e) {{ return e.reachable; }}).length;
+    const reachableEl = document.getElementById('summary-reachable');
+    reachableEl.innerHTML = up + '<span class="of">of ' + endpoints.length + '</span>';
+    // The mockup's own .summary-value only defines success/critical (no
+    // warning variant) and its own example is styled success at 11 of 12 -
+    // any endpoint at all being reachable reads as "up", not an alarm;
+    // only zero reachable is critical.
+    reachableEl.className = 'stat-value' + (up === 0 ? ' critical' : ' success');
+    const latencies = endpoints
+      .map(function (e) {{ return e.reachable ? e.latency_ms : null; }})
+      .filter(function (l) {{ return l !== null && l !== undefined; }})
+      .sort(function (a, b) {{ return a - b; }});
+    const latencyEl = document.getElementById('summary-latency');
+    if (latencies.length === 0) {{
+      latencyEl.textContent = '–';
+    }} else {{
+      const mid = Math.floor(latencies.length / 2);
+      const median = latencies.length % 2 === 0 ? (latencies[mid - 1] + latencies[mid]) / 2 : latencies[mid];
+      latencyEl.textContent = Math.round(median) + 'ms';
+    }}
+  }}
+
   if (endpoints.length === 0) {{
     body.innerHTML = '<div class="empty-state">No results yet - add a target above.</div>';
     return;
@@ -1345,11 +1948,17 @@ async function loadResults() {{
     rows.forEach(function (e) {{
       const rowId = 'health-row-' + rowIndex;
       rowMeta[rowId] = {{ target_id: e.target_id, method: e.method, path: e.path }};
+      const methodClass = (e.method || '').toLowerCase();
+      const location = e.evidence_resolution && e.evidence_resolution.file
+        ? '<span class="file">' + escapeHtml(e.evidence_resolution.file) + (e.evidence_resolution.line ? ':' + e.evidence_resolution.line : '') + '</span>'
+        : '';
+      const checkedTitle = 'title="checked ' + compactRelativeTime(e.checked_at) + '"';
       html += '<div class="health-row" id="' + rowId + '" style="cursor:pointer;" onclick="toggleEndpointHistory(\\'' + rowId + '\\')">' +
-        '<span class="health-status ' + (e.reachable ? 'up' : 'down') + '"></span>' +
-        '<span class="health-endpoint">' + escapeHtml(e.method) + ' ' + escapeHtml(e.path) + '</span>' +
-        '<span class="health-latency"' + (e.reachable ? '' : ' style="color:var(--critical);"') + '>' + (e.reachable ? Math.round(e.latency_ms) + 'ms' : (e.status_code || 'unreachable')) + '</span>' +
-        '<span class="health-checked">' + relativeTime(e.checked_at) + '</span></div>' +
+        '<div class="method ' + escapeHtml(methodClass) + '">' + escapeHtml(e.method) + '</div>' +
+        '<div class="path">' + escapeHtml(e.path) + location + '</div>' +
+        '<div class="latency">' + (e.reachable ? Math.round(e.latency_ms) + 'ms' : '&mdash;') + '</div>' +
+        '<div class="status-pill ' + (e.reachable ? 'up' : 'down') + '" ' + checkedTitle + '><span class="dot"></span>' +
+          (e.reachable ? 'up' : (e.status_code ? escapeHtml(String(e.status_code)) + ' · ' + compactRelativeTime(e.checked_at) : 'down')) + '</div></div>' +
         '<div class="health-history" id="' + rowId + '-history" style="display:none;"></div>';
       rowIndex += 1;
     }});
@@ -1367,11 +1976,14 @@ async function loadResults() {{
     staleSection.style.display = '';
     let staleHtml = '<div class="health-grid">';
     staleEndpoints.forEach(function (e) {{
-      const location = e.file ? escapeHtml(e.file) + (e.line ? ':' + e.line : '') : '';
-      staleHtml += '<div class="health-row"><span class="chip warning">Never reachable</span>' +
-        '<span class="health-endpoint">' + escapeHtml(e.method) + ' ' + escapeHtml(e.path) + '</span>' +
-        (location ? '<span class="health-checked">' + location + '</span>' : '') +
-        '<span class="health-checked">' + e.check_count + ' checks</span></div>';
+      const location = e.file
+        ? '<span class="file">' + escapeHtml(e.file) + (e.line ? ':' + e.line : '') + '</span>'
+        : '';
+      staleHtml += '<div class="health-row">' +
+        '<div class="method">' + escapeHtml(e.method) + '</div>' +
+        '<div class="path">' + escapeHtml(e.path) + location + '</div>' +
+        '<div class="latency">&mdash;</div>' +
+        '<div class="status-pill down"><span class="dot"></span>' + e.check_count + ' checks</div></div>';
     }});
     staleHtml += '</div>';
     staleBody.innerHTML = staleHtml;
@@ -1398,10 +2010,11 @@ async function toggleEndpointHistory(rowId) {{
 
   let html = '<div class="health-history-list">';
   checks.forEach(function (c) {{
-    html += '<div class="health-history-row"><span class="health-status ' + (c.reachable ? 'up' : 'down') + '"></span>' +
-      '<span class="health-latency"' + (c.reachable ? '' : ' style="color:var(--critical);"') + '>' +
-      (c.reachable ? Math.round(c.latency_ms) + 'ms' : (c.status_code || 'unreachable')) + '</span>' +
-      '<span class="health-checked">' + relativeTime(c.checked_at) + '</span></div>';
+    html += '<div class="health-history-row">' +
+      '<div class="status-pill ' + (c.reachable ? 'up' : 'down') + '"><span class="dot"></span>' +
+        (c.reachable ? 'up' : (c.status_code ? escapeHtml(String(c.status_code)) : 'down')) + '</div>' +
+      '<div class="latency">' + (c.reachable ? Math.round(c.latency_ms) + 'ms' : '&mdash;') + '</div>' +
+      '<div class="health-checked">' + compactRelativeTime(c.checked_at) + '</div></div>';
   }});
   html += '</div>';
   panel.innerHTML = html;
@@ -1486,6 +2099,7 @@ async function resetEndpointSelection() {{
   loadResults();
 }}
 
+document.getElementById('health-sub').textContent = 'Live checks against every mapped API endpoint, every 3 minutes';
 loadTargets();
 loadResults();
 loadEndpoints();
@@ -1513,23 +2127,16 @@ WIKI_LOCKED_PREVIEW = (
 
 WIKI_HTML = _page_head("AIRview — {repo} — Aletheore") + _shell(
     "wiki",
-    _topbar("AIRview")
+    _topbar("AIRview", show_breadcrumb=False, margin_bottom="7px")
     + """
+    <p class="airview-sub">Generated from the real module dependency graph, the same evidence the wiki below reads.</p>
+    <div id="graph-body"><div class="empty-state">Loading&hellip;</div></div>
     <section class="section">
       <div class="section-head">
-        <div class="section-title"><i class="ti ti-book-2" aria-hidden="true"></i>AIRview</div>
+        <div class="section-title"><i class="ti ti-book-2" aria-hidden="true"></i>Architecture wiki</div>
         <span class="section-sub">Regenerated automatically on every push</span>
       </div>
       <div class="section-body" id="wiki-body"><div class="empty-state">Loading&hellip;</div></div>
-    </section>
-    <section class="section">
-      <div class="section-head">
-        <div class="section-title"><i class="ti ti-affiliate" aria-hidden="true"></i>Interactive dependency graph</div>
-        <span class="section-sub" id="graph-section-sub">Same evidence as the diagram above, explorable</span>
-      </div>
-      <div class="section-body" id="graph-body">
-        <button class="btn" id="graph-load-btn" onclick="loadGraph()">Load graph</button>
-      </div>
     </section>
 """
 ) + f"""
@@ -1816,14 +2423,11 @@ async function loadWiki() {{
   }}
 }}
 
-let graphLoaded = false;
 let graphNodes = [];
 let graphEdges = [];
 let graphAllClusters = [];
 
 async function loadGraph() {{
-  if (graphLoaded) return;
-  graphLoaded = true;
   const container = document.getElementById('graph-body');
   container.innerHTML = '<div class="empty-state">Loading&hellip;</div>';
   const res = await apiGet(base + '/graph');
@@ -1836,7 +2440,7 @@ async function loadGraph() {{
     );
     return;
   }}
-  if (res.status === 404) {{ container.innerHTML = '<div class="empty-state">No scan evidence yet.</div>'; return; }}
+  if (res.status === 404) {{ container.innerHTML = '<div class="empty-state">No dependency graph available yet.</div>'; return; }}
   if (!res.ok) {{ container.innerHTML = '<div class="empty-state">Graph unavailable.</div>'; return; }}
   const data = await res.json();
   graphAllClusters = data.clusters || [];
@@ -1849,12 +2453,32 @@ async function loadGraph() {{
     }})
   );
   container.innerHTML =
-    '<div class="graph-toolbar">' +
-      '<select id="graph-cluster-select" onchange="renderGraphForCluster(this.value)">' + options.join('') + '</select>' +
-      '<span class="hint">drag &middot; scroll to zoom &middot; hover to trace imports</span>' +
+    '<div class="graph-card">' +
+      '<div class="graph-toolbar">' +
+        '<select id="graph-cluster-select" onchange="renderGraphForCluster(this.value)">' + options.join('') + '</select>' +
+        '<span class="hint">drag nodes &middot; scroll to zoom &middot; hover to trace imports</span>' +
+        '<button class="btn" id="graph-reset-btn" onclick="document.getElementById(&#39;depgraph&#39;)._resetView()">Reset view</button>' +
+      '</div>' +
+      '<div class="graph-wrap"><svg id="depgraph" viewBox="0 0 900 460"></svg></div>' +
+      '<div class="graph-hover-info" id="graph-hover-info">Hover a module to see what it imports.</div>' +
     '</div>' +
-    '<svg id="depgraph" viewBox="0 0 900 440"></svg>' +
-    '<div class="graph-hover-info" id="graph-hover-info">Hover a module to see what it imports.</div>';
+    '<div class="cluster-item" id="cluster-summary-item">' +
+      '<div class="name">Clusters</div>' +
+      '<div class="count" id="cluster-summary">computing&hellip;</div>' +
+    '</div>' +
+    '<div class="callout">' +
+      'This graph is real, not a static image - genuine force-directed physics (repulsion + spring edges), running against this repo\\'s real module names and import edges. The architecture wiki below is generated from the same evidence, just as a static diagram with AI-written subsystem descriptions.' +
+    '</div>';
+
+  const namedClusters = graphAllClusters.filter(function (c) {{ return c.modules.length > 1; }});
+  const singletonCount = graphAllClusters.length - namedClusters.length;
+  let clusterSummaryText = namedClusters.length
+    ? namedClusters.map(function (c) {{ return c.name + ' (' + c.modules.length + ' modules)'; }}).join(', ')
+    : 'No clusters detected yet.';
+  if (singletonCount > 0) {{
+    clusterSummaryText += (namedClusters.length ? ', and ' : '') + singletonCount + ' single-module cluster' + (singletonCount === 1 ? '' : 's') + '.';
+  }}
+  document.getElementById('cluster-summary').textContent = clusterSummaryText;
 
   // A repo-wide graph is unreadable past a couple hundred nodes and the
   // naive O(n^2) repulsion below would visibly lag - default to the
@@ -1887,7 +2511,7 @@ function runForceGraph(rawNodes, rawEdges) {{
   // settled and burned CPU indefinitely on repeated filter changes).
   if (existingSvg._stopGraphTick) existingSvg._stopGraphTick();
 
-  const W = 900, H = 440;
+  const W = 900, H = 460;
   const degree = {{}};
   rawEdges.forEach(function (e) {{ degree[e.source] = (degree[e.source] || 0) + 1; degree[e.target] = (degree[e.target] || 0) + 1; }});
   const nodes = rawNodes.map(function (n, i) {{
@@ -2010,6 +2634,12 @@ function runForceGraph(rawNodes, rawEdges) {{
     zoom = Math.max(0.5, Math.min(2.5, zoom - ev.deltaY * 0.001));
     world.setAttribute('transform', 'scale(' + zoom + ')');
   }};
+  svg._resetView = function () {{
+    zoom = 1;
+    world.setAttribute('transform', 'scale(1)');
+    nodes.forEach(function (n) {{ n.fx = null; n.fy = null; }});
+    if (!ticking) {{ ticking = true; tick(); }}
+  }};
 
   const hoverInfo = document.getElementById('graph-hover-info');
   nodeEls.forEach(function (g, i) {{
@@ -2031,6 +2661,7 @@ function runForceGraph(rawNodes, rawEdges) {{
   }});
 }}
 
+loadGraph();
 loadWiki();
 loadPlanBadge();
 </script>
@@ -2055,24 +2686,43 @@ DOCS_LOCKED_PREVIEW = (
 
 DOCS_HTML = _page_head("Docs — {repo} — Aletheore") + _shell(
     "docs",
-    _topbar("Docs")
+    _topbar(
+        "Docs",
+        show_breadcrumb=False,
+        margin_bottom="0",
+        right_html='<a class="btn" id="docs-download-link" href="#" download style="display:none">Export as Markdown</a>',
+    )
     + """
-    <section class="section">
-      <div class="section-head">
-        <div class="section-title"><i class="ti ti-file-text" aria-hidden="true"></i>Docs</div>
-        <span class="section-sub">Regenerated automatically on every push</span>
-        <a class="btn" id="docs-download-link" href="#" download style="display:none"><i class="ti ti-download" aria-hidden="true"></i>Download</a>
-      </div>
-      <div class="section-body" id="docs-body"><div class="empty-state">Loading&hellip;</div></div>
-    </section>
+    <div id="docs-stat-row"></div>
+    <div class="main-grid">
+      <div class="main-col">
+        <div id="docs-body"><div class="empty-state">Loading&hellip;</div></div>
 
-    <section class="section" id="docs-repo-commit-section" style="display:none">
-      <div class="section-head">
-        <div class="section-title"><i class="ti ti-git-pull-request" aria-hidden="true"></i>Commit to repo</div>
-        <span class="section-sub">Also push this reference into your repo as .aletheore/docs/API.md</span>
+        <section class="section" id="docs-repo-commit-section" style="display:none">
+          <div class="section-head">
+            <div class="section-title"><i class="ti ti-git-pull-request" aria-hidden="true"></i>Commit to repo</div>
+            <span class="section-sub">Also push this reference into your repo as .aletheore/docs/API.md</span>
+          </div>
+          <div class="section-body" id="docs-repo-commit-body"><div class="empty-state">Loading&hellip;</div></div>
+        </section>
       </div>
-      <div class="section-body" id="docs-repo-commit-body"><div class="empty-state">Loading&hellip;</div></div>
-    </section>
+      <aside class="rail" id="docs-rail" style="display:none">
+        <div class="rail-card">
+          <h3>Recently updated</h3>
+          <div id="rail-recently-updated"></div>
+        </div>
+        <div class="rail-card">
+          <h3>Hotspots</h3>
+          <div id="rail-hotspots"></div>
+        </div>
+        <div class="rail-card">
+          <h3>Jump to</h3>
+          <a class="rail-link" href="#" id="rail-jump-all">All modules</a>
+          <a class="rail-link" href="#" id="rail-jump-ai">AI-assisted only</a>
+          <a class="rail-link" href="#" id="rail-jump-undoc">Undocumented symbols</a>
+        </div>
+      </aside>
+    </div>
 """
 ) + f"""
 <script>
@@ -2085,12 +2735,72 @@ function docsSymbolCount(markdown) {{
   return matches ? matches.length : 0;
 }}
 
-function docsLineCount(markdown) {{
-  return markdown.split('\\n').filter(function (line) {{ return line.trim().length > 0; }}).length;
-}}
-
 function docsHasAiText(markdown) {{
   return markdown.indexOf('AI-generated') !== -1 || markdown.indexOf('AI-polished') !== -1;
+}}
+
+function docsHasUndocumented(markdown) {{
+  // docs_reference.py's own UNDOCUMENTED marker for a symbol with no
+  // extracted docstring - real grounding text, not a guess at this
+  // module's shape from the outside.
+  return markdown.indexOf('Undocumented - no docstring found.') !== -1;
+}}
+
+// docs_reference.py's build_module_reference() produces an exact,
+// deterministic markdown shape - "# path", then "## Classes"/"## Functions"
+// sections, each symbol as "### `signature`", a body (docstring, an AI
+// marker, or the UNDOCUMENTED marker), then a "`path:line`" citation line.
+// Parsed here rather than rendered as a raw <pre> block, so the module
+// card's expanded body can show a real symbol list (name, kind, citation,
+// AI/undocumented flags) matching docs.html's own row-per-symbol layout,
+// instead of visible markdown syntax (headers, backticks, asterisks).
+function parseDocsMarkdown(markdown) {{
+  const symbols = [];
+  let kind = 'function';
+  let current = null;
+  function flush() {{
+    if (!current) return;
+    const bodyText = current.bodyLines.join('\\n').trim();
+    const citeMatch = bodyText.match(/`([^`]+:\\d+)`\\s*$/);
+    const citation = citeMatch ? citeMatch[1] : '';
+    const description = (citeMatch ? bodyText.slice(0, citeMatch.index) : bodyText)
+      .replace(/\\*\\(AI-generated - no docstring found in source\\)\\*/, '')
+      .replace(/\\*\\(AI-polished from the original docstring\\)\\*/, '')
+      .replace(/\\*Undocumented - no docstring found\\.\\*/, '')
+      .trim();
+    symbols.push({{
+      name: current.name, kind: current.kind, signature: current.signature, citation: citation,
+      isUndocumented: bodyText.indexOf('Undocumented - no docstring found.') !== -1,
+      isAi: bodyText.indexOf('AI-generated') !== -1,
+      isPolished: bodyText.indexOf('AI-polished') !== -1,
+      description: description,
+    }});
+    current = null;
+  }}
+  // A line-by-line scan, not a nested split-by-header-level regex (a first
+  // attempt at that swallowed every ### symbol header inside its enclosing
+  // ## Classes/## Functions block instead of finding it, since ##? matches
+  // "#" or "##" but never "###" - the exact real bug a Node-based test
+  // against this repo's own real 89-symbol db.py caught before this ever
+  // reached a browser).
+  markdown.split('\\n').forEach(function (line) {{
+    const sectionMatch = line.match(/^##\\s+(Classes|Functions)\\s*$/);
+    if (sectionMatch) {{
+      flush();
+      kind = sectionMatch[1] === 'Classes' ? 'class' : 'function';
+      return;
+    }}
+    const sigMatch = line.match(/^###\\s+`(.+)`\\s*$/);
+    if (sigMatch) {{
+      flush();
+      const signature = sigMatch[1];
+      current = {{ kind: kind, signature: signature, name: (signature.match(/^[^(]+/) || [signature])[0].trim(), bodyLines: [] }};
+      return;
+    }}
+    if (current) current.bodyLines.push(line);
+  }});
+  flush();
+  return symbols;
 }}
 
 function renderDocsOverview(modulePaths, modules) {{
@@ -2098,45 +2808,45 @@ function renderDocsOverview(modulePaths, modules) {{
     return total + docsSymbolCount(modules[path] || '');
   }}, 0);
   const aiCount = modulePaths.filter(function (path) {{ return docsHasAiText(modules[path] || ''); }}).length;
-  return '<div class="docs-overview">' +
-    '<div>' +
-      '<div class="docs-overview-kicker">Aletheore Docs</div>' +
-      '<h2>Evidence-grounded API reference</h2>' +
-      '<p>Public functions and classes are grouped by source file with signatures, docstrings, generated descriptions, and file:line citations kept visibly grounded in repository evidence.</p>' +
-    '</div>' +
-    '<div class="docs-overview-stats">' +
-      '<div class="docs-stat-pill"><div class="docs-stat-value">' + modulePaths.length + '</div><div class="docs-stat-label">modules</div></div>' +
-      '<div class="docs-stat-pill"><div class="docs-stat-value">' + symbolCount + '</div><div class="docs-stat-label">symbols</div></div>' +
-      '<div class="docs-stat-pill"><div class="docs-stat-value">' + aiCount + '</div><div class="docs-stat-label">AI-assisted files</div></div>' +
-    '</div>' +
+  return '<div class="stat-row">' +
+    '<div class="stat-pill"><span class="n">' + modulePaths.length + '</span><span class="l">modules</span></div>' +
+    '<div class="stat-pill"><span class="n">' + symbolCount + '</span><span class="l">symbols</span></div>' +
+    '<div class="stat-pill"><span class="n">' + aiCount + '</span><span class="l">AI-assisted files</span></div>' +
   '</div>';
 }}
 
 function renderDocsModule(modulePath, markdown) {{
   const details = document.createElement('details');
   details.className = 'docs-module-card';
+  details.id = 'docs-module-' + modulePath.replace(/[^a-zA-Z0-9]/g, '-');
+  const hasAi = docsHasAiText(markdown);
+  details.dataset.ai = hasAi ? '1' : '0';
+  details.dataset.undocumented = docsHasUndocumented(markdown) ? '1' : '0';
   const summary = document.createElement('summary');
   summary.className = 'docs-module-summary';
-  const symbols = docsSymbolCount(markdown);
-  const lines = docsLineCount(markdown);
-  const hasAi = docsHasAiText(markdown);
   summary.innerHTML =
-    '<div>' +
-      '<div class="docs-module-title"><i class="ti ti-file-code" aria-hidden="true"></i><span class="docs-module-path">' + escapeHtml(modulePath) + '</span></div>' +
-      '<div class="docs-module-sub">' + symbols + ' public symbol' + (symbols === 1 ? '' : 's') + ' documented from source evidence</div>' +
-    '</div>' +
-    '<div class="docs-module-meta">' +
-      '<span class="docs-chip">' + lines + ' lines</span>' +
-      (hasAi ? '<span class="docs-chip ai"><i class="ti ti-sparkles" aria-hidden="true"></i>AI marked</span>' : '') +
-      '<i class="ti ti-chevron-down docs-module-chevron" aria-hidden="true"></i>' +
-    '</div>';
+    '<span class="docs-module-chevron">&#9654;</span>' +
+    '<span class="docs-module-path" title="' + escapeHtml(modulePath) + '">' + escapeHtml(modulePath) + '</span>' +
+    (hasAi ? '<span class="docs-chip">AI-assisted</span>' : '');
   const content = document.createElement('div');
   content.className = 'docs-module-content';
-  const pre = document.createElement('pre');
-  pre.className = 'docs-module-body';
-  pre.textContent = markdown;
+  const inner = document.createElement('div');
+  inner.className = 'docs-module-content-inner';
+  const symbols = parseDocsMarkdown(markdown);
+  inner.innerHTML = symbols.length
+    ? symbols.map(function (s) {{
+        const flag = s.isUndocumented
+          ? '<span class="flag undocumented">undocumented</span>'
+          : (s.isAi || s.isPolished) ? '<span class="flag ai">' + (s.isPolished ? 'AI-polished' : 'AI-generated') + '</span>' : '';
+        return '<div class="docs-symbol-row">' +
+          '<div class="sig"><span class="name">' + escapeHtml(s.signature) + '</span><span class="kind">' + escapeHtml(s.kind) + '</span>' + flag + '</div>' +
+          (s.description ? '<div class="desc">' + escapeHtml(s.description) + '</div>' : '') +
+          '<div class="cite">' + escapeHtml(s.citation) + '</div>' +
+        '</div>';
+      }}).join('')
+    : '<div class="docs-symbol-row">No public symbols found.</div>';
+  content.appendChild(inner);
   details.appendChild(summary);
-  content.appendChild(pre);
   details.appendChild(content);
   return details;
 }}
@@ -2194,13 +2904,62 @@ async function loadDocs() {{
       'The latest Docs update didn\\'t finish everything: ' + escapeHtml(data.build_error) +
       ' It will pick up automatically on the next run.</div>';
   }}
-  body.innerHTML = renderDocsOverview(modulePaths, data.modules || {{}}) + staleBanner;
+  document.getElementById('docs-stat-row').innerHTML = renderDocsOverview(modulePaths, data.modules || {{}});
+  body.innerHTML = staleBanner;
   const list = document.createElement('div');
   list.className = 'docs-grid';
+  list.id = 'docs-grid';
   modulePaths.sort().forEach(function (path) {{
     list.appendChild(renderDocsModule(path, data.modules[path]));
   }});
   body.appendChild(list);
+
+  renderDocsRail(data.recently_updated || [], data.hotspots || []);
+}}
+
+function renderDocsRail(recentlyUpdated, hotspots) {{
+  const rail = document.getElementById('docs-rail');
+  rail.style.display = '';
+  const recentEl = document.getElementById('rail-recently-updated');
+  recentEl.innerHTML = recentlyUpdated.length
+    ? recentlyUpdated.slice(0, 6).map(function (f) {{
+        return '<div class="rail-row"><span class="path" title="' + escapeHtml(f.path) + '">' + escapeHtml(f.path) + '</span>' +
+          '<span class="meta">' + compactRelativeTime(f.last_commit_at) + '</span></div>';
+      }}).join('')
+    : '<div class="rail-row"><span class="meta">No git history yet.</span></div>';
+  const hotspotsEl = document.getElementById('rail-hotspots');
+  // "N commits" (churn_count), not a percentile: hotspots is a churn-ranked
+  // top-30 slice (HOTSPOT_LIMIT in git_intel/analyzer.py), not per-file
+  // churn for the whole repo - ranking within only the visible top 30
+  // would misrepresent a file's real standing against every file, most of
+  // which have near-zero churn and never appear in this list at all.
+  hotspotsEl.innerHTML = hotspots.length
+    ? hotspots.slice(0, 6).map(function (h) {{
+        return '<div class="rail-row"><span class="path" title="' + escapeHtml(h.path) + '">' + escapeHtml(h.path) + '</span>' +
+          '<span class="meta">' + h.churn_count + ' commit' + (h.churn_count === 1 ? '' : 's') + '</span></div>';
+      }}).join('')
+    : '<div class="rail-row"><span class="meta">No hotspots yet.</span></div>';
+
+  function filterModules(predicate) {{
+    document.querySelectorAll('.docs-module-card').forEach(function (card) {{
+      card.style.display = predicate(card) ? '' : 'none';
+    }});
+  }}
+  document.getElementById('rail-jump-all').onclick = function (e) {{
+    e.preventDefault();
+    filterModules(function () {{ return true; }});
+    document.getElementById('docs-grid').scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+  }};
+  document.getElementById('rail-jump-ai').onclick = function (e) {{
+    e.preventDefault();
+    filterModules(function (card) {{ return card.dataset.ai === '1'; }});
+    document.getElementById('docs-grid').scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+  }};
+  document.getElementById('rail-jump-undoc').onclick = function (e) {{
+    e.preventDefault();
+    filterModules(function (card) {{ return card.dataset.undocumented === '1'; }});
+    document.getElementById('docs-grid').scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+  }};
 }}
 
 async function loadDocsRepoCommitSettings() {{
@@ -2506,149 +3265,8 @@ async function sendTestPushover() {{
   status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
 }}
 
-async function buySeat(btn) {{
-  // Disabled for the whole round trip, not just re-enabled on failure like
-  // most other buttons on this page: real gap found via audit - buySeat/
-  // removeSeat are the only real-money actions on this page with no
-  // double-click guard at all. A second click landing before the first
-  // response comes back fires a second, genuinely separate POST /seats/buy
-  // - the backend's per-installation lock (admin.py's
-  // _seat_adjustment_lock) only serializes the two against each other, it
-  // does not collapse them into one purchase, so both succeed and the
-  // customer is billed for two extra seats from what looked like one
-  // click. loadSettings() below re-renders this whole section (including
-  // this button) once the real seat count is known, so there is no
-  // separate re-enable path to also get right for the SUCCESS path - but
-  // that reasoning only covers success. Real gap found by Flash Review on
-  // this same change: on a genuine network failure (fetch() itself
-  // rejects, before res/data ever exist) the function exits via an
-  // unhandled exception, loadSettings() never runs, and the button - a
-  // real-money action - stays disabled forever with no page-reload-free
-  // recovery. try/finally re-enables on every exit; harmless on the
-  // success path too, since loadSettings() has already replaced this
-  // button's DOM node by the time finally runs.
-  btn.disabled = true;
-  const status = document.getElementById('seat-billing-status');
-  status.textContent = 'Updating billing...';
-  status.style.color = 'var(--slate-600)';
-  try {{
-    const res = await fetch(adminBase + '/seats/buy', {{ method: 'POST' }});
-    const data = await res.json().catch(function () {{ return {{}}; }});
-    if (res.ok) {{
-      status.textContent = 'Seat added - billing updated. Refreshing...';
-      status.style.color = 'var(--success)';
-      loadSettings();
-    }} else {{
-      status.textContent = data.detail || 'Could not buy a seat.';
-      status.style.color = 'var(--critical)';
-    }}
-  }} finally {{
-    btn.disabled = false;
-  }}
-}}
-
-async function removeSeat(btn) {{
-  // See buySeat's comment - same double-click gap and same network-failure
-  // stuck-button gap, same fix for both.
-  btn.disabled = true;
-  const status = document.getElementById('seat-billing-status');
-  status.textContent = 'Updating billing...';
-  status.style.color = 'var(--slate-600)';
-  try {{
-    const res = await fetch(adminBase + '/seats/remove', {{ method: 'POST' }});
-    const data = await res.json().catch(function () {{ return {{}}; }});
-    if (res.ok) {{
-      status.textContent = 'Seat removed - billing updated. Refreshing...';
-      status.style.color = 'var(--success)';
-      loadSettings();
-    }} else {{
-      status.textContent = data.detail || 'Could not remove a seat.';
-      status.style.color = 'var(--critical)';
-    }}
-  }} finally {{
-    btn.disabled = false;
-  }}
-}}
-
-async function openBillingPortal() {{
-  const status = document.getElementById('seat-billing-status');
-  if (status) {{ status.textContent = 'Opening billing portal...'; status.style.color = 'var(--slate-600)'; }}
-  const res = await fetch(adminBase + '/billing-portal');
-  const data = await res.json().catch(function () {{ return {{}}; }});
-  if (res.ok && data.url) {{
-    window.location.href = data.url;
-    return;
-  }}
-  if (status) {{
-    status.textContent = data.detail || 'Could not open the billing portal.';
-    status.style.color = 'var(--critical)';
-  }}
-}}
-
-async function buyCredit(btn) {{
-  const statusEl = document.getElementById('topup-status');
-  if (typeof Paddle === "undefined") {{
-    statusEl.textContent = 'Checkout is unavailable right now - try disabling any ad/script blocker and reload.';
-    return;
-  }}
-  // parseInt would accept "7.9" (silently truncated to 7) or "1e5" (parsed
-  // as 1) - Number() + an explicit integer check rejects both instead of
-  // quietly charging a different amount than what's on screen.
-  const rawAmount = Number(document.getElementById('topup-amount').value);
-  const amount = Number.isInteger(rawAmount) ? rawAmount : NaN;
-  if (!amount || amount < 5 || amount > 1000) {{
-    statusEl.textContent = 'Enter an amount between $5 and $1000.';
-    return;
-  }}
-  // Real gap found via audit: buySeat/removeSeat both guard against a
-  // rapid double-click firing two independent purchases (see buySeat's
-  // comment); this button had no guard at all - two clicks before the
-  // first apiGet() round trip returns could open two stacked
-  // Paddle.Checkout.open() overlays with two different signed
-  // checkout_installation_tokens. Re-enabled in finally - unlike
-  // buySeat/removeSeat, this button's DOM node is never replaced by a
-  // re-render, so it must actually come back (e.g. the customer closes
-  // the overlay without completing checkout and wants to try again).
-  btn.disabled = true;
-  statusEl.textContent = 'Opening checkout...';
-  statusEl.style.color = '';
-  try {{
-    window._creditCheckoutCompleted = false;
-    // The installation token is minted with a 30-minute TTL (auth.py's
-    // sign_checkout_installation_id) - re-fetch it fresh here instead of
-    // reusing loadSettings()'s page-load-time copy, so a tab left open past
-    // 30 minutes doesn't send Paddle a token the webhook can no longer
-    // resolve (money taken, no credit granted). window._creditTopupPriceId
-    // is a static price id set once at page load and doesn't need refreshing.
-    const res = await apiGet(adminBase);
-    if (!res || !res.ok) {{
-      statusEl.textContent = 'Could not start checkout - try again.';
-      return;
-    }}
-    const data = await res.json();
-    // Associates the checkout with the installation's existing Paddle
-    // customer record (already returned in data.installation, same source
-    // /subscribe's checkout page reads for its own pwCustomer wiring) -
-    // without it, an existing subscriber topping up credit would re-enter
-    // their email and Paddle would silently open a second customer record,
-    // splitting billing history and producing a transaction whose
-    // customer_id the subscription webhook path can't attribute back to
-    // this installation.
-    const paddleCustomerId = data.installation && data.installation.paddle_customer_id;
-    Paddle.Checkout.open({{
-      items: [{{ priceId: window._creditTopupPriceId, quantity: amount }}],
-      customData: {{ installation_token: data.checkout_installation_token }},
-      ...(paddleCustomerId ? {{ customer: {{ id: paddleCustomerId }} }} : {{}}),
-      settings: {{
-        displayMode: 'overlay',
-        variant: 'one-page',
-        successUrl: 'https://app.aletheore.com/dashboard',
-      }},
-    }});
-  }} finally {{
-    btn.disabled = false;
-  }}
-}}
+{BILLING_ACTIONS_JS}
+window._reloadUsage = loadSettings;
 
 // The danger zone renders on every plan, including free and lapsed - the
 // settings page 402s those customers out of everything else, but locking
@@ -3112,64 +3730,92 @@ function setStatus(text, color) {
   el.textContent = text;
   el.style.color = color || '';
 }
+function billingCadenceText(data) {
+  const renewsAt = data.subscription_renews_at
+    ? new Date(data.subscription_renews_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+    : null;
+  const cadenceWord = data.billing_interval === 'year' ? 'yearly' : 'monthly';
+  if (renewsAt) return 'Billed ' + cadenceWord + ' \\u00b7 next charge ' + renewsAt;
+  // A real subscription exists (paddle_subscription_id is set) but the
+  // Paddle lookup failed or returned no next_billed_at - telling a paying
+  // customer "no active subscription" here would be actively wrong, not
+  // just imprecise.
+  if (data.paddle_subscription_id) return 'Billing details unavailable right now';
+  return 'No active subscription';
+}
+function renderInstallsList(siblings, currentId) {
+  const list = document.getElementById('installs-list');
+  if (siblings.length === 0) { list.innerHTML = ''; return; }
+  list.innerHTML = siblings.map(function (s) {
+    const label = escapeHtml(s.account_login);
+    if (s.plan === 'free') {
+      // No dashboard exists for a free installation - an inert row (not a
+      // dead link) is more honest than the mockup's own href="#" placeholder.
+      return '<li><span class="nav-item disabled"><span class="nav-dot"></span>' + label + '<span class="install-tag">free</span></span></li>';
+    }
+    const isActive = s.installation_id === currentId;
+    // An AIR sibling has no single repo to deep-link to from an
+    // installation-scoped page - /dashboard (the org/repo picker) is the
+    // real entry point for it, same as everywhere else AIR is reached.
+    const href = s.plan === 'flash' ? '/credits/' + s.installation_id : '/dashboard';
+    return '<li><a class="nav-item' + (isActive ? ' active' : '') + '" href="' + href + '">' +
+      '<span class="nav-dot paid"></span>' + label +
+      (s.plan === 'air' ? '<span class="install-tag">AIR</span>' : '') +
+    '</a></li>';
+  }).join('');
+}
 async function loadCredits() {
-  const body = document.getElementById('credits-body');
   const res = await fetch(creditsApi);
   if (res.status === 401) { window.location.href = '/auth/logout'; return; }
   if (res.status === 404) {
-    body.innerHTML = '<div class="empty-state">This installation has no paid Aletheore plan, or your GitHub account does not administer it. <a href="/dashboard">Back to your organizations</a></div>';
+    document.getElementById('top-error').innerHTML = '<div class="error-banner">This installation has no paid Aletheore plan, or your GitHub account does not administer it. <a href="/dashboard">Back to your organizations</a></div>';
     return;
   }
   if (!res.ok) {
     // A transient 5xx must not tell a paying customer they have no plan.
-    body.innerHTML = '<div class="empty-state">We could not load your credit balance right now. Please reload in a moment. <a href="/dashboard">Back to your organizations</a></div>';
+    document.getElementById('top-error').innerHTML = '<div class="error-banner">We could not load your credit balance right now. Please reload in a moment.</div>';
     return;
   }
   const data = await res.json();
+  window._creditTopupPriceId = data.credit_topup_price_id;
+
+  document.title = data.account_login + ' - Aletheore';
+  document.getElementById('install-name').textContent = data.account_login;
+  document.getElementById('plan-pill').textContent = planShortName(data.plan);
+  renderInstallsList(data.sibling_installations || [], data.installation_id);
+
   const base = data.base_credit_remaining_usd || 0;
   const topup = data.topup_credit_balance_usd || 0;
-  window._creditTopupPriceId = data.credit_topup_price_id;
-  body.innerHTML =
-    '<div class="settings-block">' +
-      '<div class="settings-block-label">' + escapeHtml(data.account_login) + ' &middot; ' + escapeHtml(planDisplayName(data.plan)) + '</div>' +
-      '<div class="settings-block-hint">$' + (base + topup).toFixed(2) + ' AI credit available for reviews and builds</div>' +
-      '<div class="settings-block-hint">$' + base.toFixed(2) + ' included this month' +
-        (topup > 0 ? ' + $' + topup.toFixed(2) + ' purchased (never expires)' : '') + '</div>' +
-      '<div class="form-row" style="margin-top: 10px;">' +
-        '<div class="stepper">' +
-              '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepDown()" aria-label="Decrease amount">&minus;</button>' +
-              '<input type="number" id="topup-amount" min="5" max="1000" step="5" value="10">' +
-              '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepUp()" aria-label="Increase amount">+</button>' +
-            '</div>' +
-        '<button class="btn btn-accent" id="topup-button" style="margin-left: 6px;">Buy more credit</button>' +
-      '</div>' +
-      '<div id="topup-status" class="settings-block-hint"></div>' +
-      '<div class="settings-block-hint">One-time purchase, $1 per credit, minimum $5. Purchased credit never expires. When your credit runs out, automatic AI reviews pause until your plan renews or you buy more.</div>' +
-    '</div>' +
-    '<div class="settings-block">' +
-      '<div class="settings-block-label">Alert email</div>' +
-      '<div class="settings-block-hint">Used for the low-credit warning, which is the only notice you get before reviews pause at $0, and for endpoint-health alerts if you have monitored endpoints configured.</div>' +
-      '<div class="form-row" style="margin-top: 10px;">' +
-        '<input class="field" id="alert-email-input" type="email" placeholder="you@example.com" style="flex: 1 1 220px;">' +
-        '<button class="btn" id="alert-email-save">Save</button>' +
-      '</div>' +
-      '<div id="alert-email-status" class="settings-block-hint"></div>' +
-    '</div>' +
-    '<div class="settings-block">' +
-      '<div class="settings-block-label">Billing</div>' +
-      '<div class="settings-block-hint"><a href="#" id="billing-portal-link">Manage billing</a> to update your payment method or view invoices.</div>' +
-      '<div id="billing-portal-status" class="settings-block-hint"></div>' +
-    '</div>' +
-    '<div class="settings-block">' +
-      '<div class="settings-block-label">Review history</div>' +
-      '<div id="review-history-body"><div class="empty-state">Loading&hellip;</div></div>' +
-    '</div>';
+  const allotment = data.base_credit_allotment_usd || 0;
+  const pct = allotment > 0 ? Math.max(0, Math.min(100, Math.round((base / allotment) * 100))) : 0;
+  document.getElementById('credit-figure').innerHTML =
+    '$' + base.toFixed(2) + (allotment > 0 ? ' <span class="of">of $' + allotment.toFixed(2) + '</span>' : '');
+  document.getElementById('credit-meter-fill').style.width = pct + '%';
+  const avg = data.average_cost_per_review_usd;
+  let subText;
+  if (avg && avg > 0) {
+    const reviewsLeft = Math.floor((base + topup) / avg);
+    subText = '~' + reviewsLeft + (reviewsLeft === 1 ? ' review' : ' reviews') + ' left this month, at your recent average cost per review';
+  } else {
+    subText = data.flash_review_count_this_month > 0 ? 'Credit available for automatic reviews' : 'No completed reviews yet this month';
+  }
+  if (topup > 0) subText += ' \\u00b7 $' + topup.toFixed(2) + ' purchased credit also available';
+  document.getElementById('credit-sub').textContent = subText;
+  document.getElementById('credit-hero').style.display = '';
+
+  document.getElementById('billing-cadence-line').textContent = billingCadenceText(data);
+
+  // The mockup's own "1 repo on Flash, 1 on the free tier" line assumes
+  // repo-level plan granularity a GitHub App installation doesn't have -
+  // plan is set per installation, and one installation can cover several
+  // repos. The honest equivalent: this install's own real repo count.
+  const repoCount = data.repo_count || 0;
+  document.getElementById('sibling-summary-line').textContent =
+    repoCount + (repoCount === 1 ? ' repo' : ' repos') + ' on ' + planShortName(data.plan);
+
   document.getElementById('topup-button').addEventListener('click', function () { buyCredit(this); });
+  document.getElementById('billing-portal-btn').addEventListener('click', openInstallationBillingPortal);
   document.getElementById('alert-email-save').addEventListener('click', saveAlertEmail);
-  document.getElementById('billing-portal-link').addEventListener('click', function (event) {
-    event.preventDefault();
-    openInstallationBillingPortal();
-  });
   loadAlertEmail();
   loadReviewHistory();
 }
@@ -3225,17 +3871,23 @@ async function loadReviewHistory() {
     body.innerHTML = '<div class="empty-state">No reviews recorded yet.</div>';
     return;
   }
-  const outcomeLabel = { posted: 'commented', clean: 'clean', skipped: 'skipped', failed: 'failed' };
-  body.innerHTML = reviews.map(function (r) {
-    const when = new Date(r.reviewed_at).toLocaleString();
-    let detail = '';
-    if (r.outcome === 'posted') detail = r.finding_count + (r.finding_count === 1 ? ' finding' : ' findings');
-    else if (r.outcome === 'skipped' || r.outcome === 'failed') detail = escapeHtml(r.skip_reason || r.outcome);
-    return '<div class="token-row">' +
-      '<span>' + escapeHtml(r.repo_full_name) + ' #' + r.pr_number + '</span>' +
-      '<span class="token-meta">' + (outcomeLabel[r.outcome] || r.outcome) + (detail ? ' &middot; ' + detail : '') + ' &middot; ' + escapeHtml(when) + '</span>' +
-    '</div>';
-  }).join('');
+  // flash_review_history has no PR-title column (see migration 069) - the
+  // real per-repo path plus PR number, which we do have, stands in for the
+  // mockup's invented title text as the row's primary identifier.
+  const statusClass = { posted: 'commented', clean: 'clean', skipped: 'skipped', failed: 'skipped' };
+  const metaText = { clean: 'clean' };
+  body.innerHTML = '<div class="review-list">' + reviews.map(function (r) {
+    let meta = metaText[r.outcome];
+    if (r.outcome === 'posted') meta = r.finding_count + (r.finding_count === 1 ? ' finding' : ' findings');
+    else if (!meta) meta = escapeHtml(r.skip_reason || r.outcome);
+    const prUrl = 'https://github.com/' + encodeURIComponent(r.repo_full_name).replace('%2F', '/') + '/pull/' + r.pr_number;
+    return '<a class="review-row" href="' + prUrl + '" target="_blank" rel="noopener">' +
+      '<span class="review-status ' + (statusClass[r.outcome] || 'skipped') + '"></span>' +
+      '<span class="review-title">' + escapeHtml(r.repo_full_name) + '<span class="repo">#' + r.pr_number + '</span></span>' +
+      '<span class="review-meta">' + meta + '</span>' +
+      '<span class="review-cost">' + compactRelativeTime(r.reviewed_at) + '</span>' +
+    '</a>';
+  }).join('') + '</div>';
 }
 async function buyCredit(btn) {
   if (typeof Paddle === 'undefined') {
@@ -3300,27 +3952,101 @@ loadCredits();
 
 
 def _credits_page(installation_id: int) -> str:
-    """Standalone AI-credit page for one installation: balance plus a one-time
-    top-up checkout. Exists because a Flash installation has no managed
-    dashboard (the settings page, which holds the same controls for AIR, is
-    AIR-only), so without this a Flash customer who runs out of credit has no
-    way to buy more. Data comes from /app/installations/{id}/credits, which does
-    the real authorization; nothing sensitive is baked into this HTML."""
+    """Flash's entire managed dashboard: credit balance and top-up checkout,
+    review history, the low-credit alert email, and an AIR upgrade cross-sell
+    - matching flash.html's own full-shell layout, not the settings page's
+    AIR-only tabs. Exists because a Flash installation has no other managed
+    dashboard (settings.py's own settings page is AIR-only), so without this
+    a Flash customer has no way to buy more credit, see what Flash Review has
+    done, or set a low-credit warning address. Data comes from
+    /app/installations/{id}/credits and friends, which do the real
+    authorization; nothing sensitive is baked into this HTML."""
     settings = get_settings()
     script = (
         _CREDITS_JS.replace("__INSTALLATION_ID__", str(int(installation_id)))
     )
     return f"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI credit — Aletheore</title>
+<title>Aletheore</title>
+<link rel="icon" type="image/png" href="{BRAND_MARK_DATA_URI}">
 {ICONS_LINK}
 {STYLE}
-<div class="picker-wrap" id="credits-root" data-paddle-env="{escape(settings.paddle_environment)}" data-paddle-client-token="{escape(settings.paddle_client_token)}">
-  <div class="picker-head">
-    <h1>AI credit</h1>
-    <div><a class="btn" href="/dashboard">All organizations</a> <a class="btn" href="/auth/logout">Sign out</a></div>
-  </div>
-  <div id="credits-body"><div class="empty-state">Loading&hellip;</div></div>
+<div class="shell" id="credits-root" data-paddle-env="{escape(settings.paddle_environment)}" data-paddle-client-token="{escape(settings.paddle_client_token)}">
+  <nav class="sidebar" aria-label="Dashboard navigation">
+    <div class="brand"><img class="brand-mark" src="{BRAND_MARK_DATA_URI}" alt="" width="28" height="28"><span class="brand-name">Aletheore</span></div>
+    <div class="nav-scroll">
+      <div class="nav-group-label">Your installs</div>
+      <ul class="nav-list" id="installs-list"><li><a class="nav-item" aria-hidden="true">&hellip;</a></li></ul>
+    </div>
+    <div style="margin-top:auto;">
+      <div class="nav-group-label">Account</div>
+      <ul class="nav-list">
+        <li><a class="nav-item" href="/credits/{installation_id}"><i class="ti ti-settings" aria-hidden="true"></i>Settings</a></li>
+        <li><a class="nav-item" href="/auth/logout"><i class="ti ti-logout" aria-hidden="true"></i>Sign out</a></li>
+      </ul>
+    </div>
+  </nav>
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h1 class="h1" style="margin-top:0"><span id="install-name">&hellip;</span><span class="plan-pill" id="plan-pill"></span></h1>
+        <div class="repo-path">Automatic PR reviews on every push</div>
+      </div>
+    </div>
+    <div id="top-error"></div>
+    <div class="credit-hero" id="credit-hero" style="display:none">
+      <div>
+        <div class="credit-figure" id="credit-figure"></div>
+        <div class="credit-meter"><div class="credit-meter-fill" id="credit-meter-fill"></div></div>
+        <div class="credit-sub" id="credit-sub"></div>
+      </div>
+      <div class="credit-actions">
+        <div class="qty-row">
+          <span class="qty-prefix">$</span>
+          <div class="stepper">
+            <button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepDown()" aria-label="Decrease amount">&minus;</button>
+            <input type="number" id="topup-amount" min="5" max="1000" step="5" value="10">
+            <button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepUp()" aria-label="Increase amount">+</button>
+          </div>
+          <button class="btn btn-accent" id="topup-button">Buy credit</button>
+        </div>
+        <div id="topup-status" class="settings-block-hint"></div>
+        <button class="btn btn-small" id="billing-portal-btn">Manage billing</button>
+        <div id="billing-portal-status" class="settings-block-hint"></div>
+      </div>
+    </div>
+
+    <div class="plain-section-head">
+      <h2>Recent reviews</h2>
+      <div class="count">last 30 days</div>
+    </div>
+    <div id="review-history-body"><div class="empty-state">Loading&hellip;</div></div>
+
+    <div class="settings-grid" id="flash-settings-grid">
+      <div class="settings-block">
+        <div class="settings-block-label">Notify when credit runs low</div>
+        <div class="form-row">
+          <input class="field" id="alert-email-input" type="email" placeholder="you@example.com">
+          <button class="btn" id="alert-email-save">Save</button>
+        </div>
+        <div id="alert-email-status" class="settings-block-hint"></div>
+        <div class="status-line"><span class="status-dot"></span>Reviews pause silently below $0 - this is the only warning you'll get before that happens.</div>
+      </div>
+      <div class="settings-block">
+        <div class="settings-block-label">This install</div>
+        <div class="settings-block-hint" id="billing-cadence-line"></div>
+        <div class="settings-block-hint" id="sibling-summary-line"></div>
+      </div>
+    </div>
+
+    <div class="upgrade-card">
+      <div>
+        <h3>AIR adds AIRview, Docs, managed audits and endpoint monitoring</h3>
+        <p>Same evidence-grounded reviews, plus a generated architecture map, always-current docs, and uptime checks across your repo's API. $18 of shared AI credit a month.</p>
+      </div>
+      <a class="btn" href="{PRICING_URL}" target="_blank" rel="noopener">Compare plans</a>
+    </div>
+  </main>
 </div>
 <script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
 <script>
@@ -3414,7 +4140,7 @@ async def dashboard_overview_page(org: str, repo: str, request: Request):
     redirect = await _require_session_or_redirect(request)
     if redirect is not None:
         return redirect
-    return _no_store_html(OVERVIEW_HTML)
+    return _no_store_html(_overview_html())
 
 
 @frontend_router.get("/dashboard/{org}/{repo}/security", response_class=HTMLResponse)

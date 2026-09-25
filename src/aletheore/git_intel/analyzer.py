@@ -2,7 +2,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from aletheore.git_intel.graph_store import GraphSnapshot, RepoGraphStore
+from aletheore.git_intel.graph_store import FileChurnTotal, GraphSnapshot, RepoGraphStore
 from aletheore.git_intel.incremental import (
     CO_CHANGE_PARTNERS_RETURNED,
     GitLogStreamError,
@@ -14,6 +14,7 @@ from aletheore.git_intel.incremental import (
 from aletheore.git_intel.sqlite_store import SQLiteRepoGraphStore, default_graph_db_path
 
 HOTSPOT_LIMIT = 30
+RECENTLY_UPDATED_LIMIT = 10
 CADENCE_WEEKS_RETURNED = 52
 
 # Distinct from the generic exit code 1 other scan failures use, so callers
@@ -273,6 +274,13 @@ def _cadence_summary(snapshot: GraphSnapshot, now: datetime) -> dict:
     }
 
 
+def _last_commit_at(churn: FileChurnTotal) -> datetime | None:
+    # recent_commits is already newest-first (see FileChurnTotal's own
+    # docstring) - this is a lookup into data already computed while
+    # streaming git log, never a fresh git call.
+    return churn.recent_commits[0].committed_at if churn.recent_commits else None
+
+
 def _hotspots_summary(snapshot: GraphSnapshot, modules: list[dict]) -> list[dict]:
     dependents_by_path = {module["path"]: len(module.get("imported_by", [])) for module in modules}
     hotspots = []
@@ -280,6 +288,7 @@ def _hotspots_summary(snapshot: GraphSnapshot, modules: list[dict]) -> list[dict
         partners = sorted(
             churn.co_change_counts.items(), key=lambda item: (-item[1], item[0])
         )[:CO_CHANGE_PARTNERS_RETURNED]
+        last_commit_at = _last_commit_at(churn)
         hotspots.append(
             {
                 "path": path,
@@ -288,9 +297,23 @@ def _hotspots_summary(snapshot: GraphSnapshot, modules: list[dict]) -> list[dict
                     {"path": partner, "co_occurrences": count} for partner, count in partners
                 ],
                 "dependents_count": dependents_by_path.get(path, 0),
+                "last_commit_at": last_commit_at.isoformat() if last_commit_at else None,
             }
         )
     return sorted(hotspots, key=lambda item: (-item["churn_count"], item["path"]))[:HOTSPOT_LIMIT]
+
+
+def _recently_updated_summary(snapshot: GraphSnapshot) -> list[dict]:
+    """The most recently touched files repo-wide, ranked by recency rather
+    than churn - a high-churn hotspot and a file edited five minutes ago are
+    different questions, and HOTSPOT_LIMIT's churn-ranked top 30 can easily
+    exclude a low-churn file that was just touched."""
+    dated = []
+    for path, churn in snapshot.file_churn.items():
+        last_commit_at = _last_commit_at(churn)
+        if last_commit_at is not None:
+            dated.append({"path": path, "last_commit_at": last_commit_at.isoformat()})
+    return sorted(dated, key=lambda item: item["last_commit_at"], reverse=True)[:RECENTLY_UPDATED_LIMIT]
 
 
 def compute_hotspots(
@@ -309,6 +332,30 @@ def compute_hotspots(
         if owns_store and isinstance(store, SQLiteRepoGraphStore):
             store.close()
     return _hotspots_summary(snapshot, modules)
+
+
+def compute_recently_updated(
+    repo_path: Path,
+    *,
+    store: RepoGraphStore | None = None,
+    depth_cap: int | None = None,
+    branch: str | None = None,
+) -> list[dict]:
+    """The most recently touched files repo-wide - see
+    _recently_updated_summary's docstring for why this is a separate ranking
+    from compute_hotspots' churn-ranked list, not a slice of it. A second
+    _sync_graph call, same as compute_hotspots' own - cheap here since the
+    incremental store already has this scan's commits synced by the time
+    both are called in the same evidence build (see evidence.py), so this
+    resolves to a cache read, not a second history walk."""
+    owns_store = store is None
+    store = store or default_store(repo_path)
+    try:
+        snapshot, _reset = _sync_graph(repo_path, store, datetime.now(timezone.utc), depth_cap, branch)
+    finally:
+        if owns_store and isinstance(store, SQLiteRepoGraphStore):
+            store.close()
+    return _recently_updated_summary(snapshot)
 
 
 def _first_commit_at(repo_path: Path) -> datetime:

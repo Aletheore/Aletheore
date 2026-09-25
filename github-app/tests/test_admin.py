@@ -36,6 +36,7 @@ from app_server.db import (
     set_installation_plan,
     upsert_installation,
 )
+from app_server.llm_cost import PLAN_BASE_CREDIT_USD
 from app_server.main import app
 from app_server.paddle_client import PaddleAPIError
 from app_server.paddle_pricing import EXTRA_SEAT_PRICE_ID
@@ -397,6 +398,68 @@ async def test_admin_page_surfaces_credit_balance(pool, monkeypatch):
     body = response.json()
     assert body["base_credit_remaining_usd"] == pytest.approx(3.50)
     assert body["topup_credit_balance_usd"] == pytest.approx(12.00)
+
+
+@pytest.mark.asyncio
+async def test_admin_page_surfaces_base_credit_allotment(pool, monkeypatch):
+    # base_credit_allotment_usd is the Overview page's progress-bar
+    # denominator (headline credit figure "of $X") - a real value from
+    # base_credit_for_plan(), not the remaining balance re-labeled.
+    client = await _logged_in_client(pool, monkeypatch, plan="air")
+
+    async with client:
+        response = await client.get("/admin/octocat/hello-world")
+
+    assert response.status_code == 200
+    assert response.json()["base_credit_allotment_usd"] == pytest.approx(PLAN_BASE_CREDIT_USD["air"])
+
+
+@pytest.mark.asyncio
+async def test_admin_page_surfaces_subscription_renewal_date(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch, plan="air")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test_renewal", "ctm_test_renewal")
+
+    def _fake_get_subscription(api_key, subscription_id):
+        assert subscription_id == "sub_test_renewal"
+        return {"next_billed_at": "2026-10-24T00:00:00Z"}
+
+    monkeypatch.setattr("app_server.admin.get_paddle_subscription", _fake_get_subscription)
+
+    async with client:
+        response = await client.get("/admin/octocat/hello-world")
+
+    assert response.status_code == 200
+    assert response.json()["subscription_renews_at"] == "2026-10-24T00:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_admin_page_survives_a_paddle_lookup_failure_for_the_renewal_date(pool, monkeypatch):
+    # Best-effort, same as _uninitialized_repos_for_installation: a Paddle
+    # hiccup must show "no date" on Overview, not break the whole admin page.
+    client = await _logged_in_client(pool, monkeypatch, plan="air")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test_renewal", "ctm_test_renewal")
+
+    def _boom(api_key, subscription_id):
+        raise PaddleAPIError("could not fetch subscription")
+
+    monkeypatch.setattr("app_server.admin.get_paddle_subscription", _boom)
+
+    async with client:
+        response = await client.get("/admin/octocat/hello-world")
+
+    assert response.status_code == 200
+    assert response.json()["subscription_renews_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_admin_page_has_no_renewal_date_without_a_subscription(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch, plan="air")
+
+    async with client:
+        response = await client.get("/admin/octocat/hello-world")
+
+    assert response.status_code == 200
+    assert response.json()["subscription_renews_at"] is None
 
 
 @pytest.mark.asyncio

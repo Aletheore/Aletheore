@@ -8,6 +8,7 @@ from aletheore.evidence import EVIDENCE_VERSION
 from app_server.auth import encrypt_access_token, sign_session_id
 from app_server.db import (
     add_installation_member,
+    add_paddle_ids_to_installation,
     create_session,
     hide_repo,
     insert_repo_history,
@@ -17,6 +18,7 @@ from app_server.db import (
 )
 from app_server.dashboard import _fetch_uninitialized_repos_sync
 from app_server.main import app
+from app_server.paddle_client import PaddleAPIError
 
 
 async def _seed_wiki_overview(pool, installation_id, repo_full_name, description="System overview."):
@@ -350,6 +352,62 @@ async def test_credits_works_for_an_air_installation_too(pool, monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["plan"] == "air"
+
+
+@pytest.mark.asyncio
+async def test_credits_keeps_the_real_subscription_id_when_the_paddle_lookup_fails(pool, monkeypatch):
+    # A real subscription exists (paddle_subscription_id is set on the
+    # installation) but the Paddle API call for its renewal date/billing
+    # interval fails - the response must still carry paddle_subscription_id
+    # so the frontend can tell "a subscription exists but we couldn't read
+    # its details" apart from "no subscription at all" (billingCadenceText
+    # in frontend.py branches on exactly this field for that reason).
+    await upsert_installation(pool, 737, "my-org")
+    await set_installation_plan(pool, 737, "flash")
+    await add_paddle_ids_to_installation(pool, 737, "sub_test_flaky", "ctm_test_flaky")
+
+    def _boom(api_key, subscription_id):
+        raise PaddleAPIError("could not fetch subscription")
+
+    monkeypatch.setattr("app_server.dashboard.get_paddle_subscription", _boom)
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[737])
+    async with client:
+        response = await client.get("/app/installations/737/credits")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["paddle_subscription_id"] == "sub_test_flaky"
+    assert body["subscription_renews_at"] is None
+    assert body["billing_interval"] is None
+
+
+@pytest.mark.asyncio
+async def test_credits_reports_this_installations_own_real_repo_count(pool, monkeypatch):
+    # Plan is set per installation, not per repo, so the mockup's own
+    # "1 repo on Flash, 1 on the free tier" line (repo-level plan
+    # granularity) can't be reproduced honestly - this installation's own
+    # real repo count is the equivalent the frontend actually renders.
+    await upsert_installation(pool, 738, "my-org")
+    await set_installation_plan(pool, 738, "flash")
+    await insert_repo_history(
+        pool, 738, "my-org/service-a", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+    await insert_repo_history(
+        pool, 738, "my-org/service-b", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+    # A different installation's repo must not be counted here.
+    await upsert_installation(pool, 739, "other-org")
+    await insert_repo_history(
+        pool, 739, "other-org/unrelated", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[738])
+    async with client:
+        response = await client.get("/app/installations/738/credits")
+
+    assert response.status_code == 200
+    assert response.json()["repo_count"] == 2
 
 
 @pytest.mark.asyncio
@@ -1573,6 +1631,54 @@ async def test_dashboard_health_keeps_results_separate_per_target(pool, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_dashboard_health_surfaces_a_24h_aggregate_uptime_pct(pool, monkeypatch):
+    # The Overview-style summary row's "Uptime, last 24h" figure - one
+    # repo-wide number across every endpoint and target, not per-endpoint
+    # (get_endpoint_uptime_pct_since's own worst-case-per-endpoint shape
+    # is for a different, public-API purpose).
+    await upsert_installation(pool, 504, "octocat")
+    await set_installation_plan(pool, 504, "air")
+    await insert_repo_history(
+        pool, 504, "octocat/hello-world", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable, checked_at)
+            VALUES
+                (504, 'octocat/hello-world', 'GET', '/api/a', true, now() - interval '1 hour'),
+                (504, 'octocat/hello-world', 'GET', '/api/b', false, now() - interval '2 hours'),
+                (504, 'octocat/hello-world', 'GET', '/api/c', true, now() - interval '2 days')
+            """
+        )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[504])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/health")
+
+    assert response.status_code == 200
+    # Only the two checks inside the 24h window count - one up, one down.
+    assert response.json()["uptime_pct_24h"] == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_health_uptime_pct_24h_is_none_with_no_check_data(pool, monkeypatch):
+    await upsert_installation(pool, 505, "octocat")
+    await set_installation_plan(pool, 505, "air")
+    await insert_repo_history(
+        pool, 505, "octocat/hello-world", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[505])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/health")
+
+    assert response.status_code == 200
+    assert response.json()["uptime_pct_24h"] is None
+
+
+@pytest.mark.asyncio
 async def test_dashboard_health_history_requires_login(pool):
     app.state.db_pool = pool
     transport = ASGITransport(app=app)
@@ -2385,6 +2491,32 @@ async def test_dashboard_docs_returns_empty_modules_when_nothing_scanned_yet(poo
     body = response.json()
     assert body["modules"] == {}
     assert body["build_status"] is None
+
+
+@pytest.mark.asyncio
+async def test_dashboard_docs_surfaces_recently_updated_and_hotspots(pool, monkeypatch):
+    # The Docs page's right rail (Recently updated / Hotspots) reads these
+    # straight from evidence.git - not computed by this route itself, just
+    # passed through.
+    await upsert_installation(pool, 706, "octocat")
+    await set_installation_plan(pool, 706, "air")
+    evidence = _evidence_with_module("a.py", "add", "Adds two numbers.")
+    evidence["git"] = {
+        "available": True,
+        "recently_updated": [{"path": "a.py", "last_commit_at": "2026-09-25T00:00:00+00:00"}],
+        "hotspots": [{"path": "a.py", "churn_count": 5, "co_change_partners": [], "dependents_count": 0, "last_commit_at": "2026-09-25T00:00:00+00:00"}],
+    }
+    await insert_repo_history(pool, 706, "octocat/hello-world", datetime.now(timezone.utc), evidence)
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[706])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/docs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["recently_updated"] == [{"path": "a.py", "last_commit_at": "2026-09-25T00:00:00+00:00"}]
+    assert body["hotspots"][0]["path"] == "a.py"
+    assert body["hotspots"][0]["churn_count"] == 5
 
 
 @pytest.mark.asyncio

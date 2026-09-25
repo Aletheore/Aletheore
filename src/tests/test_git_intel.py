@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from aletheore.git_intel.analyzer import GitAnalysisError, analyze_git, compute_hotspots
+from aletheore.git_intel.analyzer import GitAnalysisError, analyze_git, compute_hotspots, compute_recently_updated
 from aletheore.git_intel.incremental import GitLogStreamError
 
 
@@ -477,6 +477,59 @@ def test_compute_hotspots_ranks_by_churn(tmp_path):
     assert hotspots[0]["path"] == "a.py"
 
 
+def test_compute_recently_updated_ranks_by_recency_not_churn(tmp_path):
+    # a.py and b.py tie on churn_count (both touched twice), but b.py's
+    # last touch is explicitly later - recently_updated must rank on that,
+    # not on churn_count, which is exactly what would make this
+    # indistinguishable from a slice of compute_hotspots' own ranking.
+    # Explicit commit dates (not just "commit it after the others") avoid
+    # this test being flaky against git's 1-second commit-timestamp
+    # resolution - two commits made back-to-back in a fast test run can
+    # otherwise land in the same second.
+    repo = tmp_path / "recency_repo"
+    repo.mkdir()
+    run(repo, "init", "-q")
+    run(repo, "config", "user.email", "a@example.com")
+    run(repo, "config", "user.name", "A")
+
+    (repo / "a.py").write_text("1")
+    (repo / "b.py").write_text("1")
+    run(repo, "add", "-A")
+    commit(repo, "initial", "2026-01-01T00:00:00")
+
+    (repo / "a.py").write_text("2")
+    run(repo, "add", "-A")
+    commit(repo, "touch a", "2026-01-02T00:00:00")
+
+    (repo / "b.py").write_text("2")
+    run(repo, "add", "-A")
+    commit(repo, "touch b last", "2026-01-03T00:00:00")
+
+    recent = compute_recently_updated(repo)
+    paths = [item["path"] for item in recent]
+    assert paths.index("b.py") < paths.index("a.py")
+    assert all(item["last_commit_at"] for item in recent)
+
+
+def test_compute_recently_updated_excludes_a_low_churn_file_the_hotspot_limit_would_miss(tmp_path):
+    # A file touched once, very recently, has churn_count 1 - real
+    # production repos can have far more than HOTSPOT_LIMIT (30) files
+    # with churn_count 1, so compute_hotspots' own churn-ranked, capped
+    # list has no guaranteed way to surface it. compute_recently_updated
+    # must still find it since it ranks by recency across every file, not
+    # a slice of the churn ranking. An explicit, clearly-later commit date
+    # (not just "commit it after the others") avoids this test being flaky
+    # against git's 1-second commit-timestamp resolution - two commits made
+    # back-to-back in a fast test run can otherwise land in the same second.
+    repo = _init_repo_with_hotspot_commits(tmp_path)
+    (repo / "z_lonely.py").write_text("1")
+    run(repo, "add", "-A")
+    commit(repo, "add a lonely file last", "2099-01-01T00:00:00")
+
+    recent = compute_recently_updated(repo)
+    assert recent[0]["path"] == "z_lonely.py"
+
+
 def test_compute_hotspots_finds_co_change_partner(tmp_path):
     repo = _init_repo_with_hotspot_commits(tmp_path)
     modules = [
@@ -532,6 +585,8 @@ def test_compute_hotspots_normalizes_paths_when_scan_root_is_subdirectory(tmp_pa
     run(repo, "commit", "-q", "-m", "initial")
 
     hotspots = compute_hotspots(subdir, [{"path": "a.py", "imported_by": []}])
+    assert hotspots[0]["last_commit_at"] is not None
+    hotspots[0].pop("last_commit_at")
 
     assert hotspots == [
         {

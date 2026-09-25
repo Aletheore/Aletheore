@@ -25,7 +25,7 @@ from aletheore.code_graph_diff import diff_endpoints, diff_modules
 from aletheore.credentials import has_api_key
 from aletheore.dead_code import is_test_file
 from aletheore.evidence import write_evidence
-from aletheore.git_intel.analyzer import analyze_git, compute_hotspots
+from aletheore.git_intel.analyzer import analyze_git, compute_hotspots, compute_recently_updated
 from aletheore.evidence_resolution import (
     empty_resolution,
     merge_resolution,
@@ -784,6 +784,9 @@ def _sync_persistent_git_graph(installation_id: int, repo_full_name: str, repo_d
         if git_data.get("available"):
             git_data["hotspots"] = compute_hotspots(
                 repo_dir, modules, store=store, depth_cap=GRAPH_COLD_SYNC_DEPTH_CAP, branch=GRAPH_BRANCH
+            )
+            git_data["recently_updated"] = compute_recently_updated(
+                repo_dir, store=store, depth_cap=GRAPH_COLD_SYNC_DEPTH_CAP, branch=GRAPH_BRANCH
             )
             evidence["git"] = git_data
     except Exception as exc:  # noqa: BLE001
