@@ -209,11 +209,14 @@ a { color: var(--accent); }
   background: var(--slate-100); padding: 7px 10px; color: var(--ink-700); font-size: 12px; white-space: nowrap; }
 .summary-chip i { color: var(--accent-strong); font-size: 14px; }
 
-/* .topbar's shared margin-bottom (22.4px) is 5.6px short of index.html's
-   28px page-head-to-strip gap - scoped here rather than raising .topbar
-   itself, since other pages' own mockups want different values there
-   (endpoints.html's page-head is 24px, for one). */
-.stat-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; margin-top: 5.6px; margin-bottom: 1.7rem; }
+/* Adjacent vertical margins collapse to the LARGER value, they do not
+   add - .topbar's shared margin-bottom (22.4px) and this margin-top
+   collapse through #top-error's empty div between them. 28px here (not
+   22.4px + a delta) is what actually produces a 28px gap, matching
+   index.html's page-head-to-strip spacing. Scoped to #stat-strip rather
+   than raising .topbar itself, since other pages' own mockups want
+   different values there (endpoints.html's page-head is 24px, for one). */
+.stat-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; margin-top: 28px; margin-bottom: 1.7rem; }
 .stat-card { background: var(--paper); border-right: 1px solid var(--border); padding: 16px 18px; text-decoration: none; color: inherit; display: block; transition: background-color 0.12s ease; }
 .stat-card:last-child { border-right: none; }
 a.stat-card:hover { background: var(--slate-50); }
