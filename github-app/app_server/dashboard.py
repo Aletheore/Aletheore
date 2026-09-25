@@ -269,25 +269,37 @@ async def get_credits(installation_id: int, request: Request):
     pool = request.app.state.db_pool
 
     subscription_renews_at = None
+    billing_interval = None
     subscription_id = installation.get("paddle_subscription_id")
     settings = get_settings()
     if subscription_id:
         # Best-effort, same pattern as admin.py's admin_page: a Paddle
         # hiccup shows "no date" on this page, not a broken credits page.
+        # A failed lookup must not read as "no subscription" to the
+        # frontend - paddle_subscription_id (below) already tells it a
+        # subscription exists even when this lookup comes back empty.
         try:
             subscription = await asyncio.to_thread(get_paddle_subscription, settings.paddle_api_key, subscription_id)
             subscription_renews_at = subscription.get("next_billed_at")
+            billing_interval = (subscription.get("billing_cycle") or {}).get("interval")
         except Exception:
             subscription_renews_at = None
+            billing_interval = None
 
     flash_review_count = await get_flash_review_count_this_month(pool, installation_id)
     flash_review_cost = await get_flash_review_cost_this_month(pool, installation_id)
     average_cost_per_review = (flash_review_cost / flash_review_count) if flash_review_count > 0 else None
 
-    # "1 repo on Flash, 1 on the free tier" plus the sidebar's "Your
-    # installs" list - every installation this session administers, not
-    # just this one paid install, same _administered_installation_ids_for_session_or_401
-    # set /app/repos already uses for its own cross-installation listing.
+    # "This install" reports its own real repo count - repo-level plan
+    # granularity doesn't exist here (plan is per installation, and one
+    # installation can cover several repos), so "N repos on Flash" is the
+    # honest equivalent of the mockup's invented per-repo plan split.
+    repo_count = len(await list_repos_for_installations(pool, [installation_id]))
+
+    # The sidebar's "Your installs" list - every installation this session
+    # administers, not just this one paid install, same
+    # _administered_installation_ids_for_session_or_401 set /app/repos
+    # already uses for its own cross-installation listing.
     session = await get_current_session(request)
     sibling_installations = []
     if session is not None:
@@ -314,8 +326,10 @@ async def get_credits(installation_id: int, request: Request):
         "paddle_customer_id": installation.get("paddle_customer_id"),
         "paddle_subscription_id": subscription_id,
         "subscription_renews_at": subscription_renews_at,
+        "billing_interval": billing_interval,
         "average_cost_per_review_usd": average_cost_per_review,
         "flash_review_count_this_month": flash_review_count,
+        "repo_count": repo_count,
         "sibling_installations": sibling_installations,
         # Minted per request (30-minute TTL), same as the settings page's own
         # top-up, so a tab left open re-fetches a fresh one at click time.

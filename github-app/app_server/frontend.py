@@ -186,8 +186,12 @@ a { color: var(--accent); }
 .nav-item { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 4px; font-size: 13px; color: var(--ink-700); text-decoration: none; transition: background-color 0.12s ease, color 0.12s ease; }
 .nav-item i { font-size: 16px; color: var(--ink-700); opacity: 0.95; }
 .nav-item:hover { background: var(--paper); }
-.nav-item.active { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
-.nav-item.active i { color: var(--accent-strong); }
+/* flash.html's own active nav item (verified against a real measurement:
+   mockup wants ink text at 600 weight over a 6% accent tint, not an
+   accent-colored label) - shell-wide, since every page shares this sidebar
+   markup. */
+.nav-item.active { background: color-mix(in srgb, var(--accent) 6%, var(--paper)); color: var(--ink-900); font-weight: 600; }
+.nav-item.active i { color: var(--ink-900); }
 .nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .nav-item.disabled { cursor: default; }
 .nav-item.disabled:hover { background: none; }
@@ -500,13 +504,26 @@ svg#depgraph:active { cursor: grabbing; }
    credit-figure/meter, stepper, status-line) reuses Overview's already-
    ported classes above. */
 .plan-pill { font-family: var(--font-mono); font-size: 11px; color: var(--slate-600); border: 1px solid var(--border-strong); border-radius: 3px; padding: 2px 7px; margin-left: 8px; vertical-align: middle; }
-.credit-hero { border: 1px solid var(--border); border-radius: 4px; padding: 22px 24px; background: var(--paper); margin-bottom: 32px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px; align-items: center; }
+.credit-hero { border: 1px solid var(--border); border-radius: 4px; padding: 22px 24px; background: var(--paper); margin-top: 28px; margin-bottom: 32px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px; align-items: center; }
 .credit-hero .credit-figure { font-size: 38px; }
+.credit-hero .credit-figure .of { font-size: 17px; }
 .credit-hero .credit-meter { max-width: 420px; margin: 16px 0 6px; }
 .credit-hero .credit-sub { font-size: 12px; color: var(--slate-600); }
 .credit-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
 .credit-actions .qty-row { gap: 10px; }
-.btn-small { font-size: 12px; padding: 6px 10px; }
+.credit-actions .stepper input[type="number"] { width: 46px; }
+/* flash.html's own .btn is 13px/600/8px-14px, a different size than the
+   shared default most pages use - scoped to this page's two hero/upgrade
+   buttons rather than touching the shared class, same reasoning as Docs'
+   own #docs-download-link scoping. Manage billing and Save keep the
+   smaller mockup-specified size, applied after so it wins the tie. */
+.credit-hero .btn, .upgrade-card .btn { font-size: 13px; font-weight: 600; padding: 8px 14px; }
+.credit-actions .btn-small { font-size: 12px; font-weight: 600; padding: 6px 10px; }
+#alert-email-save { font-size: 12px; font-weight: 600; padding: 6px 10px; }
+#topup-button { color: #FBFAF7; }
+#alert-email-input { background: #FBFAF7; font-family: var(--font-sans); font-size: 13px; }
+#flash-settings-grid { gap: 20px; }
+#flash-settings-grid .settings-block-label { font-weight: 650; }
 .install-tag { margin-left: auto; font-size: 10px; color: var(--slate-400); }
 .review-list { border: 1px solid var(--border); border-radius: 4px; overflow: hidden; margin-bottom: 32px; }
 .review-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto auto; gap: 14px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border); text-decoration: none; color: inherit; }
@@ -587,6 +604,21 @@ svg#depgraph:active { cursor: grabbing; }
   .summary-row { grid-template-columns: 1fr; }
   .summary-row .stat-card { border-right: none; border-bottom: 1px solid var(--border); }
   .summary-row .stat-card:last-child { border-bottom: none; }
+  /* A real 375px bug: .review-title's desktop nowrap+ellipsis, fighting a
+     long status word (e.g. "review failed unexpectedly") for the row's
+     remaining space, could shrink the title to nothing but "A…" - clipping
+     the repo name and PR number entirely. Below 600px the row becomes two
+     lines instead: title (wrapping, never clipped) on its own row, meta
+     and cost on a second row sharing the space freed by wrapping. */
+  .review-row {
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+    grid-template-areas: "dot title title" "dot meta cost";
+    row-gap: 4px;
+  }
+  .review-status { grid-area: dot; margin-top: 4px; align-self: start; }
+  .review-title { grid-area: title; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+  .review-meta { grid-area: meta; }
+  .review-cost { grid-area: cost; text-align: right; }
 }
 
 </style>
@@ -3644,6 +3676,19 @@ function setStatus(text, color) {
   el.textContent = text;
   el.style.color = color || '';
 }
+function billingCadenceText(data) {
+  const renewsAt = data.subscription_renews_at
+    ? new Date(data.subscription_renews_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+    : null;
+  const cadenceWord = data.billing_interval === 'year' ? 'yearly' : 'monthly';
+  if (renewsAt) return 'Billed ' + cadenceWord + ' \\u00b7 next charge ' + renewsAt;
+  // A real subscription exists (paddle_subscription_id is set) but the
+  // Paddle lookup failed or returned no next_billed_at - telling a paying
+  // customer "no active subscription" here would be actively wrong, not
+  // just imprecise.
+  if (data.paddle_subscription_id) return 'Billing details unavailable right now';
+  return 'No active subscription';
+}
 function renderInstallsList(siblings, currentId) {
   const list = document.getElementById('installs-list');
   if (siblings.length === 0) { list.innerHTML = ''; return; }
@@ -3704,25 +3749,15 @@ async function loadCredits() {
   document.getElementById('credit-sub').textContent = subText;
   document.getElementById('credit-hero').style.display = '';
 
-  const renewsAt = data.subscription_renews_at
-    ? new Date(data.subscription_renews_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-    : null;
-  document.getElementById('billing-cadence-line').textContent =
-    renewsAt ? 'Billed monthly \\u00b7 next charge ' + renewsAt : 'No active subscription';
+  document.getElementById('billing-cadence-line').textContent = billingCadenceText(data);
 
   // The mockup's own "1 repo on Flash, 1 on the free tier" line assumes
   // repo-level plan granularity a GitHub App installation doesn't have -
-  // plan is set per installation here, and one installation can cover
-  // several repos. The honest equivalent with our real data model is a
-  // plan breakdown across every installation this session administers.
-  const siblings = data.sibling_installations || [];
-  const planCounts = {};
-  siblings.forEach(function (s) { planCounts[s.plan] = (planCounts[s.plan] || 0) + 1; });
-  const summaryParts = Object.keys(planCounts).sort().map(function (p) {
-    const n = planCounts[p];
-    return n + ' ' + planShortName(p) + (n === 1 ? ' install' : ' installs');
-  });
-  document.getElementById('sibling-summary-line').textContent = summaryParts.join(', ');
+  // plan is set per installation, and one installation can cover several
+  // repos. The honest equivalent: this install's own real repo count.
+  const repoCount = data.repo_count || 0;
+  document.getElementById('sibling-summary-line').textContent =
+    repoCount + (repoCount === 1 ? ' repo' : ' repos') + ' on ' + planShortName(data.plan);
 
   document.getElementById('topup-button').addEventListener('click', function () { buyCredit(this); });
   document.getElementById('billing-portal-btn').addEventListener('click', openInstallationBillingPortal);
@@ -3932,7 +3967,7 @@ def _credits_page(installation_id: int) -> str:
     </div>
     <div id="review-history-body"><div class="empty-state">Loading&hellip;</div></div>
 
-    <div class="settings-grid">
+    <div class="settings-grid" id="flash-settings-grid">
       <div class="settings-block">
         <div class="settings-block-label">Notify when credit runs low</div>
         <div class="form-row">
