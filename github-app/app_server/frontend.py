@@ -175,7 +175,13 @@ a { color: var(--accent); }
 
 /* ---- Dashboard shell ---- */
 .shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100vh; }
-.sidebar { border-right: 1px solid var(--border); padding: 20px 14px; display: flex; flex-direction: column; gap: 1.45rem; position: sticky; top: 0; height: 100vh; }
+.sidebar { border-right: 1px solid var(--border); padding: 20px 14px; display: flex; flex-direction: column; gap: 1.45rem; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+/* An org with many repos used to push "This repository", Settings and Sign out below the
+   fold, so reaching them meant scrolling the whole page. The repo list is now the one region
+   that shrinks and scrolls on its own; every other block keeps its size and stays in view. */
+.sidebar > * { flex-shrink: 0; }
+.sidebar > .nav-scroll { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.nav-scroll > .nav-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .brand { display: flex; align-items: center; gap: 8px; padding: 0 6px; }
 .brand-mark { width: 20px; height: 20px; border: 1.5px solid var(--ink-900); border-radius: 3px; display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 11px; font-weight: 700; flex-shrink: 0; }
 .brand-name { font-weight: 650; font-size: 14.5px; letter-spacing: -0.01em; }
@@ -580,6 +586,8 @@ svg#depgraph:active { cursor: grabbing; }
 @media (max-width: 860px) {
   .shell { grid-template-columns: 1fr; }
   .sidebar { position: static; height: auto; flex-direction: column; overflow: visible; border-right: none; border-bottom: 1px solid var(--border); }
+  .sidebar > .nav-scroll { flex: none; }
+  .nav-scroll > .nav-list { overflow: visible; }
   .nav-list { flex-direction: row; flex-wrap: wrap; }
   .nav-item { white-space: nowrap; }
   .main { padding: 1.2rem 1rem 2.5rem; }
@@ -883,7 +891,7 @@ def _sidebar(active: str) -> str:
     return f"""
   <nav class="sidebar" aria-label="Dashboard navigation">
     <div class="brand"><span class="brand-mark">A</span><span class="brand-name">Aletheore</span></div>
-    <div>
+    <div class="nav-scroll">
       <div class="nav-group-label">Repository</div>
       <ul class="nav-list" id="repo-switch-list"><li><a class="nav-item" aria-hidden="true">&hellip;</a></li></ul>
     </div>
@@ -3933,7 +3941,7 @@ def _credits_page(installation_id: int) -> str:
 <div class="shell" id="credits-root" data-paddle-env="{escape(settings.paddle_environment)}" data-paddle-client-token="{escape(settings.paddle_client_token)}">
   <nav class="sidebar" aria-label="Dashboard navigation">
     <div class="brand"><span class="brand-mark">A</span><span class="brand-name">Aletheore</span></div>
-    <div>
+    <div class="nav-scroll">
       <div class="nav-group-label">Your installs</div>
       <ul class="nav-list" id="installs-list"><li><a class="nav-item" aria-hidden="true">&hellip;</a></li></ul>
     </div>
