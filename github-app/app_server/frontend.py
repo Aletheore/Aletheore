@@ -1889,7 +1889,7 @@ WIKI_HTML = _page_head("AIRview — {repo} — Aletheore") + _shell(
     "wiki",
     _topbar("AIRview", show_breadcrumb=False, margin_bottom="7px")
     + """
-    <p class="airview-sub">Generated from the real module dependency graph - the same evidence the architecture wiki below reads too, just explorable instead of static.</p>
+    <p class="airview-sub">Generated from the real module dependency graph, the same evidence the wiki below reads.</p>
     <div id="graph-body"><div class="empty-state">Loading&hellip;</div></div>
     <section class="section">
       <div class="section-head">
