@@ -34,6 +34,7 @@ from app_server.db import (
     get_installation,
     get_installation_by_account_login,
     get_latest_evidence,
+    get_overall_uptime_pct_since,
     get_public_status_enabled,
     get_recent_endpoint_health,
     get_recent_history,
@@ -527,6 +528,9 @@ async def get_dashboard_health(org: str, repo: str, request: Request):
         repo_full_name,
         since,
     )
+    uptime_pct_24h = await get_overall_uptime_pct_since(
+        pool, installation_id, repo_full_name, datetime.now(timezone.utc) - timedelta(hours=24)
+    )
     api_endpoints = (
         (evidence or {})
         .get("repository", {})
@@ -562,6 +566,7 @@ async def get_dashboard_health(org: str, repo: str, request: Request):
         "stale_endpoints": stale_endpoints,
         "total_endpoint_count": len(api_endpoints),
         "monitored_endpoint_count": monitored_endpoint_count,
+        "uptime_pct_24h": uptime_pct_24h,
     }
 
 
