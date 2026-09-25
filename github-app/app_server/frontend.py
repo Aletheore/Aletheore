@@ -817,7 +817,7 @@ SIGNIN_HTML = f"""<!DOCTYPE html>
       disclosure this replaced, kept rather than dropped. Both rows need the
       user's sign-off on wording, not just accuracy. -->
       <div class="scope-row"><span class="mark">&#8212;</span>No telemetry. Scan results are kept for your dashboard until you remove the repo.</div>
-      <div class="scope-row"><span class="mark">&#8212;</span>Requests read access to repository contents and metadata, and permission to post check runs and comments. We never request write access to code.</div>
+      <div class="scope-row"><span class="mark">&#8212;</span>Requests read access to repository contents and metadata, and permission to post check runs and comments. Write access is used only if you turn on the optional Docs sync, which pushes generated docs to a dedicated aletheore/docs-update branch and never to your default branch.</div>
     </div>
     <p class="signin-fine-print">By continuing you agree to the <a href="https://www.aletheore.com/terms.html">Terms</a> and <a href="https://www.aletheore.com/privacy.html">Privacy Policy</a>.</p>
   </div>
