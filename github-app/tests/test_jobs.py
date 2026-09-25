@@ -674,11 +674,11 @@ def test_clone_pr_head_does_not_attempt_a_scrub_when_init_never_created_a_git_di
 
 
 def test_incremental_spend_budget_record_usage_ledgers_the_real_cost_not_the_delta(monkeypatch):
-    # Real gap found via audit: record_usage passed the true-up delta
-    # (cost - next_call_reserve_usd) as both the aggregate update AND the
-    # per-feature ledger amount - correct for the former, wrong for the
-    # latter, the same class of bug as run_flash_review_job's own
-    # dollar-cap true-up (see record_llm_spend's ledger_cost_usd).
+    # record_usage used to pass the true-up delta (cost - reserve) as both the
+    # aggregate update AND the per-feature ledger amount. The delta was wrong
+    # for the ledger (real audit finding) and, once reservations stopped writing
+    # to llm_spend, wrong for the aggregate too: it drove September's total to
+    # -$154.66 on one install. Both now get the real cost.
     from scan_worker.jobs import _IncrementalSpendBudget
 
     calls = []
@@ -696,11 +696,12 @@ def test_incremental_spend_budget_record_usage_ledgers_the_real_cost_not_the_del
     budget = _IncrementalSpendBudget(
         "dsn", 1, "model", next_call_reserve_usd=0.05, feature="airview_full_build",
     )
+    budget._pending_reserve_usd = 0.05  # a reservation is outstanding for this call
     budget.record_usage(prompt_tokens=100, completion_tokens=50)
 
     assert len(calls) == 1
-    delta, kwargs = calls[0]
-    assert delta == pytest.approx(0.03 - 0.05)
+    aggregate_amount, kwargs = calls[0]
+    assert aggregate_amount == pytest.approx(0.03)
     assert kwargs["ledger_cost_usd"] == pytest.approx(0.03)
     assert kwargs["feature"] == "airview_full_build"
 
@@ -723,11 +724,12 @@ def test_incremental_spend_budget_record_usage_still_ledgers_when_cost_exactly_m
     budget = _IncrementalSpendBudget(
         "dsn", 1, "model", next_call_reserve_usd=0.05, feature="docs_incremental",
     )
+    budget._pending_reserve_usd = 0.05
     budget.record_usage(prompt_tokens=100, completion_tokens=50)
 
     assert len(calls) == 1
-    delta, kwargs = calls[0]
-    assert delta == 0
+    aggregate_amount, kwargs = calls[0]
+    assert aggregate_amount == pytest.approx(0.05)
     assert kwargs["ledger_cost_usd"] == pytest.approx(0.05)
 
 
@@ -2535,7 +2537,8 @@ async def test_flash_review_trues_up_the_credit_balance_to_the_real_cost(pool, m
     run_flash_review_job(installation_id, "octocat/hello-world", 42, "aaa", "bbb")
 
     real_cost = 10000 * 0.44 / 1e6 + 2000 * 1.32 / 1e6
-    assert recorded_spend == [pytest.approx(real_cost - FLASH_REVIEW_SPEND_RESERVE_USD)]
+    # The aggregate gets the real cost; the reservation is trued up on the balance only.
+    assert recorded_spend == [pytest.approx(real_cost)]
 
     remaining = await _get_balance(pool, installation_id)
     combined = float(remaining["base_credit_remaining_usd"]) + float(
@@ -2744,7 +2747,7 @@ async def test_flash_review_trueup_drains_balance_when_real_cost_exceeds_what_is
     run_flash_review_job(installation_id, "octocat/hello-world", 42, "aaa", "bbb")
 
     real_cost = 1_500_000 * 0.44 / 1e6 + 100_000 * 1.32 / 1e6
-    assert recorded_spend == [pytest.approx(real_cost - 0.50)]
+    assert recorded_spend == [pytest.approx(real_cost)]
 
     remaining = await _get_balance(pool, installation_id)
     # The whole point: real cost ($0.792) exceeded the entire $0.60 balance,
@@ -2824,7 +2827,7 @@ def test_managed_audit_api_job_records_each_call_and_exposes_budget_stop(monkeyp
     )
 
     assert "Partial managed audit" in result
-    assert recorded_deltas == [pytest.approx(-0.4)]
+    assert recorded_deltas == [pytest.approx(0.6)]  # the real cost of the one call, not cost - reserve
     assert budget_checks == [True, False]
 
 
@@ -3007,7 +3010,7 @@ def test_managed_audit_pr_job_records_each_call_and_stops_mid_run_when_cap_reach
 
     run_managed_audit_pr_job(1, "octocat/hello-world", 42)
 
-    assert recorded_deltas == [pytest.approx(-0.4)]
+    assert recorded_deltas == [pytest.approx(0.6)]  # the real cost of the one call, not cost - reserve
     assert budget_checks == [True, False]
 
 
@@ -4076,11 +4079,12 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     assert args[1:5] == (1, "octocat/hello-world", 42, "posted")
     assert kwargs == {"finding_count": 1, "skip_reason": None}
     assert set_sha_calls == ["bbb"]
-    # True-up delta, not the raw total: real cost (0.0 - review_diff is
-    # mocked, no on_usage ever fires) minus the FLASH_REVIEW_SPEND_RESERVE_USD
-    # (0.5) reserved up front - record_llm_spend's additive upsert applies
-    # this negative delta to give back the unused portion of the reservation.
-    assert recorded_spend == [-FLASH_REVIEW_SPEND_RESERVE_USD]
+    # The real cost (0.0 - review_diff is mocked, no on_usage ever fires). The
+    # unused part of the FLASH_REVIEW_SPEND_RESERVE_USD reservation is given back
+    # on the credit balance; it never touched the llm_spend aggregate, so it must
+    # not be subtracted from it (that drove one install's September total to
+    # -$154.66).
+    assert recorded_spend == [0.0]
 
 
 def test_flash_review_job_summary_count_reflects_a_real_post_failure(monkeypatch):
@@ -9831,7 +9835,7 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
     run_live_docs_full_build_job(1, "octocat/hello-world")
 
     assert stored_for == ["m0.py"]
-    assert recorded_deltas == [pytest.approx(-0.04)]
+    assert recorded_deltas == [pytest.approx(0.06)]
     assert status_calls[0][0] == "ready"
     assert "1/3 files processed" in status_calls[0][1]
     # cap_message() now reads the real (mocked, $10 combined) balance
@@ -11213,3 +11217,121 @@ async def test_release_llm_spend_reservation_never_shrinks_base_above_the_stored
     balance = await _get_balance(pool, installation_id)
     assert float(balance["base_credit_remaining_usd"]) == pytest.approx(18.00)
     assert float(balance["topup_credit_balance_usd"]) == pytest.approx(0.097)
+
+
+@pytest.mark.asyncio
+async def test_two_reservations_for_one_call_are_both_trued_up(pool):
+    # An adapter that checks the budget twice for one call (e.g. a provider
+    # fallback) used to overwrite the pending amount, so the first reservation
+    # could never be released: $0.10 drained per call with no ledger row.
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    installation_id = 9894
+    await _insert_installation(
+        pool, installation_id, "a",
+        base_credit_allotment_usd=18.00,
+        base_credit_remaining_usd=18.00,
+        topup_credit_balance_usd=0.00,
+    )
+    budget = _IncrementalSpendBudget(
+        TEST_DATABASE_URL, installation_id, "glm-5.3-flash",
+        next_call_reserve_usd=0.10, feature="airview_incremental",
+    )
+    assert budget.can_start_next_call() is True
+    assert budget.can_start_next_call() is True
+    assert float((await _get_balance(pool, installation_id))["base_credit_remaining_usd"]) == pytest.approx(17.80)
+
+    budget.record_usage(prompt_tokens=8000, completion_tokens=1200)
+
+    remaining = float((await _get_balance(pool, installation_id))["base_credit_remaining_usd"])
+    assert 17.99 < remaining < 18.00  # only the real cost (~$0.0009) is gone
+
+
+@pytest.mark.asyncio
+async def test_second_call_under_one_reservation_is_charged_in_full(pool):
+    # A Docs module can make two model calls under the single reservation the
+    # loop takes for it. The second used to be trued up against the same fixed
+    # reserve again, refunding money that had already been given back.
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    installation_id = 9895
+    await _insert_installation(
+        pool, installation_id, "a",
+        base_credit_allotment_usd=18.00,
+        base_credit_remaining_usd=18.00,
+        topup_credit_balance_usd=0.00,
+    )
+    budget = _IncrementalSpendBudget(
+        TEST_DATABASE_URL, installation_id, "glm-5.3-flash",
+        next_call_reserve_usd=0.10, feature="docs_full_build",
+    )
+    assert budget.can_start_next_call() is True
+    budget.record_usage(prompt_tokens=8000, completion_tokens=1200)
+    budget.record_usage(prompt_tokens=8000, completion_tokens=1200)
+
+    remaining = float((await _get_balance(pool, installation_id))["base_credit_remaining_usd"])
+    from scan_worker.jobs import cost_for_usage
+    two_calls = 2 * cost_for_usage("glm-5.3-flash", 8000, 1200)
+    assert remaining == pytest.approx(18.00 - two_calls, abs=1e-6)
+
+
+def test_record_usage_adds_the_real_cost_to_the_monthly_aggregate_not_a_negative_delta(monkeypatch):
+    # Reservations only move the credit balance and never wrote to llm_spend, so
+    # recording (cost - reserve) drove the month's total below zero over time.
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.record_llm_spend",
+        lambda dsn, iid, amount, **k: calls.append(amount),
+    )
+    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.004)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    budget = _IncrementalSpendBudget("dsn", 1, "m", next_call_reserve_usd=0.10, feature="docs_incremental")
+    budget._pending_reserve_usd = 0.10
+    budget.record_usage(prompt_tokens=1, completion_tokens=1)
+    assert calls == [pytest.approx(0.004)]
+
+
+def _flash_job_with_run_review_stub(monkeypatch, run_review):
+    """run_flash_review_job on an AIR install with everything around
+    _run_flash_review stubbed, returning the list of spend releases."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    releases = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.release_llm_spend_reservation", lambda dsn, iid, amount: releases.append(amount)
+    )
+    monkeypatch.setattr("scan_worker.jobs._run_flash_review", run_review)
+    monkeypatch.setattr("scan_worker.jobs._post_flash_review_failure_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._record_review_outcome", lambda *a, **k: None)
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+    return releases
+
+
+def test_flash_review_does_not_release_the_reservation_twice_when_it_fails_after_the_true_up(monkeypatch):
+    # _run_flash_review trues the reservation up (releasing the unused part) and
+    # only then posts comments and records history. An exception in that tail
+    # left review_ran False, so the job's finally released the WHOLE reservation
+    # again: free credit on every such failure.
+    def run_review(*a, **k):
+        k["reservation_state"]["settled"] = True
+        raise RuntimeError("GitHub timed out posting comments")
+
+    assert _flash_job_with_run_review_stub(monkeypatch, run_review) == []
+
+
+def test_flash_review_still_releases_the_reservation_when_it_fails_before_the_true_up(monkeypatch):
+    def run_review(*a, **k):
+        raise RuntimeError("diff fetch failed")
+
+    releases = _flash_job_with_run_review_stub(monkeypatch, run_review)
+    assert len(releases) == 1 and releases[0] > 0
