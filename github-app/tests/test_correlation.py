@@ -7,7 +7,6 @@ import pytest
 from aletheore.evidence_resolution import normalize_resolution
 from scan_worker.jobs import (
     GRAPH_BRANCH,
-    HEALTH_FIX_SUGGESTION_LLM_RESERVE_USD,
     _attach_recent_commit_for_failure,
     _commit_attachment_from_graph,
     _dependency_context_attachment,
@@ -448,12 +447,11 @@ def test_fix_suggestion_attachment_records_spend_when_model_succeeds(monkeypatch
     # never actually invoked.
     assert len(call_failed_calls) == 1
     assert callable(call_failed_calls[0])
-    # record_llm_spend now receives the true-up delta from the flat
-    # HEALTH_FIX_SUGGESTION_LLM_RESERVE_USD reservation already made by
-    # can_start_next_call() (this call site's own sized reserve, not the
-    # generic DEFAULT_LLM_NEXT_CALL_RESERVE_USD placeholder), not the raw
-    # cost - see _IncrementalSpendBudget.record_usage.
-    assert recorded == [pytest.approx(0.0017 - HEALTH_FIX_SUGGESTION_LLM_RESERVE_USD)]
+    # record_llm_spend receives the real cost. The flat
+    # HEALTH_FIX_SUGGESTION_LLM_RESERVE_USD reservation made by
+    # can_start_next_call() only moves the credit balance (trued up in
+    # record_usage) and never wrote to the llm_spend aggregate.
+    assert recorded == [pytest.approx(0.0017)]
 
 
 def test_fix_suggestion_attachment_degrades_gracefully_on_any_failure(monkeypatch):

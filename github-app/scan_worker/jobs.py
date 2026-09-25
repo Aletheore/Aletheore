@@ -2184,6 +2184,11 @@ def run_flash_review_job(
             return
 
     review_ran = False
+    # Set by _run_flash_review once it has trued the spend reservation up. An
+    # exception AFTER that point (posting comments, recording history) leaves
+    # review_ran False, and the finally below used to release the whole
+    # reservation a second time: free credit on every such failure.
+    reservation_state = {"settled": False}
     try:
         review_ran = _run_flash_review(
             settings, installation_id, repo_full_name, pr_number, base_sha, head_sha,
@@ -2207,6 +2212,7 @@ def run_flash_review_job(
             rank_findings=not is_free_tier,
             cross_file_check_runs=_cross_file_check_runs_for(installation["plan"], is_free_tier),
             share_pr_context_per_file=_share_pr_context_for(is_free_tier),
+            reservation_state=reservation_state,
         )
     except Exception as exc:  # noqa: BLE001
         try:
@@ -2249,7 +2255,7 @@ def run_flash_review_job(
         # release_llm_spend_reservation.
         if not review_ran:
             release_flash_review_count_reservation(settings.database_url, installation_id)
-            if reserved_spend:
+            if reserved_spend and not reservation_state["settled"]:
                 release_llm_spend_reservation(settings.database_url, installation_id, reserved_spend)
 
 
@@ -2497,6 +2503,7 @@ def _run_flash_review(
     rank_findings: bool = False,
     cross_file_check_runs: int = 0,
     share_pr_context_per_file: bool = False,
+    reservation_state: dict | None = None,
 ) -> bool:
     """Returns True if a real review actually ran and its spend/count
     reservation (see run_flash_review_job) was trued up to reflect it -
@@ -2924,11 +2931,16 @@ def _run_flash_review(
                     reserve_llm_spend(settings.database_url, installation_id, remaining)
     elif delta < 0:
         release_llm_spend_reservation(settings.database_url, installation_id, -delta)
+    # Real cost, not the true-up delta: see _IncrementalSpendBudget.record_usage.
     record_llm_spend(
-        settings.database_url, installation_id, delta,
+        settings.database_url, installation_id, spend_accumulator["total"],
         feature="flash_review",
         ledger_cost_usd=spend_accumulator["total"],
     )
+    if reservation_state is not None:
+        # From here the reservation is fully settled (trued up above). Anything
+        # that raises later in this function must not release it a second time.
+        reservation_state["settled"] = True
 
     proposed = grounding_result.get("proposed", 0)
     kept = grounding_result.get("kept", 0)
@@ -5064,7 +5076,11 @@ class _IncrementalSpendBudget:
             self.dsn, self.installation_id, self.next_call_reserve_usd, self.feature
         )
         if ok:
-            self._pending_reserve_usd = self.next_call_reserve_usd
+            # Accumulate, never overwrite: two reservations outstanding for one
+            # call (an adapter that checks the budget twice, e.g. a provider
+            # fallback) used to leave the first one unreachable by
+            # record_usage/on_call_failed/release_unused_reservation.
+            self._pending_reserve_usd += self.next_call_reserve_usd
         return ok
 
     def on_call_failed(self) -> None:
@@ -5123,6 +5139,12 @@ class _IncrementalSpendBudget:
     def record_usage(
         self, prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0
     ) -> None:
+        # Settle against what is actually outstanding, not a fixed
+        # next_call_reserve_usd: a second call under the same reservation (a
+        # Docs module can make two) has nothing left reserved and must be drawn
+        # in full, where the old fixed subtraction refunded a reservation that
+        # had already been given back.
+        reserved = self._pending_reserve_usd
         self._pending_reserve_usd = 0.0
         if cached_tokens:
             # Visibility only - cost_for_usage below still prices the full
@@ -5134,7 +5156,7 @@ class _IncrementalSpendBudget:
                 self.model, self.feature, cached_tokens, prompt_tokens,
             )
         cost = cost_for_usage(self.model, prompt_tokens, completion_tokens)
-        delta = cost - self.next_call_reserve_usd
+        delta = cost - reserved
         # True up the real credit balance too, not just the llm_spend
         # accounting table below - can_start_next_call() only reserved an
         # ESTIMATE (next_call_reserve_usd); now that the real cost is
@@ -5167,8 +5189,12 @@ class _IncrementalSpendBudget:
         # this call's real cost entirely (see record_llm_spend's
         # ledger_cost_usd - the delta this reservation pattern produces is
         # never the right amount to attribute to a feature).
+        # The aggregate gets the REAL cost. Reservations only move the credit
+        # balance and never wrote to llm_spend, so recording the true-up delta
+        # here (cost - reserve, usually negative) drove the month's total
+        # steadily below zero: -$154.66 for September on one install.
         record_llm_spend(
-            self.dsn, self.installation_id, delta, feature=self.feature, ledger_cost_usd=cost,
+            self.dsn, self.installation_id, cost, feature=self.feature, ledger_cost_usd=cost,
         )
 
     def cap_message(self) -> str:
