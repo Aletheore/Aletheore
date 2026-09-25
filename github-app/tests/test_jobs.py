@@ -11119,3 +11119,97 @@ def test_recent_failed_job_count_only_counts_failures_inside_the_window():
         assert jobs._recent_failed_job_count(Registry(), object(), now, 3600) == 2
     finally:
         jobs.Job.fetch_many = original
+
+
+@pytest.mark.asyncio
+async def test_incremental_spend_budget_release_unused_reservation_gives_the_money_back(pool):
+    # Real production bug: the Docs build reserves $0.10 for every module before
+    # it knows whether that module needs an LLM call. A module whose symbols are
+    # all already described makes no call, so neither record_usage() nor
+    # on_call_failed() ran and the reservation stayed drawn from the balance
+    # forever with no llm_spend_events row. Two AIR installs on production sat
+    # at $0.02 and $0.00 with only $1.79 and $2.22 of ledgered spend.
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    installation_id = 9891
+    await _insert_installation(
+        pool, installation_id, "a",
+        base_credit_allotment_usd=18.00,
+        base_credit_remaining_usd=18.00,
+        topup_credit_balance_usd=0.00,
+    )
+    budget = _IncrementalSpendBudget(
+        TEST_DATABASE_URL, installation_id, "glm-5.3-flash",
+        next_call_reserve_usd=0.10, feature="docs_full_build",
+    )
+    assert budget.can_start_next_call() is True
+    assert float((await _get_balance(pool, installation_id))["base_credit_remaining_usd"]) == pytest.approx(17.90)
+
+    budget.release_unused_reservation()
+    assert float((await _get_balance(pool, installation_id))["base_credit_remaining_usd"]) == pytest.approx(18.00)
+
+    # Idempotent, and a no-op once record_usage() has already trued the
+    # reservation up: it must never hand back money that was really spent.
+    budget.release_unused_reservation()
+    assert budget.can_start_next_call() is True
+    budget.record_usage(prompt_tokens=8000, completion_tokens=1200)
+    after_usage = float((await _get_balance(pool, installation_id))["base_credit_remaining_usd"])
+    budget.release_unused_reservation()
+    assert float((await _get_balance(pool, installation_id))["base_credit_remaining_usd"]) == pytest.approx(after_usage)
+    assert after_usage < 18.00
+
+
+@pytest.mark.asyncio
+async def test_docs_build_over_modules_that_need_no_llm_call_does_not_drain_credit(pool, monkeypatch):
+    # The loop-level regression for the leak above: 30 modules that make no LLM
+    # call used to drain $3.00 ($0.10 each) with nothing in the ledger.
+    from scan_worker.jobs import _IncrementalSpendBudget, _run_docs_build_for_modules
+
+    installation_id = 9892
+    await _insert_installation(
+        pool, installation_id, "a",
+        base_credit_allotment_usd=18.00,
+        base_credit_remaining_usd=18.00,
+        topup_credit_balance_usd=0.00,
+    )
+    monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "x = 1\n")
+    monkeypatch.setattr("scan_worker.jobs._store_docs_generation_for_module", lambda *a, **k: None)
+    budget = _IncrementalSpendBudget(
+        TEST_DATABASE_URL, installation_id, "glm-5.3-flash",
+        next_call_reserve_usd=0.10, feature="docs_full_build",
+    )
+    modules = [{"path": f"m{i}.py"} for i in range(30)]
+
+    succeeded, error = _run_docs_build_for_modules(
+        TEST_DATABASE_URL, installation_id, "a/b", modules, object(), None, "tok", "main",
+        spend_budget=budget,
+    )
+
+    assert (succeeded, error) == (30, None)
+    balance = await _get_balance(pool, installation_id)
+    assert float(balance["base_credit_remaining_usd"]) == pytest.approx(18.00)
+    assert float(balance["topup_credit_balance_usd"]) == pytest.approx(0.00)
+
+
+@pytest.mark.asyncio
+async def test_release_llm_spend_reservation_never_shrinks_base_above_the_stored_allotment(pool):
+    # An install whose plan changed without its allotment being reset (base 18,
+    # stored allotment 5) lost base - allotment dollars on the first release,
+    # because base was rewritten to LEAST(base + reserve, allotment). Total
+    # balance must be conserved: base is untouched and the release spills into
+    # the top-up bucket instead.
+    from scan_worker.db import release_llm_spend_reservation
+
+    installation_id = 9893
+    await _insert_installation(
+        pool, installation_id, "a",
+        base_credit_allotment_usd=5.00,
+        base_credit_remaining_usd=18.00,
+        topup_credit_balance_usd=0.00,
+    )
+
+    release_llm_spend_reservation(TEST_DATABASE_URL, installation_id, 0.097)
+
+    balance = await _get_balance(pool, installation_id)
+    assert float(balance["base_credit_remaining_usd"]) == pytest.approx(18.00)
+    assert float(balance["topup_credit_balance_usd"]) == pytest.approx(0.097)

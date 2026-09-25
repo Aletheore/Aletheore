@@ -479,16 +479,22 @@ def release_llm_spend_reservation(dsn: str, installation_id: int, reserve_usd: f
     spills only the remainder into topup_credit_balance_usd. Capping at
     the allotment is what makes base credit actually reset every
     renewal instead of permanently leaking into the never-expiring
-    topup bucket on every partial release."""
+    topup bucket on every partial release.
+
+    The cap only ever limits how much a release ADDS to base: it never
+    lowers a base balance that is already above the stored allotment. The
+    earlier LEAST(base + reserve, allotment) form did exactly that, so an
+    install whose plan changed without its allotment being reset (base 18,
+    stored allotment 5) lost base - allotment dollars on its first release,
+    with no ledger row to show for it. Total balance is now conserved."""
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE installations
                 SET
-                    base_credit_remaining_usd = LEAST(
-                        base_credit_remaining_usd + %(reserve)s, base_credit_allotment_usd
-                    ),
+                    base_credit_remaining_usd = base_credit_remaining_usd
+                        + LEAST(%(reserve)s, GREATEST(base_credit_allotment_usd - base_credit_remaining_usd, 0)),
                     topup_credit_balance_usd = topup_credit_balance_usd
                         + GREATEST(
                             %(reserve)s - GREATEST(base_credit_allotment_usd - base_credit_remaining_usd, 0),

@@ -5100,6 +5100,26 @@ class _IncrementalSpendBudget:
             )
             self._pending_reserve_usd = 0.0
 
+    def release_unused_reservation(self) -> None:
+        """Gives back a reservation that no LLM call ever consumed.
+
+        The Docs build reserves next_call_reserve_usd for every module BEFORE
+        it knows whether that module needs an LLM call at all: a module whose
+        symbols are all already described (unchanged content hash) or that has
+        nothing public to describe returns without calling the model, so
+        neither record_usage() nor on_call_failed() ever ran and the
+        reservation stayed drawn from the balance for good, with no
+        llm_spend_events row to explain it. Reproduced against the real loop:
+        30 such modules drained $3.00. On production two AIR installs sat at
+        $0.02 and $0.00 with only $1.79 and $2.22 of ledgered spend.
+
+        Silent and idempotent, unlike on_call_failed(): nothing failed, so it
+        logs no warning, and a call that already trued its reservation up via
+        record_usage() (pending is zero by then) is a no-op."""
+        if self._pending_reserve_usd:
+            release_llm_spend_reservation(self.dsn, self.installation_id, self._pending_reserve_usd)
+            self._pending_reserve_usd = 0.0
+
     def record_usage(
         self, prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0
     ) -> None:
@@ -6040,6 +6060,13 @@ def _run_docs_build_for_modules(
                 dsn, installation_id, repo_full_name, module, writing_adapter,
                 content.split("\n"), ref,
             )
+            # can_start_next_call() reserved this module's spend before we knew
+            # whether it needs an LLM call. If it did, record_usage() already
+            # trued the reservation up and this is a no-op; if it did not (every
+            # symbol already described, nothing public to describe), give the
+            # reservation back instead of letting it leak from the balance.
+            if spend_budget is not None:
+                spend_budget.release_unused_reservation()
             succeeded += 1
         except Exception as exc:  # noqa: BLE001
             # Defensive, not the primary fix: the writing_adapter passed in
