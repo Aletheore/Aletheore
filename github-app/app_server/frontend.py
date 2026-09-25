@@ -783,6 +783,7 @@ function renderWikiMarkdown(src) {
 SIGNIN_HTML = f"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Aletheore</title>
+<link rel="icon" type="image/png" href="{BRAND_MARK_DATA_URI}">
 {ICONS_LINK}
 {STYLE}
 <div class="signin">
@@ -804,6 +805,7 @@ SIGNIN_HTML = f"""<!DOCTYPE html>
 PICKER_HTML = f"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Your repositories — Aletheore</title>
+<link rel="icon" type="image/png" href="{BRAND_MARK_DATA_URI}">
 {ICONS_LINK}
 {STYLE}
 <div class="picker-wrap">
@@ -1161,6 +1163,7 @@ def _page_head(title: str) -> str:
     return f"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
+<link rel="icon" type="image/png" href="{BRAND_MARK_DATA_URI}">
 {ICONS_LINK}
 {MERMAID_SCRIPT}
 {STYLE}"""
@@ -3942,6 +3945,7 @@ def _credits_page(installation_id: int) -> str:
     return f"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Aletheore</title>
+<link rel="icon" type="image/png" href="{BRAND_MARK_DATA_URI}">
 {ICONS_LINK}
 {STYLE}
 <div class="shell" id="credits-root" data-paddle-env="{escape(settings.paddle_environment)}" data-paddle-client-token="{escape(settings.paddle_client_token)}">
