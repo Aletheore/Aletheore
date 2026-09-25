@@ -23,14 +23,15 @@ _PAGE_CONSTANTS = [
     if name.endswith("_HTML") and isinstance(getattr(frontend, name), str)
 ]
 
-# _settings_html() is the one page built as a zero-argument, lru_cache'd
-# function instead of a module-level constant (it defers get_settings() to
-# the first real request rather than Python import time - see its own
-# docstring), so it doesn't match the isinstance(..., str) filter above and
-# was silently falling out of this test's coverage entirely. Named
-# explicitly so its <script> block (including buyCredit()) keeps getting
-# the same JS syntax check as every other dashboard page.
-_PAGE_CONSTANTS = _PAGE_CONSTANTS + ["_settings_html"]
+# _settings_html() and _overview_html() are built as zero-argument,
+# lru_cache'd functions instead of module-level constants (both defer
+# get_settings() to the first real request rather than Python import time,
+# for the real inline Paddle checkout each needs - see either one's own
+# docstring), so neither matches the isinstance(..., str) filter above and
+# both would otherwise silently fall out of this test's coverage entirely.
+# Named explicitly so their <script> blocks (including buyCredit()) keep
+# getting the same JS syntax check as every other dashboard page.
+_PAGE_CONSTANTS = _PAGE_CONSTANTS + ["_settings_html", "_overview_html"]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available in this environment")
@@ -298,3 +299,40 @@ p.then(function () {
     )
     result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_billing_actions_are_truly_shared_not_duplicated_per_page():
+    # Settings and Overview both need buySeat/removeSeat/openBillingPortal/
+    # buyCredit - real money-handling code that was duplicated once already
+    # (a second, separately-maintained copy for the standalone /credits
+    # page's own installation-scoped API shape). Asserting the exact same
+    # BILLING_ACTIONS_JS text appears in both pages (not just "a function
+    # with this name exists in both", which a second hand-written copy
+    # would also satisfy) is what actually proves this isn't duplicated
+    # again the same way.
+    settings_js = frontend._settings_html()
+    overview_js = frontend._overview_html()
+    assert frontend.BILLING_ACTIONS_JS in settings_js
+    assert frontend.BILLING_ACTIONS_JS in overview_js
+    for name in ("buySeat", "removeSeat", "openBillingPortal", "buyCredit"):
+        # Each function's own source should appear exactly once per page
+        # (from BILLING_ACTIONS_JS) - a stray second definition would mean
+        # the extraction didn't fully replace the old inline copy.
+        assert settings_js.count(f"async function {name}(") == 1
+        assert overview_js.count(f"async function {name}(") == 1
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_overview_usage_stepper_wires_to_the_shared_buy_credit_function():
+    # Real gap this guards against: loadUsage() builds the stepper/button
+    # markup as an HTML string, and it's easy for that string's
+    # onclick="buyCredit(this)" to silently drift from BILLING_ACTIONS_JS's
+    # actual function name (or never get wired at all) without any test
+    # catching it, since the JS-syntax test above only checks the script
+    # parses, not that the two pieces reference each other correctly.
+    js = frontend._overview_html()
+    fn = _extract_js_function(js, "loadUsage")
+    assert "onclick=\\'buyCredit(this)\\'" not in fn  # wrong quoting would silently no-op the button
+    assert "buyCredit(this)" in fn
+    assert "buySeat(this)" in fn
+    assert "openBillingPortal()" in fn

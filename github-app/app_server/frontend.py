@@ -166,18 +166,19 @@ a { color: var(--accent); }
 .copy-box .field { font-size: 11.5px; }
 
 /* ---- Dashboard shell ---- */
-.shell { display: grid; grid-template-columns: 238px minmax(0, 1fr); min-height: 100vh; }
-.sidebar { background: var(--slate-100); border-right: 1px solid var(--border); padding: 1rem; display: flex; flex-direction: column; gap: 1.45rem; position: sticky; top: 0; height: 100vh; }
-.org-switch { display: flex; align-items: center; gap: 9px; padding: 9px; border: 1px solid var(--border); border-radius: 4px; background: var(--paper); text-decoration: none; color: inherit; }
-.org-avatar { width: 22px; height: 22px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-strong); font-size: 11px; font-weight: 500; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.org-switch-label { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.org-switch-sub { font-size: 11px; color: var(--slate-600); }
-.nav-group-label { font-size: 11px; color: var(--slate-400); padding: 0 8px; margin-bottom: 6px; }
+.shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100vh; }
+.sidebar { border-right: 1px solid var(--border); padding: 20px 14px; display: flex; flex-direction: column; gap: 1.45rem; position: sticky; top: 0; height: 100vh; }
+.brand { display: flex; align-items: center; gap: 8px; padding: 0 6px; }
+.brand-mark { width: 20px; height: 20px; border: 1.5px solid var(--ink-900); border-radius: 3px; display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 11px; font-weight: 700; flex-shrink: 0; }
+.brand-name { font-weight: 650; font-size: 14.5px; letter-spacing: -0.01em; }
+.nav-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--slate-400); flex-shrink: 0; }
+.nav-dot.paid { background: var(--accent); }
+.nav-group-label { font-size: 11px; color: var(--slate-400); padding: 0 8px 6px; }
 .nav-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
-.nav-item { display: flex; align-items: center; gap: 9px; padding: 8px 9px; border-radius: 4px; font-size: 13.5px; color: var(--ink-700); text-decoration: none; transition: background-color 0.12s ease, color 0.12s ease; }
+.nav-item { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 4px; font-size: 13px; color: var(--ink-700); text-decoration: none; transition: background-color 0.12s ease, color 0.12s ease; }
 .nav-item i { font-size: 16px; color: var(--ink-700); opacity: 0.95; }
 .nav-item:hover { background: var(--paper); }
-.nav-item.active { background: var(--accent-soft); color: var(--accent-strong); font-weight: 500; }
+.nav-item.active { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
 .nav-item.active i { color: var(--accent-strong); }
 .nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .plan-badge-wrap { margin-top: auto; }
@@ -192,8 +193,9 @@ a { color: var(--accent); }
 .breadcrumb b { color: var(--ink-900); font-weight: 500; }
 .breadcrumb a { color: var(--slate-600); text-decoration: none; }
 .breadcrumb a:hover { color: var(--ink-900); }
-.h1 { font-size: 20px; font-weight: 650; margin: 3px 0 0; }
-.topbar-right { font-size: 12px; color: var(--slate-600); }
+.h1 { font-size: 20px; font-weight: 650; letter-spacing: -0.01em; margin: 3px 0 0; }
+.repo-path { font-family: var(--font-mono); font-size: 13px; color: var(--slate-600); }
+.topbar-right { font-size: 12px; color: var(--slate-400); font-family: var(--font-mono); }
 
 .dashboard-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
   margin-bottom: 1.15rem; border: 1px solid var(--border); border-radius: 4px;
@@ -207,16 +209,24 @@ a { color: var(--accent); }
   background: var(--slate-100); padding: 7px 10px; color: var(--ink-700); font-size: 12px; white-space: nowrap; }
 .summary-chip i { color: var(--accent-strong); font-size: 14px; }
 
-.stat-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 1.7rem; }
-.stat-card { background: var(--paper); border: 1px solid var(--border); border-radius: 4px; padding: 15px; text-decoration: none; color: inherit; display: block; transition: background-color 0.12s ease, border-color 0.12s ease; }
-a.stat-card:hover { border-color: var(--border-strong); background: var(--slate-100); }
+/* Adjacent vertical margins collapse to the LARGER value, they do not
+   add - .topbar's shared margin-bottom (22.4px) and this margin-top
+   collapse through #top-error's empty div between them. 28px here (not
+   22.4px + a delta) is what actually produces a 28px gap, matching
+   index.html's page-head-to-strip spacing. Scoped to #stat-strip rather
+   than raising .topbar itself, since other pages' own mockups want
+   different values there (endpoints.html's page-head is 24px, for one). */
+.stat-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; margin-top: 28px; margin-bottom: 1.7rem; }
+.stat-card { background: var(--paper); border-right: 1px solid var(--border); padding: 16px 18px; text-decoration: none; color: inherit; display: block; transition: background-color 0.12s ease; }
+.stat-card:last-child { border-right: none; }
+a.stat-card:hover { background: var(--slate-50); }
 a.stat-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .stat-label { font-size: 12px; color: var(--slate-600); }
-.stat-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 27px; font-weight: 720; margin-top: 5px; }
+.stat-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 26px; font-weight: 650; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .stat-value.critical { color: var(--critical); }
 .stat-value.warning { color: var(--warning); }
 .stat-value.success { color: var(--success); }
-.stat-delta { font-size: 11.5px; color: var(--slate-600); margin-top: 3px; }
+.stat-delta { font-size: 11px; color: var(--slate-400); margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .section { background: var(--paper); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 1.15rem; scroll-margin-top: 1rem; overflow: hidden; }
 .section-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 18px; border-bottom: 1px solid var(--border); gap: 1rem; flex-wrap: wrap; }
@@ -230,6 +240,18 @@ a.stat-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
    directly under it with no gap. */
 .airview-sub { font-size: 16px; font-weight: 400; color: var(--ink-900); margin: 0; }
 .section-body { padding: 8px 18px 16px; }
+.plain-section-head { display: flex; align-items: center; justify-content: space-between; margin: 0 0 12px; }
+.plain-section-head h2 { font-size: 14px; font-weight: 650; margin: 0; }
+.plain-section-head .count { font-family: var(--font-mono); font-size: 12px; color: var(--slate-600); }
+/* Overriding via margin-top on the head itself (not the previous element's
+   margin-bottom) so the two collapse to whichever is larger, matching
+   index.html's own per-gap measurements - #findings-head sits below
+   #stat-strip (27.2px margin-bottom) needing a 36px gap, #usage-head sits
+   below .finding-list (27.2px margin-bottom) needing a 40px gap, and
+   collapsing is exactly what makes max(27.2, 36)/max(27.2, 40) work
+   instead of stacking on top of the existing margin. */
+#findings-head { margin-top: 36px; }
+#usage-head { margin-top: 40px; }
 
 table.findings { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.findings th { text-align: left; font-size: 11px; color: var(--slate-400); font-weight: 500; padding: 8px 8px; border-bottom: 1px solid var(--border); }
@@ -241,6 +263,18 @@ table.findings tr:last-child td { border-bottom: none; }
 .sev-stripe.critical { background: var(--critical); }
 .sev-stripe.warning { background: var(--warning); }
 .sev-stripe.neutral { background: var(--slate-400); }
+
+.finding-list { border: 1px solid var(--border); border-radius: 4px; overflow: hidden; margin-bottom: 1.7rem; }
+.finding-row { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 13px 16px; border-bottom: 1px solid var(--border); transition: background-color 0.12s ease; }
+.finding-row:last-child { border-bottom: none; }
+.finding-row:hover { background: var(--slate-50); }
+.sev-dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
+.sev-dot.critical { background: var(--critical); }
+.sev-dot.warning { background: var(--warning); }
+.sev-dot.minor { background: var(--slate-400); }
+.finding-row .msg { font-size: 13.5px; line-height: 1.5; }
+.finding-row .cite { font-family: var(--font-mono); font-size: 12px; color: var(--slate-600); margin-top: 4px; overflow-wrap: anywhere; }
+.finding-row .tool { font-family: var(--font-mono); font-size: 11px; color: var(--slate-400); border: 1px solid var(--border); border-radius: 3px; padding: 2px 6px; white-space: nowrap; align-self: start; }
 
 .deadcode-list, .dep-list { display: flex; flex-direction: column; }
 .deadcode-row { display: flex; align-items: baseline; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px; flex-wrap: wrap; }
@@ -369,9 +403,34 @@ svg#depgraph:active { cursor: grabbing; }
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; align-items: start; }
 .settings-section { margin-top: 24px; }
 .settings-block { background: var(--paper); border: 1px solid var(--border); border-radius: 4px;
-  padding: 16px 18px; margin-bottom: 16px; }
-.settings-block-label { font-size: 13px; font-weight: 600; margin-bottom: 9px; }
-.settings-block-hint { font-size: 11px; color: var(--slate-600); margin-top: 6px; }
+  padding: 18px 20px; margin-bottom: 16px; }
+.settings-block-label { font-size: 13px; font-weight: 600; margin-bottom: 14px; }
+.settings-block-hint { font-size: 11px; color: var(--slate-600); margin-top: 6px; line-height: 1.5; }
+/* Overview's seats block renders an empty #seat-billing-status hint div
+   between the button row and the status line (populated only after a
+   buySeat/removeSeat click) - real gap found while pixel-matching the
+   seats block height against index.html's own seats block, which has no
+   such element: an empty block-level div still takes up a full
+   line-height + margin-top even with no text, adding height the mockup
+   never accounted for. */
+.settings-block-hint:empty { display: none; }
+.credit-figure { font-family: var(--font-mono); font-size: 34px; font-weight: 650; letter-spacing: -0.01em; line-height: 1; }
+.credit-figure .of { font-size: 14px; color: var(--slate-600); font-weight: 500; margin-left: 6px; }
+.credit-meter { height: 4px; border-radius: 2px; background: var(--border); margin: 14px 0 4px; overflow: hidden; }
+.credit-meter-fill { height: 100%; background: var(--accent); }
+.credit-breakdown { font-size: 11px; color: var(--slate-400); display: flex; justify-content: space-between; }
+/* #usage-body scopes this to Overview only (its id is unique to that page)
+   rather than raising the shared .settings-block-hint font-size, which
+   Settings' own many hint lines also use and hasn't been measured against
+   any mockup - index.html's dedicated .block-hint is 12px, 1px larger
+   than the shared 11px default. */
+#usage-body .settings-block-hint { font-size: 12px; }
+.divider-label { font-size: 11px; color: var(--slate-400); margin: 20px 0 12px; display: flex; align-items: center; gap: 10px; }
+.divider-label::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.qty-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.qty-prefix { font-family: var(--font-mono); font-size: 13px; color: var(--slate-600); }
+.status-line { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--slate-600); margin-top: 4px; }
+.status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
 .settings-help-links { display: flex; gap: 14px; margin-top: 8px; }
 .settings-help-links a { font-size: 11px; color: var(--accent-strong); text-decoration: none; font-weight: 500; }
 .settings-help-links a:hover { text-decoration: underline; }
@@ -396,9 +455,9 @@ svg#depgraph:active { cursor: grabbing; }
 .claim-option { display: flex; align-items: center; gap: 9px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 4px; }
 .claim-option input { accent-color: var(--accent); }
 
-@media (max-width: 720px) {
+@media (max-width: 860px) {
   .shell { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; flex-direction: column; overflow: visible; }
+  .sidebar { position: static; height: auto; flex-direction: column; overflow: visible; border-right: none; border-bottom: 1px solid var(--border); }
   .nav-list { flex-direction: row; flex-wrap: wrap; }
   .nav-item { white-space: nowrap; }
   .main { padding: 1.2rem 1rem 2.5rem; }
@@ -411,6 +470,29 @@ svg#depgraph:active { cursor: grabbing; }
   .picker-head { align-items: flex-start; gap: 1rem; flex-direction: column; }
   .diagram-zoom-toolbar { left: 14px; right: 14px; transform: none; justify-content: center; flex-wrap: wrap; border-radius: 14px; }
   .diagram-zoom-hint { order: 2; width: 100%; text-align: center; }
+}
+
+/* Real bug found at a true 375px viewport (device-emulated, not a window
+   resize): 4 narrow .stat-strip cells (Overview) or 3 narrow
+   #summary-row cells (Endpoint health) squeeze .stat-value's 26px mono
+   figure past its own cell width, and .stat-value's overflow/ellipsis
+   rule (there to truncate a long text value like "Not configured")
+   silently clips a NUMBER instead ("98.7%" rendering as "98.…") - a
+   truncated stat is actively misleading, never acceptable, unlike a
+   truncated label or path. Shrinking the figure and cell padding a
+   further step below 860px's existing 2-column reflow keeps every
+   digit visible instead. */
+@media (max-width: 600px) {
+  .stat-card { padding: 12px; }
+  .stat-value { font-size: 20px; }
+  /* 3 narrow columns is tighter than Overview's own 4-strip (which only
+     drops to 2 columns, never lower) - stacking to one column is the
+     safer of the peer's two suggested fixes for this specific row count
+     at this width, guaranteed not to clip regardless of exact content
+     width rather than relying on the same 20px figure just barely fitting. */
+  .summary-row { grid-template-columns: 1fr; }
+  .summary-row .stat-card { border-right: none; border-bottom: 1px solid var(--border); }
+  .summary-row .stat-card:last-child { border-bottom: none; }
 }
 
 </style>
@@ -479,6 +561,22 @@ function relativeTime(iso) {
   const days = Math.round(hours / 24);
   return days + ' day' + (days === 1 ? '' : 's') + ' ago';
 }
+// Compact unit (5m/2h/3d) for the Overview topbar's fine-print "last scan"
+// line, matching index.html's own compact style there - a separate
+// function rather than changing relativeTime()'s own output, since that
+// shared function's full-word format ("5 minutes ago") is also used in
+// several other, more prose-like contexts (endpoint health, token/member
+// lists) that aren't part of this mockup and shouldn't change with it.
+function compactRelativeTime(iso) {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + 'm ago';
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return hours + 'h ago';
+  const days = Math.round(hours / 24);
+  return days + 'd ago';
+}
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, function (c) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -486,6 +584,10 @@ function escapeHtml(s) {
 }
 function planDisplayName(plan) {
   var names = { free: 'Aletheore Community', flash: 'Aletheore Flash', air: 'Aletheore AIR' };
+  return names[plan] || names.air;
+}
+function planShortName(plan) {
+  var names = { free: 'Community', flash: 'Flash', air: 'AIR' };
   return names[plan] || names.air;
 }
 // Minimal markdown for AIRview file pages. The text is model-written from
@@ -624,7 +726,7 @@ PICKER_HTML = f"""<!DOCTYPE html>
 
 _NAV_ITEMS = [
     ("overview", "", "ti-layout-dashboard", "Overview"),
-    ("security", "/security", "ti-shield-check", "Security findings"),
+    ("security", "/security", "ti-shield-check", "Findings"),
     ("deadcode", "/dead-code", "ti-trash", "Dead code"),
     ("health", "/health", "ti-activity", "Endpoint health"),
     ("wiki", "/wiki", "ti-book-2", "AIRview"),
@@ -641,16 +743,13 @@ def _sidebar(active: str) -> str:
     settings_active = " active" if active == "settings" else ""
     return f"""
   <nav class="sidebar" aria-label="Dashboard navigation">
-    <a class="org-switch" href="/dashboard">
-      <span class="org-avatar" id="org-avatar"></span>
-      <div style="min-width:0;">
-        <div class="org-switch-label" id="side-repo"></div>
-        <div class="org-switch-sub" id="side-org"></div>
-      </div>
-      <i class="ti ti-chevron-down" style="margin-left:auto;color:var(--slate-400);" aria-hidden="true"></i>
-    </a>
+    <div class="brand"><span class="brand-mark">A</span><span class="brand-name">Aletheore</span></div>
     <div>
       <div class="nav-group-label">Repository</div>
+      <ul class="nav-list" id="repo-switch-list"><li><a class="nav-item" aria-hidden="true">&hellip;</a></li></ul>
+    </div>
+    <div>
+      <div class="nav-group-label">This repository</div>
       <ul class="nav-list">{repo_items}</ul>
     </div>
     <div>
@@ -686,9 +785,6 @@ const base = '/app/' + encodeURIComponent(org) + '/' + encodeURIComponent(repo);
 const adminBase = '/admin/' + encodeURIComponent(org) + '/' + encodeURIComponent(repo);
 const pageBase = '/dashboard/' + encodeURIComponent(org) + '/' + encodeURIComponent(repo);
 
-document.getElementById('side-org').textContent = org;
-document.getElementById('side-repo').textContent = repo;
-document.getElementById('org-avatar').textContent = org.slice(0, 2).toLowerCase();
 document.querySelectorAll('.nav-item[data-href]').forEach(function (el) {
   el.href = pageBase + el.dataset.href;
 });
@@ -698,20 +794,36 @@ if (cOrg) cOrg.textContent = org;
 if (cRepo) { cRepo.textContent = repo; cRepo.href = pageBase; }
 document.title = document.title.replace('{repo}', repo).replace('{org}', org);
 
+async function loadRepoSwitcher() {
+  const list = document.getElementById('repo-switch-list');
+  const res = await apiGet('/app/repos');
+  const repos = (res && res.ok ? (await res.json()).repos : []).filter(function (r) { return r.initialized; });
+  if (repos.length === 0) { list.innerHTML = ''; return; }
+  list.innerHTML = repos.map(function (r) {
+    const isActive = r.org === org && r.repo === repo;
+    return '<li><a class="nav-item' + (isActive ? ' active' : '') + '" href="/dashboard/' + encodeURIComponent(r.org) + '/' + encodeURIComponent(r.repo) + '">' +
+      '<span class="nav-dot paid"></span>' + escapeHtml(r.repo_full_name) + '</a></li>';
+  }).join('');
+}
+loadRepoSwitcher();
+
 async function loadPlanBadge() {
   const res = await apiGet(adminBase);
   const nameEl = document.getElementById('plan-name');
   const subEl = document.getElementById('plan-sub');
+  const planLineEl = document.getElementById('repo-plan-line');
   if (!res) return null;
   if (res.status === 402) {
     nameEl.textContent = planDisplayName('free');
     subEl.textContent = 'Upgrade for AIRview and settings.';
+    if (planLineEl) planLineEl.textContent = org + '/' + repo + ' · ' + planShortName('free') + ' plan';
     return 'free';
   }
   if (!res.ok) { nameEl.textContent = ''; subEl.textContent = ''; return null; }
   const data = await res.json();
   nameEl.textContent = planDisplayName(data.installation.plan);
   subEl.textContent = data.installation.plan === 'free' ? 'Upgrade for AIRview and settings.' : 'AIRview and priority scans included.';
+  if (planLineEl) planLineEl.textContent = org + '/' + repo + ' · ' + planShortName(data.installation.plan) + ' plan';
   return data;
 }
 """
@@ -736,6 +848,161 @@ function lockedFeature(title, description, previewHtml) {{
 }}
 """
 
+# Shared by every page with real-money actions (Settings, Overview) - was
+# duplicated per-page (a second, separately-maintained copy already existed
+# for the standalone /credits page's own installation-scoped API shape,
+# _CREDITS_JS below). adminBase-based, not installation-id-based, since
+# every caller of this constant already has org/repo in scope. Each caller
+# sets window._reloadUsage to its own refresh function before invoking
+# these (loadSettings on Settings, loadUsage on Overview) instead of this
+# file hardcoding one page's refresh call - buySeat/removeSeat need to
+# re-render whichever page's seat UI actually called them.
+BILLING_ACTIONS_JS = """
+async function buySeat(btn) {
+  // Disabled for the whole round trip, not just re-enabled on failure like
+  // most other buttons on this page: real gap found via audit - buySeat/
+  // removeSeat are the only real-money actions on this page with no
+  // double-click guard at all. A second click landing before the first
+  // response comes back fires a second, genuinely separate POST /seats/buy
+  // - the backend's per-installation lock (admin.py's
+  // _seat_adjustment_lock) only serializes the two against each other, it
+  // does not collapse them into one purchase, so both succeed and the
+  // customer is billed for two extra seats from what looked like one
+  // click. window._reloadUsage() below re-renders this whole section
+  // (including this button) once the real seat count is known, so there
+  // is no separate re-enable path to also get right for the SUCCESS path -
+  // but that reasoning only covers success. Real gap found by Flash Review
+  // on this same change: on a genuine network failure (fetch() itself
+  // rejects, before res/data ever exist) the function exits via an
+  // unhandled exception, the refresh never runs, and the button - a
+  // real-money action - stays disabled forever with no page-reload-free
+  // recovery. try/finally re-enables on every exit; harmless on the
+  // success path too, since the refresh has already replaced this
+  // button's DOM node by the time finally runs.
+  btn.disabled = true;
+  const status = document.getElementById('seat-billing-status');
+  status.textContent = 'Updating billing...';
+  status.style.color = 'var(--slate-600)';
+  try {
+    const res = await fetch(adminBase + '/seats/buy', { method: 'POST' });
+    const data = await res.json().catch(function () { return {}; });
+    if (res.ok) {
+      status.textContent = 'Seat added - billing updated. Refreshing...';
+      status.style.color = 'var(--success)';
+      if (window._reloadUsage) window._reloadUsage();
+    } else {
+      status.textContent = data.detail || 'Could not buy a seat.';
+      status.style.color = 'var(--critical)';
+    }
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function removeSeat(btn) {
+  // See buySeat's comment - same double-click gap and same network-failure
+  // stuck-button gap, same fix for both.
+  btn.disabled = true;
+  const status = document.getElementById('seat-billing-status');
+  status.textContent = 'Updating billing...';
+  status.style.color = 'var(--slate-600)';
+  try {
+    const res = await fetch(adminBase + '/seats/remove', { method: 'POST' });
+    const data = await res.json().catch(function () { return {}; });
+    if (res.ok) {
+      status.textContent = 'Seat removed - billing updated. Refreshing...';
+      status.style.color = 'var(--success)';
+      if (window._reloadUsage) window._reloadUsage();
+    } else {
+      status.textContent = data.detail || 'Could not remove a seat.';
+      status.style.color = 'var(--critical)';
+    }
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function openBillingPortal() {
+  const status = document.getElementById('seat-billing-status');
+  if (status) { status.textContent = 'Opening billing portal...'; status.style.color = 'var(--slate-600)'; }
+  const res = await fetch(adminBase + '/billing-portal');
+  const data = await res.json().catch(function () { return {}; });
+  if (res.ok && data.url) {
+    window.location.href = data.url;
+    return;
+  }
+  if (status) {
+    status.textContent = data.detail || 'Could not open the billing portal.';
+    status.style.color = 'var(--critical)';
+  }
+}
+
+async function buyCredit(btn) {
+  const statusEl = document.getElementById('topup-status');
+  if (typeof Paddle === "undefined") {
+    statusEl.textContent = 'Checkout is unavailable right now - try disabling any ad/script blocker and reload.';
+    return;
+  }
+  // parseInt would accept "7.9" (silently truncated to 7) or "1e5" (parsed
+  // as 1) - Number() + an explicit integer check rejects both instead of
+  // quietly charging a different amount than what's on screen.
+  const rawAmount = Number(document.getElementById('topup-amount').value);
+  const amount = Number.isInteger(rawAmount) ? rawAmount : NaN;
+  if (!amount || amount < 5 || amount > 1000) {
+    statusEl.textContent = 'Enter an amount between $5 and $1000.';
+    return;
+  }
+  // Real gap found via audit: buySeat/removeSeat both guard against a
+  // rapid double-click firing two independent purchases (see buySeat's
+  // comment); this button had no guard at all - two clicks before the
+  // first apiGet() round trip returns could open two stacked
+  // Paddle.Checkout.open() overlays with two different signed
+  // checkout_installation_tokens. Re-enabled in finally - unlike
+  // buySeat/removeSeat, this button's DOM node is never replaced by a
+  // re-render, so it must actually come back (e.g. the customer closes
+  // the overlay without completing checkout and wants to try again).
+  btn.disabled = true;
+  statusEl.textContent = 'Opening checkout...';
+  statusEl.style.color = '';
+  try {
+    window._creditCheckoutCompleted = false;
+    // The installation token is minted with a 30-minute TTL (auth.py's
+    // sign_checkout_installation_id) - re-fetch it fresh here instead of
+    // reusing page-load time's copy, so a tab left open past 30 minutes
+    // doesn't send Paddle a token the webhook can no longer resolve (money
+    // taken, no credit granted). window._creditTopupPriceId is a static
+    // price id set once at page load and doesn't need refreshing.
+    const res = await apiGet(adminBase);
+    if (!res || !res.ok) {
+      statusEl.textContent = 'Could not start checkout - try again.';
+      return;
+    }
+    const data = await res.json();
+    // Associates the checkout with the installation's existing Paddle
+    // customer record (already returned in data.installation, same source
+    // /subscribe's checkout page reads for its own pwCustomer wiring) -
+    // without it, an existing subscriber topping up credit would re-enter
+    // their email and Paddle would silently open a second customer record,
+    // splitting billing history and producing a transaction whose
+    // customer_id the subscription webhook path can't attribute back to
+    // this installation.
+    const paddleCustomerId = data.installation && data.installation.paddle_customer_id;
+    Paddle.Checkout.open({
+      items: [{ priceId: window._creditTopupPriceId, quantity: amount }],
+      customData: { installation_token: data.checkout_installation_token },
+      ...(paddleCustomerId ? { customer: { id: paddleCustomerId } } : {}),
+      settings: {
+        displayMode: 'overlay',
+        variant: 'one-page',
+        successUrl: 'https://app.aletheore.com/dashboard',
+      },
+    });
+  } finally {
+    btn.disabled = false;
+  }
+}
+"""
+
 
 def _page_head(title: str) -> str:
     return f"""<!DOCTYPE html>
@@ -746,28 +1013,36 @@ def _page_head(title: str) -> str:
 {STYLE}"""
 
 
-def _topbar(h1: str, right_id: str = "", show_breadcrumb: bool = True, margin_bottom: str = "") -> str:
+def _topbar(h1: str, right_id: str = "", sub_id: str = "", show_breadcrumb: bool = True, margin_bottom: str = "") -> str:
     right = f'<div class="topbar-right" id="{right_id}"></div>' if right_id else ""
-    # airview.html's own mockup has no breadcrumb - the H1 line is the top
-    # of the page - matching the show_breadcrumb=False pattern other
-    # already-restructured pages use for the same reason.
+    sub = f'<div class="repo-path" id="{sub_id}"></div>' if sub_id else ""
+    # Overview's own mockup has no breadcrumb - the H1 line is the top of
+    # the page - but every other page's topbar keeps it, so this defaults
+    # to on and PAGE_HEAD_JS's existing crumb-org/crumb-repo population
+    # already null-checks both elements rather than assuming they exist.
     breadcrumb = (
         '<div class="breadcrumb"><a id="crumb-org" href="/dashboard"></a> '
         '<span style="color:var(--slate-400);">/</span> <b><a id="crumb-repo"></a></b></div>'
         if show_breadcrumb else ""
     )
+    # .h1's margin-top exists to space it away from the breadcrumb above it -
+    # with no breadcrumb, that margin just pushes the H1 down from where
+    # .main's own top padding already puts it, which is what the mockup's
+    # H1 sits flush at.
     h1_style = "" if show_breadcrumb else ' style="margin-top:0"'
-    # .topbar's shared margin-bottom (22.4px) is a fine default, but
-    # airview.html's own sub-line sits flush against the H1 with no gap at
-    # all - margin-collapse means that can't be reached by adding more
-    # margin below, since collapse only ever takes the larger side.
-    # margin_bottom overrides .topbar's own value directly for that page.
+    # .topbar's shared margin-bottom (22.4px) is a fine default, but a page
+    # whose own mockup wants a smaller exact gap below its page-head (e.g.
+    # airview.html's sub-line sitting flush against the H1 with no gap at
+    # all) can't get there by adding more margin below - margin-collapse
+    # means collapse only ever takes the larger side. margin_bottom
+    # overrides .topbar's own value directly for that one page instead.
     topbar_style = f' style="margin-bottom:{margin_bottom}"' if margin_bottom else ""
     return f"""
     <div class="topbar"{topbar_style}>
       <div>
         {breadcrumb}
         <h1 class="h1"{h1_style}>{h1}</h1>
+        {sub}
       </div>
       {right}
     </div>
@@ -788,45 +1063,72 @@ def _shell(active: str, body: str) -> str:
 # ---------------------------------------------------------------------------
 # Overview page - stats only, each stat links into its own detail page.
 # ---------------------------------------------------------------------------
-OVERVIEW_HTML = _page_head("Overview — {repo} — Aletheore") + _shell(
+# A function, not a plain module-level constant like the other _HTML pages -
+# same reason as _settings_html(): its Usage section needs a real inline
+# Paddle checkout (get_settings().paddle_client_token/paddle_environment),
+# and calling get_settings() at plain module-import time would make
+# importing this file require a fully configured settings environment.
+@lru_cache(maxsize=1)
+def _overview_html() -> str:
+    return _page_head("Overview — {repo} — Aletheore") + _shell(
     "overview",
-    _topbar("Overview", "last-scanned")
+    _topbar("Overview", "last-scanned", "repo-plan-line", show_breadcrumb=False)
     + """
     <div id="top-error"></div>
-    <div class="dashboard-summary">
-      <div>
-        <div class="dashboard-summary-kicker">Repository watch</div>
-        <h2 id="summary-title">Evidence is loading</h2>
-        <p id="summary-copy">Aletheore is reading the latest AIR packet for this repository. Findings, code ownership, endpoint health, and AIRview all resolve back to scanner evidence.</p>
-      </div>
-      <div class="summary-chip-row">
-        <span class="summary-chip"><i class="ti ti-shield-check" aria-hidden="true"></i><span id="summary-risk">Risk loading</span></span>
-        <span class="summary-chip"><i class="ti ti-git-branch" aria-hidden="true"></i><span id="summary-scans">Scans loading</span></span>
-        <span class="summary-chip"><i class="ti ti-book-2" aria-hidden="true"></i>AIRview</span>
-      </div>
-    </div>
     <div class="stat-strip" id="stat-strip">
       <a class="stat-card" data-href="/security"><div class="stat-label">Open findings</div><div class="stat-value" id="stat-findings">&ndash;</div><div class="stat-delta" id="stat-findings-sub"></div></a>
       <a class="stat-card" data-href="/dead-code"><div class="stat-label">Dead code</div><div class="stat-value" id="stat-deadcode">&ndash;</div><div class="stat-delta" id="stat-deadcode-sub"></div></a>
       <a class="stat-card" data-href="/health"><div class="stat-label">Endpoint uptime</div><div class="stat-value" id="stat-uptime">&ndash;</div><div class="stat-delta" id="stat-uptime-sub"></div></a>
       <div class="stat-card"><div class="stat-label">Modules scanned</div><div class="stat-value" id="stat-modules">&ndash;</div><div class="stat-delta" id="stat-modules-sub"></div></div>
     </div>
-    <section class="section" id="recent-security">
-      <div class="section-head">
-        <div class="section-title"><i class="ti ti-shield-check" aria-hidden="true"></i>Recent security findings</div>
-        <a class="btn" data-href="/security">View all<i class="ti ti-arrow-right" style="font-size:13px;" aria-hidden="true"></i></a>
-      </div>
-      <div class="section-body" id="recent-security-body"><div class="empty-state">Loading&hellip;</div></div>
-    </section>
+    <div class="plain-section-head" id="findings-head">
+      <h2>Recent findings</h2>
+      <div class="count" id="findings-count"></div>
+    </div>
+    <div id="recent-security-body"><div class="empty-state">Loading&hellip;</div></div>
+    <div class="plain-section-head" id="usage-head" style="display:none">
+      <h2>Usage</h2>
+    </div>
+    <div id="usage-body"></div>
 """
 ) + f"""
+<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
 <script>
 {FETCH_HELPERS}
 {PAGE_HEAD_JS}
 {CONFIRM_UPGRADE_JS}
+{BILLING_ACTIONS_JS}
 document.querySelectorAll('[data-href]').forEach(function (el) {{
   if (el.tagName === 'A' && el.dataset.href) el.href = pageBase + el.dataset.href;
 }});
+window._reloadUsage = loadUsage;
+
+// Same guarded pattern as Settings' own Paddle.Initialize() call - a
+// blocked cdn.paddle.com load must only disable the credit top-up button,
+// never take down the rest of this script (including loadOverview() at
+// the bottom, which renders the whole page).
+if (typeof Paddle !== "undefined") {{
+  Paddle.Environment.set("{get_settings().paddle_environment}");
+  Paddle.Initialize({{
+    token: "{get_settings().paddle_client_token}",
+    eventCallback: function (event) {{
+      const status = document.getElementById('topup-status');
+      if (!status || !event || !event.name) return;
+      if (event.name === 'checkout.loaded') {{
+        status.textContent = '';
+      }} else if (event.name === 'checkout.completed') {{
+        window._creditCheckoutCompleted = true;
+        status.textContent = 'Purchase complete - your balance updates once the payment is confirmed.';
+        status.style.color = 'var(--success)';
+      }} else if (event.name === 'checkout.closed' && !window._creditCheckoutCompleted) {{
+        status.textContent = '';
+      }} else if (event.name === 'checkout.error') {{
+        status.textContent = 'Checkout error - try again.';
+        status.style.color = 'var(--critical)';
+      }}
+    }},
+  }});
+}}
 
 async function loadOverview() {{
   const res = await apiGet(base);
@@ -842,16 +1144,14 @@ async function loadOverview() {{
   const history = data.history || [];
   if (history.length === 0) {{
     document.getElementById('last-scanned').textContent = 'No scans yet';
-    document.getElementById('summary-title').textContent = repo + ' is waiting for its first scan';
-    document.getElementById('summary-copy').textContent = 'Open a pull request or trigger a managed scan to populate evidence, health, and AIRview.';
-    document.getElementById('summary-risk').textContent = 'No evidence yet';
-    document.getElementById('summary-scans').textContent = '0 scans';
+    document.getElementById('findings-count').textContent = '';
     document.getElementById('recent-security-body').innerHTML = '<div class="empty-state">No scans yet - findings will appear after the first pull request is scanned.</div>';
     return;
   }}
   const latest = history[0];
   const evidence = latest.evidence || {{}};
-  document.getElementById('last-scanned').textContent = 'Last scanned ' + relativeTime(latest.scanned_at);
+  const headSha = evidence._scan_head_sha;
+  document.getElementById('last-scanned').textContent = 'last scan ' + compactRelativeTime(latest.scanned_at) + (headSha ? ' · head ' + headSha.slice(0, 8) : '');
 
   const dismissedKeys = data.dismissed_finding_keys || {{ secret: [], vulnerability: [], static_analysis: [] }};
   const security = evidence.security || {{}};
@@ -865,16 +1165,21 @@ async function loadOverview() {{
     return (dismissedKeys.static_analysis || []).indexOf(findingIdentityKey('static_analysis', f)) === -1;
   }});
   const totalFindings = secretFindings.length + vulnFindings.length + staticAnalysisFindings.length;
-  document.getElementById('summary-title').textContent =
-    totalFindings === 0 ? repo + ' is clean in the latest scan' : repo + ' has ' + totalFindings + ' open finding' + (totalFindings === 1 ? '' : 's');
-  document.getElementById('summary-copy').textContent =
-    'Latest evidence covers ' + (((evidence.repository || {{}}).modules || []).length) + ' modules, source-mapped findings, dependency signals, and repository history. Use the left rail to drill into the exact file, line, owner, dependency, and risk.';
-  document.getElementById('summary-risk').textContent = totalFindings === 0 ? 'No open findings' : totalFindings + ' open findings';
-  document.getElementById('summary-scans').textContent = history.length + ' scan' + (history.length === 1 ? '' : 's');
+  document.getElementById('findings-count').textContent = totalFindings + ' open';
 
   document.getElementById('stat-findings').textContent = totalFindings;
   document.getElementById('stat-findings').className = 'stat-value' + (totalFindings > 0 ? ' critical' : ' success');
-  document.getElementById('stat-findings-sub').textContent = secretFindings.length + ' secret, ' + vulnFindings.length + ' dependency, ' + staticAnalysisFindings.length + ' static analysis';
+  // Real bug found at both 375px and 1280px: the full "N secret, N
+  // dependency, N static analysis" text overflows the 204px cell at 11px
+  // and silently ellipsis-truncates the last category off - dropping real
+  // information the user needs to read. Never ellipsis a number/count;
+  // shorten labels and drop zero-count categories instead, so it always
+  // fits without losing anything real.
+  const findingSubParts = [];
+  if (secretFindings.length > 0) findingSubParts.push(secretFindings.length + ' secret' + (secretFindings.length === 1 ? '' : 's'));
+  if (vulnFindings.length > 0) findingSubParts.push(vulnFindings.length + ' dep' + (vulnFindings.length === 1 ? '' : 's'));
+  if (staticAnalysisFindings.length > 0) findingSubParts.push(staticAnalysisFindings.length + ' static');
+  document.getElementById('stat-findings-sub').textContent = findingSubParts.length ? findingSubParts.join(', ') : 'No findings';
 
   const deadCode = (evidence.repository || {{}}).dead_code || {{}};
   const unreachable = deadCode.unreachable_modules || [];
@@ -896,22 +1201,23 @@ async function loadOverview() {{
   }} else {{
     let rows = '';
     securePreview.forEach(function (f) {{
-      rows += '<tr><td><span class="sev-stripe critical"></span><span class="finding-title">Possible ' + escapeHtml(f.pattern) + ' secret</span></td>' +
-        '<td class="finding-cite">' + escapeHtml(f.path) + ':' + f.line + '</td>' +
-        '<td><span class="chip critical">Critical</span></td></tr>';
+      rows += '<div class="finding-row"><div class="sev-dot critical"></div><div><div class="msg">Possible ' + escapeHtml(f.pattern) + ' secret</div>' +
+        '<div class="cite">' + escapeHtml(f.path) + ':' + f.line + '</div></div>' +
+        '<div class="tool">trivy</div></div>';
     }});
     vulnPreview.forEach(function (f) {{
-      rows += '<tr><td><span class="sev-stripe warning"></span><span class="finding-title">' + escapeHtml(f.advisory_id) + ': ' + escapeHtml(f.summary || 'known vulnerability') + '</span></td>' +
-        '<td class="finding-cite">' + escapeHtml(f.package) + '@' + escapeHtml(f.installed_version) + '</td>' +
-        '<td><span class="chip warning">Warning</span></td></tr>';
+      rows += '<div class="finding-row"><div class="sev-dot warning"></div><div><div class="msg">' + escapeHtml(f.advisory_id) + ': ' + escapeHtml(f.summary || 'known vulnerability') + '</div>' +
+        '<div class="cite">' + escapeHtml(f.package) + '@' + escapeHtml(f.installed_version) + '</div></div>' +
+        '<div class="tool">osv</div></div>';
     }});
     staticAnalysisPreview.forEach(function (f) {{
       const sev = staticAnalysisSevChip(f.severity);
-      rows += '<tr><td><span class="sev-stripe ' + sev.stripe + '"></span><span class="finding-title">' + escapeHtml(f.message) + '</span></td>' +
-        '<td class="finding-cite">' + escapeHtml(f.path) + ':' + f.line + '</td>' +
-        '<td><span class="chip ' + sev.chip + '">' + sev.label + '</span></td></tr>';
+      const dotClass = sev.stripe === 'neutral' ? 'minor' : sev.stripe;
+      rows += '<div class="finding-row"><div class="sev-dot ' + dotClass + '"></div><div><div class="msg">' + escapeHtml(f.message) + '</div>' +
+        '<div class="cite">' + escapeHtml(f.path) + ':' + f.line + '</div></div>' +
+        '<div class="tool">' + escapeHtml(f.tool || 'static analysis') + '</div></div>';
     }});
-    recentBody.innerHTML = '<table class="findings"><thead><tr><th>Finding</th><th>Evidence</th><th>Severity</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    recentBody.innerHTML = '<div class="finding-list">' + rows + '</div>';
   }}
 }}
 
@@ -921,7 +1227,7 @@ async function loadUptimeStat() {{
   const data = await res.json();
   const endpoints = data.endpoints || [];
   if (endpoints.length === 0) {{
-    document.getElementById('stat-uptime').textContent = 'Not configured';
+    document.getElementById('stat-uptime').textContent = '–';
     document.getElementById('stat-uptime-sub').textContent = 'Add a target in Endpoint health';
     return;
   }}
@@ -932,8 +1238,71 @@ async function loadUptimeStat() {{
   document.getElementById('stat-uptime-sub').textContent = up + ' of ' + endpoints.length + ' endpoints up';
 }}
 
+async function loadUsage() {{
+  const section = document.getElementById('usage-head');
+  const body = document.getElementById('usage-body');
+  const res = await apiGet(adminBase);
+  if (!res || !res.ok) return;  // free/locked plan - no managed billing to show
+  const data = await res.json();
+  section.style.display = '';
+  // Headline is base remaining only, measured against the real monthly
+  // allotment - matching index.html's own semantics ($12.40 of $18.00,
+  // purchased credit shown on its own breakdown line below). Mixing
+  // purchased credit into the headline would read as "$40 of $18" after
+  // a large top-up, which is not what "of $18" is supposed to mean.
+  const baseCredit = data.base_credit_remaining_usd || 0;
+  const topupCredit = data.topup_credit_balance_usd || 0;
+  const allotment = data.base_credit_allotment_usd || 0;
+  const pct = allotment > 0 ? Math.max(0, Math.min(100, Math.round((baseCredit / allotment) * 100))) : 0;
+  const hasSubscription = !!data.installation.paddle_subscription_id;
+  const renewsAt = data.subscription_renews_at
+    ? new Date(data.subscription_renews_at).toLocaleDateString(undefined, {{ month: 'short', day: 'numeric' }})
+    : null;
+  window._creditTopupPriceId = data.credit_topup_price_id;
+  body.innerHTML =
+    '<div class="settings-grid">' +
+      '<div class="settings-block">' +
+        '<div class="settings-block-label">Credit balance</div>' +
+        '<div class="credit-figure">$' + baseCredit.toFixed(2) + (allotment > 0 ? ' <span class="of">of $' + allotment.toFixed(2) + '</span>' : '') + '</div>' +
+        (allotment > 0 ? '<div class="credit-meter"><div class="credit-meter-fill" style="width:' + pct + '%"></div></div>' : '') +
+        '<div class="credit-breakdown"><span>$' + allotment.toFixed(2) + ' included this month</span>' +
+          '<span>' + (topupCredit > 0 ? '+ $' + topupCredit.toFixed(2) + ' purchased, never expires' : '') + '</span>' +
+        '</div>' +
+        (data.credit_topup_price_id
+          ? '<div class="divider-label">buy more credit</div>' +
+            '<div class="qty-row">' +
+              '<span class="qty-prefix">$</span>' +
+              '<div class="stepper">' +
+                '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepDown()" aria-label="Decrease amount">&minus;</button>' +
+                '<input type="number" id="topup-amount" min="5" max="1000" step="5" value="10">' +
+                '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepUp()" aria-label="Increase amount">+</button>' +
+              '</div>' +
+              '<button class="btn btn-accent" onclick="buyCredit(this)">Buy credit</button>' +
+            '</div>' +
+            '<div id="topup-status" class="settings-block-hint"></div>' +
+            '<div class="settings-block-hint">$5 minimum &middot; charged once, added immediately</div>'
+          : '<div class="settings-block-hint" style="margin-top:10px;">Buying additional credit is coming soon.</div>') +
+      '</div>' +
+      '<div class="settings-block">' +
+        '<div class="settings-block-label">Team seats</div>' +
+        '<div class="settings-block-hint">' + data.seat_limit + ' included &middot; ' + (data.members || []).length + ' in use</div>' +
+        '<div class="qty-row" style="margin-top:14px;">' +
+          (hasSubscription
+            ? '<button class="btn" onclick="buySeat(this)">Buy extra seat</button>'
+            : '') +
+          '<button class="btn" onclick="openBillingPortal()">Manage billing</button>' +
+        '</div>' +
+        '<div id="seat-billing-status" class="settings-block-hint"></div>' +
+        (hasSubscription
+          ? '<div class="status-line"><span class="status-dot"></span>Subscription active' + (renewsAt ? ', renews ' + renewsAt : '') + '</div>'
+          : '<div class="status-line"><span class="status-dot" style="background:var(--slate-400);"></span>No active subscription</div>') +
+      '</div>' +
+    '</div>';
+}}
+
 loadOverview();
 loadUptimeStat();
+loadUsage();
 loadPlanBadge();
 </script>
 """
@@ -2528,149 +2897,8 @@ async function sendTestPushover() {{
   status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
 }}
 
-async function buySeat(btn) {{
-  // Disabled for the whole round trip, not just re-enabled on failure like
-  // most other buttons on this page: real gap found via audit - buySeat/
-  // removeSeat are the only real-money actions on this page with no
-  // double-click guard at all. A second click landing before the first
-  // response comes back fires a second, genuinely separate POST /seats/buy
-  // - the backend's per-installation lock (admin.py's
-  // _seat_adjustment_lock) only serializes the two against each other, it
-  // does not collapse them into one purchase, so both succeed and the
-  // customer is billed for two extra seats from what looked like one
-  // click. loadSettings() below re-renders this whole section (including
-  // this button) once the real seat count is known, so there is no
-  // separate re-enable path to also get right for the SUCCESS path - but
-  // that reasoning only covers success. Real gap found by Flash Review on
-  // this same change: on a genuine network failure (fetch() itself
-  // rejects, before res/data ever exist) the function exits via an
-  // unhandled exception, loadSettings() never runs, and the button - a
-  // real-money action - stays disabled forever with no page-reload-free
-  // recovery. try/finally re-enables on every exit; harmless on the
-  // success path too, since loadSettings() has already replaced this
-  // button's DOM node by the time finally runs.
-  btn.disabled = true;
-  const status = document.getElementById('seat-billing-status');
-  status.textContent = 'Updating billing...';
-  status.style.color = 'var(--slate-600)';
-  try {{
-    const res = await fetch(adminBase + '/seats/buy', {{ method: 'POST' }});
-    const data = await res.json().catch(function () {{ return {{}}; }});
-    if (res.ok) {{
-      status.textContent = 'Seat added - billing updated. Refreshing...';
-      status.style.color = 'var(--success)';
-      loadSettings();
-    }} else {{
-      status.textContent = data.detail || 'Could not buy a seat.';
-      status.style.color = 'var(--critical)';
-    }}
-  }} finally {{
-    btn.disabled = false;
-  }}
-}}
-
-async function removeSeat(btn) {{
-  // See buySeat's comment - same double-click gap and same network-failure
-  // stuck-button gap, same fix for both.
-  btn.disabled = true;
-  const status = document.getElementById('seat-billing-status');
-  status.textContent = 'Updating billing...';
-  status.style.color = 'var(--slate-600)';
-  try {{
-    const res = await fetch(adminBase + '/seats/remove', {{ method: 'POST' }});
-    const data = await res.json().catch(function () {{ return {{}}; }});
-    if (res.ok) {{
-      status.textContent = 'Seat removed - billing updated. Refreshing...';
-      status.style.color = 'var(--success)';
-      loadSettings();
-    }} else {{
-      status.textContent = data.detail || 'Could not remove a seat.';
-      status.style.color = 'var(--critical)';
-    }}
-  }} finally {{
-    btn.disabled = false;
-  }}
-}}
-
-async function openBillingPortal() {{
-  const status = document.getElementById('seat-billing-status');
-  if (status) {{ status.textContent = 'Opening billing portal...'; status.style.color = 'var(--slate-600)'; }}
-  const res = await fetch(adminBase + '/billing-portal');
-  const data = await res.json().catch(function () {{ return {{}}; }});
-  if (res.ok && data.url) {{
-    window.location.href = data.url;
-    return;
-  }}
-  if (status) {{
-    status.textContent = data.detail || 'Could not open the billing portal.';
-    status.style.color = 'var(--critical)';
-  }}
-}}
-
-async function buyCredit(btn) {{
-  const statusEl = document.getElementById('topup-status');
-  if (typeof Paddle === "undefined") {{
-    statusEl.textContent = 'Checkout is unavailable right now - try disabling any ad/script blocker and reload.';
-    return;
-  }}
-  // parseInt would accept "7.9" (silently truncated to 7) or "1e5" (parsed
-  // as 1) - Number() + an explicit integer check rejects both instead of
-  // quietly charging a different amount than what's on screen.
-  const rawAmount = Number(document.getElementById('topup-amount').value);
-  const amount = Number.isInteger(rawAmount) ? rawAmount : NaN;
-  if (!amount || amount < 5 || amount > 1000) {{
-    statusEl.textContent = 'Enter an amount between $5 and $1000.';
-    return;
-  }}
-  // Real gap found via audit: buySeat/removeSeat both guard against a
-  // rapid double-click firing two independent purchases (see buySeat's
-  // comment); this button had no guard at all - two clicks before the
-  // first apiGet() round trip returns could open two stacked
-  // Paddle.Checkout.open() overlays with two different signed
-  // checkout_installation_tokens. Re-enabled in finally - unlike
-  // buySeat/removeSeat, this button's DOM node is never replaced by a
-  // re-render, so it must actually come back (e.g. the customer closes
-  // the overlay without completing checkout and wants to try again).
-  btn.disabled = true;
-  statusEl.textContent = 'Opening checkout...';
-  statusEl.style.color = '';
-  try {{
-    window._creditCheckoutCompleted = false;
-    // The installation token is minted with a 30-minute TTL (auth.py's
-    // sign_checkout_installation_id) - re-fetch it fresh here instead of
-    // reusing loadSettings()'s page-load-time copy, so a tab left open past
-    // 30 minutes doesn't send Paddle a token the webhook can no longer
-    // resolve (money taken, no credit granted). window._creditTopupPriceId
-    // is a static price id set once at page load and doesn't need refreshing.
-    const res = await apiGet(adminBase);
-    if (!res || !res.ok) {{
-      statusEl.textContent = 'Could not start checkout - try again.';
-      return;
-    }}
-    const data = await res.json();
-    // Associates the checkout with the installation's existing Paddle
-    // customer record (already returned in data.installation, same source
-    // /subscribe's checkout page reads for its own pwCustomer wiring) -
-    // without it, an existing subscriber topping up credit would re-enter
-    // their email and Paddle would silently open a second customer record,
-    // splitting billing history and producing a transaction whose
-    // customer_id the subscription webhook path can't attribute back to
-    // this installation.
-    const paddleCustomerId = data.installation && data.installation.paddle_customer_id;
-    Paddle.Checkout.open({{
-      items: [{{ priceId: window._creditTopupPriceId, quantity: amount }}],
-      customData: {{ installation_token: data.checkout_installation_token }},
-      ...(paddleCustomerId ? {{ customer: {{ id: paddleCustomerId }} }} : {{}}),
-      settings: {{
-        displayMode: 'overlay',
-        variant: 'one-page',
-        successUrl: 'https://app.aletheore.com/dashboard',
-      }},
-    }});
-  }} finally {{
-    btn.disabled = false;
-  }}
-}}
+{BILLING_ACTIONS_JS}
+window._reloadUsage = loadSettings;
 
 // The danger zone renders on every plan, including free and lapsed - the
 // settings page 402s those customers out of everything else, but locking
@@ -3436,7 +3664,7 @@ async def dashboard_overview_page(org: str, repo: str, request: Request):
     redirect = await _require_session_or_redirect(request)
     if redirect is not None:
         return redirect
-    return _no_store_html(OVERVIEW_HTML)
+    return _no_store_html(_overview_html())
 
 
 @frontend_router.get("/dashboard/{org}/{repo}/security", response_class=HTMLResponse)

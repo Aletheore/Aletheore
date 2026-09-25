@@ -76,7 +76,7 @@ from app_server.db import (
     set_webhook_url,
     update_session_tokens,
 )
-from app_server.llm_cost import EXTRA_SEAT_PRICE_USD
+from app_server.llm_cost import EXTRA_SEAT_PRICE_USD, base_credit_for_plan
 from app_server.paddle_client import PaddleAPIError, PaddleAPINotConfigured
 from app_server.paddle_client import cancel_subscription as cancel_paddle_subscription
 from app_server.paddle_client import create_discount as create_paddle_discount
@@ -563,6 +563,17 @@ async def admin_page(org: str, repo: str, request: Request):
     public_status_enabled = await get_public_status_enabled(pool, installation_id, repo_full_name)
     settings = get_settings()
     checkout_installation_token = sign_checkout_installation_id(installation_id, settings.session_secret)
+    subscription_renews_at = None
+    subscription_id = installation.get("paddle_subscription_id")
+    if subscription_id:
+        # Best-effort, matching _uninitialized_repos_for_installation's
+        # pattern below - a Paddle API hiccup shows "no date" on the
+        # Overview page's subscription line, not a broken admin page.
+        try:
+            subscription = await asyncio.to_thread(get_paddle_subscription, settings.paddle_api_key, subscription_id)
+            subscription_renews_at = subscription.get("next_billed_at")
+        except Exception:
+            subscription_renews_at = None
     return {
         "installation": installation,
         "tokens": tokens,
@@ -583,8 +594,10 @@ async def admin_page(org: str, repo: str, request: Request):
         "flash_reviews_month_to_date": flash_reviews_month_to_date,
         "base_credit_remaining_usd": float(installation["base_credit_remaining_usd"]),
         "topup_credit_balance_usd": float(installation["topup_credit_balance_usd"]),
+        "base_credit_allotment_usd": base_credit_for_plan(installation["plan"], extra_seats),
         "checkout_installation_token": checkout_installation_token,
         "credit_topup_price_id": CREDIT_TOPUP_PRICE_ID,
+        "subscription_renews_at": subscription_renews_at,
     }
 
 
