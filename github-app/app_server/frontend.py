@@ -466,6 +466,29 @@ svg#depgraph:active { cursor: grabbing; }
   .diagram-zoom-hint { order: 2; width: 100%; text-align: center; }
 }
 
+/* Real bug found at a true 375px viewport (device-emulated, not a window
+   resize): 4 narrow .stat-strip cells (Overview) or 3 narrow
+   #summary-row cells (Endpoint health) squeeze .stat-value's 26px mono
+   figure past its own cell width, and .stat-value's overflow/ellipsis
+   rule (there to truncate a long text value like "Not configured")
+   silently clips a NUMBER instead ("98.7%" rendering as "98.…") - a
+   truncated stat is actively misleading, never acceptable, unlike a
+   truncated label or path. Shrinking the figure and cell padding a
+   further step below 860px's existing 2-column reflow keeps every
+   digit visible instead. */
+@media (max-width: 600px) {
+  .stat-card { padding: 12px; }
+  .stat-value { font-size: 20px; }
+  /* 3 narrow columns is tighter than Overview's own 4-strip (which only
+     drops to 2 columns, never lower) - stacking to one column is the
+     safer of the peer's two suggested fixes for this specific row count
+     at this width, guaranteed not to clip regardless of exact content
+     width rather than relying on the same 20px figure just barely fitting. */
+  .summary-row { grid-template-columns: 1fr; }
+  .summary-row .stat-card { border-right: none; border-bottom: 1px solid var(--border); }
+  .summary-row .stat-card:last-child { border-bottom: none; }
+}
+
 </style>
 """
 
