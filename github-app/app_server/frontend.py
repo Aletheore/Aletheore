@@ -523,7 +523,14 @@ svg#depgraph:active { cursor: grabbing; }
 #topup-button { color: #FBFAF7; }
 #alert-email-input { background: #FBFAF7; font-family: var(--font-sans); font-size: 13px; }
 #flash-settings-grid { gap: 20px; }
-#flash-settings-grid .settings-block-label { font-weight: 650; }
+/* margin-bottom here is a real margin-collapse fix (same category as the
+   Docs work): a .form-row margin-top can never win this collapse against
+   the label's own larger margin-bottom (the max of the two adjacent
+   margins governs, not either set independently) - the label's own
+   margin-bottom is the side that actually has to move to close the
+   label-to-input gap by 2px. */
+#flash-settings-grid .settings-block-label { font-weight: 650; margin-bottom: 11px; }
+#flash-settings-grid .status-line { margin-top: 10px; }
 .install-tag { margin-left: auto; font-size: 10px; color: var(--slate-400); }
 .review-list { border: 1px solid var(--border); border-radius: 4px; overflow: hidden; margin-bottom: 32px; }
 .review-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto auto; gap: 14px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border); text-decoration: none; color: inherit; }
@@ -3935,7 +3942,7 @@ def _credits_page(installation_id: int) -> str:
     <div class="topbar">
       <div>
         <h1 class="h1" style="margin-top:0"><span id="install-name">&hellip;</span><span class="plan-pill" id="plan-pill"></span></h1>
-        <div class="page-sub">Automatic PR reviews on every push</div>
+        <div class="repo-path">Automatic PR reviews on every push</div>
       </div>
     </div>
     <div id="top-error"></div>
