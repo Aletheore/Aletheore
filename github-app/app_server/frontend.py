@@ -186,7 +186,7 @@ a { color: var(--accent); }
 .plan-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 .plan-sub { font-size: 11px; color: var(--slate-600); margin-top: 3px; line-height: 1.5; }
 
-.main { padding: 1.7rem 2rem 3.25rem; min-width: 0; max-width: 1180px; margin: 0 auto; width: 100%; }
+.main { padding: 32px 48px 60px; min-width: 0; max-width: 1180px; margin: 0 auto; width: 100%; }
 .topbar { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: 1.4rem; flex-wrap: wrap; }
 .breadcrumb { font-size: 12px; color: var(--slate-600); }
 .breadcrumb b { color: var(--ink-900); font-weight: 500; }
@@ -223,6 +223,12 @@ a.stat-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
 .section-title { font-size: 14.5px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
 .section-title i { font-size: 16px; color: var(--slate-400); }
 .section-sub { font-size: 12px; color: var(--slate-600); }
+/* airview.html's own intro line is left plain (16px/400, ink), not the
+   muted-caption treatment .section-sub uses elsewhere on this same page
+   (the wiki section's "Regenerated automatically..." caption) - a
+   different, unmuted role for this one line, and the graph card sits
+   directly under it with no gap. */
+.airview-sub { font-size: 16px; font-weight: 400; color: var(--ink-900); margin: 0; }
 .section-body { padding: 8px 18px 16px; }
 
 table.findings { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -298,7 +304,7 @@ table.findings tr:last-child td { border-bottom: none; }
 .docs-commit-desc { font-size: 12.5px; color: var(--slate-600); line-height: 1.55; }
 .docs-commit-desc a { font-weight: 650; }
 .diagram-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 4px; background: var(--slate-50); padding: 14px; }
-.graph-card { border: 1px solid var(--border); border-radius: 4px; background: var(--paper); margin-bottom: 20px; }
+.graph-card { border: 1px solid var(--border); border-radius: 4px; background: var(--paper); margin-bottom: 23px; }
 .graph-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .graph-toolbar select { font-family: var(--font-sans); font-size: 12.5px; border: 1px solid var(--border-strong); border-radius: 4px; padding: 6px 8px; background: var(--paper); color: var(--ink-900); }
 .graph-toolbar .hint { font-size: 12px; color: var(--slate-400); font-family: var(--font-mono); }
@@ -740,13 +746,28 @@ def _page_head(title: str) -> str:
 {STYLE}"""
 
 
-def _topbar(h1: str, right_id: str = "") -> str:
+def _topbar(h1: str, right_id: str = "", show_breadcrumb: bool = True, margin_bottom: str = "") -> str:
     right = f'<div class="topbar-right" id="{right_id}"></div>' if right_id else ""
+    # airview.html's own mockup has no breadcrumb - the H1 line is the top
+    # of the page - matching the show_breadcrumb=False pattern other
+    # already-restructured pages use for the same reason.
+    breadcrumb = (
+        '<div class="breadcrumb"><a id="crumb-org" href="/dashboard"></a> '
+        '<span style="color:var(--slate-400);">/</span> <b><a id="crumb-repo"></a></b></div>'
+        if show_breadcrumb else ""
+    )
+    h1_style = "" if show_breadcrumb else ' style="margin-top:0"'
+    # .topbar's shared margin-bottom (22.4px) is a fine default, but
+    # airview.html's own sub-line sits flush against the H1 with no gap at
+    # all - margin-collapse means that can't be reached by adding more
+    # margin below, since collapse only ever takes the larger side.
+    # margin_bottom overrides .topbar's own value directly for that page.
+    topbar_style = f' style="margin-bottom:{margin_bottom}"' if margin_bottom else ""
     return f"""
-    <div class="topbar">
+    <div class="topbar"{topbar_style}>
       <div>
-        <div class="breadcrumb"><a id="crumb-org" href="/dashboard"></a> <span style="color:var(--slate-400);">/</span> <b><a id="crumb-repo"></a></b></div>
-        <h1 class="h1">{h1}</h1>
+        {breadcrumb}
+        <h1 class="h1"{h1_style}>{h1}</h1>
       </div>
       {right}
     </div>
@@ -1497,9 +1518,9 @@ WIKI_LOCKED_PREVIEW = (
 
 WIKI_HTML = _page_head("AIRview — {repo} — Aletheore") + _shell(
     "wiki",
-    _topbar("AIRview")
+    _topbar("AIRview", show_breadcrumb=False, margin_bottom="0")
     + """
-    <p class="section-sub" style="margin: -0.6rem 0 1.2rem;">Generated from the real module dependency graph - the same evidence the architecture wiki below reads too, just explorable instead of static.</p>
+    <p class="airview-sub">Generated from the real module dependency graph - the same evidence the architecture wiki below reads too, just explorable instead of static.</p>
     <div id="graph-body"><div class="empty-state">Loading&hellip;</div></div>
     <section class="section">
       <div class="section-head">
