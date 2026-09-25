@@ -226,7 +226,7 @@ a.stat-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
 .stat-value.critical { color: var(--critical); }
 .stat-value.warning { color: var(--warning); }
 .stat-value.success { color: var(--success); }
-.stat-delta { font-size: 11px; color: var(--slate-400); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat-delta { font-size: 11px; color: var(--slate-400); margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .section { background: var(--paper); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 1.15rem; scroll-margin-top: 1rem; overflow: hidden; }
 .section-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 18px; border-bottom: 1px solid var(--border); gap: 1rem; flex-wrap: wrap; }
@@ -237,6 +237,15 @@ a.stat-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
 .plain-section-head { display: flex; align-items: center; justify-content: space-between; margin: 0 0 12px; }
 .plain-section-head h2 { font-size: 14px; font-weight: 650; margin: 0; }
 .plain-section-head .count { font-family: var(--font-mono); font-size: 12px; color: var(--slate-600); }
+/* Overriding via margin-top on the head itself (not the previous element's
+   margin-bottom) so the two collapse to whichever is larger, matching
+   index.html's own per-gap measurements - #findings-head sits below
+   #stat-strip (27.2px margin-bottom) needing a 36px gap, #usage-head sits
+   below .finding-list (27.2px margin-bottom) needing a 40px gap, and
+   collapsing is exactly what makes max(27.2, 36)/max(27.2, 40) work
+   instead of stacking on top of the existing margin. */
+#findings-head { margin-top: 36px; }
+#usage-head { margin-top: 40px; }
 
 table.findings { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.findings th { text-align: left; font-size: 11px; color: var(--slate-400); font-weight: 500; padding: 8px 8px; border-bottom: 1px solid var(--border); }
@@ -388,15 +397,15 @@ svg#depgraph:active { cursor: grabbing; }
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; align-items: start; }
 .settings-section { margin-top: 24px; }
 .settings-block { background: var(--paper); border: 1px solid var(--border); border-radius: 4px;
-  padding: 16px 18px; margin-bottom: 16px; }
-.settings-block-label { font-size: 13px; font-weight: 600; margin-bottom: 9px; }
-.settings-block-hint { font-size: 11px; color: var(--slate-600); margin-top: 6px; }
+  padding: 18px 20px; margin-bottom: 16px; }
+.settings-block-label { font-size: 13px; font-weight: 600; margin-bottom: 14px; }
+.settings-block-hint { font-size: 11px; color: var(--slate-600); margin-top: 6px; line-height: 1.5; }
 .credit-figure { font-family: var(--font-mono); font-size: 34px; font-weight: 650; letter-spacing: -0.01em; line-height: 1; }
 .credit-figure .of { font-size: 14px; color: var(--slate-600); font-weight: 500; margin-left: 6px; }
-.credit-meter { height: 4px; border-radius: 2px; background: var(--border); margin: 12px 0 4px; overflow: hidden; }
+.credit-meter { height: 4px; border-radius: 2px; background: var(--border); margin: 14px 0 4px; overflow: hidden; }
 .credit-meter-fill { height: 100%; background: var(--accent); }
 .credit-breakdown { font-size: 11px; color: var(--slate-400); display: flex; justify-content: space-between; margin-top: 8px; }
-.divider-label { font-size: 11px; color: var(--slate-400); margin: 16px 0 10px; display: flex; align-items: center; gap: 10px; }
+.divider-label { font-size: 11px; color: var(--slate-400); margin: 20px 0 12px; display: flex; align-items: center; gap: 10px; }
 .divider-label::after { content: ""; flex: 1; height: 1px; background: var(--border); }
 .qty-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .qty-prefix { font-family: var(--font-mono); font-size: 13px; color: var(--slate-600); }
@@ -1022,7 +1031,7 @@ def _overview_html() -> str:
       <a class="stat-card" data-href="/health"><div class="stat-label">Endpoint uptime</div><div class="stat-value" id="stat-uptime">&ndash;</div><div class="stat-delta" id="stat-uptime-sub"></div></a>
       <div class="stat-card"><div class="stat-label">Modules scanned</div><div class="stat-value" id="stat-modules">&ndash;</div><div class="stat-delta" id="stat-modules-sub"></div></div>
     </div>
-    <div class="plain-section-head">
+    <div class="plain-section-head" id="findings-head">
       <h2>Recent findings</h2>
       <div class="count" id="findings-count"></div>
     </div>
