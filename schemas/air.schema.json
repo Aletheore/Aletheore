@@ -136,6 +136,9 @@
           },
           "type": "array"
         },
+        "recently_updated": {
+          "type": "array"
+        },
         "repo_age_days": {
           "type": "integer"
         },

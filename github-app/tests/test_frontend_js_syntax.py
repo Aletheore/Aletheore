@@ -336,3 +336,45 @@ def test_overview_usage_stepper_wires_to_the_shared_buy_credit_function():
     assert "buyCredit(this)" in fn
     assert "buySeat(this)" in fn
     assert "openBillingPortal()" in fn
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_parse_docs_markdown_finds_every_symbol_across_both_sections():
+    # Real bug found while building this: a first version split the
+    # markdown on a regex matching "#" or "##" headers (##?\s) to separate
+    # ## Classes/## Functions sections, then re-tested each resulting
+    # block for a leading "### " symbol header - but ##? never matches
+    # "###", so every ### line stayed buried inside its enclosing section
+    # block and zero symbols were ever extracted (89/89 missing against
+    # this repo's own real db.py). A line-by-line scan tracking the
+    # current section's kind, rather than a nested split-by-header-level
+    # regex, is what actually works - this test pins that down.
+    js = frontend.DOCS_HTML
+    fn = _extract_js_function(js, "parseDocsMarkdown")
+    markdown = (
+        "# a/module.py\n\n"
+        "## Classes\n\n"
+        "### `Foo`\n\n"
+        "*Undocumented - no docstring found.*\n\n"
+        "`a/module.py:10`\n\n"
+        "## Functions\n\n"
+        "### `bar(x: int) -> str`\n\n"
+        "Converts x to a string.\n\n"
+        "*(AI-polished from the original docstring)*\n\n"
+        "`a/module.py:25`\n"
+    )
+    harness = fn + f"""
+const symbols = parseDocsMarkdown({markdown!r});
+if (symbols.length !== 2) throw new Error('expected 2 symbols, got ' + symbols.length + ': ' + JSON.stringify(symbols));
+if (symbols[0].kind !== 'class' || symbols[0].name !== 'Foo' || !symbols[0].isUndocumented) {{
+  throw new Error('class symbol wrong: ' + JSON.stringify(symbols[0]));
+}}
+if (symbols[1].kind !== 'function' || symbols[1].name !== 'bar' || !symbols[1].isPolished) {{
+  throw new Error('function symbol wrong: ' + JSON.stringify(symbols[1]));
+}}
+if (symbols[1].citation !== 'a/module.py:25') throw new Error('citation wrong: ' + symbols[1].citation);
+if (symbols[1].description.indexOf('Converts x to a string') === -1) throw new Error('description missing: ' + symbols[1].description);
+console.log('ok');
+"""
+    result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
