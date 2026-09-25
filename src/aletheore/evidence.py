@@ -12,7 +12,7 @@ from aletheore.architecture import build_clusters, detect_layer_violations, load
 from aletheore.dead_code import find_dead_code
 from aletheore.endpoints import map_api_endpoints
 from aletheore.evidence_resolution import find_symbol_at_location
-from aletheore.git_intel.analyzer import analyze_git, compute_hotspots
+from aletheore.git_intel.analyzer import analyze_git, compute_hotspots, compute_recently_updated
 from aletheore.licenses import check_dependency_licenses
 from aletheore.model_associations import rails_model_association_edges
 from aletheore.repo_config import load_repo_config
@@ -578,6 +578,7 @@ def scan_repository(
     if check_hotspots and git_data.get("available"):
         report("Computing git hotspots")
         git_data["hotspots"] = compute_hotspots(repo_path, modules)
+        git_data["recently_updated"] = compute_recently_updated(repo_path)
 
     if check_vulnerabilities:
         report("Checking dependencies for known vulnerabilities (OSV.dev)")

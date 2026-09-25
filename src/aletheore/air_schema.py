@@ -213,6 +213,7 @@ AIR_JSON_SCHEMA: dict = {
                 "total_commits": _INT,
                 "history_depth_limited": _BOOL,
                 "hotspots": _ANY_LIST,
+                "recently_updated": _ANY_LIST,
             },
             required=["available"],
         ),
