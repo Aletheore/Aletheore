@@ -189,6 +189,8 @@ a { color: var(--accent); }
 .nav-item.active { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
 .nav-item.active i { color: var(--accent-strong); }
 .nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.nav-item.disabled { cursor: default; }
+.nav-item.disabled:hover { background: none; }
 .plan-badge-wrap { margin-top: auto; }
 .plan-card { background: var(--paper); border: 1px solid var(--border); border-radius: 4px; padding: 12px; }
 .plan-name { font-size: 12px; font-weight: 500; display: flex; align-items: center; gap: 6px; text-transform: capitalize; }
@@ -493,6 +495,34 @@ svg#depgraph:active { cursor: grabbing; }
 .qty-prefix { font-family: var(--font-mono); font-size: 13px; color: var(--slate-600); }
 .status-line { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--slate-600); margin-top: 4px; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
+/* ---- Flash dashboard (the credits page) - flash.html's own vocabulary
+   not otherwise shared. Everything else on that page (settings-grid,
+   credit-figure/meter, stepper, status-line) reuses Overview's already-
+   ported classes above. */
+.plan-pill { font-family: var(--font-mono); font-size: 11px; color: var(--slate-600); border: 1px solid var(--border-strong); border-radius: 3px; padding: 2px 7px; margin-left: 8px; vertical-align: middle; }
+.credit-hero { border: 1px solid var(--border); border-radius: 4px; padding: 22px 24px; background: var(--paper); margin-bottom: 32px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px; align-items: center; }
+.credit-hero .credit-figure { font-size: 38px; }
+.credit-hero .credit-meter { max-width: 420px; margin: 16px 0 6px; }
+.credit-hero .credit-sub { font-size: 12px; color: var(--slate-600); }
+.credit-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+.credit-actions .qty-row { gap: 10px; }
+.btn-small { font-size: 12px; padding: 6px 10px; }
+.install-tag { margin-left: auto; font-size: 10px; color: var(--slate-400); }
+.review-list { border: 1px solid var(--border); border-radius: 4px; overflow: hidden; margin-bottom: 32px; }
+.review-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto auto; gap: 14px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border); text-decoration: none; color: inherit; }
+.review-row:last-child { border-bottom: none; }
+.review-row:hover { background: var(--slate-100); }
+.review-status { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.review-status.commented { background: var(--warning); }
+.review-status.clean { background: var(--success); }
+.review-status.skipped, .review-status.failed { background: var(--slate-400); }
+.review-title { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.review-title .repo { color: var(--slate-600); font-family: var(--font-mono); font-size: 12px; margin-left: 6px; }
+.review-meta { font-size: 12px; color: var(--slate-600); font-family: var(--font-mono); white-space: nowrap; }
+.review-cost { font-size: 12px; color: var(--slate-400); font-family: var(--font-mono); white-space: nowrap; }
+.upgrade-card { border: 1px solid var(--border); border-radius: 4px; padding: 20px 22px; display: flex; justify-content: space-between; align-items: center; gap: 20px; flex-wrap: wrap; }
+.upgrade-card h3 { font-size: 14px; margin: 0 0 6px; font-weight: 650; }
+.upgrade-card p { font-size: 12.5px; color: var(--slate-600); margin: 0; max-width: 56ch; line-height: 1.55; }
 .settings-help-links { display: flex; gap: 14px; margin-top: 8px; }
 .settings-help-links a { font-size: 11px; color: var(--accent-strong); text-decoration: none; font-weight: 500; }
 .settings-help-links a:hover { text-decoration: underline; }
@@ -527,6 +557,8 @@ svg#depgraph:active { cursor: grabbing; }
   .summary-chip-row { justify-content: flex-start; }
   .stat-strip { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .health-grid, .subsystem-grid, .settings-grid, .docs-grid { grid-template-columns: 1fr; }
+  .credit-hero { grid-template-columns: minmax(0, 1fr); }
+  .credit-actions { align-items: flex-start; }
   .docs-overview, .docs-module-summary, .docs-commit-card { grid-template-columns: 1fr; }
   .docs-overview-stats, .docs-module-meta { justify-content: flex-start; }
   .picker-head { align-items: flex-start; gap: 1rem; flex-direction: column; }
@@ -3612,64 +3644,89 @@ function setStatus(text, color) {
   el.textContent = text;
   el.style.color = color || '';
 }
+function renderInstallsList(siblings, currentId) {
+  const list = document.getElementById('installs-list');
+  if (siblings.length === 0) { list.innerHTML = ''; return; }
+  list.innerHTML = siblings.map(function (s) {
+    const label = escapeHtml(s.account_login);
+    if (s.plan === 'free') {
+      // No dashboard exists for a free installation - an inert row (not a
+      // dead link) is more honest than the mockup's own href="#" placeholder.
+      return '<li><span class="nav-item disabled"><span class="nav-dot"></span>' + label + '<span class="install-tag">free</span></span></li>';
+    }
+    const isActive = s.installation_id === currentId;
+    // An AIR sibling has no single repo to deep-link to from an
+    // installation-scoped page - /dashboard (the org/repo picker) is the
+    // real entry point for it, same as everywhere else AIR is reached.
+    const href = s.plan === 'flash' ? '/credits/' + s.installation_id : '/dashboard';
+    return '<li><a class="nav-item' + (isActive ? ' active' : '') + '" href="' + href + '">' +
+      '<span class="nav-dot paid"></span>' + label +
+      (s.plan === 'air' ? '<span class="install-tag">AIR</span>' : '') +
+    '</a></li>';
+  }).join('');
+}
 async function loadCredits() {
-  const body = document.getElementById('credits-body');
   const res = await fetch(creditsApi);
   if (res.status === 401) { window.location.href = '/auth/logout'; return; }
   if (res.status === 404) {
-    body.innerHTML = '<div class="empty-state">This installation has no paid Aletheore plan, or your GitHub account does not administer it. <a href="/dashboard">Back to your organizations</a></div>';
+    document.getElementById('top-error').innerHTML = '<div class="error-banner">This installation has no paid Aletheore plan, or your GitHub account does not administer it. <a href="/dashboard">Back to your organizations</a></div>';
     return;
   }
   if (!res.ok) {
     // A transient 5xx must not tell a paying customer they have no plan.
-    body.innerHTML = '<div class="empty-state">We could not load your credit balance right now. Please reload in a moment. <a href="/dashboard">Back to your organizations</a></div>';
+    document.getElementById('top-error').innerHTML = '<div class="error-banner">We could not load your credit balance right now. Please reload in a moment.</div>';
     return;
   }
   const data = await res.json();
+  window._creditTopupPriceId = data.credit_topup_price_id;
+
+  document.title = data.account_login + ' - Aletheore';
+  document.getElementById('install-name').textContent = data.account_login;
+  document.getElementById('plan-pill').textContent = planShortName(data.plan);
+  renderInstallsList(data.sibling_installations || [], data.installation_id);
+
   const base = data.base_credit_remaining_usd || 0;
   const topup = data.topup_credit_balance_usd || 0;
-  window._creditTopupPriceId = data.credit_topup_price_id;
-  body.innerHTML =
-    '<div class="settings-block">' +
-      '<div class="settings-block-label">' + escapeHtml(data.account_login) + ' &middot; ' + escapeHtml(planDisplayName(data.plan)) + '</div>' +
-      '<div class="settings-block-hint">$' + (base + topup).toFixed(2) + ' AI credit available for reviews and builds</div>' +
-      '<div class="settings-block-hint">$' + base.toFixed(2) + ' included this month' +
-        (topup > 0 ? ' + $' + topup.toFixed(2) + ' purchased (never expires)' : '') + '</div>' +
-      '<div class="form-row" style="margin-top: 10px;">' +
-        '<div class="stepper">' +
-              '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepDown()" aria-label="Decrease amount">&minus;</button>' +
-              '<input type="number" id="topup-amount" min="5" max="1000" step="5" value="10">' +
-              '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepUp()" aria-label="Increase amount">+</button>' +
-            '</div>' +
-        '<button class="btn btn-accent" id="topup-button" style="margin-left: 6px;">Buy more credit</button>' +
-      '</div>' +
-      '<div id="topup-status" class="settings-block-hint"></div>' +
-      '<div class="settings-block-hint">One-time purchase, $1 per credit, minimum $5. Purchased credit never expires. When your credit runs out, automatic AI reviews pause until your plan renews or you buy more.</div>' +
-    '</div>' +
-    '<div class="settings-block">' +
-      '<div class="settings-block-label">Alert email</div>' +
-      '<div class="settings-block-hint">Used for the low-credit warning, which is the only notice you get before reviews pause at $0, and for endpoint-health alerts if you have monitored endpoints configured.</div>' +
-      '<div class="form-row" style="margin-top: 10px;">' +
-        '<input class="field" id="alert-email-input" type="email" placeholder="you@example.com" style="flex: 1 1 220px;">' +
-        '<button class="btn" id="alert-email-save">Save</button>' +
-      '</div>' +
-      '<div id="alert-email-status" class="settings-block-hint"></div>' +
-    '</div>' +
-    '<div class="settings-block">' +
-      '<div class="settings-block-label">Billing</div>' +
-      '<div class="settings-block-hint"><a href="#" id="billing-portal-link">Manage billing</a> to update your payment method or view invoices.</div>' +
-      '<div id="billing-portal-status" class="settings-block-hint"></div>' +
-    '</div>' +
-    '<div class="settings-block">' +
-      '<div class="settings-block-label">Review history</div>' +
-      '<div id="review-history-body"><div class="empty-state">Loading&hellip;</div></div>' +
-    '</div>';
-  document.getElementById('topup-button').addEventListener('click', function () { buyCredit(this); });
-  document.getElementById('alert-email-save').addEventListener('click', saveAlertEmail);
-  document.getElementById('billing-portal-link').addEventListener('click', function (event) {
-    event.preventDefault();
-    openInstallationBillingPortal();
+  const allotment = data.base_credit_allotment_usd || 0;
+  const pct = allotment > 0 ? Math.max(0, Math.min(100, Math.round((base / allotment) * 100))) : 0;
+  document.getElementById('credit-figure').innerHTML =
+    '$' + base.toFixed(2) + (allotment > 0 ? ' <span class="of">of $' + allotment.toFixed(2) + '</span>' : '');
+  document.getElementById('credit-meter-fill').style.width = pct + '%';
+  const avg = data.average_cost_per_review_usd;
+  let subText;
+  if (avg && avg > 0) {
+    const reviewsLeft = Math.floor((base + topup) / avg);
+    subText = '~' + reviewsLeft + (reviewsLeft === 1 ? ' review' : ' reviews') + ' left this month, at your recent average cost per review';
+  } else {
+    subText = data.flash_review_count_this_month > 0 ? 'Credit available for automatic reviews' : 'No completed reviews yet this month';
+  }
+  if (topup > 0) subText += ' \\u00b7 $' + topup.toFixed(2) + ' purchased credit also available';
+  document.getElementById('credit-sub').textContent = subText;
+  document.getElementById('credit-hero').style.display = '';
+
+  const renewsAt = data.subscription_renews_at
+    ? new Date(data.subscription_renews_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+    : null;
+  document.getElementById('billing-cadence-line').textContent =
+    renewsAt ? 'Billed monthly \\u00b7 next charge ' + renewsAt : 'No active subscription';
+
+  // The mockup's own "1 repo on Flash, 1 on the free tier" line assumes
+  // repo-level plan granularity a GitHub App installation doesn't have -
+  // plan is set per installation here, and one installation can cover
+  // several repos. The honest equivalent with our real data model is a
+  // plan breakdown across every installation this session administers.
+  const siblings = data.sibling_installations || [];
+  const planCounts = {};
+  siblings.forEach(function (s) { planCounts[s.plan] = (planCounts[s.plan] || 0) + 1; });
+  const summaryParts = Object.keys(planCounts).sort().map(function (p) {
+    const n = planCounts[p];
+    return n + ' ' + planShortName(p) + (n === 1 ? ' install' : ' installs');
   });
+  document.getElementById('sibling-summary-line').textContent = summaryParts.join(', ');
+
+  document.getElementById('topup-button').addEventListener('click', function () { buyCredit(this); });
+  document.getElementById('billing-portal-btn').addEventListener('click', openInstallationBillingPortal);
+  document.getElementById('alert-email-save').addEventListener('click', saveAlertEmail);
   loadAlertEmail();
   loadReviewHistory();
 }
@@ -3725,17 +3782,23 @@ async function loadReviewHistory() {
     body.innerHTML = '<div class="empty-state">No reviews recorded yet.</div>';
     return;
   }
-  const outcomeLabel = { posted: 'commented', clean: 'clean', skipped: 'skipped', failed: 'failed' };
-  body.innerHTML = reviews.map(function (r) {
-    const when = new Date(r.reviewed_at).toLocaleString();
-    let detail = '';
-    if (r.outcome === 'posted') detail = r.finding_count + (r.finding_count === 1 ? ' finding' : ' findings');
-    else if (r.outcome === 'skipped' || r.outcome === 'failed') detail = escapeHtml(r.skip_reason || r.outcome);
-    return '<div class="token-row">' +
-      '<span>' + escapeHtml(r.repo_full_name) + ' #' + r.pr_number + '</span>' +
-      '<span class="token-meta">' + (outcomeLabel[r.outcome] || r.outcome) + (detail ? ' &middot; ' + detail : '') + ' &middot; ' + escapeHtml(when) + '</span>' +
-    '</div>';
-  }).join('');
+  // flash_review_history has no PR-title column (see migration 069) - the
+  // real per-repo path plus PR number, which we do have, stands in for the
+  // mockup's invented title text as the row's primary identifier.
+  const statusClass = { posted: 'commented', clean: 'clean', skipped: 'skipped', failed: 'skipped' };
+  const metaText = { clean: 'clean' };
+  body.innerHTML = '<div class="review-list">' + reviews.map(function (r) {
+    let meta = metaText[r.outcome];
+    if (r.outcome === 'posted') meta = r.finding_count + (r.finding_count === 1 ? ' finding' : ' findings');
+    else if (!meta) meta = escapeHtml(r.skip_reason || r.outcome);
+    const prUrl = 'https://github.com/' + encodeURIComponent(r.repo_full_name).replace('%2F', '/') + '/pull/' + r.pr_number;
+    return '<a class="review-row" href="' + prUrl + '" target="_blank" rel="noopener">' +
+      '<span class="review-status ' + (statusClass[r.outcome] || 'skipped') + '"></span>' +
+      '<span class="review-title">' + escapeHtml(r.repo_full_name) + '<span class="repo">#' + r.pr_number + '</span></span>' +
+      '<span class="review-meta">' + meta + '</span>' +
+      '<span class="review-cost">' + compactRelativeTime(r.reviewed_at) + '</span>' +
+    '</a>';
+  }).join('') + '</div>';
 }
 async function buyCredit(btn) {
   if (typeof Paddle === 'undefined') {
@@ -3800,27 +3863,100 @@ loadCredits();
 
 
 def _credits_page(installation_id: int) -> str:
-    """Standalone AI-credit page for one installation: balance plus a one-time
-    top-up checkout. Exists because a Flash installation has no managed
-    dashboard (the settings page, which holds the same controls for AIR, is
-    AIR-only), so without this a Flash customer who runs out of credit has no
-    way to buy more. Data comes from /app/installations/{id}/credits, which does
-    the real authorization; nothing sensitive is baked into this HTML."""
+    """Flash's entire managed dashboard: credit balance and top-up checkout,
+    review history, the low-credit alert email, and an AIR upgrade cross-sell
+    - matching flash.html's own full-shell layout, not the settings page's
+    AIR-only tabs. Exists because a Flash installation has no other managed
+    dashboard (settings.py's own settings page is AIR-only), so without this
+    a Flash customer has no way to buy more credit, see what Flash Review has
+    done, or set a low-credit warning address. Data comes from
+    /app/installations/{id}/credits and friends, which do the real
+    authorization; nothing sensitive is baked into this HTML."""
     settings = get_settings()
     script = (
         _CREDITS_JS.replace("__INSTALLATION_ID__", str(int(installation_id)))
     )
     return f"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI credit — Aletheore</title>
+<title>Aletheore</title>
 {ICONS_LINK}
 {STYLE}
-<div class="picker-wrap" id="credits-root" data-paddle-env="{escape(settings.paddle_environment)}" data-paddle-client-token="{escape(settings.paddle_client_token)}">
-  <div class="picker-head">
-    <h1>AI credit</h1>
-    <div><a class="btn" href="/dashboard">All organizations</a> <a class="btn" href="/auth/logout">Sign out</a></div>
-  </div>
-  <div id="credits-body"><div class="empty-state">Loading&hellip;</div></div>
+<div class="shell" id="credits-root" data-paddle-env="{escape(settings.paddle_environment)}" data-paddle-client-token="{escape(settings.paddle_client_token)}">
+  <nav class="sidebar" aria-label="Dashboard navigation">
+    <div class="brand"><span class="brand-mark">A</span><span class="brand-name">Aletheore</span></div>
+    <div>
+      <div class="nav-group-label">Your installs</div>
+      <ul class="nav-list" id="installs-list"><li><a class="nav-item" aria-hidden="true">&hellip;</a></li></ul>
+    </div>
+    <div style="margin-top:auto;">
+      <div class="nav-group-label">Account</div>
+      <ul class="nav-list">
+        <li><a class="nav-item" href="/credits/{installation_id}"><i class="ti ti-settings" aria-hidden="true"></i>Settings</a></li>
+        <li><a class="nav-item" href="/auth/logout"><i class="ti ti-logout" aria-hidden="true"></i>Sign out</a></li>
+      </ul>
+    </div>
+  </nav>
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h1 class="h1" style="margin-top:0"><span id="install-name">&hellip;</span><span class="plan-pill" id="plan-pill"></span></h1>
+        <div class="page-sub">Automatic PR reviews on every push</div>
+      </div>
+    </div>
+    <div id="top-error"></div>
+    <div class="credit-hero" id="credit-hero" style="display:none">
+      <div>
+        <div class="credit-figure" id="credit-figure"></div>
+        <div class="credit-meter"><div class="credit-meter-fill" id="credit-meter-fill"></div></div>
+        <div class="credit-sub" id="credit-sub"></div>
+      </div>
+      <div class="credit-actions">
+        <div class="qty-row">
+          <span class="qty-prefix">$</span>
+          <div class="stepper">
+            <button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepDown()" aria-label="Decrease amount">&minus;</button>
+            <input type="number" id="topup-amount" min="5" max="1000" step="5" value="10">
+            <button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepUp()" aria-label="Increase amount">+</button>
+          </div>
+          <button class="btn btn-accent" id="topup-button">Buy credit</button>
+        </div>
+        <div id="topup-status" class="settings-block-hint"></div>
+        <button class="btn btn-small" id="billing-portal-btn">Manage billing</button>
+        <div id="billing-portal-status" class="settings-block-hint"></div>
+      </div>
+    </div>
+
+    <div class="plain-section-head">
+      <h2>Recent reviews</h2>
+      <div class="count">last 30 days</div>
+    </div>
+    <div id="review-history-body"><div class="empty-state">Loading&hellip;</div></div>
+
+    <div class="settings-grid">
+      <div class="settings-block">
+        <div class="settings-block-label">Notify when credit runs low</div>
+        <div class="form-row">
+          <input class="field" id="alert-email-input" type="email" placeholder="you@example.com">
+          <button class="btn" id="alert-email-save">Save</button>
+        </div>
+        <div id="alert-email-status" class="settings-block-hint"></div>
+        <div class="status-line"><span class="status-dot"></span>Reviews pause silently below $0 - this is the only warning you'll get before that happens.</div>
+      </div>
+      <div class="settings-block">
+        <div class="settings-block-label">This install</div>
+        <div class="settings-block-hint" id="billing-cadence-line"></div>
+        <div class="settings-block-hint" id="sibling-summary-line"></div>
+      </div>
+    </div>
+
+    <div class="upgrade-card">
+      <div>
+        <h3>AIR adds AIRview, Docs, managed audits and endpoint monitoring</h3>
+        <p>Same evidence-grounded reviews, plus a generated architecture map, always-current docs, and uptime checks across your repo's API. $18 of shared AI credit a month.</p>
+      </div>
+      <a class="btn" href="{PRICING_URL}" target="_blank" rel="noopener">Compare plans</a>
+    </div>
+  </main>
 </div>
 <script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
 <script>

@@ -31,6 +31,8 @@ from app_server.db import (
     get_endpoint_health_selection,
     get_endpoint_health_summary_since,
     get_endpoint_uptime_pct_since,
+    get_flash_review_cost_this_month,
+    get_flash_review_count_this_month,
     get_installation,
     get_installation_by_account_login,
     get_latest_evidence,
@@ -44,6 +46,7 @@ from app_server.db import (
     get_wiki_subsystem,
     is_installation_member,
     list_docs_symbols,
+    list_installations_for_ids,
     list_repos_for_installations,
     list_wiki_subsystems,
     record_admin_action,
@@ -51,7 +54,9 @@ from app_server.db import (
 )
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.github_pagination import fetch_paginated_github_collection
+from app_server.llm_cost import base_credit_for_plan
 from app_server.paddle_client import PaddleAPIError, create_portal_session
+from app_server.paddle_client import get_subscription as get_paddle_subscription
 from app_server.paddle_pricing import CREDIT_TOPUP_PRICE_ID
 
 dashboard_router = APIRouter()
@@ -261,6 +266,43 @@ async def _require_paid_installation_or_404(request: Request, installation_id: i
 async def get_credits(installation_id: int, request: Request):
     """Credit balance and top-up checkout data for one paid installation."""
     installation = await _require_paid_installation_or_404(request, installation_id)
+    pool = request.app.state.db_pool
+
+    subscription_renews_at = None
+    subscription_id = installation.get("paddle_subscription_id")
+    settings = get_settings()
+    if subscription_id:
+        # Best-effort, same pattern as admin.py's admin_page: a Paddle
+        # hiccup shows "no date" on this page, not a broken credits page.
+        try:
+            subscription = await asyncio.to_thread(get_paddle_subscription, settings.paddle_api_key, subscription_id)
+            subscription_renews_at = subscription.get("next_billed_at")
+        except Exception:
+            subscription_renews_at = None
+
+    flash_review_count = await get_flash_review_count_this_month(pool, installation_id)
+    flash_review_cost = await get_flash_review_cost_this_month(pool, installation_id)
+    average_cost_per_review = (flash_review_cost / flash_review_count) if flash_review_count > 0 else None
+
+    # "1 repo on Flash, 1 on the free tier" plus the sidebar's "Your
+    # installs" list - every installation this session administers, not
+    # just this one paid install, same _administered_installation_ids_for_session_or_401
+    # set /app/repos already uses for its own cross-installation listing.
+    session = await get_current_session(request)
+    sibling_installations = []
+    if session is not None:
+        try:
+            administered_ids = await _administered_installation_ids_for_session_or_401(pool, session)
+            sibling_installations = [
+                {
+                    "installation_id": row["installation_id"],
+                    "account_login": row["account_login"],
+                    "plan": row["plan"],
+                }
+                for row in await list_installations_for_ids(pool, list(administered_ids))
+            ]
+        except HTTPException:
+            sibling_installations = []
 
     return {
         "installation_id": installation_id,
@@ -268,7 +310,13 @@ async def get_credits(installation_id: int, request: Request):
         "plan": installation["plan"],
         "base_credit_remaining_usd": float(installation["base_credit_remaining_usd"]),
         "topup_credit_balance_usd": float(installation["topup_credit_balance_usd"]),
+        "base_credit_allotment_usd": base_credit_for_plan(installation["plan"], installation.get("extra_seats", 0) or 0),
         "paddle_customer_id": installation.get("paddle_customer_id"),
+        "paddle_subscription_id": subscription_id,
+        "subscription_renews_at": subscription_renews_at,
+        "average_cost_per_review_usd": average_cost_per_review,
+        "flash_review_count_this_month": flash_review_count,
+        "sibling_installations": sibling_installations,
         # Minted per request (30-minute TTL), same as the settings page's own
         # top-up, so a tab left open re-fetches a fresh one at click time.
         "checkout_installation_token": sign_checkout_installation_id(

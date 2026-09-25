@@ -908,6 +908,24 @@ async def get_flash_review_count_this_month(pool: asyncpg.Pool, installation_id:
     return row["review_count"] if row else 0
 
 
+async def get_flash_review_cost_this_month(pool: asyncpg.Pool, installation_id: int) -> float:
+    """Sum of llm_spend_events rows tagged feature='flash_review' this
+    month - unlike get_llm_spend_this_month's llm_spend total (blended
+    across every feature an installation might use), this is scoped to
+    exactly the reviews get_flash_review_count_this_month counts, so
+    dividing one by the other gives a real average cost per review, not an
+    approximation blended with unrelated spend."""
+    row = await pool.fetchrow(
+        """
+        SELECT COALESCE(sum(cost_usd), 0) AS total FROM llm_spend_events
+        WHERE installation_id = $1 AND feature = 'flash_review'
+          AND created_at >= date_trunc('month', now())
+        """,
+        installation_id,
+    )
+    return float(row["total"]) if row else 0.0
+
+
 async def get_extra_seats(pool: asyncpg.Pool, installation_id: int) -> int:
     row = await pool.fetchrow(
         "SELECT extra_seats FROM installations WHERE installation_id = $1",
