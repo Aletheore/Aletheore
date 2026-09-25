@@ -40,7 +40,7 @@ from aletheore.static_analysis import check_static_analysis as run_static_analys
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.vulnerabilities import check_vulnerabilities as check_dependency_vulnerabilities
 
-EVIDENCE_VERSION = "0.6.0"
+EVIDENCE_VERSION = "0.7.0"
 
 
 def _version_compatibility_key(version: str) -> tuple[int, int] | None:

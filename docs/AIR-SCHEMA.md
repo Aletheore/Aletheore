@@ -4,7 +4,7 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [../schemas/air.schema.json](../schemas/air.schema.json), [../SECURITY.md](../SECURITY.md)
-**Last Updated:** 2026-09-21
+**Last Updated:** 2026-09-25
 
 ## Purpose
 
@@ -41,6 +41,9 @@ per-module map from a resolved import target to `"inferred"` or
 
 Version `0.6.0` adds `security.static_analysis`, normalized findings from
 five external deterministic scanners - see the changelog entry below.
+
+Version `0.7.0` adds `git.recently_updated`, a recency-ranked file list -
+see the changelog entry below.
 
 ## Migration rules
 
@@ -105,6 +108,7 @@ architecture config, which is the common case.
 
 | Version | Change |
 | --- | --- |
+| `0.7.0` | Added `git.recently_updated`: the most recently touched files repo-wide (`{path, last_commit_at}`), ranked by recency rather than churn - a low-churn file edited five minutes ago and a high-churn hotspot are different questions, and `git.hotspots`' churn-ranked, capped list can exclude the former outright. Computed from `FileChurnTotal.recent_commits` (already gathered while streaming git log for `hotspots`), so this is a second summarization of data already in hand, not a second git walk. `git.hotspots` entries also now carry `last_commit_at` per file; since `hotspots` has no declared item schema (`_ANY_LIST`), that addition alone needed no version bump - `recently_updated` is what requires this one. |
 | `0.6.0` | Added `security.static_analysis`: normalized findings (`{tool, rule_id, severity, type, path, line, message}`) from SonarQube, Semgrep, Bearer, gosec, Bandit, and Joern, plus `tools_run`/`tools_skipped` (with per-tool skip reasons). Semgrep/gosec/Bandit are on by default (`--no-check-static-analysis` to skip), self-skip gracefully when their binary isn't installed. Bearer, Joern, and SonarQube are each opt-in: Bearer because its full-repo runtime doesn't scale cleanly with repo size (real data: 18.7s on a 241-file subtree, still running past 300s on a real ~3,331-file repo) — `--check-bearer`, or an interactive ask-and-warn prompt on a real terminal; Joern because a CPG build is real per-scan JVM-startup-plus-parsing cost and needs a separate toolchain — `--check-joern`, no prompt; SonarQube is opt-in/local-only — `checked: false` unless `SONARQUBE_HOST_URL` is set — per the real infra-cost-vs-coverage tradeoff in `docs/audits/deterministic_scanner_integration_scope.md`. Joern added same-day as a follow-up after the first five shipped, reusing the identical schema shape - no further version bump needed. |
 | `0.5.0` | Added `repository.modules[].import_confidence` (optional): a map from a resolved import target already present in that module's own `imports` to `"inferred"` (a source-root/namespace-prefix/PSR-4-prefix tiebreak among genuinely multiple candidates picked a winner) or `"ambiguous"` (C# only - a type-reference edge kept despite more than one file declaring that type name, rather than the previous behavior of dropping it outright). Omitted for a module with no non-exact edges - every module in six of the eleven supported languages (js/ts, go, rust, ruby, c/cpp), whose resolvers are never ambiguous, plus the common single-candidate case in the other five. Also fixed a real non-determinism bug found while adding this: Java's multi-source-root tiebreak previously picked whichever root came first in filesystem walk order (not guaranteed stable across runs/platforms), now sorted the same shallowest-first way Python's own source roots already were. |
 | `0.3.0` | Added `repository.database.schema`: tables, columns, foreign-key relations, and indexes replayed from Postgres DDL migrations, each citing the file:line that introduced it. Gated — present with `checked: false` when the installation is not entitled, so the section's keys are identical for every user and only `checked` varies. |
