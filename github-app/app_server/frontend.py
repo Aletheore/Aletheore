@@ -400,16 +400,30 @@ svg#depgraph:active { cursor: grabbing; }
   padding: 18px 20px; margin-bottom: 16px; }
 .settings-block-label { font-size: 13px; font-weight: 600; margin-bottom: 14px; }
 .settings-block-hint { font-size: 11px; color: var(--slate-600); margin-top: 6px; line-height: 1.5; }
+/* Overview's seats block renders an empty #seat-billing-status hint div
+   between the button row and the status line (populated only after a
+   buySeat/removeSeat click) - real gap found while pixel-matching the
+   seats block height against index.html's own seats block, which has no
+   such element: an empty block-level div still takes up a full
+   line-height + margin-top even with no text, adding height the mockup
+   never accounted for. */
+.settings-block-hint:empty { display: none; }
 .credit-figure { font-family: var(--font-mono); font-size: 34px; font-weight: 650; letter-spacing: -0.01em; line-height: 1; }
 .credit-figure .of { font-size: 14px; color: var(--slate-600); font-weight: 500; margin-left: 6px; }
 .credit-meter { height: 4px; border-radius: 2px; background: var(--border); margin: 14px 0 4px; overflow: hidden; }
 .credit-meter-fill { height: 100%; background: var(--accent); }
-.credit-breakdown { font-size: 11px; color: var(--slate-400); display: flex; justify-content: space-between; margin-top: 8px; }
+.credit-breakdown { font-size: 11px; color: var(--slate-400); display: flex; justify-content: space-between; }
+/* #usage-body scopes this to Overview only (its id is unique to that page)
+   rather than raising the shared .settings-block-hint font-size, which
+   Settings' own many hint lines also use and hasn't been measured against
+   any mockup - index.html's dedicated .block-hint is 12px, 1px larger
+   than the shared 11px default. */
+#usage-body .settings-block-hint { font-size: 12px; }
 .divider-label { font-size: 11px; color: var(--slate-400); margin: 20px 0 12px; display: flex; align-items: center; gap: 10px; }
 .divider-label::after { content: ""; flex: 1; height: 1px; background: var(--border); }
 .qty-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .qty-prefix { font-family: var(--font-mono); font-size: 13px; color: var(--slate-600); }
-.status-line { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--slate-600); margin-top: 10px; }
+.status-line { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--slate-600); margin-top: 4px; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
 .settings-help-links { display: flex; gap: 14px; margin-top: 8px; }
 .settings-help-links a { font-size: 11px; color: var(--accent-strong); text-decoration: none; font-weight: 500; }
