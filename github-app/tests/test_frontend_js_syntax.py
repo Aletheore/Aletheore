@@ -378,3 +378,32 @@ console.log('ok');
 """
     result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_billing_cadence_text_does_not_call_a_real_subscription_lapsed():
+    # Real gap a peer's pixel review caught: with a subscription id present
+    # but no renewal date (the Paddle lookup failed, or the subscription
+    # simply has no next_billed_at), the old inline logic fell straight to
+    # its "no active subscription" branch - telling a paying customer with
+    # a real, live subscription that they have none, over what should be a
+    # harmless Paddle hiccup. paddle_subscription_id (independent of the
+    # lookup that produced subscription_renews_at) is what must gate that
+    # message, not the lookup's own success or failure.
+    js = frontend._credits_page(1)
+    fn = _extract_js_function(js, "billingCadenceText")
+    harness = fn + """
+const lookupFailed = billingCadenceText({ paddle_subscription_id: 'sub_123', subscription_renews_at: null, billing_interval: null });
+if (lookupFailed !== 'Billing details unavailable right now') {
+  throw new Error('a live subscription with a failed lookup must not read as no subscription: ' + lookupFailed);
+}
+const noSubscription = billingCadenceText({ paddle_subscription_id: null, subscription_renews_at: null, billing_interval: null });
+if (noSubscription !== 'No active subscription') throw new Error('wrong message for no subscription: ' + noSubscription);
+const monthly = billingCadenceText({ paddle_subscription_id: 'sub_1', subscription_renews_at: '2026-10-24T00:00:00Z', billing_interval: 'month' });
+if (monthly.indexOf('Billed monthly') !== 0) throw new Error('wrong monthly cadence text: ' + monthly);
+const yearly = billingCadenceText({ paddle_subscription_id: 'sub_1', subscription_renews_at: '2026-10-24T00:00:00Z', billing_interval: 'year' });
+if (yearly.indexOf('Billed yearly') !== 0) throw new Error('wrong yearly cadence text: ' + yearly);
+console.log('ok');
+"""
+    result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
