@@ -334,12 +334,26 @@ table.findings tr:last-child td { border-bottom: none; }
 .wiki-banner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; background: var(--slate-100); border: 1px solid var(--border); border-radius: 4px; padding: 13px 15px; margin: 10px 0 14px; flex-wrap: wrap; }
 .wiki-banner-text { font-size: 12.5px; color: var(--ink-700); line-height: 1.5; max-width: 46ch; }
 .wiki-banner-text b { font-weight: 600; color: var(--ink-900); }
-.docs-overview { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center; border: 1px solid var(--border);
-  border-radius: 4px; padding: 16px; margin: 10px 0 16px; background: var(--paper); }
-.docs-overview-kicker { font-size: 11px; font-weight: 720; color: var(--accent-strong); }
-.docs-overview h2 { margin: 5px 0 5px; font-size: 20px; line-height: 1.2; }
-.docs-overview p { margin: 0; color: var(--slate-600); font-size: 13px; line-height: 1.55; max-width: 72ch; }
-.docs-overview-stats { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+/* docs.html's own plain stat-row (mono number + label pills) - replaces
+   the earlier .docs-overview kicker/heading/description card, which the
+   mockup has no equivalent of. */
+.stat-row { display: flex; gap: 24px; margin: 20px 0 28px; flex-wrap: wrap; }
+.stat-pill { font-family: var(--font-mono); }
+.stat-pill .n { font-size: 20px; font-weight: 650; }
+.stat-pill .l { font-size: 11.5px; color: var(--slate-600); font-family: var(--font-sans); margin-left: 6px; }
+/* docs.html's two-column layout: main content plus a sticky right rail
+   (Recently updated / Hotspots / Jump to). */
+.main-grid { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 44px; align-items: start; }
+.rail { display: flex; flex-direction: column; gap: 20px; position: sticky; top: 32px; }
+.rail-card { border: 1px solid var(--border); border-radius: 4px; padding: 14px 16px; background: var(--paper); }
+.rail-card h3 { font-size: 12px; font-weight: 650; margin: 0 0 10px; color: var(--slate-600); }
+.rail-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+.rail-row:last-child { border-bottom: none; padding-bottom: 0; }
+.rail-row .path { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-900); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.rail-row .meta { color: var(--slate-400); font-size: 11px; white-space: nowrap; flex-shrink: 0; }
+.rail-card a.rail-link { display: block; font-size: 12.5px; color: var(--slate-600); text-decoration: none; padding: 5px 0; }
+.rail-card a.rail-link:hover { color: var(--accent); }
+@media (max-width: 880px) { .main-grid { grid-template-columns: 1fr; } .rail { position: static; } }
 .docs-stat-pill { min-width: 104px; border: 1px solid var(--border); border-radius: 4px; background: var(--slate-100);
   padding: 10px 12px; }
 .docs-stat-value { font-family: var(--font-mono); font-size: 18px; font-weight: 720; color: var(--ink-900); }
@@ -1047,8 +1061,12 @@ def _page_head(title: str) -> str:
 {STYLE}"""
 
 
-def _topbar(h1: str, right_id: str = "", sub_id: str = "", show_breadcrumb: bool = True, sub_class: str = "repo-path") -> str:
-    right = f'<div class="topbar-right" id="{right_id}"></div>' if right_id else ""
+def _topbar(h1: str, right_id: str = "", sub_id: str = "", show_breadcrumb: bool = True, sub_class: str = "repo-path", right_html: str = "", margin_bottom: str = "") -> str:
+    # right_html carries real markup (e.g. Docs' "Export as Markdown" link,
+    # which needs its own href/download attributes) - right_id alone only
+    # ever produces an empty div a script populates with text later, which
+    # can't express that.
+    right = right_html or (f'<div class="topbar-right" id="{right_id}"></div>' if right_id else "")
     # sub_class defaults to Overview's mono "org/repo - plan" treatment;
     # other pages needing a plain descriptive sentence under the H1 (e.g.
     # Endpoint health's "Live checks against every mapped API endpoint...")
@@ -1068,8 +1086,15 @@ def _topbar(h1: str, right_id: str = "", sub_id: str = "", show_breadcrumb: bool
     # .main's own top padding already puts it, which is what the mockup's
     # H1 sits flush at.
     h1_style = "" if show_breadcrumb else ' style="margin-top:0"'
+    # .topbar's shared margin-bottom (22.4px) is a fine default, but a page
+    # whose own mockup wants a smaller exact gap below its page-head
+    # (docs.html: 20px, via margin-collapse with .stat-row's own 20px
+    # margin-top) can't get there by adding more margin below - collapse
+    # only ever takes the larger side. margin_bottom overrides .topbar's
+    # own value directly for that one page instead.
+    topbar_style = f' style="margin-bottom:{margin_bottom}"' if margin_bottom else ""
     return f"""
-    <div class="topbar">
+    <div class="topbar"{topbar_style}>
       <div>
         {breadcrumb}
         <h1 class="h1"{h1_style}>{h1}</h1>
@@ -2529,24 +2554,43 @@ DOCS_LOCKED_PREVIEW = (
 
 DOCS_HTML = _page_head("Docs — {repo} — Aletheore") + _shell(
     "docs",
-    _topbar("Docs")
+    _topbar(
+        "Docs",
+        show_breadcrumb=False,
+        margin_bottom="0",
+        right_html='<a class="btn" id="docs-download-link" href="#" download style="display:none"><i class="ti ti-download" aria-hidden="true"></i>Export as Markdown</a>',
+    )
     + """
-    <section class="section">
-      <div class="section-head">
-        <div class="section-title"><i class="ti ti-file-text" aria-hidden="true"></i>Docs</div>
-        <span class="section-sub">Regenerated automatically on every push</span>
-        <a class="btn" id="docs-download-link" href="#" download style="display:none"><i class="ti ti-download" aria-hidden="true"></i>Download</a>
-      </div>
-      <div class="section-body" id="docs-body"><div class="empty-state">Loading&hellip;</div></div>
-    </section>
+    <div id="docs-stat-row"></div>
+    <div class="main-grid">
+      <div class="main-col">
+        <div id="docs-body"><div class="empty-state">Loading&hellip;</div></div>
 
-    <section class="section" id="docs-repo-commit-section" style="display:none">
-      <div class="section-head">
-        <div class="section-title"><i class="ti ti-git-pull-request" aria-hidden="true"></i>Commit to repo</div>
-        <span class="section-sub">Also push this reference into your repo as .aletheore/docs/API.md</span>
+        <section class="section" id="docs-repo-commit-section" style="display:none">
+          <div class="section-head">
+            <div class="section-title"><i class="ti ti-git-pull-request" aria-hidden="true"></i>Commit to repo</div>
+            <span class="section-sub">Also push this reference into your repo as .aletheore/docs/API.md</span>
+          </div>
+          <div class="section-body" id="docs-repo-commit-body"><div class="empty-state">Loading&hellip;</div></div>
+        </section>
       </div>
-      <div class="section-body" id="docs-repo-commit-body"><div class="empty-state">Loading&hellip;</div></div>
-    </section>
+      <aside class="rail" id="docs-rail" style="display:none">
+        <div class="rail-card">
+          <h3>Recently updated</h3>
+          <div id="rail-recently-updated"></div>
+        </div>
+        <div class="rail-card">
+          <h3>Hotspots</h3>
+          <div id="rail-hotspots"></div>
+        </div>
+        <div class="rail-card">
+          <h3>Jump to</h3>
+          <a class="rail-link" href="#" id="rail-jump-all">All modules</a>
+          <a class="rail-link" href="#" id="rail-jump-ai">AI-assisted only</a>
+          <a class="rail-link" href="#" id="rail-jump-undoc">Undocumented symbols</a>
+        </div>
+      </aside>
+    </div>
 """
 ) + f"""
 <script>
@@ -2567,33 +2611,36 @@ function docsHasAiText(markdown) {{
   return markdown.indexOf('AI-generated') !== -1 || markdown.indexOf('AI-polished') !== -1;
 }}
 
+function docsHasUndocumented(markdown) {{
+  // docs_reference.py's own UNDOCUMENTED marker for a symbol with no
+  // extracted docstring - real grounding text, not a guess at this
+  // module's shape from the outside.
+  return markdown.indexOf('Undocumented - no docstring found.') !== -1;
+}}
+
 function renderDocsOverview(modulePaths, modules) {{
   const symbolCount = modulePaths.reduce(function (total, path) {{
     return total + docsSymbolCount(modules[path] || '');
   }}, 0);
   const aiCount = modulePaths.filter(function (path) {{ return docsHasAiText(modules[path] || ''); }}).length;
-  return '<div class="docs-overview">' +
-    '<div>' +
-      '<div class="docs-overview-kicker">Aletheore Docs</div>' +
-      '<h2>Evidence-grounded API reference</h2>' +
-      '<p>Public functions and classes are grouped by source file with signatures, docstrings, generated descriptions, and file:line citations kept visibly grounded in repository evidence.</p>' +
-    '</div>' +
-    '<div class="docs-overview-stats">' +
-      '<div class="docs-stat-pill"><div class="docs-stat-value">' + modulePaths.length + '</div><div class="docs-stat-label">modules</div></div>' +
-      '<div class="docs-stat-pill"><div class="docs-stat-value">' + symbolCount + '</div><div class="docs-stat-label">symbols</div></div>' +
-      '<div class="docs-stat-pill"><div class="docs-stat-value">' + aiCount + '</div><div class="docs-stat-label">AI-assisted files</div></div>' +
-    '</div>' +
+  return '<div class="stat-row">' +
+    '<div class="stat-pill"><span class="n">' + modulePaths.length + '</span><span class="l">modules</span></div>' +
+    '<div class="stat-pill"><span class="n">' + symbolCount + '</span><span class="l">symbols</span></div>' +
+    '<div class="stat-pill"><span class="n">' + aiCount + '</span><span class="l">AI-assisted files</span></div>' +
   '</div>';
 }}
 
 function renderDocsModule(modulePath, markdown) {{
   const details = document.createElement('details');
   details.className = 'docs-module-card';
-  const summary = document.createElement('summary');
-  summary.className = 'docs-module-summary';
+  details.id = 'docs-module-' + modulePath.replace(/[^a-zA-Z0-9]/g, '-');
   const symbols = docsSymbolCount(markdown);
   const lines = docsLineCount(markdown);
   const hasAi = docsHasAiText(markdown);
+  details.dataset.ai = hasAi ? '1' : '0';
+  details.dataset.undocumented = docsHasUndocumented(markdown) ? '1' : '0';
+  const summary = document.createElement('summary');
+  summary.className = 'docs-module-summary';
   summary.innerHTML =
     '<div>' +
       '<div class="docs-module-title"><i class="ti ti-file-code" aria-hidden="true"></i><span class="docs-module-path">' + escapeHtml(modulePath) + '</span></div>' +
@@ -2668,13 +2715,57 @@ async function loadDocs() {{
       'The latest Docs update didn\\'t finish everything: ' + escapeHtml(data.build_error) +
       ' It will pick up automatically on the next run.</div>';
   }}
-  body.innerHTML = renderDocsOverview(modulePaths, data.modules || {{}}) + staleBanner;
+  document.getElementById('docs-stat-row').innerHTML = renderDocsOverview(modulePaths, data.modules || {{}});
+  body.innerHTML = staleBanner;
   const list = document.createElement('div');
   list.className = 'docs-grid';
+  list.id = 'docs-grid';
   modulePaths.sort().forEach(function (path) {{
     list.appendChild(renderDocsModule(path, data.modules[path]));
   }});
   body.appendChild(list);
+
+  renderDocsRail(data.recently_updated || [], data.hotspots || []);
+}}
+
+function renderDocsRail(recentlyUpdated, hotspots) {{
+  const rail = document.getElementById('docs-rail');
+  rail.style.display = '';
+  const recentEl = document.getElementById('rail-recently-updated');
+  recentEl.innerHTML = recentlyUpdated.length
+    ? recentlyUpdated.slice(0, 6).map(function (f) {{
+        return '<div class="rail-row"><span class="path">' + escapeHtml(f.path) + '</span>' +
+          '<span class="meta">' + compactRelativeTime(f.last_commit_at) + '</span></div>';
+      }}).join('')
+    : '<div class="rail-row"><span class="meta">No git history yet.</span></div>';
+  const hotspotsEl = document.getElementById('rail-hotspots');
+  hotspotsEl.innerHTML = hotspots.length
+    ? hotspots.slice(0, 6).map(function (h) {{
+        return '<div class="rail-row"><span class="path">' + escapeHtml(h.path) + '</span>' +
+          '<span class="meta">' + h.churn_count + ' commit' + (h.churn_count === 1 ? '' : 's') + '</span></div>';
+      }}).join('')
+    : '<div class="rail-row"><span class="meta">No hotspots yet.</span></div>';
+
+  function filterModules(predicate) {{
+    document.querySelectorAll('.docs-module-card').forEach(function (card) {{
+      card.style.display = predicate(card) ? '' : 'none';
+    }});
+  }}
+  document.getElementById('rail-jump-all').onclick = function (e) {{
+    e.preventDefault();
+    filterModules(function () {{ return true; }});
+    document.getElementById('docs-grid').scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+  }};
+  document.getElementById('rail-jump-ai').onclick = function (e) {{
+    e.preventDefault();
+    filterModules(function (card) {{ return card.dataset.ai === '1'; }});
+    document.getElementById('docs-grid').scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+  }};
+  document.getElementById('rail-jump-undoc').onclick = function (e) {{
+    e.preventDefault();
+    filterModules(function (card) {{ return card.dataset.undocumented === '1'; }});
+    document.getElementById('docs-grid').scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+  }};
 }}
 
 async function loadDocsRepoCommitSettings() {{

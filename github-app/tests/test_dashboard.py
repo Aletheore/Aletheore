@@ -2436,6 +2436,32 @@ async def test_dashboard_docs_returns_empty_modules_when_nothing_scanned_yet(poo
 
 
 @pytest.mark.asyncio
+async def test_dashboard_docs_surfaces_recently_updated_and_hotspots(pool, monkeypatch):
+    # The Docs page's right rail (Recently updated / Hotspots) reads these
+    # straight from evidence.git - not computed by this route itself, just
+    # passed through.
+    await upsert_installation(pool, 706, "octocat")
+    await set_installation_plan(pool, 706, "air")
+    evidence = _evidence_with_module("a.py", "add", "Adds two numbers.")
+    evidence["git"] = {
+        "available": True,
+        "recently_updated": [{"path": "a.py", "last_commit_at": "2026-09-25T00:00:00+00:00"}],
+        "hotspots": [{"path": "a.py", "churn_count": 5, "co_change_partners": [], "dependents_count": 0, "last_commit_at": "2026-09-25T00:00:00+00:00"}],
+    }
+    await insert_repo_history(pool, 706, "octocat/hello-world", datetime.now(timezone.utc), evidence)
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[706])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/docs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["recently_updated"] == [{"path": "a.py", "last_commit_at": "2026-09-25T00:00:00+00:00"}]
+    assert body["hotspots"][0]["path"] == "a.py"
+    assert body["hotspots"][0]["churn_count"] == 5
+
+
+@pytest.mark.asyncio
 async def test_dashboard_docs_surfaces_failed_build_status(pool, monkeypatch):
     await upsert_installation(pool, 705, "octocat")
     await set_installation_plan(pool, 705, "air")

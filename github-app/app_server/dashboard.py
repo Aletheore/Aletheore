@@ -800,11 +800,20 @@ async def get_dashboard_docs(org: str, repo: str, request: Request):
 
     build_status = await get_docs_build_status(pool, installation_id, repo_full_name)
     modules = await _build_docs_modules(pool, installation_id, repo_full_name)
+    # Fetched separately from _build_docs_modules's own internal fetch - it
+    # only returns the built API reference, not the raw evidence the Docs
+    # page's rail (recently-updated files, hotspots) also needs. A second
+    # get_latest_evidence call, not a refactor to share one, since the
+    # export route also calls _build_docs_modules and has no use for these.
+    evidence = await get_latest_evidence(pool, installation_id, repo_full_name)
+    git_data = (evidence or {}).get("git", {})
     return {
         "repo_full_name": repo_full_name,
         "modules": modules,
         "build_status": build_status["status"] if build_status is not None else None,
         "build_error": build_status["error_message"] if build_status is not None else None,
+        "recently_updated": git_data.get("recently_updated", []),
+        "hotspots": git_data.get("hotspots", []),
     }
 
 
