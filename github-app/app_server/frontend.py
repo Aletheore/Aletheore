@@ -226,6 +226,15 @@ a { color: var(--accent); }
    margin-top on this element to collapse-to-larger against .topbar's
    shared margin-bottom rather than stack on top of it). */
 .summary-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; margin-top: 24px; margin-bottom: 28px; }
+/* endpoints.html's own .summary-label/.summary-value gap is 8px, via the
+   label's margin-bottom, not the value's margin-top (which is 0, with
+   the value's line-height set to 1 explicitly) - scoped to #summary-row
+   rather than changing the shared .stat-label/.stat-value (also used by
+   Overview's own stat-strip, already pixel-measured and approved at a
+   different gap value; touching the shared rule would regress it). */
+#summary-row .stat-label { margin-bottom: 8px; }
+#summary-row .stat-value { margin-top: 0; line-height: 1; }
+#summary-row .stat-value .of { font-size: 15px; color: var(--slate-400); font-weight: 500; margin-left: 4px; }
 .stat-card { background: var(--paper); border-right: 1px solid var(--border); padding: 16px 18px; text-decoration: none; color: inherit; display: block; transition: background-color 0.12s ease; }
 .stat-card:last-child { border-right: none; }
 a.stat-card:hover { background: var(--slate-50); }
@@ -1528,6 +1537,11 @@ HEALTH_HTML = _page_head("Endpoint health — {repo} — Aletheore") + _shell(
       <div class="stat-card"><div class="stat-label">Reachable now</div><div class="stat-value" id="summary-reachable">&ndash;</div></div>
       <div class="stat-card"><div class="stat-label">Median latency</div><div class="stat-value" id="summary-latency">&ndash;</div></div>
     </div>
+    <div class="plain-section-head" id="endpoints-list-head">
+      <h2>Endpoints</h2>
+      <div class="count" id="endpoints-list-count"></div>
+    </div>
+    <div id="health-body"><div class="empty-state">Loading&hellip;</div></div>
     <section class="section">
       <div class="section-head">
         <div class="section-title"><i class="ti ti-target-arrow" aria-hidden="true"></i>Monitored targets</div>
@@ -1548,13 +1562,6 @@ HEALTH_HTML = _page_head("Endpoint health — {repo} — Aletheore") + _shell(
         <span class="section-sub" id="endpoints-usage"></span>
       </div>
       <div class="section-body" id="endpoints-body"><div class="empty-state">Loading&hellip;</div></div>
-    </section>
-    <section class="section">
-      <div class="section-head">
-        <div class="section-title"><i class="ti ti-activity" aria-hidden="true"></i>Results</div>
-        <span class="section-sub">Most recent check per endpoint, per target</span>
-      </div>
-      <div class="section-body" id="health-body"><div class="empty-state">Loading&hellip;</div></div>
     </section>
     <section class="section" id="stale-endpoints-section" style="display:none;">
       <div class="section-head">
@@ -1687,6 +1694,7 @@ async function loadResults() {{
   if (!res.ok) {{ body.innerHTML = '<div class="empty-state">Health data unavailable.</div>'; return; }}
   const data = await res.json();
   const endpoints = data.endpoints || [];
+  document.getElementById('endpoints-list-count').textContent = endpoints.length + ' mapped';
 
   const summaryRow = document.getElementById('summary-row');
   if (endpoints.length === 0) {{
@@ -1698,14 +1706,18 @@ async function loadResults() {{
       uptimeEl.textContent = '–';
       uptimeEl.className = 'stat-value';
     }} else {{
-      const pct = Math.round(data.uptime_pct_24h * 100);
-      uptimeEl.textContent = pct + '%';
+      const pct = data.uptime_pct_24h * 100;
+      uptimeEl.textContent = pct.toFixed(1) + '%';
       uptimeEl.className = 'stat-value' + (pct === 100 ? ' success' : pct < 90 ? ' critical' : ' warning');
     }}
     const up = endpoints.filter(function (e) {{ return e.reachable; }}).length;
     const reachableEl = document.getElementById('summary-reachable');
-    reachableEl.textContent = up + ' of ' + endpoints.length;
-    reachableEl.className = 'stat-value' + (up === endpoints.length ? ' success' : ' critical');
+    reachableEl.innerHTML = up + '<span class="of">of ' + endpoints.length + '</span>';
+    // The mockup's own .summary-value only defines success/critical (no
+    // warning variant) and its own example is styled success at 11 of 12 -
+    // any endpoint at all being reachable reads as "up", not an alarm;
+    // only zero reachable is critical.
+    reachableEl.className = 'stat-value' + (up === 0 ? ' critical' : ' success');
     const latencies = endpoints
       .map(function (e) {{ return e.reachable ? e.latency_ms : null; }})
       .filter(function (l) {{ return l !== null && l !== undefined; }})
@@ -1750,12 +1762,13 @@ async function loadResults() {{
       const location = e.evidence_resolution && e.evidence_resolution.file
         ? '<span class="file">' + escapeHtml(e.evidence_resolution.file) + (e.evidence_resolution.line ? ':' + e.evidence_resolution.line : '') + '</span>'
         : '';
+      const checkedTitle = 'title="checked ' + compactRelativeTime(e.checked_at) + '"';
       html += '<div class="health-row" id="' + rowId + '" style="cursor:pointer;" onclick="toggleEndpointHistory(\\'' + rowId + '\\')">' +
         '<div class="method ' + escapeHtml(methodClass) + '">' + escapeHtml(e.method) + '</div>' +
         '<div class="path">' + escapeHtml(e.path) + location + '</div>' +
         '<div class="latency">' + (e.reachable ? Math.round(e.latency_ms) + 'ms' : '&mdash;') + '</div>' +
-        '<div class="status-pill ' + (e.reachable ? 'up' : 'down') + '"><span class="dot"></span>' +
-          (e.reachable ? 'up' : (e.status_code ? escapeHtml(String(e.status_code)) : 'down')) + ' &middot; ' + compactRelativeTime(e.checked_at) + '</div></div>' +
+        '<div class="status-pill ' + (e.reachable ? 'up' : 'down') + '" ' + checkedTitle + '><span class="dot"></span>' +
+          (e.reachable ? 'up' : (e.status_code ? escapeHtml(String(e.status_code)) + ' · ' + compactRelativeTime(e.checked_at) : 'down')) + '</div></div>' +
         '<div class="health-history" id="' + rowId + '-history" style="display:none;"></div>';
       rowIndex += 1;
     }});
