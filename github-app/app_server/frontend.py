@@ -135,7 +135,7 @@ a { color: var(--accent); }
    against endpoints.html - outline, matching the shared default).
    Scoped to this one button rather than touching the shared class,
    which many other, non-primary buttons across every page also use. */
-#docs-download-link { background: var(--ink-900); color: var(--paper); border-color: var(--ink-900); font-size: 13px; font-weight: 600; }
+#docs-download-link { background: var(--ink-900); color: #FBFAF7; border-color: var(--ink-900); font-size: 13px; font-weight: 600; padding: 8px 14px; }
 #docs-download-link:hover { background: var(--ink-700); }
 .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 500; padding: 2px 9px; border-radius: 4px; }
 .stepper { display: inline-flex; align-items: center; border: 1px solid var(--border-strong); border-radius: 4px; overflow: hidden; vertical-align: middle; }
@@ -352,7 +352,8 @@ table.findings tr:last-child td { border-bottom: none; }
 /* docs.html's two-column layout: main content plus a sticky right rail
    (Recently updated / Hotspots / Jump to). */
 .main-grid { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 44px; align-items: start; }
-.rail { display: flex; flex-direction: column; gap: 20px; position: sticky; top: 32px; }
+.main-col { min-width: 0; }
+.rail { display: flex; flex-direction: column; gap: 20px; position: sticky; top: 32px; min-width: 0; }
 .rail-card { border: 1px solid var(--border); border-radius: 4px; padding: 14px 16px; background: var(--paper); }
 .rail-card h3 { font-size: 12px; font-weight: 650; margin: 0 0 10px; color: var(--slate-600); }
 .rail-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); }
@@ -361,7 +362,7 @@ table.findings tr:last-child td { border-bottom: none; }
 .rail-row .meta { color: var(--slate-400); font-size: 11px; white-space: nowrap; flex-shrink: 0; }
 .rail-card a.rail-link { display: block; font-size: 12.5px; color: var(--slate-600); text-decoration: none; padding: 5px 0; }
 .rail-card a.rail-link:hover { color: var(--accent); }
-@media (max-width: 880px) { .main-grid { grid-template-columns: 1fr; } .rail { position: static; } }
+@media (max-width: 880px) { .main-grid { grid-template-columns: minmax(0, 1fr); } .rail { position: static; } }
 .docs-stat-pill { min-width: 104px; border: 1px solid var(--border); border-radius: 4px; background: var(--slate-100);
   padding: 10px 12px; }
 .docs-stat-value { font-family: var(--font-mono); font-size: 18px; font-weight: 720; color: var(--ink-900); }
@@ -374,7 +375,7 @@ table.findings tr:last-child td { border-bottom: none; }
    bordered row with a rotating chevron, not a card-with-shadow rebuild. */
 .docs-grid { display: flex; flex-direction: column; }
 .docs-module-card { border: 1px solid var(--border); border-radius: 4px; margin-bottom: 8px; background: var(--paper); }
-.docs-module-summary { list-style: none; cursor: pointer; padding: 14px 16px; display: flex; align-items: center; gap: 12px; }
+.docs-module-summary { list-style: none; cursor: pointer; padding: 14.5px 16px; display: flex; align-items: center; gap: 12px; }
 .docs-module-summary::-webkit-details-marker { display: none; }
 .docs-module-chevron { font-family: var(--font-mono); font-size: 11px; color: var(--slate-400); transition: transform 0.15s ease; flex-shrink: 0; }
 .docs-module-card[open] .docs-module-chevron { transform: rotate(90deg); }
