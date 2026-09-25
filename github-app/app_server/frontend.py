@@ -129,6 +129,14 @@ a { color: var(--accent); }
 .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .btn-accent { background: var(--accent); color: #FFFFFF; border-color: var(--accent); }
 .btn-accent:hover { background: var(--accent-strong); }
+/* docs.html's own .btn is solid dark (a different default than the
+   shared outline .btn most pages use for less-primary actions,
+   confirmed by comparing docs.html/index.html/flash.html - all solid -
+   against endpoints.html - outline, matching the shared default).
+   Scoped to this one button rather than touching the shared class,
+   which many other, non-primary buttons across every page also use. */
+#docs-download-link { background: var(--ink-900); color: var(--paper); border-color: var(--ink-900); font-size: 13px; font-weight: 600; }
+#docs-download-link:hover { background: var(--ink-700); }
 .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 500; padding: 2px 9px; border-radius: 4px; }
 .stepper { display: inline-flex; align-items: center; border: 1px solid var(--border-strong); border-radius: 4px; overflow: hidden; vertical-align: middle; }
 .stepper button { font-family: var(--font-mono); font-size: 15px; font-weight: 600; width: 30px; height: 30px; border: none; background: var(--paper);
@@ -361,24 +369,29 @@ table.findings tr:last-child td { border-bottom: none; }
 .docs-status-banner { border: 1px solid var(--border); border-radius: 4px; padding: 12px 14px; margin: 0 0 14px; font-size: 12.5px; line-height: 1.55; }
 .docs-status-banner.failed { border-color: var(--critical); background: var(--critical-soft); color: var(--critical); }
 .docs-status-banner.partial { border-color: var(--warning); background: var(--warning-soft); color: var(--warning); }
-.docs-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
-.docs-module-card { border: 1px solid var(--border); border-radius: 4px; background: var(--paper);
-  overflow: hidden; transition: border-color 0.15s ease, background-color 0.15s ease; }
-.docs-module-card[open] { grid-column: 1 / -1; border-color: var(--accent); }
-.docs-module-summary { list-style: none; cursor: pointer; padding: 14px 15px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; }
+/* docs.html's own flat-row module list, replacing the earlier 2-column
+   card grid - the mockup's own callout confirms the intent was a flat
+   bordered row with a rotating chevron, not a card-with-shadow rebuild. */
+.docs-grid { display: flex; flex-direction: column; }
+.docs-module-card { border: 1px solid var(--border); border-radius: 4px; margin-bottom: 8px; background: var(--paper); }
+.docs-module-summary { list-style: none; cursor: pointer; padding: 14px 16px; display: flex; align-items: center; gap: 12px; }
 .docs-module-summary::-webkit-details-marker { display: none; }
-.docs-module-title { display: flex; align-items: center; gap: 9px; min-width: 0; }
-.docs-module-title i { color: var(--accent-strong); font-size: 17px; flex-shrink: 0; }
-.docs-module-path { font-family: var(--font-mono); font-size: 12.5px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.docs-module-sub { margin-top: 4px; font-size: 11.5px; color: var(--slate-600); }
-.docs-module-meta { display: flex; align-items: center; gap: 7px; justify-content: flex-end; flex-wrap: wrap; }
-.docs-chip { display: inline-flex; align-items: center; gap: 5px; border-radius: 4px; padding: 4px 8px; background: var(--slate-100); color: var(--slate-600); font-size: 11px; white-space: nowrap; }
-.docs-chip.ai { background: var(--accent-soft); color: var(--accent-strong); }
-.docs-module-chevron { color: var(--slate-400); font-size: 16px; transition: transform 0.15s ease; }
-.docs-module-card[open] .docs-module-chevron { transform: rotate(180deg); }
-.docs-module-content { border-top: 1px solid var(--border); background: var(--slate-50); padding: 14px; }
-.docs-module-body { white-space: pre-wrap; font-size: 12px; line-height: 1.7; padding: 14px; margin: 0; font-family: var(--font-mono); color: var(--ink-700);
-  overflow-x: auto; border: 1px solid var(--border); border-radius: 4px; background: var(--slate-100); }
+.docs-module-chevron { font-family: var(--font-mono); font-size: 11px; color: var(--slate-400); transition: transform 0.15s ease; flex-shrink: 0; }
+.docs-module-card[open] .docs-module-chevron { transform: rotate(90deg); }
+.docs-module-path { font-family: var(--font-mono); font-size: 13px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docs-chip { font-family: var(--font-mono); font-size: 10.5px; color: var(--slate-600); border: 1px solid var(--border-strong); border-radius: 3px; padding: 1px 6px; flex-shrink: 0; }
+.docs-module-content { padding: 0 16px 16px 42px; border-top: 1px solid var(--border); }
+.docs-module-content-inner { font-size: 12px; color: var(--slate-600); padding: 14px 0 0; }
+.docs-symbol-row { border-bottom: 1px solid var(--border); padding: 10px 0; }
+.docs-symbol-row:last-child { border-bottom: none; }
+.docs-symbol-row .sig { font-family: var(--font-mono); font-size: 12.5px; padding: 3px 0; }
+.docs-symbol-row .sig .name { color: var(--ink-900); }
+.docs-symbol-row .sig .kind { color: var(--slate-400); margin-left: 8px; font-family: var(--font-sans); }
+.docs-symbol-row .desc { font-size: 12.5px; line-height: 1.6; color: var(--slate-600); margin: 6px 0; max-width: 72ch; }
+.docs-symbol-row .cite { font-family: var(--font-mono); font-size: 11px; color: var(--slate-400); }
+.docs-symbol-row .flag { font-size: 11px; margin-left: 8px; }
+.docs-symbol-row .flag.undocumented { color: var(--slate-400); font-style: italic; }
+.docs-symbol-row .flag.ai { color: var(--accent-strong); }
 .docs-commit-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid var(--border); border-radius: 4px; padding: 14px;
   background: var(--paper); }
 .docs-commit-copy { min-width: 0; }
@@ -2558,7 +2571,7 @@ DOCS_HTML = _page_head("Docs — {repo} — Aletheore") + _shell(
         "Docs",
         show_breadcrumb=False,
         margin_bottom="0",
-        right_html='<a class="btn" id="docs-download-link" href="#" download style="display:none"><i class="ti ti-download" aria-hidden="true"></i>Export as Markdown</a>',
+        right_html='<a class="btn" id="docs-download-link" href="#" download style="display:none">Export as Markdown</a>',
     )
     + """
     <div id="docs-stat-row"></div>
@@ -2603,10 +2616,6 @@ function docsSymbolCount(markdown) {{
   return matches ? matches.length : 0;
 }}
 
-function docsLineCount(markdown) {{
-  return markdown.split('\\n').filter(function (line) {{ return line.trim().length > 0; }}).length;
-}}
-
 function docsHasAiText(markdown) {{
   return markdown.indexOf('AI-generated') !== -1 || markdown.indexOf('AI-polished') !== -1;
 }}
@@ -2616,6 +2625,63 @@ function docsHasUndocumented(markdown) {{
   // extracted docstring - real grounding text, not a guess at this
   // module's shape from the outside.
   return markdown.indexOf('Undocumented - no docstring found.') !== -1;
+}}
+
+// docs_reference.py's build_module_reference() produces an exact,
+// deterministic markdown shape - "# path", then "## Classes"/"## Functions"
+// sections, each symbol as "### `signature`", a body (docstring, an AI
+// marker, or the UNDOCUMENTED marker), then a "`path:line`" citation line.
+// Parsed here rather than rendered as a raw <pre> block, so the module
+// card's expanded body can show a real symbol list (name, kind, citation,
+// AI/undocumented flags) matching docs.html's own row-per-symbol layout,
+// instead of visible markdown syntax (headers, backticks, asterisks).
+function parseDocsMarkdown(markdown) {{
+  const symbols = [];
+  let kind = 'function';
+  let current = null;
+  function flush() {{
+    if (!current) return;
+    const bodyText = current.bodyLines.join('\\n').trim();
+    const citeMatch = bodyText.match(/`([^`]+:\\d+)`\\s*$/);
+    const citation = citeMatch ? citeMatch[1] : '';
+    const description = (citeMatch ? bodyText.slice(0, citeMatch.index) : bodyText)
+      .replace(/\\*\\(AI-generated - no docstring found in source\\)\\*/, '')
+      .replace(/\\*\\(AI-polished from the original docstring\\)\\*/, '')
+      .replace(/\\*Undocumented - no docstring found\\.\\*/, '')
+      .trim();
+    symbols.push({{
+      name: current.name, kind: current.kind, signature: current.signature, citation: citation,
+      isUndocumented: bodyText.indexOf('Undocumented - no docstring found.') !== -1,
+      isAi: bodyText.indexOf('AI-generated') !== -1,
+      isPolished: bodyText.indexOf('AI-polished') !== -1,
+      description: description,
+    }});
+    current = null;
+  }}
+  // A line-by-line scan, not a nested split-by-header-level regex (a first
+  // attempt at that swallowed every ### symbol header inside its enclosing
+  // ## Classes/## Functions block instead of finding it, since ##? matches
+  // "#" or "##" but never "###" - the exact real bug a Node-based test
+  // against this repo's own real 89-symbol db.py caught before this ever
+  // reached a browser).
+  markdown.split('\\n').forEach(function (line) {{
+    const sectionMatch = line.match(/^##\\s+(Classes|Functions)\\s*$/);
+    if (sectionMatch) {{
+      flush();
+      kind = sectionMatch[1] === 'Classes' ? 'class' : 'function';
+      return;
+    }}
+    const sigMatch = line.match(/^###\\s+`(.+)`\\s*$/);
+    if (sigMatch) {{
+      flush();
+      const signature = sigMatch[1];
+      current = {{ kind: kind, signature: signature, name: (signature.match(/^[^(]+/) || [signature])[0].trim(), bodyLines: [] }};
+      return;
+    }}
+    if (current) current.bodyLines.push(line);
+  }});
+  flush();
+  return symbols;
 }}
 
 function renderDocsOverview(modulePaths, modules) {{
@@ -2634,30 +2700,34 @@ function renderDocsModule(modulePath, markdown) {{
   const details = document.createElement('details');
   details.className = 'docs-module-card';
   details.id = 'docs-module-' + modulePath.replace(/[^a-zA-Z0-9]/g, '-');
-  const symbols = docsSymbolCount(markdown);
-  const lines = docsLineCount(markdown);
   const hasAi = docsHasAiText(markdown);
   details.dataset.ai = hasAi ? '1' : '0';
   details.dataset.undocumented = docsHasUndocumented(markdown) ? '1' : '0';
   const summary = document.createElement('summary');
   summary.className = 'docs-module-summary';
   summary.innerHTML =
-    '<div>' +
-      '<div class="docs-module-title"><i class="ti ti-file-code" aria-hidden="true"></i><span class="docs-module-path">' + escapeHtml(modulePath) + '</span></div>' +
-      '<div class="docs-module-sub">' + symbols + ' public symbol' + (symbols === 1 ? '' : 's') + ' documented from source evidence</div>' +
-    '</div>' +
-    '<div class="docs-module-meta">' +
-      '<span class="docs-chip">' + lines + ' lines</span>' +
-      (hasAi ? '<span class="docs-chip ai"><i class="ti ti-sparkles" aria-hidden="true"></i>AI marked</span>' : '') +
-      '<i class="ti ti-chevron-down docs-module-chevron" aria-hidden="true"></i>' +
-    '</div>';
+    '<span class="docs-module-chevron">&#9654;</span>' +
+    '<span class="docs-module-path" title="' + escapeHtml(modulePath) + '">' + escapeHtml(modulePath) + '</span>' +
+    (hasAi ? '<span class="docs-chip">AI-assisted</span>' : '');
   const content = document.createElement('div');
   content.className = 'docs-module-content';
-  const pre = document.createElement('pre');
-  pre.className = 'docs-module-body';
-  pre.textContent = markdown;
+  const inner = document.createElement('div');
+  inner.className = 'docs-module-content-inner';
+  const symbols = parseDocsMarkdown(markdown);
+  inner.innerHTML = symbols.length
+    ? symbols.map(function (s) {{
+        const flag = s.isUndocumented
+          ? '<span class="flag undocumented">undocumented</span>'
+          : (s.isAi || s.isPolished) ? '<span class="flag ai">' + (s.isPolished ? 'AI-polished' : 'AI-generated') + '</span>' : '';
+        return '<div class="docs-symbol-row">' +
+          '<div class="sig"><span class="name">' + escapeHtml(s.signature) + '</span><span class="kind">' + escapeHtml(s.kind) + '</span>' + flag + '</div>' +
+          (s.description ? '<div class="desc">' + escapeHtml(s.description) + '</div>' : '') +
+          '<div class="cite">' + escapeHtml(s.citation) + '</div>' +
+        '</div>';
+      }}).join('')
+    : '<div class="docs-symbol-row">No public symbols found.</div>';
+  content.appendChild(inner);
   details.appendChild(summary);
-  content.appendChild(pre);
   details.appendChild(content);
   return details;
 }}
@@ -2734,14 +2804,19 @@ function renderDocsRail(recentlyUpdated, hotspots) {{
   const recentEl = document.getElementById('rail-recently-updated');
   recentEl.innerHTML = recentlyUpdated.length
     ? recentlyUpdated.slice(0, 6).map(function (f) {{
-        return '<div class="rail-row"><span class="path">' + escapeHtml(f.path) + '</span>' +
+        return '<div class="rail-row"><span class="path" title="' + escapeHtml(f.path) + '">' + escapeHtml(f.path) + '</span>' +
           '<span class="meta">' + compactRelativeTime(f.last_commit_at) + '</span></div>';
       }}).join('')
     : '<div class="rail-row"><span class="meta">No git history yet.</span></div>';
   const hotspotsEl = document.getElementById('rail-hotspots');
+  // "N commits" (churn_count), not a percentile: hotspots is a churn-ranked
+  // top-30 slice (HOTSPOT_LIMIT in git_intel/analyzer.py), not per-file
+  // churn for the whole repo - ranking within only the visible top 30
+  // would misrepresent a file's real standing against every file, most of
+  // which have near-zero churn and never appear in this list at all.
   hotspotsEl.innerHTML = hotspots.length
     ? hotspots.slice(0, 6).map(function (h) {{
-        return '<div class="rail-row"><span class="path">' + escapeHtml(h.path) + '</span>' +
+        return '<div class="rail-row"><span class="path" title="' + escapeHtml(h.path) + '">' + escapeHtml(h.path) + '</span>' +
           '<span class="meta">' + h.churn_count + ' commit' + (h.churn_count === 1 ? '' : 's') + '</span></div>';
       }}).join('')
     : '<div class="rail-row"><span class="meta">No hotspots yet.</span></div>';
