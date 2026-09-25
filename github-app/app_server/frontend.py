@@ -186,13 +186,13 @@ a { color: var(--accent); }
 .plan-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 .plan-sub { font-size: 11px; color: var(--slate-600); margin-top: 3px; line-height: 1.5; }
 
-.main { padding: 1.7rem 2rem 3.25rem; min-width: 0; max-width: 1180px; margin: 0 auto; width: 100%; }
+.main { padding: 32px 48px 60px; min-width: 0; max-width: 1180px; margin: 0 auto; width: 100%; }
 .topbar { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: 1.4rem; flex-wrap: wrap; }
 .breadcrumb { font-size: 12px; color: var(--slate-600); }
 .breadcrumb b { color: var(--ink-900); font-weight: 500; }
 .breadcrumb a { color: var(--slate-600); text-decoration: none; }
 .breadcrumb a:hover { color: var(--ink-900); }
-.h1 { font-size: 26px; font-weight: 720; margin: 3px 0 0; }
+.h1 { font-size: 20px; font-weight: 650; margin: 3px 0 0; }
 .topbar-right { font-size: 12px; color: var(--slate-600); }
 
 .dashboard-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
@@ -223,6 +223,12 @@ a.stat-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
 .section-title { font-size: 14.5px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
 .section-title i { font-size: 16px; color: var(--slate-400); }
 .section-sub { font-size: 12px; color: var(--slate-600); }
+/* airview.html's own intro line is left plain (16px/400, ink), not the
+   muted-caption treatment .section-sub uses elsewhere on this same page
+   (the wiki section's "Regenerated automatically..." caption) - a
+   different, unmuted role for this one line, and the graph card sits
+   directly under it with no gap. */
+.airview-sub { font-size: 16px; font-weight: 400; color: var(--ink-900); margin: 0; }
 .section-body { padding: 8px 18px 16px; }
 
 table.findings { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -298,10 +304,13 @@ table.findings tr:last-child td { border-bottom: none; }
 .docs-commit-desc { font-size: 12.5px; color: var(--slate-600); line-height: 1.55; }
 .docs-commit-desc a { font-weight: 650; }
 .diagram-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 4px; background: var(--slate-50); padding: 14px; }
-.graph-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+.graph-card { border: 1px solid var(--border); border-radius: 4px; background: var(--paper); margin-bottom: 23px; }
+.graph-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .graph-toolbar select { font-family: var(--font-sans); font-size: 12.5px; border: 1px solid var(--border-strong); border-radius: 4px; padding: 6px 8px; background: var(--paper); color: var(--ink-900); }
-.graph-toolbar .hint { font-size: 11.5px; color: var(--slate-400); font-family: var(--font-mono); }
-svg#depgraph { width: 100%; height: 440px; display: block; border: 1px solid var(--border); border-radius: 4px; background: var(--paper); cursor: grab; }
+.graph-toolbar .hint { font-size: 12px; color: var(--slate-400); font-family: var(--font-mono); }
+#graph-reset-btn { font-weight: 600; padding: 7px 12px; }
+.graph-wrap { position: relative; }
+svg#depgraph { width: 100%; height: 460px; display: block; background: var(--paper); cursor: grab; }
 svg#depgraph:active { cursor: grabbing; }
 .g-node circle { fill: var(--paper); stroke: var(--ink-900); stroke-width: 1.4; cursor: grab; }
 .g-node.hub circle { stroke: var(--accent); stroke-width: 1.8; }
@@ -312,7 +321,11 @@ svg#depgraph:active { cursor: grabbing; }
 .g-edge.g-edge-ambiguous { stroke-dasharray: 3 3; }
 .g-edge.dim { stroke: var(--border); }
 .g-edge.lit { stroke: var(--accent); stroke-width: 1.4; }
-.graph-hover-info { margin-top: 8px; font-family: var(--font-mono); font-size: 12px; color: var(--slate-600); min-height: 16px; }
+.graph-hover-info { padding: 10px 16px; border-top: 1px solid var(--border); font-family: var(--font-mono); font-size: 12px; color: var(--slate-600); min-height: 16px; }
+.cluster-item { border: 1px solid var(--border); border-radius: 4px; padding: 12px 14px; background: var(--paper); margin-bottom: 20px; }
+.cluster-item .name { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.cluster-item .count { font-family: var(--font-mono); font-size: 11.5px; color: var(--slate-600); }
+.callout { border: 1px solid var(--border); border-left: 2px solid var(--slate-600); padding: 12px 14px; font-size: 12.5px; color: var(--slate-600); line-height: 1.55; margin-bottom: 20px; border-radius: 0 4px 4px 0; }
 .diagram-wrap .mermaid { display: flex; justify-content: center; min-width: max-content; }
 .diagram-wrap.diagram-zoomable { cursor: zoom-in; }
 .diagram-wrap.diagram-zoomable::after { content: "Click to open full diagram"; display: block; margin-top: 8px; color: var(--slate-400); font-size: 11px; text-align: center; }
@@ -733,13 +746,28 @@ def _page_head(title: str) -> str:
 {STYLE}"""
 
 
-def _topbar(h1: str, right_id: str = "") -> str:
+def _topbar(h1: str, right_id: str = "", show_breadcrumb: bool = True, margin_bottom: str = "") -> str:
     right = f'<div class="topbar-right" id="{right_id}"></div>' if right_id else ""
+    # airview.html's own mockup has no breadcrumb - the H1 line is the top
+    # of the page - matching the show_breadcrumb=False pattern other
+    # already-restructured pages use for the same reason.
+    breadcrumb = (
+        '<div class="breadcrumb"><a id="crumb-org" href="/dashboard"></a> '
+        '<span style="color:var(--slate-400);">/</span> <b><a id="crumb-repo"></a></b></div>'
+        if show_breadcrumb else ""
+    )
+    h1_style = "" if show_breadcrumb else ' style="margin-top:0"'
+    # .topbar's shared margin-bottom (22.4px) is a fine default, but
+    # airview.html's own sub-line sits flush against the H1 with no gap at
+    # all - margin-collapse means that can't be reached by adding more
+    # margin below, since collapse only ever takes the larger side.
+    # margin_bottom overrides .topbar's own value directly for that page.
+    topbar_style = f' style="margin-bottom:{margin_bottom}"' if margin_bottom else ""
     return f"""
-    <div class="topbar">
+    <div class="topbar"{topbar_style}>
       <div>
-        <div class="breadcrumb"><a id="crumb-org" href="/dashboard"></a> <span style="color:var(--slate-400);">/</span> <b><a id="crumb-repo"></a></b></div>
-        <h1 class="h1">{h1}</h1>
+        {breadcrumb}
+        <h1 class="h1"{h1_style}>{h1}</h1>
       </div>
       {right}
     </div>
@@ -1490,23 +1518,16 @@ WIKI_LOCKED_PREVIEW = (
 
 WIKI_HTML = _page_head("AIRview — {repo} — Aletheore") + _shell(
     "wiki",
-    _topbar("AIRview")
+    _topbar("AIRview", show_breadcrumb=False, margin_bottom="7px")
     + """
+    <p class="airview-sub">Generated from the real module dependency graph, the same evidence the wiki below reads.</p>
+    <div id="graph-body"><div class="empty-state">Loading&hellip;</div></div>
     <section class="section">
       <div class="section-head">
-        <div class="section-title"><i class="ti ti-book-2" aria-hidden="true"></i>AIRview</div>
+        <div class="section-title"><i class="ti ti-book-2" aria-hidden="true"></i>Architecture wiki</div>
         <span class="section-sub">Regenerated automatically on every push</span>
       </div>
       <div class="section-body" id="wiki-body"><div class="empty-state">Loading&hellip;</div></div>
-    </section>
-    <section class="section">
-      <div class="section-head">
-        <div class="section-title"><i class="ti ti-affiliate" aria-hidden="true"></i>Interactive dependency graph</div>
-        <span class="section-sub" id="graph-section-sub">Same evidence as the diagram above, explorable</span>
-      </div>
-      <div class="section-body" id="graph-body">
-        <button class="btn" id="graph-load-btn" onclick="loadGraph()">Load graph</button>
-      </div>
     </section>
 """
 ) + f"""
@@ -1793,14 +1814,11 @@ async function loadWiki() {{
   }}
 }}
 
-let graphLoaded = false;
 let graphNodes = [];
 let graphEdges = [];
 let graphAllClusters = [];
 
 async function loadGraph() {{
-  if (graphLoaded) return;
-  graphLoaded = true;
   const container = document.getElementById('graph-body');
   container.innerHTML = '<div class="empty-state">Loading&hellip;</div>';
   const res = await apiGet(base + '/graph');
@@ -1813,7 +1831,7 @@ async function loadGraph() {{
     );
     return;
   }}
-  if (res.status === 404) {{ container.innerHTML = '<div class="empty-state">No scan evidence yet.</div>'; return; }}
+  if (res.status === 404) {{ container.innerHTML = '<div class="empty-state">No dependency graph available yet.</div>'; return; }}
   if (!res.ok) {{ container.innerHTML = '<div class="empty-state">Graph unavailable.</div>'; return; }}
   const data = await res.json();
   graphAllClusters = data.clusters || [];
@@ -1826,12 +1844,32 @@ async function loadGraph() {{
     }})
   );
   container.innerHTML =
-    '<div class="graph-toolbar">' +
-      '<select id="graph-cluster-select" onchange="renderGraphForCluster(this.value)">' + options.join('') + '</select>' +
-      '<span class="hint">drag &middot; scroll to zoom &middot; hover to trace imports</span>' +
+    '<div class="graph-card">' +
+      '<div class="graph-toolbar">' +
+        '<select id="graph-cluster-select" onchange="renderGraphForCluster(this.value)">' + options.join('') + '</select>' +
+        '<span class="hint">drag nodes &middot; scroll to zoom &middot; hover to trace imports</span>' +
+        '<button class="btn" id="graph-reset-btn" onclick="document.getElementById(&#39;depgraph&#39;)._resetView()">Reset view</button>' +
+      '</div>' +
+      '<div class="graph-wrap"><svg id="depgraph" viewBox="0 0 900 460"></svg></div>' +
+      '<div class="graph-hover-info" id="graph-hover-info">Hover a module to see what it imports.</div>' +
     '</div>' +
-    '<svg id="depgraph" viewBox="0 0 900 440"></svg>' +
-    '<div class="graph-hover-info" id="graph-hover-info">Hover a module to see what it imports.</div>';
+    '<div class="cluster-item" id="cluster-summary-item">' +
+      '<div class="name">Clusters</div>' +
+      '<div class="count" id="cluster-summary">computing&hellip;</div>' +
+    '</div>' +
+    '<div class="callout">' +
+      'This graph is real, not a static image - genuine force-directed physics (repulsion + spring edges), running against this repo\\'s real module names and import edges. The architecture wiki below is generated from the same evidence, just as a static diagram with AI-written subsystem descriptions.' +
+    '</div>';
+
+  const namedClusters = graphAllClusters.filter(function (c) {{ return c.modules.length > 1; }});
+  const singletonCount = graphAllClusters.length - namedClusters.length;
+  let clusterSummaryText = namedClusters.length
+    ? namedClusters.map(function (c) {{ return c.name + ' (' + c.modules.length + ' modules)'; }}).join(', ')
+    : 'No clusters detected yet.';
+  if (singletonCount > 0) {{
+    clusterSummaryText += (namedClusters.length ? ', and ' : '') + singletonCount + ' single-module cluster' + (singletonCount === 1 ? '' : 's') + '.';
+  }}
+  document.getElementById('cluster-summary').textContent = clusterSummaryText;
 
   // A repo-wide graph is unreadable past a couple hundred nodes and the
   // naive O(n^2) repulsion below would visibly lag - default to the
@@ -1864,7 +1902,7 @@ function runForceGraph(rawNodes, rawEdges) {{
   // settled and burned CPU indefinitely on repeated filter changes).
   if (existingSvg._stopGraphTick) existingSvg._stopGraphTick();
 
-  const W = 900, H = 440;
+  const W = 900, H = 460;
   const degree = {{}};
   rawEdges.forEach(function (e) {{ degree[e.source] = (degree[e.source] || 0) + 1; degree[e.target] = (degree[e.target] || 0) + 1; }});
   const nodes = rawNodes.map(function (n, i) {{
@@ -1987,6 +2025,12 @@ function runForceGraph(rawNodes, rawEdges) {{
     zoom = Math.max(0.5, Math.min(2.5, zoom - ev.deltaY * 0.001));
     world.setAttribute('transform', 'scale(' + zoom + ')');
   }};
+  svg._resetView = function () {{
+    zoom = 1;
+    world.setAttribute('transform', 'scale(1)');
+    nodes.forEach(function (n) {{ n.fx = null; n.fy = null; }});
+    if (!ticking) {{ ticking = true; tick(); }}
+  }};
 
   const hoverInfo = document.getElementById('graph-hover-info');
   nodeEls.forEach(function (g, i) {{
@@ -2008,6 +2052,7 @@ function runForceGraph(rawNodes, rawEdges) {{
   }});
 }}
 
+loadGraph();
 loadWiki();
 loadPlanBadge();
 </script>
