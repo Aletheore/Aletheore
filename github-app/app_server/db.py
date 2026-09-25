@@ -1495,6 +1495,36 @@ async def get_endpoint_uptime_pct_since(
     return {(row["endpoint_method"], row["endpoint_path"]): row["uptime_pct"] for row in rows}
 
 
+async def get_overall_uptime_pct_since(
+    pool: asyncpg.Pool,
+    installation_id: int,
+    repo_full_name: str,
+    since: datetime,
+) -> float | None:
+    """One aggregate uptime percentage across every endpoint and target in
+    the window - the dashboard's own "Uptime, last 24h" summary figure,
+    a single repo-wide number. Deliberately not per-endpoint-then-averaged
+    (see get_endpoint_uptime_pct_since's own worst-case-per-endpoint logic,
+    built for a different, public-API purpose: never letting one healthy
+    target hide another's outage) - this is a simple total-checks
+    aggregate, matching what a single "X% up" tile actually means to
+    someone reading it. None (not 0.0) when there is no check data yet in
+    the window, so the caller can render "no data" instead of a
+    misleading 0%.
+    """
+    row = await pool.fetchrow(
+        """
+        SELECT (count(*) FILTER (WHERE reachable))::float / NULLIF(count(*), 0) AS uptime_pct
+        FROM endpoint_health
+        WHERE installation_id = $1 AND repo_full_name = $2 AND checked_at >= $3
+        """,
+        installation_id,
+        repo_full_name,
+        since,
+    )
+    return row["uptime_pct"] if row is not None else None
+
+
 async def get_endpoint_health_summary_since(
     pool: asyncpg.Pool,
     installation_id: int,

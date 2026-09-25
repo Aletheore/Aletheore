@@ -1573,6 +1573,54 @@ async def test_dashboard_health_keeps_results_separate_per_target(pool, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_dashboard_health_surfaces_a_24h_aggregate_uptime_pct(pool, monkeypatch):
+    # The Overview-style summary row's "Uptime, last 24h" figure - one
+    # repo-wide number across every endpoint and target, not per-endpoint
+    # (get_endpoint_uptime_pct_since's own worst-case-per-endpoint shape
+    # is for a different, public-API purpose).
+    await upsert_installation(pool, 504, "octocat")
+    await set_installation_plan(pool, 504, "air")
+    await insert_repo_history(
+        pool, 504, "octocat/hello-world", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable, checked_at)
+            VALUES
+                (504, 'octocat/hello-world', 'GET', '/api/a', true, now() - interval '1 hour'),
+                (504, 'octocat/hello-world', 'GET', '/api/b', false, now() - interval '2 hours'),
+                (504, 'octocat/hello-world', 'GET', '/api/c', true, now() - interval '2 days')
+            """
+        )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[504])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/health")
+
+    assert response.status_code == 200
+    # Only the two checks inside the 24h window count - one up, one down.
+    assert response.json()["uptime_pct_24h"] == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_health_uptime_pct_24h_is_none_with_no_check_data(pool, monkeypatch):
+    await upsert_installation(pool, 505, "octocat")
+    await set_installation_plan(pool, 505, "air")
+    await insert_repo_history(
+        pool, 505, "octocat/hello-world", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[505])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/health")
+
+    assert response.status_code == 200
+    assert response.json()["uptime_pct_24h"] is None
+
+
+@pytest.mark.asyncio
 async def test_dashboard_health_history_requires_login(pool):
     app.state.db_pool = pool
     transport = ASGITransport(app=app)
