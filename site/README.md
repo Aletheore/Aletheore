@@ -16,6 +16,8 @@ Data (regenerate when the repo changes):
 Evidence: clone the repo to /tmp/aletheore-evidence and run `aletheore scan .` there first.
 Spec: docs/superpowers/specs/2026-09-26-marketing-site-rebuild-design.md
 
-Preview: the Vercel project `aletheore-site-next` (root directory `site`) builds every push to this branch. Its ignore step
-skips a build when nothing under `site/` changed, so pushes to other branches do not trigger it. The production site is the
-separate `aletheore-website` project serving `website/`, and stays as it is until cutover.
+Preview: the Vercel project `aletheore-site-next` builds this app from the repository root (install and build run inside
+`site/`), because a root directory of `site` fails on every branch that does not have the folder yet. Its ignore step
+(`git diff --quiet HEAD^ HEAD -- site/`) skips a build when nothing under `site/` changed, so pull requests to other parts
+of the repo are not built. The production site is the separate `aletheore-website` project serving `website/`, and stays
+as it is until cutover.
