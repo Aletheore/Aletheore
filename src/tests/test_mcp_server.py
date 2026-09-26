@@ -1238,3 +1238,101 @@ async def test_aletheore_list_unknown_kind_returns_an_error(tmp_path):
     result = await server.call_tool("aletheore_list", {"kind": "nonsense"})
 
     assert "error" in tool_result_body(result)["result"]
+
+
+# --- background watching (aletheore mcp keeps evidence current) ------------
+
+
+@pytest.fixture
+def mcp_watchers():
+    """The module-level registry of watchers this process started; always
+    stopped afterwards so a failed assertion cannot leak a thread or the
+    per-repo lock into the next test."""
+    from aletheore import mcp_server
+
+    mcp_server.stop_watchers()
+    yield mcp_server._watchers
+    mcp_server.stop_watchers()
+
+
+def _wait_for(predicate, timeout: float = 15.0) -> bool:
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_build_server_does_not_watch_unless_asked(tmp_path, mcp_watchers):
+    repo = make_repo_with_evidence(tmp_path)
+
+    build_server(repo)
+
+    assert mcp_watchers == {}
+
+
+def test_watching_needs_the_write_effect_and_says_why_it_is_off(tmp_path, mcp_watchers, capsys):
+    repo = make_repo_with_evidence(tmp_path)
+
+    build_server(repo, allow=frozenset({"network"}), watch=True)
+
+    captured = capsys.readouterr()
+    assert mcp_watchers == {}
+    assert "file watching off" in captured.err
+    assert "ALETHEORE_MCP_ALLOW" in captured.err
+    # stdout is the MCP transport; nothing but protocol may ever go there.
+    assert captured.out == ""
+
+
+def test_watching_starts_with_the_server_announces_on_stderr_and_never_touches_stdout(
+    tmp_path, mcp_watchers, capsys
+):
+    repo = make_repo_with_evidence(tmp_path)
+
+    build_server(repo, watch=True)
+
+    assert repo in mcp_watchers and mcp_watchers[repo].running
+    seen = ""
+
+    def announced() -> bool:
+        nonlocal seen
+        seen += capsys.readouterr().err
+        return "watching" in seen and "--no-watch" in seen
+
+    assert _wait_for(announced), f"no announcement on stderr: {seen!r}"
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.asyncio
+async def test_the_first_scan_gives_the_watcher_the_evidence_it_needs(tmp_path, mcp_watchers, capsys):
+    repo = make_git_repo_with_source(tmp_path)
+
+    server = build_server(repo, watch=True)
+
+    # No evidence yet: nothing to keep current, and it says so rather than
+    # leaving the user to wonder whether "on by default" is true.
+    assert mcp_watchers == {}
+    assert "no evidence yet" in capsys.readouterr().err
+
+    await server.call_tool(
+        "aletheore_scan",
+        {
+            "check_vulnerabilities": False,
+            "scan_git_history": False,
+            "check_licenses": False,
+            "map_endpoints": False,
+        },
+    )
+
+    assert repo in mcp_watchers and mcp_watchers[repo].running
+
+
+def test_the_server_instructions_tell_the_agent_about_freshness_and_the_off_switch():
+    from aletheore.mcp_server import SERVER_INSTRUCTIONS
+
+    assert "--no-watch" in SERVER_INSTRUCTIONS
+    assert "ALETHEORE_MCP_WATCH=0" in SERVER_INSTRUCTIONS
+    assert "aletheore_scan" in SERVER_INSTRUCTIONS.split("Freshness:")[1].split("\n\n")[0]

@@ -6,7 +6,16 @@ from unittest.mock import patch
 
 import pytest
 
-from aletheore.watch import _current_mtimes, _DebouncedHandler, _is_relevant, rebuild, watch
+from aletheore.watch import (
+    EVIDENCE_WRITE_LOCK,
+    _current_mtimes,
+    _DebouncedHandler,
+    _is_relevant,
+    rebuild,
+    start_background_watch,
+    watch,
+    watching_disabled_by_env,
+)
 
 # Patched at their source modules, not on aletheore.watch: every heavy import
 # in watch.py is function-local so that `aletheore --help` does not drag in
@@ -502,3 +511,214 @@ def test_a_failing_scan_does_not_end_the_session(tmp_path):
 
     assert alive, "watch exited on a failed rebuild"
     assert any("rebuild failed" in message for message in messages)
+
+
+# --- the background watcher the MCP server starts -------------------------
+
+
+def _repo_with_evidence(tmp_path: Path) -> Path:
+    """A git repo with a real prior scan on disk: the watcher only starts when
+    there is evidence to keep current."""
+    from aletheore.evidence import scan_repository, write_evidence
+
+    repo = _git_repo(tmp_path)
+    evidence = scan_repository(
+        repo,
+        check_vulnerabilities=False,
+        check_licenses=False,
+        scan_git_history=False,
+        check_static_analysis=False,
+    )
+    write_evidence(evidence, repo)
+    return repo
+
+
+def _function_names(repo: Path) -> set[str]:
+    import json
+
+    evidence = json.loads((repo / ".aletheore" / "air.json").read_text(encoding="utf-8"))
+    return {
+        function["name"]
+        for module in evidence["repository"]["modules"]
+        for function in module["symbols"]["functions"]
+    }
+
+
+def _wait_for(predicate, timeout: float = 30.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.1)
+    return False
+
+
+@pytest.mark.parametrize(
+    "value, disabled",
+    [
+        ("0", True),
+        ("false", True),
+        ("FALSE", True),
+        (" off ", True),
+        ("no", True),
+        ("1", False),
+        ("true", False),
+        ("", False),
+        # A typo must not silently flip the default either way.
+        ("disable", False),
+        ("of", False),
+    ],
+)
+def test_the_env_var_only_disables_watching_on_an_explicit_falsy_value(value, disabled):
+    assert watching_disabled_by_env({"ALETHEORE_MCP_WATCH": value}) is disabled
+
+
+def test_the_env_var_unset_leaves_watching_on():
+    assert watching_disabled_by_env({}) is False
+
+
+def test_background_watch_does_not_start_without_evidence_and_says_so(tmp_path):
+    repo = _git_repo(tmp_path)
+    messages: list[str] = []
+
+    assert start_background_watch(repo, messages.append) is None
+
+    assert any("no evidence yet" in message for message in messages)
+
+
+def test_background_watch_declines_a_repository_over_the_file_limit_and_says_so(tmp_path):
+    repo = _repo_with_evidence(tmp_path)
+    (repo / "b.py").write_text("x = 1\n")
+    (repo / "c.py").write_text("y = 2\n")
+    messages: list[str] = []
+
+    watcher = start_background_watch(repo, messages.append, max_files=2)
+
+    # The size check happens on the watcher's own thread, so the caller (the MCP
+    # server, before it can answer its client) is never held up walking a huge
+    # tree; the refusal arrives as a report and as `declined`.
+    assert watcher is not None
+    assert _wait_for(lambda: watcher.declined, timeout=10)
+    assert _wait_for(lambda: not watcher.running, timeout=10)
+    assert any("more than 2 source files" in message for message in messages)
+    assert not any(message.startswith("watching ") for message in messages)
+    # Declining gave the repository back rather than holding its lock forever.
+    retry = start_background_watch(repo, [].append, debounce_seconds=0.2)
+    assert retry is not None
+    retry.stop()
+
+
+def test_the_file_walk_gives_up_early_past_its_limit(tmp_path):
+    for name in ("a", "b", "c", "d"):
+        (tmp_path / f"{name}.py").write_text("x = 1\n")
+
+    assert _current_mtimes(tmp_path, limit=3) is None
+    assert len(_current_mtimes(tmp_path, limit=4)) == 4
+    assert len(_current_mtimes(tmp_path)) == 4
+
+
+def test_starting_a_watcher_returns_without_walking_the_tree(tmp_path):
+    """A huge repository must not delay the MCP server's startup: the walk that
+    sizes it runs on the watcher thread, so start_background_watch returns
+    before it finishes."""
+    repo = _repo_with_evidence(tmp_path)
+    release = threading.Event()
+
+    def slow_walk(_repo, limit=None):
+        release.wait(timeout=10)
+        return {}
+
+    with patch("aletheore.watch._current_mtimes", side_effect=slow_walk):
+        started = time.monotonic()
+        watcher = start_background_watch(repo, [].append, debounce_seconds=0.2)
+        elapsed = time.monotonic() - started
+        assert watcher is not None
+        assert elapsed < 1.0, f"start_background_watch blocked for {elapsed:.1f}s"
+        release.set()
+        watcher.stop()
+
+
+def test_only_one_watcher_runs_per_repository_and_the_lock_is_released_on_stop(tmp_path):
+    repo = _repo_with_evidence(tmp_path)
+    first_messages: list[str] = []
+    second_messages: list[str] = []
+
+    first = start_background_watch(repo, first_messages.append, debounce_seconds=0.2)
+    assert first is not None
+    try:
+        second = start_background_watch(repo, second_messages.append, debounce_seconds=0.2)
+        assert second is None
+        assert any("already watching" in message for message in second_messages)
+    finally:
+        first.stop()
+
+    third = start_background_watch(repo, [].append, debounce_seconds=0.2)
+    assert third is not None
+    third.stop()
+
+
+def test_background_watch_announces_itself_and_how_to_turn_it_off(tmp_path):
+    repo = _repo_with_evidence(tmp_path)
+    messages: list[str] = []
+
+    watcher = start_background_watch(repo, messages.append, debounce_seconds=0.2)
+    assert watcher is not None
+    try:
+        assert _wait_for(lambda: any(message.startswith("watching ") for message in messages), timeout=10)
+    finally:
+        watcher.stop()
+
+    announcement = next(message for message in messages if message.startswith("watching "))
+    assert "--no-watch" in announcement
+    assert "ALETHEORE_MCP_WATCH=0" in announcement
+    # "Ctrl-C to stop" is the foreground command's line and would be false here.
+    assert "Ctrl-C" not in announcement
+
+
+def test_background_watch_refreshes_evidence_after_an_edit(tmp_path):
+    repo = _repo_with_evidence(tmp_path)
+    assert "brand_new" not in _function_names(repo)
+
+    watcher = start_background_watch(repo, [].append, debounce_seconds=0.3)
+    assert watcher is not None
+    try:
+        time.sleep(1.0)
+        (repo / "app.py").write_text("def f():\n    return 2\n\ndef brand_new():\n    return 3\n")
+        assert _wait_for(lambda: "brand_new" in _function_names(repo)), "evidence never refreshed"
+    finally:
+        watcher.stop()
+
+
+def test_a_rebuild_waits_for_whoever_holds_the_evidence_write_lock(tmp_path):
+    """The MCP scan and index tools take this same lock, so an agent-triggered
+    scan and a background rebuild can never write .aletheore/ together."""
+    repo = _repo_with_evidence(tmp_path)
+
+    watcher = start_background_watch(repo, [].append, debounce_seconds=0.3)
+    assert watcher is not None
+    try:
+        time.sleep(1.0)
+        with EVIDENCE_WRITE_LOCK:
+            (repo / "app.py").write_text("def f():\n    return 2\n\ndef held_back():\n    return 3\n")
+            time.sleep(2.0)
+            assert "held_back" not in _function_names(repo), "rebuild ran while the lock was held"
+        assert _wait_for(lambda: "held_back" in _function_names(repo)), "rebuild never ran after release"
+    finally:
+        watcher.stop()
+
+
+def test_a_watcher_that_dies_says_so_and_frees_the_lock(tmp_path):
+    repo = _repo_with_evidence(tmp_path)
+    messages: list[str] = []
+
+    with patch("aletheore.watch.watch", side_effect=OSError("inotify watch limit reached")):
+        watcher = start_background_watch(repo, messages.append, debounce_seconds=0.2)
+        assert watcher is not None
+        assert _wait_for(lambda: any("file watching stopped" in message for message in messages), timeout=10)
+        watcher._thread.join(timeout=5)
+
+    assert any("inotify watch limit reached" in message for message in messages)
+    # The dead watcher gave the repository back.
+    again = start_background_watch(repo, [].append, debounce_seconds=0.2)
+    assert again is not None
+    again.stop()

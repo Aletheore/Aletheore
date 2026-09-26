@@ -1,8 +1,11 @@
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from aletheore.evidence import (
     EVIDENCE_VERSION,
@@ -748,7 +751,11 @@ def test_write_evidence_pins_utf8_encoding_for_both_air_json_and_air_toon(tmp_pa
     seen_encodings: dict[str, object] = {}
 
     def spy_write_text(self, data, *args, **kwargs):
-        seen_encodings[self.name] = kwargs.get("encoding")
+        # write_evidence writes to a sibling temp file and renames it over the
+        # target (see _atomic_write_text), so the name seen here is
+        # "air.json.<pid>.<thread>.tmp"; key it by the final file name.
+        final_name = re.sub(r"\.\d+\.\d+\.tmp$", "", self.name)
+        seen_encodings[final_name] = kwargs.get("encoding")
         return original_write_text(self, data, *args, **kwargs)
 
     monkeypatch.setattr(Path, "write_text", spy_write_text)
@@ -1191,3 +1198,92 @@ def test_scan_repository_progress_is_optional(tmp_path):
         evidence = scan_repository(repo, check_licenses=False)
 
     assert evidence["repository"]["languages"]
+
+
+def test_write_evidence_never_exposes_a_partial_file_to_a_concurrent_reader(tmp_path):
+    """A watcher rewriting air.json while an agent's tool call reads it must
+    not hand the reader a truncated file. Path.write_text truncates first and
+    writes after, so a reader landing in between saw empty or half a JSON
+    document; the atomic swap leaves only whole old or whole new files."""
+    import json
+    import threading
+    import time
+
+    from aletheore.evidence import write_evidence
+
+    (tmp_path / ".aletheore").mkdir()
+    # Big enough that a non-atomic write spans many filesystem operations.
+    big = {"payload": ["x" * 200] * 4000}
+    target = tmp_path / ".aletheore" / "air.json"
+    write_evidence({**big, "generation": 0}, tmp_path)
+
+    stop = threading.Event()
+    partial: list[str] = []
+    reads = 0
+
+    def reader() -> None:
+        nonlocal reads
+        while not stop.is_set():
+            try:
+                text = target.read_text(encoding="utf-8")
+            except OSError:
+                # Windows can refuse the open for an instant during the swap;
+                # that is a busy file, not a partial one.
+                continue
+            reads += 1
+            try:
+                json.loads(text)
+            except ValueError:
+                partial.append(text[:80])
+            # A real reader opens the file for a moment, not in a tight loop. On
+            # Windows an open handle blocks the swap, so a reader that never
+            # lets go would only test the fallback, not the atomic path.
+            time.sleep(0.001)
+
+    thread = threading.Thread(target=reader, daemon=True)
+    thread.start()
+    for generation in range(1, 60):
+        write_evidence({**big, "generation": generation}, tmp_path)
+    stop.set()
+    thread.join(timeout=10)
+
+    assert reads > 0
+    assert not partial, f"reader saw {len(partial)} partial file(s), e.g. {partial[0]!r}"
+
+
+def test_write_evidence_leaves_the_old_file_and_no_temp_file_when_the_swap_fails(tmp_path):
+    import os
+    from unittest.mock import patch
+
+    from aletheore.evidence import write_evidence
+
+    (tmp_path / ".aletheore").mkdir()
+    write_evidence({"generation": "old"}, tmp_path)
+    target = tmp_path / ".aletheore" / "air.json"
+
+    with patch("aletheore.evidence.os.replace", side_effect=OSError("disk gone")):
+        with pytest.raises(OSError):
+            write_evidence({"generation": "new"}, tmp_path)
+
+    assert '"old"' in target.read_text(encoding="utf-8")
+    leftovers = [p.name for p in (tmp_path / ".aletheore").iterdir() if p.name.endswith(".tmp")]
+    assert leftovers == []
+    assert os.path.exists(target)
+
+
+def test_write_evidence_falls_back_to_writing_in_place_when_a_reader_blocks_the_swap(tmp_path):
+    """On Windows a reader holding the file open makes os.replace raise
+    PermissionError indefinitely. The scan must still land its evidence (the
+    behaviour before atomic writes) rather than fail."""
+    from aletheore.evidence import write_evidence
+
+    (tmp_path / ".aletheore").mkdir()
+    target = tmp_path / ".aletheore" / "air.json"
+
+    with patch("aletheore.evidence.os.replace", side_effect=PermissionError("in use")), patch(
+        "aletheore.evidence._REPLACE_RETRY_DELAY_SECONDS", 0
+    ):
+        write_evidence({"generation": "fallback"}, tmp_path)
+
+    assert '"fallback"' in target.read_text(encoding="utf-8")
+    assert [p.name for p in (tmp_path / ".aletheore").iterdir() if p.name.endswith(".tmp")] == []

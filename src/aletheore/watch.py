@@ -32,6 +32,40 @@ from pathlib import Path
 # any of those into one rebuild instead of hundreds of overlapping ones.
 DEBOUNCE_SECONDS = 2.0
 
+# Held for the whole of a rebuild, and by the MCP server's aletheore_scan and
+# aletheore_index tools for the whole of theirs, so a background rebuild and an
+# agent-triggered scan never write .aletheore/ at the same time. Re-entrant so
+# a holder that calls back into another holder cannot deadlock itself.
+EVIDENCE_WRITE_LOCK = threading.RLock()
+
+# The MCP server's background watcher is slower to react than the foreground
+# command on purpose. A rebuild costs seconds of CPU (about 9.5 s measured on a
+# 424-source-file repository), and an agent editing files all afternoon would
+# otherwise keep one running almost constantly. Edits that land while a rebuild
+# is running are not lost: they accumulate in the handler and become the next one.
+MCP_DEBOUNCE_SECONDS = 5.0
+
+# Above this many parseable source files the background watcher declines to start
+# rather than quietly burn a core on every edit burst. Measured in the same units
+# the watcher itself tracks (files the scanner can parse), so the number in the
+# message means what it says. A foreground `aletheore watch` has no such limit:
+# whoever typed it asked for it.
+MCP_MAX_WATCHED_FILES = 5000
+
+WATCH_ENV_VAR = "ALETHEORE_MCP_WATCH"
+_FALSE_VALUES = frozenset({"0", "false", "no", "off"})
+
+
+def watching_disabled_by_env(environ: dict[str, str] | None = None) -> bool:
+    """Whether ALETHEORE_MCP_WATCH turns the background watcher off.
+
+    Only an explicit falsy value disables it (0, false, no, off, any case).
+    Unset, empty, or anything else leaves the default in force, so a typo
+    cannot silently switch behaviour in either direction.
+    """
+    value = (environ if environ is not None else os.environ).get(WATCH_ENV_VAR)
+    return value is not None and value.strip().lower() in _FALSE_VALUES
+
 @lru_cache(maxsize=1)
 def _watched_suffixes() -> frozenset[str]:
     """Extensions the scanner can parse.
@@ -75,7 +109,7 @@ def _is_relevant(repo_path: Path, changed: Path) -> bool:
     return changed.suffix in _watched_suffixes()
 
 
-def _current_mtimes(repo_path: Path) -> dict[Path, float]:
+def _current_mtimes(repo_path: Path, limit: int | None = None) -> dict[Path, float] | None:
     """mtime for every currently-relevant file, walked once at startup.
 
     This is the baseline _DebouncedHandler compares new events against - see
@@ -89,6 +123,11 @@ def _current_mtimes(repo_path: Path) -> dict[Path, float]:
     out polling in the first place. Doing it once at startup rather than
     every debounce cycle is the entire point; it does not reintroduce what
     was rejected above.
+
+    limit: give up and return None as soon as more than this many relevant
+    files have been seen, instead of finishing the walk. The background
+    watcher uses it to refuse a huge repository without first paying to
+    enumerate all of it.
     """
     mtimes: dict[Path, float] = {}
     suffixes = _watched_suffixes()
@@ -104,6 +143,8 @@ def _current_mtimes(repo_path: Path) -> dict[Path, float]:
                 mtimes[resolved] = resolved.stat().st_mtime
             except OSError:
                 continue
+            if limit is not None and len(mtimes) > limit:
+                return None
     return mtimes
 
 
@@ -129,15 +170,19 @@ class _DebouncedHandler:
     changed can.
     """
 
-    def __init__(self, repo_path: Path) -> None:
+    def __init__(self, repo_path: Path, known_mtimes: dict[Path, float] | None = None) -> None:
         self.repo_path = repo_path
         self._lock = threading.Lock()
         self._last_event_at: float | None = None
         self._changed: set[Path] = set()
         # Built once, synchronously, before the observer starts - see
         # _current_mtimes for why this is a one-time cost rather than the
-        # per-cycle poll this module exists to avoid.
-        self._known_mtimes: dict[Path, float] = _current_mtimes(repo_path)
+        # per-cycle poll this module exists to avoid. A caller that already
+        # walked the tree (start_background_watch, to size-check it) hands
+        # its result in rather than paying for the walk twice.
+        self._known_mtimes: dict[Path, float] = (
+            known_mtimes if known_mtimes is not None else _current_mtimes(repo_path)
+        )
 
     def on_any_event(self, event) -> None:  # noqa: ANN001 - watchdog event, kept untyped to avoid the import
         if event.is_directory:
@@ -359,11 +404,17 @@ def watch(
     debounce_seconds: float = DEBOUNCE_SECONDS,
     stop: threading.Event | None = None,
     poll_seconds: float = 0.25,
+    announce: str | None = None,
+    initial_mtimes: dict[Path, float] | None = None,
 ) -> None:
     """Rebuild evidence whenever watched source files settle after changing.
 
     Returns when `stop` is set, so a caller (and a test) can end it without
     depending on a signal.
+
+    announce replaces the opening line, whose "Ctrl-C to stop" is only true
+    for the foreground command. initial_mtimes is a baseline the caller already
+    walked (see _DebouncedHandler).
     """
     from watchdog.observers import Observer
 
@@ -371,8 +422,8 @@ def watch(
     # Printed before building the mtime baseline (_DebouncedHandler.__init__
     # walks the tree once - see _current_mtimes) so a large repo shows
     # something immediately instead of an apparent hang.
-    report(f"watching {repo_path} - Ctrl-C to stop")
-    handler = _DebouncedHandler(repo_path)
+    report(announce if announce is not None else f"watching {repo_path} - Ctrl-C to stop")
+    handler = _DebouncedHandler(repo_path, known_mtimes=initial_mtimes)
     observer = Observer()
     observer.schedule(_observer_handler(handler), str(repo_path), recursive=True)
     observer.start()
@@ -385,7 +436,8 @@ def watch(
                 shown = ", ".join(names[:3]) + (f" +{len(names) - 3} more" if len(names) > 3 else "")
                 report(f"{len(names)} file(s) changed ({shown})")
                 try:
-                    rebuild(repo_path, report)
+                    with EVIDENCE_WRITE_LOCK:
+                        rebuild(repo_path, report)
                 except Exception as exc:  # noqa: BLE001
                     # A scan that fails on one bad edit - a half-written
                     # file, a syntax error mid-keystroke - should not end a
@@ -395,3 +447,146 @@ def watch(
     finally:
         observer.stop()
         observer.join(timeout=5)
+
+
+def _try_lock_repo(repo_path: Path):
+    """Take the advisory "one watcher per repository" lock, or return None.
+
+    Several agent sessions can have an MCP server open on the same repository
+    at once, and each would otherwise run its own watcher and rebuild the same
+    evidence in parallel. The lock is an OS-level advisory lock on
+    .aletheore/watch.lock, held by an open file for the life of the process,
+    so it is released by the kernel when the holder exits or crashes: there is
+    no pid file to go stale and nothing to clean up.
+    """
+    lock_path = repo_path / ".aletheore" / "watch.lock"
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(lock_path, "a+")  # noqa: SIM115 - held open on purpose
+    except OSError:
+        return None
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
+class BackgroundWatcher:
+    """A `watch()` loop on a daemon thread, with a way to stop it.
+
+    Everything that costs time (walking the tree to size it, building the
+    mtime baseline) happens on that thread, never in the caller: the MCP
+    server starts one before it is ready to answer its client, and a huge
+    repository must not turn that into a startup timeout.
+    """
+
+    def __init__(
+        self,
+        repo_path: Path,
+        report: Callable[[str], None],
+        debounce_seconds: float,
+        max_files: int,
+        lock_handle,
+    ) -> None:
+        self.repo_path = repo_path
+        self._report = report
+        self._debounce_seconds = debounce_seconds
+        self._max_files = max_files
+        self._stop = threading.Event()
+        self._lock_handle = lock_handle
+        self._thread: threading.Thread | None = None
+        # True once the repository proved too large to watch. A caller that
+        # restarts watchers after each scan checks it so it does not re-walk
+        # and re-announce the same refusal every time.
+        self.declined = False
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def _run(self) -> None:
+        try:
+            mtimes = _current_mtimes(self.repo_path, limit=self._max_files)
+            if mtimes is None:
+                self.declined = True
+                self._report(
+                    f"file watching not started: more than {self._max_files} source files is over the limit "
+                    "for automatic re-scans (run `aletheore watch` yourself, or re-scan when you need fresh evidence)"
+                )
+                return
+            watch(
+                self.repo_path,
+                self._report,
+                debounce_seconds=self._debounce_seconds,
+                stop=self._stop,
+                announce=(
+                    f"watching {self.repo_path} ({len(mtimes)} source files): evidence re-scans "
+                    f"{self._debounce_seconds:g}s after edits settle. Turn off with --no-watch or {WATCH_ENV_VAR}=0"
+                ),
+                initial_mtimes=mtimes,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # The likely causes are environmental (an exhausted inotify watch
+            # limit, watchdog unavailable). Losing live updates must never take
+            # the MCP server down with it, so say so and end the thread.
+            self._report(f"file watching stopped ({type(exc).__name__}: {exc}); evidence will no longer refresh on edits")
+        finally:
+            self._release()
+
+    def _release(self) -> None:
+        handle, self._lock_handle = self._lock_handle, None
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                pass
+
+    def stop(self, timeout: float = 6.0) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+        self._release()
+
+
+def start_background_watch(
+    repo_path: Path,
+    report: Callable[[str], None],
+    *,
+    debounce_seconds: float = MCP_DEBOUNCE_SECONDS,
+    max_files: int = MCP_MAX_WATCHED_FILES,
+) -> BackgroundWatcher | None:
+    """Start keeping this repository's evidence current in the background.
+
+    Returns immediately with a watcher whose thread does the rest, or None
+    when it cannot start at all (no evidence yet, or another process already
+    watching); each of those is reported rather than silent, because the caller
+    told the user watching was on by default and a quiet no-op would make that
+    false. A repository over `max_files` is only discovered on the thread, which
+    reports it and sets `declined`.
+    """
+    evidence_path = repo_path / ".aletheore" / "air.json"
+    if not evidence_path.exists():
+        # Nothing to keep current yet. rebuild() carries forward the last full
+        # scan's slow-check results, so it needs one to exist.
+        report("file watching not started: no evidence yet (run a scan first)")
+        return None
+
+    lock_handle = _try_lock_repo(repo_path)
+    if lock_handle is None:
+        report("file watching not started here: another aletheore process is already watching this repository")
+        return None
+
+    watcher = BackgroundWatcher(repo_path, report, debounce_seconds, max_files, lock_handle)
+    watcher._thread = threading.Thread(target=watcher._run, name="aletheore-mcp-watch", daemon=True)
+    watcher._thread.start()
+    return watcher
