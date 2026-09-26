@@ -1818,7 +1818,7 @@ def test_main_mcp_invokes_mcp_flow(tmp_path):
         result = runner.invoke(app, ["mcp", str(tmp_path)])
 
     assert result.exit_code == 0
-    mock_mcp.assert_called_once_with(str(tmp_path), None)
+    mock_mcp.assert_called_once_with(str(tmp_path), None, watch=True)
 
 
 def test_main_mcp_threads_answer_agent(tmp_path):
@@ -1826,7 +1826,7 @@ def test_main_mcp_threads_answer_agent(tmp_path):
         result = runner.invoke(app, ["mcp", str(tmp_path), "--agent", "ollama"])
 
     assert result.exit_code == 0
-    mock_mcp.assert_called_once_with(str(tmp_path), "ollama")
+    mock_mcp.assert_called_once_with(str(tmp_path), "ollama", watch=True)
 
 
 def test_main_dashboard_invokes_dashboard_flow(tmp_path):
@@ -2762,3 +2762,55 @@ def test_healthcheck_without_base_url_explains_what_a_base_url_is():
     assert result.exit_code == 1
     assert "running" in result.output
     assert "http://localhost:8000" in result.output
+
+
+# --- aletheore mcp: background watching is on by default, with an off switch ---
+
+
+def _run_mcp_command(tmp_path, monkeypatch, *, watch: bool = True, env: str | None = None):
+    """Runs _mcp with build_server stubbed, returning the kwargs it was given."""
+    from aletheore.cli import _mcp
+
+    if env is None:
+        monkeypatch.delenv("ALETHEORE_MCP_WATCH", raising=False)
+    else:
+        monkeypatch.setenv("ALETHEORE_MCP_WATCH", env)
+    fake_server = MagicMock()
+    with patch("aletheore.mcp_server.build_server", return_value=fake_server) as build:
+        _mcp(str(tmp_path), None, watch=watch)
+    assert fake_server.run.called
+    return build.call_args.kwargs
+
+
+def test_mcp_watches_by_default(tmp_path, monkeypatch):
+    assert _run_mcp_command(tmp_path, monkeypatch)["watch"] is True
+
+
+def test_mcp_no_watch_flag_turns_watching_off(tmp_path, monkeypatch):
+    assert _run_mcp_command(tmp_path, monkeypatch, watch=False)["watch"] is False
+
+
+@pytest.mark.parametrize("value", ["0", "false", "OFF", "no"])
+def test_mcp_watch_env_var_turns_watching_off(tmp_path, monkeypatch, value):
+    assert _run_mcp_command(tmp_path, monkeypatch, env=value)["watch"] is False
+
+
+@pytest.mark.parametrize("value", ["1", "true", "", "disable"])
+def test_mcp_watch_env_var_other_values_leave_the_default_on(tmp_path, monkeypatch, value):
+    assert _run_mcp_command(tmp_path, monkeypatch, env=value)["watch"] is True
+
+
+def test_main_mcp_no_watch_flag_reaches_the_mcp_flow(tmp_path):
+    with patch("aletheore.cli._mcp", return_value=0) as mock_mcp:
+        result = runner.invoke(app, ["mcp", str(tmp_path), "--no-watch"])
+
+    assert result.exit_code == 0
+    mock_mcp.assert_called_once_with(str(tmp_path), None, watch=False)
+
+
+def test_the_mcp_command_documents_no_watch():
+    result = runner.invoke(app, ["mcp", "--help"])
+
+    assert result.exit_code == 0
+    assert "--no-watch" in result.output
+    assert "ALETHEORE_MCP_WATCH" in result.output

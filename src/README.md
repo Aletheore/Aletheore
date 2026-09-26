@@ -532,6 +532,36 @@ aletheore mcp .
 
 **Windows: `ImportError: DLL load failed while importing _lancedb`.** This is Windows 11's Smart App Control silently blocking `_lancedb.dll` (from the `lancedb` package the semantic-search tools depend on), not a bug in this package. Check Windows Security → App & browser control → Smart App Control; turning it off resolves the import immediately, with no code changes needed. Microsoft only lets Smart App Control be turned off, not back on, without reinstalling Windows, so this is a one-way decision on the affected machine.
 
+#### Keeping evidence current (on by default)
+
+Evidence is a snapshot of the last scan, so an agent driving the server would otherwise answer
+from a repository that has since moved. `aletheore mcp` therefore re-scans in the background a
+few seconds after source files stop changing, and says so on stderr when it starts:
+
+```text
+aletheore: watching /path/to/repo (412 source files): evidence re-scans 5s after edits settle. Turn off with --no-watch or ALETHEORE_MCP_WATCH=0
+```
+
+- **Turn it off** with `aletheore mcp --no-watch`, or `ALETHEORE_MCP_WATCH=0` (also `false`, `no`,
+  `off`) in the client's environment. Any other value leaves it on.
+- **It needs the `write` effect** — the same permission `aletheore_scan` needs to rewrite
+  `.aletheore/`. If `ALETHEORE_MCP_ALLOW` withholds `write`, there is no watcher and the server
+  says so.
+- **It needs evidence to exist.** With none yet, it starts after the first `aletheore_scan`.
+- **It is deliberately lighter than a full scan.** The background re-scan skips dependency
+  vulnerabilities and licenses, git history, static analysis, architecture clustering and
+  hotspots, and carries the last full scan's values for those forward; run `aletheore scan` (or
+  the `aletheore_scan` tool) when you want them refreshed. It only refreshes a semantic index that
+  already exists, and never builds a first one.
+- **It stays out of the way.** One re-scan at a time (edits made during one become the next), a
+  5-second quiet period, and it declines to start above 5,000 source files rather than keep a core
+  busy — the message says how many it found. Only one watcher runs per repository even when several
+  agent sessions have the server open; the others report that another process is watching.
+- Everything it prints goes to stderr; stdout stays the MCP transport.
+
+`aletheore watch` does the same thing in the foreground (Ctrl-C to stop), with a 2-second quiet
+period and no file limit.
+
 #### Tool permissions
 
 Most of these tools only read `.aletheore/air.json`. A few do more, so each one carries standard

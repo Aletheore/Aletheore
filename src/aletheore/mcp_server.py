@@ -4,6 +4,8 @@ import os
 import queue
 import re
 import sys
+import threading
+from collections.abc import Callable
 from pathlib import Path, PurePath
 
 from mcp.server.mcpserver import MCPServer
@@ -44,6 +46,7 @@ from aletheore.repo_config import load_repo_config
 from aletheore.secrets import iter_all_files
 from aletheore.search_index import IndexDimensionMismatchError, IndexNotFoundError, search_index
 from aletheore.toon_encoding import ToonEncodingError, to_toon
+from aletheore.watch import EVIDENCE_WRITE_LOCK, BackgroundWatcher, start_background_watch
 
 
 # repo_path -> ((mtime, size) of the evidence file at load time, parsed
@@ -109,6 +112,14 @@ Timing: aletheore_scan and aletheore_index both report live progress while \
 running, not a silent hang - a small repo finishes in seconds, a large \
 monorepo can take several minutes. Don't assume either has failed just \
 because it's still running; check the reported progress before retrying.
+
+Freshness: evidence is a snapshot of the last scan. Unless the server was \
+started with --no-watch (or ALETHEORE_MCP_WATCH=0), it re-scans in the \
+background a few seconds after source files stop changing, so answers can \
+lag your edits by that long. That background re-scan skips the slow checks \
+(dependency vulnerabilities and licenses, git history, static analysis, \
+architecture clustering, hotspots) and reuses the last full scan's values \
+for them; call aletheore_scan when you need those refreshed too.
 
 Before your first aletheore_search or aletheore_search_codebase/aletheore_answer \
 call: if you don't already know the exact identifier, file name, or term \
@@ -702,7 +713,9 @@ def _scan_summary(evidence: dict) -> dict:
     }
 
 
-def _register_scan_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+def _register_scan_tool(
+    mcp_instance: MCPServer, repo_path: Path, after_scan: Callable[[Path], None] | None = None
+) -> None:
     @mcp_instance.tool(
         name="aletheore_scan",
         # Rewrites .aletheore/ and appends a snapshot, and reaches OSV.dev and
@@ -720,15 +733,22 @@ def _register_scan_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
         map_endpoints: bool = True,
     ) -> str:
         """Run the deterministic Aletheore scanner and save evidence for this repository."""
-        evidence = scan_repository(
-            repo_path,
-            check_vulnerabilities=check_vulnerabilities,
-            scan_git_history=scan_git_history,
-            check_licenses=check_licenses,
-            map_endpoints=map_endpoints,
-        )
-        write_evidence(evidence, repo_path)
-        save_snapshot(evidence, repo_path)
+        # Shared with the background watcher's rebuilds so the two never write
+        # .aletheore/ at the same time.
+        with EVIDENCE_WRITE_LOCK:
+            evidence = scan_repository(
+                repo_path,
+                check_vulnerabilities=check_vulnerabilities,
+                scan_git_history=scan_git_history,
+                check_licenses=check_licenses,
+                map_endpoints=map_endpoints,
+            )
+            write_evidence(evidence, repo_path)
+            save_snapshot(evidence, repo_path)
+        if after_scan is not None:
+            # After the lock is released: the first scan on a fresh repository is
+            # what gives the watcher evidence to keep current.
+            after_scan(repo_path)
         return _toon_result(_scan_summary(evidence))
 
 
@@ -775,7 +795,8 @@ def _register_index_tool(mcp_instance: MCPServer, repo_path: Path, effects: froz
 
         evidence = read_evidence(repo_path)
         try:
-            count = build_index(repo_path, evidence, allow_hosted=EFFECT_EXTERNAL in effects)
+            with EVIDENCE_WRITE_LOCK:
+                count = build_index(repo_path, evidence, allow_hosted=EFFECT_EXTERNAL in effects)
         except Exception as exc:  # noqa: BLE001
             return _toon_result({"error": str(exc)})
         return _toon_result({"indexed_chunks": count})
@@ -878,6 +899,50 @@ def _register_managed_audit_tool(mcp_instance: MCPServer, repo_path: Path) -> No
 Read-only tools are absent from this map: reading evidence is the server's
 purpose and is never gated.
 """
+# One background watcher per repository per process. Kept here (not on the
+# server object) so the aletheore_scan tool, which can be what first creates the
+# evidence a watcher needs, can start it after the fact, and so tests can stop it.
+_watchers: dict[Path, BackgroundWatcher] = {}
+_watch_declined: set[Path] = set()
+_watchers_lock = threading.Lock()
+
+
+def _watch_report(message: str) -> None:
+    # stderr, never stdout: stdout is the MCP transport.
+    print(f"aletheore: {message}", file=sys.stderr, flush=True)
+
+
+def ensure_watcher(repo_path: Path) -> None:
+    """Start the background watcher for this repository if it is not running.
+
+    Safe to call repeatedly (after every scan). A start that was refused for a
+    reason that will not change on its own (too many files, another process
+    already watching) is remembered so it is not re-announced on every scan.
+    """
+    with _watchers_lock:
+        existing = _watchers.get(repo_path)
+        if existing is not None and (existing.running or existing.declined):
+            return
+        if repo_path in _watch_declined:
+            return
+        had_evidence = (repo_path / ".aletheore" / "air.json").exists()
+        watcher = start_background_watch(repo_path, _watch_report)
+        if watcher is not None:
+            _watchers[repo_path] = watcher
+        elif had_evidence:
+            _watch_declined.add(repo_path)
+
+
+def stop_watchers() -> None:
+    """Stop every background watcher this process started (used by tests)."""
+    with _watchers_lock:
+        watchers = list(_watchers.values())
+        _watchers.clear()
+        _watch_declined.clear()
+    for watcher in watchers:
+        watcher.stop()
+
+
 TOOL_REQUIRED_EFFECTS: dict[str, frozenset[str]] = {
     "aletheore_search_codebase": frozenset({EFFECT_NETWORK}),
     "aletheore_scan": frozenset({EFFECT_WRITE, EFFECT_NETWORK}),
@@ -892,6 +957,7 @@ def build_server(
     repo_path: Path,
     answer_adapter: AgentAdapter | None = None,
     allow: frozenset[str] | None = None,
+    watch: bool = False,
 ) -> MCPServer:
     """Assemble the MCP server, registering only tools whose effects are permitted.
 
@@ -900,6 +966,12 @@ def build_server(
     boundary; a registered tool that returns "not permitted" is only a
     convention, and it still spends the agent's context advertising something
     it may not do.
+
+    watch: keep this repository's evidence current in the background while the
+    server runs (re-scan shortly after source files change). Off here so every
+    other caller of build_server is unchanged; `aletheore mcp` turns it on. It
+    also needs the `write` effect, the same permission aletheore_scan needs to
+    rewrite .aletheore/, so an operator who withheld write gets no watcher.
     """
     effects = allowed_effects(os.environ.get(_ALLOW_ENV_VAR)) if allow is None else allow
 
@@ -925,8 +997,14 @@ def build_server(
         withheld.append(tool_name)
         return False
 
+    watching = watch and EFFECT_WRITE in effects
+    if watch and not watching:
+        _watch_report(
+            f"file watching off: it rewrites .aletheore/ and the write effect is not permitted (see {_ALLOW_ENV_VAR})"
+        )
+
     if permitted("aletheore_scan"):
-        _register_scan_tool(mcp_instance, repo_path)
+        _register_scan_tool(mcp_instance, repo_path, after_scan=ensure_watcher if watching else None)
     if permitted("aletheore_healthcheck"):
         _register_healthcheck_tool(mcp_instance, repo_path)
     if permitted("aletheore_index"):
@@ -937,6 +1015,9 @@ def build_server(
         _register_managed_audit_tool(mcp_instance, repo_path)
     if answer_adapter is not None and permitted("aletheore_answer"):
         _register_answer_tool(mcp_instance, repo_path, answer_adapter, effects)
+
+    if watching:
+        ensure_watcher(repo_path)
 
     if withheld:
         # stderr, not stdout: stdout is the MCP transport. The operator is the
