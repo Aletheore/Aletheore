@@ -1,0 +1,260 @@
+{
+  "source": "aletheore package build_server() and cli.QUERY_KIND_GROUPS",
+  "version": "0.9.20",
+  "default": [
+    "aletheore_ast_pattern",
+    "aletheore_branch",
+    "aletheore_changes",
+    "aletheore_cluster",
+    "aletheore_database",
+    "aletheore_dead_code",
+    "aletheore_endpoints",
+    "aletheore_environment_variables",
+    "aletheore_find_evidence_for_dependency",
+    "aletheore_find_evidence_for_endpoint",
+    "aletheore_find_evidence_for_symbol",
+    "aletheore_get_blast_radius",
+    "aletheore_healthcheck",
+    "aletheore_hotspots",
+    "aletheore_imported_by",
+    "aletheore_imports",
+    "aletheore_index",
+    "aletheore_infrastructure",
+    "aletheore_layer_violations",
+    "aletheore_licenses",
+    "aletheore_list",
+    "aletheore_neighborhood",
+    "aletheore_overview",
+    "aletheore_ownership",
+    "aletheore_scan",
+    "aletheore_search",
+    "aletheore_search_codebase",
+    "aletheore_secrets",
+    "aletheore_static_analysis",
+    "aletheore_symbol_source",
+    "aletheore_symbols",
+    "aletheore_verify_citations",
+    "aletheore_vulnerabilities"
+  ],
+  "optional": [
+    "aletheore_answer",
+    "aletheore_managed_audit"
+  ],
+  "queryGroups": {
+    "Structure": [
+      "imports",
+      "imported-by",
+      "symbols",
+      "cluster",
+      "layer-violations",
+      "dead-code",
+      "schema",
+      "ast-pattern"
+    ],
+    "Security": [
+      "secrets",
+      "vulnerabilities",
+      "licenses",
+      "static-analysis"
+    ],
+    "Runtime": [
+      "endpoints",
+      "database",
+      "infrastructure",
+      "environment-variables"
+    ],
+    "History": [
+      "branch",
+      "ownership",
+      "hotspots",
+      "changes"
+    ],
+    "Evidence": [
+      "evidence-for-symbol",
+      "evidence-for-endpoint",
+      "evidence-for-dependency"
+    ],
+    "AI-assisted": [
+      "answer",
+      "search-codebase",
+      "symbol-source"
+    ]
+  },
+  "tools": [
+    {
+      "name": "aletheore_answer",
+      "group": "AI-assisted",
+      "description": "Answer a natural-language question about this repository from the semantic index."
+    },
+    {
+      "name": "aletheore_ast_pattern",
+      "group": "Search",
+      "description": "Structural search: find code by shape rather than by words, via a raw tree-sitter S-expression query: e.g. functions that catch a specific exception type, or classes implementing a given interface, regardless of naming."
+    },
+    {
+      "name": "aletheore_branch",
+      "group": "History",
+      "description": "Git branch metadata (head commit, tracking info)."
+    },
+    {
+      "name": "aletheore_changes",
+      "group": "History",
+      "description": "What changed between the two most recent scans of this repo."
+    },
+    {
+      "name": "aletheore_cluster",
+      "group": "Structure",
+      "description": "The architecture cluster containing this module."
+    },
+    {
+      "name": "aletheore_database",
+      "group": "Runtime",
+      "description": "Detected database usage: ORMs, connection strings, migrations."
+    },
+    {
+      "name": "aletheore_dead_code",
+      "group": "Structure",
+      "description": "Unreferenced functions/classes and unused dependencies."
+    },
+    {
+      "name": "aletheore_endpoints",
+      "group": "Runtime",
+      "description": "All API endpoints mapped from source."
+    },
+    {
+      "name": "aletheore_environment_variables",
+      "group": "Runtime",
+      "description": "Environment variables referenced in the codebase."
+    },
+    {
+      "name": "aletheore_find_evidence_for_dependency",
+      "group": "Evidence",
+      "description": "Resolve a dependency or import to source evidence."
+    },
+    {
+      "name": "aletheore_find_evidence_for_endpoint",
+      "group": "Evidence",
+      "description": "Resolve an API endpoint to source evidence: file, line, symbol, owner, commit, dependency, and risk."
+    },
+    {
+      "name": "aletheore_find_evidence_for_symbol",
+      "group": "Evidence",
+      "description": "Resolve a function or class symbol to source evidence."
+    },
+    {
+      "name": "aletheore_get_blast_radius",
+      "group": "Navigate",
+      "description": "Everything that would be affected by changing target (a file path): one call instead of manually chasing aletheore_imported_by recursively."
+    },
+    {
+      "name": "aletheore_healthcheck",
+      "group": "Run",
+      "description": "GET-only live health check of mapped API endpoints against a running instance."
+    },
+    {
+      "name": "aletheore_hotspots",
+      "group": "History",
+      "description": "Files with the most git churn/co-change activity."
+    },
+    {
+      "name": "aletheore_imported_by",
+      "group": "Structure",
+      "description": "Which modules import this one."
+    },
+    {
+      "name": "aletheore_imports",
+      "group": "Structure",
+      "description": "This module's own list of imports."
+    },
+    {
+      "name": "aletheore_index",
+      "group": "Run",
+      "description": "Build the semantic search index for this repo's evidence, required before aletheore_search_codebase or aletheore_answer can be used."
+    },
+    {
+      "name": "aletheore_infrastructure",
+      "group": "Runtime",
+      "description": "Detected infrastructure config: Docker, CI, IaC files."
+    },
+    {
+      "name": "aletheore_layer_violations",
+      "group": "Structure",
+      "description": "Layer-convention violations detected in the architecture."
+    },
+    {
+      "name": "aletheore_licenses",
+      "group": "Security",
+      "description": "All dependency license findings for this repo."
+    },
+    {
+      "name": "aletheore_list",
+      "group": "Navigate",
+      "description": "Lists the valid names/identifiers for one evidence collection, so other tools' exact-match target arguments can be filled in correctly."
+    },
+    {
+      "name": "aletheore_managed_audit",
+      "group": "Run",
+      "description": "Run a full audit report using Aletheore's managed audit service."
+    },
+    {
+      "name": "aletheore_neighborhood",
+      "group": "Navigate",
+      "description": "A module's imports, dependents, and cluster in one call."
+    },
+    {
+      "name": "aletheore_overview",
+      "group": "Navigate",
+      "description": "A repo-level summary: languages, frameworks, monorepo structure, dependency-graph size, module/cluster counts, and git age/commit cadence/branch count."
+    },
+    {
+      "name": "aletheore_ownership",
+      "group": "History",
+      "description": "Code ownership derived from git blame history."
+    },
+    {
+      "name": "aletheore_scan",
+      "group": "Run",
+      "description": "Run the deterministic Aletheore scanner and save evidence for this repository."
+    },
+    {
+      "name": "aletheore_search",
+      "group": "Search",
+      "description": "Deterministic literal or regex search over the repository's source files."
+    },
+    {
+      "name": "aletheore_search_codebase",
+      "group": "Search",
+      "description": "Hybrid search (meaning + exact identifiers) over the repository's indexed code."
+    },
+    {
+      "name": "aletheore_secrets",
+      "group": "Security",
+      "description": "Secret-scanner findings for one file."
+    },
+    {
+      "name": "aletheore_static_analysis",
+      "group": "Security",
+      "description": "Static analysis findings (SonarQube/Semgrep/Bearer/gosec/Bandit/Joern/Trivy/PMD), normalized into one shape: {tool, rule_id, severity, type, path, line, message}."
+    },
+    {
+      "name": "aletheore_symbol_source",
+      "group": "Search",
+      "description": "Exact source text for one named function/class, with resolved line bounds."
+    },
+    {
+      "name": "aletheore_symbols",
+      "group": "Structure",
+      "description": "This module's extracted functions and classes."
+    },
+    {
+      "name": "aletheore_verify_citations",
+      "group": "Evidence",
+      "description": "Checks every file:line citation in report_text against this repo's real evidence and real file line counts."
+    },
+    {
+      "name": "aletheore_vulnerabilities",
+      "group": "Security",
+      "description": "All dependency vulnerability findings for this repo."
+    }
+  ]
+}

@@ -1,0 +1,76 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-paper: #F7F5F2;
+  --color-raised: #FFFFFF;
+  --color-ink: #16140F;
+  --color-muted: #5C574C;
+  --color-faint: #9A9384;
+  --color-line: #DDD8CB;
+  --color-line-strong: #C4BEAC;
+  --color-stamp: #A33327;
+  --color-stamp-soft: #F3E3E0;
+  --color-success: #3D6B41;
+  --font-display: var(--font-plex-mono), ui-monospace, "SF Mono", monospace;
+  --font-sans: var(--font-geist), -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+}
+
+html { scroll-behavior: smooth; color-scheme: light; }
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}
+
+.eyebrow { font-family: var(--font-display); font-size: 12.5px; color: var(--color-stamp); }
+.eyebrow--section::before { content: "\00a7\00a0"; }
+.rule-dashed { border-top: 1px dashed var(--color-line-strong); }
+
+/* Four L-shaped corner marks framing a scene or card. */
+.crop-marks { position: relative; }
+.crop-marks::before {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  pointer-events: none;
+  --c: var(--color-ink);
+  --s: 14px;
+  --w: 1.5px;
+  background:
+    linear-gradient(var(--c), var(--c)) top left / var(--s) var(--w) no-repeat,
+    linear-gradient(var(--c), var(--c)) top left / var(--w) var(--s) no-repeat,
+    linear-gradient(var(--c), var(--c)) top right / var(--s) var(--w) no-repeat,
+    linear-gradient(var(--c), var(--c)) top right / var(--w) var(--s) no-repeat,
+    linear-gradient(var(--c), var(--c)) bottom left / var(--s) var(--w) no-repeat,
+    linear-gradient(var(--c), var(--c)) bottom left / var(--w) var(--s) no-repeat,
+    linear-gradient(var(--c), var(--c)) bottom right / var(--s) var(--w) no-repeat,
+    linear-gradient(var(--c), var(--c)) bottom right / var(--w) var(--s) no-repeat;
+}
+
+/* Terminal lines arrive one after another; reduced motion shows them at once. */
+@keyframes line-in { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: none; } }
+.term-line { animation: line-in 380ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes fade-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.fade-up { animation: fade-up 520ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .term-line, .fade-up { animation: none; }
+}
+
+/* Policy pages: long-form text in a readable measure. */
+.legal { max-width: 1080px; }
+.legal > * { max-width: 68ch; }
+.legal h2 { margin-top: 2.25rem; margin-bottom: 0.6rem; font-family: var(--font-display); font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
+.legal p, .legal li { font-size: 14.5px; line-height: 1.75; color: var(--color-muted); }
+.legal p { margin-top: 0.85rem; }
+.legal ul { margin-top: 0.85rem; padding-left: 1.2rem; list-style: square; }
+.legal li { margin-top: 0.35rem; }
+.legal strong { color: var(--color-ink); }
+.legal a { color: var(--color-ink); text-decoration: underline; text-underline-offset: 3px; }
+.legal a:hover { color: var(--color-stamp); }
+.legal code { font-family: var(--font-mono); font-size: 0.9em; background: var(--color-raised); border: 1px solid var(--color-line); padding: 0.05em 0.35em; border-radius: 3px; color: var(--color-ink); }

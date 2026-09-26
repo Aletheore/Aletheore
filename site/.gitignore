@@ -1,0 +1,9 @@
+node_modules
+.next
+next-env.d.ts
+tsconfig.tsbuildinfo
+e2e-out
+
+# local environment files (Next.js loads these automatically); keep the example
+.env*
+!.env.example

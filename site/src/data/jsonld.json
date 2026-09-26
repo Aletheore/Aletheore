@@ -1,0 +1,48 @@
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Aletheore",
+  "url": "https://www.aletheore.com/",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "macOS, Linux, Windows",
+  "description": "Evidence-grounded repository audits: a free deterministic CLI scanner plus a hosted GitHub App with automated PR reviews, dead code detection, live endpoint health monitoring, AIRview (an AI-generated architecture map), and Slack/Teams alerts.",
+  "offers": [
+    {
+      "@type": "Offer",
+      "name": "Aletheore Community",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    {
+      "@type": "Offer",
+      "name": "Aletheore Flash",
+      "price": "8",
+      "priceCurrency": "USD",
+      "description": "Automatic PR reviews on every push, powered by $5 of AI credit a month (about 400 PRs), one model."
+    },
+    {
+      "@type": "Offer",
+      "name": "Aletheore AIR",
+      "price": "29.99",
+      "priceCurrency": "USD",
+      "description": "Up to 3 team members, $18 of AI credit a month. Everything in Flash plus managed audits, and AIRview builds run on DeepSeek."
+    }
+  ],
+  "featureList": [
+    "Deterministic secret, vulnerability, and license scanning across 13 languages",
+    "Dead code detection from real call-graph analysis",
+    "Git hotspot intelligence",
+    "Database and infrastructure detection",
+    "Local semantic code search via vector index",
+    "MCP server for coding agents",
+    "Multi-provider AI audit reports (Claude, OpenAI, Gemini, Mistral, Grok, DeepSeek, Ollama)",
+    "GitHub App: automatic PR comments and branch-protection check runs",
+    "AI-powered managed audit reports on pull requests, written by DeepSeek",
+    "Automatic Flash reviews on every pull request push (Flash tier and up); AIR adds more AI credit, AIRview, Docs and managed audits",
+    "Slack/Teams alerts on new findings",
+    "Live API endpoint health monitoring across multiple targets, with a public status API",
+    "AIRview: an AI-generated, always-current map of your repo's architecture with dependency diagrams",
+    "AI-generated Docs: grounded, per-symbol descriptions written and kept current automatically, marked AI-generated or AI-polished, exportable as a single Markdown file",
+    "Team seat management, up to 3 seats included on Aletheore AIR"
+  ]
+}
