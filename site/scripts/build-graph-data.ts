@@ -25,7 +25,7 @@ const input: GraphInput = {
   edges: graph.edges.filter(([a, b]) => keepSet.has(a) && keepSet.has(b)),
 };
 
-const laid = layout3d(input, { seed: 7 });
+const laid = layout3d(input, { seed: 7, repulsion: 3200, rest: 120, spring: 0.012, center: 0.0006, iterations: 520 });
 const commit = execFileSync("git", ["-C", repoDir, "rev-parse", "--short", "HEAD"]).toString().trim();
 const out = {
   source: "aletheore scan of the Aletheore repository (own dependency graph, top modules by degree)",

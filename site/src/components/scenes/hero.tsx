@@ -10,7 +10,7 @@ export function Hero() {
     <section className="mx-auto grid max-w-[1080px] items-center gap-8 px-8 pb-10 pt-14 md:grid-cols-[1.05fr_0.95fr] md:pt-16">
       <div>
         <p className="eyebrow mb-3">Evidence-driven code intelligence</p>
-        <h1 className="font-display text-[clamp(34px,5.4vw,52px)] font-bold leading-[1.06] tracking-[-0.02em]">
+        <h1 className="text-balance font-display text-[clamp(30px,4.4vw,46px)] font-bold leading-[1.06] tracking-[-0.02em]">
           AI code intelligence that has to <span className="text-stamp">show its work.</span>
         </h1>
         <p className="mt-5 max-w-[52ch] text-[16px] leading-[1.65] text-muted">

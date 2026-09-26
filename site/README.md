@@ -1,0 +1,17 @@
+# Aletheore marketing site (Next.js)
+
+Rebuild of the static site in `../website`, which stays live until cutover.
+
+    npm install
+    npm run dev        # http://localhost:3100
+    npm run build && npm run start
+    npm run lint && npm run typecheck && npm test
+    npm run e2e        # needs `npm run start` running and Google Chrome installed
+
+Data (regenerate when the repo changes):
+
+    npm run data:graph    # reads /tmp/aletheore-evidence/.aletheore/air.json
+    npm run data:chain    # runs `aletheore query` in /tmp/aletheore-evidence
+
+Evidence: clone the repo to /tmp/aletheore-evidence and run `aletheore scan .` there first.
+Spec: docs/superpowers/specs/2026-09-26-marketing-site-rebuild-design.md
