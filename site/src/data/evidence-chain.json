@@ -1,0 +1,43 @@
+{
+  "source": "aletheore scan and queries run against the Aletheore repository itself",
+  "commit": "3c09867",
+  "file": "github-app/app_server/admin.py",
+  "steps": [
+    {
+      "id": "endpoint",
+      "label": "endpoint",
+      "value": "GET /admin/{org}/{repo}",
+      "detail": "A route the scanner found in github-app/app_server/admin.py."
+    },
+    {
+      "id": "handler",
+      "label": "handler",
+      "value": "admin.py:540",
+      "detail": "The scanner resolved the route to github-app/app_server/admin.py at line 540."
+    },
+    {
+      "id": "symbol",
+      "label": "symbol",
+      "value": "admin_page",
+      "detail": "admin_page spans lines 541 to 601 of github-app/app_server/admin.py."
+    },
+    {
+      "id": "owner",
+      "label": "owner",
+      "value": "Arihant Kaul",
+      "detail": "49 commits touch this file, 100% of them by this author."
+    },
+    {
+      "id": "touched",
+      "label": "last touched",
+      "value": "fca0676",
+      "detail": "2026-09-25: restructure: Overview page and dashboard shell to match the approved mockup"
+    },
+    {
+      "id": "verdict",
+      "label": "verdict",
+      "value": "Hotspot: 49 commits",
+      "detail": "49 commits and 3 dependent modules put this file on the hotspot list."
+    }
+  ]
+}
