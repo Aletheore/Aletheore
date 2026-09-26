@@ -17,6 +17,14 @@ describe("ported policy pages", () => {
     expect(legal.terms.updated).toBe("Last updated: July 2026");
     expect(legal.refund.html).toContain("14 days");
   });
+  it("state the GitHub App permissions the App actually holds (checked against GitHub's public apps API on 2026-09-27)", () => {
+    const h = legal.security.html;
+    expect(h).toContain("repository contents (read and write)");
+    expect(h).toContain("checks (write)");
+    expect(h).toContain("pull requests (write)");
+    expect(h).toContain("aletheore/docs-update");
+    expect(h).not.toContain("repository contents (read),");
+  });
   it("state the current prices in the terms", () => {
     expect(legal.terms.html).toContain("$8/month");
     expect(legal.terms.html).toContain("$29.99/month or $299.90/year");
