@@ -702,7 +702,10 @@ def test_incremental_spend_budget_record_usage_ledgers_the_real_cost_not_the_del
     assert len(calls) == 1
     aggregate_amount, kwargs = calls[0]
     assert aggregate_amount == pytest.approx(0.03)
-    assert kwargs["ledger_cost_usd"] == pytest.approx(0.03)
+    # ledger_cost_usd omitted now, not passed separately - it always equals
+    # cost_usd at this call site, and record_llm_spend defaults to cost_usd
+    # when it's omitted.
+    assert "ledger_cost_usd" not in kwargs
     assert kwargs["feature"] == "airview_full_build"
 
 
@@ -730,7 +733,8 @@ def test_incremental_spend_budget_record_usage_still_ledgers_when_cost_exactly_m
     assert len(calls) == 1
     aggregate_amount, kwargs = calls[0]
     assert aggregate_amount == pytest.approx(0.05)
-    assert kwargs["ledger_cost_usd"] == pytest.approx(0.05)
+    # ledger_cost_usd omitted now - see the matching assertion above.
+    assert "ledger_cost_usd" not in kwargs
 
 
 def test_run_pr_scan_job_uses_persistent_checkout_and_unchanged_cache_for_head(

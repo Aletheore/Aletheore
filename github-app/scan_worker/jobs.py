@@ -2931,16 +2931,28 @@ def _run_flash_review(
                     reserve_llm_spend(settings.database_url, installation_id, remaining)
     elif delta < 0:
         release_llm_spend_reservation(settings.database_url, installation_id, -delta)
+    if reservation_state is not None:
+        # Settled the moment the credit-balance true-up above lands, not
+        # after the record_llm_spend() call below: that call only writes
+        # the separate llm_spend/llm_spend_events ledger, not the balance
+        # this reservation actually holds against. Marking settled here
+        # (instead of after record_llm_spend, as before) closes a real
+        # double-release gap: if record_llm_spend raised (a DB blip) while
+        # settled was still only set after it, the exception unwound to
+        # run_flash_review_job's `finally`, which saw settled == False and
+        # released the FULL flat reservation again on top of a balance
+        # that was already correctly trued up here - crediting free money.
+        # Anything that raises after this point (i.e. record_llm_spend
+        # below) must not release the reservation a second time.
+        reservation_state["settled"] = True
     # Real cost, not the true-up delta: see _IncrementalSpendBudget.record_usage.
+    # ledger_cost_usd omitted: it's identical to cost_usd at this call site
+    # (both are the real cost), and record_llm_spend already defaults
+    # ledger_cost_usd to cost_usd when omitted.
     record_llm_spend(
         settings.database_url, installation_id, spend_accumulator["total"],
         feature="flash_review",
-        ledger_cost_usd=spend_accumulator["total"],
     )
-    if reservation_state is not None:
-        # From here the reservation is fully settled (trued up above). Anything
-        # that raises later in this function must not release it a second time.
-        reservation_state["settled"] = True
 
     proposed = grounding_result.get("proposed", 0)
     kept = grounding_result.get("kept", 0)
@@ -5108,13 +5120,12 @@ class _IncrementalSpendBudget:
         from a broad except block even when the specific failure is
         ambiguous about whether record_usage() already ran.
         """
-        if self._pending_reserve_usd:
-            release_llm_spend_reservation(self.dsn, self.installation_id, self._pending_reserve_usd)
+        amount = self._release_pending()
+        if amount:
             logging.getLogger("scan_worker.jobs").warning(
                 "llm call failed after reservation, released: model=%s feature=%s amount_usd=%.4f",
-                self.model, self.feature, self._pending_reserve_usd,
+                self.model, self.feature, amount,
             )
-            self._pending_reserve_usd = 0.0
 
     def release_unused_reservation(self) -> None:
         """Gives back a reservation that no LLM call ever consumed.
@@ -5132,9 +5143,20 @@ class _IncrementalSpendBudget:
         Silent and idempotent, unlike on_call_failed(): nothing failed, so it
         logs no warning, and a call that already trued its reservation up via
         record_usage() (pending is zero by then) is a no-op."""
-        if self._pending_reserve_usd:
-            release_llm_spend_reservation(self.dsn, self.installation_id, self._pending_reserve_usd)
+        self._release_pending()
+
+    def _release_pending(self) -> float:
+        """Shared core of on_call_failed()/release_unused_reservation():
+        both used to independently reimplement 'release whatever's pending
+        and zero it out', which could silently drift out of sync if only
+        one of them were ever updated. Returns the amount released (0.0 if
+        nothing was pending) so on_call_failed() can still log its warning
+        with the real amount."""
+        amount = self._pending_reserve_usd
+        if amount:
+            release_llm_spend_reservation(self.dsn, self.installation_id, amount)
             self._pending_reserve_usd = 0.0
+        return amount
 
     def record_usage(
         self, prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0
@@ -5193,8 +5215,11 @@ class _IncrementalSpendBudget:
         # balance and never wrote to llm_spend, so recording the true-up delta
         # here (cost - reserve, usually negative) drove the month's total
         # steadily below zero: -$154.66 for September on one install.
+        # ledger_cost_usd omitted: identical to cost_usd here too (see the
+        # matching call site in _run_flash_review_job's true-up above) -
+        # record_llm_spend already defaults it to cost_usd when omitted.
         record_llm_spend(
-            self.dsn, self.installation_id, cost, feature=self.feature, ledger_cost_usd=cost,
+            self.dsn, self.installation_id, cost, feature=self.feature,
         )
 
     def cap_message(self) -> str:
@@ -6086,6 +6111,13 @@ def _run_docs_build_for_modules(
                 dsn, installation_id, repo_full_name, module, writing_adapter,
                 content.split("\n"), ref,
             )
+            # Counted here, before release_unused_reservation() below, not
+            # after: this module's docs content is already durably written
+            # by this point, so a later failure releasing its now-moot
+            # reservation (a transient DB blip) must not mis-report an
+            # already-persisted module as failed - it used to fall through
+            # to the except block below, which never runs succeeded += 1.
+            succeeded += 1
             # can_start_next_call() reserved this module's spend before we knew
             # whether it needs an LLM call. If it did, record_usage() already
             # trued the reservation up and this is a no-op; if it did not (every
@@ -6093,7 +6125,6 @@ def _run_docs_build_for_modules(
             # reservation back instead of letting it leak from the balance.
             if spend_budget is not None:
                 spend_budget.release_unused_reservation()
-            succeeded += 1
         except Exception as exc:  # noqa: BLE001
             # Defensive, not the primary fix: the writing_adapter passed in
             # already carries on_call_failed=spend_budget.on_call_failed

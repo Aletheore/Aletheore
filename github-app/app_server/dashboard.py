@@ -31,6 +31,7 @@ from app_server.db import (
     get_endpoint_health_selection,
     get_endpoint_health_summary_since,
     get_endpoint_uptime_pct_since,
+    get_extra_seats,
     get_flash_review_cost_this_month,
     get_flash_review_count_this_month,
     get_installation,
@@ -288,6 +289,11 @@ async def get_credits(installation_id: int, request: Request):
 
     flash_review_count = await get_flash_review_count_this_month(pool, installation_id)
     flash_review_cost = await get_flash_review_cost_this_month(pool, installation_id)
+    # installation.get("extra_seats", 0) always evaluated to 0 here -
+    # get_installation()'s SELECT never returns that column, so it's not
+    # a stale/missing key some rows have and others don't, it's just never
+    # there. Same real lookup admin.py's admin_page uses.
+    extra_seats = await get_extra_seats(pool, installation_id)
     average_cost_per_review = (flash_review_cost / flash_review_count) if flash_review_count > 0 else None
 
     # "This install" reports its own real repo count - repo-level plan
@@ -322,7 +328,7 @@ async def get_credits(installation_id: int, request: Request):
         "plan": installation["plan"],
         "base_credit_remaining_usd": float(installation["base_credit_remaining_usd"]),
         "topup_credit_balance_usd": float(installation["topup_credit_balance_usd"]),
-        "base_credit_allotment_usd": base_credit_for_plan(installation["plan"], installation.get("extra_seats", 0) or 0),
+        "base_credit_allotment_usd": base_credit_for_plan(installation["plan"], extra_seats),
         "paddle_customer_id": installation.get("paddle_customer_id"),
         "paddle_subscription_id": subscription_id,
         "subscription_renews_at": subscription_renews_at,
@@ -826,13 +832,24 @@ async def get_dashboard_wiki_file(org: str, repo: str, file_path: str, request: 
     }
 
 
-async def _build_docs_modules(pool, installation_id: int, repo_full_name: str) -> dict[str, str]:
+async def _build_docs_modules(
+    pool, installation_id: int, repo_full_name: str, evidence: dict | None = None
+) -> dict[str, str]:
     """Shared by the JSON dashboard route and the markdown export route -
     both render the same evidence + AI-description merge, just packaged
-    differently."""
+    differently.
+
+    evidence: pass the already-fetched evidence when the caller also needs
+    it for something else (get_dashboard_docs's git_data, the export
+    route's overview sections) - avoids a second get_latest_evidence call
+    *and* the race it opened: a new scan's repo_history row landing in the
+    gap between two separate fetches could otherwise mix an older scan's
+    modules with a newer scan's recently_updated/hotspots or overview
+    sections in one response. Omit it to fetch it here."""
     from aletheore.docs_reference import build_api_reference
 
-    evidence = await get_latest_evidence(pool, installation_id, repo_full_name)
+    if evidence is None:
+        evidence = await get_latest_evidence(pool, installation_id, repo_full_name)
     if evidence is None:
         return {}
 
@@ -861,13 +878,13 @@ async def get_dashboard_docs(org: str, repo: str, request: Request):
     repo_full_name = f"{org}/{repo}"
 
     build_status = await get_docs_build_status(pool, installation_id, repo_full_name)
-    modules = await _build_docs_modules(pool, installation_id, repo_full_name)
-    # Fetched separately from _build_docs_modules's own internal fetch - it
-    # only returns the built API reference, not the raw evidence the Docs
-    # page's rail (recently-updated files, hotspots) also needs. A second
-    # get_latest_evidence call, not a refactor to share one, since the
-    # export route also calls _build_docs_modules and has no use for these.
+    # Fetched once, here, and passed into _build_docs_modules - not two
+    # separate get_latest_evidence calls - so modules and git_data
+    # (recently-updated files, hotspots) always come from the same scan,
+    # even if a new scan's repo_history row lands between what would
+    # otherwise be two separate fetches.
     evidence = await get_latest_evidence(pool, installation_id, repo_full_name)
+    modules = await _build_docs_modules(pool, installation_id, repo_full_name, evidence=evidence)
     git_data = (evidence or {}).get("git", {})
     return {
         "repo_full_name": repo_full_name,
@@ -910,13 +927,14 @@ async def get_dashboard_docs_export(org: str, repo: str, request: Request):
     installation_id = installation["installation_id"]
     repo_full_name = f"{org}/{repo}"
 
-    # Fetched separately from _build_docs_modules's own internal fetch
-    # (same cheap lookup this file already repeats per-route elsewhere) -
-    # the combined export is the one caller that also needs the raw
-    # evidence, for the API Endpoints/Database Schema overview sections
-    # build_combined_reference adds ahead of the per-module reference.
+    # Fetched once and passed into _build_docs_modules (see its docstring) -
+    # the combined export also needs the raw evidence itself, for the API
+    # Endpoints/Database Schema overview sections build_combined_reference
+    # adds ahead of the per-module reference, and two separate fetches let
+    # a scan that lands in between mix modules from one snapshot with
+    # overview sections from another.
     evidence = await get_latest_evidence(pool, installation_id, repo_full_name)
-    modules = await _build_docs_modules(pool, installation_id, repo_full_name)
+    modules = await _build_docs_modules(pool, installation_id, repo_full_name, evidence=evidence)
     markdown = build_combined_reference(modules, repo_full_name, evidence)
     filename = f"{_safe_download_filename(repo)}-api-reference.md"
     return Response(

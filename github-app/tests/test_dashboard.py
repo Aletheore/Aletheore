@@ -355,6 +355,29 @@ async def test_credits_works_for_an_air_installation_too(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_credits_includes_purchased_extra_seats_in_the_credit_allotment(pool, monkeypatch):
+    # Real bug found in a backward audit: base_credit_allotment_usd was
+    # computed from installation.get("extra_seats", 0), but
+    # get_installation()'s SELECT never returns that column, so the lookup
+    # always silently fell back to 0 - understating the allotment shown to
+    # any AIR installation that had purchased extra seats. admin.py's
+    # admin_page uses the real get_extra_seats(pool, installation_id) for
+    # this same number; get_credits now does too.
+    from app_server.llm_cost import base_credit_for_plan
+
+    await upsert_installation(pool, 733, "seated-org")
+    await set_installation_plan(pool, 733, "air")
+    await pool.execute("UPDATE installations SET extra_seats = 3 WHERE installation_id = 733")
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[733])
+    async with client:
+        response = await client.get("/app/installations/733/credits")
+
+    assert response.status_code == 200
+    assert response.json()["base_credit_allotment_usd"] == base_credit_for_plan("air", 3)
+
+
+@pytest.mark.asyncio
 async def test_credits_keeps_the_real_subscription_id_when_the_paddle_lookup_fails(pool, monkeypatch):
     # A real subscription exists (paddle_subscription_id is set on the
     # installation) but the Paddle API call for its renewal date/billing
@@ -2480,6 +2503,38 @@ async def test_dashboard_docs_merges_ai_generated_description_for_undocumented_s
 
 
 @pytest.mark.asyncio
+async def test_dashboard_docs_fetches_evidence_only_once(pool, monkeypatch):
+    # Real gap found in a backward audit: get_dashboard_docs used to call
+    # get_latest_evidence twice - once inside _build_docs_modules, once
+    # again directly for git_data - a wasted DB round trip on every load,
+    # and a real race if a new scan landed in the gap between the two
+    # calls (modules from one scan, recently_updated/hotspots from
+    # another). Now fetched once and passed through.
+    evidence = _evidence_with_module("a.py", "add", "Adds two numbers.")
+    await upsert_installation(pool, 711, "octocat")
+    await set_installation_plan(pool, 711, "air")
+    await insert_repo_history(pool, 711, "octocat/hello-world", datetime.now(timezone.utc), evidence)
+
+    calls = []
+    import app_server.dashboard as dashboard_module
+
+    real_get_latest_evidence = dashboard_module.get_latest_evidence
+
+    async def counting_get_latest_evidence(*a, **k):
+        calls.append(1)
+        return await real_get_latest_evidence(*a, **k)
+
+    monkeypatch.setattr(dashboard_module, "get_latest_evidence", counting_get_latest_evidence)
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[711])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/docs")
+
+    assert response.status_code == 200
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_dashboard_docs_returns_empty_modules_when_nothing_scanned_yet(pool, monkeypatch):
     await upsert_installation(pool, 704, "octocat")
     await set_installation_plan(pool, 704, "air")
@@ -2581,6 +2636,38 @@ async def test_dashboard_docs_export_returns_combined_markdown_with_toc(pool, mo
     assert "## Contents" in body
     assert "[a.py](#apy)" in body
     assert "Adds two numbers." in body
+
+
+@pytest.mark.asyncio
+async def test_dashboard_docs_export_fetches_evidence_only_once(pool, monkeypatch):
+    # Same race as the JSON Docs route: the export needs the raw evidence
+    # itself (overview sections) and _build_docs_modules used to fetch it a
+    # second time, so a scan landing between the two fetches could pair one
+    # snapshot's modules with another's endpoints/schema sections.
+    await upsert_installation(pool, 712, "octocat")
+    await set_installation_plan(pool, 712, "air")
+    await insert_repo_history(
+        pool, 712, "octocat/hello-world", datetime.now(timezone.utc),
+        _evidence_with_module("a.py", "add", "Adds two numbers."),
+    )
+
+    calls = []
+    import app_server.dashboard as dashboard_module
+
+    real_get_latest_evidence = dashboard_module.get_latest_evidence
+
+    async def counting_get_latest_evidence(*a, **k):
+        calls.append(1)
+        return await real_get_latest_evidence(*a, **k)
+
+    monkeypatch.setattr(dashboard_module, "get_latest_evidence", counting_get_latest_evidence)
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[712])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/docs/export")
+
+    assert response.status_code == 200
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio

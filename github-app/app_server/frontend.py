@@ -611,8 +611,8 @@ svg#depgraph:active { cursor: grabbing; }
   .health-grid, .subsystem-grid, .settings-grid, .docs-grid { grid-template-columns: 1fr; }
   .credit-hero { grid-template-columns: minmax(0, 1fr); }
   .credit-actions { align-items: flex-start; }
-  .docs-overview, .docs-module-summary, .docs-commit-card { grid-template-columns: 1fr; }
-  .docs-overview-stats, .docs-module-meta { justify-content: flex-start; }
+  .docs-module-summary, .docs-commit-card { grid-template-columns: 1fr; }
+  .stat-row { justify-content: flex-start; }
   .picker-head { align-items: flex-start; gap: 1rem; flex-direction: column; }
   .diagram-zoom-toolbar { left: 14px; right: 14px; transform: none; justify-content: center; flex-wrap: wrap; border-radius: 14px; }
   .diagram-zoom-hint { order: 2; width: 100%; text-align: center; }
@@ -1883,7 +1883,14 @@ async function loadResults() {{
   if (!res.ok) {{ body.innerHTML = '<div class="empty-state">Health data unavailable.</div>'; return; }}
   const data = await res.json();
   const endpoints = data.endpoints || [];
-  document.getElementById('endpoints-list-count').textContent = endpoints.length + ' mapped';
+  // total_endpoint_count, not endpoints.length: endpoints is one row per
+  // (target, endpoint) pair (get_recent_endpoint_health's DISTINCT ON
+  // includes target_id so two targets checking the same endpoint don't
+  // collapse into one row), so a repo with 5 endpoints checked from 2
+  // targets has endpoints.length === 10 - total_endpoint_count is the
+  // real count of distinct endpoints, already computed server-side for
+  // exactly this reason (see dashboard.py's own comment on it).
+  document.getElementById('endpoints-list-count').textContent = data.total_endpoint_count + ' mapped';
 
   const summaryRow = document.getElementById('summary-row');
   if (endpoints.length === 0) {{
@@ -1978,8 +1985,9 @@ async function loadResults() {{
       const location = e.file
         ? '<span class="file">' + escapeHtml(e.file) + (e.line ? ':' + e.line : '') + '</span>'
         : '';
+      const methodClass = (e.method || '').toLowerCase();
       staleHtml += '<div class="health-row">' +
-        '<div class="method">' + escapeHtml(e.method) + '</div>' +
+        '<div class="method ' + escapeHtml(methodClass) + '">' + escapeHtml(e.method) + '</div>' +
         '<div class="path">' + escapeHtml(e.path) + location + '</div>' +
         '<div class="latency">&mdash;</div>' +
         '<div class="status-pill down"><span class="dot"></span>' + e.check_count + ' checks</div></div>';
@@ -2672,14 +2680,29 @@ loadPlanBadge();
 # had no docstring, always marked distinct from a verbatim source comment.
 # ---------------------------------------------------------------------------
 DOCS_LOCKED_PREVIEW = (
+    # Mirrors renderDocsModule()'s real markup exactly (docs-module-card >
+    # docs-module-summary [chevron, path] + docs-module-content >
+    # docs-module-content-inner > docs-symbol-row [sig/name/kind, desc,
+    # cite]) - this used to hardcode an older class structure
+    # (docs-module-title/-sub/-meta, a raw <pre> of un-parsed markdown)
+    # that the real stylesheet and renderer no longer have, so a free-plan
+    # or pre-first-scan viewer saw this teaser with broken/default styling
+    # and literal "#"/backtick markdown syntax instead of the parsed look
+    # every real module gets.
     '<div class="docs-grid">'
-    '<details class="docs-module-card" open><summary class="docs-module-summary">'
-    '<div><div class="docs-module-title"><i class="ti ti-file-code"></i><span class="docs-module-path">checkout/session.py</span></div>'
-    '<div class="docs-module-sub">1 documented symbol</div></div>'
-    '<div class="docs-module-meta"><span class="docs-chip">1 symbol</span><i class="ti ti-chevron-down docs-module-chevron"></i></div>'
-    '</summary><div class="docs-module-content"><pre class="docs-module-body">'
-    '# checkout/session.py\n\n### `create_session(cart_id)`\n\nValidates a cart and opens a new payment session.\n\n`checkout/session.py:42`'
-    '</pre></div></details>'
+    '<details class="docs-module-card" open>'
+    '<summary class="docs-module-summary">'
+    '<span class="docs-module-chevron">&#9654;</span>'
+    '<span class="docs-module-path">checkout/session.py</span>'
+    "</summary>"
+    '<div class="docs-module-content"><div class="docs-module-content-inner">'
+    '<div class="docs-symbol-row">'
+    '<div class="sig"><span class="name">create_session(cart_id)</span><span class="kind">function</span></div>'
+    '<div class="desc">Validates a cart and opens a new payment session.</div>'
+    '<div class="cite">checkout/session.py:42</div>'
+    "</div>"
+    "</div></div>"
+    "</details>"
     "</div>"
 )
 
