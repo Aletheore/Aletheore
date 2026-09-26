@@ -3761,7 +3761,9 @@ def test_build_blast_radius_context_does_not_flag_untouched_symbol():
 
 def test_build_blast_radius_context_caps_candidates_checked():
     """An imported_by list longer than MAX_BLAST_RADIUS_CANDIDATES ->
-    fetch_file_content should never be called for anything past the cap."""
+    fetch_file_content should never be called for anything past the cap,
+    plus exactly one further call to check the symbol's own file for a
+    same-file caller (cached per changed file, not per candidate)."""
     from scan_worker.flash_review import MAX_BLAST_RADIUS_CANDIDATES, build_blast_radius_context
 
     imported_by_list = [f"caller_{i}.py" for i in range(MAX_BLAST_RADIUS_CANDIDATES + 10)]
@@ -3794,7 +3796,7 @@ def test_build_blast_radius_context_caps_candidates_checked():
 
     context = build_blast_radius_context(evidence, ["a.py"], diff_text, fake_fetch_file_content)
     assert "is called from:" in context
-    assert call_count[0] <= MAX_BLAST_RADIUS_CANDIDATES
+    assert call_count[0] <= MAX_BLAST_RADIUS_CANDIDATES + 1
 
 
 def test_build_blast_radius_context_never_exceeds_callers_shown_cap():
@@ -3878,6 +3880,117 @@ def test_build_blast_radius_context_caller_using_different_symbol_not_flagged():
 
     context = build_blast_radius_context(evidence, ["a.py"], diff_text, fake_fetch_file_content)
     assert "is called from:" not in context
+
+
+def test_build_blast_radius_context_detects_a_same_file_caller():
+    """Real gap found via the Flask wsgi_app/Flask.__call__ case: a
+    same-file caller (one method of a class calling another) never shows
+    up as an importer of its own file, so the imported_by-only loop above
+    can never see it. No other file imports a.py here at all - the only
+    signal is the symbol's own file content."""
+    from scan_worker.flash_review import build_blast_radius_context
+
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "a.py",
+                    "imported_by": [],
+                    "symbols": {
+                        "functions": [
+                            {"name": "wsgi_app", "start_line": 2, "end_line": 3},
+                            {"name": "__call__", "start_line": 5, "end_line": 6},
+                        ],
+                        "classes": [],
+                    },
+                }
+            ]
+        }
+    }
+
+    diff_text = "--- a.py ---\n@@ -1,7 +1,7 @@\n class Flask:\n     def wsgi_app(self):\n         pass\n"
+
+    def fake_fetch_file_content(candidate_path: str) -> str | None:
+        assert candidate_path == "a.py"
+        return (
+            "class Flask:\n"
+            "    def wsgi_app(self):\n"
+            "        pass\n\n"
+            "    def __call__(self):\n"
+            "        return self.wsgi_app()\n"
+        )
+
+    context = build_blast_radius_context(evidence, ["a.py"], diff_text, fake_fetch_file_content)
+    assert "a.py:wsgi_app is called from: a same-file caller in a.py itself" in context
+
+
+def test_build_blast_radius_context_same_file_check_ignores_the_definition_line():
+    """The symbol's own def line inevitably contains "name(" too - must not
+    count as the symbol calling itself."""
+    from scan_worker.flash_review import build_blast_radius_context
+
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "a.py",
+                    "imported_by": [],
+                    "symbols": {
+                        "functions": [{"name": "handler", "start_line": 1, "end_line": 2}],
+                        "classes": [],
+                    },
+                }
+            ]
+        }
+    }
+
+    diff_text = "--- a.py ---\n@@ -1,2 +1,2 @@\n def handler():\n     pass\n"
+
+    def fake_fetch_file_content(candidate_path: str) -> str | None:
+        return "def handler():\n    pass\n"
+
+    context = build_blast_radius_context(evidence, ["a.py"], diff_text, fake_fetch_file_content)
+    assert "is called from:" not in context
+    assert "no confirmed caller found among a.py itself" in context
+
+
+def test_build_blast_radius_context_fetches_own_file_content_once_per_file_not_per_symbol():
+    """Two touched symbols in the same changed file must only trigger one
+    fetch_file_content call for that file's own content, not one per
+    symbol - avoids doubling the real GitHub API cost this fetch incurs in
+    production."""
+    from scan_worker.flash_review import build_blast_radius_context
+
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "a.py",
+                    "imported_by": [],
+                    "symbols": {
+                        "functions": [
+                            {"name": "first", "start_line": 1, "end_line": 2},
+                            {"name": "second", "start_line": 4, "end_line": 5},
+                        ],
+                        "classes": [],
+                    },
+                }
+            ]
+        }
+    }
+
+    diff_text = (
+        "--- a.py ---\n@@ -1,5 +1,5 @@\n def first():\n     pass\n\n def second():\n     pass\n"
+    )
+
+    call_count = [0]
+
+    def fake_fetch_file_content(candidate_path: str) -> str | None:
+        call_count[0] += 1
+        return "def first():\n    pass\n\ndef second():\n    pass\n"
+
+    build_blast_radius_context(evidence, ["a.py"], diff_text, fake_fetch_file_content)
+    assert call_count[0] == 1
 
 
 # ── review_diff via the free-tier adapter_chain fallback ───────────────

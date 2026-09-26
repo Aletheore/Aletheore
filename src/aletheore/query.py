@@ -207,6 +207,17 @@ def find_blast_radius(
     Confirmed against real local content via repo_path, not evidence -
     evidence has no per-call-site data to check against.
 
+    Also separately reports `same_file_caller`: whether `target`'s own
+    content calls `symbol` from somewhere other than its definition line -
+    a same-file/same-class caller (e.g. a class's __call__ invoking one of
+    its own other methods) is real and confirmed_callers alone can never
+    surface it, since that list only ever checks *other files* that import
+    target. Found via a real gap: aletheore_get_blast_radius on Flask's
+    wsgi_app returned confirmed_callers=[] (correctly - no other file calls
+    it by name) while the actual caller, Flask.__call__, sits one class
+    away in the same file. Excludes matches on `symbol`'s own def/class
+    line so the symbol's own definition never counts as calling itself.
+
     layer_violations reports EXISTING violations (evidence's own
     architecture.layer_violations) that already touch a module in this
     blast radius - not a prospective simulation of what a signature change
@@ -258,8 +269,27 @@ def find_blast_radius(
                 continue
             if call_pattern.search(content):
                 confirmed_callers.append(candidate)
+
+        # target's own file necessarily contains symbol's def/class line,
+        # which would otherwise false-positive as a "self-call" - a
+        # dependent can never define symbol itself, so no such exclusion
+        # is needed in the loop above.
+        def_pattern = re.compile(r"^\s*(async\s+def|def|class)\s+" + re.escape(symbol) + r"\b")
+        same_file_caller = False
+        try:
+            target_content = (repo_path / target).read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            target_content = ""
+        for line in target_content.splitlines():
+            if def_pattern.match(line):
+                continue
+            if call_pattern.search(line):
+                same_file_caller = True
+                break
+
         result["symbol"] = symbol
         result["confirmed_callers"] = confirmed_callers
+        result["same_file_caller"] = same_file_caller
 
     blast_radius_modules = {target, *direct_dependents, *transitive_dependents}
     violations = evidence.get("architecture", {}).get("layer_violations", {}).get("violations") or []

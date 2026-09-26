@@ -503,6 +503,48 @@ def test_find_blast_radius_excludes_a_dependent_that_only_imports_not_calls(tmp_
     assert result["confirmed_callers"] == []
 
 
+def test_find_blast_radius_detects_a_same_file_caller(tmp_path):
+    """Real gap found via the Flask wsgi_app/Flask.__call__ case: a same-file
+    caller (e.g. one method of a class calling another) is invisible to
+    confirmed_callers, which only ever checks other files. same_file_caller
+    reports this separately."""
+    (tmp_path / "core").mkdir()
+    (tmp_path / "core" / "util.py").write_text(
+        "def parse_config(raw):\n    return raw\n\n\n"
+        "def load(raw):\n    return parse_config(raw)\n"
+    )
+
+    result = find_blast_radius(_blast_radius_evidence(), tmp_path, "core/util.py", symbol="parse_config")
+
+    assert result["same_file_caller"] is True
+
+
+def test_find_blast_radius_same_file_caller_false_when_only_the_definition_is_present(tmp_path):
+    (tmp_path / "core").mkdir()
+    (tmp_path / "core" / "util.py").write_text("def parse_config(raw):\n    return raw\n")
+
+    result = find_blast_radius(_blast_radius_evidence(), tmp_path, "core/util.py", symbol="parse_config")
+
+    assert result["same_file_caller"] is False
+
+
+def test_find_blast_radius_same_file_caller_detects_a_method_calling_a_sibling_method(tmp_path):
+    # Mirrors the real Flask case: Flask.__call__ calling Flask.wsgi_app,
+    # both defined in the same class in the same file.
+    (tmp_path / "core").mkdir()
+    (tmp_path / "core" / "util.py").write_text(
+        "class Flask:\n"
+        "    def wsgi_app(self, environ, start_response):\n"
+        "        pass\n\n"
+        "    def __call__(self, environ, start_response):\n"
+        "        return self.wsgi_app(environ, start_response)\n"
+    )
+
+    result = find_blast_radius(_blast_radius_evidence(), tmp_path, "core/util.py", symbol="wsgi_app")
+
+    assert result["same_file_caller"] is True
+
+
 def test_find_dead_code_evidence_returns_the_whole_block_ignoring_target():
     assert find_dead_code_evidence(make_evidence(), None) == make_evidence()["repository"]["dead_code"]
 
