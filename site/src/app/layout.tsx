@@ -19,7 +19,7 @@ export const viewport: Viewport = { width: "device-width", initialScale: 1, them
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${plexMono.variable} ${geist.variable}`}>
+    <html lang="en" data-scroll-behavior="smooth" className={`${plexMono.variable} ${geist.variable}`}>
       <body>
         <Header />
         <main>{children}</main>

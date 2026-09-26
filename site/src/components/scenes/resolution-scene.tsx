@@ -97,6 +97,8 @@ export function ResolutionScene() {
           <GraphCanvas
             graph={graph}
             activeIds={activeIds}
+            focus
+            activeLabel={steps[active].value}
             staticSrc="/hero-graph-static.svg"
             alt="The same dependency graph with the modules on the current step of the chain highlighted"
           />
