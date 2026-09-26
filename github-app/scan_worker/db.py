@@ -300,17 +300,19 @@ def record_llm_spend(
     hard-fail if a future call site forgets to set it.
 
     ledger_cost_usd: the real total cost to attribute to `feature`, when it
-    differs from `cost_usd`. reserve_llm_spend's true-up callers pass
-    `real_cost - reserve_usd` as `cost_usd` (the aggregate delta, correct
-    for llm_spend's running total) - real found via audit: ledgering that
-    same delta into llm_spend_events silently drops the event whenever real
-    cost is at or under the reservation (delta <= 0, the common case per
-    reserve_llm_spend's own docstring), and under-reports by the reservation
-    amount otherwise, even though the delta can be a real, nonzero cost.
-    Pass the real total here so the per-feature breakdown doesn't collapse
-    to zero or under-count; omit it for a call that was never preceded by a
-    reservation (the two already coincide there: no reservation, no
-    discrepancy)."""
+    differs from `cost_usd`. Both of reserve_llm_spend's true-up callers
+    (_run_flash_review_job's true-up, _IncrementalSpendBudget.record_usage)
+    now pass the real cost as `cost_usd` directly, so for them the two
+    already coincide and this can be omitted - it defaults to `cost_usd`.
+    This parameter exists for a caller that ever needs to record a
+    different real cost than the aggregate `cost_usd` write reflects, not
+    for the reservation-delta pattern: an earlier version of both callers
+    above passed `real_cost - reserve_usd` (the aggregate delta) as
+    `cost_usd` and this parameter's real cost as `ledger_cost_usd`, which
+    silently dropped the per-feature event whenever real cost was at or
+    under the reservation (delta <= 0, the common case per
+    reserve_llm_spend's own docstring) - since fixed by having both callers
+    pass the real cost as `cost_usd` itself instead."""
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
