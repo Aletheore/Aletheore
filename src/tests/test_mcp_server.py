@@ -1366,3 +1366,44 @@ def test_the_watch_report_survives_a_closed_stderr(monkeypatch):
     monkeypatch.setattr("sys.stderr", closed)
 
     _watch_report("watching anything")  # ValueError would escape a bare print
+
+
+@pytest.mark.asyncio
+async def test_aletheore_index_reads_the_evidence_only_after_it_holds_the_write_lock(tmp_path):
+    """The background watcher can rewrite the evidence while an index build is
+    waiting for the lock; an index built from the earlier snapshot would never be
+    refreshed, since the watcher only refreshes an index that already exists."""
+    import threading
+
+    from aletheore.watch import EVIDENCE_WRITE_LOCK
+
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+    held_when_read: list[bool] = []
+
+    def lock_is_held_by_this_thread() -> bool:
+        # An RLock has no public "do I own it": probe from a second thread,
+        # where a non-blocking acquire only fails if this thread holds it.
+        outcome: list[bool] = []
+
+        def probe() -> None:
+            got = EVIDENCE_WRITE_LOCK.acquire(blocking=False)
+            if got:
+                EVIDENCE_WRITE_LOCK.release()
+            outcome.append(not got)
+
+        thread = threading.Thread(target=probe)
+        thread.start()
+        thread.join()
+        return outcome[0]
+
+    def spy_read_evidence(_repo):
+        held_when_read.append(lock_is_held_by_this_thread())
+        return minimal_air_evidence()
+
+    with patch("aletheore.mcp_server.read_evidence", side_effect=spy_read_evidence), patch(
+        "aletheore.search_index.build_index", return_value=0
+    ):
+        await server.call_tool("aletheore_index", {})
+
+    assert held_when_read == [True], "evidence was read without holding the write lock"

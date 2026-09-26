@@ -793,12 +793,18 @@ def _register_index_tool(mcp_instance: MCPServer, repo_path: Path, effects: froz
         too."""
         from aletheore.search_index import build_index
 
-        evidence = read_evidence(repo_path)
-        try:
-            with EVIDENCE_WRITE_LOCK:
+        # Read inside the lock, not before it: the background watcher can
+        # rewrite the evidence while this waits, and an index built from the
+        # older snapshot would never be refreshed by it (the watcher only
+        # refreshes an index that already exists). The read stays outside the
+        # try so a missing or incompatible evidence file surfaces exactly as it
+        # did before.
+        with EVIDENCE_WRITE_LOCK:
+            evidence = read_evidence(repo_path)
+            try:
                 count = build_index(repo_path, evidence, allow_hosted=EFFECT_EXTERNAL in effects)
-        except Exception as exc:  # noqa: BLE001
-            return _toon_result({"error": str(exc)})
+            except Exception as exc:  # noqa: BLE001
+                return _toon_result({"error": str(exc)})
         return _toon_result({"indexed_chunks": count})
 
 

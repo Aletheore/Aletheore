@@ -807,3 +807,38 @@ def test_the_lock_is_an_ordinary_file_in_the_evidence_directory(tmp_path):
         assert (repo / ".aletheore" / "watch.lock").is_file()
     finally:
         watcher.stop()
+
+
+def test_stopping_during_a_rebuild_keeps_the_repository_lock_until_the_thread_ends(tmp_path):
+    """stop() gives up waiting after its timeout, but a rebuild can be much
+    longer. Releasing the lock then would let another process rebuild while this
+    thread is still writing .aletheore/."""
+    repo = _repo_with_evidence(tmp_path)
+    in_rebuild = threading.Event()
+    finish_rebuild = threading.Event()
+
+    def slow_rebuild(_repo, _report):
+        in_rebuild.set()
+        finish_rebuild.wait(timeout=20)
+
+    with patch("aletheore.watch.rebuild", side_effect=slow_rebuild):
+        watcher = start_background_watch(repo, [].append, debounce_seconds=0.2)
+        assert watcher is not None
+        time.sleep(1.0)
+        (repo / "app.py").write_text("def f():\n    return 2\n\ndef changed():\n    return 3\n")
+        assert in_rebuild.wait(timeout=15), "the rebuild never started"
+
+        watcher.stop(timeout=0.5)  # returns while the rebuild is still running
+        assert watcher.running
+
+        second_messages: list[str] = []
+        assert start_background_watch(repo, second_messages.append, debounce_seconds=0.2) is None
+        assert any("already watching" in message for message in second_messages)
+
+        finish_rebuild.set()
+        assert _wait_for(lambda: not watcher.running, timeout=15)
+
+    # Once the thread has really ended the repository is free again.
+    again = start_background_watch(repo, [].append, debounce_seconds=0.2)
+    assert again is not None
+    again.stop()

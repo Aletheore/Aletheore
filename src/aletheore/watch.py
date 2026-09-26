@@ -490,12 +490,15 @@ def _lock_repo(repo_path: Path):
     so it is released by the kernel when the holder exits or crashes: there is
     no pid file to go stale and nothing to clean up.
 
-    Only genuine contention means another watcher exists. A filesystem that
-    cannot lock at all (NFS without a lock daemon, some container bind mounts,
-    WSL's Windows drives) must not read as "somebody else is watching" and leave
-    the user with no watcher: the status is _LOCK_UNSUPPORTED and the caller
-    watches anyway, which is safe because evidence writes are atomic and the
-    worst case is a duplicate rebuild.
+    Only errors that mean contention read as "another watcher exists". A
+    filesystem that cannot lock at all (NFS without a lock daemon, some container
+    bind mounts, WSL's Windows drives) reports a different error on POSIX, and
+    then the status is _LOCK_UNSUPPORTED and the caller watches anyway, which is
+    safe because evidence writes are atomic and the worst case is a duplicate
+    rebuild. On Windows a held region and some restricted filesystems can both
+    surface as EACCES and cannot be told apart by errno; there the ambiguity
+    resolves to the safe outcome (no second watcher) at worst at the cost of
+    this process not watching.
     """
     lock_path = repo_path / ".aletheore" / "watch.lock"
     try:
@@ -507,7 +510,10 @@ def _lock_repo(repo_path: Path):
         _os_lock(handle.fileno())
     except OSError as exc:
         handle.close()
-        if exc.errno in _CONTENTION_ERRNOS or isinstance(exc, (BlockingIOError, PermissionError)):
+        # BlockingIOError is Python's own "would block", whatever errno the
+        # platform used for it. PermissionError is deliberately not matched by
+        # type: only its errno (EACCES, in the set above) means contention.
+        if exc.errno in _CONTENTION_ERRNOS or isinstance(exc, BlockingIOError):
             return _LOCK_BUSY, None
         return _LOCK_UNSUPPORTED, None
     return _LOCK_HELD, handle
@@ -537,20 +543,26 @@ class BackgroundWatcher:
         self._stop = threading.Event()
         self._lock_handle = lock_handle
         self._thread: threading.Thread | None = None
-        # True once the repository proved too large to watch. A caller that
+        # Set once the repository proved too large to watch. A caller that
         # restarts watchers after each scan checks it so it does not re-walk
-        # and re-announce the same refusal every time.
-        self.declined = False
+        # and re-announce the same refusal every time. An Event, not a bare
+        # bool, so the cross-thread hand-off is explicit rather than resting on
+        # the GIL.
+        self._declined = threading.Event()
 
     @property
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
+    @property
+    def declined(self) -> bool:
+        return self._declined.is_set()
+
     def _run(self) -> None:
         try:
             mtimes = _current_mtimes(self.repo_path, limit=self._max_files)
             if mtimes is None:
-                self.declined = True
+                self._declined.set()
                 self._report(
                     f"file watching not started: more than {self._max_files} source files is over the limit "
                     "for automatic re-scans (run `aletheore watch` yourself, or re-scan when you need fresh evidence)"
@@ -587,7 +599,13 @@ class BackgroundWatcher:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=timeout)
-        self._release()
+        # A rebuild can outlast the join timeout (about 9.5 s measured on a
+        # 424-file repository). Releasing the repository lock now would let
+        # another process start rebuilding while this thread is still writing
+        # .aletheore/, which is exactly what the lock is for. If the thread is
+        # still alive it releases the lock itself when it exits (_run's finally).
+        if self._thread is None or not self._thread.is_alive():
+            self._release()
 
 
 def start_background_watch(
