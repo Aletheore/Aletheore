@@ -50,7 +50,7 @@ export function Terminal({ terms }: { terms: Term[] }) {
           <div className="absolute right-2 top-2"><CopyButton text={t.copy} /></div>
           <pre className="overflow-x-auto p-5 pr-24 font-display text-[12.5px] leading-[1.75]">
             {t.lines.map((l, i) => (
-              <div key={i} className={l.kind === "cmd" ? "text-paper" : "text-[#b6b09f]"}>
+              <div key={i} className={l.kind === "cmd" ? "term-line text-paper" : "term-line text-[#b6b09f]"} style={{ animationDelay: `${Math.min(i, 24) * 45}ms` }}>
                 {l.kind === "cmd" ? <span className="mr-2 text-stamp" aria-hidden="true">$</span> : null}
                 {l.text}
               </div>

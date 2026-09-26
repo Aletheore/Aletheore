@@ -15,11 +15,11 @@ export const DialogContent = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & { side?: "center" | "right" }
 >(({ className, children, side = "center", ...props }, ref) => (
   <DialogPrimitive.Portal>
-    <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-ink/40 backdrop-blur-[2px]" />
+    <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-[rgba(22,20,15,0.45)]" />
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed z-50 border border-line bg-raised p-6 shadow-[0_24px_60px_rgba(22,20,15,0.18)] focus:outline-none",
+        "fixed z-50 border border-line bg-[#ffffff] p-6 text-[#16140f] shadow-[0_24px_60px_rgba(22,20,15,0.18)] focus:outline-none",
         side === "center" && "left-1/2 top-1/2 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-[4px]",
         side === "right" && "right-0 top-0 h-full w-[min(86vw,320px)]",
         className,

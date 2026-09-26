@@ -16,7 +16,7 @@
   --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
 }
 
-html { scroll-behavior: smooth; }
+html { scroll-behavior: smooth; color-scheme: light; }
 body {
   background: var(--color-paper);
   color: var(--color-ink);
@@ -51,4 +51,13 @@ body {
     linear-gradient(var(--c), var(--c)) bottom left / var(--w) var(--s) no-repeat,
     linear-gradient(var(--c), var(--c)) bottom right / var(--s) var(--w) no-repeat,
     linear-gradient(var(--c), var(--c)) bottom right / var(--w) var(--s) no-repeat;
+}
+
+/* Terminal lines arrive one after another; reduced motion shows them at once. */
+@keyframes line-in { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: none; } }
+.term-line { animation: line-in 380ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes fade-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.fade-up { animation: fade-up 520ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .term-line, .fade-up { animation: none; }
 }

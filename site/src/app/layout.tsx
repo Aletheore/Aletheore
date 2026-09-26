@@ -15,7 +15,7 @@ const geist = Geist({ subsets: ["latin"], variable: "--font-geist", display: "sw
 
 export const metadata: Metadata = siteMetadata;
 
-export const viewport: Viewport = { width: "device-width", initialScale: 1, themeColor: "#F7F5F2" };
+export const viewport: Viewport = { width: "device-width", initialScale: 1, themeColor: "#F7F5F2", colorScheme: "light" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

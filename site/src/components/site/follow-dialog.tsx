@@ -8,7 +8,7 @@ export function FollowDialog({ open, onOpenChange }: { open: boolean; onOpenChan
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
-        <DialogTitle className="font-display text-lg font-bold">Follow Aletheore</DialogTitle>
+        <DialogTitle className="font-display text-lg font-bold text-ink">Follow Aletheore</DialogTitle>
         <DialogDescription className="mb-4 mt-1.5 text-[13.5px] text-muted">
           Pick where you want to see updates.
         </DialogDescription>
@@ -23,7 +23,7 @@ export function FollowDialog({ open, onOpenChange }: { open: boolean; onOpenChan
             >
               {o.id === "linkedin" ? <LinkedInIcon className="size-[30px] flex-none" /> : <InstagramIcon className="size-[30px] flex-none" />}
               <span className="flex min-w-0 flex-1 flex-col">
-                <strong className="text-[14.5px]">{o.name}</strong>
+                <strong className="text-[14.5px] text-ink">{o.name}</strong>
                 <small className="text-[12.5px] text-muted">{o.note}</small>
               </span>
               <ArrowRight className="size-4 text-faint" aria-hidden="true" />

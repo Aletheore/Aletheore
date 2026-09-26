@@ -24,6 +24,14 @@ describe("developers data", () => {
     expect(dev.queryKindCount).toBe(Object.values(tools.queryGroups).flat().length);
     expect(dev.queryKindCount).toBeGreaterThan(20);
   });
+  it("gives every tool a real description and a group", () => {
+    expect(dev.toolInfo.length).toBe(tools.default.length + tools.optional.length);
+    for (const x of dev.toolInfo) {
+      expect(x.description.length, x.name).toBeGreaterThan(15);
+      expect(dev.toolGroups).toContain(x.group);
+      expect(x.description, x.name).not.toMatch(/[–—]/);
+    }
+  });
   it("carries no em or en dashes", () => {
     expect(JSON.stringify(dev)).not.toMatch(/[–—]/);
   });
