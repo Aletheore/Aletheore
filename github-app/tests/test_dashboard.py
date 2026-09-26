@@ -355,6 +355,29 @@ async def test_credits_works_for_an_air_installation_too(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_credits_includes_purchased_extra_seats_in_the_credit_allotment(pool, monkeypatch):
+    # Real bug found in a backward audit: base_credit_allotment_usd was
+    # computed from installation.get("extra_seats", 0), but
+    # get_installation()'s SELECT never returns that column, so the lookup
+    # always silently fell back to 0 - understating the allotment shown to
+    # any AIR installation that had purchased extra seats. admin.py's
+    # admin_page uses the real get_extra_seats(pool, installation_id) for
+    # this same number; get_credits now does too.
+    from app_server.llm_cost import base_credit_for_plan
+
+    await upsert_installation(pool, 733, "seated-org")
+    await set_installation_plan(pool, 733, "air")
+    await pool.execute("UPDATE installations SET extra_seats = 3 WHERE installation_id = 733")
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[733])
+    async with client:
+        response = await client.get("/app/installations/733/credits")
+
+    assert response.status_code == 200
+    assert response.json()["base_credit_allotment_usd"] == base_credit_for_plan("air", 3)
+
+
+@pytest.mark.asyncio
 async def test_credits_keeps_the_real_subscription_id_when_the_paddle_lookup_fails(pool, monkeypatch):
     # A real subscription exists (paddle_subscription_id is set on the
     # installation) but the Paddle API call for its renewal date/billing

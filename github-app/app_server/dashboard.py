@@ -31,6 +31,7 @@ from app_server.db import (
     get_endpoint_health_selection,
     get_endpoint_health_summary_since,
     get_endpoint_uptime_pct_since,
+    get_extra_seats,
     get_flash_review_cost_this_month,
     get_flash_review_count_this_month,
     get_installation,
@@ -288,6 +289,11 @@ async def get_credits(installation_id: int, request: Request):
 
     flash_review_count = await get_flash_review_count_this_month(pool, installation_id)
     flash_review_cost = await get_flash_review_cost_this_month(pool, installation_id)
+    # installation.get("extra_seats", 0) always evaluated to 0 here -
+    # get_installation()'s SELECT never returns that column, so it's not
+    # a stale/missing key some rows have and others don't, it's just never
+    # there. Same real lookup admin.py's admin_page uses.
+    extra_seats = await get_extra_seats(pool, installation_id)
     average_cost_per_review = (flash_review_cost / flash_review_count) if flash_review_count > 0 else None
 
     # "This install" reports its own real repo count - repo-level plan
@@ -322,7 +328,7 @@ async def get_credits(installation_id: int, request: Request):
         "plan": installation["plan"],
         "base_credit_remaining_usd": float(installation["base_credit_remaining_usd"]),
         "topup_credit_balance_usd": float(installation["topup_credit_balance_usd"]),
-        "base_credit_allotment_usd": base_credit_for_plan(installation["plan"], installation.get("extra_seats", 0) or 0),
+        "base_credit_allotment_usd": base_credit_for_plan(installation["plan"], extra_seats),
         "paddle_customer_id": installation.get("paddle_customer_id"),
         "paddle_subscription_id": subscription_id,
         "subscription_renews_at": subscription_renews_at,
