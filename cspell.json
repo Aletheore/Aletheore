@@ -13,16 +13,13 @@
     "docs/audits/**",
     "src/.aletheore/**",
     "github-app/backups/**",
-    "STARTUP_AUDIT_REPORT.md",
-    "website/vendor/**"
+    "STARTUP_AUDIT_REPORT.md"
   ],
   "files": [
     "README.md",
     "*.md",
     ".github/**/*.md",
-    "docs/**/*.md",
-    "website/**/*.html",
-    "website/**/*.js"
+    "docs/**/*.md"
   ],
   "words": [
     "Aletheore",

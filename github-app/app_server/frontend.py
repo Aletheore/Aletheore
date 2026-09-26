@@ -52,7 +52,7 @@ MERMAID_SCRIPT = (
     'crossorigin="anonymous"></script>'
 )
 
-# The real Aletheore mark (website/assets/logo-mark.png, downscaled to 96px so it stays crisp at 2x)
+# The real Aletheore mark (site/public/assets/logo-mark.png, downscaled to 96px so it stays crisp at 2x)
 # inlined as a data URI: the dashboard is served from app.aletheore.com, not the marketing site, and
 # the CSP already allows data: images. The approved mockups drew a placeholder "A" in a box here;
 # that placeholder was copied into production by mistake and is not the brand.

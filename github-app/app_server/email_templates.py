@@ -18,7 +18,7 @@ _APP_URL = "https://app.aletheore.com"
 _DASHBOARD_URL = f"{_APP_URL}/dashboard"
 _FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
 
-# Matches website/styles.css's --bg-cream/--text-primary/--accent palette,
+# Matches the marketing site's --bg-cream/--text-primary/--accent palette,
 # just flipped to a light card on a cream page background (dark-mode-only
 # HTML email is a real risk - some clients strip backgrounds, others invert
 # colors - so the brand's dark theme is represented via the header band and
