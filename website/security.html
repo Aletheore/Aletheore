@@ -36,7 +36,7 @@
 
     <main class="legal-body">
       <h1>Security</h1>
-      <p>Last updated: August 2026</p>
+      <p>Last updated: September 2026</p>
 
       <p>Aletheore audits other people's code, so we hold ourselves to the same evidence-grounded
         standard we ask of you. This page describes what we actually do, not what a template says
@@ -56,11 +56,14 @@
         <a href="privacy.html">Privacy Policy</a> for the full data-handling breakdown.</p>
 
       <h2>GitHub App permissions</h2>
-      <p>The GitHub App requests the minimum scopes needed to clone a repo, read pull request and
-        push events, and post check results and PR comments: repository contents (read), pull
-        requests (read/write for comments and checks), and webhook delivery for the events we act
-        on. It does not request organization-wide admin scopes, and it cannot see or modify
-        repository settings, other installed apps, or billing on your GitHub account.</p>
+      <p>The GitHub App requests these permissions: repository contents (read and write), checks (write), pull requests (write),
+        issues (read), repository metadata (read), and read access to the email address of the GitHub account that signs in. It
+        subscribes to the check run, issue comment, pull request and push events. Pull request and checks write access are used to
+        post reviews, comments and check runs. Contents write access exists for one optional feature: when you turn on Docs sync,
+        Aletheore pushes the generated docs to a dedicated <code>aletheore/docs-update</code> branch and opens a pull request from it.
+        It never pushes to your default branch, and an installation that has not turned Docs sync on never uses that access. The App
+        does not request organization-wide admin permissions, and it cannot see or modify repository settings, other installed apps,
+        or billing on your GitHub account.</p>
 
       <h2>Authentication and webhooks</h2>
       <p>Dashboard sign-in uses GitHub OAuth; we never see or store a GitHub password. Both inbound
