@@ -6,27 +6,16 @@ readme = "README.md"
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Arihant Kaul", email = "arihantkaul@outlook.com" }]
-# Upper-bounded at 3.14: aletheore_ast_pattern's use of tree_sitter's
-# Query/QueryCursor segfaults reliably on Python 3.14 once enough real
-# files/matches accumulate in one process for the cyclic GC to touch
-# tree-sitter's Node/Tree/QueryCursor object graph. Not a bug in this
-# package's own code - `aletheore scan` itself, which uses tree_sitter's
-# Parser/Tree/Node but never Query/QueryCursor, runs fine on 3.14.
-#
-# This comment used to claim "the exact same code against the exact same
-# repo runs clean on 3.12" - true only at the small scale it was checked
-# at (this project's own ~116 files). Confirmed false at real scale
-# (2026-09-04): a low-match-density query against Django's real ~2,930
-# file Python tree segfaults reliably on 3.12 too - see
-# src/aletheore/ast_pattern.py's module docstring for the full
-# characterization. CI only tests 3.11/3.12 (see .github/workflows/
-# tests.yml), so the crash isn't actually fully excluded by this bound
-# for a large-enough real repo - it's the honest floor for the *known,
-# already-reproduced* case (3.14 with any repo size), not a guarantee
-# for every repo on 3.11/3.12 - until either tree-sitter ships a fix or
-# the crash is isolated some other way (e.g. running the query in a
-# subprocess - a real design trade-off, not attempted yet).
-requires-python = ">=3.11,<3.14"
+# Upper bound is the next Python after the newest one CI runs (3.14). It used to be
+# <3.14 because tree_sitter's Query/QueryCursor (used only by aletheore_ast_pattern)
+# can segfault once enough real files accumulate in one process. That crash is
+# probabilistic and not specific to 3.14 (it was reproduced on 3.12 against Django's
+# tree), so the real fix was isolation, not a version cap: ast_pattern.py runs each
+# batch of files in its own worker process, and a crash there only truncates the
+# result. Re-verified on Python 3.14.7 with tree-sitter 0.26.0: four full traversals
+# of ~7,200 files, a real `aletheore scan`, and the whole src test suite, all clean.
+# See src/aletheore/ast_pattern.py's module docstring for the full history.
+requires-python = ">=3.11,<3.15"
 keywords = ["code-review", "static-analysis", "secrets-detection", "dependency-vulnerabilities", "mcp-server"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -37,6 +26,8 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
     "tree-sitter>=0.25,<0.27",

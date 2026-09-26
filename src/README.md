@@ -116,7 +116,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Requires Python 3.11+.
+Requires Python 3.11 or newer (tested on 3.11 through 3.14).
 
 ## Configuration
 
