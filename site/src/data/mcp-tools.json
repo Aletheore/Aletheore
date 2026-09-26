@@ -1,0 +1,83 @@
+{
+  "source": "aletheore package build_server() and cli.QUERY_KIND_GROUPS",
+  "version": "0.9.20",
+  "default": [
+    "aletheore_ast_pattern",
+    "aletheore_branch",
+    "aletheore_changes",
+    "aletheore_cluster",
+    "aletheore_database",
+    "aletheore_dead_code",
+    "aletheore_endpoints",
+    "aletheore_environment_variables",
+    "aletheore_find_evidence_for_dependency",
+    "aletheore_find_evidence_for_endpoint",
+    "aletheore_find_evidence_for_symbol",
+    "aletheore_get_blast_radius",
+    "aletheore_healthcheck",
+    "aletheore_hotspots",
+    "aletheore_imported_by",
+    "aletheore_imports",
+    "aletheore_index",
+    "aletheore_infrastructure",
+    "aletheore_layer_violations",
+    "aletheore_licenses",
+    "aletheore_list",
+    "aletheore_neighborhood",
+    "aletheore_overview",
+    "aletheore_ownership",
+    "aletheore_scan",
+    "aletheore_search",
+    "aletheore_search_codebase",
+    "aletheore_secrets",
+    "aletheore_static_analysis",
+    "aletheore_symbol_source",
+    "aletheore_symbols",
+    "aletheore_verify_citations",
+    "aletheore_vulnerabilities"
+  ],
+  "optional": [
+    "aletheore_answer",
+    "aletheore_managed_audit"
+  ],
+  "queryGroups": {
+    "Structure": [
+      "imports",
+      "imported-by",
+      "symbols",
+      "cluster",
+      "layer-violations",
+      "dead-code",
+      "schema",
+      "ast-pattern"
+    ],
+    "Security": [
+      "secrets",
+      "vulnerabilities",
+      "licenses",
+      "static-analysis"
+    ],
+    "Runtime": [
+      "endpoints",
+      "database",
+      "infrastructure",
+      "environment-variables"
+    ],
+    "History": [
+      "branch",
+      "ownership",
+      "hotspots",
+      "changes"
+    ],
+    "Evidence": [
+      "evidence-for-symbol",
+      "evidence-for-endpoint",
+      "evidence-for-dependency"
+    ],
+    "AI-assisted": [
+      "answer",
+      "search-codebase",
+      "symbol-source"
+    ]
+  }
+}
