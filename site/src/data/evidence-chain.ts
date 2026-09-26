@@ -6,6 +6,6 @@ export type ChainStep = {
   value: string;
   detail: string;
 };
-export type EvidenceChain = { source: string; commit: string; file: string; steps: ChainStep[] };
+export type EvidenceChain = { source: string; commit: string; file: string; ownerCommits: number; commitFiles: string[]; steps: ChainStep[] };
 
 export const evidenceChain = raw as EvidenceChain;

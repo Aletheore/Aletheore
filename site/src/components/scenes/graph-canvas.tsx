@@ -12,6 +12,12 @@ type Props = {
   activeLabel?: string;
   /** Rotate and zoom toward the active nodes and dim everything else. */
   focus?: boolean;
+  /** Which edges of the first active node to light: none (only edges between active nodes), its imports, or its dependents. */
+  edgeMode?: "none" | "out" | "in";
+  /** 0 keeps the overview distance, 1 moves in close to the active node. */
+  zoom?: number;
+  /** Number of small dots orbiting the first active node (one per commit, for instance). */
+  orbit?: number;
   interactive?: boolean;
   className?: string;
   staticSrc: string;
@@ -22,7 +28,7 @@ const INK = 0x16140f;
 const STAMP = 0xa33327;
 const FAINT = 0xc9c3b5;
 
-export function GraphCanvas({ graph, activeIds = [], activeLabel, focus = false, interactive = false, className, staticSrc, alt }: Props) {
+export function GraphCanvas({ graph, activeIds = [], activeLabel, focus = false, edgeMode = "none", zoom = 0.5, orbit = 0, interactive = false, className, staticSrc, alt }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const applyRef = useRef<((ids: readonly string[]) => void) | null>(null);
   const idsRef = useRef<readonly string[]>(activeIds);
@@ -30,10 +36,13 @@ export function GraphCanvas({ graph, activeIds = [], activeLabel, focus = false,
   const reduced = useReducedMotion();
   const [ready, setReady] = useState(false);
 
+  const sceneRef = useRef({ edgeMode, zoom, orbit });
+
   useEffect(() => {
     idsRef.current = activeIds;
+    sceneRef.current = { edgeMode, zoom, orbit };
     applyRef.current?.(activeIds);
-  }, [activeIds]);
+  }, [activeIds, edgeMode, zoom, orbit]);
 
   useEffect(() => {
     const el = host.current;
@@ -125,22 +134,27 @@ export function GraphCanvas({ graph, activeIds = [], activeLabel, focus = false,
         new THREE.PointsMaterial({ size: 0.24, color: STAMP, map: ringMap, transparent: true, alphaTest: 0.2, sizeAttenuation: true, depthWrite: false }),
       );
       group.add(hotPoints, halo);
+      // One dot per commit (or similar count) circling the active node, always facing the camera.
+      const MAX_ORBIT = 96;
+      const orbitPos = new Float32Array(MAX_ORBIT * 3);
+      const orbitGeo = new THREE.BufferGeometry();
+      orbitGeo.setAttribute("position", new THREE.BufferAttribute(orbitPos, 3));
+      orbitGeo.setDrawRange(0, 0);
+      const orbitPoints = new THREE.Points(
+        orbitGeo,
+        new THREE.PointsMaterial({ size: 0.026, color: STAMP, map, transparent: true, alphaTest: 0.4, sizeAttenuation: true, depthWrite: false }),
+      );
+      scene.add(orbitPoints);
+      let orbitCount = 0, zoomTarget = 0.5, zoomNow = 0.5;
       const focusCentre = new THREE.Vector3();
       let focusAmount = 0, focusTarget = 0, primary = -1;
 
       const indexOf = new Map(graph.nodes.map((nd, i) => [nd.id, i] as const));
-      const neighbours = new Set<number>();
       const apply = (ids: readonly string[]) => {
         const active = new Set(ids.map((id) => indexOf.get(id)).filter((v): v is number => v !== undefined));
         primary = ids.length ? (indexOf.get(ids[0]) ?? -1) : -1;
         const focused = focus && active.size > 0;
-        neighbours.clear();
-        if (focused) {
-          for (const [a, b] of graph.edges) {
-            if (a === primary) neighbours.add(b);
-            if (b === primary) neighbours.add(a);
-          }
-        }
+        const scene3 = sceneRef.current;
         let h = 0;
         haloGeo.setDrawRange(0, primary >= 0 && focused ? 1 : 0);
         if (primary >= 0) haloPos.set([pos[primary * 3], pos[primary * 3 + 1], pos[primary * 3 + 2]]);
@@ -148,7 +162,7 @@ export function GraphCanvas({ graph, activeIds = [], activeLabel, focus = false,
         focusCentre.set(0, 0, 0);
         graph.nodes.forEach((_, i) => {
           const isActive = active.has(i);
-          const c = isActive ? hot : focused ? (neighbours.has(i) ? base : faint) : base;
+          const c = isActive ? hot : focused ? faint : base;
           col.set([c.r, c.g, c.b], i * 3);
           if (isActive) {
             hotPos.set([pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]], h * 3);
@@ -165,16 +179,26 @@ export function GraphCanvas({ graph, activeIds = [], activeLabel, focus = false,
         let k = 0;
         graph.edges.forEach(([a, b], e) => {
           const both = active.has(a) && active.has(b);
-          const touchesPrimary = focused && (a === primary || b === primary);
-          if (both || touchesPrimary) {
+          const viaPrimary =
+            focused && ((scene3.edgeMode === "out" && a === primary) || (scene3.edgeMode === "in" && b === primary));
+          if ((scene3.edgeMode === "none" && both) || viaPrimary) {
             hotBuf.set(baseLines.subarray(e * 6, e * 6 + 6), k * 6);
             k++;
           }
         });
         hotGeo.setDrawRange(0, k * 2);
         (hotGeo.getAttribute("position") as import("three").BufferAttribute).needsUpdate = true;
-        (lines.material as import("three").LineBasicMaterial).opacity = focused ? 0.08 : 0.22;
+        (lines.material as import("three").LineBasicMaterial).opacity = focused ? 0.07 : 0.22;
         focusTarget = focused && focusCentre.length() > 0.05 ? 1 : 0;
+        zoomTarget = scene3.zoom;
+        orbitCount = focused ? Math.min(scene3.orbit, MAX_ORBIT) : 0;
+        const radius = 0.24;
+        for (let i = 0; i < orbitCount; i++) {
+          const ang = (i / Math.max(orbitCount, 1)) * Math.PI * 2;
+          orbitPos.set([Math.cos(ang) * radius, Math.sin(ang) * radius, 0], i * 3);
+        }
+        orbitGeo.setDrawRange(0, orbitCount);
+        (orbitGeo.getAttribute("position") as import("three").BufferAttribute).needsUpdate = true;
       };
       applyRef.current = apply;
       apply(idsRef.current);
@@ -227,7 +251,18 @@ export function GraphCanvas({ graph, activeIds = [], activeLabel, focus = false,
         } else {
           group.quaternion.copy(spinQ);
         }
-        camera.position.z = 4.2 - 1.5 * focusAmount;
+        zoomNow += (zoomTarget - zoomNow) * 0.05;
+        const near = Math.max(focusCentre.length() + 1.15, 4.2 - 2.6 * zoomNow);
+        camera.position.z = 4.2 + (near - 4.2) * focusAmount;
+        if (orbitCount > 0 && primary >= 0) {
+          screen.set(pos[primary * 3], pos[primary * 3 + 1], pos[primary * 3 + 2]);
+          group.localToWorld(screen);
+          orbitPoints.position.copy(screen);
+          orbitPoints.rotation.z = now / 4200;
+          orbitPoints.visible = focusAmount > 0.5;
+        } else {
+          orbitPoints.visible = false;
+        }
         const pulse = 1 + 0.18 * Math.sin(now / 320);
         (halo.material as import("three").PointsMaterial).size = 0.24 * pulse;
         renderer.render(scene, camera);
@@ -253,6 +288,8 @@ export function GraphCanvas({ graph, activeIds = [], activeLabel, focus = false,
         renderer.domElement.removeEventListener("webglcontextlost", onLost);
         pointsGeo.dispose();
         hotPointsGeo.dispose();
+        orbitGeo.dispose();
+        orbitPoints.material.dispose();
         haloGeo.dispose();
         ringMap.dispose();
         hotPoints.material.dispose();
@@ -275,7 +312,7 @@ export function GraphCanvas({ graph, activeIds = [], activeLabel, focus = false,
       disposed = true;
       cleanup?.();
     };
-  }, [graph, interactive, reduced, focus]);
+  }, [graph, interactive, reduced, focus]); // scene props (edgeMode, zoom, orbit) are read from sceneRef
 
   return (
     <div ref={host} className={cn("relative aspect-square w-full", className)} data-webgl-ready={ready ? "true" : "false"}>

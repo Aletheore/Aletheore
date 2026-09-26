@@ -25,10 +25,14 @@ const [sha, date, subject] = log.split("|");
 const commit = execFileSync("git", ["-C", repo, "rev-parse", "--short", "HEAD"], { encoding: "utf8" }).trim();
 if (!hot) throw new Error("file is not in the hotspot list, so there is no verdict to state");
 
+const touched = execFileSync("git", ["-C", repo, "show", "--name-only", "--format=", sha], { encoding: "utf8" }).split("\n").filter((f) => inGraph.has(f));
+
 const out = {
   source: "aletheore scan and queries run against the Aletheore repository itself",
   commit,
   file: ep.file,
+  ownerCommits: top.commit_count,
+  commitFiles: touched,
   steps: [
     { id: "endpoint", label: "endpoint", value: `${ep.method} ${ep.path}`, detail: `A route the scanner found in ${ep.file}.` },
     { id: "handler", label: "handler", value: `${ep.file.split("/").pop()}:${ep.line}`, detail: `The scanner resolved the route to ${ep.file} at line ${ep.line}.` },

@@ -39,5 +39,10 @@
       "value": "Hotspot: 49 commits",
       "detail": "49 commits and 3 dependent modules put this file on the hotspot list."
     }
-  ]
+  ],
+  "commitFiles": [
+    "github-app/app_server/admin.py",
+    "github-app/app_server/frontend.py"
+  ],
+  "ownerCommits": 49
 }

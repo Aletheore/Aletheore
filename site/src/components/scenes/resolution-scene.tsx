@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { evidenceChain } from "@/data/evidence-chain";
 import { graphData as graph } from "@/data/graph";
 import { refreshAfterFonts } from "@/lib/fonts";
-import { highlightForStep } from "@/lib/highlight";
+import { sceneForStep } from "@/lib/highlight";
 import { stepForProgress } from "@/lib/scroll-steps";
 import { cn } from "@/lib/utils";
 import { GraphCanvas } from "./graph-canvas";
@@ -16,7 +16,7 @@ export function ResolutionScene() {
   const steps = evidenceChain.steps;
   // Without the pinned scroll (reduced motion, phones) the scene rests on its final step, the full chain.
   const active = reduced ? steps.length - 1 : scrollStep;
-  const activeIds = useMemo(() => highlightForStep(graph, evidenceChain, active), [active]);
+  const scene = useMemo(() => sceneForStep(graph, evidenceChain, active), [active]);
 
   useEffect(() => {
     const el = root.current;
@@ -99,7 +99,10 @@ export function ResolutionScene() {
         <div className="crop-marks mx-2 md:mx-0">
           <GraphCanvas
             graph={graph}
-            activeIds={activeIds}
+            activeIds={scene.ids}
+            edgeMode={scene.edges}
+            zoom={scene.zoom}
+            orbit={scene.orbit}
             focus
             activeLabel={steps[active].value}
             staticSrc="/hero-graph-static.svg"
