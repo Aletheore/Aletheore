@@ -2809,8 +2809,11 @@ def test_main_mcp_no_watch_flag_reaches_the_mcp_flow(tmp_path):
 
 
 def test_the_mcp_command_documents_no_watch():
-    result = runner.invoke(app, ["mcp", "--help"])
+    # Inspect the option itself, not the rendered --help: rich wraps and colours
+    # that text differently on every terminal and CI runner, which splits the
+    # flag across ANSI codes.
+    command = typer.main.get_command(app).commands["mcp"]
+    option = next(param for param in command.params if "--no-watch" in getattr(param, "opts", []))
 
-    assert result.exit_code == 0
-    assert "--no-watch" in result.output
-    assert "ALETHEORE_MCP_WATCH" in result.output
+    assert option.is_flag
+    assert "ALETHEORE_MCP_WATCH" in option.help

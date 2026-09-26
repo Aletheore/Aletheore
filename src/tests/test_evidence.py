@@ -1207,6 +1207,7 @@ def test_write_evidence_never_exposes_a_partial_file_to_a_concurrent_reader(tmp_
     document; the atomic swap leaves only whole old or whole new files."""
     import json
     import threading
+    import time
 
     from aletheore.evidence import write_evidence
 
@@ -1234,6 +1235,10 @@ def test_write_evidence_never_exposes_a_partial_file_to_a_concurrent_reader(tmp_
                 json.loads(text)
             except ValueError:
                 partial.append(text[:80])
+            # A real reader opens the file for a moment, not in a tight loop. On
+            # Windows an open handle blocks the swap, so a reader that never
+            # lets go would only test the fallback, not the atomic path.
+            time.sleep(0.001)
 
     thread = threading.Thread(target=reader, daemon=True)
     thread.start()
@@ -1264,3 +1269,21 @@ def test_write_evidence_leaves_the_old_file_and_no_temp_file_when_the_swap_fails
     leftovers = [p.name for p in (tmp_path / ".aletheore").iterdir() if p.name.endswith(".tmp")]
     assert leftovers == []
     assert os.path.exists(target)
+
+
+def test_write_evidence_falls_back_to_writing_in_place_when_a_reader_blocks_the_swap(tmp_path):
+    """On Windows a reader holding the file open makes os.replace raise
+    PermissionError indefinitely. The scan must still land its evidence (the
+    behaviour before atomic writes) rather than fail."""
+    from aletheore.evidence import write_evidence
+
+    (tmp_path / ".aletheore").mkdir()
+    target = tmp_path / ".aletheore" / "air.json"
+
+    with patch("aletheore.evidence.os.replace", side_effect=PermissionError("in use")), patch(
+        "aletheore.evidence._REPLACE_RETRY_DELAY_SECONDS", 0
+    ):
+        write_evidence({"generation": "fallback"}, tmp_path)
+
+    assert '"fallback"' in target.read_text(encoding="utf-8")
+    assert [p.name for p in (tmp_path / ".aletheore").iterdir() if p.name.endswith(".tmp")] == []

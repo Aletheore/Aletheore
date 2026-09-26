@@ -718,7 +718,7 @@ def _ensure_aletheore_dir_gitignored(repo_path: Path) -> None:
         pass
 
 
-_REPLACE_RETRIES = 5
+_REPLACE_RETRIES = 20
 _REPLACE_RETRY_DELAY_SECONDS = 0.05
 
 
@@ -733,9 +733,12 @@ def _atomic_write_text(path: Path, text: str) -> None:
     swap a single step: a reader sees the whole old file or the whole new one.
 
     Encoding is pinned for the same reason it is at the callers (Windows'
-    default is a legacy codepage). On Windows os.replace can raise
-    PermissionError for a moment while a reader still has the target open, so
-    it is retried briefly before giving up.
+    default is a legacy codepage). On Windows os.replace raises PermissionError
+    for as long as any reader has the target open (Python opens files without
+    FILE_SHARE_DELETE), so it is retried for about a second. If a reader still
+    holds it after that, this falls back to writing in place: exactly what
+    write_evidence did before this helper existed, so the worst case is the old
+    behaviour (a reader could see a partial file) and never a failed scan.
     """
     temp_path = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
@@ -745,9 +748,9 @@ def _atomic_write_text(path: Path, text: str) -> None:
                 os.replace(temp_path, path)
                 return
             except PermissionError:
-                if attempt == _REPLACE_RETRIES - 1:
-                    raise
-                time.sleep(_REPLACE_RETRY_DELAY_SECONDS)
+                if attempt < _REPLACE_RETRIES - 1:
+                    time.sleep(_REPLACE_RETRY_DELAY_SECONDS)
+        path.write_text(text, encoding="utf-8")
     finally:
         # Only present if the replace never happened; after a successful
         # replace the temp path no longer exists.
