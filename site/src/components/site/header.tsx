@@ -35,7 +35,7 @@ export function Header() {
             l.external ? (
               <a key={l.href} href={l.href} className="text-muted hover:text-ink" rel="noopener">{l.label}</a>
             ) : (
-              <Link key={l.href} href={l.href} className="text-muted hover:text-ink">{l.label}</Link>
+              <Link key={l.href} href={l.href} prefetch={false} className="text-muted hover:text-ink">{l.label}</Link>
             ),
           )}
           <Button variant="ghost" onClick={() => setFollowOpen(true)} aria-haspopup="dialog">Follow Updates</Button>
