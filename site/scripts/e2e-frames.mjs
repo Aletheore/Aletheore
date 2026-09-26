@@ -28,7 +28,7 @@ const initial = await initialScriptGzipBytes();
 if (initial.total > 200 * 1024) { console.error(`initial JS ${initial.total} bytes gzipped exceeds the 200 KB budget`); process.exitCode = 1; }
 
 const browser = await puppeteer.launch({ executablePath: CHROME, headless: "new", args: ["--no-sandbox", "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
-const ROUTES = (process.env.ROUTES ?? "/,/pricing,/developers,/benchmarks").split(",");
+const ROUTES = (process.env.ROUTES ?? "/,/pricing,/developers,/benchmarks,/dogfooding,/status,/privacy,/terms,/refund,/security").split(",");
 const slug = (r) => (r === "/" ? "home" : r.slice(1));
 const results = [];
 let failed = false;

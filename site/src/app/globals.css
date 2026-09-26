@@ -61,3 +61,16 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .term-line, .fade-up { animation: none; }
 }
+
+/* Policy pages: long-form text in a readable measure. */
+.legal { max-width: 1080px; }
+.legal > * { max-width: 68ch; }
+.legal h2 { margin-top: 2.25rem; margin-bottom: 0.6rem; font-family: var(--font-display); font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
+.legal p, .legal li { font-size: 14.5px; line-height: 1.75; color: var(--color-muted); }
+.legal p { margin-top: 0.85rem; }
+.legal ul { margin-top: 0.85rem; padding-left: 1.2rem; list-style: square; }
+.legal li { margin-top: 0.35rem; }
+.legal strong { color: var(--color-ink); }
+.legal a { color: var(--color-ink); text-decoration: underline; text-underline-offset: 3px; }
+.legal a:hover { color: var(--color-stamp); }
+.legal code { font-family: var(--font-mono); font-size: 0.9em; background: var(--color-raised); border: 1px solid var(--color-line); padding: 0.05em 0.35em; border-radius: 3px; color: var(--color-ink); }

@@ -5,7 +5,7 @@ export const internalPaths = [
 ] as const;
 
 /** Pages that exist in this app. Links to the rest are not prefetched (they would 404) until they ship. */
-export const builtPaths: ReadonlySet<string> = new Set(["/", "/pricing", "/developers", "/benchmarks"]);
+export const builtPaths: ReadonlySet<string> = new Set([...internalPaths]);
 export const prefetchFor = (href: string): false | undefined => (builtPaths.has(href.split("#")[0]) ? undefined : false);
 
 export const getStartedHref = "https://app.aletheore.com/";
