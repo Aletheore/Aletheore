@@ -13,3 +13,16 @@ describe("legacy .html redirects", () => {
     }
   });
 });
+
+describe("cutover compatibility", () => {
+  it("keeps the public logo URL the static site published (og:image links point at it)", async () => {
+    const { existsSync } = await import("node:fs");
+    expect(existsSync("public/assets/logo-mark.png")).toBe(true);
+  });
+  it("sends baseline security headers on every route", async () => {
+    const rules = await nextConfig.headers!();
+    const all = rules.find((r) => r.source === "/:path*")!;
+    const keys = all.headers.map((h) => h.key);
+    expect(keys).toEqual(expect.arrayContaining(["X-Content-Type-Options", "Referrer-Policy", "X-Frame-Options"]));
+  });
+});
