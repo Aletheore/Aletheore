@@ -9,6 +9,14 @@ export function Footer() {
         <div>
           <Logo />
           <p className="mt-3 max-w-[30ch] text-[13px] leading-[1.55] text-faint">{footerNote}</p>
+          <a
+            href="https://mcpvault.io/servers/aletheore/health?utm_source=external_badge&utm_medium=referral&utm_campaign=mcp_health_report"
+            rel="noopener"
+            className="mt-4 inline-block"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="https://mcpvault.io/badge/aletheore.svg?theme=dark" alt="MCPVault: claimed" height={32} width={197} className="h-8 w-auto" />
+          </a>
         </div>
         {footerColumns.map((col) => (
           <div key={col.title}>
