@@ -8,10 +8,14 @@ import { Surfaces } from "@/components/sections/surfaces";
 import { Teams } from "@/components/sections/teams";
 import { Why } from "@/components/sections/why";
 import { home } from "@/content/home";
+import ld from "@/data/jsonld.json";
+
+export const metadata = { alternates: { canonical: "/" } };
 
 export default function Home() {
   return (
     <>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(ld) }} />
       <Hero />
       <div className="mx-auto max-w-[1080px] border-y border-dashed border-line-strong px-8 py-4">
         <p className="flex flex-wrap items-center gap-x-5 gap-y-1 font-display text-[12px] text-muted">
