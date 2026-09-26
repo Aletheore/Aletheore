@@ -1,6 +1,6 @@
 {
   "source": "aletheore package build_server() and cli.QUERY_KIND_GROUPS",
-  "version": "0.9.20",
+  "version": "0.9.21",
   "default": [
     "aletheore_ast_pattern",
     "aletheore_branch",
@@ -31,6 +31,7 @@
     "aletheore_search_codebase",
     "aletheore_secrets",
     "aletheore_static_analysis",
+    "aletheore_symbol_path",
     "aletheore_symbol_source",
     "aletheore_symbols",
     "aletheore_verify_citations",
@@ -235,6 +236,11 @@
       "name": "aletheore_static_analysis",
       "group": "Security",
       "description": "Static analysis findings (SonarQube/Semgrep/Bearer/gosec/Bandit/Joern/Trivy/PMD), normalized into one shape: {tool, rule_id, severity, type, path, line, message}."
+    },
+    {
+      "name": "aletheore_symbol_path",
+      "group": "Navigate",
+      "description": "Is there an evidence-backed path from source_symbol (defined in source) to target_symbol (defined in target)? Built from real imports edges and real file content, not a full symbol-level call graph: this scanner doesn't record per-call-site edges between arbitrary symbols, so confirmed is only ever True for the two cases with real content to check: same file, or a direct 1-hop import."
     },
     {
       "name": "aletheore_symbol_source",

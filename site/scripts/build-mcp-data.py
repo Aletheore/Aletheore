@@ -1,7 +1,7 @@
 """Writes src/data/mcp-tools.json from the installed aletheore package.
 
 Run with the release you want to describe on PYTHONPATH, e.g.
-    PYTHONPATH=/path/to/unzipped-0.9.20 python3 scripts/build-mcp-data.py
+    PYTHONPATH=/path/to/unzipped-0.9.21 python3 scripts/build-mcp-data.py
 """
 import asyncio, json, pathlib, tempfile
 
@@ -52,7 +52,7 @@ group_of.update({
     "aletheore_find_evidence_for_dependency": "Evidence",
     "aletheore_scan": "Run", "aletheore_index": "Run", "aletheore_healthcheck": "Run", "aletheore_managed_audit": "Run",
     "aletheore_overview": "Navigate", "aletheore_list": "Navigate", "aletheore_neighborhood": "Navigate",
-    "aletheore_get_blast_radius": "Navigate", "aletheore_search": "Search", "aletheore_search_codebase": "Search",
+    "aletheore_get_blast_radius": "Navigate", "aletheore_symbol_path": "Navigate", "aletheore_search": "Search", "aletheore_search_codebase": "Search",
     "aletheore_symbol_source": "Search", "aletheore_verify_citations": "Evidence", "aletheore_ast_pattern": "Search",
 })
 tool_info = [
