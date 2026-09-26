@@ -197,6 +197,9 @@
     "gosec",
     "fmhr",
     "Filip",
-    "Kulisiewicz"
+    "Kulisiewicz",
+    "fchmod",
+    "unparseable",
+    "lancedb"
   ]
 }

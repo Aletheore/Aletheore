@@ -3,6 +3,61 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.21 - 2026-09-26
+
+**Evidence schema 0.7.0: re-run `aletheore scan` after upgrading**
+
+`git.recently_updated` (files ranked by their most recent commit, repo-wide) is now part of the
+evidence, and every hotspot entry carries a `last_commit_at`. This is a schema addition, so
+`EVIDENCE_VERSION` moves from 0.6.0 to 0.7.0. An `air.json` written by an earlier release is
+refused with a clear "re-run `aletheore scan`" message rather than being read half-way; one
+re-scan refreshes it.
+
+**New MCP tool: `aletheore_symbol_path` (#837)**
+
+Answers "is there an evidence-backed path from symbol A to symbol B?". Within one file it checks
+the calling symbol's own body for a call to the target and reports a confirmed answer. Across
+files it finds the shortest chain of importing modules (bounded, and it says when it truncated).
+Only a direct one-hop chain is call-confirmed; a longer chain proves the files are connected, not
+that the two symbols are, and is reported as unconfirmed rather than guessed. The scanner does
+not build a full symbol-level call graph, and the tool does not pretend it does.
+
+**Fixed: same-file callers were invisible to blast radius (#835)**
+
+`aletheore_get_blast_radius` only looked for confirmed calls from other files that import the
+target, so a caller in the same file (for example a class's `__call__` invoking one of its own
+methods) never appeared. Same-file callers are now checked and reported.
+
+**Fixed: Windows scans and file I/O (#790, #794)**
+
+Evidence, config, history, license and report files are now always read and written as UTF-8.
+Before, a non-ASCII character in a scanned repository's own source could crash a scan on Windows
+with a `UnicodeEncodeError` after part of the evidence had been written. Saving credentials no
+longer crashes on Windows (`os.fchmod` does not exist there). A single file that cannot be read
+during a scan (permission denied, removed mid-scan, or a path over the legacy Windows limit) is now
+recorded as unparseable instead of aborting the whole scan, and the same applies to dependency
+manifests that vanish between the existence check and the read.
+
+**Fixed: static-analysis integrations (#786, #789)**
+
+PMD exit code 5 (a recoverable parse error together with real violations) was treated as a hard
+failure, which silently dropped every finding from the files PMD did parse. It is now handled like
+exit codes 0 and 4. The Trivy secret preview hash was computed from the finding's path, line and
+rule instead of the matched secret, so two different secrets flagged at the same spot produced
+identical previews; it now hashes the real matched value.
+
+**Fixed: `aletheore_search` line numbers (#785)**
+
+The MCP search tool split files with `splitlines()`, which also breaks on characters such as form
+feed. A file containing one shifted every later match, so the reported `file:line` was wrong. It
+now splits on real newlines only.
+
+**Docs**
+
+Documented the Windows 11 Smart App Control gotcha that blocks the `_lancedb` DLL and makes
+`aletheore mcp` fail with "DLL load failed" (#809). Turning Smart App Control off in Windows
+Security fixes it; nothing in this package is at fault.
+
 ## 0.9.20 — 2026-09-23
 
 **Security fix: ReDoS in `.csproj` license detection (GHSA-66qv-fmhr-gpj8)**
