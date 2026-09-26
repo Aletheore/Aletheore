@@ -1883,7 +1883,14 @@ async function loadResults() {{
   if (!res.ok) {{ body.innerHTML = '<div class="empty-state">Health data unavailable.</div>'; return; }}
   const data = await res.json();
   const endpoints = data.endpoints || [];
-  document.getElementById('endpoints-list-count').textContent = endpoints.length + ' mapped';
+  // total_endpoint_count, not endpoints.length: endpoints is one row per
+  // (target, endpoint) pair (get_recent_endpoint_health's DISTINCT ON
+  // includes target_id so two targets checking the same endpoint don't
+  // collapse into one row), so a repo with 5 endpoints checked from 2
+  // targets has endpoints.length === 10 - total_endpoint_count is the
+  // real count of distinct endpoints, already computed server-side for
+  // exactly this reason (see dashboard.py's own comment on it).
+  document.getElementById('endpoints-list-count').textContent = data.total_endpoint_count + ' mapped';
 
   const summaryRow = document.getElementById('summary-row');
   if (endpoints.length === 0) {{
@@ -1978,8 +1985,9 @@ async function loadResults() {{
       const location = e.file
         ? '<span class="file">' + escapeHtml(e.file) + (e.line ? ':' + e.line : '') + '</span>'
         : '';
+      const methodClass = (e.method || '').toLowerCase();
       staleHtml += '<div class="health-row">' +
-        '<div class="method">' + escapeHtml(e.method) + '</div>' +
+        '<div class="method ' + escapeHtml(methodClass) + '">' + escapeHtml(e.method) + '</div>' +
         '<div class="path">' + escapeHtml(e.path) + location + '</div>' +
         '<div class="latency">&mdash;</div>' +
         '<div class="status-pill down"><span class="dot"></span>' + e.check_count + ' checks</div></div>';
