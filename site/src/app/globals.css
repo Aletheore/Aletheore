@@ -1,1 +1,54 @@
 @import "tailwindcss";
+
+@theme inline {
+  --color-paper: #F7F5F2;
+  --color-raised: #FFFFFF;
+  --color-ink: #16140F;
+  --color-muted: #5C574C;
+  --color-faint: #9A9384;
+  --color-line: #DDD8CB;
+  --color-line-strong: #C4BEAC;
+  --color-stamp: #A33327;
+  --color-stamp-soft: #F3E3E0;
+  --color-success: #3D6B41;
+  --font-display: var(--font-plex-mono), ui-monospace, "SF Mono", monospace;
+  --font-sans: var(--font-geist), -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+}
+
+html { scroll-behavior: smooth; }
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}
+
+.eyebrow { font-family: var(--font-display); font-size: 12.5px; color: var(--color-stamp); }
+.eyebrow--section::before { content: "\00a7\00a0"; }
+.rule-dashed { border-top: 1px dashed var(--color-line-strong); }
+
+/* Four L-shaped corner marks framing a scene or card. */
+.crop-marks { position: relative; }
+.crop-marks::before {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  pointer-events: none;
+  --c: var(--color-ink);
+  --s: 14px;
+  --w: 1.5px;
+  background:
+    linear-gradient(var(--c), var(--c)) top left / var(--s) var(--w) no-repeat,
+    linear-gradient(var(--c), var(--c)) top left / var(--w) var(--s) no-repeat,
+    linear-gradient(var(--c), var(--c)) top right / var(--s) var(--w) no-repeat,
+    linear-gradient(var(--c), var(--c)) top right / var(--w) var(--s) no-repeat,
+    linear-gradient(var(--c), var(--c)) bottom left / var(--s) var(--w) no-repeat,
+    linear-gradient(var(--c), var(--c)) bottom left / var(--w) var(--s) no-repeat,
+    linear-gradient(var(--c), var(--c)) bottom right / var(--s) var(--w) no-repeat,
+    linear-gradient(var(--c), var(--c)) bottom right / var(--w) var(--s) no-repeat;
+}
