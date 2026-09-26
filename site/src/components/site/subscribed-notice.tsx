@@ -3,6 +3,8 @@ import { X } from "lucide-react";
 import { useState, useSyncExternalStore } from "react";
 import { subscribedPlan } from "@/lib/subscribed";
 
+// Nothing to subscribe to on purpose: the customer arrives by a full page load from the hosted checkout (an external redirect), so the
+// query string is fixed for the life of the page. Client-side navigation to /?subscribed=flash is not a supported entry.
 const subscribe = () => () => {};
 
 /** Confirms a Flash checkout. The old site showed nothing after payment, so customers landed on the homepage with no sign it worked. */
@@ -22,7 +24,13 @@ export function SubscribedNotice() {
         </div>
         <button
           type="button"
-          onClick={() => setDismissed(true)}
+          onClick={() => {
+            setDismissed(true);
+            // Drop the parameter so a refresh or a bookmarked link does not show the notice again.
+            const url = new URL(window.location.href);
+            url.searchParams.delete("subscribed");
+            window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+          }}
           aria-label="Dismiss"
           className="inline-flex size-8 flex-none items-center justify-center rounded-[4px] text-muted hover:text-ink focus-visible:outline-2 focus-visible:outline-stamp"
         >

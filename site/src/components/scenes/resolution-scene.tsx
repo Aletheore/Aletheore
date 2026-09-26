@@ -48,7 +48,8 @@ export function ResolutionScene() {
       mm.add("(max-width: 767px)", () => {
         setActive(steps.length - 1);
       });
-      void refreshAfterFonts(document.fonts, () => ScrollTrigger.refresh());
+      // fonts.ready rejects only if font loading itself fails; the refresh still ran, so there is nothing to handle.
+      refreshAfterFonts(document.fonts, () => ScrollTrigger.refresh()).catch(() => {});
       revert = () => mm.revert();
     })();
     return () => {

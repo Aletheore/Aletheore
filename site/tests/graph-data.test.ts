@@ -13,6 +13,16 @@ describe("graph.json", () => {
       expect(graph.nodes[b]).toBeDefined();
     }
   });
+  it("gives every node the full GraphNode shape (graphData is a cast, so this is the type check)", () => {
+    for (const n of graph.nodes) {
+      expect(typeof n.id).toBe("string");
+      expect(typeof n.label).toBe("string");
+      expect(typeof n.hub).toBe("boolean");
+      for (const k of ["degree", "x", "y", "z"] as const) expect(Number.isFinite(n[k]), `${n.id}.${k}`).toBe(true);
+    }
+    expect(typeof graph.source).toBe("string");
+    expect(Number.isNaN(Date.parse(graph.scannedAt))).toBe(false);
+  });
   it("records provenance", () => {
     expect(graph.source).toMatch(/aletheore scan/);
     expect(graph.commit).toMatch(/^[0-9a-f]{7,}$/);
