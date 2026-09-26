@@ -47,7 +47,7 @@ function Feature({ f }: { f: FeatureText }) {
   return (
     <>
       {f.parts.map((p, i) =>
-        typeof p === "string" ? <span key={i}>{p}</span> : <Link key={i} href={p.href} className="text-ink underline" prefetch={false}>{p.label}</Link>,
+        typeof p === "string" ? <span key={i}>{p}</span> : <Link key={i} href={p.href} className="text-ink underline">{p.label}</Link>,
       )}
       {f.mark ? <sup className="ml-0.5 text-stamp">{f.mark}</sup> : null}
     </>

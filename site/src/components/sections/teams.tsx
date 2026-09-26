@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { prefetchFor } from "@/data/site-links";
 import { Button } from "@/components/ui/button";
 import { home } from "@/content/home";
 
@@ -19,7 +20,7 @@ export function Teams() {
       </ol>
       <div className="mt-8 flex flex-wrap items-center gap-3">
         <Button asChild><a href={t.primary.href} rel="noopener">{t.primary.label}</a></Button>
-        <Button asChild variant="secondary"><Link prefetch={false} href={t.secondary.href}>{t.secondary.label}</Link></Button>
+        <Button asChild variant="secondary"><Link prefetch={prefetchFor(t.secondary.href)} href={t.secondary.href}>{t.secondary.label}</Link></Button>
         <span className="text-[12.5px] text-faint">{t.note}</span>
       </div>
     </section>

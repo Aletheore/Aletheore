@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { footerColumns, footerNote } from "@/data/site-links";
+import { footerColumns, footerNote, prefetchFor } from "@/data/site-links";
 import { Logo } from "./logo";
 
 export function Footer() {
@@ -25,7 +25,7 @@ export function Footer() {
               l.external ? (
                 <a key={l.href} href={l.href} rel="noopener" className="mb-2 block text-[13.5px] text-muted hover:text-ink">{l.label}</a>
               ) : (
-                <Link key={l.href} href={l.href} prefetch={false} className="mb-2 block text-[13.5px] text-muted hover:text-ink">{l.label}</Link>
+                <Link key={l.href} href={l.href} prefetch={prefetchFor(l.href)} className="mb-2 block text-[13.5px] text-muted hover:text-ink">{l.label}</Link>
               ),
             )}
           </div>

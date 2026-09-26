@@ -28,3 +28,12 @@ describe("site links", () => {
     expect(getStartedHref).toBe("https://app.aletheore.com/");
   });
 });
+
+import { prefetchFor } from "@/data/site-links";
+describe("prefetchFor", () => {
+  it("prefetches pages that exist and skips ones that do not yet", () => {
+    expect(prefetchFor("/pricing")).toBeUndefined();
+    expect(prefetchFor("/benchmarks#pr-review-head-to-head")).toBeUndefined();
+    expect(prefetchFor("/status")).toBe(false);
+  });
+});

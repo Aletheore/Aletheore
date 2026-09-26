@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { prefetchFor } from "@/data/site-links";
 import { Counter } from "@/components/site/counter";
 import { Badge } from "@/components/ui/badge";
 import { home } from "@/content/home";
@@ -10,7 +11,7 @@ export function Proof() {
       <p className="eyebrow eyebrow--section mb-3">{p.eyebrow}</p>
       <h2 id="proof-title" className="font-display text-[clamp(24px,3.2vw,34px)] font-bold leading-[1.1] tracking-[-0.015em]">{p.title}</h2>
       <p className="mt-4 max-w-[62ch] text-[15px] leading-[1.65] text-muted">
-        {p.intro} <Link prefetch={false} href={p.writeup.href} className="text-ink underline">{p.writeup.label} &rarr;</Link>
+        {p.intro} <Link prefetch={prefetchFor(p.writeup.href)} href={p.writeup.href} className="text-ink underline">{p.writeup.label} &rarr;</Link>
       </p>
       <div className="mt-10 grid gap-px border border-line bg-line md:grid-cols-3">
         {p.repos.map((r) => (
@@ -38,7 +39,7 @@ export function Proof() {
           {p.toon.stats.map((s) => (<div key={s.label}><div className="font-display text-[34px] font-bold tabular-nums text-stamp"><Counter value={s.value} /></div><div className="text-[12px] text-muted">{s.label}</div></div>))}
         </div>
         <p className="mt-6 text-[13.5px] text-muted">
-          How it measures up against a real competitor, wins and losses both: <Link prefetch={false} href={p.benchmarks.href} className="text-ink underline">{p.benchmarks.label} &rarr;</Link>
+          How it measures up against a real competitor, wins and losses both: <Link prefetch={prefetchFor(p.benchmarks.href)} href={p.benchmarks.href} className="text-ink underline">{p.benchmarks.label} &rarr;</Link>
         </p>
       </div>
     </section>

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Menu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { getStartedHref, navLinks } from "@/data/site-links";
+import { getStartedHref, navLinks, prefetchFor } from "@/data/site-links";
 import { cn } from "@/lib/utils";
 import { FollowDialog } from "./follow-dialog";
 import { Logo } from "./logo";
@@ -35,7 +35,7 @@ export function Header() {
             l.external ? (
               <a key={l.href} href={l.href} className="text-muted hover:text-ink" rel="noopener">{l.label}</a>
             ) : (
-              <Link key={l.href} href={l.href} prefetch={false} className="text-muted hover:text-ink">{l.label}</Link>
+              <Link key={l.href} href={l.href} prefetch={prefetchFor(l.href)} className="text-muted hover:text-ink">{l.label}</Link>
             ),
           )}
           <Button variant="ghost" onClick={() => setFollowOpen(true)} aria-haspopup="dialog">Follow Updates</Button>
