@@ -33,6 +33,7 @@ export function DataTable({ columns, rows, caption, highlightFirstCol = true, ou
                     className={cn(
                       "px-3.5 py-2 tabular-nums",
                       c.align === "right" && "text-right",
+                      ci === 0 && "min-w-[11rem]",
                       ci === 0 && highlightFirstCol && "font-semibold",
                       ours && "text-stamp",
                     )}

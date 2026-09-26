@@ -85,8 +85,8 @@ export const home = {
     },
     toon: {
       title: "The same data, TOON-encoded.",
-      body: "Measured against Aletheore's own air.json / air.toon pair from a real self-scan, the exact data the MCP server and audit coding-agent adapter read.",
-      stats: [{ value: "45.5%", label: "fewer tokens" }, { value: "55.5%", label: "smaller on disk" }],
+      body: "Measured against Aletheore's own air.json / air.toon pair from a real self-scan (2026-09-25, o200k_base tokenizer), the exact data the MCP server and audit coding-agent adapter read.",
+      stats: [{ value: "47.2%", label: "fewer tokens" }, { value: "53.8%", label: "smaller on disk" }],
     },
   },
   cta: {

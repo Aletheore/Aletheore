@@ -1,0 +1,130 @@
+[
+  {
+    "file": "pr_review/README.md",
+    "text": "44 human-identified golden bugs"
+  },
+  {
+    "file": "README.md",
+    "text": "Aletheore ties or leads Graphify on every question"
+  },
+  {
+    "file": "README.md",
+    "text": "only 2 of 15 questions actually discriminate between conditions"
+  },
+  {
+    "file": "README.md",
+    "text": "36% fewer tokens than Graphify"
+  },
+  {
+    "file": "README.md",
+    "text": "(9,803 vs. 15,296 mean)"
+  },
+  {
+    "file": "README.md",
+    "text": "Aletheore 198 (55.0%), RepoWise 144 (40.0%), tie 18 (5.0%)"
+  },
+  {
+    "file": "README.md",
+    "text": "5–0–2"
+  },
+  {
+    "file": "README.md",
+    "text": "secrets 6/6 recall, 0/5 false positives"
+  },
+  {
+    "file": "README.md",
+    "text": "vulnerabilities 10/10 recall, 0/7 false positives, all 10 manifest ecosystems covered"
+  },
+  {
+    "file": "README.md",
+    "text": "21,430 files across 20 real repos, 96 secrets + 231 vulnerability findings manually reviewed"
+  },
+  {
+    "file": "README.md",
+    "text": "6 real product gaps found and fixed"
+  },
+  {
+    "file": "README.md",
+    "text": "every one of its 375 real-repo findings was noise"
+  },
+  {
+    "file": "README.md",
+    "text": "dead code** | 10/10 recall, 0/7 false positives"
+  },
+  {
+    "file": "README.md",
+    "text": "Flask reported **all six of its real runtime dependencies as unused**"
+  },
+  {
+    "file": "README.md",
+    "text": "3 real gaps found and fixed"
+  },
+  {
+    "file": "README.md",
+    "text": "zero crashes across 5,378 real migration files, 9 real repos"
+  },
+  {
+    "file": "README.md",
+    "text": "8 real gaps found and fixed"
+  },
+  {
+    "file": "README.md",
+    "text": "took Sentry's extracted relations from 8 to 235"
+  },
+  {
+    "file": "README.md",
+    "text": "extracted zero foreign keys or indexes across 622 files"
+  },
+  {
+    "file": "README.md",
+    "text": "verified 20/20 clean on both versions"
+  },
+  {
+    "file": "swe_prbench/README.md",
+    "text": "foundry-ai/swe-prbench"
+  },
+  {
+    "file": "swe_prbench/README.md",
+    "text": "κ=0.75"
+  },
+  {
+    "file": "swe_prbench/README.md",
+    "text": "run-to-run spread of overall_score 0.151-0.191"
+  },
+  {
+    "file": "swe_prbench/README.md",
+    "text": "0.174 vs. 0.170, a 0.4-point gap"
+  },
+  {
+    "file": "pr_review/README.md",
+    "text": "Flash minus GitLab: recall +3.3 points (CI -12.9 to +18.1), precision -2.9 (CI -13.2 to +9.6)"
+  },
+  {
+    "file": "pr_review/README.md",
+    "text": "precision +0.9 points (CI -4.8 to +7.1), recall -2.1 (CI -9.6 to +6.6), at roughly five times the generation cost"
+  },
+  {
+    "file": "pr_review/README.md",
+    "text": "Flash precision by 20.4 points (95% CI +7.2 to +31.3)"
+  },
+  {
+    "file": "pr_review/README.md",
+    "text": "Confirmed false positives per run fell from 13.0 to 2.0 (Flash) and from 10.3 to 0.5 (AIR)"
+  },
+  {
+    "file": "README.md",
+    "text": "Sentry uses 249 times"
+  },
+  {
+    "file": "README.md",
+    "text": "Repowise never replays"
+  },
+  {
+    "file": "swe_prbench/README.md",
+    "text": "std ≈ 0.015-0.017"
+  },
+  {
+    "file": "swe_prbench/README.md",
+    "text": "$0.1615 for the full 100-task pass"
+  }
+]

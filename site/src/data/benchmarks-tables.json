@@ -1,0 +1,910 @@
+{
+ "locating": {
+  "columns": [
+   "Corpus",
+   "Language",
+   "Aletheore",
+   "RepoWise semantic",
+   "RepoWise full-text",
+   "Winner"
+  ],
+  "rows": [
+   [
+    "gin",
+    "Go",
+    "80.0%",
+    "60.0%",
+    "46.7%",
+    "Aletheore"
+   ],
+   [
+    "serde",
+    "Rust",
+    "53.3%",
+    "6.7%",
+    "13.3%",
+    "Aletheore"
+   ],
+   [
+    "gson",
+    "Java",
+    "40.0%",
+    "26.7%",
+    "0.0%",
+    "Aletheore"
+   ],
+   [
+    "jekyll",
+    "Ruby",
+    "26.7%",
+    "13.3%",
+    "6.7%",
+    "Aletheore"
+   ],
+   [
+    "Slim",
+    "PHP",
+    "26.7%",
+    "26.7%",
+    "20.0%",
+    "tie"
+   ],
+   [
+    "guzzle",
+    "PHP",
+    "20.0%",
+    "13.3%",
+    "20.0%",
+    "tie"
+   ],
+   [
+    "zod",
+    "TypeScript",
+    "20.0%",
+    "6.7%",
+    "13.3%",
+    "Aletheore"
+   ]
+  ],
+  "sources": [
+   "README.md"
+  ]
+ },
+ "vocabulary": {
+  "columns": [
+   "Corpus",
+   "Aletheore general",
+   "RepoWise general",
+   "Aletheore vocabulary",
+   "RepoWise vocabulary"
+  ],
+  "rows": [
+   [
+    "Slim",
+    "26.7%",
+    "26.7%",
+    "73.3%",
+    "66.7%"
+   ],
+   [
+    "gson",
+    "40.0%",
+    "26.7%",
+    "60.0%",
+    "46.7%"
+   ],
+   [
+    "zod",
+    "20.0%",
+    "13.3%",
+    "60.0%",
+    "26.7%"
+   ],
+   [
+    "guzzle",
+    "20.0%",
+    "20.0%",
+    "53.3%",
+    "53.3%"
+   ],
+   [
+    "jekyll",
+    "26.7%",
+    "13.3%",
+    "66.7%",
+    "80.0%"
+   ]
+  ],
+  "sources": [
+   "README.md"
+  ]
+ },
+ "indexCost": {
+  "columns": [
+   "",
+   "Aletheore",
+   "RepoWise"
+  ],
+  "rows": [
+   [
+    "Indexing cost, 7 corpora",
+    "$0.00",
+    "$1.85"
+   ],
+   [
+    "Per corpus",
+    "$0.00",
+    "$0.09 to $0.47"
+   ],
+   [
+    "What it costs money for",
+    "nothing, local nomic-embed-text",
+    "LLM generation of 1,341 wiki pages"
+   ],
+   [
+    "Typical setup time",
+    "seconds to ~1 min per corpus",
+    "minutes per corpus"
+   ]
+  ],
+  "sources": [
+   "README.md"
+  ]
+ },
+ "matrix": {
+  "columns": [
+   "Corpus",
+   "Regime",
+   "Top-1",
+   "Top-3",
+   "Top-5",
+   "MRR",
+   "n"
+  ],
+  "rows": [
+   [
+    "location (Flask)",
+    "general",
+    "71.9%",
+    "93.8%",
+    "100.0%",
+    "0.832",
+    "32"
+   ],
+   [
+    "gin",
+    "general",
+    "80.0%",
+    "100.0%",
+    "100.0%",
+    "0.878",
+    "15"
+   ],
+   [
+    "serde",
+    "general",
+    "53.3%",
+    "66.7%",
+    "73.3%",
+    "0.617",
+    "15"
+   ],
+   [
+    "Slim",
+    "general",
+    "26.7%",
+    "60.0%",
+    "66.7%",
+    "0.458",
+    "15"
+   ],
+   [
+    "Slim",
+    "vocabulary",
+    "73.3%",
+    "80.0%",
+    "93.3%",
+    "0.797",
+    "15"
+   ],
+   [
+    "guzzle",
+    "general",
+    "20.0%",
+    "53.3%",
+    "66.7%",
+    "0.374",
+    "15"
+   ],
+   [
+    "guzzle",
+    "vocabulary",
+    "53.3%",
+    "93.3%",
+    "100.0%",
+    "0.728",
+    "15"
+   ],
+   [
+    "jekyll",
+    "general",
+    "26.7%",
+    "33.3%",
+    "46.7%",
+    "0.337",
+    "15"
+   ],
+   [
+    "jekyll",
+    "vocabulary",
+    "66.7%",
+    "86.7%",
+    "93.3%",
+    "0.778",
+    "15"
+   ],
+   [
+    "zod",
+    "general",
+    "20.0%",
+    "40.0%",
+    "40.0%",
+    "0.289",
+    "15"
+   ],
+   [
+    "zod",
+    "vocabulary",
+    "60.0%",
+    "73.3%",
+    "73.3%",
+    "0.667",
+    "15"
+   ],
+   [
+    "gson",
+    "general",
+    "40.0%",
+    "66.7%",
+    "80.0%",
+    "0.544",
+    "15"
+   ],
+   [
+    "gson",
+    "vocabulary",
+    "60.0%",
+    "86.7%",
+    "86.7%",
+    "0.749",
+    "15"
+   ],
+   [
+    "axios",
+    "general",
+    "20.0%",
+    "46.7%",
+    "66.7%",
+    "0.407",
+    "15"
+   ],
+   [
+    "axios",
+    "vocabulary",
+    "73.3%",
+    "93.3%",
+    "100.0%",
+    "0.850",
+    "15"
+   ],
+   [
+    "jq",
+    "general",
+    "53.3%",
+    "66.7%",
+    "80.0%",
+    "0.648",
+    "15"
+   ],
+   [
+    "jq",
+    "vocabulary",
+    "73.3%",
+    "100.0%",
+    "100.0%",
+    "0.867",
+    "15"
+   ],
+   [
+    "fmt",
+    "general",
+    "40.0%",
+    "60.0%",
+    "86.7%",
+    "0.527",
+    "15"
+   ],
+   [
+    "fmt",
+    "vocabulary",
+    "66.7%",
+    "93.3%",
+    "93.3%",
+    "0.789",
+    "15"
+   ],
+   [
+    "AutoMapper",
+    "general",
+    "6.7%",
+    "20.0%",
+    "33.3%",
+    "0.177",
+    "15"
+   ],
+   [
+    "AutoMapper",
+    "vocabulary",
+    "86.7%",
+    "100.0%",
+    "100.0%",
+    "0.933",
+    "15"
+   ],
+   [
+    "thrift",
+    "general",
+    "6.7%",
+    "33.3%",
+    "53.3%",
+    "0.241",
+    "15"
+   ],
+   [
+    "thrift",
+    "cross-language",
+    "53.3%",
+    "73.3%",
+    "93.3%",
+    "0.677",
+    "15"
+   ]
+  ],
+  "sources": [
+   "README.md"
+  ]
+ },
+ "jina": {
+  "columns": [
+   "Corpus",
+   "nomic top-1",
+   "jina top-1",
+   "Δ top-1",
+   "nomic MRR",
+   "jina MRR"
+  ],
+  "rows": [
+   [
+    "flask (location)",
+    "71.9%",
+    "81.2%",
+    "+9.3pp",
+    "0.832",
+    "0.901"
+   ],
+   [
+    "gin",
+    "80.0%",
+    "86.7%",
+    "+6.7pp",
+    "0.878",
+    "0.933"
+   ],
+   [
+    "serde",
+    "53.3%",
+    "53.3%",
+    "+0.0pp",
+    "0.617",
+    "0.678"
+   ],
+   [
+    "Slim (general)",
+    "26.7%",
+    "53.3%",
+    "+26.6pp",
+    "0.458",
+    "0.647"
+   ],
+   [
+    "Slim (vocab)",
+    "73.3%",
+    "66.7%",
+    "-6.6pp",
+    "0.797",
+    "0.811"
+   ],
+   [
+    "guzzle (general)",
+    "20.0%",
+    "20.0%",
+    "+0.0pp",
+    "0.374",
+    "0.458"
+   ],
+   [
+    "guzzle (vocab)",
+    "53.3%",
+    "73.3%",
+    "+20.0pp",
+    "0.728",
+    "0.844"
+   ],
+   [
+    "jekyll (general)",
+    "26.7%",
+    "26.7%",
+    "+0.0pp",
+    "0.337",
+    "0.382"
+   ],
+   [
+    "jekyll (vocab)",
+    "66.7%",
+    "66.7%",
+    "+0.0pp",
+    "0.778",
+    "0.791"
+   ],
+   [
+    "zod (general)",
+    "20.0%",
+    "13.3%",
+    "-6.7pp",
+    "0.289",
+    "0.237"
+   ],
+   [
+    "zod (vocab)",
+    "60.0%",
+    "53.3%",
+    "-6.7pp",
+    "0.667",
+    "0.658"
+   ],
+   [
+    "gson (general)",
+    "40.0%",
+    "46.7%",
+    "+6.7pp",
+    "0.544",
+    "0.569"
+   ],
+   [
+    "gson (vocab)",
+    "60.0%",
+    "66.7%",
+    "+6.7pp",
+    "0.749",
+    "0.797"
+   ],
+   [
+    "axios (general)",
+    "20.0%",
+    "20.0%",
+    "+0.0pp",
+    "0.407",
+    "0.420"
+   ],
+   [
+    "axios (vocab)",
+    "73.3%",
+    "80.0%",
+    "+6.7pp",
+    "0.850",
+    "0.878"
+   ],
+   [
+    "jq (general)",
+    "53.3%",
+    "53.3%",
+    "+0.0pp",
+    "0.648",
+    "0.728"
+   ],
+   [
+    "jq (vocab)",
+    "73.3%",
+    "80.0%",
+    "+6.7pp",
+    "0.867",
+    "0.883"
+   ],
+   [
+    "fmt (general)",
+    "40.0%",
+    "46.7%",
+    "+6.7pp",
+    "0.527",
+    "0.621"
+   ],
+   [
+    "fmt (vocab)",
+    "66.7%",
+    "66.7%",
+    "+0.0pp",
+    "0.789",
+    "0.789"
+   ],
+   [
+    "AutoMapper (general)",
+    "6.7%",
+    "13.3%",
+    "+6.6pp",
+    "0.177",
+    "0.243"
+   ],
+   [
+    "AutoMapper (vocab)",
+    "86.7%",
+    "86.7%",
+    "+0.0pp",
+    "0.933",
+    "0.922"
+   ],
+   [
+    "thrift (general)",
+    "6.7%",
+    "20.0%",
+    "+13.3pp",
+    "0.241",
+    "0.285"
+   ],
+   [
+    "thrift (cross-language)",
+    "53.3%",
+    "73.3%",
+    "+20.0pp",
+    "0.677",
+    "0.822"
+   ]
+  ],
+  "sources": [
+   "README.md"
+  ]
+ },
+ "compactRuns": {
+  "columns": [
+   "Run",
+   "Evidence only (compact)",
+   "+ full file content"
+  ],
+  "rows": [
+   [
+    "Run 1",
+    "97.7% verified-accept (42/43)",
+    "85.7% (36/42)"
+   ],
+   [
+    "Run 2",
+    "97.6% verified-accept (40/41)",
+    "90.5% (38/42)"
+   ],
+   [
+    "Run 3",
+    "96.7% verified-accept (29/30)",
+    "100% (27/27), coverage artifact*"
+   ]
+  ],
+  "sources": [
+   "pr_review/README.md",
+   "README.md"
+  ]
+ },
+ "compactSize": {
+  "columns": [
+   "",
+   "Evidence only (compact)",
+   "+ full file content",
+   "Compact is"
+  ],
+  "rows": [
+   [
+    "Median context size (measured)",
+    "1,480 chars (~370 tok)",
+    "15,212 chars (~3,800 tok)",
+    "~10.3x smaller"
+   ],
+   [
+    "Avg prompt tokens, real API (DeepSeek V4 Flash)",
+    "2,483",
+    "16,325",
+    "~6.6x smaller"
+   ],
+   [
+    "Avg cost per review, same run",
+    "$0.0041",
+    "$0.0054",
+    "~24% cheaper"
+   ]
+  ],
+  "sources": [
+   "pr_review/README.md",
+   "README.md"
+  ]
+ },
+ "prRecall": {
+  "columns": [
+   "Tool",
+   "Golden bugs caught (of 44)",
+   "Recall (95% CI)",
+   "Precision (95% CI)",
+   "Accurate findings",
+   "Real findings",
+   "Confirmed false positives",
+   "Runs"
+  ],
+  "rows": [
+   [
+    "Aletheore Flash, shared context",
+    "23.5",
+    "53.4% [39-68]",
+    "92.6% [86-96]",
+    "87.5",
+    "94.5",
+    "2.0",
+    "2"
+   ],
+   [
+    "Aletheore AIR, shared context",
+    "22.5",
+    "51.1% [37-65]",
+    "93.3% [87-98]",
+    "86.5",
+    "92.5",
+    "0.5",
+    "2"
+   ],
+   [
+    "GitHub Copilot",
+    "26.0",
+    "59.1% [40-76]",
+    "89.6% [82-98]",
+    "60.0",
+    "67",
+    "1",
+    "1"
+   ],
+   [
+    "GitLab Duo",
+    "22.0",
+    "50.0% [38-63]",
+    "95.1% [85-100]",
+    "39.0",
+    "41",
+    "1",
+    "1"
+   ],
+   [
+    "Qodo",
+    "10.0",
+    "22.7% [10-38]",
+    "100% [100-100]",
+    "24.0",
+    "24",
+    "0",
+    "1"
+   ],
+   [
+    "Aletheore Flash, no shared context (before)",
+    "23.0",
+    "52.3% [39-66]",
+    "71.5% [63-82]",
+    "69.0",
+    "96.5",
+    "13.0",
+    "2"
+   ],
+   [
+    "Aletheore AIR, no shared context (before)",
+    "22.0",
+    "50.0% [37-63]",
+    "79.7% [73-89]",
+    "73.7",
+    "92.3",
+    "10.3",
+    "3"
+   ]
+  ],
+  "sources": [
+   "pr_review/README.md"
+  ]
+ },
+ "swePr": {
+  "columns": [
+   "Model",
+   "Overall score",
+   "Cost per 100 PRs*"
+  ],
+  "rows": [
+   [
+    "Aletheore (GLM-5.3-Flash, per_file_completeness=True)",
+    "0.174",
+    "$0.162"
+   ],
+   [
+    "Claude Haiku 4.5",
+    "0.153",
+    "$0.825"
+   ],
+   [
+    "Claude Sonnet 4.6",
+    "0.152",
+    "$2.475"
+   ],
+   [
+    "DeepSeek V3",
+    "0.150",
+    "$0.163"
+   ],
+   [
+    "Aletheore (GLM-5.3-Flash, bare mode)",
+    "0.149 - 0.169",
+    "$0.055"
+   ],
+   [
+    "Mistral Large 3",
+    "0.147",
+    "$0.350"
+   ],
+   [
+    "GPT-4o",
+    "0.113",
+    "-"
+   ]
+  ],
+  "sources": [
+   "README.md",
+   "swe_prbench/README.md"
+  ]
+ },
+ "perFile": {
+  "columns": [
+   "",
+   "Bare (original, OpenAI-direct route)",
+   "per_file_completeness=True"
+  ],
+  "rows": [
+   [
+    "Recall",
+    "16.8%",
+    "22.3%"
+   ],
+   [
+    "Precision",
+    "23.8%",
+    "20.5%"
+   ],
+   [
+    "Overall score",
+    "0.169",
+    "0.174"
+   ],
+   [
+    "Coverage",
+    "0.40",
+    "0.48"
+   ]
+  ],
+  "sources": [
+   "swe_prbench/README.md"
+  ]
+ },
+ "graphify": {
+  "columns": [
+   "Condition",
+   "Coverage (mean, 30 samples)",
+   "Tokens per query (mean, 15 samples)"
+  ],
+  "rows": [
+   [
+    "baseline (grep + read + list only)",
+    "92.2%",
+    "11,839"
+   ],
+   [
+    "+ Aletheore",
+    "100.0%",
+    "14,893"
+   ],
+   [
+    "+ Graphify",
+    "93.3%",
+    "17,921"
+   ]
+  ],
+  "sources": [
+   "README.md"
+  ]
+ },
+ "comprehension": {
+  "columns": [
+   "Corpus",
+   "Language",
+   "AIRview",
+   "RepoWise"
+  ],
+  "rows": [
+   [
+    "flask",
+    "Python",
+    "1.96",
+    "1.75"
+   ],
+   [
+    "axios",
+    "JavaScript",
+    "2.12",
+    "1.85"
+   ],
+   [
+    "automapper",
+    "C#",
+    "2.08",
+    "1.78"
+   ],
+   [
+    "fmt",
+    "C++",
+    "1.92",
+    "1.72"
+   ],
+   [
+    "jq",
+    "C",
+    "1.93",
+    "1.76"
+   ],
+   [
+    "average",
+    "",
+    "2.00",
+    "1.77"
+   ]
+  ],
+  "sources": [
+   "README.md"
+  ]
+ },
+ "detVsLlm": {
+  "columns": [
+   "",
+   "Aletheore",
+   "gpt-5.6-luna (bare)",
+   "gpt-5.6-terra (bare)"
+  ],
+  "rows": [
+   [
+    "Hotspots (top 10 by commit count)",
+    "exact, every run",
+    "declined, asked for real code instead",
+    "0/10 counts correct, 4 fabricated entries"
+   ],
+   [
+    "Ownership (top 8 by commit count)",
+    "exact",
+    "1/8 exact, mean error ~14.5, drops a real contributor",
+    "4/8 exact, still fabricates a person"
+   ],
+   [
+    "Dead code (unreachable modules)",
+    "2/2, zero false positives",
+    "48 flagged, 4.2% precision",
+    "49 flagged, 4.1% precision"
+   ]
+  ],
+  "sources": [
+   "README.md"
+  ]
+ }
+}
