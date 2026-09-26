@@ -23,6 +23,7 @@ from aletheore.query import (
     find_licenses,
     find_ownership,
     find_secrets_for_file,
+    find_symbol_path,
     find_symbol_source,
     find_symbols,
     find_vulnerabilities,
@@ -725,3 +726,209 @@ def test_list_clusters_does_not_depend_on_git_and_is_unaffected_by_unavailable_g
         "git": {"available": False},
     }
     assert list_clusters(evidence) == [{"id": 0, "module_count": 1}]
+
+
+def _symbol_path_evidence():
+    def module(path, imports, functions):
+        return {
+            "path": path,
+            "imports": imports,
+            "imported_by": [],
+            "symbols": {"functions": functions, "classes": []},
+        }
+
+    return {
+        "repository": {
+            "modules": [
+                module(
+                    "core/util.py",
+                    [],
+                    [
+                        {"name": "parse_config", "start_line": 1, "end_line": 2},
+                        {"name": "helper", "start_line": 4, "end_line": 5},
+                    ],
+                ),
+                module(
+                    "service/handler.py",
+                    ["core/util.py"],
+                    [{"name": "handle", "start_line": 2, "end_line": 3}],
+                ),
+                module(
+                    "api/routes.py",
+                    ["service/handler.py"],
+                    [{"name": "route_handler", "start_line": 2, "end_line": 3}],
+                ),
+                module("unrelated/other.py", [], [{"name": "standalone", "start_line": 1, "end_line": 2}]),
+            ],
+        },
+    }
+
+
+def _write_symbol_path_fixture_files(tmp_path):
+    (tmp_path / "core").mkdir()
+    (tmp_path / "core" / "util.py").write_text(
+        "def parse_config(raw):\n    return raw\n\ndef helper(raw):\n    return parse_config(raw)\n"
+    )
+    (tmp_path / "service").mkdir()
+    (tmp_path / "service" / "handler.py").write_text(
+        "from core.util import parse_config\ndef handle(raw):\n    return parse_config(raw)\n"
+    )
+    (tmp_path / "api").mkdir()
+    (tmp_path / "api" / "routes.py").write_text(
+        "from service.handler import handle\ndef route_handler(req):\n    return handle(req)\n"
+    )
+    (tmp_path / "unrelated").mkdir()
+    (tmp_path / "unrelated" / "other.py").write_text("def standalone():\n    pass\n")
+
+
+def test_find_symbol_path_confirms_a_same_file_call(tmp_path):
+    _write_symbol_path_fixture_files(tmp_path)
+
+    result = find_symbol_path(
+        _symbol_path_evidence(), tmp_path, "core/util.py", "helper", "core/util.py", "parse_config"
+    )
+
+    assert result["same_file"] is True
+    assert result["hops"] == ["core/util.py"]
+    assert result["confirmed"] is True
+
+
+def test_find_symbol_path_same_file_not_confirmed_when_no_call_exists(tmp_path):
+    _write_symbol_path_fixture_files(tmp_path)
+
+    # parse_config's own body never calls helper - the reverse direction
+    # of the confirmed case above.
+    result = find_symbol_path(
+        _symbol_path_evidence(), tmp_path, "core/util.py", "parse_config", "core/util.py", "helper"
+    )
+
+    assert result["same_file"] is True
+    assert result["confirmed"] is False
+
+
+def test_find_symbol_path_confirms_a_direct_one_hop_import(tmp_path):
+    _write_symbol_path_fixture_files(tmp_path)
+
+    result = find_symbol_path(
+        _symbol_path_evidence(),
+        tmp_path,
+        "service/handler.py",
+        "handle",
+        "core/util.py",
+        "parse_config",
+    )
+
+    assert result["same_file"] is False
+    assert result["hops"] == ["service/handler.py", "core/util.py"]
+    assert result["confirmed"] is True
+
+
+def test_find_symbol_path_one_hop_import_not_confirmed_without_a_real_call(tmp_path):
+    _write_symbol_path_fixture_files(tmp_path)
+
+    # handler.py imports core/util.py but handle() never calls helper -
+    # the import edge exists, the call doesn't.
+    result = find_symbol_path(
+        _symbol_path_evidence(), tmp_path, "service/handler.py", "handle", "core/util.py", "helper"
+    )
+
+    assert result["hops"] == ["service/handler.py", "core/util.py"]
+    assert result["confirmed"] is False
+
+
+def test_find_symbol_path_multi_hop_chain_is_never_confirmed(tmp_path):
+    """A 2-hop import chain proves core/util.py is reachable from
+    api/routes.py's imports, but this scanner has no per-hop symbol-usage
+    data to confirm route_handler's calls actually reach parse_config
+    through it - confirmed must stay False, not guess yes."""
+    _write_symbol_path_fixture_files(tmp_path)
+
+    result = find_symbol_path(
+        _symbol_path_evidence(),
+        tmp_path,
+        "api/routes.py",
+        "route_handler",
+        "core/util.py",
+        "parse_config",
+    )
+
+    assert result["hops"] == ["api/routes.py", "service/handler.py", "core/util.py"]
+    assert result["confirmed"] is False
+    assert "2 hops" in result["confirmation_basis"]
+
+
+def test_find_symbol_path_reports_no_path_when_genuinely_unreachable(tmp_path):
+    _write_symbol_path_fixture_files(tmp_path)
+
+    result = find_symbol_path(
+        _symbol_path_evidence(),
+        tmp_path,
+        "unrelated/other.py",
+        "standalone",
+        "core/util.py",
+        "parse_config",
+    )
+
+    assert result["hops"] is None
+    assert result["confirmed"] is False
+    assert "no import chain" in result["confirmation_basis"]
+    assert "bounded" not in result["confirmation_basis"]
+
+
+def test_find_symbol_path_reports_bounded_search_when_hop_cap_hit(tmp_path, monkeypatch):
+    import aletheore.query as query_module
+
+    monkeypatch.setattr(query_module, "_SYMBOL_PATH_MAX_HOPS", 1)
+    _write_symbol_path_fixture_files(tmp_path)
+
+    result = find_symbol_path(
+        _symbol_path_evidence(),
+        tmp_path,
+        "api/routes.py",
+        "route_handler",
+        "core/util.py",
+        "parse_config",
+    )
+
+    assert result["hops"] is None
+    assert "bounded" in result["confirmation_basis"]
+
+
+def test_find_symbol_path_reports_bounded_search_when_visited_cap_hit(tmp_path, monkeypatch):
+    import aletheore.query as query_module
+
+    monkeypatch.setattr(query_module, "_SYMBOL_PATH_MAX_VISITED", 1)
+    _write_symbol_path_fixture_files(tmp_path)
+
+    result = find_symbol_path(
+        _symbol_path_evidence(),
+        tmp_path,
+        "api/routes.py",
+        "route_handler",
+        "core/util.py",
+        "parse_config",
+    )
+
+    assert result["hops"] is None
+    assert "bounded" in result["confirmation_basis"]
+
+
+def test_find_symbol_path_raises_for_unknown_source_module(tmp_path):
+    with pytest.raises(ModuleNotFoundInEvidenceError):
+        find_symbol_path(
+            _symbol_path_evidence(), tmp_path, "does/not/exist.py", "x", "core/util.py", "parse_config"
+        )
+
+
+def test_find_symbol_path_raises_for_unknown_source_symbol(tmp_path):
+    with pytest.raises(SymbolNotFoundInEvidenceError):
+        find_symbol_path(
+            _symbol_path_evidence(), tmp_path, "core/util.py", "does_not_exist", "core/util.py", "parse_config"
+        )
+
+
+def test_find_symbol_path_raises_for_unknown_target_symbol(tmp_path):
+    with pytest.raises(SymbolNotFoundInEvidenceError):
+        find_symbol_path(
+            _symbol_path_evidence(), tmp_path, "core/util.py", "parse_config", "core/util.py", "does_not_exist"
+        )

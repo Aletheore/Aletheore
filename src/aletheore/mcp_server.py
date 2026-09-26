@@ -25,6 +25,7 @@ from aletheore.managed_audit_client import run_managed_audit_request
 from aletheore.query import (
     ModuleNotFoundInEvidenceError,
     QUERY_FUNCTIONS,
+    SymbolNotFoundInEvidenceError,
     find_blast_radius,
     find_code_evidence_for_dependency,
     find_code_evidence_for_endpoint,
@@ -33,6 +34,7 @@ from aletheore.query import (
     find_imported_by,
     find_imports,
     find_repo_overview,
+    find_symbol_path,
     find_symbol_source,
     list_branches,
     list_clusters,
@@ -491,6 +493,28 @@ def _register_blast_radius_tool(mcp_instance: MCPServer, repo_path: Path) -> Non
         return _toon_result(find_blast_radius(evidence, repo_path, target, symbol))
 
 
+def _register_symbol_path_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+    @mcp_instance.tool(name="aletheore_symbol_path", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_symbol_path(
+        source: str, source_symbol: str, target: str, target_symbol: str
+    ) -> str:
+        """Is there an evidence-backed path from `source_symbol` (defined in
+        `source`) to `target_symbol` (defined in `target`)? Built from real
+        imports edges and real file content, not a full symbol-level call
+        graph - this scanner doesn't record per-call-site edges between
+        arbitrary symbols, so `confirmed` is only ever True for the two
+        cases with real content to check: same file, or a direct 1-hop
+        import. A longer `hops` chain proves target's file is reachable
+        from source's imports, not that source_symbol's calls actually
+        reach target_symbol through it - read `confirmation_basis` for
+        exactly what was and wasn't verified.
+        """
+        evidence = read_evidence(repo_path)
+        return _toon_result(
+            find_symbol_path(evidence, repo_path, source, source_symbol, target, target_symbol)
+        )
+
+
 _LIST_KIND_TO_FUNCTION = {
     "modules": list_modules,
     "clusters": list_clusters,
@@ -884,6 +908,7 @@ def build_server(
     _register_changes_tool(mcp_instance, repo_path)
     _register_neighborhood_tool(mcp_instance, repo_path)
     _register_blast_radius_tool(mcp_instance, repo_path)
+    _register_symbol_path_tool(mcp_instance, repo_path)
     _register_list_tool(mcp_instance, repo_path)
     _register_overview_tool(mcp_instance, repo_path)
     _register_search_tool(mcp_instance, repo_path)
