@@ -13,7 +13,8 @@
     "test": "vitest run",
     "data:graph": "node scripts/build-graph-data.ts",
     "data:chain": "node scripts/build-evidence-chain.ts",
-    "e2e": "node scripts/e2e-frames.mjs"
+    "e2e": "node scripts/e2e-frames.mjs",
+    "e2e:nav": "node scripts/e2e-nav.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "1.1.23",

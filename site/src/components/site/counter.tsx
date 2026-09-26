@@ -40,8 +40,8 @@ export function Counter({ value, className, duration = 1400 }: { value: string; 
   }, [value, duration, reduced]);
 
   return (
-    <span ref={el} className={className} aria-label={value}>
-      {value}
-    </span>
+    // innerHTML rather than a text child: the count-up rewrites the text directly, and React must not hold a
+    // reference to a text node that gets replaced (that made removeChild throw on navigation).
+    <span ref={el} className={className} dangerouslySetInnerHTML={{ __html: value }} />
   );
 }

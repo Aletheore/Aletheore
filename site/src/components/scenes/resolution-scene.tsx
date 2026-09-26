@@ -58,6 +58,9 @@ export function ResolutionScene() {
   }, [reduced, steps.length]);
 
   return (
+    // ScrollTrigger wraps the pinned element in a spacer, so React must own a parent above it: removing the
+    // section directly from its old parent would throw once the spacer sits in between.
+    <div>
     <section
       ref={root}
       data-active-step={active}
@@ -105,5 +108,6 @@ export function ResolutionScene() {
         </div>
       </div>
     </section>
+    </div>
   );
 }
