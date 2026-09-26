@@ -300,6 +300,150 @@ def find_blast_radius(
     return result
 
 
+# Bounds a BFS over the import graph the same way _BLAST_RADIUS_MAX_TRANSITIVE
+# bounds blast radius's - a real answer for most repos, an honest truncation
+# signal rather than a runaway scan or a silent wrong "no path" on a huge
+# monorepo's import graph.
+_SYMBOL_PATH_MAX_HOPS = 12
+_SYMBOL_PATH_MAX_VISITED = 5000
+
+
+def _has_symbol(module: dict, symbol_name: str) -> bool:
+    symbols = module["symbols"]
+    return any(
+        entry["name"] == symbol_name
+        for entry in symbols["functions"] + symbols["classes"] + symbols.get("constants", [])
+    )
+
+
+def _symbol_body_or_none(
+    evidence: dict, repo_path: Path, module_path: str, symbol_name: str
+) -> str | None:
+    try:
+        return find_symbol_source(evidence, repo_path, module_path, symbol_name)["source"]
+    except OSError:
+        return None
+
+
+def find_symbol_path(
+    evidence: dict,
+    repo_path: Path,
+    source: str,
+    source_symbol: str,
+    target: str,
+    target_symbol: str,
+) -> dict:
+    """Is there an evidence-backed path from `source_symbol` (in `source`) to
+    `target_symbol` (in `target`)? The file-level analog of a symbol call
+    graph, built from what this scanner actually has - the imports edge set
+    and real file content - not a full symbol-level call graph (this
+    scanner doesn't build per-call-site edges between arbitrary symbols).
+
+    Same file (`source == target`): high confidence. `source_symbol`'s own
+    body (the exact lines evidence records for it, not the whole file) is
+    checked directly for a call-shaped reference to `target_symbol` -
+    mirrors find_blast_radius's same_file_caller check, but scoped to the
+    one calling symbol asked about rather than "anywhere in the file".
+
+    Different files: a real BFS over the `imports` edge set (source's own
+    imports, transitively - the direction a caller's file must chase to
+    reach a callee's file) finds the shortest chain of modules from
+    `source` to `target`, capped at _SYMBOL_PATH_MAX_HOPS hops and
+    _SYMBOL_PATH_MAX_VISITED modules visited. Only a direct 1-hop chain
+    (source imports target directly) gets the same high-confidence
+    call-shape check as the same-file case; a longer chain proves an
+    import path exists but NOT that source_symbol's call chain actually
+    reaches target_symbol through it - this scanner has no per-hop
+    symbol-usage data to confirm that, and confirmed stays False rather
+    than guessing.
+    """
+    source_module = _find_module(evidence, source)
+    target_module = _find_module(evidence, target)
+    if not _has_symbol(source_module, source_symbol):
+        raise SymbolNotFoundInEvidenceError(source, source_symbol)
+    if not _has_symbol(target_module, target_symbol):
+        raise SymbolNotFoundInEvidenceError(target, target_symbol)
+
+    result: dict[str, Any] = {
+        "source": {"file": source, "symbol": source_symbol},
+        "target": {"file": target, "symbol": target_symbol},
+        "same_file": source == target,
+    }
+
+    call_pattern = re.compile(r"\b" + re.escape(target_symbol) + r"\s*\(")
+
+    def _confirm_direct_call() -> tuple[bool, str]:
+        body = _symbol_body_or_none(evidence, repo_path, source, source_symbol)
+        if body is None:
+            return False, f"could not read {source} to verify {source_symbol}'s body"
+        if call_pattern.search(body):
+            return True, f"{source_symbol}'s own body contains a call to {target_symbol}"
+        return False, f"{source_symbol}'s own body has no call-shaped reference to {target_symbol}"
+
+    if source == target:
+        confirmed, basis = _confirm_direct_call()
+        result["hops"] = [source]
+        result["hops_truncated"] = False
+        result["confirmed"] = confirmed
+        result["confirmation_basis"] = basis
+        return result
+
+    by_path = {m["path"]: m for m in evidence["repository"]["modules"] if m.get("path")}
+    visited = {source}
+    queue: list[list[str]] = [[source]]
+    chain: list[str] | None = None
+    # Tracks whether either cap actually fired during the search, decoupled
+    # from "the queue drained" - the queue drains naturally both when the
+    # graph is genuinely exhausted AND when a cap silently stops new nodes
+    # from ever being queued, and those two cases need different messages.
+    bounded = False
+    while queue and chain is None:
+        path = queue.pop(0)
+        if len(path) > _SYMBOL_PATH_MAX_HOPS:
+            bounded = True
+            continue
+        for nxt in by_path.get(path[-1], {}).get("imports") or []:
+            if nxt == target:
+                chain = [*path, nxt]
+                break
+            if nxt in visited:
+                continue
+            if len(visited) >= _SYMBOL_PATH_MAX_VISITED:
+                bounded = True
+                continue
+            visited.add(nxt)
+            queue.append([*path, nxt])
+
+    if chain is None:
+        result["hops"] = None
+        result["hops_truncated"] = False
+        result["confirmed"] = False
+        result["confirmation_basis"] = (
+            f"import graph search bounded at {_SYMBOL_PATH_MAX_HOPS} hops / "
+            f"{_SYMBOL_PATH_MAX_VISITED} modules before finding a chain - not a "
+            "definitive 'no path exists'"
+            if bounded
+            else f"no import chain from {source} to {target} in the reachable import graph"
+        )
+        return result
+
+    result["hops"] = chain
+    result["hops_truncated"] = False
+    if len(chain) == 2:
+        confirmed, basis = _confirm_direct_call()
+        result["confirmed"] = confirmed
+        result["confirmation_basis"] = f"direct import (1 hop): {basis}"
+    else:
+        result["confirmed"] = False
+        result["confirmation_basis"] = (
+            f"import chain found ({len(chain) - 1} hops) - proves {target} is reachable "
+            f"from {source}'s imports, but not that {source_symbol} specifically calls "
+            f"{target_symbol} through it; only a direct 1-hop import gets call-shape "
+            "confirmation"
+        )
+    return result
+
+
 def find_dead_code_evidence(evidence: dict, target: str | None) -> dict:
     return evidence["repository"]["dead_code"]
 

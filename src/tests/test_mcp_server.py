@@ -251,6 +251,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_changes",
         "aletheore_neighborhood",
         "aletheore_get_blast_radius",
+        "aletheore_symbol_path",
         "aletheore_list",
         "aletheore_overview",
         "aletheore_search",
@@ -267,7 +268,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_find_evidence_for_dependency",
     }
     assert expected.issubset(names)
-    assert len(names) == 34
+    assert len(names) == 35
     assert "aletheore_answer" not in names
 
 
