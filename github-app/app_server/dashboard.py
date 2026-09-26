@@ -832,13 +832,24 @@ async def get_dashboard_wiki_file(org: str, repo: str, file_path: str, request: 
     }
 
 
-async def _build_docs_modules(pool, installation_id: int, repo_full_name: str) -> dict[str, str]:
+async def _build_docs_modules(
+    pool, installation_id: int, repo_full_name: str, evidence: dict | None = None
+) -> dict[str, str]:
     """Shared by the JSON dashboard route and the markdown export route -
     both render the same evidence + AI-description merge, just packaged
-    differently."""
+    differently.
+
+    evidence: pass the already-fetched evidence when the caller also needs
+    it for something else (get_dashboard_docs's git_data below) - avoids a
+    second get_latest_evidence call *and* the race it opened: a new scan's
+    repo_history row landing in the gap between two separate fetches could
+    otherwise mix an older scan's modules with a newer scan's
+    recently_updated/hotspots in one response. Omit it (as the export
+    route does - it has no use for git_data) to fetch it here as before."""
     from aletheore.docs_reference import build_api_reference
 
-    evidence = await get_latest_evidence(pool, installation_id, repo_full_name)
+    if evidence is None:
+        evidence = await get_latest_evidence(pool, installation_id, repo_full_name)
     if evidence is None:
         return {}
 
@@ -867,13 +878,13 @@ async def get_dashboard_docs(org: str, repo: str, request: Request):
     repo_full_name = f"{org}/{repo}"
 
     build_status = await get_docs_build_status(pool, installation_id, repo_full_name)
-    modules = await _build_docs_modules(pool, installation_id, repo_full_name)
-    # Fetched separately from _build_docs_modules's own internal fetch - it
-    # only returns the built API reference, not the raw evidence the Docs
-    # page's rail (recently-updated files, hotspots) also needs. A second
-    # get_latest_evidence call, not a refactor to share one, since the
-    # export route also calls _build_docs_modules and has no use for these.
+    # Fetched once, here, and passed into _build_docs_modules - not two
+    # separate get_latest_evidence calls - so modules and git_data
+    # (recently-updated files, hotspots) always come from the same scan,
+    # even if a new scan's repo_history row lands between what would
+    # otherwise be two separate fetches.
     evidence = await get_latest_evidence(pool, installation_id, repo_full_name)
+    modules = await _build_docs_modules(pool, installation_id, repo_full_name, evidence=evidence)
     git_data = (evidence or {}).get("git", {})
     return {
         "repo_full_name": repo_full_name,

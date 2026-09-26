@@ -2503,6 +2503,38 @@ async def test_dashboard_docs_merges_ai_generated_description_for_undocumented_s
 
 
 @pytest.mark.asyncio
+async def test_dashboard_docs_fetches_evidence_only_once(pool, monkeypatch):
+    # Real gap found in a backward audit: get_dashboard_docs used to call
+    # get_latest_evidence twice - once inside _build_docs_modules, once
+    # again directly for git_data - a wasted DB round trip on every load,
+    # and a real race if a new scan landed in the gap between the two
+    # calls (modules from one scan, recently_updated/hotspots from
+    # another). Now fetched once and passed through.
+    evidence = _evidence_with_module("a.py", "add", "Adds two numbers.")
+    await upsert_installation(pool, 711, "octocat")
+    await set_installation_plan(pool, 711, "air")
+    await insert_repo_history(pool, 711, "octocat/hello-world", datetime.now(timezone.utc), evidence)
+
+    calls = []
+    import app_server.dashboard as dashboard_module
+
+    real_get_latest_evidence = dashboard_module.get_latest_evidence
+
+    async def counting_get_latest_evidence(*a, **k):
+        calls.append(1)
+        return await real_get_latest_evidence(*a, **k)
+
+    monkeypatch.setattr(dashboard_module, "get_latest_evidence", counting_get_latest_evidence)
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[711])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/docs")
+
+    assert response.status_code == 200
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_dashboard_docs_returns_empty_modules_when_nothing_scanned_yet(pool, monkeypatch):
     await upsert_installation(pool, 704, "octocat")
     await set_installation_plan(pool, 704, "air")

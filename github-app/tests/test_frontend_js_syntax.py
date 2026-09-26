@@ -407,3 +407,35 @@ console.log('ok');
 """
     result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+_CLASS_ATTR = re.compile(r'class="([^"]*)"')
+_CSS_CLASS_SELECTOR = re.compile(r"\.([a-zA-Z][a-zA-Z0-9_-]*)")
+
+_LOCKED_PREVIEW_CONSTANTS = [
+    name
+    for name in dir(frontend)
+    if name.endswith("_LOCKED_PREVIEW") and isinstance(getattr(frontend, name), str)
+]
+
+
+@pytest.mark.parametrize("const_name", _LOCKED_PREVIEW_CONSTANTS)
+def test_locked_preview_markup_only_uses_classes_the_stylesheet_actually_defines(const_name):
+    # Real bug found in a backward audit: DOCS_LOCKED_PREVIEW hardcoded a
+    # module-render markup/class shape (docs-module-title/-sub/-meta, a raw
+    # <pre> body) from before a later PR restyled the real renderer -
+    # those classes were deleted from STYLE, so a free-plan or
+    # pre-first-scan viewer saw the teaser with broken/default styling.
+    # Nothing caught it because no test checked a *_LOCKED_PREVIEW
+    # constant's classes against the real stylesheet - this one does, for
+    # all of them, so the same drift on WIKI_LOCKED_PREVIEW/
+    # TARGETS_LOCKED_PREVIEW/SETTINGS_LOCKED_PREVIEW gets caught too.
+    defined_classes = set(_CSS_CLASS_SELECTOR.findall(frontend.STYLE))
+    markup = getattr(frontend, const_name)
+    used_classes = {
+        cls
+        for attr_value in _CLASS_ATTR.findall(markup)
+        for cls in attr_value.split()
+    }
+    missing = used_classes - defined_classes
+    assert not missing, f"{const_name} uses classes not defined in STYLE: {sorted(missing)}"

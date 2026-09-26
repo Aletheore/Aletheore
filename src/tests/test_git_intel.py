@@ -511,6 +511,40 @@ def test_compute_recently_updated_ranks_by_recency_not_churn(tmp_path):
     assert all(item["last_commit_at"] for item in recent)
 
 
+def test_compute_recently_updated_ranks_by_real_utc_instant_not_offset_string(tmp_path):
+    # Real bug found in a backward audit: committed_at keeps each commit's
+    # own original UTC offset (`--date=iso-strict`), and sorting on its
+    # isoformat() *string* instead of the real datetime instant gets the
+    # order wrong across a day boundary. '2026-01-01T23:00:00-08:00' (real
+    # UTC instant 2026-01-02T07:00) string-sorts BEFORE
+    # '2026-01-02T01:00:00+00:00' (real UTC instant 2026-01-02T01:00)
+    # purely because '01-01' < '01-02' in the date portion, even though
+    # the first commit's real instant is later. a.py's touch below is the
+    # later real instant; recently_updated must rank it first.
+    repo = tmp_path / "offset_repo"
+    repo.mkdir()
+    run(repo, "init", "-q")
+    run(repo, "config", "user.email", "a@example.com")
+    run(repo, "config", "user.name", "A")
+
+    (repo / "a.py").write_text("1")
+    (repo / "b.py").write_text("1")
+    run(repo, "add", "-A")
+    commit(repo, "initial", "2026-01-01T00:00:00+00:00")
+
+    (repo / "b.py").write_text("2")
+    run(repo, "add", "-A")
+    commit(repo, "touch b, real UTC 2026-01-02T01:00", "2026-01-02T01:00:00+00:00")
+
+    (repo / "a.py").write_text("2")
+    run(repo, "add", "-A")
+    commit(repo, "touch a, real UTC 2026-01-02T07:00 (later)", "2026-01-01T23:00:00-08:00")
+
+    recent = compute_recently_updated(repo)
+    paths = [item["path"] for item in recent]
+    assert paths.index("a.py") < paths.index("b.py")
+
+
 def test_compute_recently_updated_excludes_a_low_churn_file_the_hotspot_limit_would_miss(tmp_path):
     # A file touched once, very recently, has churn_count 1 - real
     # production repos can have far more than HOTSPOT_LIMIT (30) files

@@ -312,8 +312,21 @@ def _recently_updated_summary(snapshot: GraphSnapshot) -> list[dict]:
     for path, churn in snapshot.file_churn.items():
         last_commit_at = _last_commit_at(churn)
         if last_commit_at is not None:
-            dated.append({"path": path, "last_commit_at": last_commit_at.isoformat()})
-    return sorted(dated, key=lambda item: item["last_commit_at"], reverse=True)[:RECENTLY_UPDATED_LIMIT]
+            dated.append((last_commit_at, path))
+    # Sort on the real datetime, not its isoformat() string: committed_at
+    # keeps each commit's own original UTC offset (`--date=iso-strict`,
+    # see incremental.py), and two offset-preserving isoformat strings do
+    # not string-compare in real chronological order - e.g.
+    # '...23:00:00-08:00' (actual UTC 07:00 the next day) sorts as earlier
+    # than '...01:00:00+00:00' (actual UTC 01:00) even though it's the
+    # later real instant. Found in a backward audit: ships despite
+    # passing tests because the existing tests' commits all share one
+    # local timezone offset and never exercise a cross-offset comparison.
+    dated.sort(key=lambda item: item[0], reverse=True)
+    return [
+        {"path": path, "last_commit_at": last_commit_at.isoformat()}
+        for last_commit_at, path in dated[:RECENTLY_UPDATED_LIMIT]
+    ]
 
 
 def compute_hotspots(
