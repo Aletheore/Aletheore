@@ -19,6 +19,7 @@
   <a href="https://github.com/Aletheore/Aletheore/actions/workflows/container-security.yml"><img src="https://github.com/Aletheore/Aletheore/actions/workflows/container-security.yml/badge.svg" alt="Container Security"></a>
   <a href="https://securityscorecards.dev/viewer/?uri=github.com/Aletheore/Aletheore"><img src="https://api.securityscorecards.dev/projects/github.com/Aletheore/Aletheore/badge" alt="OpenSSF Scorecard"></a>
   <a href="https://pepy.tech/projects/aletheore"><img src="https://static.pepy.tech/personalized-badge/aletheore?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads" alt="PyPI Downloads"></a>
+  <a href="https://mcpvault.io/servers/aletheore/health?utm_source=external_badge&utm_medium=referral&utm_campaign=mcp_health_report"><img src="https://mcpvault.io/badge/aletheore.svg" alt="MCPVault: claimed"></a>
 </p>
 
 <p align="center">
