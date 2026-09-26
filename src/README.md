@@ -557,6 +557,9 @@ aletheore: watching /path/to/repo (412 source files): evidence re-scans 5s after
   5-second quiet period, and it declines to start above 5,000 source files rather than keep a core
   busy — the message says how many it found. Only one watcher runs per repository even when several
   agent sessions have the server open; the others report that another process is watching.
+  On a filesystem that cannot take file locks (some network shares, container bind mounts, WSL's
+  Windows drives) it cannot tell, so it watches anyway: evidence writes are atomic, so the worst
+  case is a duplicate re-scan, never a corrupt file.
 - Everything it prints goes to stderr; stdout stays the MCP transport.
 
 `aletheore watch` does the same thing in the foreground (Ctrl-C to stop), with a 2-second quiet

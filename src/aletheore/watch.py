@@ -13,6 +13,7 @@ macOS and inotify on Linux, so idle cost is essentially zero and cost scales
 with edits rather than repository size.
 """
 
+import errno
 import os
 import threading
 import time
@@ -449,8 +450,38 @@ def watch(
         observer.join(timeout=5)
 
 
-def _try_lock_repo(repo_path: Path):
-    """Take the advisory "one watcher per repository" lock, or return None.
+# Outcomes of _lock_repo. Kept as plain strings so a test can name them.
+_LOCK_HELD = "held"  # this process now owns the repository's watcher lock
+_LOCK_BUSY = "busy"  # another process owns it
+_LOCK_UNSUPPORTED = "unsupported"  # the filesystem cannot lock; proceed without exclusion
+_LOCK_UNWRITABLE = "unwritable"  # .aletheore/ cannot be created or written
+
+# errno values that mean "somebody else holds the lock", as opposed to "this
+# filesystem cannot lock at all". POSIX flock(LOCK_NB) reports contention as
+# EAGAIN/EWOULDBLOCK (EACCES on some systems); Windows' LK_NBLCK reports it as
+# EACCES, or EDEADLK after its own internal retries.
+_CONTENTION_ERRNOS = frozenset({errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES, errno.EDEADLK})
+
+
+def _os_lock(fileno: int) -> None:
+    """Take a non-blocking exclusive lock on an open file, per operating system.
+
+    The only OS-specific code in the watcher. Raises OSError: contention as one
+    of _CONTENTION_ERRNOS, anything else meaning locking is not available here.
+    """
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(fileno, 0, os.SEEK_SET)
+        msvcrt.locking(fileno, msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(fileno, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _lock_repo(repo_path: Path):
+    """Try to become the one watcher for this repository: (status, handle).
 
     Several agent sessions can have an MCP server open on the same repository
     at once, and each would otherwise run its own watcher and rebuild the same
@@ -458,27 +489,28 @@ def _try_lock_repo(repo_path: Path):
     .aletheore/watch.lock, held by an open file for the life of the process,
     so it is released by the kernel when the holder exits or crashes: there is
     no pid file to go stale and nothing to clean up.
+
+    Only genuine contention means another watcher exists. A filesystem that
+    cannot lock at all (NFS without a lock daemon, some container bind mounts,
+    WSL's Windows drives) must not read as "somebody else is watching" and leave
+    the user with no watcher: the status is _LOCK_UNSUPPORTED and the caller
+    watches anyway, which is safe because evidence writes are atomic and the
+    worst case is a duplicate rebuild.
     """
     lock_path = repo_path / ".aletheore" / "watch.lock"
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        handle = open(lock_path, "a+")  # noqa: SIM115 - held open on purpose
+        handle = open(lock_path, "ab")  # noqa: SIM115 - held open on purpose
     except OSError:
-        return None
+        return _LOCK_UNWRITABLE, None
     try:
-        if os.name == "nt":
-            import msvcrt
-
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+        _os_lock(handle.fileno())
+    except OSError as exc:
         handle.close()
-        return None
-    return handle
+        if exc.errno in _CONTENTION_ERRNOS or isinstance(exc, (BlockingIOError, PermissionError)):
+            return _LOCK_BUSY, None
+        return _LOCK_UNSUPPORTED, None
+    return _LOCK_HELD, handle
 
 
 class BackgroundWatcher:
@@ -581,10 +613,14 @@ def start_background_watch(
         report("file watching not started: no evidence yet (run a scan first)")
         return None
 
-    lock_handle = _try_lock_repo(repo_path)
-    if lock_handle is None:
+    lock_status, lock_handle = _lock_repo(repo_path)
+    if lock_status == _LOCK_BUSY:
         report("file watching not started here: another aletheore process is already watching this repository")
         return None
+    if lock_status == _LOCK_UNWRITABLE:
+        report("file watching not started: cannot write to .aletheore/ in this repository")
+        return None
+    # _LOCK_UNSUPPORTED falls through with no handle: watch without exclusion.
 
     watcher = BackgroundWatcher(repo_path, report, debounce_seconds, max_files, lock_handle)
     watcher._thread = threading.Thread(target=watcher._run, name="aletheore-mcp-watch", daemon=True)

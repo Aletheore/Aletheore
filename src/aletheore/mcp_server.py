@@ -909,7 +909,22 @@ _watchers_lock = threading.Lock()
 
 def _watch_report(message: str) -> None:
     # stderr, never stdout: stdout is the MCP transport.
-    print(f"aletheore: {message}", file=sys.stderr, flush=True)
+    line = f"aletheore: {message}"
+    try:
+        print(line, file=sys.stderr, flush=True)
+    except UnicodeEncodeError:
+        # A Windows console on a legacy code page cannot encode every character
+        # a repository path may contain. Losing a diagnostic line is fine;
+        # taking the server (or the watcher thread) down over one is not.
+        encoding = getattr(sys.stderr, "encoding", None) or "ascii"
+        safe = line.encode(encoding, errors="replace").decode(encoding, errors="replace")
+        try:
+            print(safe, file=sys.stderr, flush=True)
+        except (UnicodeEncodeError, OSError, ValueError):
+            pass
+    except (OSError, ValueError):
+        # stderr closed (ValueError) or a broken pipe (OSError): the client went away.
+        pass
 
 
 def ensure_watcher(repo_path: Path) -> None:

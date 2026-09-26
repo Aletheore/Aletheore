@@ -65,9 +65,18 @@ jobs:
   # `pytest (3.11)` / `pytest (3.12)` check names stay exactly as they are. The coverage
   # gate is left off: its 85% threshold was calibrated on Linux, and platform-specific
   # code paths would make it a false signal here.
+  #
+  # Python 3.14 runs here too, not just on Linux: the tree-sitter crash that used to cap
+  # requires-python is a memory-corruption-class bug, and whether it shows up can depend on
+  # the platform's wheel. The newest and oldest-supported CPython are covered per OS;
+  # 3.11 to 3.13 are covered on Linux above. Not required checks.
   pytest-windows:
     runs-on: windows-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.14"]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -75,7 +84,34 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        working-directory: src
+        run: pip install -e ".[dev]"
+
+      - name: Run tests
+        working-directory: src
+        run: pytest
+
+  # macOS is the third platform the CLI and the MCP server run on. It differs from Linux in
+  # ways that have mattered here: file-event backend (FSEvents, not inotify), errno numbers,
+  # case-insensitive default filesystem, and /tmp being a symlink to /private/tmp.
+  pytest-macos:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.14"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: ${{ matrix.python-version }}
 
       - name: Install
         working-directory: src

@@ -1,3 +1,4 @@
+import errno
 import subprocess
 import threading
 import time
@@ -722,3 +723,87 @@ def test_a_watcher_that_dies_says_so_and_frees_the_lock(tmp_path):
     again = start_background_watch(repo, [].append, debounce_seconds=0.2)
     assert again is not None
     again.stop()
+
+
+# --- operating-system and filesystem differences ---------------------------
+#
+# The only OS-specific code in the watcher is watch._os_lock (fcntl.flock on
+# POSIX, msvcrt.locking on Windows). These patch that one function, so the
+# same assertions run identically on Linux, macOS and Windows CI.
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        BlockingIOError(errno.EAGAIN, "Resource temporarily unavailable"),
+        PermissionError(errno.EACCES, "Permission denied"),  # Windows' report of a held region
+        OSError(errno.EDEADLK, "Resource deadlock avoided"),
+    ],
+)
+def test_real_lock_contention_means_another_watcher_is_running(tmp_path, error):
+    repo = _repo_with_evidence(tmp_path)
+    messages: list[str] = []
+
+    with patch("aletheore.watch._os_lock", side_effect=error):
+        assert start_background_watch(repo, messages.append, debounce_seconds=0.2) is None
+
+    assert any("already watching" in message for message in messages)
+
+
+# Symbolic errno names, never numbers: the numbers differ by operating system
+# (37 is ENOLCK on Linux but EALREADY on macOS, where Python turns it into a
+# BlockingIOError), which is exactly the kind of difference these tests exist for.
+@pytest.mark.parametrize(
+    "error",
+    [
+        OSError(errno.ENOLCK, "No locks available"),
+        OSError(getattr(errno, "ENOTSUP", errno.EINVAL), "Operation not supported"),
+    ],
+)
+def test_a_filesystem_that_cannot_lock_still_gets_a_watcher_and_no_false_claim(tmp_path, error):
+    """NFS without a lock daemon, some container bind mounts and WSL's Windows
+    drives cannot lock. That must not be reported as "another process is
+    watching" and must not leave the user without a watcher: evidence writes
+    are atomic, so watching without exclusion is safe."""
+    repo = _repo_with_evidence(tmp_path)
+    messages: list[str] = []
+
+    with patch("aletheore.watch._os_lock", side_effect=error):
+        watcher = start_background_watch(repo, messages.append, debounce_seconds=0.2)
+        assert watcher is not None
+        try:
+            assert _wait_for(lambda: any(m.startswith("watching ") for m in messages), timeout=10)
+        finally:
+            watcher.stop()
+
+    assert not any("already watching" in message for message in messages)
+
+
+def test_an_unwritable_evidence_directory_is_reported_as_that(tmp_path):
+    repo = _repo_with_evidence(tmp_path)
+    messages: list[str] = []
+
+    real_open = open
+
+    def refuse_lock_file(path, *args, **kwargs):
+        if str(path).endswith("watch.lock"):
+            raise PermissionError(13, "Permission denied")
+        return real_open(path, *args, **kwargs)
+
+    with patch("builtins.open", side_effect=refuse_lock_file):
+        assert start_background_watch(repo, messages.append, debounce_seconds=0.2) is None
+
+    assert any("cannot write to .aletheore/" in message for message in messages)
+    assert not any("already watching" in message for message in messages)
+
+
+def test_the_lock_is_an_ordinary_file_in_the_evidence_directory(tmp_path):
+    """No pid file, no stale-lock cleanup: the OS drops the lock with the process."""
+    repo = _repo_with_evidence(tmp_path)
+
+    watcher = start_background_watch(repo, [].append, debounce_seconds=0.2)
+    assert watcher is not None
+    try:
+        assert (repo / ".aletheore" / "watch.lock").is_file()
+    finally:
+        watcher.stop()

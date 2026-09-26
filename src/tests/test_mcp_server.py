@@ -1336,3 +1336,33 @@ def test_the_server_instructions_tell_the_agent_about_freshness_and_the_off_swit
     assert "--no-watch" in SERVER_INSTRUCTIONS
     assert "ALETHEORE_MCP_WATCH=0" in SERVER_INSTRUCTIONS
     assert "aletheore_scan" in SERVER_INSTRUCTIONS.split("Freshness:")[1].split("\n\n")[0]
+
+
+def test_the_watch_report_survives_a_console_that_cannot_encode_the_path(monkeypatch):
+    """A Windows console on a legacy code page cannot encode every character a
+    repository path may contain. That must cost a diagnostic line at worst, never
+    the server."""
+    import io
+
+    from aletheore.mcp_server import _watch_report
+
+    raw = io.BytesIO()
+    legacy_console = io.TextIOWrapper(raw, encoding="cp1252", errors="strict", write_through=True)
+    monkeypatch.setattr("sys.stderr", legacy_console)
+
+    _watch_report("watching /home/日本語/repo (3 source files)")
+
+    written = raw.getvalue().decode("cp1252")
+    assert "watching" in written and "repo" in written
+
+
+def test_the_watch_report_survives_a_closed_stderr(monkeypatch):
+    import io
+
+    from aletheore.mcp_server import _watch_report
+
+    closed = io.StringIO()
+    closed.close()
+    monkeypatch.setattr("sys.stderr", closed)
+
+    _watch_report("watching anything")  # ValueError would escape a bare print
