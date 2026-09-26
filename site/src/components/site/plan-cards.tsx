@@ -61,7 +61,7 @@ function PlanCard({ plan, price, priceNote, interval }: { plan: Plan; price: str
       data-tier={plan.id === "community" ? undefined : plan.id}
       className={cn("flex flex-col border bg-raised p-6", plan.flagship ? "border-ink shadow-[6px_6px_0_0_var(--color-ink)]" : "border-line")}
     >
-      <h3 className="font-display text-[13px] font-semibold uppercase tracking-[0.04em] text-stamp">{plan.name}</h3>
+      <h2 className="font-display text-[13px] font-semibold uppercase tracking-[0.04em] text-stamp">{plan.name}</h2>
       <p className="mt-3 flex items-baseline gap-1.5 font-display">
         <span className="price-now text-[38px] font-bold tabular-nums leading-none">{price}</span>
         <span className="text-[13px] text-faint">{priceNote}</span>

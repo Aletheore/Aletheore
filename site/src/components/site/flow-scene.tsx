@@ -40,7 +40,7 @@ export function FlowScene({ steps, panels }: { steps: readonly FlowStep[]; panel
           >
             <span className={cn("absolute -left-[5px] top-[7px] size-[9px] transition-colors", i === active ? "bg-stamp" : "bg-line-strong")} aria-hidden="true" />
             <p className="font-display text-[12.5px] text-stamp">{s.k}</p>
-            <h3 className="mt-2 font-display text-[21px] font-bold leading-tight">{s.title}</h3>
+            <h2 className="mt-2 font-display text-[21px] font-bold leading-tight">{s.title}</h2>
             <p className="mt-3 max-w-[46ch] text-[14.5px] leading-[1.7] text-muted">{s.body}</p>
             <div className="mt-6 md:hidden"><PanelView panel={panels[s.id]} /></div>
           </li>

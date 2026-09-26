@@ -20,7 +20,7 @@ export function Footer() {
         </div>
         {footerColumns.map((col) => (
           <div key={col.title}>
-            <h4 className="mb-3.5 text-xs uppercase tracking-[0.04em] text-faint">{col.title}</h4>
+            <h3 className="mb-3.5 text-xs uppercase tracking-[0.04em] text-faint">{col.title}</h3>
             {col.links.map((l) =>
               l.external ? (
                 <a key={l.href} href={l.href} rel="noopener" className="mb-2 block text-[13.5px] text-muted hover:text-ink">{l.label}</a>

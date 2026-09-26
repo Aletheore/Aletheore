@@ -10,7 +10,7 @@ import { credit, enterprise, footnotes, installHref, installNote, pricingHead, p
 export const metadata: Metadata = {
   title: "Pricing",
   description:
-    "Aletheore Community: free deterministic CLI scanning forever. Aletheore Flash ($8/mo): automatic PR reviews on $5 of AI credit a month (about 400 PRs). Aletheore AIR ($29.99/mo, $18 of AI credit a month): everything in Flash plus managed AI audits, AIRview, AI-generated Docs, live endpoint monitoring, and team seats.",
+    "Free local CLI forever. Flash is $8/mo for automatic PR reviews on $5 of AI credit. AIR is $29.99/mo with $18 of credit, audits, AIRview, AI Docs, endpoint monitoring and team seats.",
   alternates: { canonical: "/pricing" },
 };
 
