@@ -908,6 +908,19 @@ def build_blast_radius_context(
     (name collisions between unrelated symbols in different modules are
     common, especially for short/generic names). A lower-confidence,
     name-only tier is explicitly out of scope for this pass.
+
+    Also checks the symbol's own file for a same-file/same-class caller
+    (e.g. a class's __call__ invoking one of its own other methods) -
+    invisible to the imported_by-only loop above, since a same-file caller
+    never shows up as an importer of its own file. Found via a real gap:
+    the mirrored find_blast_radius (query.py, used by the MCP server) on
+    Flask's wsgi_app returned zero confirmed callers - correctly, since no
+    *other* file calls it by name - while the actual caller, Flask.__call__,
+    sits one class away in the same file. Excludes matches on the symbol's
+    own def/class line so its own definition never counts as calling
+    itself. Same one fetch per changed file, cached across that file's
+    symbols, so this adds at most one extra fetch_file_content call per
+    changed file, not per symbol.
     """
     if not evidence:
         return ""
@@ -917,6 +930,7 @@ def build_blast_radius_context(
 
     lines: list[str] = []
     symbols_analyzed = 0
+    own_content_cache: dict[str, str | None] = {}
 
     for file_path in changed_files:
         if symbols_analyzed >= MAX_BLAST_RADIUS_SYMBOLS:
@@ -983,15 +997,34 @@ def build_blast_radius_context(
                 if len(callers) > MAX_BLAST_RADIUS_CALLERS_SHOWN:
                     callers = callers[:MAX_BLAST_RADIUS_CALLERS_SHOWN]
 
-            if callers:
+            if file_path not in own_content_cache:
+                own_content_cache[file_path] = fetch_file_content(file_path)
+            own_content = own_content_cache[file_path]
+            same_file_caller = False
+            if own_content is not None:
+                def_re = re.compile(rf"^\s*(async\s+def|def|class)\s+{re.escape(name)}\b")
+                for line in own_content.splitlines():
+                    if def_re.match(line):
+                        continue
+                    if call_re.search(line):
+                        same_file_caller = True
+                        break
+
+            if callers or same_file_caller:
                 total = len(module.get("imported_by") or [])
                 shown = f"{', '.join(callers)}" + (
                     f" (+{total - len(callers)} more importers not shown)"
-                    if total > len(callers)
+                    if callers and total > len(callers)
                     else ""
                 )
+                if same_file_caller:
+                    shown = (
+                        f"{shown} and a same-file caller in {file_path} itself"
+                        if shown
+                        else f"a same-file caller in {file_path} itself"
+                    )
                 lines.append(f"{file_path}:{name} is called from: {shown}")
-            elif checked:
+            elif checked or own_content is not None:
                 # Absence of a positive signal used to be plain silence -
                 # nothing distinguished "not checked" from "checked and
                 # found no caller". A real false positive traced to exactly
@@ -1000,19 +1033,30 @@ def build_blast_radius_context(
                 # itself and guessed "not used anywhere in the codebase" -
                 # a claim broader than what was actually checked. State
                 # only what was verified, gated on `checked` (content
-                # actually fetched and searched), not `candidates`
-                # (attempted) - a candidate whose fetch failed was never
-                # really checked, and claiming otherwise would overclaim
-                # in exactly the way this line exists to prevent.
+                # actually fetched and searched) or the same-file check
+                # having actually run, not `candidates` (attempted) - a
+                # candidate whose fetch failed was never really checked,
+                # and claiming otherwise would overclaim in exactly the
+                # way this line exists to prevent.
                 total = len(module.get("imported_by") or [])
-                scope = (
-                    f"the {checked} file(s) that import {file_path}"
-                    if total <= checked
-                    else f"{checked} of the {total} files that import {file_path}"
-                )
+                checked_scopes = []
+                if checked:
+                    checked_scopes.append(
+                        f"the {checked} file(s) that import {file_path}"
+                        if total <= checked
+                        else f"{checked} of the {total} files that import {file_path}"
+                    )
+                if own_content is not None:
+                    checked_scopes.append(f"{file_path} itself")
+                not_checked = []
+                if own_content is None:
+                    not_checked.append("same-file callers")
+                if checked and total > checked:
+                    not_checked.append("importers beyond this count")
+                caveat = f" (not checked: {', '.join(not_checked)})" if not_checked else ""
                 lines.append(
-                    f"{file_path}:{name}: no confirmed caller found among {scope} "
-                    "(not checked: same-file callers, or importers beyond this count)"
+                    f"{file_path}:{name}: no confirmed caller found among "
+                    f"{' and '.join(checked_scopes)}{caveat}"
                 )
 
     if not lines:
