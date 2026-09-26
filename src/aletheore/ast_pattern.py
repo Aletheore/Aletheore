@@ -11,8 +11,9 @@ Only user of tree_sitter's Query/QueryCursor API in this codebase - every
 other module uses Parser/Tree/Node directly. That distinction matters: this
 module's real-repo use of Query/QueryCursor segfaults reliably on Python
 3.14 once enough files/matches accumulate for the cyclic GC to touch the
-resulting Node/Tree/QueryCursor object graph (see pyproject.toml's
-`requires-python` upper bound). Not fixed by explicit `del`,
+resulting Node/Tree/QueryCursor object graph (this used to be why
+`requires-python` was capped below 3.14; the cap was lifted once the FIX below was
+verified on 3.14). Not fixed by explicit `del`,
 `gc.disable()`, or forced `gc.collect()` per iteration - tried all three,
 none prevented it.
 
