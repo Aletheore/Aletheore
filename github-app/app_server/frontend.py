@@ -611,8 +611,8 @@ svg#depgraph:active { cursor: grabbing; }
   .health-grid, .subsystem-grid, .settings-grid, .docs-grid { grid-template-columns: 1fr; }
   .credit-hero { grid-template-columns: minmax(0, 1fr); }
   .credit-actions { align-items: flex-start; }
-  .docs-overview, .docs-module-summary, .docs-commit-card { grid-template-columns: 1fr; }
-  .docs-overview-stats, .docs-module-meta { justify-content: flex-start; }
+  .docs-module-summary, .docs-commit-card { grid-template-columns: 1fr; }
+  .stat-row { justify-content: flex-start; }
   .picker-head { align-items: flex-start; gap: 1rem; flex-direction: column; }
   .diagram-zoom-toolbar { left: 14px; right: 14px; transform: none; justify-content: center; flex-wrap: wrap; border-radius: 14px; }
   .diagram-zoom-hint { order: 2; width: 100%; text-align: center; }
@@ -2673,13 +2673,19 @@ loadPlanBadge();
 # ---------------------------------------------------------------------------
 DOCS_LOCKED_PREVIEW = (
     '<div class="docs-grid">'
-    '<details class="docs-module-card" open><summary class="docs-module-summary">'
-    '<div><div class="docs-module-title"><i class="ti ti-file-code"></i><span class="docs-module-path">checkout/session.py</span></div>'
-    '<div class="docs-module-sub">1 documented symbol</div></div>'
-    '<div class="docs-module-meta"><span class="docs-chip">1 symbol</span><i class="ti ti-chevron-down docs-module-chevron"></i></div>'
-    '</summary><div class="docs-module-content"><pre class="docs-module-body">'
-    '# checkout/session.py\n\n### `create_session(cart_id)`\n\nValidates a cart and opens a new payment session.\n\n`checkout/session.py:42`'
-    '</pre></div></details>'
+    '<details class="docs-module-card" open>'
+    '<summary class="docs-module-summary">'
+    '<span class="docs-module-chevron">&#9654;</span>'
+    '<span class="docs-module-path">checkout/session.py</span>'
+    '</summary>'
+    '<div class="docs-module-content"><div class="docs-module-content-inner">'
+    '<div class="docs-symbol-row">'
+    '<div class="sig"><span class="name">create_session(cart_id)</span><span class="kind">function</span></div>'
+    '<div class="desc">Validates a cart and opens a new payment session.</div>'
+    '<div class="cite">checkout/session.py:42</div>'
+    '</div>'
+    '</div></div>'
+    '</details>'
     "</div>"
 )
 
