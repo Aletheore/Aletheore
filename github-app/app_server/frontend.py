@@ -611,8 +611,8 @@ svg#depgraph:active { cursor: grabbing; }
   .health-grid, .subsystem-grid, .settings-grid, .docs-grid { grid-template-columns: 1fr; }
   .credit-hero { grid-template-columns: minmax(0, 1fr); }
   .credit-actions { align-items: flex-start; }
-  .docs-overview, .docs-module-summary, .docs-commit-card { grid-template-columns: 1fr; }
-  .docs-overview-stats, .docs-module-meta { justify-content: flex-start; }
+  .docs-module-summary, .docs-commit-card { grid-template-columns: 1fr; }
+  .stat-row { justify-content: flex-start; }
   .picker-head { align-items: flex-start; gap: 1rem; flex-direction: column; }
   .diagram-zoom-toolbar { left: 14px; right: 14px; transform: none; justify-content: center; flex-wrap: wrap; border-radius: 14px; }
   .diagram-zoom-hint { order: 2; width: 100%; text-align: center; }

@@ -840,12 +840,12 @@ async def _build_docs_modules(
     differently.
 
     evidence: pass the already-fetched evidence when the caller also needs
-    it for something else (get_dashboard_docs's git_data below) - avoids a
-    second get_latest_evidence call *and* the race it opened: a new scan's
-    repo_history row landing in the gap between two separate fetches could
-    otherwise mix an older scan's modules with a newer scan's
-    recently_updated/hotspots in one response. Omit it (as the export
-    route does - it has no use for git_data) to fetch it here as before."""
+    it for something else (get_dashboard_docs's git_data, the export
+    route's overview sections) - avoids a second get_latest_evidence call
+    *and* the race it opened: a new scan's repo_history row landing in the
+    gap between two separate fetches could otherwise mix an older scan's
+    modules with a newer scan's recently_updated/hotspots or overview
+    sections in one response. Omit it to fetch it here."""
     from aletheore.docs_reference import build_api_reference
 
     if evidence is None:
@@ -927,13 +927,14 @@ async def get_dashboard_docs_export(org: str, repo: str, request: Request):
     installation_id = installation["installation_id"]
     repo_full_name = f"{org}/{repo}"
 
-    # Fetched separately from _build_docs_modules's own internal fetch
-    # (same cheap lookup this file already repeats per-route elsewhere) -
-    # the combined export is the one caller that also needs the raw
-    # evidence, for the API Endpoints/Database Schema overview sections
-    # build_combined_reference adds ahead of the per-module reference.
+    # Fetched once and passed into _build_docs_modules (see its docstring) -
+    # the combined export also needs the raw evidence itself, for the API
+    # Endpoints/Database Schema overview sections build_combined_reference
+    # adds ahead of the per-module reference, and two separate fetches let
+    # a scan that lands in between mix modules from one snapshot with
+    # overview sections from another.
     evidence = await get_latest_evidence(pool, installation_id, repo_full_name)
-    modules = await _build_docs_modules(pool, installation_id, repo_full_name)
+    modules = await _build_docs_modules(pool, installation_id, repo_full_name, evidence=evidence)
     markdown = build_combined_reference(modules, repo_full_name, evidence)
     filename = f"{_safe_download_filename(repo)}-api-reference.md"
     return Response(

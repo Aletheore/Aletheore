@@ -2639,6 +2639,38 @@ async def test_dashboard_docs_export_returns_combined_markdown_with_toc(pool, mo
 
 
 @pytest.mark.asyncio
+async def test_dashboard_docs_export_fetches_evidence_only_once(pool, monkeypatch):
+    # Same race as the JSON Docs route: the export needs the raw evidence
+    # itself (overview sections) and _build_docs_modules used to fetch it a
+    # second time, so a scan landing between the two fetches could pair one
+    # snapshot's modules with another's endpoints/schema sections.
+    await upsert_installation(pool, 712, "octocat")
+    await set_installation_plan(pool, 712, "air")
+    await insert_repo_history(
+        pool, 712, "octocat/hello-world", datetime.now(timezone.utc),
+        _evidence_with_module("a.py", "add", "Adds two numbers."),
+    )
+
+    calls = []
+    import app_server.dashboard as dashboard_module
+
+    real_get_latest_evidence = dashboard_module.get_latest_evidence
+
+    async def counting_get_latest_evidence(*a, **k):
+        calls.append(1)
+        return await real_get_latest_evidence(*a, **k)
+
+    monkeypatch.setattr(dashboard_module, "get_latest_evidence", counting_get_latest_evidence)
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[712])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/docs/export")
+
+    assert response.status_code == 200
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_dashboard_docs_export_handles_no_modules_yet(pool, monkeypatch):
     await upsert_installation(pool, 708, "octocat")
     await set_installation_plan(pool, 708, "air")
