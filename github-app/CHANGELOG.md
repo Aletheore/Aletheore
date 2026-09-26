@@ -18,6 +18,59 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-09-26
+
+Tagged `github-app-deploy-2026-09-26` (commit `3c09867`), no migrations. One deploy, all five code
+services rebuilt and force-recreated.
+
+- **#828 - credit accounting follow-ups.** The `llm_spend` monthly aggregate now records the real
+  cost of each call. Reservations only move the credit balance, but the true-up used to record
+  `cost - reserve` into the aggregate, driving September to -$156.02 on one install and -$47.20 on
+  another (informational table, returned by the admin API as `llm_spend_month_to_date`).
+  Flash Review no longer releases its reservation a second time when an error happens after the
+  true-up. `_IncrementalSpendBudget` reservations accumulate instead of overwriting, and
+  `record_usage` settles against what is actually outstanding, so a second model call under one
+  Docs reservation is charged in full.
+- One-off data repair after the deploy: the two negative September `llm_spend` rows were reset to
+  their `llm_spend_events` ledger sums (1.85 and 2.22).
+
+## 2026-09-25 (later deploys, tags `-2` to `-7`)
+
+Six more deploys the same day, all five code services rebuilt each time, no migrations. Every one
+was checked after restart: `/healthz` and the public status API 200, all services `healthy`, zero
+errors in the logs, and the change confirmed present inside the running container.
+
+- **`-2` (`a3de1a7`) - dashboard restructure, first half (#819 to #822).** Viewport meta tag on
+  every page (it existed nowhere, so phone layouts never worked), then AIRview, Overview (with
+  inline credit and seat purchase) and Endpoint health rebuilt to the approved mockups. Adds a
+  24-hour uptime figure, the credit allotment and the renewal date to the dashboard data.
+- **`-3` (`736bf96`) - dashboard restructure, second half (#823, #824).** Docs (with the
+  recently-updated and hotspot panel) and the Flash credits page. The Docs panel adds
+  `git.recently_updated` to the AIR schema, so `EVIDENCE_VERSION` went from 0.6.0 to 0.7.0: every
+  scan stored at 0.6.0 reads as "no evidence yet" until its repo is scanned again. The two current
+  Aletheore repos were re-scanned after the deploy.
+- **`-4` (`bcc8124`) - #825.** The sidebar repo list scrolls on its own, so an org with many repos
+  no longer pushes Settings and Sign out below the fold.
+- **`-5` (`be96d5d`) - #826.** The real Aletheore logo, website wordmark styling and a favicon on
+  every dashboard page. The mockups had drawn a placeholder "A" in a box, which had been copied
+  into production, and no dashboard page set a favicon.
+- **`-6` (`1fb6727`) - #818, sign-in redesign.** Also replaces the sign-in line "We never request
+  write access to code", which was false: the GitHub App holds `contents: write`, used only by the
+  opt-in, off-by-default Docs sync that pushes `.aletheore/docs/API.md` to an
+  `aletheore/docs-update` branch and never to the default branch.
+- **`-7` (`9fd724e`) - #827, credit leak.** The Docs build reserved $0.10 per module before it
+  knew whether the module needed a model call, and never gave it back when it did not, with no
+  `llm_spend_events` row to show for it. Two AIR installs sat at $0.02 and $0.00 with only $1.79
+  and $2.22 of ledgered spend. `release_unused_reservation()` now settles it. Also fixed:
+  `release_llm_spend_reservation` no longer lowers a base balance that is already above the stored
+  allotment (base 18 with allotment 5 lost 13 on the first release).
+
+Data changes made by hand, not part of any deploy: both balances restored after `-7` (Aletheore
+allotment and base to $18.00; ArihantK15 base to $18 minus its $2.22 ledgered spend, allotment
+$18.00, `balance_epoch` bumped on both). Known and parked: the `Aletheore` installation is on `air`
+by a database change and its Paddle customer and subscription ids do not exist in live Paddle, so
+its Buy extra seat and Manage billing actions fail until it has a real subscription.
+
 ## 2026-09-25
 
 69 commits since the previous deploy (`github-app-deploy-2026-09-23-5`), tagged

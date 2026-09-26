@@ -4,8 +4,21 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-09-25
-**Snapshot Freshness:** CURRENT as of 2026-09-25 - production was redeployed to `master` (commit
+**Last Updated:** 2026-09-26
+**Snapshot Freshness:** CURRENT as of 2026-09-26 - production was redeployed to `master` (commit
+`3c09867`, tagged `github-app-deploy-2026-09-26`) and re-verified live via SSH the same session. Only
+PR #828 since the previous tag (`github-app-deploy-2026-09-25-7`), no migrations. `app-server`,
+`scan-worker`, `scan-worker-2`, `health-worker` and `scheduler` rebuilt and force-recreated
+(`jina-embed` untouched); all `healthy`, zero errors in the logs after restart, `/healthz` and the
+public status API returning 200, and `reservation_state` (the Flash Review double-release fix)
+confirmed present by grepping `scan_worker/jobs.py` inside the running `scan-worker` container.
+Credit accounting was checked against the ledger after the deploy: the Aletheore install's balance
+drop (about $0.06 since it was restored to $18.00) matched its `llm_spend_events`, and the other
+paid install was unchanged. Six earlier deploys on 2026-09-25 (tags `-2` to `-7`: dashboard
+restructure, sidebar scroll, real logo and favicon, sign-in, and the credit leak fix) are written up
+in `github-app/CHANGELOG.md`; the evidence schema moved to 0.7.0 in `-3`.
+
+**Previous:** CURRENT as of 2026-09-25 (first deploy) - production was redeployed to `master` (commit
 `1d4da1f`, tagged `github-app-deploy-2026-09-25`) and re-verified live via SSH the same session.
 69 commits since the previous deploy tag (`github-app-deploy-2026-09-23-5`), 1 migration (069,
 `flash_review_history`, confirmed applied) - see `github-app/CHANGELOG.md` for the full writeup.
