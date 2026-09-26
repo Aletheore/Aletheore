@@ -11,14 +11,17 @@ import { useReducedMotion } from "./use-reduced-motion";
 
 export function ResolutionScene() {
   const root = useRef<HTMLElement>(null);
-  const [active, setActive] = useState(0);
+  const [scrollStep, setActive] = useState(0);
   const reduced = useReducedMotion();
   const steps = evidenceChain.steps;
+  // Without the pinned scroll (reduced motion, phones) the scene rests on its final step, the full chain.
+  const active = reduced ? steps.length - 1 : scrollStep;
   const activeIds = useMemo(() => highlightForStep(graph, evidenceChain, active), [active]);
 
   useEffect(() => {
     const el = root.current;
-    if (!el || reduced) return;
+    if (!el) return;
+    if (reduced) return;
     let cancelled = false;
     let revert: (() => void) | null = null;
     (async () => {
@@ -41,6 +44,9 @@ export function ResolutionScene() {
             }),
         });
         return () => trigger.kill();
+      });
+      mm.add("(max-width: 767px)", () => {
+        setActive(steps.length - 1);
       });
       void refreshAfterFonts(document.fonts, () => ScrollTrigger.refresh());
       revert = () => mm.revert();
