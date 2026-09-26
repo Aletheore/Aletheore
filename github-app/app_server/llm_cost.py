@@ -48,7 +48,7 @@ EXTRA_SEAT_PRICE_USD = 6.99
 # a wash - at cap, a seat used to cost exactly what it earned.
 EXTRA_SEAT_LLM_CAP_USD = 3.00
 
-# Base monthly price per plan (github-app/../website/pricing.html) - the hard
+# Base monthly price per plan (site/src/data/pricing.ts) - the hard
 # LLM spend cap is set as a fraction of this, not a flat dollar figure, so it
 # scales with what the tier actually pays rather than under- or over-capping
 # it. Single paid tier (Aletheore AIR) - priced monthly regardless of

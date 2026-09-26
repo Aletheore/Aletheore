@@ -7,7 +7,7 @@
     "format:check": "prettier --check \".github/**/*.{yml,yaml}\" \"package.json\"",
     "format": "prettier --write \".github/**/*.{yml,yaml}\" \"package.json\"",
     "lint:markdown": "markdownlint-cli2 \"*.md\" \"!STARTUP_AUDIT_REPORT.md\" \".github/**/*.md\" \"docs/**/*.md\" \"!docs/superpowers/**\"",
-    "lint:links": "lychee --config lychee.toml \"README.md\" \"website/**/*.html\" \"docs/**/*.md\"",
+    "lint:links": "lychee --config lychee.toml \"README.md\" \"docs/**/*.md\"",
     "lint:spelling": "cspell --config cspell.json",
     "lint:licenses": "cd src && pip-licenses --fail-on \"GPL;AGPL\" --format=plain-vertical && cd ../github-app && pip-licenses --fail-on \"GPL;AGPL\" --format=plain-vertical"
   },

@@ -48,8 +48,8 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     # Only the public status widget (/v1/health/{org}/{repo}, dashboard.py -
-    # website/status.js fetches it directly from browser JS on the
-    # marketing site) is meant to be called from a different origin.
+    # the marketing site's status page fetches it directly from browser
+    # JS) is meant to be called from a different origin.
     # Everything else here is same-site cookie auth or a Bearer-token API
     # not normally called from a browser, so this stays narrowly scoped
     # rather than a wildcard.
