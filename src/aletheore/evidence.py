@@ -105,7 +105,7 @@ def load_evidence_file(evidence_path: Path) -> dict:
     not help, and the caller needs to know which key is wrong rather than
     discovering it as a KeyError three modules away.
     """
-    evidence = json.loads(_read_text_with_retry(evidence_path))
+    evidence = json.loads(read_text_with_retry(evidence_path))
     written_version = evidence.get("aletheore_version") if isinstance(evidence, dict) else None
     if not is_evidence_version_compatible(written_version):
         raise IncompatibleEvidenceVersionError(
@@ -722,7 +722,7 @@ _REPLACE_RETRIES = 20
 _REPLACE_RETRY_DELAY_SECONDS = 0.05
 
 
-def _read_text_with_retry(path: Path) -> str:
+def read_text_with_retry(path: Path) -> str:
     """Read `path` as UTF-8 text, retrying briefly on Windows.
 
     The mirror image of _atomic_write_text's own retry, and a real gap that

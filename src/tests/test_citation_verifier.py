@@ -222,7 +222,7 @@ def _repo_with_evidence(tmp_path, files: dict[str, str]):
 
 
 def test_load_verifiable_evidence_recovers_from_a_transient_windows_permission_error(tmp_path):
-    # This read used to bypass the shared _read_text_with_retry helper
+    # This read used to bypass the shared read_text_with_retry helper
     # entirely, catching PermissionError (a subclass of OSError) as "cannot
     # verify" and silently giving up rather than actually succeeding after a
     # brief, real transient race with a concurrent writer (the background

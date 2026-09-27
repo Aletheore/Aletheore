@@ -1289,13 +1289,13 @@ def test_write_evidence_falls_back_to_writing_in_place_when_a_reader_blocks_the_
     assert [p.name for p in (tmp_path / ".aletheore").iterdir() if p.name.endswith(".tmp")] == []
 
 
-def test_read_text_with_retry_recovers_from_a_transient_windows_permission_error(tmp_path):
+def testread_text_with_retry_recovers_from_a_transient_windows_permission_error(tmp_path):
     # The reader-side mirror of the write-side retry above: os.replace's
     # Windows implementation briefly holds the destination exclusively while
     # swapping in new content, and a reader's own read() can land in that
     # instant. Confirmed live on CI's pytest-windows job (test_watch.py's own
     # concurrent-writer test) before this existed.
-    from aletheore.evidence import _read_text_with_retry
+    from aletheore.evidence import read_text_with_retry
 
     path = tmp_path / "air.json"
     path.write_text('{"real": "content"}', encoding="utf-8")
@@ -1311,14 +1311,14 @@ def test_read_text_with_retry_recovers_from_a_transient_windows_permission_error
     with patch("aletheore.evidence.Path.read_text", flaky_read_text), patch(
         "aletheore.evidence._REPLACE_RETRY_DELAY_SECONDS", 0
     ):
-        assert _read_text_with_retry(path) == '{"real": "content"}'
+        assert read_text_with_retry(path) == '{"real": "content"}'
     assert calls["count"] == 3
 
 
-def test_read_text_with_retry_reraises_a_persistent_permission_error(tmp_path):
+def testread_text_with_retry_reraises_a_persistent_permission_error(tmp_path):
     # A genuine, non-transient permission problem must fail exactly as it
     # would without these retries, not hang or silently swallow it.
-    from aletheore.evidence import _read_text_with_retry
+    from aletheore.evidence import read_text_with_retry
 
     path = tmp_path / "air.json"
     path.write_text("{}", encoding="utf-8")
@@ -1327,7 +1327,7 @@ def test_read_text_with_retry_reraises_a_persistent_permission_error(tmp_path):
         "aletheore.evidence.Path.read_text", side_effect=PermissionError("permanently denied")
     ), patch("aletheore.evidence._REPLACE_RETRY_DELAY_SECONDS", 0):
         with pytest.raises(PermissionError):
-            _read_text_with_retry(path)
+            read_text_with_retry(path)
 
 
 def test_load_evidence_file_recovers_from_a_transient_windows_permission_error(tmp_path):
