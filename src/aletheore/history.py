@@ -99,6 +99,71 @@ def _new_and_resolved(
     return new_only, resolved
 
 
+def _module_symbol_names(module: dict | None) -> tuple[set[str], set[str]]:
+    """(function_names, class_names) declared in `module`'s scan evidence,
+    or two empty sets when `module` is None - the file didn't exist as a
+    scanned code module at this commit, either because it never existed
+    or because aletheore's scanner doesn't parse it as code (docs,
+    config, binary assets)."""
+    if module is None:
+        return set(), set()
+    symbols = module.get("symbols", {})
+    functions = {e["name"] for e in symbols.get("functions", []) if e.get("name")}
+    classes = {e["name"] for e in symbols.get("classes", []) if e.get("name")}
+    return functions, classes
+
+
+def summarize_file_changes(old: dict, new: dict, changed_files: list[dict]) -> list[dict]:
+    """Per-file function/class-level summary for every file GitHub's
+    compare API reports as changed between the commits `old` and `new`
+    were scanned at.
+
+    `changed_files` is `github_api.fetch_pr_changed_files_detailed`'s own
+    shape: each dict needs "filename", "status", "additions", "deletions",
+    and (for a rename) "previous_filename". A renamed file is looked up at
+    its *previous* path in `old` and its current path in `new` - looking
+    both up at the current path would misreport a pure rename's whole
+    function/class set as freshly added, since `old`'s module list was
+    never indexed at the new path.
+
+    Returns one dict per input file, in the same order: {"path", "status",
+    "additions", "deletions", "previous_path", "functions_added",
+    "functions_removed", "classes_added", "classes_removed",
+    "has_module_data"}. `has_module_data` is False only when neither
+    commit's evidence scanned this path as a code module at all (a
+    non-code file, or one aletheore's scanner doesn't parse) - a renderer
+    needs this to tell "nothing changed" apart from "never had symbols to
+    diff in the first place" instead of reporting both identically.
+    """
+    old_modules = {m["path"]: m for m in old.get("repository", {}).get("modules", [])}
+    new_modules = {m["path"]: m for m in new.get("repository", {}).get("modules", [])}
+
+    rows = []
+    for file in changed_files:
+        path = file["filename"]
+        previous_path = file.get("previous_filename")
+        old_lookup_path = previous_path if previous_path else path
+        old_module = old_modules.get(old_lookup_path)
+        new_module = new_modules.get(path)
+
+        old_functions, old_classes = _module_symbol_names(old_module)
+        new_functions, new_classes = _module_symbol_names(new_module)
+
+        rows.append({
+            "path": path,
+            "status": file.get("status", "modified"),
+            "additions": file.get("additions", 0),
+            "deletions": file.get("deletions", 0),
+            "previous_path": previous_path,
+            "functions_added": sorted(new_functions - old_functions),
+            "functions_removed": sorted(old_functions - new_functions),
+            "classes_added": sorted(new_classes - old_classes),
+            "classes_removed": sorted(old_classes - new_classes),
+            "has_module_data": old_module is not None or new_module is not None,
+        })
+    return rows
+
+
 def _endpoint_block(evidence: dict) -> dict:
     return evidence["repository"].get(
         "api_endpoints", {"checked": False, "reason": "not present in older evidence", "endpoints": []}

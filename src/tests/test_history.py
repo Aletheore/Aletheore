@@ -1,6 +1,6 @@
 import json
 
-from aletheore.history import compute_diff, list_snapshots, save_snapshot, to_sarif
+from aletheore.history import compute_diff, list_snapshots, save_snapshot, summarize_file_changes, to_sarif
 
 
 def make_evidence(scanned_at: str) -> dict:
@@ -518,6 +518,108 @@ def test_compute_diff_is_deterministic():
 
     assert first == second
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
+
+
+def _module(path, functions=(), classes=()):
+    return {
+        "path": path,
+        "symbols": {
+            "functions": [{"name": n, "start_line": 1, "end_line": 2} for n in functions],
+            "classes": [{"name": n, "start_line": 1, "end_line": 2} for n in classes],
+        },
+    }
+
+
+def _evidence_with_modules(modules):
+    return {"repository": {"modules": modules}}
+
+
+def test_summarize_file_changes_detects_added_and_removed_functions():
+    old = _evidence_with_modules([_module("app.py", functions=["a", "b"])])
+    new = _evidence_with_modules([_module("app.py", functions=["a", "c"])])
+    changed_files = [{"filename": "app.py", "status": "modified", "additions": 3, "deletions": 1}]
+
+    rows = summarize_file_changes(old, new, changed_files)
+
+    assert rows == [{
+        "path": "app.py",
+        "status": "modified",
+        "additions": 3,
+        "deletions": 1,
+        "previous_path": None,
+        "functions_added": ["c"],
+        "functions_removed": ["b"],
+        "classes_added": [],
+        "classes_removed": [],
+        "has_module_data": True,
+    }]
+
+
+def test_summarize_file_changes_new_file_reports_only_additions():
+    old = _evidence_with_modules([])
+    new = _evidence_with_modules([_module("new_mod.py", functions=["f1", "f2"])])
+    changed_files = [{"filename": "new_mod.py", "status": "added", "additions": 20, "deletions": 0}]
+
+    rows = summarize_file_changes(old, new, changed_files)
+
+    assert rows[0]["functions_added"] == ["f1", "f2"]
+    assert rows[0]["functions_removed"] == []
+    assert rows[0]["has_module_data"] is True
+
+
+def test_summarize_file_changes_removed_file_reports_only_removals():
+    old = _evidence_with_modules([_module("gone.py", functions=["f1"])])
+    new = _evidence_with_modules([])
+    changed_files = [{"filename": "gone.py", "status": "removed", "additions": 0, "deletions": 15}]
+
+    rows = summarize_file_changes(old, new, changed_files)
+
+    assert rows[0]["functions_removed"] == ["f1"]
+    assert rows[0]["functions_added"] == []
+
+
+def test_summarize_file_changes_no_change_reports_empty_diffs():
+    old = _evidence_with_modules([_module("stable.py", functions=["f1"])])
+    new = _evidence_with_modules([_module("stable.py", functions=["f1"])])
+    changed_files = [{"filename": "stable.py", "status": "modified", "additions": 1, "deletions": 1}]
+
+    rows = summarize_file_changes(old, new, changed_files)
+
+    assert rows[0]["functions_added"] == []
+    assert rows[0]["functions_removed"] == []
+    assert rows[0]["has_module_data"] is True
+
+
+def test_summarize_file_changes_rename_diffs_against_the_previous_path():
+    # The real bug this pins: looking up a renamed file at its NEW path in
+    # `old` evidence finds nothing there, and would misreport the whole
+    # function as freshly added even though only the filename changed.
+    old = _evidence_with_modules([_module("src/old_name.py", functions=["f1", "f2"])])
+    new = _evidence_with_modules([_module("src/new_name.py", functions=["f1", "f2"])])
+    changed_files = [{
+        "filename": "src/new_name.py",
+        "status": "renamed",
+        "additions": 0,
+        "deletions": 0,
+        "previous_filename": "src/old_name.py",
+    }]
+
+    rows = summarize_file_changes(old, new, changed_files)
+
+    assert rows[0]["functions_added"] == []
+    assert rows[0]["functions_removed"] == []
+    assert rows[0]["previous_path"] == "src/old_name.py"
+
+
+def test_summarize_file_changes_non_code_file_has_no_module_data():
+    old = _evidence_with_modules([])
+    new = _evidence_with_modules([])
+    changed_files = [{"filename": "README.md", "status": "modified", "additions": 4, "deletions": 1}]
+
+    rows = summarize_file_changes(old, new, changed_files)
+
+    assert rows[0]["has_module_data"] is False
+    assert rows[0]["functions_added"] == []
 
 
 def test_to_sarif_has_valid_top_level_shape_with_no_findings():
