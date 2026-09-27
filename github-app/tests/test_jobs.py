@@ -982,6 +982,138 @@ def test_run_pr_scan_job_excludes_a_dismissed_secret_from_the_pr_comment(
     assert "Secrets" not in posted["body"]
 
 
+def test_run_pr_scan_job_posts_a_file_overview_section(bare_repo_with_two_commits, monkeypatch):
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+    posted = {}
+
+    def fake_upsert(client, token, repo_full_name, pr_number, body):
+        posted["body"] = body
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_pr_changed_files_detailed",
+        lambda *a, **k: [{
+            "filename": "app.py", "status": "modified", "additions": 1, "deletions": 1,
+            "previous_filename": None,
+        }],
+    )
+
+    run_pr_scan_job(
+        installation_id=1, repo_full_name="octocat/hello-world", pr_number=7,
+        base_sha=base_sha, head_sha=head_sha,
+    )
+
+    assert "What changed" in posted["body"]
+    assert "`app.py`" in posted["body"]
+
+
+def test_run_pr_scan_job_posts_a_file_overview_even_with_no_new_findings(bare_repo_with_two_commits, monkeypatch):
+    # Piece B's whole point: this section must post even when Flash Review
+    # (a completely separate job) found nothing, or the diff comment would
+    # otherwise have nothing but "No new secrets..." to show.
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+    posted = {}
+
+    def fake_upsert(client, token, repo_full_name, pr_number, body):
+        posted["body"] = body
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        # Dismiss the fixture's own planted secret so this run really has
+        # zero new findings, exercising the "nothing new" + file-overview
+        # combination end to end.
+        lambda *a, **k: {"secret": {"dismiss-everything"}, "vulnerability": set()},
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.filter_dismissed",
+        lambda findings, finding_type, dismissed_keys: (
+            [] if finding_type == "secret" and dismissed_keys == {"dismiss-everything"} else findings
+        ),
+    )
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_pr_changed_files_detailed",
+        lambda *a, **k: [{
+            "filename": "app.py", "status": "modified", "additions": 1, "deletions": 1,
+            "previous_filename": None,
+        }],
+    )
+
+    run_pr_scan_job(
+        installation_id=1, repo_full_name="octocat/hello-world", pr_number=7,
+        base_sha=base_sha, head_sha=head_sha,
+    )
+
+    # The fixture's base/head commits differ by a real commit, so
+    # format_diff_comment's aggregate-deltas block always renders here -
+    # asserting the "No new secrets..." fallback message would depend on
+    # that being zero too, an orthogonal fact this fixture can't provide.
+    # The real claim this test pins is that the dismissed secret produced
+    # no findings at all, same assertion the sibling
+    # test_run_pr_scan_job_excludes_a_dismissed_secret_from_the_pr_comment
+    # already uses for this identical fixture+dismissal.
+    assert "What changed" in posted["body"]
+    assert "Secrets" not in posted["body"]
+
+
+def test_run_pr_scan_job_still_posts_the_diff_comment_when_the_file_overview_fetch_fails(
+    bare_repo_with_two_commits, monkeypatch, caplog
+):
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+    posted = {}
+
+    def fake_upsert(client, token, repo_full_name, pr_number, body):
+        posted["body"] = body
+
+    def raise_error(*a, **k):
+        raise RuntimeError("GitHub compare API is down")
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files_detailed", raise_error)
+
+    with caplog.at_level("WARNING", logger="scan_worker.jobs"):
+        run_pr_scan_job(
+            installation_id=1, repo_full_name="octocat/hello-world", pr_number=7,
+            base_sha=base_sha, head_sha=head_sha,
+        )
+
+    assert "Secrets" in posted["body"]
+    assert "What changed" not in posted["body"]
+    assert any("file-overview section" in record.message for record in caplog.records)
+
+
 def test_check_run_failure_does_not_overwrite_diff_comment(bare_repo_with_two_commits, monkeypatch, caplog):
     bare_path, base_sha, head_sha = bare_repo_with_two_commits
     posted = {}
