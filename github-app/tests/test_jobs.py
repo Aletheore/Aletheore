@@ -4395,6 +4395,113 @@ def test_flash_review_severity_breakdown_omits_zero_count_labels():
     assert _flash_review_severity_breakdown(findings) == "(1 High.)"
 
 
+def test_post_flash_review_finding_comments_records_a_real_url_for_a_new_post(monkeypatch):
+    from scan_worker.jobs import _post_flash_review_finding_comments
+
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda client, token, repo, pr, commit_id, path, line, body: {"id": 555001},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    finding = {"file": "app.py", "line": 1, "issue": "real problem", "source": "llm"}
+
+    from types import SimpleNamespace
+
+    failed = _post_flash_review_finding_comments(
+        settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
+        repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
+        findings_to_post=[finding],
+    )
+
+    assert failed == 0
+    assert finding["comment_url"] == "https://github.com/octocat/hello-world/pull/42#discussion_r555001"
+
+
+def test_post_flash_review_finding_comments_renders_the_rank_suffix_on_the_real_posted_body(monkeypatch):
+    # The gap a unit test of _flash_review_comment_body in isolation (Task 1)
+    # cannot catch: this function is the one real caller that must actually
+    # compute and pass total_ranked through, or every deployed comment would
+    # show a severity badge with no rank suffix at all, silently.
+    from scan_worker.jobs import _post_flash_review_finding_comments
+
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    posted_bodies = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda client, token, repo, pr, commit_id, path, line, body: posted_bodies.append(body)
+        or {"id": 1},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    findings = [
+        {"file": "a.py", "line": 1, "issue": "x", "source": "llm", "rank": 1, "severity": "High"},
+        {"file": "b.py", "line": 2, "issue": "y", "source": "llm", "rank": 2, "severity": "Low"},
+    ]
+
+    from types import SimpleNamespace
+
+    _post_flash_review_finding_comments(
+        settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
+        repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
+        findings_to_post=findings,
+    )
+
+    assert "High · #1 of 2" in posted_bodies[0]
+    assert "Low · #2 of 2" in posted_bodies[1]
+
+
+def test_post_flash_review_finding_comments_omits_url_when_the_post_fails(monkeypatch):
+    from scan_worker.jobs import _post_flash_review_finding_comments
+
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+
+    def boom(*a, **k):
+        raise RuntimeError("GitHub rejected the citation")
+
+    monkeypatch.setattr("scan_worker.jobs.create_pr_review_comment", boom)
+    finding = {"file": "app.py", "line": 1, "issue": "real problem", "source": "llm"}
+
+    from types import SimpleNamespace
+
+    failed = _post_flash_review_finding_comments(
+        settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
+        repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
+        findings_to_post=[finding],
+    )
+
+    assert failed == 1
+    assert "comment_url" not in finding
+
+
+def test_post_flash_review_finding_comments_records_url_for_an_untouched_existing_finding(monkeypatch):
+    # The "else: touch_flash_review_finding_comment(...)" branch - a finding
+    # already tracked, not un-resolved, not newly posted - still has a real,
+    # currently-visible comment; its URL comes from the tracked row's own id.
+    from scan_worker.jobs import _post_flash_review_finding_comments
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_flash_review_finding_comments",
+        lambda *a, **k: {
+            ("flash_review_llm", "some-identity-key"): {
+                "id": 1, "github_comment_id": 777001, "resolved_at": None,
+            }
+        },
+    )
+    monkeypatch.setattr("scan_worker.jobs.finding_identity_key", lambda *a, **k: "some-identity-key")
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    finding = {"file": "app.py", "line": 1, "issue": "real problem", "source": "llm"}
+
+    from types import SimpleNamespace
+
+    _post_flash_review_finding_comments(
+        settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
+        repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
+        findings_to_post=[finding],
+    )
+
+    assert finding["comment_url"] == "https://github.com/octocat/hello-world/pull/42#discussion_r777001"
+
+
 def test_flash_review_job_attaches_symbol_attribution_from_deterministic_evidence(monkeypatch):
     # Build B: the symbol shown in the posted comment must come from the
     # same deterministic module-graph evidence every other blast-radius/

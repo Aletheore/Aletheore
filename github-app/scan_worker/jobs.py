@@ -2372,6 +2372,13 @@ def _flash_review_severity_breakdown(findings: list[dict]) -> str:
 _RESOLVED_PREFIX = "✅ _No longer detected as of `{sha}`._\n\n---\n\n"
 
 
+def _pr_review_comment_url(repo_full_name: str, pr_number: int, comment_id: int) -> str:
+    # Verified 2026-09-27 against a real comment Aletheore posted on its own
+    # PR #841 (gh api repos/Aletheore/Aletheore/pulls/841/comments | .html_url) -
+    # not assumed from memory or GitHub's general docs.
+    return f"https://github.com/{repo_full_name}/pull/{pr_number}#discussion_r{comment_id}"
+
+
 def _post_flash_review_finding_comments(
     settings,
     client,
@@ -2415,6 +2422,11 @@ def _post_flash_review_finding_comments(
     existing = get_flash_review_finding_comments(dsn, installation_id, repo_full_name, pr_number)
     seen_keys: set[tuple[str, str]] = set()
     failed_new_posts = 0
+    total_ranked = sum(
+        1 for f in findings_to_post
+        if isinstance(f.get("rank"), int) and not isinstance(f.get("rank"), bool)
+        and f.get("severity") in _SEVERITY_EMOJI
+    )
 
     for finding in findings_to_post:
         finding_type = _flash_review_finding_type(finding)
@@ -2426,7 +2438,7 @@ def _post_flash_review_finding_comments(
             try:
                 comment = create_pr_review_comment(
                     client, token, repo_full_name, pr_number, head_sha,
-                    finding["file"], finding["line"], _flash_review_comment_body(finding),
+                    finding["file"], finding["line"], _flash_review_comment_body(finding, total_ranked),
                 )
             except Exception:
                 # A finding whose citation GitHub's own diff-position
@@ -2440,6 +2452,7 @@ def _post_flash_review_finding_comments(
                 )
                 failed_new_posts += 1
                 continue
+            finding["comment_url"] = _pr_review_comment_url(repo_full_name, pr_number, comment["id"])
             insert_flash_review_finding_comment(
                 dsn, installation_id, repo_full_name, pr_number,
                 finding_type, identity_key, comment["id"], head_sha,
@@ -2455,15 +2468,21 @@ def _post_flash_review_finding_comments(
             # DB function for what's really one state transition.
             try:
                 edit_pr_review_comment(
-                    client, token, repo_full_name, row["github_comment_id"], _flash_review_comment_body(finding)
+                    client, token, repo_full_name, row["github_comment_id"],
+                    _flash_review_comment_body(finding, total_ranked),
                 )
             except Exception:
                 logging.getLogger("scan_worker.jobs").warning(
                     "failed to un-resolve flash review comment %s on %s#%s",
                     row["github_comment_id"], repo_full_name, pr_number, exc_info=True,
                 )
+            # Set regardless of whether the edit above succeeded - the comment
+            # already existed before this run and is still visible even if
+            # editing it back to the un-resolved body failed.
+            finding["comment_url"] = _pr_review_comment_url(repo_full_name, pr_number, row["github_comment_id"])
             touch_flash_review_finding_comment(dsn, row["id"], head_sha, resolved=False)
         else:
+            finding["comment_url"] = _pr_review_comment_url(repo_full_name, pr_number, row["github_comment_id"])
             touch_flash_review_finding_comment(dsn, row["id"], head_sha)
 
     for (finding_type, identity_key), row in existing.items():
