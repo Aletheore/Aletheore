@@ -1,4 +1,5 @@
 import type { TierKey } from "@/lib/pricing";
+import { installGitHubAppHref } from "@/data/site-links";
 
 export type FeatureText = string | { parts: (string | { href: string; label: string })[]; mark?: "*" | "**" };
 
@@ -13,7 +14,7 @@ export type Plan = {
   cta: { label: string; href?: string; subscribe?: TierKey };
 };
 
-const INSTALL = "https://github.com/apps/aletheore/installations/new";
+const INSTALL = installGitHubAppHref;
 
 export const pricingHead = {
   eyebrow: "Pricing",

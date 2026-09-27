@@ -10,6 +10,8 @@ export const prefetchFor = (href: string): false | undefined => (builtPaths.has(
 
 export const getStartedHref = "https://app.aletheore.com/";
 
+export const installGitHubAppHref = "https://github.com/apps/aletheore/installations/new";
+
 export const navLinks: SiteLink[] = [
   { label: "Pricing", href: "/pricing" },
   { label: "Developers", href: "/developers" },
