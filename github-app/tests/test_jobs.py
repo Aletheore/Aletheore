@@ -4312,6 +4312,63 @@ def test_flash_review_comment_body_omits_severity_prefix_for_an_unrecognized_lab
     assert body.startswith("real problem")
 
 
+def test_flash_review_comment_body_suffixes_rank_when_present_with_severity():
+    from scan_worker.jobs import _flash_review_comment_body
+
+    body = _flash_review_comment_body(
+        {"file": "app.py", "line": 12, "issue": "real problem", "severity": "High", "rank": 2},
+        total_ranked=5,
+    )
+    assert body.startswith("🟠 **High · #2 of 5**\n\nreal problem")
+
+
+def test_flash_review_comment_body_omits_rank_suffix_when_rank_absent():
+    from scan_worker.jobs import _flash_review_comment_body
+
+    body = _flash_review_comment_body(
+        {"file": "app.py", "line": 12, "issue": "real problem", "severity": "High"}, total_ranked=5
+    )
+    assert body.startswith("🟠 **High**\n\nreal problem")
+    assert "#" not in body.split("\n\n")[0]
+
+
+def test_flash_review_comment_body_omits_rank_suffix_when_severity_absent():
+    # Ranking is one call that returns rank+severity together; a finding
+    # somehow carrying rank without severity (e.g. a future partial-failure
+    # shape) must render exactly like "ranking never ran", never a bare
+    # rank with no colour/label around it.
+    from scan_worker.jobs import _flash_review_comment_body
+
+    body = _flash_review_comment_body(
+        {"file": "app.py", "line": 12, "issue": "real problem", "rank": 2}, total_ranked=5
+    )
+    assert body.startswith("real problem")
+
+
+def test_flash_review_comment_body_omits_rank_suffix_when_rank_is_not_a_real_int():
+    # bool is a subclass of int in Python - True/False must not slip through
+    # isinstance(rank, int) and render as "#1"/"#0".
+    from scan_worker.jobs import _flash_review_comment_body
+
+    body = _flash_review_comment_body(
+        {"file": "app.py", "line": 12, "issue": "real problem", "severity": "High", "rank": True},
+        total_ranked=5,
+    )
+    assert body.startswith("🟠 **High**\n\nreal problem")
+
+
+def test_flash_review_comment_body_omits_rank_suffix_when_total_ranked_is_stale():
+    # total_ranked is the count from THIS run; a rank higher than it would
+    # mean stale/inconsistent data, not a real "#7 of 3" a reader would trust.
+    from scan_worker.jobs import _flash_review_comment_body
+
+    body = _flash_review_comment_body(
+        {"file": "app.py", "line": 12, "issue": "real problem", "severity": "High", "rank": 7},
+        total_ranked=3,
+    )
+    assert body.startswith("🟠 **High**\n\nreal problem")
+
+
 def test_flash_review_severity_breakdown_counts_in_fixed_order():
     from scan_worker.jobs import _flash_review_severity_breakdown
 

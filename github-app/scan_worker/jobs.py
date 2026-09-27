@@ -2311,12 +2311,20 @@ def _share_pr_context_for(is_free_tier: bool) -> bool:
 _SEVERITY_EMOJI = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🔵"}
 
 
-def _flash_review_comment_body(finding: dict) -> str:
+def _flash_review_comment_body(finding: dict, total_ranked: int = 0) -> str:
     symbol = finding.get("symbol")
     header = f"**`{symbol}`**\n\n{finding['issue']}" if symbol else finding["issue"]
     severity = finding.get("severity")
     if severity in _SEVERITY_EMOJI:
-        header = f"{_SEVERITY_EMOJI[severity]} **{severity}**\n\n{header}"
+        rank = finding.get("rank")
+        # rank is only trustworthy alongside its own severity (they come from
+        # the same ranking call) and only within this run's own total - never
+        # a bare number a reader has no way to make sense of.
+        has_real_rank = (
+            isinstance(rank, int) and not isinstance(rank, bool) and 1 <= rank <= total_ranked
+        )
+        label = f"{severity} · #{rank} of {total_ranked}" if has_real_rank else severity
+        header = f"{_SEVERITY_EMOJI[severity]} **{label}**\n\n{header}"
     lines = [header]
     suggestion = finding.get("suggestion")
     if suggestion:
