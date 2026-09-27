@@ -572,6 +572,56 @@ def fetch_pr_changed_files(
     return filenames
 
 
+def fetch_pr_changed_files_detailed(
+    client: httpx.Client,
+    token: str,
+    repo_full_name: str,
+    base_ref: str,
+    head_ref: str,
+    ignored_paths: list[str] = (),
+) -> list[dict]:
+    """Like `fetch_pr_changed_files`, but keeps GitHub's own per-file status,
+    added/deleted line counts, and (for a rename) `previous_filename` instead
+    of discarding everything but the filename. A separate function rather
+    than widening `fetch_pr_changed_files`'s own return shape - that
+    function has three existing call sites all expecting a plain
+    `list[str]` (see `app_server/webhooks/pull_request.py` and two call
+    sites in `scan_worker/jobs.py`); this one is for a fourth, new caller
+    (the PR file-overview section) that needs the richer shape, matching
+    this file's own established pattern of a dedicated function per need
+    rather than reshaping a function other callers already depend on.
+    """
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    response = client.get(
+        f"/repos/{repo_full_name}/compare/{base_ref}...{head_ref}",
+        headers=headers,
+    )
+    response.raise_for_status()
+    compare_files = response.json().get("files", [])
+    if len(compare_files) >= GITHUB_COMPARE_FILES_HARD_CAP:
+        logger.warning(
+            "fetch_pr_changed_files_detailed: compare %s...%s for %s hit the compare API's "
+            "%d-file cap; changed files beyond this are invisible to this review",
+            base_ref, head_ref, repo_full_name, GITHUB_COMPARE_FILES_HARD_CAP,
+        )
+    results = [
+        {
+            "filename": file["filename"],
+            "status": file.get("status", "modified"),
+            "additions": file.get("additions", 0),
+            "deletions": file.get("deletions", 0),
+            "previous_filename": file.get("previous_filename"),
+        }
+        for file in compare_files
+    ]
+    if ignored_paths:
+        results = [r for r in results if not is_ignored(r["filename"], ignored_paths)]
+    return results
+
+
 def fetch_pr_context(
     client: httpx.Client,
     token: str,
