@@ -562,6 +562,32 @@ async def test_aletheore_symbol_source_returns_exact_source(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_aletheore_symbol_source_reports_an_unknown_symbol_as_an_error_not_a_crash(tmp_path):
+    # Real gap reported live (GitHub issue #846, verified against this exact
+    # code before fixing): find_symbol_source raises SymbolNotFoundInEvidenceError
+    # for a real module with no matching symbol, and this tool had no
+    # try/except at all - unlike the CLI's own symbol-source command and
+    # aletheore_ast_pattern right above this tool in the same file, both of
+    # which catch their own evidence-lookup errors and return {"error": ...}.
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "does_not_exist"})
+
+    assert "does_not_exist" in tool_result_body(result)["result"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_symbol_source_reports_an_unknown_module_as_an_error_not_a_crash(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_symbol_source", {"module": "does/not/exist.py", "symbol": "foo"})
+
+    assert "does/not/exist.py" in tool_result_body(result)["result"]["error"]
+
+
+@pytest.mark.asyncio
 async def test_aletheore_verify_citations_reports_verified_and_unverified(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     (repo / "a.py").write_text("def foo():\n    pass\n")
