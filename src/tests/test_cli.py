@@ -1360,6 +1360,41 @@ def test_verify_errors_cleanly_when_no_evidence_exists(tmp_path):
     assert "aletheore scan" in collapsed_output
 
 
+def test_verify_errors_cleanly_when_report_path_is_unreadable(tmp_path):
+    # Same class of bug as the MCP crashes fixed alongside this (#848): the
+    # .exists() check two lines above the real read only proves the path
+    # was there at that moment, not that it's a readable file - a
+    # directory (this test) or a file that vanishes/loses permissions in
+    # that window both raise OSError from read_text() uncaught otherwise.
+    # A directory reproduces this deterministically, unlike a chmod-based
+    # race, which is unreliable when a test suite runs as root.
+    repo = tmp_path
+    (repo / ".aletheore").mkdir()
+    evidence = {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": [{"path": "app.py"}]}}
+    (repo / ".aletheore" / "air.json").write_text(json.dumps(evidence))
+    report_dir = repo / "report.md"
+    report_dir.mkdir()
+
+    result = runner.invoke(app, ["verify", str(report_dir), "--path", str(repo)])
+
+    assert result.exit_code == 1
+    assert "could not read" in result.output
+
+
+def test_verify_errors_cleanly_on_non_utf8_report(tmp_path):
+    repo = tmp_path
+    (repo / ".aletheore").mkdir()
+    evidence = {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": [{"path": "app.py"}]}}
+    (repo / ".aletheore" / "air.json").write_text(json.dumps(evidence))
+    report = repo / "report.md"
+    report.write_bytes(b"\xff\xfe not valid utf-8")
+
+    result = runner.invoke(app, ["verify", str(report), "--path", str(repo)])
+
+    assert result.exit_code == 1
+    assert "not valid UTF-8" in result.output
+
+
 def test_main_audit_threads_no_check_vulnerabilities_flag(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
