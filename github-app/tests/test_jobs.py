@@ -4450,6 +4450,51 @@ def test_post_flash_review_finding_comments_renders_the_rank_suffix_on_the_real_
     assert "Low · #2 of 2" in posted_bodies[1]
 
 
+def test_post_flash_review_finding_comments_rank_total_is_not_undercounted_by_an_unrecognized_severity(
+    monkeypatch,
+):
+    # Real gap found via Flash Review on this PR: total_ranked used to count
+    # only findings whose severity was ALSO recognized (matching
+    # _flash_review_comment_body's own per-finding gate). One finding with a
+    # valid rank but a severity this file doesn't know how to render (a
+    # future severity vocabulary added upstream before _SEVERITY_EMOJI
+    # catches up) would then silently shrink the total for every OTHER
+    # finding too - here, finding C's own rank (3) would exceed the
+    # undercounted total (2, since B's rank 2 was excluded), dropping C's
+    # rank suffix even though C's own rank+severity are both perfectly
+    # valid. Not reachable today (_rank_findings_with_severity rejects the
+    # whole batch on any invalid severity), but the total must reflect how
+    # many findings were actually ranked, independent of whether each one's
+    # severity happens to be renderable.
+    from scan_worker.jobs import _post_flash_review_finding_comments
+
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    posted_bodies = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda client, token, repo, pr, commit_id, path, line, body: posted_bodies.append(body)
+        or {"id": 1},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    findings = [
+        {"file": "a.py", "line": 1, "issue": "a", "source": "llm", "rank": 1, "severity": "Critical"},
+        {"file": "b.py", "line": 2, "issue": "b", "source": "llm", "rank": 2, "severity": "Unrecognized"},
+        {"file": "c.py", "line": 3, "issue": "c", "source": "llm", "rank": 3, "severity": "High"},
+    ]
+
+    from types import SimpleNamespace
+
+    _post_flash_review_finding_comments(
+        settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
+        repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
+        findings_to_post=findings,
+    )
+
+    assert "Critical · #1 of 3" in posted_bodies[0]
+    assert posted_bodies[1].startswith("b")  # unrecognized severity: no badge at all, unchanged behavior
+    assert "High · #3 of 3" in posted_bodies[2]
+
+
 def test_post_flash_review_finding_comments_omits_url_when_the_post_fails(monkeypatch):
     from scan_worker.jobs import _post_flash_review_finding_comments
 

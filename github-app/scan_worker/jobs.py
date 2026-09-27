@@ -2470,10 +2470,23 @@ def _post_flash_review_finding_comments(
     existing = get_flash_review_finding_comments(dsn, installation_id, repo_full_name, pr_number)
     seen_keys: set[tuple[str, str]] = set()
     failed_new_posts = 0
+    # Real gap found via Flash Review on this PR: counting only findings whose
+    # severity is ALSO a recognized label (as _flash_review_comment_body's own
+    # badge-rendering condition does) would let one finding with a valid rank
+    # but an unrecognized severity string (a future severity vocabulary added
+    # upstream before _SEVERITY_EMOJI catches up) silently shrink this total -
+    # understating "of N" for every OTHER finding and, if its own rank number
+    # then exceeds the undercounted total, dropping that finding's rank
+    # suffix too, even though its own data was perfectly valid. Not reachable
+    # today (_rank_findings_with_severity rejects the whole ranking response
+    # if any entry's severity is invalid - it's all-or-nothing), but the two
+    # conditions are genuinely different concerns: how many findings got
+    # ranked at all (this total) vs. whether one particular finding's
+    # severity is one this file knows how to render (a separate, per-finding
+    # gate, already handled inside _flash_review_comment_body itself).
     total_ranked = sum(
         1 for f in findings_to_post
         if isinstance(f.get("rank"), int) and not isinstance(f.get("rank"), bool)
-        and f.get("severity") in _SEVERITY_EMOJI
     )
 
     for finding in findings_to_post:
