@@ -3,6 +3,49 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.22 - 2026-09-27
+
+**Python 3.13 and 3.14 are supported (#840)**
+
+`pip install aletheore` failed on Python 3.14 (the default `python3` from Homebrew on macOS) with a
+bare "No matching distribution found", because the package was capped below 3.14. The cap dated from
+a tree-sitter crash in `aletheore_ast_pattern` that turned out to be probabilistic and not specific
+to 3.14; running each batch of files in its own worker process contains it on every version, and the
+cap was never lifted afterwards. It is now `>=3.11,<3.15`. Verified on Python 3.14 with repeated
+searches over about 7,200 files, a real scan, and the whole test suite. CI now runs 3.11 to 3.14 on
+Linux, 3.12 and 3.14 on Windows, and 3.12 and 3.14 on macOS.
+
+**`aletheore mcp` keeps evidence current in the background (#841)**
+
+Evidence is a snapshot of the last scan, so an agent driving the server used to answer from a
+repository that had since changed. The server now re-scans a few seconds after source files stop
+changing, and says so on stderr when it starts. It is on by default. Turn it off with
+`aletheore mcp --no-watch` or `ALETHEORE_MCP_WATCH=0`.
+
+- It needs the `write` permission (the one `aletheore_scan` needs) and existing evidence; the first
+  `aletheore_scan` starts it otherwise.
+- The background re-scan skips the slow checks (dependency vulnerabilities and licenses, git history,
+  static analysis, architecture clustering, hotspots) and reuses the last full scan's values for them.
+  Run `aletheore scan` to refresh those too.
+- One re-scan runs at a time, after a 5 second quiet period. It does not start above 5,000 source
+  files, and only one watcher runs per repository even when several agent sessions are open.
+- On filesystems that cannot take file locks it still watches; evidence writes are atomic, so the
+  worst case is a duplicate re-scan.
+- Everything it prints goes to stderr, so stdout stays the MCP transport.
+
+**Fixed: `air.json` could be read half-written**
+
+Evidence was written by truncating the file and then filling it in, so a reader that opened it in
+between (an agent's tool call, the dashboard, a second process) saw a truncated file and a JSON error
+unrelated to the repository. It is now written to a temporary file and renamed into place. On Windows,
+where an open reader blocks the rename, it retries for about a second and then falls back to writing in
+place, so a scan never fails because of a reader.
+
+**Docs**
+
+The tool counts in the READMEs were out of date. `aletheore mcp` registers 34 tools by default, 30 with
+every effect class withheld, and 35 with everything permitted (36 with `--agent`).
+
 ## 0.9.21 - 2026-09-26
 
 **Evidence schema 0.7.0: re-run `aletheore scan` after upgrading**
