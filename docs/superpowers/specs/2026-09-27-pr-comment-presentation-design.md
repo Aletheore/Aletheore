@@ -76,7 +76,7 @@ New code in `run_pr_scan_job`'s path (`jobs.py`), a new comment with its own mar
 - Truncated past a cap (proposed: 20 files shown, "+N more" beyond that) — the same honest-truncation idiom `blast_radius_summary.MAX_TARGETS_SHOWN` already uses, not a silent cut.
 - A one-line header stating this is deterministic and always posted, so nobody mistakes its absence-of-opinion for "nothing happened."
 
-**Open point for review, not yet decided:** does this become a genuinely new comment (its own marker, its own upsert call), or is it added as a new section on `run_pr_scan_job`'s *existing* "Aletheore evidence diff" comment, which already exists, already has a marker, and already fires under the exact same conditions this needs (every tier, always)? The founder asked for "a comment," and CodeRabbit's own precedent is two genuinely separate comments — but reusing the existing evidence-diff comment costs less surface area and there is already prior art for extending it. Recommendation: fold into the existing evidence-diff comment as a new leading section, not a third comment type, unless the founder prefers a dedicated one. **Needs the founder's answer before the plan is written.**
+**Decided:** this is a new leading section on `run_pr_scan_job`'s *existing* "Aletheore evidence diff" comment, not a third comment type. That comment already exists, already has a marker, already upserts every run, and already fires under the exact conditions this needs (every tier, always) — one fewer comment type on every PR, and the per-file overview becomes what a reader sees first, with the existing new/resolved-findings content unchanged below it.
 
 ## 4. Testing
 
@@ -92,7 +92,6 @@ Two PRs, in the order the founder chose: Piece A first (smaller, lower-risk, no 
 
 ## 6. Risks and open points
 
-- The one open design point (Section 3, Piece B) needs an answer before `writing-plans` turns this into an implementation plan.
 - GitHub's rename handling for the per-file diff needs an explicit fixture, not just added/removed/modified.
 - The jump-link format (`#discussion_r<id>`) needs a live check against a real posted comment before trusting it — GitHub's URL scheme for a review comment anchor should be verified once, not assumed from memory.
 - Piece B's per-file symbol diff is new code with no precedent in this codebase to copy verbatim (unlike `_new_and_resolved`, which is finding-shaped, not module-shaped) — real, not large, effort.
