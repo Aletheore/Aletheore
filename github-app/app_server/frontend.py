@@ -297,13 +297,11 @@ a.stat-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
 .plain-section-head .count { font-family: var(--font-mono); font-size: 12px; color: var(--slate-600); }
 /* Overriding via margin-top on the head itself (not the previous element's
    margin-bottom) so the two collapse to whichever is larger, matching
-   index.html's own per-gap measurements - #findings-head sits below
-   #stat-strip (27.2px margin-bottom) needing a 36px gap, #usage-head sits
-   below .finding-list (27.2px margin-bottom) needing a 40px gap, and
-   collapsing is exactly what makes max(27.2, 36)/max(27.2, 40) work
-   instead of stacking on top of the existing margin. */
+   index.html's own per-gap measurement - #findings-head sits below
+   #stat-strip (27.2px margin-bottom) needing a 36px gap, and collapsing
+   is exactly what makes max(27.2, 36) work instead of stacking on top of
+   the existing margin. */
 #findings-head { margin-top: 36px; }
-#usage-head { margin-top: 40px; }
 
 table.findings { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.findings th { text-align: left; font-size: 11px; color: var(--slate-400); font-weight: 500; padding: 8px 8px; border-bottom: 1px solid var(--border); }
@@ -471,13 +469,20 @@ svg#depgraph:active { cursor: grabbing; }
   color: #F5F0E6; cursor: pointer; font-family: var(--font-sans); font-size: 12px; font-weight: 650; padding: 6px 10px; }
 .diagram-zoom-toolbar button:hover { background: rgba(255, 255, 255, 0.14); }
 .diagram-zoom-hint { padding: 0 8px; color: #D8D2C5; font-size: 12px; white-space: nowrap; }
-.subsystem-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 20px; }
+.subsystem-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 20px; align-items: start; }
 .subsystem-card { display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start;
   border: 1px solid var(--border); border-radius: 4px; padding: 12px; text-align: left; background: var(--paper);
   cursor: pointer; font-family: var(--font-sans); transition: background-color 0.12s ease; }
 .subsystem-card:hover { border-color: var(--border-strong); background: var(--slate-100); }
 .subsystem-name { font-size: 13px; font-weight: 600; margin-bottom: 3px; color: var(--ink-900); }
-.subsystem-desc { font-size: 12px; color: var(--slate-600); line-height: 1.55; }
+/* Real subsystem descriptions vary from one sentence to a full paragraph.
+   With align-items: start (above) a row no longer stretches every card to
+   its tallest neighbor, but one very long card could still dominate the
+   row visually - clamp to a scannable preview, same principle as Docs'
+   own <details> disclosure: click the card for the full write-up
+   (showSubsystem), the grid only needs to show enough to pick one. */
+.subsystem-desc { font-size: 12px; color: var(--slate-600); line-height: 1.55;
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .subsystem-files { font-family: var(--font-mono); font-size: 10.5px; color: var(--slate-400); margin-top: 8px; }
 .subsystem-detail { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 14px; }
 .subsystem-detail-file { margin-bottom: 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--slate-50); padding: 11px; }
@@ -513,12 +518,12 @@ svg#depgraph:active { cursor: grabbing; }
 .credit-meter { height: 4px; border-radius: 2px; background: var(--border); margin: 14px 0 4px; overflow: hidden; }
 .credit-meter-fill { height: 100%; background: var(--accent); }
 .credit-breakdown { font-size: 11px; color: var(--slate-400); display: flex; justify-content: space-between; }
-/* #usage-body scopes this to Overview only (its id is unique to that page)
-   rather than raising the shared .settings-block-hint font-size, which
-   Settings' own many hint lines also use and hasn't been measured against
-   any mockup - index.html's dedicated .block-hint is 12px, 1px larger
-   than the shared 11px default. */
-#usage-body .settings-block-hint { font-size: 12px; }
+/* #usage-section scopes this to the ported credit block only, rather than
+   raising the shared .settings-block-hint font-size, which Settings' own
+   many other hint lines also use and hasn't been measured against any
+   mockup - index.html's dedicated .block-hint is 12px, 1px larger than
+   the shared 11px default. */
+#usage-section .settings-block-hint { font-size: 12px; }
 .divider-label { font-size: 11px; color: var(--slate-400); margin: 20px 0 12px; display: flex; align-items: center; gap: 10px; }
 .divider-label::after { content: ""; flex: 1; height: 1px; background: var(--border); }
 .qty-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -1025,13 +1030,14 @@ function lockedFeature(title, description, previewHtml) {{
 }}
 """
 
-# Shared by every page with real-money actions (Settings, Overview) - was
-# duplicated per-page (a second, separately-maintained copy already existed
-# for the standalone /credits page's own installation-scoped API shape,
-# _CREDITS_JS below). adminBase-based, not installation-id-based, since
-# every caller of this constant already has org/repo in scope. Each caller
-# sets window._reloadUsage to its own refresh function before invoking
-# these (loadSettings on Settings, loadUsage on Overview) instead of this
+# Shared by every page with real-money actions (currently Settings only -
+# Overview's own duplicate credit/seat widget was removed, its canonical
+# home is Settings) - was duplicated per-page (a second, separately-
+# maintained copy already existed for the standalone /credits page's own
+# installation-scoped API shape, _CREDITS_JS below). adminBase-based, not
+# installation-id-based, since every caller of this constant already has
+# org/repo in scope. The caller sets window._reloadUsage to its own refresh
+# function before invoking these (loadSettings on Settings) instead of this
 # file hardcoding one page's refresh call - buySeat/removeSeat need to
 # re-render whichever page's seat UI actually called them.
 BILLING_ACTIONS_JS = """
@@ -1249,12 +1255,11 @@ def _shell(active: str, body: str) -> str:
 
 # ---------------------------------------------------------------------------
 # Overview page - stats only, each stat links into its own detail page.
+# Its own Usage/credit-balance section (a near-duplicate of Settings' own,
+# both hitting adminBase for the same data) was removed - Settings is the
+# one canonical place for billing, matching this page's own "stats only"
+# framing above.
 # ---------------------------------------------------------------------------
-# A function, not a plain module-level constant like the other _HTML pages -
-# same reason as _settings_html(): its Usage section needs a real inline
-# Paddle checkout (get_settings().paddle_client_token/paddle_environment),
-# and calling get_settings() at plain module-import time would make
-# importing this file require a fully configured settings environment.
 @lru_cache(maxsize=1)
 def _overview_html() -> str:
     return _page_head("Overview — {repo} — Aletheore") + _shell(
@@ -1273,49 +1278,15 @@ def _overview_html() -> str:
       <div class="count" id="findings-count"></div>
     </div>
     <div id="recent-security-body"><div class="empty-state">Loading&hellip;</div></div>
-    <div class="plain-section-head" id="usage-head" style="display:none">
-      <h2>Usage</h2>
-    </div>
-    <div id="usage-body"></div>
 """
 ) + f"""
-<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
 <script>
 {FETCH_HELPERS}
 {PAGE_HEAD_JS}
 {CONFIRM_UPGRADE_JS}
-{BILLING_ACTIONS_JS}
 document.querySelectorAll('[data-href]').forEach(function (el) {{
   if (el.tagName === 'A' && el.dataset.href) el.href = pageBase + el.dataset.href;
 }});
-window._reloadUsage = loadUsage;
-
-// Same guarded pattern as Settings' own Paddle.Initialize() call - a
-// blocked cdn.paddle.com load must only disable the credit top-up button,
-// never take down the rest of this script (including loadOverview() at
-// the bottom, which renders the whole page).
-if (typeof Paddle !== "undefined") {{
-  Paddle.Environment.set("{get_settings().paddle_environment}");
-  Paddle.Initialize({{
-    token: "{get_settings().paddle_client_token}",
-    eventCallback: function (event) {{
-      const status = document.getElementById('topup-status');
-      if (!status || !event || !event.name) return;
-      if (event.name === 'checkout.loaded') {{
-        status.textContent = '';
-      }} else if (event.name === 'checkout.completed') {{
-        window._creditCheckoutCompleted = true;
-        status.textContent = 'Purchase complete - your balance updates once the payment is confirmed.';
-        status.style.color = 'var(--success)';
-      }} else if (event.name === 'checkout.closed' && !window._creditCheckoutCompleted) {{
-        status.textContent = '';
-      }} else if (event.name === 'checkout.error') {{
-        status.textContent = 'Checkout error - try again.';
-        status.style.color = 'var(--critical)';
-      }}
-    }},
-  }});
-}}
 
 async function loadOverview() {{
   const res = await apiGet(base);
@@ -1425,71 +1396,8 @@ async function loadUptimeStat() {{
   document.getElementById('stat-uptime-sub').textContent = up + ' of ' + endpoints.length + ' endpoints up';
 }}
 
-async function loadUsage() {{
-  const section = document.getElementById('usage-head');
-  const body = document.getElementById('usage-body');
-  const res = await apiGet(adminBase);
-  if (!res || !res.ok) return;  // free/locked plan - no managed billing to show
-  const data = await res.json();
-  section.style.display = '';
-  // Headline is base remaining only, measured against the real monthly
-  // allotment - matching index.html's own semantics ($12.40 of $18.00,
-  // purchased credit shown on its own breakdown line below). Mixing
-  // purchased credit into the headline would read as "$40 of $18" after
-  // a large top-up, which is not what "of $18" is supposed to mean.
-  const baseCredit = data.base_credit_remaining_usd || 0;
-  const topupCredit = data.topup_credit_balance_usd || 0;
-  const allotment = data.base_credit_allotment_usd || 0;
-  const pct = allotment > 0 ? Math.max(0, Math.min(100, Math.round((baseCredit / allotment) * 100))) : 0;
-  const hasSubscription = !!data.installation.paddle_subscription_id;
-  const renewsAt = data.subscription_renews_at
-    ? new Date(data.subscription_renews_at).toLocaleDateString(undefined, {{ month: 'short', day: 'numeric' }})
-    : null;
-  window._creditTopupPriceId = data.credit_topup_price_id;
-  body.innerHTML =
-    '<div class="settings-grid">' +
-      '<div class="settings-block">' +
-        '<div class="settings-block-label">Credit balance</div>' +
-        '<div class="credit-figure">$' + baseCredit.toFixed(2) + (allotment > 0 ? ' <span class="of">of $' + allotment.toFixed(2) + '</span>' : '') + '</div>' +
-        (allotment > 0 ? '<div class="credit-meter"><div class="credit-meter-fill" style="width:' + pct + '%"></div></div>' : '') +
-        '<div class="credit-breakdown"><span>$' + allotment.toFixed(2) + ' included this month</span>' +
-          '<span>' + (topupCredit > 0 ? '+ $' + topupCredit.toFixed(2) + ' purchased, never expires' : '') + '</span>' +
-        '</div>' +
-        (data.credit_topup_price_id
-          ? '<div class="divider-label">buy more credit</div>' +
-            '<div class="qty-row">' +
-              '<span class="qty-prefix">$</span>' +
-              '<div class="stepper">' +
-                '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepDown()" aria-label="Decrease amount">&minus;</button>' +
-                '<input type="number" id="topup-amount" min="5" max="1000" step="5" value="10">' +
-                '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepUp()" aria-label="Increase amount">+</button>' +
-              '</div>' +
-              '<button class="btn btn-accent" onclick="buyCredit(this)">Buy credit</button>' +
-            '</div>' +
-            '<div id="topup-status" class="settings-block-hint"></div>' +
-            '<div class="settings-block-hint">$5 minimum &middot; charged once, added immediately</div>'
-          : '<div class="settings-block-hint" style="margin-top:10px;">Buying additional credit is coming soon.</div>') +
-      '</div>' +
-      '<div class="settings-block">' +
-        '<div class="settings-block-label">Team seats</div>' +
-        '<div class="settings-block-hint">' + data.seat_limit + ' included &middot; ' + (data.members || []).length + ' in use</div>' +
-        '<div class="qty-row" style="margin-top:14px;">' +
-          (hasSubscription
-            ? '<button class="btn" onclick="buySeat(this)">Buy extra seat</button>'
-            : '') +
-          '<button class="btn" onclick="openBillingPortal()">Manage billing</button>' +
-        '</div>' +
-        '<div id="seat-billing-status" class="settings-block-hint"></div>' +
-        (hasSubscription
-          ? '<div class="status-line"><span class="status-dot"></span>Subscription active' + (renewsAt ? ', renews ' + renewsAt : '') + '</div>'
-          : '<div class="status-line"><span class="status-dot" style="background:var(--slate-400);"></span>No active subscription</div>') +
-      '</div>' +
-    '</div>';
-}}
-
 loadOverview();
 loadUptimeStat();
-loadUsage();
 loadPlanBadge();
 </script>
 """
@@ -3499,27 +3407,37 @@ async function loadSettings() {{
 
   const baseCredit = data.base_credit_remaining_usd || 0;
   const topupCredit = data.topup_credit_balance_usd || 0;
-  const combinedCredit = baseCredit + topupCredit;
+  const allotment = data.base_credit_allotment_usd || 0;
+  const creditPct = allotment > 0 ? Math.max(0, Math.min(100, Math.round((baseCredit / allotment) * 100))) : 0;
+  // Ported verbatim from Overview's own credit block (which is being
+  // removed as a duplicate - see its own comment) rather than the plain
+  // text-line version this page had: same credit-figure/meter/breakdown
+  // markup, same buyCredit() flow, just the one canonical presentation
+  // instead of two different-looking widgets for the same data.
   const usageHtml =
     '<section class="settings-section" id="usage-section">' +
       '<h2>Usage</h2>' +
       '<div class="settings-block">' +
         '<div class="settings-block-label">Credit balance</div>' +
-        '<div class="settings-block-hint">$' + baseCredit.toFixed(2) + ' included this month' +
-          (topupCredit > 0 ? ' + $' + topupCredit.toFixed(2) + ' purchased (never expires)' : '') +
+        '<div class="credit-figure">$' + baseCredit.toFixed(2) + (allotment > 0 ? ' <span class="of">of $' + allotment.toFixed(2) + '</span>' : '') + '</div>' +
+        (allotment > 0 ? '<div class="credit-meter"><div class="credit-meter-fill" style="width:' + creditPct + '%"></div></div>' : '') +
+        '<div class="credit-breakdown"><span>$' + allotment.toFixed(2) + ' included this month</span>' +
+          '<span>' + (topupCredit > 0 ? '+ $' + topupCredit.toFixed(2) + ' purchased, never expires' : '') + '</span>' +
         '</div>' +
-        '<div class="settings-block-hint">$' + combinedCredit.toFixed(2) + ' total available for AI reviews and builds</div>' +
         (data.credit_topup_price_id
-          ? '<div class="form-row" style="margin-top: 10px;">' +
+          ? '<div class="divider-label">buy more credit</div>' +
+            '<div class="qty-row">' +
+              '<span class="qty-prefix">$</span>' +
               '<div class="stepper">' +
-              '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepDown()" aria-label="Decrease amount">&minus;</button>' +
-              '<input type="number" id="topup-amount" min="5" max="1000" step="5" value="10">' +
-              '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepUp()" aria-label="Increase amount">+</button>' +
+                '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepDown()" aria-label="Decrease amount">&minus;</button>' +
+                '<input type="number" id="topup-amount" min="5" max="1000" step="5" value="10">' +
+                '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepUp()" aria-label="Increase amount">+</button>' +
+              '</div>' +
+              '<button class="btn btn-accent" onclick="buyCredit(this)">Buy credit</button>' +
             '</div>' +
-              '<button class="btn" onclick="buyCredit(this)" style="margin-left: 6px;">Buy more credit</button>' +
-            '</div>' +
-            '<div id="topup-status" class="settings-block-hint"></div>'
-          : '<div class="settings-block-hint">Buying additional credit is coming soon.</div>') +
+            '<div id="topup-status" class="settings-block-hint"></div>' +
+            '<div class="settings-block-hint">$5 minimum &middot; charged once, added immediately</div>'
+          : '<div class="settings-block-hint" style="margin-top:10px;">Buying additional credit is coming soon.</div>') +
       '</div>' +
     '</section>';
 

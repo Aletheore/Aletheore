@@ -301,37 +301,40 @@ p.then(function () {
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_billing_actions_are_truly_shared_not_duplicated_per_page():
-    # Settings and Overview both need buySeat/removeSeat/openBillingPortal/
-    # buyCredit - real money-handling code that was duplicated once already
-    # (a second, separately-maintained copy for the standalone /credits
-    # page's own installation-scoped API shape). Asserting the exact same
-    # BILLING_ACTIONS_JS text appears in both pages (not just "a function
-    # with this name exists in both", which a second hand-written copy
-    # would also satisfy) is what actually proves this isn't duplicated
-    # again the same way.
+def test_billing_actions_live_on_settings_only_not_duplicated():
+    # Settings is the one canonical home for buySeat/removeSeat/
+    # openBillingPortal/buyCredit - real money-handling code that was
+    # duplicated once already (a second, separately-maintained copy for the
+    # standalone /credits page's own installation-scoped API shape, and
+    # again briefly as Overview's own near-identical Usage section before
+    # that was removed as a duplicate of Settings'). Asserting the exact
+    # BILLING_ACTIONS_JS text appears in Settings (not just "a function
+    # with this name exists there", which a hand-written copy would also
+    # satisfy) and is absent from Overview locks in that it stays that way.
     settings_js = frontend._settings_html()
     overview_js = frontend._overview_html()
     assert frontend.BILLING_ACTIONS_JS in settings_js
-    assert frontend.BILLING_ACTIONS_JS in overview_js
+    assert frontend.BILLING_ACTIONS_JS not in overview_js
     for name in ("buySeat", "removeSeat", "openBillingPortal", "buyCredit"):
-        # Each function's own source should appear exactly once per page
-        # (from BILLING_ACTIONS_JS) - a stray second definition would mean
-        # the extraction didn't fully replace the old inline copy.
+        # Each function's own source should appear exactly once (from
+        # BILLING_ACTIONS_JS) - a stray second definition would mean a new
+        # inline copy crept back in, and any presence on Overview at all
+        # would mean the duplicate Usage section crept back too.
         assert settings_js.count(f"async function {name}(") == 1
-        assert overview_js.count(f"async function {name}(") == 1
+        assert overview_js.count(f"async function {name}(") == 0
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
-def test_overview_usage_stepper_wires_to_the_shared_buy_credit_function():
-    # Real gap this guards against: loadUsage() builds the stepper/button
-    # markup as an HTML string, and it's easy for that string's
-    # onclick="buyCredit(this)" to silently drift from BILLING_ACTIONS_JS's
-    # actual function name (or never get wired at all) without any test
-    # catching it, since the JS-syntax test above only checks the script
-    # parses, not that the two pieces reference each other correctly.
-    js = frontend._overview_html()
-    fn = _extract_js_function(js, "loadUsage")
+def test_settings_usage_stepper_wires_to_the_shared_buy_credit_function():
+    # Real gap this guards against: loadSettings() builds the credit
+    # stepper/button markup as an HTML string, and it's easy for that
+    # string's onclick="buyCredit(this)" to silently drift from
+    # BILLING_ACTIONS_JS's actual function name (or never get wired at all)
+    # without any test catching it, since the JS-syntax test above only
+    # checks the script parses, not that the two pieces reference each
+    # other correctly.
+    js = frontend._settings_html()
+    fn = _extract_js_function(js, "loadSettings")
     assert "onclick=\\'buyCredit(this)\\'" not in fn  # wrong quoting would silently no-op the button
     assert "buyCredit(this)" in fn
     assert "buySeat(this)" in fn
