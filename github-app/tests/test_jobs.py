@@ -4699,6 +4699,79 @@ def test_flash_review_job_summary_leads_with_the_top_issue_callout(monkeypatch):
     assert "the real bug" in callout
     assert "discussion_r9001" in rest.split("\n\n", 1)[0] or "discussion_r9001" in callout
     assert rest.split("\n\n", 1)[-1].startswith("2 finding(s) posted as inline review comment(s) below")
+def test_flash_review_data_block_encodes_every_ranked_finding():
+    from scan_worker.jobs import _flash_review_data_block
+    import toon
+
+    findings = [
+        {"rank": 1, "severity": "High", "file": "app.py", "line": 3, "issue": "a real bug",
+         "comment_url": "url-1"},
+        {"rank": 2, "severity": "Low", "file": "app.py", "line": 9, "issue": "a nit",
+         "comment_url": "url-2"},
+    ]
+    block = _flash_review_data_block(findings)
+
+    assert block.startswith("\n\n<!-- aletheore-flash-review-data\n")
+    assert block.rstrip().endswith("-->")
+    inner = block.split("aletheore-flash-review-data\n", 1)[1].rsplit("\n-->", 1)[0]
+    decoded = toon.decode(inner)
+    assert decoded == [
+        {"rank": 1, "severity": "High", "file": "app.py", "line": 3, "issue": "a real bug"},
+        {"rank": 2, "severity": "Low", "file": "app.py", "line": 9, "issue": "a nit"},
+    ]
+
+
+def test_flash_review_data_block_empty_when_nothing_is_ranked():
+    from scan_worker.jobs import _flash_review_data_block
+
+    assert _flash_review_data_block([{"file": "app.py", "line": 1, "issue": "x"}]) == ""
+    assert _flash_review_data_block([]) == ""
+
+
+def test_flash_review_data_block_skips_a_finding_missing_rank_or_severity_but_keeps_the_rest():
+    from scan_worker.jobs import _flash_review_data_block
+    import toon
+
+    findings = [
+        {"rank": 1, "severity": "High", "file": "a.py", "line": 1, "issue": "ranked", "comment_url": "u"},
+        {"file": "b.py", "line": 2, "issue": "unranked, e.g. free tier or ranking failed open"},
+    ]
+    block = _flash_review_data_block(findings)
+    inner = block.split("aletheore-flash-review-data\n", 1)[1].rsplit("\n-->", 1)[0]
+    decoded = toon.decode(inner)
+    assert len(decoded) == 1
+    assert decoded[0]["issue"] == "ranked"
+
+
+def test_flash_review_data_block_degrades_to_empty_when_toon_encoding_fails(monkeypatch):
+    from scan_worker import jobs as jobs_module
+
+    def boom(_data):
+        raise jobs_module.ToonEncodingError("pathological shape")
+
+    monkeypatch.setattr(jobs_module, "to_toon", boom)
+    findings = [{"rank": 1, "severity": "High", "file": "a.py", "line": 1, "issue": "x", "comment_url": "u"}]
+
+    assert jobs_module._flash_review_data_block(findings) == ""
+
+
+def test_flash_review_data_block_degrades_to_empty_when_finding_text_would_close_the_html_comment():
+    # Real gap found via Flash Review on this PR itself: an LLM-authored
+    # "issue" describing an arrow, a diff hunk marker, or quoted code
+    # containing the literal substring "-->" would otherwise close the
+    # HTML comment early, dumping the rest of the TOON payload as visible
+    # text on the PR and corrupting the block. No escape sequence exists
+    # for "-->" inside an HTML comment, so this must degrade to "" exactly
+    # like the ToonEncodingError case, never silently rewrite a finding's
+    # real text to route around it.
+    from scan_worker.jobs import _flash_review_data_block
+
+    findings = [
+        {"rank": 1, "severity": "High", "file": "a.py", "line": 1,
+         "issue": "uses --> as an arrow in a comment", "comment_url": "u"},
+    ]
+
+    assert _flash_review_data_block(findings) == ""
 
 
 def test_flash_review_job_attaches_symbol_attribution_from_deterministic_evidence(monkeypatch):

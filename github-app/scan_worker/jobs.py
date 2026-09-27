@@ -26,6 +26,7 @@ from aletheore.credentials import has_api_key
 from aletheore.dead_code import is_test_file
 from aletheore.evidence import write_evidence
 from aletheore.git_intel.analyzer import analyze_git, compute_hotspots, compute_recently_updated
+from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.evidence_resolution import (
     empty_resolution,
     merge_resolution,
@@ -2576,6 +2577,53 @@ def _post_flash_review_finding_comments(
     return failed_new_posts
 
 
+def _flash_review_data_block(findings: list[dict]) -> str:
+    """A hidden, TOON-encoded copy of every ranked finding's key fields, for
+    an agent reviewing (not authoring) this PR to read exact fields from
+    instead of parsing the prose above. Invisible on GitHub - HTML comments
+    never render - and under its own marker, distinct from FLASH_REVIEW_MARKER
+    (which gates the whole comment's upsert), so a consumer can find this
+    block without depending on the rest of the comment's shape.
+
+    Empty string, not a malformed or partial block, whenever there is
+    nothing ranked to encode (free tier, or a ranking call that failed open
+    this run) or when to_toon itself can't encode the data (see its own
+    module for when that happens) - either way, a human reading the visible
+    part of the comment is completely unaffected.
+    """
+    ranked = [
+        {
+            "rank": f["rank"],
+            "severity": f["severity"],
+            "file": f["file"],
+            "line": f["line"],
+            "issue": f["issue"],
+        }
+        for f in findings
+        if isinstance(f.get("rank"), int)
+        and not isinstance(f.get("rank"), bool)
+        and f.get("severity") in _SEVERITY_EMOJI
+    ]
+    if not ranked:
+        return ""
+    try:
+        encoded = to_toon(ranked)
+    except ToonEncodingError:
+        return ""
+    # An LLM-authored finding (e.g. an "issue" describing an arrow, a diff
+    # hunk marker, or quoted code containing "-->") could otherwise close
+    # this HTML comment early, dumping the rest of the TOON payload as
+    # visible comment text and corrupting the block for both the human
+    # reader and any agent consumer. No escape sequence exists inside an
+    # HTML comment for a literal "-->", so the only safe option consistent
+    # with this function's own "never a malformed block" contract is to
+    # omit the block entirely, exactly like the ToonEncodingError case
+    # above - not silently mutate a finding's real text to route around it.
+    if "-->" in encoded:
+        return ""
+    return f"\n\n<!-- aletheore-flash-review-data\n{encoded}\n-->"
+
+
 def _run_flash_review(
     settings,
     installation_id: int,
@@ -3175,6 +3223,7 @@ def _run_flash_review(
     body += _blast_radius_section_for(
         settings.database_url, installation_id, repo_full_name, head_sha, changed_files
     )
+    body += _flash_review_data_block(findings_to_post)
 
     upsert_pr_comment(client, token, repo_full_name, pr_number, body, marker=FLASH_REVIEW_MARKER)
     set_last_reviewed_sha(
