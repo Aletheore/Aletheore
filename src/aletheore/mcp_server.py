@@ -1,3 +1,4 @@
+import functools
 import json
 import multiprocessing
 import os
@@ -25,6 +26,7 @@ from aletheore.healthcheck import run_healthcheck, save_healthcheck
 from aletheore.history import compute_diff, list_snapshots, save_snapshot
 from aletheore.managed_audit_client import run_managed_audit_request
 from aletheore.query import (
+    BranchNotFoundInEvidenceError,
     ModuleNotFoundInEvidenceError,
     QUERY_FUNCTIONS,
     SymbolNotFoundInEvidenceError,
@@ -44,7 +46,13 @@ from aletheore.query import (
 )
 from aletheore.repo_config import load_repo_config
 from aletheore.secrets import iter_all_files
-from aletheore.search_index import IndexDimensionMismatchError, IndexNotFoundError, search_index
+from aletheore.search_index import (
+    EmbeddingProviderUnavailableError,
+    HostedEmbeddingUnavailableError,
+    IndexDimensionMismatchError,
+    IndexNotFoundError,
+    search_index,
+)
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.watch import EVIDENCE_WRITE_LOCK, BackgroundWatcher, start_background_watch
 
@@ -87,6 +95,24 @@ def read_evidence(repo_path: Path) -> dict:
     evidence = load_evidence_file(evidence_path)
     _evidence_cache[repo_path] = (cache_key, evidence)
     return evidence
+
+
+def _guard_evidence_read_errors(tool_func: Callable[..., str]) -> Callable[..., str]:
+    """Every read_evidence() call site can fail the same three ways (no scan
+    yet, incompatible version, malformed file) - the CLI catches all three at
+    every call site (cli.py's load_evidence() wrapping), but most MCP tools
+    here didn't, so the first read_evidence() call in a freshly-cloned repo
+    (the single most common first-use case) crashed instead of surfacing the
+    actionable message read_evidence() already built for it."""
+
+    @functools.wraps(tool_func)
+    def wrapped(*args, **kwargs):
+        try:
+            return tool_func(*args, **kwargs)
+        except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
+            return _toon_result({"error": str(exc)})
+
+    return wrapped
 
 
 # Surfaced in the MCP `initialize` handshake itself - every client shows
@@ -415,17 +441,28 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
         func, requires_target = QUERY_FUNCTIONS[kind]
 
         def make_tool(func=func, requires_target=requires_target, kind=kind):
+            # imports/imported-by/symbols/cluster raise ModuleNotFoundInEvidenceError
+            # and branch raises BranchNotFoundInEvidenceError for an unknown target;
+            # the rest never raise either, so these except clauses are simply never
+            # hit for those kinds - matching aletheore_neighborhood's own handling of
+            # find_cluster below and the CLI's generic dispatcher (cli.py's _query).
             if requires_target:
 
                 def tool(target: str) -> str:
                     evidence = read_evidence(repo_path)
-                    return _toon_result(func(evidence, target))
+                    try:
+                        return _toon_result(func(evidence, target))
+                    except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
+                        return _toon_result({"error": str(exc)})
 
             elif kind in optional_target_kinds:
 
                 def tool(target: str | None = None) -> str:
                     evidence = read_evidence(repo_path)
-                    return _toon_result(func(evidence, target))
+                    try:
+                        return _toon_result(func(evidence, target))
+                    except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
+                        return _toon_result({"error": str(exc)})
 
             else:
 
@@ -438,7 +475,9 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
         tool_func = make_tool()
         tool_func.__name__ = tool_name
         tool_func.__doc__ = _QUERY_TOOL_DESCRIPTIONS[kind]
-        mcp_instance.tool(name=tool_name, annotations=READ_ONLY_ANNOTATIONS)(tool_func)
+        mcp_instance.tool(name=tool_name, annotations=READ_ONLY_ANNOTATIONS)(
+            _guard_evidence_read_errors(tool_func)
+        )
 
 
 def _register_changes_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
@@ -460,11 +499,19 @@ def _register_changes_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
 
 def _register_neighborhood_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_neighborhood", annotations=READ_ONLY_ANNOTATIONS)
+    @_guard_evidence_read_errors
     def aletheore_neighborhood(target: str) -> str:
         """A module's imports, dependents, and cluster in one call."""
         evidence = read_evidence(repo_path)
-        imports = find_imports(evidence, target)
-        imported_by = find_imported_by(evidence, target)
+        # find_imports/find_imported_by raise ModuleNotFoundInEvidenceError for the
+        # same reason find_cluster below does (unknown target) - unlike cluster,
+        # there's no "optional" reading for those two, so an unknown target is a
+        # clean error rather than a partial result.
+        try:
+            imports = find_imports(evidence, target)
+            imported_by = find_imported_by(evidence, target)
+        except ModuleNotFoundInEvidenceError as exc:
+            return _toon_result({"error": str(exc)})
         try:
             cluster = find_cluster(evidence, target)
         except ModuleNotFoundInEvidenceError:
@@ -481,6 +528,7 @@ def _register_neighborhood_tool(mcp_instance: MCPServer, repo_path: Path) -> Non
 
 def _register_blast_radius_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_get_blast_radius", annotations=READ_ONLY_ANNOTATIONS)
+    @_guard_evidence_read_errors
     def aletheore_get_blast_radius(target: str, symbol: str | None = None) -> str:
         """Everything that would be affected by changing `target` (a file
         path) - one call instead of manually chasing aletheore_imported_by
@@ -501,11 +549,15 @@ def _register_blast_radius_tool(mcp_instance: MCPServer, repo_path: Path) -> Non
         simulate that against.
         """
         evidence = read_evidence(repo_path)
-        return _toon_result(find_blast_radius(evidence, repo_path, target, symbol))
+        try:
+            return _toon_result(find_blast_radius(evidence, repo_path, target, symbol))
+        except ModuleNotFoundInEvidenceError as exc:
+            return _toon_result({"error": str(exc)})
 
 
 def _register_symbol_path_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_symbol_path", annotations=READ_ONLY_ANNOTATIONS)
+    @_guard_evidence_read_errors
     def aletheore_symbol_path(
         source: str, source_symbol: str, target: str, target_symbol: str
     ) -> str:
@@ -521,9 +573,12 @@ def _register_symbol_path_tool(mcp_instance: MCPServer, repo_path: Path) -> None
         exactly what was and wasn't verified.
         """
         evidence = read_evidence(repo_path)
-        return _toon_result(
-            find_symbol_path(evidence, repo_path, source, source_symbol, target, target_symbol)
-        )
+        try:
+            return _toon_result(
+                find_symbol_path(evidence, repo_path, source, source_symbol, target, target_symbol)
+            )
+        except (ModuleNotFoundInEvidenceError, SymbolNotFoundInEvidenceError) as exc:
+            return _toon_result({"error": str(exc)})
 
 
 _LIST_KIND_TO_FUNCTION = {
@@ -535,6 +590,7 @@ _LIST_KIND_TO_FUNCTION = {
 
 def _register_list_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_list", annotations=READ_ONLY_ANNOTATIONS)
+    @_guard_evidence_read_errors
     def aletheore_list(kind: str) -> str:
         """Lists the valid names/identifiers for one evidence collection, so
         other tools' exact-match `target` arguments can be filled in
@@ -553,6 +609,7 @@ def _register_list_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
 
 def _register_overview_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_overview", annotations=READ_ONLY_ANNOTATIONS)
+    @_guard_evidence_read_errors
     def aletheore_overview() -> str:
         """A repo-level summary: languages, frameworks, monorepo structure,
         dependency-graph size, module/cluster counts, and git age/commit
@@ -631,6 +688,7 @@ def _register_ast_pattern_tool(mcp_instance: MCPServer, repo_path: Path) -> None
 
 def _register_symbol_source_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_symbol_source", annotations=READ_ONLY_ANNOTATIONS)
+    @_guard_evidence_read_errors
     def aletheore_symbol_source(module: str, symbol: str) -> str:
         """Exact source text for one named function/class, with resolved line bounds.
 
@@ -646,6 +704,7 @@ def _register_symbol_source_tool(mcp_instance: MCPServer, repo_path: Path) -> No
 
 def _register_verify_citations_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_verify_citations", annotations=READ_ONLY_ANNOTATIONS)
+    @_guard_evidence_read_errors
     def aletheore_verify_citations(report_text: str) -> str:
         """Checks every `file:line` citation in report_text against this
         repo's real evidence and real file line counts. Call this on any
@@ -663,6 +722,7 @@ def _register_verify_citations_tool(mcp_instance: MCPServer, repo_path: Path) ->
 
 def _register_code_evidence_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_find_evidence_for_endpoint", annotations=READ_ONLY_ANNOTATIONS)
+    @_guard_evidence_read_errors
     def aletheore_find_evidence_for_endpoint(method: str, path: str) -> str:
         """Resolve an API endpoint to source evidence: file, line, symbol, owner, commit, dependency, and risk.
 
@@ -673,12 +733,14 @@ def _register_code_evidence_tools(mcp_instance: MCPServer, repo_path: Path) -> N
         return _toon_result(find_code_evidence_for_endpoint(evidence, f"{method} {path}", repo_path))
 
     @mcp_instance.tool(name="aletheore_find_evidence_for_symbol", annotations=READ_ONLY_ANNOTATIONS)
+    @_guard_evidence_read_errors
     def aletheore_find_evidence_for_symbol(symbol: str) -> str:
         """Resolve a function or class symbol to source evidence."""
         evidence = read_evidence(repo_path)
         return _toon_result(find_code_evidence_for_symbol(evidence, symbol, repo_path))
 
     @mcp_instance.tool(name="aletheore_find_evidence_for_dependency", annotations=READ_ONLY_ANNOTATIONS)
+    @_guard_evidence_read_errors
     def aletheore_find_evidence_for_dependency(dependency: str) -> str:
         """Resolve a dependency or import to source evidence."""
         evidence = read_evidence(repo_path)
@@ -765,6 +827,7 @@ def _register_healthcheck_tool(mcp_instance: MCPServer, repo_path: Path) -> None
             readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
         ),
     )
+    @_guard_evidence_read_errors
     def aletheore_healthcheck(base_url: str) -> str:
         """GET-only live health check of mapped API endpoints against a running instance."""
         evidence = read_evidence(repo_path)
@@ -787,6 +850,7 @@ def _register_index_tool(mcp_instance: MCPServer, repo_path: Path, effects: froz
             readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True
         ),
     )
+    @_guard_evidence_read_errors
     def aletheore_index() -> str:
         """Build the semantic search index for this repo's evidence, required
         before aletheore_search_codebase or aletheore_answer can be used.
@@ -847,6 +911,8 @@ def _register_search_codebase_tool(
             return _toon_result(_NO_INDEX_ERROR)
         except IndexDimensionMismatchError as exc:
             return _toon_result({"error": str(exc)})
+        except (EmbeddingProviderUnavailableError, HostedEmbeddingUnavailableError) as exc:
+            return _toon_result({"error": str(exc)})
 
 
 def _register_answer_tool(
@@ -873,6 +939,8 @@ def _register_answer_tool(
             return _toon_result(_NO_INDEX_ERROR)
         except IndexDimensionMismatchError as exc:
             return _toon_result({"error": str(exc)})
+        except (EmbeddingProviderUnavailableError, HostedEmbeddingUnavailableError) as exc:
+            return _toon_result({"error": str(exc)})
 
 
 def _register_managed_audit_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
@@ -883,6 +951,7 @@ def _register_managed_audit_tool(mcp_instance: MCPServer, repo_path: Path) -> No
             readOnlyHint=True, destructiveHint=False, idempotentHint=False, openWorldHint=True
         ),
     )
+    @_guard_evidence_read_errors
     def aletheore_managed_audit(token: str | None = None) -> str:
         """Run a full audit report using Aletheore's managed audit service."""
         # Same resolution the CLI's own `aletheore audit --managed` uses -

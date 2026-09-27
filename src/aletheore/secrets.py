@@ -550,7 +550,12 @@ def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
             continue
 
         rel_path = path.relative_to(repo_path).as_posix()
-        lines = text.splitlines()
+        # split("\n"), never splitlines() - same bug class already fixed elsewhere in
+        # this codebase (see query.py's find_symbol_source): splitlines() also breaks
+        # on \v, \f, \x1c-\x1e, NEL, LS, and PS, none of which count as a line boundary
+        # here, so a file containing one earlier would shift every subsequent match's
+        # reported "line" off from its real \n-based line number.
+        lines = text.split("\n")
         for line_no, line in enumerate(lines, start=1):
             claimed_spans: list[tuple[int, int]] = []
             for pattern_name, pattern, value_group in SECRET_PATTERNS:
