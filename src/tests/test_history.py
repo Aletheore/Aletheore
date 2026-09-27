@@ -622,6 +622,21 @@ def test_summarize_file_changes_non_code_file_has_no_module_data():
     assert rows[0]["functions_added"] == []
 
 
+def test_summarize_file_changes_tolerates_a_module_entry_missing_a_path():
+    # Real gap found by Flash Review on the PR itself: bracket indexing
+    # (m["path"]) raises KeyError if any module dict lacks the key, while
+    # the sibling count_direct_dependents (blast_radius_summary.py, same
+    # PR) defensively uses m.get("path") for the identical module list -
+    # an inconsistency this fixes by matching the safer sibling pattern.
+    old = _evidence_with_modules([{"symbols": {"functions": []}}, _module("app.py", functions=["a"])])
+    new = _evidence_with_modules([_module("app.py", functions=["a", "b"])])
+    changed_files = [{"filename": "app.py", "status": "modified", "additions": 1, "deletions": 0}]
+
+    rows = summarize_file_changes(old, new, changed_files)
+
+    assert rows[0]["functions_added"] == ["b"]
+
+
 def test_summarize_file_changes_counts_a_removed_method_sharing_a_name_with_another_symbol():
     # Real gap found on final review: aletheore's scanner stores methods in
     # symbols.functions under bare names with no class qualifier (verified

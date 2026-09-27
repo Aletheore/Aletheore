@@ -60,12 +60,24 @@ def _code_span(text: str) -> str:
     backtick in the content by widening the fence past the longest run of
     backticks the content itself contains (GFM's own escaping rule) -
     otherwise a filename containing a backtick would prematurely close
-    the code span instead of being shown as part of it."""
+    the code span instead of being shown as part of it.
+
+    Padding spaces around the content are added only when the content
+    itself starts or ends with a backtick - GFM's actual rule, and the
+    only case where the fence would otherwise visually merge with the
+    content. Real gap found by Flash Review on this PR: padding
+    unconditionally (whenever any backtick appears, even mid-content)
+    triggers GFM's own space-stripping rule (one leading/trailing space
+    silently removed) for the common case where the padding was never
+    structurally required in the first place.
+    """
     if "`" not in text:
         return f"`{text}`"
     runs = re.findall(r"`+", text)
     fence = "`" * (max(len(r) for r in runs) + 1)
-    return f"{fence} {text} {fence}"
+    if text.startswith("`") or text.endswith("`"):
+        return f"{fence} {text} {fence}"
+    return f"{fence}{text}{fence}"
 
 
 def format_file_overview(rows: list[dict], possibly_capped: bool = False) -> str:

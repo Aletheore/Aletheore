@@ -147,8 +147,8 @@ def summarize_file_changes(old: dict, new: dict, changed_files: list[dict]) -> l
     needs this to tell "nothing changed" apart from "never had symbols to
     diff in the first place" instead of reporting both identically.
     """
-    old_modules = {m["path"]: m for m in old.get("repository", {}).get("modules", [])}
-    new_modules = {m["path"]: m for m in new.get("repository", {}).get("modules", [])}
+    old_modules = {m["path"]: m for m in old.get("repository", {}).get("modules", []) if m.get("path")}
+    new_modules = {m["path"]: m for m in new.get("repository", {}).get("modules", []) if m.get("path")}
 
     rows = []
     for file in changed_files:

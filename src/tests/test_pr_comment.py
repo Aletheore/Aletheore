@@ -219,12 +219,24 @@ def test_format_file_overview_singular_dependent_is_not_pluralized():
     assert "1 other dependents" not in body
 
 
-def test_format_file_overview_escapes_a_backtick_in_the_path():
+def test_format_file_overview_escapes_a_backtick_not_at_the_boundary_without_padding():
+    # Real gap found by Flash Review on the PR itself: GFM only requires
+    # padding when the content starts or ends with a backtick. Padding
+    # unconditionally (the original fix) introduces GFM's own space-
+    # stripping rule (a leading/trailing space is silently removed) for
+    # the common case - a backtick in the middle of a path, not at either
+    # edge - where no padding was ever structurally required.
     body = format_file_overview([_row("odd`file.py")])
     line = next(line for line in body.splitlines() if "odd" in line)
-    # A single backtick in the path must not prematurely close the code
-    # span - GFM's own fix is a wider fence (double backticks) around it.
-    assert "`` odd`file.py ``" in line
+    assert "``odd`file.py``" in line
+
+
+def test_format_file_overview_pads_a_backtick_at_the_boundary():
+    # A backtick genuinely at the start/end of the content DOES need
+    # padding, or it would merge visually with the fence itself.
+    body = format_file_overview([_row("`leading.py")])
+    line = next(line for line in body.splitlines() if "leading.py" in line)
+    assert "`` `leading.py ``" in line
 
 
 def test_format_file_overview_truncates_past_20_files_honestly():
