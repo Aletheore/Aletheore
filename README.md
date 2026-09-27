@@ -73,11 +73,12 @@ Ruby, PHP, C, C++, C#, and Swift**.
   against your own repo — see [`src/README.md`](src/README.md) for why it isn't wired into CI.
 - **`aletheore query`** / **`aletheore diff`** — answer a targeted question or compare two
   scans from existing evidence, no re-scan or LLM call needed.
-- **`aletheore mcp`** — a stdio MCP server exposing 31 tools by default (32 with
+- **`aletheore mcp`** — a stdio MCP server exposing 34 tools by default (35 with
   `ALETHEORE_MCP_ALLOW=external` enabled) (module/symbol/dependency lookups,
   ownership, clusters, dead code, hotspots, full-text and semantic search, scan and index
   triggers) so a coding agent can query your repo's structure directly instead of shelling out
-  or re-reading files on every lookup. `aletheore mcp-install` wires it into Claude Code,
+  or re-reading files on every lookup; it re-scans in the background as files change unless started
+  with `--no-watch`. `aletheore mcp-install` wires it into Claude Code,
   Cursor, VS Code, Kiro, Opencode, or Codex CLI automatically.
 - **`aletheore dashboard`** — a live local web UI: dependency graph, an Obsidian-style cluster
   graph, trend charts across scan history, and the MCP tool list.
