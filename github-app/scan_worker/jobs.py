@@ -2369,6 +2369,54 @@ def _flash_review_severity_breakdown(findings: list[dict]) -> str:
     return f"({', '.join(parts)}.)" if parts else ""
 
 
+def _select_top_issue(findings: list[dict]) -> dict | None:
+    """The single finding to call out at the top of the summary: the lowest
+    rank among findings that are actually visible on the PR right now
+    (comment_url set - see _post_flash_review_finding_comments). A finding
+    that failed to post has no comment_url and is never eligible, even if
+    its rank is lower than everything that did post - pointing a reader at
+    a comment that doesn't exist would be worse than no callout at all.
+    """
+    candidates = [
+        f for f in findings
+        if isinstance(f.get("rank"), int)
+        and not isinstance(f.get("rank"), bool)
+        and f.get("severity") in _SEVERITY_EMOJI
+        and f.get("comment_url")
+    ]
+    if not candidates:
+        return None
+    return min(enumerate(candidates), key=lambda pair: (pair[1]["rank"], pair[0]))[1]
+
+
+_TOP_ISSUE_TEXT_CAP = 240
+
+
+def _top_issue_callout(finding: dict) -> str:
+    """One line calling out the single most important finding, first thing in
+    the summary comment.
+
+    The finding's own "issue" text is LLM-authored and untrusted - it must
+    never sit inside this callout's own markdown structural syntax, the way
+    a "-->" in a finding's text could otherwise close the hidden TOON block
+    early (see _flash_review_data_block). Here the equivalent risk is a
+    markdown link's own "[...]" span: an issue containing "]" immediately
+    followed by "(" could make part of the untrusted text read as this
+    callout's own link syntax. Fixed the same way - keep untrusted text
+    completely outside any bracket/paren span. The link's visible text is
+    always the fixed phrase "View this comment"; the truncated issue text is
+    plain paragraph text, never link text itself.
+    """
+    first_line = finding["issue"].split("\n", 1)[0]
+    if len(first_line) > _TOP_ISSUE_TEXT_CAP:
+        first_line = first_line[:_TOP_ISSUE_TEXT_CAP].rstrip() + "…"
+    emoji = _SEVERITY_EMOJI[finding["severity"]]
+    return (
+        f"{emoji} **Top issue** ({finding['severity']}): {first_line}\n\n"
+        f"[View this comment]({finding['comment_url']})"
+    )
+
+
 _RESOLVED_PREFIX = "✅ _No longer detected as of `{sha}`._\n\n---\n\n"
 
 
@@ -3030,8 +3078,11 @@ def _run_flash_review(
         )
         breakdown = _flash_review_severity_breakdown(findings_to_post)
         breakdown_suffix = f" {breakdown}" if breakdown else ""
+        top_issue = _select_top_issue(findings_to_post)
+        callout_prefix = f"{_top_issue_callout(top_issue)}\n\n" if top_issue else ""
         body = (
             f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\n"
+            f"{callout_prefix}"
             f"{posted_count} finding(s) posted as inline review comment(s) below.{suffix}{breakdown_suffix}"
         )
     elif findings_to_post:

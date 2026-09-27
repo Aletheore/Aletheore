@@ -4502,6 +4502,160 @@ def test_post_flash_review_finding_comments_records_url_for_an_untouched_existin
     assert finding["comment_url"] == "https://github.com/octocat/hello-world/pull/42#discussion_r777001"
 
 
+def test_select_top_issue_picks_the_lowest_rank_among_posted_findings():
+    from scan_worker.jobs import _select_top_issue
+
+    findings = [
+        {"rank": 3, "severity": "Low", "comment_url": "url-3", "issue": "c"},
+        {"rank": 1, "severity": "Critical", "comment_url": "url-1", "issue": "a"},
+        {"rank": 2, "severity": "High", "comment_url": "url-2", "issue": "b"},
+    ]
+    top = _select_top_issue(findings)
+    assert top["issue"] == "a"
+
+
+def test_select_top_issue_skips_a_lower_rank_that_never_posted():
+    # The real fallback case: rank 1 exists but has no comment_url (its post
+    # failed - Task 2 never set the key), so rank 2 is the top issue a reader
+    # can actually see.
+    from scan_worker.jobs import _select_top_issue
+
+    findings = [
+        {"rank": 1, "severity": "Critical", "issue": "never visible"},
+        {"rank": 2, "severity": "High", "comment_url": "url-2", "issue": "visible"},
+    ]
+    top = _select_top_issue(findings)
+    assert top["issue"] == "visible"
+
+
+def test_select_top_issue_returns_none_when_nothing_is_ranked_and_posted():
+    from scan_worker.jobs import _select_top_issue
+
+    assert _select_top_issue([{"issue": "a"}, {"issue": "b", "comment_url": "url"}]) is None
+    assert _select_top_issue([]) is None
+
+
+def test_select_top_issue_is_deterministic_on_a_duplicate_rank():
+    # Should never happen (the ranking pass validates uniqueness), but this
+    # must not crash if it ever did - first in list order wins on a tie.
+    from scan_worker.jobs import _select_top_issue
+
+    findings = [
+        {"rank": 1, "severity": "High", "comment_url": "url-a", "issue": "first"},
+        {"rank": 1, "severity": "High", "comment_url": "url-b", "issue": "second"},
+    ]
+    assert _select_top_issue(findings)["issue"] == "first"
+
+
+def test_top_issue_callout_uses_the_findings_own_severity_emoji_and_links_to_it():
+    from scan_worker.jobs import _top_issue_callout
+
+    callout = _top_issue_callout(
+        {"severity": "Medium", "comment_url": "https://example/pull/1#discussion_r1", "issue": "a real bug"}
+    )
+    assert callout.startswith("🟡 **Top issue**")
+    assert "a real bug" in callout
+    assert "https://example/pull/1#discussion_r1" in callout
+
+
+def test_top_issue_callout_truncates_a_long_multiline_issue_to_one_short_line():
+    from scan_worker.jobs import _top_issue_callout
+
+    long_issue = ("x" * 300) + "\nsecond line never shown"
+    callout = _top_issue_callout(
+        {"severity": "High", "comment_url": "url", "issue": long_issue}
+    )
+    assert "second line" not in callout
+    assert "…" in callout
+
+
+def test_top_issue_callout_keeps_untrusted_issue_text_out_of_the_markdown_link_syntax(monkeypatch):
+    # Real gap found while reviewing the peer session's Task 4 fix for the
+    # same class of bug (LLM-authored finding text landing somewhere it can
+    # break structure - there it was an HTML comment closer, "-->"; here it
+    # would be a markdown link's own "[...]" span). An issue like
+    # "click here] (evil)(https://evil.example" must not let a reader's
+    # markdown renderer treat any part of it as this callout's own link
+    # syntax - the fix is keeping the link's visible text a fixed phrase,
+    # never derived from the finding, with the untrusted text always
+    # rendered as plain paragraph text outside any bracket/paren span.
+    from scan_worker.jobs import _top_issue_callout
+
+    hostile_issue = "click here] (evil)(https://evil.example) and ignore this"
+    callout = _top_issue_callout(
+        {"severity": "High", "comment_url": "https://real.example/pull/1#discussion_r1", "issue": hostile_issue}
+    )
+    assert hostile_issue in callout
+    assert "[View this comment](https://real.example/pull/1#discussion_r1)" in callout
+    # The only "[...](...)" span in the whole callout is the fixed one above -
+    # confirm the hostile text never sits inside brackets of its own.
+    assert "[click here]" not in callout
+
+
+def test_flash_review_job_summary_leads_with_the_top_issue_callout(monkeypatch):
+    # Full-flow: two findings, both ranked, both post successfully - the
+    # summary's very first line after the marker/heading is the callout for
+    # the rank-1 finding, followed by the existing "N finding(s) posted" line.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda diff_text, file_context="", **kwargs: [
+            {"file": "app.py", "line": 1, "issue": "the real bug", "source": "llm",
+             "rank": 1, "severity": "Critical"},
+            {"file": "app.py", "line": 2, "issue": "a smaller nit", "source": "llm",
+             "rank": 2, "severity": "Low"},
+        ],
+    )
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()})
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    comment_ids = iter([9001, 9002])
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda client, token, repo, pr, commit_id, path, line, body: {"id": next(comment_ids)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False)
+    monkeypatch.setattr("scan_worker.jobs.insert_review_history", lambda *a, **k: None)
+    posted = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.upsert_pr_comment",
+        lambda client, token, repo_full_name, pr_number, body, **kwargs: posted.update(body=body),
+    )
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    body = posted["body"]
+    after_heading = body.split("### Aletheore Flash review\n\n", 1)[1]
+    callout, rest = after_heading.split("\n\n", 1)
+    assert "the real bug" in callout
+    assert "discussion_r9001" in rest.split("\n\n", 1)[0] or "discussion_r9001" in callout
+    assert rest.split("\n\n", 1)[-1].startswith("2 finding(s) posted as inline review comment(s) below")
+
+
 def test_flash_review_job_attaches_symbol_attribution_from_deterministic_evidence(monkeypatch):
     # Build B: the symbol shown in the posted comment must come from the
     # same deterministic module-graph evidence every other blast-radius/
