@@ -16,7 +16,7 @@ from app_server.db import (
     upsert_installation,
 )
 from app_server.webhooks.installation import handle_installation_event
-from test_admin import _logged_in_client
+from test_admin import _async_false, _logged_in_client
 
 
 async def _seed_installation(pool, installation_id, account_login, repo_full_name):
@@ -347,6 +347,37 @@ async def test_delete_all_data_route_rejects_non_administrator(pool, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_delete_all_data_route_denies_a_non_admin_in_the_coarse_installations_set(pool, monkeypatch):
+    # Real, severe gap closed 2026-09-27: being in the coarse
+    # administered-installations set alone used to be enough to run this
+    # real, full data deletion (the request-otp step before it only
+    # proves control of the CALLER's own inbox, not real access to this
+    # installation). Now requires the same real-membership-or-admin bar
+    # get_billing_portal_url already used.
+    client = await _logged_in_client(pool, monkeypatch)
+    await pool.execute(
+        "INSERT INTO github_user_emails (github_login, email) VALUES ('octocat', 'octocat@example.com') "
+        "ON CONFLICT (github_login) DO UPDATE SET email = EXCLUDED.email"
+    )
+    async with client:
+        # request-otp itself must also refuse a coarsely-qualified,
+        # non-real-admin caller - checked here rather than obtaining a
+        # real code and trying delete-all-data with it, since a caller
+        # who can never legitimately reach this point should also never
+        # receive a working code in the first place.
+        monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_false)
+        otp_response = await client.post("/admin/octocat/hello-world/delete-all-data/request-otp")
+        delete_response = await client.post(
+            "/admin/octocat/hello-world/delete-all-data",
+            json={"confirm": "octocat", "otp_code": "000000"},
+        )
+
+    assert otp_response.status_code == 403
+    assert delete_response.status_code == 403
+    assert await get_installation(pool, 100) is not None
+
+
+@pytest.mark.asyncio
 async def test_delete_all_data_route_requires_login(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch)
     async with client:
@@ -400,6 +431,20 @@ async def test_deletion_preview_names_every_repo_in_the_installation(pool, monke
     # The blast radius is installation-wide, so a repo the user isn't
     # looking at must still be named in the confirmation.
     assert "octocat/second-repo" in body["repos"]
+
+
+@pytest.mark.asyncio
+async def test_deletion_preview_denies_a_non_admin_in_the_coarse_installations_set(pool, monkeypatch):
+    # Real gap closed 2026-09-27: same class as export-data and
+    # delete-all-data - the coarse set alone let anyone read-access-
+    # qualified on one covered repo see every OTHER repo this
+    # installation covers, as a preview of what a delete would destroy.
+    client = await _logged_in_client(pool, monkeypatch)
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_false)
+    async with client:
+        response = await client.get("/admin/octocat/hello-world/deletion-preview")
+
+    assert response.status_code == 403
 
 
 @pytest.mark.asyncio

@@ -5,10 +5,15 @@ import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from aletheore.evidence import EVIDENCE_VERSION
 from app_server.auth import encrypt_access_token, sign_session_id, unsign_checkout_installation_id
-from app_server.db import add_paddle_ids_to_installation, create_session, upsert_installation
+from app_server.db import add_paddle_ids_to_installation, create_session, insert_repo_history, upsert_installation
 from app_server.frontend import _plan_display_name
 from app_server.main import app
+
+
+async def _async_true(*args, **kwargs) -> bool:
+    return True
 
 
 def test_plan_display_name_covers_all_three_plans():
@@ -52,6 +57,11 @@ async def _logged_in_client(pool, monkeypatch, administered_ids):
         "app_server.admin._github_http_client",
         lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
     )
+    # Default "administered" represents a real GitHub admin on each
+    # installation - _is_real_installation_member_or_admin would otherwise
+    # attempt a live GitHub API call and fail closed. Same pattern as
+    # test_dashboard.py's own _logged_in_client, same reasoning.
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
     app.state.db_pool = pool
     signed = sign_session_id("sub-sess", "test-session-secret")
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test", cookies={"session": signed})
@@ -134,6 +144,9 @@ async def test_zero_installations_shows_install_prompt(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_one_installation_shows_checkout_with_current_plan(pool, monkeypatch):
     await upsert_installation(pool, 2001, "acme")
+    await insert_repo_history(
+        pool, 2001, "acme/repo", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
     client = await _logged_in_client(pool, monkeypatch, [2001])
     async with client:
         response = await client.get("/subscribe?plan=air&interval=month")
@@ -163,6 +176,9 @@ async def test_one_installation_with_existing_paddle_customer_wires_pw_customer(
     # through this page - even though the installation already has a real
     # Paddle customer ID from a previous subscription.
     await upsert_installation(pool, 2004, "returning-corp")
+    await insert_repo_history(
+        pool, 2004, "returning-corp/repo", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
     await add_paddle_ids_to_installation(pool, 2004, "sub_existing", "ctm_existing123")
     client = await _logged_in_client(pool, monkeypatch, [2004])
     async with client:
@@ -174,7 +190,13 @@ async def test_one_installation_with_existing_paddle_customer_wires_pw_customer(
 @pytest.mark.asyncio
 async def test_multiple_installations_shows_selection(pool, monkeypatch):
     await upsert_installation(pool, 2002, "acme")
+    await insert_repo_history(
+        pool, 2002, "acme/repo", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
     await upsert_installation(pool, 2003, "beta-corp")
+    await insert_repo_history(
+        pool, 2003, "beta-corp/repo", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
     client = await _logged_in_client(pool, monkeypatch, [2002, 2003])
     async with client:
         response = await client.get("/subscribe?plan=air&interval=year")

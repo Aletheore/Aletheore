@@ -281,6 +281,24 @@ def _fetch_administered_installation_ids(github_token: str) -> set[int]:
     return {item["id"] for item in installations}
 
 
+def _fetch_github_login(github_token: str) -> str:
+    """The caller's own GitHub login, for the bearer-token routes
+    (`/v1/my-installations`, `/v1/cli-tokens`) that never go through
+    `get_current_session` and so never get `session["github_login"]` for
+    free - needed to call `_is_real_installation_member_or_admin` the same
+    way every session-cookie route already does.
+    """
+    response = _github_http_client().get(
+        "/user",
+        headers={
+            "Authorization": f"Bearer {github_token}",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    response.raise_for_status()
+    return response.json()["login"]
+
+
 _ADMINISTERED_INSTALLATIONS_CACHE_TTL_SECONDS = 30
 
 
@@ -449,6 +467,118 @@ async def _has_real_admin_permission(installation_id: int, github_login: str, re
         )
         return False
     return permission == "admin"
+
+
+def _fetch_any_covered_repo_sync(installation_id: int) -> str | None:
+    """One repo this installation covers per GitHub's own record, via the
+    installation's own token (not the caller's) - the same call
+    `dashboard._fetch_uninitialized_repos_sync` makes, reused here so
+    `_is_real_installation_member_or_admin` has something to verify real
+    per-repo permission against even for an installation Aletheore has
+    never scanned (`list_repos_for_installations` - Aletheore's own scan
+    history - is empty for a brand-new or freshly-upgraded installation:
+    installing or paying for one writes no repo_history row by itself,
+    see dashboard.py's `_uninitialized_repos_for_installation` docstring).
+    Without this fallback, a customer who just paid and hasn't had a
+    first scan complete yet could never pass real-admin verification for
+    their own installation - a real regression a first attempt at this
+    fix caught via its own test suite (2026-09-27), not shipped.
+
+    None on any failure (revoked install, rate limit, GitHub outage) or
+    an installation with zero repos - the caller must fail closed, not
+    treat "couldn't check" as "verified".
+    """
+    settings = get_settings()
+    app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+    installation_token = get_installation_token(installation_id, app_jwt)
+    repositories = fetch_paginated_github_collection(
+        _github_http_client(),
+        "/installation/repositories",
+        headers={
+            "Authorization": f"Bearer {installation_token}",
+            "Accept": "application/vnd.github+json",
+        },
+        collection_key="repositories",
+    )
+    return repositories[0]["full_name"] if repositories else None
+
+
+async def _is_real_installation_member_or_admin(pool, installation_id: int, github_login: str) -> bool:
+    """Whether `github_login` should actually be able to see or act on
+    this specific installation - the bar every sensitive per-installation
+    route already applies one way or another (`_require_seat_if_paid`,
+    `_require_installation_admin_permission_or_404`, the inline check in
+    `get_billing_portal_url`), extracted so every LISTING endpoint that
+    fans out across several installations can apply the identical bar
+    per installation instead of trusting the coarse set alone.
+
+    Real, confirmed gap this closes (2026-09-27): the coarse
+    administered-installations set is GitHub's own `/user/installations`
+    result, which includes any account with read/write/OR admin access to
+    even ONE repo an installation covers - notably, read access to a
+    single PUBLIC repo is enough, no invitation needed. Several listing
+    endpoints (`/app/repos`, `/subscribe`, the credits page's sibling-
+    installations list, `/v1/my-installations`, `/v1/cli-tokens`) used
+    that raw set directly, with zero further filtering - so anyone
+    coarsely qualified for an installation saw (or, for `/v1/cli-tokens`,
+    could mint a real API token against) every repo and billing detail
+    under it, private repos included, confirmed live against two real
+    accounts.
+
+    An already-seated member is trusted outright (paid access was already
+    vetted when they were added). Anyone else needs their real per-repo
+    GitHub permission verified via `_has_real_admin_permission`, checked
+    against any one repo this installation actually covers
+    (`list_repos_for_installations`, keyed by `repo_history`) - or, if
+    Aletheore has never scanned any repo for this installation yet,
+    against a repo fetched directly from GitHub instead
+    (`_fetch_any_covered_repo_sync`). Fails closed (False) with no
+    covered repo to check against by either route - "unable to verify"
+    must never read as "verified".
+    """
+    if await is_installation_member(pool, installation_id, github_login):
+        return True
+    repos = await list_repos_for_installations(pool, [installation_id])
+    repo_full_name = repos[0]["repo_full_name"] if repos else None
+    if repo_full_name is None:
+        try:
+            repo_full_name = await asyncio.to_thread(_fetch_any_covered_repo_sync, installation_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "could not fetch a covered repo for installation=%s (%s)", installation_id, exc,
+            )
+            return False
+    if repo_full_name is None:
+        return False
+    return await _has_real_admin_permission(installation_id, github_login, repo_full_name)
+
+
+async def _require_real_admin_or_member(
+    pool, installation_id: int, github_login: str, repo_full_name: str
+) -> None:
+    """Same bar as `_is_real_installation_member_or_admin`, checked against
+    a specific `repo_full_name` the caller already has in hand (from the
+    URL path, e.g. an `/admin/{org}/{repo}/...` route) instead of
+    Aletheore's own scanned-repo list - safe to use even for an
+    installation Aletheore has never scanned, which
+    `_is_real_installation_member_or_admin` cannot verify (it fails closed
+    with no covered repo to check against). Prefer this whenever a
+    specific repo is already known; this is the pattern
+    `get_billing_portal_url` already used inline before being extracted
+    here, when four more routes below turned out to need the identical
+    check (2026-09-27).
+
+    Raises 403 rather than returning a bool - every call site needs the
+    same "stop right here" behavior, unlike
+    `_is_real_installation_member_or_admin`'s callers, which filter a
+    list instead.
+    """
+    if await is_installation_member(pool, installation_id, github_login):
+        return
+    if not await _has_real_admin_permission(installation_id, github_login, repo_full_name):
+        raise HTTPException(
+            status_code=403, detail="you do not have admin access to this repository on GitHub"
+        )
 
 
 async def _require_seat_if_paid(pool, installation: dict, github_login: str, repo_full_name: str) -> None:
@@ -789,12 +919,7 @@ async def get_billing_portal_url(org: str, repo: str, request: Request):
     session, installation = await _require_authorized_installation(request, org, repo)
     installation_id = installation["installation_id"]
     pool = request.app.state.db_pool
-    if not await is_installation_member(pool, installation_id, session["github_login"]):
-        if not await _has_real_admin_permission(installation_id, session["github_login"], f"{org}/{repo}"):
-            raise HTTPException(
-                status_code=403,
-                detail="you do not have admin access to this repository on GitHub",
-            )
+    await _require_real_admin_or_member(pool, installation_id, session["github_login"], f"{org}/{repo}")
     customer_id = installation.get("paddle_customer_id")
     if not customer_id:
         raise HTTPException(
@@ -1254,10 +1379,20 @@ async def export_data(org: str, repo: str, request: Request):
     token or its hash (list_api_tokens never returns either); the webhook
     URL is omitted entirely, since Slack-style webhook URLs embed a secret
     in the path itself.
+
+    Real gap closed here (2026-09-27): _require_authorized_installation
+    alone only proves membership in the coarse administered-installations
+    set (GitHub's own definition - read/write/OR admin on any ONE repo
+    the app covers, including a single public repo) - the "no plan/seat
+    gate" reasoning above is about not requiring a PAID seat, not about
+    trusting that coarse set with this export's actual contents (security
+    findings, member logins, token labels). Same real-membership-or-admin
+    bar get_billing_portal_url already applied for the identical reason.
     """
     session, installation = await _require_authorized_installation(request, org, repo)
     pool = request.app.state.db_pool
     installation_id = installation["installation_id"]
+    await _require_real_admin_or_member(pool, installation_id, session["github_login"], f"{org}/{repo}")
 
     repos = await list_repos_for_installations(pool, [installation_id])
     repo_full_names = [row["repo_full_name"] for row in repos]
@@ -1298,10 +1433,15 @@ async def deletion_preview(org: str, repo: str, request: Request):
     repo-scoped, so a customer standing on acme/api's settings page is one
     click from wiping acme/web too - naming the other repos is the only
     honest way to present that.
+
+    Real gap closed here (2026-09-27): same as export_data above - the
+    coarse set alone let anyone read-access-qualified on one covered repo
+    see every OTHER repo this installation covers.
     """
-    _session, installation = await _require_authorized_installation(request, org, repo)
+    session, installation = await _require_authorized_installation(request, org, repo)
     pool = request.app.state.db_pool
     installation_id = installation["installation_id"]
+    await _require_real_admin_or_member(pool, installation_id, session["github_login"], f"{org}/{repo}")
     repos = await list_repos_for_installations(pool, [installation_id])
     return {
         "account_login": installation["account_login"],
@@ -1329,10 +1469,19 @@ async def request_deletion_otp(org: str, repo: str, request: Request):
     the account owner's - a teammate with their own seat can delete too),
     so completing a delete requires proving control of that inbox right
     now, not just possession of a session.
+
+    Real gap closed here (2026-09-27): that "proving control of an inbox"
+    story only works if the inbox belongs to someone who should be able
+    to act on this installation at all - the coarse set alone doesn't
+    establish that (see export_data above), and without this check
+    anyone read-access-qualified on one covered repo could request (and
+    receive, at their OWN verified email) a real code toward deleting
+    someone else's entire installation.
     """
     session, installation = await _require_authorized_installation(request, org, repo)
     pool = request.app.state.db_pool
     installation_id = installation["installation_id"]
+    await _require_real_admin_or_member(pool, installation_id, session["github_login"], f"{org}/{repo}")
 
     settings = get_settings()
     try:
@@ -1399,10 +1548,25 @@ async def delete_all_data(
     a customer on the free plan, or one whose card just failed and got
     downgraded, is precisely the person who must still be able to delete
     their data. A 402 on this route would be indefensible.
+
+    Real, severe gap closed here (2026-09-27): "same reasoning as the
+    billing portal" described above is about not requiring a paid seat -
+    it was never a reason to skip the billing portal's OTHER check, the
+    one that actually verifies the caller belongs on this installation at
+    all (get_billing_portal_url's own docstring: the coarse set alone is
+    "not enough to trust with a session that can view or change a
+    payment method, or cancel the subscription outright" - deleting all
+    of an installation's data is at least as sensitive). Without this,
+    the request-otp email step above proves only that the caller
+    controls their OWN inbox, not that they administer THIS installation
+    - anyone read-access-qualified on one covered repo could complete a
+    real, full data deletion for an installation they have no real
+    access to.
     """
     session, installation = await _require_authorized_installation(request, org, repo)
     pool = request.app.state.db_pool
     installation_id = installation["installation_id"]
+    await _require_real_admin_or_member(pool, installation_id, session["github_login"], f"{org}/{repo}")
 
     # The typed confirmation is the account login, not the repo name: the
     # blast radius is the whole installation, and making someone type the
@@ -1519,14 +1683,25 @@ async def my_installations(request: Request):
     # option they can't use.
     github_token = _bearer_github_token(request)
     administered_ids = await _administered_installation_ids_or_401(github_token)
-    rows = await request.app.state.db_pool.fetch(
+    pool = request.app.state.db_pool
+    # Real gap closed here (2026-09-27): same coarse-set-without-
+    # verification issue as /app/repos and /subscribe, just on the CLI's
+    # own login path - filtered to installations this login is actually
+    # seated on, or has real GitHub admin permission on.
+    github_login = await asyncio.to_thread(_fetch_github_login, github_token)
+    verified_ids = [
+        installation_id
+        for installation_id in administered_ids
+        if await _is_real_installation_member_or_admin(pool, installation_id, github_login)
+    ]
+    rows = await pool.fetch(
         """
         SELECT installation_id, account_login
         FROM installations
         WHERE installation_id = ANY($1::bigint[]) AND plan = 'air'
         ORDER BY account_login ASC, installation_id ASC
         """,
-        list(administered_ids),
+        verified_ids,
     )
     return {"installations": [dict(row) for row in rows]}
 
@@ -1541,6 +1716,16 @@ async def create_cli_token(request: Request, body: CreateCliTokenRequest):
         raise HTTPException(status_code=403, detail="you do not administer this installation")
 
     pool = request.app.state.db_pool
+    # Real gap closed here (2026-09-27), more severe than a data leak: the
+    # coarse check above let anyone with mere read access to one covered
+    # repo (including via a single public repo) mint a real, usable CLI API
+    # token against someone else's installation - not just view their data,
+    # act as them. Same real-membership-or-admin bar as every other route
+    # fixed alongside this one.
+    github_login = await asyncio.to_thread(_fetch_github_login, github_token)
+    if not await _is_real_installation_member_or_admin(pool, installation_id, github_login):
+        raise HTTPException(status_code=403, detail="you do not administer this installation")
+
     installation = await get_installation(pool, installation_id)
     if installation is None:
         raise HTTPException(status_code=404, detail="installation not found")

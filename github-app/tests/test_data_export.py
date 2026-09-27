@@ -4,7 +4,7 @@ import pytest
 
 from aletheore.evidence import EVIDENCE_VERSION
 from app_server.db import list_admin_actions
-from test_admin import _logged_in_client
+from test_admin import _async_false, _logged_in_client
 
 
 @pytest.mark.asyncio
@@ -30,6 +30,22 @@ async def test_export_rejects_non_administrator(pool, monkeypatch):
         response = await client.get("/admin/globex/web/export-data")
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_export_denies_a_non_admin_in_the_coarse_installations_set(pool, monkeypatch):
+    # Real gap closed 2026-09-27: being in the coarse administered-
+    # installations set (GitHub's own definition - read/write/OR admin on
+    # any ONE repo the app covers, including a single public repo) used to
+    # be enough on its own to download this export - security findings,
+    # member logins, and token labels included. Now requires the same
+    # real-membership-or-admin bar every other sensitive route uses.
+    client = await _logged_in_client(pool, monkeypatch, plan="air")
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_false)
+    async with client:
+        response = await client.get("/admin/octocat/hello-world/export-data")
+
+    assert response.status_code == 403
 
 
 @pytest.mark.asyncio
