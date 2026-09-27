@@ -1036,7 +1036,20 @@ def _verify(report_path: str, repo_path: str) -> int:
         )
         return 1
 
-    report_text = report_file.read_text(encoding="utf-8")
+    try:
+        report_text = report_file.read_text(encoding="utf-8")
+    except OSError as exc:
+        # The .exists() check above only proves the file was there at that
+        # moment - it can vanish, lose permissions, or (on a race with
+        # something else writing it) become briefly unreadable before this
+        # read runs. Same class of bug as the MCP crashes fixed alongside
+        # this: a real, unhandled exception two lines below a check that
+        # looks like it already guarded against exactly this.
+        console.print(f"[bold red]error:[/bold red] could not read {report_file}: {exc}")
+        return 1
+    except UnicodeDecodeError as exc:
+        console.print(f"[bold red]error:[/bold red] {report_file} is not valid UTF-8: {exc}")
+        return 1
     result = verify_citations(report_text, evidence, fetch_line_count=local_line_count_fetcher(repo))
     total = result["total_citations"]
     verified = len(result["verified"])
