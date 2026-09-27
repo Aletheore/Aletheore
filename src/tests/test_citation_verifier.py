@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -218,6 +219,34 @@ def _repo_with_evidence(tmp_path, files: dict[str, str]):
     }
     (repo_path / ".aletheore" / "air.json").write_text(json.dumps(evidence))
     return repo_path
+
+
+def test_load_verifiable_evidence_recovers_from_a_transient_windows_permission_error(tmp_path):
+    # This read used to bypass the shared read_text_with_retry helper
+    # entirely, catching PermissionError (a subclass of OSError) as "cannot
+    # verify" and silently giving up rather than actually succeeding after a
+    # brief, real transient race with a concurrent writer (the background
+    # watcher rewriting air.json while this runs).
+    from unittest.mock import patch
+
+    repo_path = _repo_with_evidence(tmp_path, {"app.py": "one\ntwo\n"})
+    path = repo_path / ".aletheore" / "air.json"
+    real_read_text = Path.read_text
+    calls = {"count": 0}
+
+    def flaky_read_text(self, *args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1 and self == path:
+            raise PermissionError("in use")
+        return real_read_text(self, *args, **kwargs)
+
+    with patch("aletheore.evidence.Path.read_text", flaky_read_text), patch(
+        "aletheore.evidence._REPLACE_RETRY_DELAY_SECONDS", 0
+    ):
+        evidence = load_verifiable_evidence(repo_path)
+
+    assert evidence is not None
+    assert evidence["aletheore_version"] == EVIDENCE_VERSION
 
 
 def test_local_line_count_fetcher_counts_real_lines_and_rejects_escapes(tmp_path):

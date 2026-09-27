@@ -33,7 +33,7 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
-from aletheore.evidence import is_evidence_version_compatible
+from aletheore.evidence import read_text_with_retry, is_evidence_version_compatible
 
 logger = logging.getLogger("aletheore.citation_verifier")
 
@@ -204,7 +204,7 @@ def load_verifiable_evidence(repo_path: Path) -> dict | None:
     unavailable rather than as failure.
     """
     try:
-        evidence = json.loads((repo_path / ".aletheore" / "air.json").read_text(encoding="utf-8"))
+        evidence = json.loads(read_text_with_retry(repo_path / ".aletheore" / "air.json"))
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(evidence, dict):
