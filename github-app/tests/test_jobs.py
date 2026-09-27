@@ -1114,6 +1114,98 @@ def test_run_pr_scan_job_still_posts_the_diff_comment_when_the_file_overview_fet
     assert any("file-overview section" in record.message for record in caplog.records)
 
 
+def test_run_pr_scan_job_reuses_the_detailed_fetch_instead_of_a_second_compare_call(
+    bare_repo_with_two_commits, monkeypatch
+):
+    # Real gap found on final review: fetch_pr_changed_files_detailed and
+    # the later fetch_pr_changed_files call both hit the same GitHub
+    # compare endpoint for the same base/head pair - one avoidable request
+    # per PR scan. When the detailed fetch already succeeded, its own
+    # filenames should be reused instead of fetching them a second time.
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+    posted = {}
+
+    def fake_upsert(client, token, repo_full_name, pr_number, body):
+        posted["body"] = body
+
+    def fail_if_called(*a, **k):
+        pytest.fail("fetch_pr_changed_files must not be called when the detailed fetch already succeeded")
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_pr_changed_files_detailed",
+        lambda *a, **k: [{
+            "filename": "app.py", "status": "modified", "additions": 1, "deletions": 1,
+            "previous_filename": None,
+        }],
+    )
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", fail_if_called)
+
+    run_pr_scan_job(
+        installation_id=1, repo_full_name="octocat/hello-world", pr_number=7,
+        base_sha=base_sha, head_sha=head_sha,
+    )
+
+    assert "What changed" in posted["body"]
+
+
+def test_run_pr_scan_job_falls_back_to_fetch_pr_changed_files_when_the_detailed_fetch_fails(
+    bare_repo_with_two_commits, monkeypatch
+):
+    # The reuse above must not remove the existing fallback path: when the
+    # detailed fetch itself fails, the plain fetch_pr_changed_files call
+    # (feeding the wiki/docs incremental-update enqueue and the
+    # regression-risk/fence check runs) must still run.
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+    posted = {}
+    plain_fetch_calls = []
+
+    def fake_upsert(client, token, repo_full_name, pr_number, body):
+        posted["body"] = body
+
+    def raise_error(*a, **k):
+        raise RuntimeError("GitHub compare API is down")
+
+    def fake_plain_fetch(client, token, repo_full_name, base_sha, head_sha):
+        plain_fetch_calls.append(1)
+        return ["app.py"]
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files_detailed", raise_error)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", fake_plain_fetch)
+
+    run_pr_scan_job(
+        installation_id=1, repo_full_name="octocat/hello-world", pr_number=7,
+        base_sha=base_sha, head_sha=head_sha,
+    )
+
+    assert plain_fetch_calls == [1]
+
+
 def test_check_run_failure_does_not_overwrite_diff_comment(bare_repo_with_two_commits, monkeypatch, caplog):
     bare_path, base_sha, head_sha = bare_repo_with_two_commits
     posted = {}

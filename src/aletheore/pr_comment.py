@@ -1,5 +1,7 @@
 """Format Aletheore diff results as pull request comment bodies."""
 
+import re
+
 COMMENT_MARKER = "<!-- aletheore-diff -->"
 
 FILE_OVERVIEW_TRUNCATION_CAP = 20
@@ -53,16 +55,36 @@ def _symbol_change_phrase(row: dict) -> str:
     return ", ".join(parts)
 
 
-def format_file_overview(rows: list[dict]) -> str:
+def _code_span(text: str) -> str:
+    """Wrap `text` in Markdown inline-code backticks, escaping a literal
+    backtick in the content by widening the fence past the longest run of
+    backticks the content itself contains (GFM's own escaping rule) -
+    otherwise a filename containing a backtick would prematurely close
+    the code span instead of being shown as part of it."""
+    if "`" not in text:
+        return f"`{text}`"
+    runs = re.findall(r"`+", text)
+    fence = "`" * (max(len(r) for r in runs) + 1)
+    return f"{fence} {text} {fence}"
+
+
+def format_file_overview(rows: list[dict], possibly_capped: bool = False) -> str:
     """Render `history.summarize_file_changes`'s per-file rows (with a
     caller-merged "dependents_count" key - see `blast_radius_summary.
-    compute_blast_radius`) as the leading section of the PR evidence-diff
+    count_direct_dependents`) as the leading section of the PR evidence-diff
     comment. Empty string when `rows` is empty (nothing GitHub reports as
     changed - `run_pr_scan_job` never calls this with an empty list in
     practice, but an empty result must never fabricate a section header
     over nothing). Otherwise always non-empty: this section is fully
     deterministic and posts on every run, regardless of tier or whether
     Flash Review ran at all.
+
+    `possibly_capped` - True when `rows` came from a GitHub compare that
+    itself hit its own file-count cap (see `github_api.
+    GITHUB_COMPARE_FILES_HARD_CAP`) - past that cap, files beyond it were
+    never returned at all, so "+N more" would understate the true total
+    rather than merely truncate a known one; the truncation line hedges
+    instead of presenting a number that reads as exact.
     """
     if not rows:
         return ""
@@ -74,21 +96,35 @@ def format_file_overview(rows: list[dict]) -> str:
     ]
     shown = rows[:FILE_OVERVIEW_TRUNCATION_CAP]
     for row in shown:
-        parts = [f"`{row['path']}`"]
+        parts = [_code_span(row["path"])]
         if row.get("previous_path"):
-            parts.append(f"(renamed from `{row['previous_path']}`)")
-        parts.append(row["status"])
+            parts.append(f"(renamed from {_code_span(row['previous_path'])})")
+        phrase = _symbol_change_phrase(row)
+        # The raw status word is skipped when the phrase (or the rename
+        # annotation just above) already says the same thing - "removed ·
+        # removed" and "renamed ... · renamed" are redundant on every PR
+        # that deletes or renames a file. A status whose phrase came back
+        # empty (e.g. an added non-code file, which has no module data to
+        # phrase at all) keeps the raw word - it's the only signal left.
+        status_redundant = (
+            (row["status"] == "removed" and phrase == "removed")
+            or (row["status"] == "added" and phrase.startswith("new file"))
+            or (row["status"] == "renamed" and row.get("previous_path"))
+        )
+        if not status_redundant:
+            parts.append(row["status"])
         if row["additions"] or row["deletions"]:
             parts.append(f"+{row['additions']}/-{row['deletions']}")
-        phrase = _symbol_change_phrase(row)
         if phrase:
             parts.append(phrase)
         dependents = row.get("dependents_count", 0)
         if dependents:
-            parts.append(f"{dependents} dependent{'s' if dependents != 1 else ''}")
+            parts.append(f"{dependents} other dependent{'s' if dependents != 1 else ''}")
         lines.append("- " + " · ".join(parts))
     if len(rows) > FILE_OVERVIEW_TRUNCATION_CAP:
-        lines.append(f"- +{len(rows) - FILE_OVERVIEW_TRUNCATION_CAP} more changed file(s)")
+        overflow = len(rows) - FILE_OVERVIEW_TRUNCATION_CAP
+        hedge = "or more" if possibly_capped else "more"
+        lines.append(f"- +{overflow} {hedge} changed file(s)")
     lines.append("")
     return "\n".join(lines)
 

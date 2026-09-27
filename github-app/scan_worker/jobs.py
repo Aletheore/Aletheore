@@ -144,6 +144,7 @@ from scan_worker.flash_review_cache import (
     store_result as store_flash_review_result,
 )
 from scan_worker.github_api import (
+    GITHUB_COMPARE_FILES_HARD_CAP,
     MAX_CONTEXT_FILE_BYTES,
     MAX_CONTEXT_FILES,
     create_check_run,
@@ -1384,6 +1385,7 @@ def run_pr_scan_job(
             # (see _maybe_send_slack_alert and the three _maybe_create_
             # *_check_run calls further down).
             file_overview = ""
+            changed_files_detailed = None
             try:
                 changed_files_detailed = fetch_pr_changed_files_detailed(
                     get_github_api_client(), token, repo_full_name, base_sha, head_sha
@@ -1394,7 +1396,11 @@ def run_pr_scan_job(
                 )
                 for row in overview_rows:
                     row["dependents_count"] = dependents_counts.get(row["path"], 0)
-                file_overview = format_file_overview(overview_rows)
+                # Past GitHub's own compare-API file cap, files beyond it were
+                # never returned at all - "+N more" below would understate
+                # the true total rather than merely truncate a known one.
+                possibly_capped = len(changed_files_detailed) >= GITHUB_COMPARE_FILES_HARD_CAP
+                file_overview = format_file_overview(overview_rows, possibly_capped=possibly_capped)
             except Exception:  # noqa: BLE001
                 logging.getLogger("scan_worker.jobs").warning(
                     "could not build the PR file-overview section for installation=%s repo=%s",
@@ -1449,10 +1455,16 @@ def run_pr_scan_job(
                 "static analysis check run failed for installation=%s repo=%s",
                 installation_id, repo_full_name, exc_info=True,
             )
-        try:
-            changed_files = fetch_pr_changed_files(client, token, repo_full_name, base_sha, head_sha)
-        except Exception:  # noqa: BLE001
-            changed_files = None
+        if changed_files_detailed is not None:
+            # Already fetched above for the file-overview section - same
+            # base/head pair, same GitHub compare endpoint. Reusing its
+            # filenames avoids a second identical request per PR scan.
+            changed_files = [f["filename"] for f in changed_files_detailed]
+        else:
+            try:
+                changed_files = fetch_pr_changed_files(client, token, repo_full_name, base_sha, head_sha)
+            except Exception:  # noqa: BLE001
+                changed_files = None
         if changed_files is not None:
             # Enqueued as their own jobs rather than called inline - see
             # run_live_wiki_incremental_update_job's docstring for why: real

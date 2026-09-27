@@ -155,10 +155,31 @@ def test_format_file_overview_removed_file_says_removed():
     assert lines and "removed" in lines[0]
 
 
-def test_format_file_overview_non_code_file_has_no_symbol_phrase():
-    body = format_file_overview([_row("README.md", has_module_data=False)])
-    line = next(line for line in body.splitlines() if "README.md" in line)
-    assert "function" not in line and "class" not in line
+def test_format_file_overview_removed_file_does_not_say_removed_twice():
+    # Real gap found on final review: the phrase already says "removed";
+    # appending the raw status word too produced "removed · removed".
+    body = format_file_overview([_row("gone.py", status="removed", functions_removed=["f1"])])
+    line = next(line for line in body.splitlines() if "gone.py" in line)
+    assert line.count("removed") == 1
+
+
+def test_format_file_overview_new_file_does_not_also_say_added():
+    # Same gap: "new file, 2 symbols" already says it was added.
+    body = format_file_overview([_row("new.py", status="added", functions_added=["f1", "f2"])])
+    line = next(line for line in body.splitlines() if "new.py" in line)
+    parts = [p.strip() for p in line.split("·")]
+    assert "added" not in parts
+
+
+def test_format_file_overview_new_non_code_file_still_says_added():
+    # Regression guard: a newly-added file with no module data (has_module_data
+    # False) gets an empty phrase from _symbol_change_phrase, so suppressing
+    # the raw "added" status word there would drop the only signal that the
+    # file is new at all.
+    body = format_file_overview([_row("data.json", status="added", has_module_data=False)])
+    line = next(line for line in body.splitlines() if "data.json" in line)
+    parts = [p.strip() for p in line.split("·")]
+    assert "added" in parts
 
 
 def test_format_file_overview_shows_renamed_from():
@@ -166,9 +187,44 @@ def test_format_file_overview_shows_renamed_from():
     assert "renamed from `src/old_name.py`" in body
 
 
+def test_format_file_overview_pure_rename_does_not_also_say_renamed():
+    # The "(renamed from ...)" annotation already says it; a bare "renamed"
+    # status token alongside it is redundant.
+    body = format_file_overview(
+        [_row("src/new_name.py", status="renamed", previous_path="src/old_name.py")]
+    )
+    line = next(line for line in body.splitlines() if "new_name.py" in line)
+    parts = [p.strip() for p in line.split("·")]
+    assert "renamed" not in parts
+
+
+def test_format_file_overview_renamed_file_with_a_real_change_shows_both(
+):
+    body = format_file_overview([_row(
+        "src/new_name.py", status="renamed", previous_path="src/old_name.py",
+        functions_added=["f1"],
+    )])
+    assert "renamed from `src/old_name.py`" in body
+    assert "+1 function" in body
+
+
 def test_format_file_overview_shows_dependents_count():
     body = format_file_overview([_row("lib.py", dependents_count=3)])
-    assert "3 dependents" in body
+    assert "3 other dependents" in body
+
+
+def test_format_file_overview_singular_dependent_is_not_pluralized():
+    body = format_file_overview([_row("lib.py", dependents_count=1)])
+    assert "1 other dependent" in body
+    assert "1 other dependents" not in body
+
+
+def test_format_file_overview_escapes_a_backtick_in_the_path():
+    body = format_file_overview([_row("odd`file.py")])
+    line = next(line for line in body.splitlines() if "odd" in line)
+    # A single backtick in the path must not prematurely close the code
+    # span - GFM's own fix is a wider fence (double backticks) around it.
+    assert "`` odd`file.py ``" in line
 
 
 def test_format_file_overview_truncates_past_20_files_honestly():
@@ -177,6 +233,24 @@ def test_format_file_overview_truncates_past_20_files_honestly():
     assert "file_19.py" in body
     assert "file_20.py" not in body
     assert "+5 more changed file(s)" in body
+
+
+def test_format_file_overview_truncation_line_hedges_when_compare_may_be_capped():
+    # Real gap found on final review: GitHub's compare API itself caps at
+    # 300 files. Past that cap, "+N more" already understates the true
+    # count, since files beyond it were never returned at all - the
+    # renderer can't know the real total, so it must say so rather than
+    # present a number that reads as exact.
+    rows = [_row(f"file_{i}.py") for i in range(25)]
+    body = format_file_overview(rows, possibly_capped=True)
+    assert "+5 or more changed file(s)" in body
+
+
+def test_format_file_overview_truncation_line_is_exact_when_not_capped():
+    rows = [_row(f"file_{i}.py") for i in range(25)]
+    body = format_file_overview(rows, possibly_capped=False)
+    assert "+5 more changed file(s)" in body
+    assert "or more" not in body
 
 
 def test_format_file_overview_header_states_deterministic_and_always_posted():
