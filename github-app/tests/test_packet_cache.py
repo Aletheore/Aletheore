@@ -66,6 +66,68 @@ def test_lookup_returns_match_above_threshold_and_records_hit(monkeypatch):
     assert recorded == [7]
 
 
+def test_lookup_rejects_a_high_scoring_match_with_no_shared_files(monkeypatch):
+    # Real bug found on a live repo: two genuinely unrelated subsystems
+    # (disjoint file sets - e.g. a one-file cluster and an unrelated small
+    # test-fixture cluster) scored above SIMILARITY_THRESHOLD on embedding
+    # alone, purely because their evidence packets were both short/generic
+    # ("test configuration", "pytest fixtures") - and one was served the
+    # other's cached description verbatim in production. changed_files is
+    # ground truth the embedding can't see; a candidate that shares zero
+    # real files with the current packet must never be trusted regardless
+    # of how high its cosine score is.
+    monkeypatch.setattr("scan_worker.packet_cache.embed_text", lambda text: [1.0, 0.0])
+    monkeypatch.setattr(
+        "scan_worker.packet_cache.list_recent_evidence_packet_cache_rows",
+        lambda *a, **k: [
+            {
+                "id": 9,
+                "embedding": [1.0, 0.0],  # perfect cosine match
+                "packet_json": {"changed_files": ["scripts/extract-showcase-data.py"]},
+                "model_output": {"description": "unrelated subsystem's cached description"},
+                "model_used": "deepseek-v4-pro",
+            }
+        ],
+    )
+    # Without this, the disjoint row (once wrongly accepted) would still
+    # reach a *real* record_evidence_packet_cache_hit call against the fake
+    # "postgresql://unused" dsn, which fails and gets swallowed by this
+    # function's own broad `except Exception: return None` - masking the
+    # guard's absence as a passing test. Mocking it out so `result is None`
+    # can only mean the disjoint-file guard actually rejected the match.
+    monkeypatch.setattr("scan_worker.packet_cache.record_evidence_packet_cache_hit", lambda dsn, row_id: None)
+
+    result = lookup_cached_result(
+        "postgresql://unused", 1, "org/repo", _packet(changed_files=["github-app/tests/conftest.py"])
+    )
+
+    assert result is None
+
+
+def test_lookup_still_matches_a_high_scoring_row_that_shares_a_file(monkeypatch):
+    # The overlap guard must not turn into a stricter cache that never
+    # hits: the legitimate case (same subsystem re-scanned, same files,
+    # near-identical packet) still needs to match.
+    monkeypatch.setattr("scan_worker.packet_cache.embed_text", lambda text: [1.0, 0.0])
+    monkeypatch.setattr(
+        "scan_worker.packet_cache.list_recent_evidence_packet_cache_rows",
+        lambda *a, **k: [
+            {
+                "id": 11,
+                "embedding": [1.0, 0.0001],
+                "packet_json": {"changed_files": ["a.py", "b.py"]},
+                "model_output": {"description": "cached description"},
+                "model_used": "deepseek-v4-pro",
+            }
+        ],
+    )
+    monkeypatch.setattr("scan_worker.packet_cache.record_evidence_packet_cache_hit", lambda dsn, row_id: None)
+
+    result = lookup_cached_result("postgresql://unused", 1, "org/repo", _packet(changed_files=["a.py"]))
+
+    assert result == ({"description": "cached description"}, "deepseek-v4-pro")
+
+
 def test_store_result_writes_a_row(monkeypatch):
     written = {}
 

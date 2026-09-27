@@ -79,15 +79,34 @@ def lookup_cached_result(
         if not rows:
             return None
 
+        # Real bug found on a live repo: two genuinely different, unrelated
+        # subsystems (disjoint file sets, e.g. a one-file cluster and an
+        # unrelated small test-fixture cluster) scored above
+        # SIMILARITY_THRESHOLD on embedding alone and one was served the
+        # other's cached description verbatim. Small/sparse evidence
+        # packets are the degenerate case for this: with little real
+        # content to embed, generic wording ("defines pytest fixtures",
+        # "test configuration") dominates the vector and pushes unrelated
+        # packets above 0.92 purely on phrasing, not on describing the same
+        # code. The packet's own changed_files is ground truth the
+        # embedding can't see - require actual file overlap with a
+        # candidate before trusting its embedding score at all, so a
+        # cosine match between two subsystems that share zero real files
+        # can never be served.
+        current_files = set(packet.get("changed_files") or [])
         best_row = None
         best_score = 0.0
         for row in rows:
             score = _cosine_similarity(vector, row["embedding"])
-            if score > best_score:
-                best_score = score
-                best_row = row
+            if score <= best_score or score < SIMILARITY_THRESHOLD:
+                continue
+            cached_files = set((row.get("packet_json") or {}).get("changed_files") or [])
+            if current_files and cached_files and current_files.isdisjoint(cached_files):
+                continue
+            best_score = score
+            best_row = row
 
-        if best_row is None or best_score < SIMILARITY_THRESHOLD:
+        if best_row is None:
             return None
 
         record_evidence_packet_cache_hit(dsn, best_row["id"])
