@@ -101,7 +101,14 @@ def lookup_cached_result(
             if score <= best_score or score < SIMILARITY_THRESHOLD:
                 continue
             cached_files = set((row.get("packet_json") or {}).get("changed_files") or [])
-            if current_files and cached_files and current_files.isdisjoint(cached_files):
+            # Real gap found on review: requiring current_files AND cached_files
+            # to both be non-empty before checking overlap meant an empty (or
+            # missing packet_json) changed_files on either side bypassed the
+            # guard entirely via short-circuit - the exact cross-subsystem
+            # false match above still got served for such rows. An empty file
+            # list is itself untrustworthy evidence (nothing to verify against),
+            # not a free pass - treat it the same as a real disjoint set.
+            if not current_files or not cached_files or current_files.isdisjoint(cached_files):
                 continue
             best_score = score
             best_row = row

@@ -52,6 +52,12 @@ def test_lookup_returns_match_above_threshold_and_records_hit(monkeypatch):
             {
                 "id": 7,
                 "embedding": [1.0, 0.0001],
+                # Real evidence packets always carry changed_files (see
+                # build_evidence_packet) - this row models that, sharing a.py
+                # with the default _packet() below, so this stays a realistic
+                # happy path rather than accidentally depending on the
+                # empty-changed_files bypass the file-overlap guard closes.
+                "packet_json": {"changed_files": ["a.py"]},
                 "model_output": {"description": "cached description"},
                 "model_used": "deepseek-v4-pro",
             }
@@ -126,6 +132,43 @@ def test_lookup_still_matches_a_high_scoring_row_that_shares_a_file(monkeypatch)
     result = lookup_cached_result("postgresql://unused", 1, "org/repo", _packet(changed_files=["a.py"]))
 
     assert result == ({"description": "cached description"}, "deepseek-v4-pro")
+
+
+def test_lookup_rejects_a_high_scoring_row_with_no_changed_files_on_either_side(monkeypatch):
+    # Flash Review finding on this PR: the original guard only checked
+    # overlap when BOTH sides' changed_files were non-empty, so a cached
+    # row missing packet_json (or one with an empty changed_files list -
+    # a real state build_evidence_packet can produce for a cluster with no
+    # modules) bypassed the guard entirely via that and-chain's
+    # short-circuit, letting the exact cross-subsystem false match this PR
+    # fixes through for those rows. An empty file list is untrustworthy
+    # evidence, not a free pass - it must be rejected the same as a real
+    # disjoint set, on either side.
+    monkeypatch.setattr("scan_worker.packet_cache.embed_text", lambda text: [1.0, 0.0])
+    monkeypatch.setattr(
+        "scan_worker.packet_cache.list_recent_evidence_packet_cache_rows",
+        lambda *a, **k: [
+            {
+                "id": 13,
+                "embedding": [1.0, 0.0],  # perfect cosine match
+                # No packet_json at all - the exact "older/malformed row"
+                # shape the finding described.
+                "model_output": {"description": "cached description from a row with no file record"},
+                "model_used": "deepseek-v4-pro",
+            }
+        ],
+    )
+    # Same reason as the sibling rejection test above: without this, a
+    # wrongly-accepted row still reaches a real DB call against the fake
+    # dsn, fails, and gets swallowed by the broad except-Exception-return-
+    # None - masking the guard's absence as a passing test.
+    monkeypatch.setattr("scan_worker.packet_cache.record_evidence_packet_cache_hit", lambda dsn, row_id: None)
+
+    result = lookup_cached_result(
+        "postgresql://unused", 1, "org/repo", _packet(changed_files=["github-app/tests/conftest.py"])
+    )
+
+    assert result is None
 
 
 def test_store_result_writes_a_row(monkeypatch):
