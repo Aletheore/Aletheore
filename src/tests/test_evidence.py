@@ -1287,3 +1287,68 @@ def test_write_evidence_falls_back_to_writing_in_place_when_a_reader_blocks_the_
 
     assert '"fallback"' in target.read_text(encoding="utf-8")
     assert [p.name for p in (tmp_path / ".aletheore").iterdir() if p.name.endswith(".tmp")] == []
+
+
+def test_read_text_with_retry_recovers_from_a_transient_windows_permission_error(tmp_path):
+    # The reader-side mirror of the write-side retry above: os.replace's
+    # Windows implementation briefly holds the destination exclusively while
+    # swapping in new content, and a reader's own read() can land in that
+    # instant. Confirmed live on CI's pytest-windows job (test_watch.py's own
+    # concurrent-writer test) before this existed.
+    from aletheore.evidence import _read_text_with_retry
+
+    path = tmp_path / "air.json"
+    path.write_text('{"real": "content"}', encoding="utf-8")
+    real_read_text = Path.read_text
+    calls = {"count": 0}
+
+    def flaky_read_text(self, *args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] <= 2 and self == path:
+            raise PermissionError("in use")
+        return real_read_text(self, *args, **kwargs)
+
+    with patch("aletheore.evidence.Path.read_text", flaky_read_text), patch(
+        "aletheore.evidence._REPLACE_RETRY_DELAY_SECONDS", 0
+    ):
+        assert _read_text_with_retry(path) == '{"real": "content"}'
+    assert calls["count"] == 3
+
+
+def test_read_text_with_retry_reraises_a_persistent_permission_error(tmp_path):
+    # A genuine, non-transient permission problem must fail exactly as it
+    # would without these retries, not hang or silently swallow it.
+    from aletheore.evidence import _read_text_with_retry
+
+    path = tmp_path / "air.json"
+    path.write_text("{}", encoding="utf-8")
+
+    with patch(
+        "aletheore.evidence.Path.read_text", side_effect=PermissionError("permanently denied")
+    ), patch("aletheore.evidence._REPLACE_RETRY_DELAY_SECONDS", 0):
+        with pytest.raises(PermissionError):
+            _read_text_with_retry(path)
+
+
+def test_load_evidence_file_recovers_from_a_transient_windows_permission_error(tmp_path):
+    # End-to-end: the real caller every CLI/MCP-server code path goes
+    # through must benefit from the retry too, not just the helper in
+    # isolation.
+    evidence = minimal_air_evidence()
+    evidence["aletheore_version"] = EVIDENCE_VERSION
+    path = tmp_path / "air.json"
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+    real_read_text = Path.read_text
+    calls = {"count": 0}
+
+    def flaky_read_text(self, *args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1 and self == path:
+            raise PermissionError("in use")
+        return real_read_text(self, *args, **kwargs)
+
+    with patch("aletheore.evidence.Path.read_text", flaky_read_text), patch(
+        "aletheore.evidence._REPLACE_RETRY_DELAY_SECONDS", 0
+    ):
+        loaded = load_evidence_file(path)
+    assert loaded["aletheore_version"] == EVIDENCE_VERSION

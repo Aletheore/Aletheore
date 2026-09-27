@@ -105,7 +105,7 @@ def load_evidence_file(evidence_path: Path) -> dict:
     not help, and the caller needs to know which key is wrong rather than
     discovering it as a KeyError three modules away.
     """
-    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    evidence = json.loads(_read_text_with_retry(evidence_path))
     written_version = evidence.get("aletheore_version") if isinstance(evidence, dict) else None
     if not is_evidence_version_compatible(written_version):
         raise IncompatibleEvidenceVersionError(
@@ -720,6 +720,33 @@ def _ensure_aletheore_dir_gitignored(repo_path: Path) -> None:
 
 _REPLACE_RETRIES = 20
 _REPLACE_RETRY_DELAY_SECONDS = 0.05
+
+
+def _read_text_with_retry(path: Path) -> str:
+    """Read `path` as UTF-8 text, retrying briefly on Windows.
+
+    The mirror image of _atomic_write_text's own retry, and a real gap that
+    one left open: os.replace's Windows implementation (MoveFileEx) briefly
+    holds the destination path exclusively while swapping the new content
+    in, and a reader whose own open() lands in that instant gets
+    PermissionError too - even though the write itself is atomic and never
+    exposes a truncated file, the failure mode on Windows is "the read
+    fails" rather than "the read sees a partial file". Confirmed live: CI's
+    pytest-windows job hit exactly this reading air.json while a concurrent
+    writer held it (test_watch.py's own lock-contention test). POSIX rename
+    has no such window - a reader there either gets the whole old file or
+    the whole new one, no PermissionError either way - so these retries are
+    a no-op in practice on Linux and macOS; harmless to leave unconditional,
+    since a genuine, non-transient permission problem fails identically
+    after these retries as it would without them.
+    """
+    for attempt in range(_REPLACE_RETRIES):
+        try:
+            return path.read_text(encoding="utf-8")
+        except PermissionError:
+            if attempt == _REPLACE_RETRIES - 1:
+                raise
+            time.sleep(_REPLACE_RETRY_DELAY_SECONDS)
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
