@@ -4394,6 +4394,25 @@ def test_flash_review_data_block_degrades_to_empty_when_toon_encoding_fails(monk
     assert jobs_module._flash_review_data_block(findings) == ""
 
 
+def test_flash_review_data_block_degrades_to_empty_when_finding_text_would_close_the_html_comment():
+    # Real gap found via Flash Review on this PR itself: an LLM-authored
+    # "issue" describing an arrow, a diff hunk marker, or quoted code
+    # containing the literal substring "-->" would otherwise close the
+    # HTML comment early, dumping the rest of the TOON payload as visible
+    # text on the PR and corrupting the block. No escape sequence exists
+    # for "-->" inside an HTML comment, so this must degrade to "" exactly
+    # like the ToonEncodingError case, never silently rewrite a finding's
+    # real text to route around it.
+    from scan_worker.jobs import _flash_review_data_block
+
+    findings = [
+        {"rank": 1, "severity": "High", "file": "a.py", "line": 1,
+         "issue": "uses --> as an arrow in a comment", "comment_url": "u"},
+    ]
+
+    assert _flash_review_data_block(findings) == ""
+
+
 def test_flash_review_job_attaches_symbol_attribution_from_deterministic_evidence(monkeypatch):
     # Build B: the symbol shown in the posted comment must come from the
     # same deterministic module-graph evidence every other blast-radius/

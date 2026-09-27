@@ -2522,6 +2522,17 @@ def _flash_review_data_block(findings: list[dict]) -> str:
         encoded = to_toon(ranked)
     except ToonEncodingError:
         return ""
+    # An LLM-authored finding (e.g. an "issue" describing an arrow, a diff
+    # hunk marker, or quoted code containing "-->") could otherwise close
+    # this HTML comment early, dumping the rest of the TOON payload as
+    # visible comment text and corrupting the block for both the human
+    # reader and any agent consumer. No escape sequence exists inside an
+    # HTML comment for a literal "-->", so the only safe option consistent
+    # with this function's own "never a malformed block" contract is to
+    # omit the block entirely, exactly like the ToonEncodingError case
+    # above - not silently mutate a finding's real text to route around it.
+    if "-->" in encoded:
+        return ""
     return f"\n\n<!-- aletheore-flash-review-data\n{encoded}\n-->"
 
 
