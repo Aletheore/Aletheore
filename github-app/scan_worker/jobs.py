@@ -60,7 +60,7 @@ from app_server.rate_limit import (
 from app_server.url_validation import UnsafeURLError, validate_and_pin_https_url
 from aletheore.docs_reference import build_api_reference
 from scan_worker import live_docs, live_wiki
-from scan_worker.blast_radius_summary import blast_radius_summary, compute_blast_radius
+from scan_worker.blast_radius_summary import blast_radius_summary, count_direct_dependents
 from scan_worker.db import (
     apply_monthly_credit_reset,
     check_and_reserve_flash_review_attempt,
@@ -1389,11 +1389,11 @@ def run_pr_scan_job(
                     get_github_api_client(), token, repo_full_name, base_sha, head_sha
                 )
                 overview_rows = summarize_file_changes(old, new, changed_files_detailed)
-                per_target = compute_blast_radius(
+                dependents_counts = count_direct_dependents(
                     new, [row["path"] for row in overview_rows]
-                )["per_target"]
+                )
                 for row in overview_rows:
-                    row["dependents_count"] = len(per_target.get(row["path"], []))
+                    row["dependents_count"] = dependents_counts.get(row["path"], 0)
                 file_overview = format_file_overview(overview_rows)
             except Exception:  # noqa: BLE001
                 logging.getLogger("scan_worker.jobs").warning(

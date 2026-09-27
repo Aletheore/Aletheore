@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from pathlib import Path
 
 from aletheore.repo_config import load_repo_config
@@ -99,17 +100,28 @@ def _new_and_resolved(
     return new_only, resolved
 
 
-def _module_symbol_names(module: dict | None) -> tuple[set[str], set[str]]:
+def _module_symbol_names(module: dict | None) -> tuple[Counter, Counter]:
     """(function_names, class_names) declared in `module`'s scan evidence,
-    or two empty sets when `module` is None - the file didn't exist as a
-    scanned code module at this commit, either because it never existed
-    or because aletheore's scanner doesn't parse it as code (docs,
-    config, binary assets)."""
+    as multisets, or two empty Counters when `module` is None - the file
+    didn't exist as a scanned code module at this commit, either because
+    it never existed or because aletheore's scanner doesn't parse it as
+    code (docs, config, binary assets).
+
+    Counters, not sets - real gap found on final review: the scanner
+    stores methods in symbols.functions under their bare name with no
+    class qualifier (confirmed live: a file with `A.run`, `B.run`, and a
+    top-level `run()` all show up as three unqualified "run" entries). A
+    set-based diff collapsed all three into one name, so deleting class B
+    (and its `run` method) while class A's own `run` survived elsewhere
+    in the file reported zero removed functions. A multiset diff (Counter
+    subtraction) counts instances, not distinct names, so removing one of
+    two same-named methods correctly shows one removal.
+    """
     if module is None:
-        return set(), set()
+        return Counter(), Counter()
     symbols = module.get("symbols", {})
-    functions = {e["name"] for e in symbols.get("functions", []) if e.get("name")}
-    classes = {e["name"] for e in symbols.get("classes", []) if e.get("name")}
+    functions = Counter(e["name"] for e in symbols.get("functions", []) if e.get("name"))
+    classes = Counter(e["name"] for e in symbols.get("classes", []) if e.get("name"))
     return functions, classes
 
 
@@ -155,10 +167,10 @@ def summarize_file_changes(old: dict, new: dict, changed_files: list[dict]) -> l
             "additions": file.get("additions", 0),
             "deletions": file.get("deletions", 0),
             "previous_path": previous_path,
-            "functions_added": sorted(new_functions - old_functions),
-            "functions_removed": sorted(old_functions - new_functions),
-            "classes_added": sorted(new_classes - old_classes),
-            "classes_removed": sorted(old_classes - new_classes),
+            "functions_added": sorted((new_functions - old_functions).elements()),
+            "functions_removed": sorted((old_functions - new_functions).elements()),
+            "classes_added": sorted((new_classes - old_classes).elements()),
+            "classes_removed": sorted((old_classes - new_classes).elements()),
             "has_module_data": old_module is not None or new_module is not None,
         })
     return rows

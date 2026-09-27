@@ -622,6 +622,26 @@ def test_summarize_file_changes_non_code_file_has_no_module_data():
     assert rows[0]["functions_added"] == []
 
 
+def test_summarize_file_changes_counts_a_removed_method_sharing_a_name_with_another_symbol():
+    # Real gap found on final review: aletheore's scanner stores methods in
+    # symbols.functions under bare names with no class qualifier (verified
+    # live: a file with A.run, B.run, and a top-level run() all show up as
+    # three unqualified "run" entries). A set-based diff collapses all three
+    # into one name, so deleting class B (and its run method) entirely while
+    # class A's own run survives elsewhere in the file reported ZERO removed
+    # functions - a real undercount for a section labelled "Deterministic".
+    # This fixture uses two "run" entries in `old` (standing in for two
+    # methods sharing that name) and one in `new` (one of them removed).
+    old = _evidence_with_modules([_module("multi.py", functions=["run", "run", "helper"])])
+    new = _evidence_with_modules([_module("multi.py", functions=["run", "helper"])])
+    changed_files = [{"filename": "multi.py", "status": "modified", "additions": 0, "deletions": 5}]
+
+    rows = summarize_file_changes(old, new, changed_files)
+
+    assert rows[0]["functions_removed"] == ["run"]
+    assert rows[0]["functions_added"] == []
+
+
 def test_to_sarif_has_valid_top_level_shape_with_no_findings():
     sarif = to_sarif({})
 
