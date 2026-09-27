@@ -638,7 +638,10 @@ def _register_symbol_source_tool(mcp_instance: MCPServer, repo_path: Path) -> No
         file path exactly as it appears in evidence (e.g. "src/app.py").
         symbol: the function or class name alone (e.g. "my_function")."""
         evidence = read_evidence(repo_path)
-        return _toon_result(find_symbol_source(evidence, repo_path, module, symbol))
+        try:
+            return _toon_result(find_symbol_source(evidence, repo_path, module, symbol))
+        except (ModuleNotFoundInEvidenceError, SymbolNotFoundInEvidenceError) as exc:
+            return _toon_result({"error": str(exc)})
 
 
 def _register_verify_citations_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
