@@ -746,12 +746,17 @@ async def test_aletheore_ownership_tool_accepts_an_optional_target(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_aletheore_imports_tool_raises_for_unknown_module(tmp_path):
+async def test_aletheore_imports_tool_reports_an_unknown_module_as_an_error_not_a_crash(tmp_path):
+    # Real gap fixed alongside this test (GitHub issue #848): the generic
+    # query-wrapper tools had no try/except at all around ModuleNotFoundInEvidenceError,
+    # crashing instead of returning {"error": ...} the way the CLI's own
+    # generic dispatcher (cli.py's _query) already does for the identical call.
     repo = make_repo_with_evidence(tmp_path)
     server = build_server(repo)
 
-    with pytest.raises(ToolError):
-        await server.call_tool("aletheore_imports", {"target": "does/not/exist.py"})
+    result = await server.call_tool("aletheore_imports", {"target": "does/not/exist.py"})
+
+    assert "does/not/exist.py" in tool_result_body(result)["result"]["error"]
 
 
 @pytest.mark.asyncio
@@ -816,12 +821,17 @@ async def test_aletheore_neighborhood_cluster_is_null_when_unclustered(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_aletheore_neighborhood_raises_for_unknown_module(tmp_path):
+async def test_aletheore_neighborhood_reports_an_unknown_module_as_an_error_not_a_crash(tmp_path):
+    # Real gap fixed alongside this test (GitHub issue #848): find_imports/
+    # find_imported_by raise ModuleNotFoundInEvidenceError before the existing
+    # try/except around find_cluster two lines down is ever reached, so an
+    # unknown target crashed regardless of that later guard.
     repo = make_repo_with_evidence(tmp_path)
     server = build_server(repo)
 
-    with pytest.raises(ToolError):
-        await server.call_tool("aletheore_neighborhood", {"target": "does/not/exist.py"})
+    result = await server.call_tool("aletheore_neighborhood", {"target": "does/not/exist.py"})
+
+    assert "does/not/exist.py" in tool_result_body(result)["result"]["error"]
 
 
 @pytest.mark.asyncio
@@ -853,12 +863,71 @@ async def test_aletheore_get_blast_radius_with_symbol_confirms_real_callers(tmp_
 
 
 @pytest.mark.asyncio
-async def test_aletheore_get_blast_radius_raises_for_unknown_module(tmp_path):
+async def test_aletheore_get_blast_radius_reports_an_unknown_module_as_an_error_not_a_crash(tmp_path):
+    # Real gap fixed alongside this test (GitHub issue #848).
     repo = make_repo_with_evidence(tmp_path)
     server = build_server(repo)
 
-    with pytest.raises(ToolError):
-        await server.call_tool("aletheore_get_blast_radius", {"target": "does/not/exist.py"})
+    result = await server.call_tool("aletheore_get_blast_radius", {"target": "does/not/exist.py"})
+
+    assert "does/not/exist.py" in tool_result_body(result)["result"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_symbols_tool_reports_an_unknown_module_as_an_error_not_a_crash(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_symbols", {"target": "does/not/exist.py"})
+
+    assert "does/not/exist.py" in tool_result_body(result)["result"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_cluster_tool_reports_an_unknown_module_as_an_error_not_a_crash(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_cluster", {"target": "does/not/exist.py"})
+
+    assert "does/not/exist.py" in tool_result_body(result)["result"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_branch_tool_reports_an_unknown_branch_as_an_error_not_a_crash(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_branch", {"target": "does-not-exist"})
+
+    assert "does-not-exist" in tool_result_body(result)["result"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_symbol_path_tool_reports_an_unknown_source_module_as_an_error_not_a_crash(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool(
+        "aletheore_symbol_path",
+        {"source": "does/not/exist.py", "source_symbol": "foo", "target": "a.py", "target_symbol": "bar"},
+    )
+
+    assert "does/not/exist.py" in tool_result_body(result)["result"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_overview_reports_no_evidence_yet_as_an_error_not_a_crash(tmp_path):
+    # The generic _guard_evidence_read_errors case: a fresh repo with no scan
+    # yet used to crash read_evidence()'s FileNotFoundError straight through
+    # every tool that didn't already catch it by hand.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_overview", {})
+
+    assert "run 'aletheore scan" in tool_result_body(result)["result"]["error"]
 
 
 def make_repo_with_files(tmp_path: Path, files: dict[str, str]) -> Path:
