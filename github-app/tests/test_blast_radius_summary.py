@@ -1,6 +1,6 @@
 import pytest
 
-from scan_worker.blast_radius_summary import blast_radius_summary
+from scan_worker.blast_radius_summary import blast_radius_summary, compute_blast_radius
 
 
 def _evidence(edges: dict[str, list[str]]) -> dict:
@@ -62,6 +62,33 @@ def test_a_malformed_module_entry_never_raises(monkeypatch):
 
     monkeypatch.setattr("scan_worker.blast_radius_summary.find_blast_radius", boom)
     assert blast_radius_summary(_evidence({"core.py": ["a.py"]}), ["core.py"]) == ""
+
+
+def test_compute_blast_radius_exposes_per_file_direct_and_indirect_dependents():
+    evidence = _evidence({"core.py": ["svc.py", "cli.py"], "svc.py": ["api.py"]})
+    result = compute_blast_radius(evidence, ["core.py"])
+
+    assert result["analysed"] == 1
+    assert result["per_target"] == {"core.py": ["cli.py", "svc.py"]}
+    assert result["direct"] == {"cli.py", "svc.py"}
+    assert result["indirect"] == {"api.py"}
+    assert result["truncated"] is False
+
+
+def test_compute_blast_radius_excludes_files_already_in_the_pr():
+    evidence = _evidence({"core.py": ["svc.py", "cli.py"]})
+    result = compute_blast_radius(evidence, ["core.py", "svc.py"])
+
+    assert result["per_target"] == {"core.py": ["cli.py"]}
+    assert "svc.py" not in result["direct"]
+
+
+def test_compute_blast_radius_skips_an_unknown_changed_file_and_reports_zero_analysed():
+    evidence = _evidence({"lib.py": ["app.py"]})
+    result = compute_blast_radius(evidence, ["README.md"])
+
+    assert result["analysed"] == 0
+    assert result["per_target"] == {}
 
 
 @pytest.mark.parametrize(

@@ -23,9 +23,23 @@ def _names(paths: list[str], limit: int) -> str:
     return f"{shown} (+{extra} more)" if extra > 0 else shown
 
 
-def blast_radius_summary(evidence: dict | None, changed_files: list[str]) -> str:
-    if not evidence:
-        return ""
+def compute_blast_radius(evidence: dict, changed_files: list[str]) -> dict:
+    """Direct/transitive dependents of each of `changed_files`, from the
+    import graph of `evidence` (must be scanned at the commit being
+    described - see this module's own docstring). Pulled out of
+    `blast_radius_summary` so a second caller (the PR file-overview
+    section, `pr_comment.format_file_overview` via `jobs.py`) can read
+    each file's own direct-dependents count without re-running this same
+    BFS a second time.
+
+    Returns {"per_target": {path: [direct dependent paths]}, "direct":
+    set[str], "indirect": set[str], "truncated": bool, "analysed": int}.
+    `per_target` only carries a path when it has at least one direct
+    dependent NOT already in `changed_files` (dependents already under
+    review don't need calling out); `direct`/`indirect` are the pooled
+    sets across every analysed target, matching what `blast_radius_
+    summary`'s own rendering already reported before this refactor.
+    """
     modules = evidence.get("repository", {}).get("modules") or []
     known = {m.get("path") for m in modules if m.get("path")}
     changed = set(changed_files)
@@ -53,15 +67,30 @@ def blast_radius_summary(evidence: dict | None, changed_files: list[str]) -> str
         if direct_here:
             per_target[path] = sorted(direct_here)
     indirect -= direct
-    if not analysed:
+    return {
+        "per_target": per_target,
+        "direct": direct,
+        "indirect": indirect,
+        "truncated": truncated,
+        "analysed": analysed,
+    }
+
+
+def blast_radius_summary(evidence: dict | None, changed_files: list[str]) -> str:
+    if not evidence:
+        return ""
+    result = compute_blast_radius(evidence, changed_files)
+    if not result["analysed"]:
         return ""
 
+    direct, indirect = result["direct"], result["indirect"]
     if not direct and not indirect:
         return (
             "\n\n_Blast radius: no other file in the repo imports the changed file(s), "
             "per this commit's import graph._"
         )
 
+    per_target, truncated = result["per_target"], result["truncated"]
     total = len(direct) + len(indirect)
     lines = [
         f"\n\n<details><summary>Blast radius: {total} other file(s) depend on what this PR changes "
