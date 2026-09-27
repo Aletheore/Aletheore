@@ -2312,12 +2312,20 @@ def _share_pr_context_for(is_free_tier: bool) -> bool:
 _SEVERITY_EMOJI = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🔵"}
 
 
-def _flash_review_comment_body(finding: dict) -> str:
+def _flash_review_comment_body(finding: dict, total_ranked: int = 0) -> str:
     symbol = finding.get("symbol")
     header = f"**`{symbol}`**\n\n{finding['issue']}" if symbol else finding["issue"]
     severity = finding.get("severity")
     if severity in _SEVERITY_EMOJI:
-        header = f"{_SEVERITY_EMOJI[severity]} **{severity}**\n\n{header}"
+        rank = finding.get("rank")
+        # rank is only trustworthy alongside its own severity (they come from
+        # the same ranking call) and only within this run's own total - never
+        # a bare number a reader has no way to make sense of.
+        has_real_rank = (
+            isinstance(rank, int) and not isinstance(rank, bool) and 1 <= rank <= total_ranked
+        )
+        label = f"{severity} · #{rank} of {total_ranked}" if has_real_rank else severity
+        header = f"{_SEVERITY_EMOJI[severity]} **{label}**\n\n{header}"
     lines = [header]
     suggestion = finding.get("suggestion")
     if suggestion:
@@ -2362,7 +2370,62 @@ def _flash_review_severity_breakdown(findings: list[dict]) -> str:
     return f"({', '.join(parts)}.)" if parts else ""
 
 
+def _select_top_issue(findings: list[dict]) -> dict | None:
+    """The single finding to call out at the top of the summary: the lowest
+    rank among findings that are actually visible on the PR right now
+    (comment_url set - see _post_flash_review_finding_comments). A finding
+    that failed to post has no comment_url and is never eligible, even if
+    its rank is lower than everything that did post - pointing a reader at
+    a comment that doesn't exist would be worse than no callout at all.
+    """
+    candidates = [
+        f for f in findings
+        if isinstance(f.get("rank"), int)
+        and not isinstance(f.get("rank"), bool)
+        and f.get("severity") in _SEVERITY_EMOJI
+        and f.get("comment_url")
+    ]
+    if not candidates:
+        return None
+    return min(enumerate(candidates), key=lambda pair: (pair[1]["rank"], pair[0]))[1]
+
+
+_TOP_ISSUE_TEXT_CAP = 240
+
+
+def _top_issue_callout(finding: dict) -> str:
+    """One line calling out the single most important finding, first thing in
+    the summary comment.
+
+    The finding's own "issue" text is LLM-authored and untrusted - it must
+    never sit inside this callout's own markdown structural syntax, the way
+    a "-->" in a finding's text could otherwise close the hidden TOON block
+    early (see _flash_review_data_block). Here the equivalent risk is a
+    markdown link's own "[...]" span: an issue containing "]" immediately
+    followed by "(" could make part of the untrusted text read as this
+    callout's own link syntax. Fixed the same way - keep untrusted text
+    completely outside any bracket/paren span. The link's visible text is
+    always the fixed phrase "View this comment"; the truncated issue text is
+    plain paragraph text, never link text itself.
+    """
+    first_line = finding["issue"].split("\n", 1)[0]
+    if len(first_line) > _TOP_ISSUE_TEXT_CAP:
+        first_line = first_line[:_TOP_ISSUE_TEXT_CAP].rstrip() + "…"
+    emoji = _SEVERITY_EMOJI[finding["severity"]]
+    return (
+        f"{emoji} **Top issue** ({finding['severity']}): {first_line}\n\n"
+        f"[View this comment]({finding['comment_url']})"
+    )
+
+
 _RESOLVED_PREFIX = "✅ _No longer detected as of `{sha}`._\n\n---\n\n"
+
+
+def _pr_review_comment_url(repo_full_name: str, pr_number: int, comment_id: int) -> str:
+    # Verified 2026-09-27 against a real comment Aletheore posted on its own
+    # PR #841 (gh api repos/Aletheore/Aletheore/pulls/841/comments | .html_url) -
+    # not assumed from memory or GitHub's general docs.
+    return f"https://github.com/{repo_full_name}/pull/{pr_number}#discussion_r{comment_id}"
 
 
 def _post_flash_review_finding_comments(
@@ -2408,6 +2471,24 @@ def _post_flash_review_finding_comments(
     existing = get_flash_review_finding_comments(dsn, installation_id, repo_full_name, pr_number)
     seen_keys: set[tuple[str, str]] = set()
     failed_new_posts = 0
+    # Real gap found via Flash Review on this PR: counting only findings whose
+    # severity is ALSO a recognized label (as _flash_review_comment_body's own
+    # badge-rendering condition does) would let one finding with a valid rank
+    # but an unrecognized severity string (a future severity vocabulary added
+    # upstream before _SEVERITY_EMOJI catches up) silently shrink this total -
+    # understating "of N" for every OTHER finding and, if its own rank number
+    # then exceeds the undercounted total, dropping that finding's rank
+    # suffix too, even though its own data was perfectly valid. Not reachable
+    # today (_rank_findings_with_severity rejects the whole ranking response
+    # if any entry's severity is invalid - it's all-or-nothing), but the two
+    # conditions are genuinely different concerns: how many findings got
+    # ranked at all (this total) vs. whether one particular finding's
+    # severity is one this file knows how to render (a separate, per-finding
+    # gate, already handled inside _flash_review_comment_body itself).
+    total_ranked = sum(
+        1 for f in findings_to_post
+        if isinstance(f.get("rank"), int) and not isinstance(f.get("rank"), bool)
+    )
 
     for finding in findings_to_post:
         finding_type = _flash_review_finding_type(finding)
@@ -2419,7 +2500,7 @@ def _post_flash_review_finding_comments(
             try:
                 comment = create_pr_review_comment(
                     client, token, repo_full_name, pr_number, head_sha,
-                    finding["file"], finding["line"], _flash_review_comment_body(finding),
+                    finding["file"], finding["line"], _flash_review_comment_body(finding, total_ranked),
                 )
             except Exception:
                 # A finding whose citation GitHub's own diff-position
@@ -2433,6 +2514,7 @@ def _post_flash_review_finding_comments(
                 )
                 failed_new_posts += 1
                 continue
+            finding["comment_url"] = _pr_review_comment_url(repo_full_name, pr_number, comment["id"])
             insert_flash_review_finding_comment(
                 dsn, installation_id, repo_full_name, pr_number,
                 finding_type, identity_key, comment["id"], head_sha,
@@ -2448,15 +2530,21 @@ def _post_flash_review_finding_comments(
             # DB function for what's really one state transition.
             try:
                 edit_pr_review_comment(
-                    client, token, repo_full_name, row["github_comment_id"], _flash_review_comment_body(finding)
+                    client, token, repo_full_name, row["github_comment_id"],
+                    _flash_review_comment_body(finding, total_ranked),
                 )
             except Exception:
                 logging.getLogger("scan_worker.jobs").warning(
                     "failed to un-resolve flash review comment %s on %s#%s",
                     row["github_comment_id"], repo_full_name, pr_number, exc_info=True,
                 )
+            # Set regardless of whether the edit above succeeded - the comment
+            # already existed before this run and is still visible even if
+            # editing it back to the un-resolved body failed.
+            finding["comment_url"] = _pr_review_comment_url(repo_full_name, pr_number, row["github_comment_id"])
             touch_flash_review_finding_comment(dsn, row["id"], head_sha, resolved=False)
         else:
+            finding["comment_url"] = _pr_review_comment_url(repo_full_name, pr_number, row["github_comment_id"])
             touch_flash_review_finding_comment(dsn, row["id"], head_sha)
 
     for (finding_type, identity_key), row in existing.items():
@@ -3051,8 +3139,11 @@ def _run_flash_review(
         )
         breakdown = _flash_review_severity_breakdown(findings_to_post)
         breakdown_suffix = f" {breakdown}" if breakdown else ""
+        top_issue = _select_top_issue(findings_to_post)
+        callout_prefix = f"{_top_issue_callout(top_issue)}\n\n" if top_issue else ""
         body = (
             f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\n"
+            f"{callout_prefix}"
             f"{posted_count} finding(s) posted as inline review comment(s) below.{suffix}{breakdown_suffix}"
         )
     elif findings_to_post:

@@ -4312,6 +4312,63 @@ def test_flash_review_comment_body_omits_severity_prefix_for_an_unrecognized_lab
     assert body.startswith("real problem")
 
 
+def test_flash_review_comment_body_suffixes_rank_when_present_with_severity():
+    from scan_worker.jobs import _flash_review_comment_body
+
+    body = _flash_review_comment_body(
+        {"file": "app.py", "line": 12, "issue": "real problem", "severity": "High", "rank": 2},
+        total_ranked=5,
+    )
+    assert body.startswith("🟠 **High · #2 of 5**\n\nreal problem")
+
+
+def test_flash_review_comment_body_omits_rank_suffix_when_rank_absent():
+    from scan_worker.jobs import _flash_review_comment_body
+
+    body = _flash_review_comment_body(
+        {"file": "app.py", "line": 12, "issue": "real problem", "severity": "High"}, total_ranked=5
+    )
+    assert body.startswith("🟠 **High**\n\nreal problem")
+    assert "#" not in body.split("\n\n")[0]
+
+
+def test_flash_review_comment_body_omits_rank_suffix_when_severity_absent():
+    # Ranking is one call that returns rank+severity together; a finding
+    # somehow carrying rank without severity (e.g. a future partial-failure
+    # shape) must render exactly like "ranking never ran", never a bare
+    # rank with no colour/label around it.
+    from scan_worker.jobs import _flash_review_comment_body
+
+    body = _flash_review_comment_body(
+        {"file": "app.py", "line": 12, "issue": "real problem", "rank": 2}, total_ranked=5
+    )
+    assert body.startswith("real problem")
+
+
+def test_flash_review_comment_body_omits_rank_suffix_when_rank_is_not_a_real_int():
+    # bool is a subclass of int in Python - True/False must not slip through
+    # isinstance(rank, int) and render as "#1"/"#0".
+    from scan_worker.jobs import _flash_review_comment_body
+
+    body = _flash_review_comment_body(
+        {"file": "app.py", "line": 12, "issue": "real problem", "severity": "High", "rank": True},
+        total_ranked=5,
+    )
+    assert body.startswith("🟠 **High**\n\nreal problem")
+
+
+def test_flash_review_comment_body_omits_rank_suffix_when_total_ranked_is_stale():
+    # total_ranked is the count from THIS run; a rank higher than it would
+    # mean stale/inconsistent data, not a real "#7 of 3" a reader would trust.
+    from scan_worker.jobs import _flash_review_comment_body
+
+    body = _flash_review_comment_body(
+        {"file": "app.py", "line": 12, "issue": "real problem", "severity": "High", "rank": 7},
+        total_ranked=3,
+    )
+    assert body.startswith("🟠 **High**\n\nreal problem")
+
+
 def test_flash_review_severity_breakdown_counts_in_fixed_order():
     from scan_worker.jobs import _flash_review_severity_breakdown
 
@@ -4338,6 +4395,310 @@ def test_flash_review_severity_breakdown_omits_zero_count_labels():
     assert _flash_review_severity_breakdown(findings) == "(1 High.)"
 
 
+def test_post_flash_review_finding_comments_records_a_real_url_for_a_new_post(monkeypatch):
+    from scan_worker.jobs import _post_flash_review_finding_comments
+
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda client, token, repo, pr, commit_id, path, line, body: {"id": 555001},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    finding = {"file": "app.py", "line": 1, "issue": "real problem", "source": "llm"}
+
+    from types import SimpleNamespace
+
+    failed = _post_flash_review_finding_comments(
+        settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
+        repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
+        findings_to_post=[finding],
+    )
+
+    assert failed == 0
+    assert finding["comment_url"] == "https://github.com/octocat/hello-world/pull/42#discussion_r555001"
+
+
+def test_post_flash_review_finding_comments_renders_the_rank_suffix_on_the_real_posted_body(monkeypatch):
+    # The gap a unit test of _flash_review_comment_body in isolation (Task 1)
+    # cannot catch: this function is the one real caller that must actually
+    # compute and pass total_ranked through, or every deployed comment would
+    # show a severity badge with no rank suffix at all, silently.
+    from scan_worker.jobs import _post_flash_review_finding_comments
+
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    posted_bodies = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda client, token, repo, pr, commit_id, path, line, body: posted_bodies.append(body)
+        or {"id": 1},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    findings = [
+        {"file": "a.py", "line": 1, "issue": "x", "source": "llm", "rank": 1, "severity": "High"},
+        {"file": "b.py", "line": 2, "issue": "y", "source": "llm", "rank": 2, "severity": "Low"},
+    ]
+
+    from types import SimpleNamespace
+
+    _post_flash_review_finding_comments(
+        settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
+        repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
+        findings_to_post=findings,
+    )
+
+    assert "High · #1 of 2" in posted_bodies[0]
+    assert "Low · #2 of 2" in posted_bodies[1]
+
+
+def test_post_flash_review_finding_comments_rank_total_is_not_undercounted_by_an_unrecognized_severity(
+    monkeypatch,
+):
+    # Real gap found via Flash Review on this PR: total_ranked used to count
+    # only findings whose severity was ALSO recognized (matching
+    # _flash_review_comment_body's own per-finding gate). One finding with a
+    # valid rank but a severity this file doesn't know how to render (a
+    # future severity vocabulary added upstream before _SEVERITY_EMOJI
+    # catches up) would then silently shrink the total for every OTHER
+    # finding too - here, finding C's own rank (3) would exceed the
+    # undercounted total (2, since B's rank 2 was excluded), dropping C's
+    # rank suffix even though C's own rank+severity are both perfectly
+    # valid. Not reachable today (_rank_findings_with_severity rejects the
+    # whole batch on any invalid severity), but the total must reflect how
+    # many findings were actually ranked, independent of whether each one's
+    # severity happens to be renderable.
+    from scan_worker.jobs import _post_flash_review_finding_comments
+
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    posted_bodies = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda client, token, repo, pr, commit_id, path, line, body: posted_bodies.append(body)
+        or {"id": 1},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    findings = [
+        {"file": "a.py", "line": 1, "issue": "a", "source": "llm", "rank": 1, "severity": "Critical"},
+        {"file": "b.py", "line": 2, "issue": "b", "source": "llm", "rank": 2, "severity": "Unrecognized"},
+        {"file": "c.py", "line": 3, "issue": "c", "source": "llm", "rank": 3, "severity": "High"},
+    ]
+
+    from types import SimpleNamespace
+
+    _post_flash_review_finding_comments(
+        settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
+        repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
+        findings_to_post=findings,
+    )
+
+    assert "Critical · #1 of 3" in posted_bodies[0]
+    assert posted_bodies[1].startswith("b")  # unrecognized severity: no badge at all, unchanged behavior
+    assert "High · #3 of 3" in posted_bodies[2]
+
+
+def test_post_flash_review_finding_comments_omits_url_when_the_post_fails(monkeypatch):
+    from scan_worker.jobs import _post_flash_review_finding_comments
+
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+
+    def boom(*a, **k):
+        raise RuntimeError("GitHub rejected the citation")
+
+    monkeypatch.setattr("scan_worker.jobs.create_pr_review_comment", boom)
+    finding = {"file": "app.py", "line": 1, "issue": "real problem", "source": "llm"}
+
+    from types import SimpleNamespace
+
+    failed = _post_flash_review_finding_comments(
+        settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
+        repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
+        findings_to_post=[finding],
+    )
+
+    assert failed == 1
+    assert "comment_url" not in finding
+
+
+def test_post_flash_review_finding_comments_records_url_for_an_untouched_existing_finding(monkeypatch):
+    # The "else: touch_flash_review_finding_comment(...)" branch - a finding
+    # already tracked, not un-resolved, not newly posted - still has a real,
+    # currently-visible comment; its URL comes from the tracked row's own id.
+    from scan_worker.jobs import _post_flash_review_finding_comments
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_flash_review_finding_comments",
+        lambda *a, **k: {
+            ("flash_review_llm", "some-identity-key"): {
+                "id": 1, "github_comment_id": 777001, "resolved_at": None,
+            }
+        },
+    )
+    monkeypatch.setattr("scan_worker.jobs.finding_identity_key", lambda *a, **k: "some-identity-key")
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    finding = {"file": "app.py", "line": 1, "issue": "real problem", "source": "llm"}
+
+    from types import SimpleNamespace
+
+    _post_flash_review_finding_comments(
+        settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
+        repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
+        findings_to_post=[finding],
+    )
+
+    assert finding["comment_url"] == "https://github.com/octocat/hello-world/pull/42#discussion_r777001"
+
+
+def test_select_top_issue_picks_the_lowest_rank_among_posted_findings():
+    from scan_worker.jobs import _select_top_issue
+
+    findings = [
+        {"rank": 3, "severity": "Low", "comment_url": "url-3", "issue": "c"},
+        {"rank": 1, "severity": "Critical", "comment_url": "url-1", "issue": "a"},
+        {"rank": 2, "severity": "High", "comment_url": "url-2", "issue": "b"},
+    ]
+    top = _select_top_issue(findings)
+    assert top["issue"] == "a"
+
+
+def test_select_top_issue_skips_a_lower_rank_that_never_posted():
+    # The real fallback case: rank 1 exists but has no comment_url (its post
+    # failed - Task 2 never set the key), so rank 2 is the top issue a reader
+    # can actually see.
+    from scan_worker.jobs import _select_top_issue
+
+    findings = [
+        {"rank": 1, "severity": "Critical", "issue": "never visible"},
+        {"rank": 2, "severity": "High", "comment_url": "url-2", "issue": "visible"},
+    ]
+    top = _select_top_issue(findings)
+    assert top["issue"] == "visible"
+
+
+def test_select_top_issue_returns_none_when_nothing_is_ranked_and_posted():
+    from scan_worker.jobs import _select_top_issue
+
+    assert _select_top_issue([{"issue": "a"}, {"issue": "b", "comment_url": "url"}]) is None
+    assert _select_top_issue([]) is None
+
+
+def test_select_top_issue_is_deterministic_on_a_duplicate_rank():
+    # Should never happen (the ranking pass validates uniqueness), but this
+    # must not crash if it ever did - first in list order wins on a tie.
+    from scan_worker.jobs import _select_top_issue
+
+    findings = [
+        {"rank": 1, "severity": "High", "comment_url": "url-a", "issue": "first"},
+        {"rank": 1, "severity": "High", "comment_url": "url-b", "issue": "second"},
+    ]
+    assert _select_top_issue(findings)["issue"] == "first"
+
+
+def test_top_issue_callout_uses_the_findings_own_severity_emoji_and_links_to_it():
+    from scan_worker.jobs import _top_issue_callout
+
+    callout = _top_issue_callout(
+        {"severity": "Medium", "comment_url": "https://example/pull/1#discussion_r1", "issue": "a real bug"}
+    )
+    assert callout.startswith("🟡 **Top issue**")
+    assert "a real bug" in callout
+    assert "https://example/pull/1#discussion_r1" in callout
+
+
+def test_top_issue_callout_truncates_a_long_multiline_issue_to_one_short_line():
+    from scan_worker.jobs import _top_issue_callout
+
+    long_issue = ("x" * 300) + "\nsecond line never shown"
+    callout = _top_issue_callout(
+        {"severity": "High", "comment_url": "url", "issue": long_issue}
+    )
+    assert "second line" not in callout
+    assert "…" in callout
+
+
+def test_top_issue_callout_keeps_untrusted_issue_text_out_of_the_markdown_link_syntax(monkeypatch):
+    # Real gap found while reviewing the peer session's Task 4 fix for the
+    # same class of bug (LLM-authored finding text landing somewhere it can
+    # break structure - there it was an HTML comment closer, "-->"; here it
+    # would be a markdown link's own "[...]" span). An issue like
+    # "click here] (evil)(https://evil.example" must not let a reader's
+    # markdown renderer treat any part of it as this callout's own link
+    # syntax - the fix is keeping the link's visible text a fixed phrase,
+    # never derived from the finding, with the untrusted text always
+    # rendered as plain paragraph text outside any bracket/paren span.
+    from scan_worker.jobs import _top_issue_callout
+
+    hostile_issue = "click here] (evil)(https://evil.example) and ignore this"
+    callout = _top_issue_callout(
+        {"severity": "High", "comment_url": "https://real.example/pull/1#discussion_r1", "issue": hostile_issue}
+    )
+    assert hostile_issue in callout
+    assert "[View this comment](https://real.example/pull/1#discussion_r1)" in callout
+    # The only "[...](...)" span in the whole callout is the fixed one above -
+    # confirm the hostile text never sits inside brackets of its own.
+    assert "[click here]" not in callout
+
+
+def test_flash_review_job_summary_leads_with_the_top_issue_callout(monkeypatch):
+    # Full-flow: two findings, both ranked, both post successfully - the
+    # summary's very first line after the marker/heading is the callout for
+    # the rank-1 finding, followed by the existing "N finding(s) posted" line.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda diff_text, file_context="", **kwargs: [
+            {"file": "app.py", "line": 1, "issue": "the real bug", "source": "llm",
+             "rank": 1, "severity": "Critical"},
+            {"file": "app.py", "line": 2, "issue": "a smaller nit", "source": "llm",
+             "rank": 2, "severity": "Low"},
+        ],
+    )
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()})
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    comment_ids = iter([9001, 9002])
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda client, token, repo, pr, commit_id, path, line, body: {"id": next(comment_ids)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False)
+    monkeypatch.setattr("scan_worker.jobs.insert_review_history", lambda *a, **k: None)
+    posted = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.upsert_pr_comment",
+        lambda client, token, repo_full_name, pr_number, body, **kwargs: posted.update(body=body),
+    )
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    body = posted["body"]
+    after_heading = body.split("### Aletheore Flash review\n\n", 1)[1]
+    callout, rest = after_heading.split("\n\n", 1)
+    assert "the real bug" in callout
+    assert "discussion_r9001" in rest.split("\n\n", 1)[0] or "discussion_r9001" in callout
+    assert rest.split("\n\n", 1)[-1].startswith("2 finding(s) posted as inline review comment(s) below")
 def test_flash_review_data_block_encodes_every_ranked_finding():
     from scan_worker.jobs import _flash_review_data_block
     import toon
