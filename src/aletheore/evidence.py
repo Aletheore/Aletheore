@@ -1,6 +1,8 @@
 import hashlib
 import json
 import os
+import threading
+import time
 import warnings
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -716,6 +718,45 @@ def _ensure_aletheore_dir_gitignored(repo_path: Path) -> None:
         pass
 
 
+_REPLACE_RETRIES = 20
+_REPLACE_RETRY_DELAY_SECONDS = 0.05
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write `text` to `path` so a concurrent reader never sees a partial file.
+
+    Path.write_text truncates the target and then writes, so a reader that
+    opens it in between (an agent's MCP tool call while the watcher rewrites
+    air.json, the dashboard, a second process) gets an empty or half-written
+    file and a JSON parse error that has nothing to do with the repository.
+    Writing to a sibling temp file and renaming it over the target makes the
+    swap a single step: a reader sees the whole old file or the whole new one.
+
+    Encoding is pinned for the same reason it is at the callers (Windows'
+    default is a legacy codepage). On Windows os.replace raises PermissionError
+    for as long as any reader has the target open (Python opens files without
+    FILE_SHARE_DELETE), so it is retried for about a second. If a reader still
+    holds it after that, this falls back to writing in place: exactly what
+    write_evidence did before this helper existed, so the worst case is the old
+    behaviour (a reader could see a partial file) and never a failed scan.
+    """
+    temp_path = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        temp_path.write_text(text, encoding="utf-8")
+        for attempt in range(_REPLACE_RETRIES):
+            try:
+                os.replace(temp_path, path)
+                return
+            except PermissionError:
+                if attempt < _REPLACE_RETRIES - 1:
+                    time.sleep(_REPLACE_RETRY_DELAY_SECONDS)
+        path.write_text(text, encoding="utf-8")
+    finally:
+        # Only present if the replace never happened; after a successful
+        # replace the temp path no longer exists.
+        temp_path.unlink(missing_ok=True)
+
+
 def write_evidence(evidence: dict, repo_path: Path) -> Path:
     # Usually already a no-op by the time evidence written via
     # scan_repository() gets here - see the call at the top of
@@ -737,7 +778,7 @@ def write_evidence(evidence: dict, repo_path: Path) -> Path:
     # that a UTF-8 reader (this MCP server, CI, a different OS) then can't
     # decode correctly - the same class of bug already handled with an
     # explicit encoding a few lines up in _ensure_aletheore_dir_gitignored.
-    output_path.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
+    _atomic_write_text(output_path, json.dumps(evidence, indent=2))
 
     # A second, TOON-encoded copy exists specifically for the audit command's
     # coding-agent adapter to read instead of the JSON one - the agent's own
@@ -749,7 +790,7 @@ def write_evidence(evidence: dict, repo_path: Path) -> Path:
     # failure must never take scan down with it, since air.json (the file
     # that actually matters) is already written by this point.
     try:
-        (aletheore_dir / "air.toon").write_text(to_toon(evidence), encoding="utf-8")
+        _atomic_write_text(aletheore_dir / "air.toon", to_toon(evidence))
     except ToonEncodingError as exc:
         warnings.warn(
             f"could not write .aletheore/air.toon ({exc}) - air.json (the canonical "

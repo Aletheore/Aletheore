@@ -65,6 +65,7 @@ from aletheore.report import (
 )
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.watch import DEBOUNCE_SECONDS as WATCH_DEBOUNCE_SECONDS
+from aletheore.watch import WATCH_ENV_VAR, watching_disabled_by_env
 
 KNOWN_ADAPTERS = [
     ClaudeCodeAdapter(),
@@ -1094,7 +1095,7 @@ def _healthcheck(repo_path: str, base_url: str) -> int:
     return 0
 
 
-def _mcp(repo_path: str, forced_agent: str | None = None) -> int:
+def _mcp(repo_path: str, forced_agent: str | None = None, watch: bool = True) -> int:
     from aletheore.mcp_server import build_server
 
     repo = Path(repo_path).resolve()
@@ -1107,7 +1108,15 @@ def _mcp(repo_path: str, forced_agent: str | None = None) -> int:
         except (NoAdapterAvailableError, AmbiguousAdapterError) as exc:
             console.print(f"[bold red]error:[/bold red] {exc}")
             return 1
-    server = build_server(repo, answer_adapter=answer_adapter)
+    # Watching is on by default: the server is the long-lived process an agent
+    # drives, so it is where stale evidence hurts and where the watcher's
+    # lifetime is obvious (it ends with the server). Announced on stderr by
+    # build_server, and switched off by --no-watch or ALETHEORE_MCP_WATCH=0.
+    server = build_server(
+        repo,
+        answer_adapter=answer_adapter,
+        watch=watch and not watching_disabled_by_env(),
+    )
     # stderr, never stdout - an MCP client treats this process's stdout as the
     # JSON-RPC channel from the moment it starts, so anything written there
     # that isn't a protocol message would corrupt the stream.
@@ -1889,14 +1898,27 @@ def verify(
     raise typer.Exit(code=_verify(report, repo_path))
 
 
-@app.command(help="run an MCP server scoped to a repository")
+@app.command(
+    help=(
+        "run an MCP server scoped to a repository; it re-scans in the background "
+        "when source files change unless --no-watch is given"
+    )
+)
 def mcp(
     path: str = typer.Argument(".", help="repository path"),
     path_option: Optional[str] = _PATH_OPTION,
     agent: Optional[str] = typer.Option(None, "--agent", help="provider for the aletheore_answer tool"),
+    no_watch: bool = typer.Option(
+        False,
+        "--no-watch",
+        help=(
+            "do not re-scan in the background when source files change "
+            f"(same as {WATCH_ENV_VAR}=0)"
+        ),
+    ),
 ) -> None:
     path = _resolve_path(path, path_option)
-    raise typer.Exit(code=_mcp(path, agent))
+    raise typer.Exit(code=_mcp(path, agent, watch=not no_watch))
 
 
 @app.command(
