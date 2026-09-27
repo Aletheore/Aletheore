@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { evidenceChain } from "@/data/evidence-chain";
 import { graphData as graph } from "@/data/graph";
-import { getStartedHref } from "@/data/site-links";
+import { getStartedHref, installGitHubAppHref } from "@/data/site-links";
 import { GraphCanvas } from "./graph-canvas";
 
 export function Hero() {
@@ -17,9 +17,10 @@ export function Hero() {
           Aletheore reviews, audits, and monitors repositories with every finding traced back to source evidence: file,
           line, symbol, owner, commit, dependency, and risk.
         </p>
-        <div className="mt-7 flex flex-wrap gap-3">
+        <div className="mt-7 flex flex-wrap items-center gap-3">
           <Button asChild size="lg"><a href={getStartedHref}>Start Free Audit</a></Button>
-          <Button asChild size="lg" variant="secondary"><a href="https://github.com/Aletheore/Aletheore" rel="noopener">View on GitHub</a></Button>
+          <Button asChild size="lg" variant="secondary"><a href={installGitHubAppHref} rel="noopener">Install the GitHub App</a></Button>
+          <Button asChild size="lg" variant="ghost"><a href="https://github.com/Aletheore/Aletheore" rel="noopener">View on GitHub</a></Button>
         </div>
         <p className="mt-5 flex flex-wrap gap-x-5 font-display text-[11.5px] text-faint">
           <span>Source-available</span><span>Local-first CLI</span><span>Hosted GitHub App</span>

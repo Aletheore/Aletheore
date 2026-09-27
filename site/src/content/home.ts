@@ -1,3 +1,5 @@
+import { installGitHubAppHref } from "@/data/site-links";
+
 export const home = {
   evidenceStrip: {
     label: "Every alert, review, audit, and query resolves back to:",
@@ -58,7 +60,7 @@ export const home = {
       { k: "on: pull_request", title: "Review every change", body: "The GitHub App comments on PRs, gates new secrets, and can run managed audits or Flash reviews on paid plans." },
       { k: "GET /health", title: "Monitor what shipped", body: "Live endpoint checks alert on outages and latency regressions with source handler context." },
     ],
-    primary: { label: "Install the GitHub App", href: "https://github.com/apps/aletheore/installations/new" },
+    primary: { label: "Install the GitHub App", href: installGitHubAppHref },
     secondary: { label: "See Pricing", href: "/pricing" },
     note: "Installable today on any GitHub account or organization you administer.",
   },
