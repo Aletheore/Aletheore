@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import toon
-from mcp.server.mcpserver.exceptions import ToolError
 
 from aletheore.mcp_server import build_server
 from aletheore.search_index import IndexNotFoundError
@@ -746,12 +745,36 @@ async def test_aletheore_ownership_tool_accepts_an_optional_target(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_aletheore_imports_tool_raises_for_unknown_module(tmp_path):
+async def test_aletheore_imports_tool_returns_error_for_unknown_module(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     server = build_server(repo)
 
-    with pytest.raises(ToolError):
-        await server.call_tool("aletheore_imports", {"target": "does/not/exist.py"})
+    result = await server.call_tool("aletheore_imports", {"target": "does/not/exist.py"})
+
+    body = tool_result_body(result)["result"]
+    assert "does/not/exist.py" in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_branch_tool_returns_error_for_unknown_branch(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_branch", {"target": "does-not-exist"})
+
+    body = tool_result_body(result)["result"]
+    assert "does-not-exist" in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_cluster_tool_returns_error_for_unknown_module(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_cluster", {"target": "does/not/exist.py"})
+
+    body = tool_result_body(result)["result"]
+    assert "does/not/exist.py" in body["error"]
 
 
 @pytest.mark.asyncio
@@ -816,12 +839,14 @@ async def test_aletheore_neighborhood_cluster_is_null_when_unclustered(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_aletheore_neighborhood_raises_for_unknown_module(tmp_path):
+async def test_aletheore_neighborhood_returns_error_for_unknown_module(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     server = build_server(repo)
 
-    with pytest.raises(ToolError):
-        await server.call_tool("aletheore_neighborhood", {"target": "does/not/exist.py"})
+    result = await server.call_tool("aletheore_neighborhood", {"target": "does/not/exist.py"})
+
+    body = tool_result_body(result)["result"]
+    assert "does/not/exist.py" in body["error"]
 
 
 @pytest.mark.asyncio
@@ -853,12 +878,52 @@ async def test_aletheore_get_blast_radius_with_symbol_confirms_real_callers(tmp_
 
 
 @pytest.mark.asyncio
-async def test_aletheore_get_blast_radius_raises_for_unknown_module(tmp_path):
+async def test_aletheore_get_blast_radius_returns_error_for_unknown_module(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     server = build_server(repo)
 
-    with pytest.raises(ToolError):
-        await server.call_tool("aletheore_get_blast_radius", {"target": "does/not/exist.py"})
+    result = await server.call_tool("aletheore_get_blast_radius", {"target": "does/not/exist.py"})
+
+    body = tool_result_body(result)["result"]
+    assert "does/not/exist.py" in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_symbol_path_tool_returns_error_for_unknown_module(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool(
+        "aletheore_symbol_path",
+        {
+            "source": "does/not/exist.py",
+            "source_symbol": "foo",
+            "target": "a.py",
+            "target_symbol": "foo",
+        },
+    )
+
+    body = tool_result_body(result)["result"]
+    assert "does/not/exist.py" in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_symbol_path_tool_returns_error_for_unknown_symbol(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool(
+        "aletheore_symbol_path",
+        {
+            "source": "a.py",
+            "source_symbol": "does_not_exist",
+            "target": "a.py",
+            "target_symbol": "foo",
+        },
+    )
+
+    body = tool_result_body(result)["result"]
+    assert "does_not_exist" in body["error"]
 
 
 def make_repo_with_files(tmp_path: Path, files: dict[str, str]) -> Path:

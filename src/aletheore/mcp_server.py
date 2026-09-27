@@ -25,6 +25,7 @@ from aletheore.healthcheck import run_healthcheck, save_healthcheck
 from aletheore.history import compute_diff, list_snapshots, save_snapshot
 from aletheore.managed_audit_client import run_managed_audit_request
 from aletheore.query import (
+    BranchNotFoundInEvidenceError,
     ModuleNotFoundInEvidenceError,
     QUERY_FUNCTIONS,
     SymbolNotFoundInEvidenceError,
@@ -419,7 +420,10 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
 
                 def tool(target: str) -> str:
                     evidence = read_evidence(repo_path)
-                    return _toon_result(func(evidence, target))
+                    try:
+                        return _toon_result(func(evidence, target))
+                    except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
+                        return _toon_result({"error": str(exc)})
 
             elif kind in optional_target_kinds:
 
@@ -463,8 +467,11 @@ def _register_neighborhood_tool(mcp_instance: MCPServer, repo_path: Path) -> Non
     def aletheore_neighborhood(target: str) -> str:
         """A module's imports, dependents, and cluster in one call."""
         evidence = read_evidence(repo_path)
-        imports = find_imports(evidence, target)
-        imported_by = find_imported_by(evidence, target)
+        try:
+            imports = find_imports(evidence, target)
+            imported_by = find_imported_by(evidence, target)
+        except ModuleNotFoundInEvidenceError as exc:
+            return _toon_result({"error": str(exc)})
         try:
             cluster = find_cluster(evidence, target)
         except ModuleNotFoundInEvidenceError:
@@ -501,7 +508,10 @@ def _register_blast_radius_tool(mcp_instance: MCPServer, repo_path: Path) -> Non
         simulate that against.
         """
         evidence = read_evidence(repo_path)
-        return _toon_result(find_blast_radius(evidence, repo_path, target, symbol))
+        try:
+            return _toon_result(find_blast_radius(evidence, repo_path, target, symbol))
+        except ModuleNotFoundInEvidenceError as exc:
+            return _toon_result({"error": str(exc)})
 
 
 def _register_symbol_path_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
@@ -521,9 +531,12 @@ def _register_symbol_path_tool(mcp_instance: MCPServer, repo_path: Path) -> None
         exactly what was and wasn't verified.
         """
         evidence = read_evidence(repo_path)
-        return _toon_result(
-            find_symbol_path(evidence, repo_path, source, source_symbol, target, target_symbol)
-        )
+        try:
+            return _toon_result(
+                find_symbol_path(evidence, repo_path, source, source_symbol, target, target_symbol)
+            )
+        except (ModuleNotFoundInEvidenceError, SymbolNotFoundInEvidenceError) as exc:
+            return _toon_result({"error": str(exc)})
 
 
 _LIST_KIND_TO_FUNCTION = {
