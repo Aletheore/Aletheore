@@ -62,6 +62,9 @@ export default function () {
   if (!INSTALLATION_ID) {
     throw new Error('Set -e INSTALLATION_ID=<a real installation id you control>');
   }
+  if (!SECRET) {
+    throw new Error('Set -e GITHUB_WEBHOOK_SECRET=<the webhook secret this app-server checks against>');
+  }
 
   const afterSha = crypto.randomBytes(20).toString('hex'); // unique per request
   const body = JSON.stringify(buildPushPayload(afterSha));
@@ -77,6 +80,9 @@ export default function () {
     },
   });
 
-  check(res, { 'accepted (200)': (r) => r.status === 200 });
+  const ok = check(res, { 'accepted (200)': (r) => r.status === 200 });
+  if (!ok) {
+    console.error(`unexpected response: status=${res.status} body=${res.body}`);
+  }
   sleep(1); // real pushes aren't back-to-back; avoid falsely flooding the queue
 }

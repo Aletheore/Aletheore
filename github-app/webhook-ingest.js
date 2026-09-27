@@ -13,6 +13,10 @@ import { check } from 'k6';
 const SECRET = __ENV.GITHUB_WEBHOOK_SECRET;
 const TARGET = __ENV.TARGET_URL || 'http://localhost:8000/webhook';
 
+if (!SECRET) {
+  throw new Error('Set -e GITHUB_WEBHOOK_SECRET=<the webhook secret this app-server checks against>');
+}
+
 export const options = {
   stages: [
     { duration: '30s', target: 20 },
@@ -37,5 +41,8 @@ export default function () {
     },
   });
 
-  check(res, { 'status is 200': (r) => r.status === 200 });
+  const ok = check(res, { 'status is 200': (r) => r.status === 200 });
+  if (!ok) {
+    console.error(`unexpected response: status=${res.status} body=${res.body}`);
+  }
 }
