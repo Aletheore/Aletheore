@@ -4,8 +4,64 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-09-26
-**Snapshot Freshness:** CURRENT as of 2026-09-26 - production was redeployed to `master` (commit
+**Last Updated:** 2026-09-28
+**Snapshot Freshness:** CURRENT as of 2026-09-28 - production was redeployed to `master` (commit
+`5385ea8`, tagged `github-app-deploy-2026-09-28`) and re-verified live via SSH the same session. 45
+commits since the previous deploy tag (`github-app-deploy-2026-09-26-2`), no migrations. Two real
+fixes of note, both independently re-verified before this deploy, not just trusted at merge time:
+
+- **#858 (P0 security fix)**: a live-reported cross-account access bug - a user with no real access
+  to the founder's private repos, qualified only via GitHub's coarse `/user/installations` set (read
+  access to a single repo an installation covers, including a public one, is enough), saw the
+  founder's private repo list on `/app/repos` and the founder's account as their own checkout target
+  on `/subscribe`. Traced to root cause via direct code reading, not guessed: the coarse set was
+  trusted directly by 6 endpoints (confirmed live against two real accounts), plus 4 more found
+  auditing every other call site of the same pattern - the worst being `/v1/cli-tokens`, which could
+  mint a real, usable API credential against someone else's installation, and
+  `/admin/{org}/{repo}/delete-all-data`, real full data erasure. Fixed with two shared helpers
+  (`_is_real_installation_member_or_admin`, `_require_real_admin_or_member`) requiring either seated
+  membership or real per-repo GitHub admin permission, verified against GitHub directly when
+  Aletheore has no scan history yet. A same-PR follow-up closed one more gap the same audit style
+  found: `_require_dashboard_installation` only ran its real check `if installation is not None`,
+  silently succeeding on the coarse set alone otherwise (repo_history's `ON DELETE CASCADE` FK means
+  a completed delete can't produce this state, but a delete racing the request could) - fixed to 404.
+  Every fix has its own regression test (including a mutation test on the most severe one, and a
+  concurrency test proving the parallelization fix is real, not just refactored); full suite green
+  (2229 passed, 8 skipped) before merge.
+- **#854**: `packet_cache`'s cache key collided across unrelated subsystems reading the same
+  underlying evidence packet.
+- **#857**: the PR evidence-diff comment gets a real per-file "what changed" section (blast-radius
+  summary + a computed, not LLM-guessed, file-change list).
+- Also included: Flash Review rank+severity surfaced on the PR comment (#843), the `aletheore mcp`
+  background evidence watcher (#841), Python 3.13/3.14 support (#840), and the routine
+  release/site-data bumps in between (#838-842).
+- All five app-relevant services rebuilt and force-recreated (`app-server` for the security fix;
+  `scan-worker`, `scan-worker-2`, `health-worker`, `scheduler` share the `scan-worker` image, which
+  changed for `packet_cache.py` and the `pr_comment`/`jobs.py` changes) - `jina-embed` left untouched
+  (no lockfile change).
+- Services running: all five `Up`, all five reporting Docker-healthcheck `healthy` within ~52 seconds
+  of recreation. Zero errors, tracebacks, or exceptions in any of the five rebuilt services' logs in
+  the 10 minutes since restart (grepped, not eyeballed).
+- No pending migrations - confirmed via `git diff --stat` against the previous deploy tag showing no
+  new files under `github-app/migrations/`.
+- Post-deploy, verified live by executing directly inside the running containers, not by re-reading
+  the repo: inside `app-server` - `inspect.getsource(app_server.admin)` contains
+  `_verify_installation_ids` and the single-page (`per_page": 1`) fix to
+  `_fetch_any_covered_repo_sync`; `inspect.getsource(app_server.dashboard)` contains the
+  `if installation is None:` / `"no such repo"` fail-closed fix. Inside `scan-worker` -
+  `inspect.getsource(scan_worker.packet_cache)` references subsystem-scoping; `aletheore.pr_comment`
+  contains the new overview/file-changes content.
+- Health checks: internal `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`.
+- Deploy required an admin override past a repo-wide GitHub ruleset (`code_quality`, zero open
+  error-severity code-scanning alerts) blocking all merges to `master` - unrelated to this PR, driven
+  by long-standing Scorecard findings and two pre-existing CodeQL alerts neither #858 nor #857
+  touches. Worth a real look separately; not addressed in this deploy.
+- Not re-verified this pass (no relevant Dockerfile/host changes): Docker socket mount absence,
+  non-root users, CPU/mem limits, backup cron execution, base-image digest pinning, restore-drill
+  target availability, disk space - each last directly verified 2026-08-10 (restore drill itself
+  upgraded 2026-08-24, see below).
+
+**Previous:** CURRENT as of 2026-09-26 - production was redeployed to `master` (commit
 `3c09867`, tagged `github-app-deploy-2026-09-26`) and re-verified live via SSH the same session. Only
 PR #828 since the previous tag (`github-app-deploy-2026-09-25-7`), no migrations. `app-server`,
 `scan-worker`, `scan-worker-2`, `health-worker` and `scheduler` rebuilt and force-recreated
