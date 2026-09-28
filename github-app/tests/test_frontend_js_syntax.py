@@ -23,15 +23,15 @@ _PAGE_CONSTANTS = [
     if name.endswith("_HTML") and isinstance(getattr(frontend, name), str)
 ]
 
-# _settings_html() and _overview_html() are built as zero-argument,
-# lru_cache'd functions instead of module-level constants (both defer
-# get_settings() to the first real request rather than Python import time,
-# for the real inline Paddle checkout each needs - see either one's own
-# docstring), so neither matches the isinstance(..., str) filter above and
-# both would otherwise silently fall out of this test's coverage entirely.
-# Named explicitly so their <script> blocks (including buyCredit()) keep
+# _settings_html(), _overview_html(), and _picker_html() are built as
+# zero-argument, lru_cache'd functions instead of module-level constants
+# (each defers get_settings() to the first real request rather than
+# Python import time - see each one's own docstring), so none of them
+# matches the isinstance(..., str) filter above and all three would
+# otherwise silently fall out of this test's coverage entirely. Named
+# explicitly so their <script> blocks (including buyCredit()) keep
 # getting the same JS syntax check as every other dashboard page.
-_PAGE_CONSTANTS = _PAGE_CONSTANTS + ["_settings_html", "_overview_html"]
+_PAGE_CONSTANTS = _PAGE_CONSTANTS + ["_settings_html", "_overview_html", "_picker_html"]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available in this environment")
