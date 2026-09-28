@@ -5,7 +5,30 @@
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
 **Last Updated:** 2026-09-28
-**Snapshot Freshness:** CURRENT as of 2026-09-28 - production was redeployed to `master` (commit
+**Snapshot Freshness:** CURRENT as of 2026-09-28 (second deploy) - production was redeployed to
+`master` (commit `e159e6b`, tagged `github-app-deploy-2026-09-28-2`) and re-verified live via SSH
+the same session. 3 commits since the previous deploy tag (`github-app-deploy-2026-09-28`): #871
+(a real thread-join race in `test_postgres_graph_store.py` that could leak a straggler thread's DB
+write into a later test's already-truncated `installations` table - test-only, no runtime impact),
+#860 (this doc, no-op for running services), and #861 - the only one with real runtime impact: the
+`/dashboard` repo picker's empty state (no installation, or one still on the free plan) now shows
+real "Install the Aletheore GitHub App" and "Subscribe to AIR" buttons instead of explanatory text
+with nothing clickable. No migrations. `app-server` alone rebuilt and force-recreated (the only
+image #861's `frontend.py` change touches; #871/#860 have no runtime code); confirmed healthy via
+`docker compose ps` (`Up`, `healthy` within ~13s of recreation), zero errors in its logs in the 30s
+since restart, `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`,
+and the fix confirmed present in the *running* container's actual source via
+`inspect.getsource(app_server.frontend)` - not re-read from the repo: both CTA strings present, the
+install URL wrapped in `escape()`, and `_picker_html` carrying a real `lru_cache`.
+
+**Correction to the entry directly below:** its tag `github-app-deploy-2026-09-28` was originally
+created pointing at `06a7eb6` (#858 merged, before #857 had) instead of the commit actually
+fast-forwarded to and built on the server (`5385ea8`, which includes #857) - caught while scoping
+this second deploy's own diff (scan_worker files spuriously appeared as "changed since last
+deploy" until this was found and fixed). The tag has been deleted and recreated at the correct
+`5385ea8`; the prose below was already accurate, only the git tag object was wrong.
+
+**Previous:** CURRENT as of 2026-09-28 (first deploy) - production was redeployed to `master` (commit
 `5385ea8`, tagged `github-app-deploy-2026-09-28`) and re-verified live via SSH the same session. 45
 commits since the previous deploy tag (`github-app-deploy-2026-09-26-2`), no migrations. Two real
 fixes of note, both independently re-verified before this deploy, not just trusted at merge time:
