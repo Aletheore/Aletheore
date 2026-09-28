@@ -1,6 +1,6 @@
 import pytest
 
-from scan_worker.blast_radius_summary import blast_radius_summary
+from scan_worker.blast_radius_summary import blast_radius_summary, compute_blast_radius, count_direct_dependents
 
 
 def _evidence(edges: dict[str, list[str]]) -> dict:
@@ -62,6 +62,70 @@ def test_a_malformed_module_entry_never_raises(monkeypatch):
 
     monkeypatch.setattr("scan_worker.blast_radius_summary.find_blast_radius", boom)
     assert blast_radius_summary(_evidence({"core.py": ["a.py"]}), ["core.py"]) == ""
+
+
+def test_compute_blast_radius_exposes_per_file_direct_and_indirect_dependents():
+    evidence = _evidence({"core.py": ["svc.py", "cli.py"], "svc.py": ["api.py"]})
+    result = compute_blast_radius(evidence, ["core.py"])
+
+    assert result["analysed"] == 1
+    assert result["per_target"] == {"core.py": ["cli.py", "svc.py"]}
+    assert result["direct"] == {"cli.py", "svc.py"}
+    assert result["indirect"] == {"api.py"}
+    assert result["truncated"] is False
+
+
+def test_compute_blast_radius_excludes_files_already_in_the_pr():
+    evidence = _evidence({"core.py": ["svc.py", "cli.py"]})
+    result = compute_blast_radius(evidence, ["core.py", "svc.py"])
+
+    assert result["per_target"] == {"core.py": ["cli.py"]}
+    assert "svc.py" not in result["direct"]
+
+
+def test_compute_blast_radius_skips_an_unknown_changed_file_and_reports_zero_analysed():
+    evidence = _evidence({"lib.py": ["app.py"]})
+    result = compute_blast_radius(evidence, ["README.md"])
+
+    assert result["analysed"] == 0
+    assert result["per_target"] == {}
+
+
+def test_count_direct_dependents_is_not_capped_at_fifty():
+    # Real gap found on final review: find_blast_radius (which
+    # compute_blast_radius reads its per_target counts from) truncates
+    # direct_dependents to _BLAST_RADIUS_MAX_DIRECT (50) BEFORE the
+    # already-in-PR exclusion runs, so a hub file's true dependent count
+    # silently reads as "50" or fewer once routed through per_target. This
+    # function reads evidence's own `imported_by` adjacency directly - no
+    # BFS, no cap - specifically so a per-file count can't undercount.
+    hub_dependents = [f"user{i}.py" for i in range(60)]
+    evidence = _evidence({"core.py": hub_dependents})
+
+    counts = count_direct_dependents(evidence, ["core.py"])
+
+    assert counts["core.py"] == 60
+
+
+def test_count_direct_dependents_excludes_files_already_in_the_pr():
+    evidence = _evidence({"core.py": ["svc.py", "cli.py"]})
+    counts = count_direct_dependents(evidence, ["core.py", "svc.py"])
+
+    assert counts["core.py"] == 1
+
+
+def test_count_direct_dependents_omits_a_file_with_no_dependents():
+    evidence = _evidence({"leaf.py": []})
+    counts = count_direct_dependents(evidence, ["leaf.py"])
+
+    assert "leaf.py" not in counts
+
+
+def test_count_direct_dependents_omits_an_unknown_changed_file():
+    evidence = _evidence({"lib.py": ["app.py"]})
+    counts = count_direct_dependents(evidence, ["README.md"])
+
+    assert counts == {}
 
 
 @pytest.mark.parametrize(

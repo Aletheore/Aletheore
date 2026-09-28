@@ -23,9 +23,61 @@ def _names(paths: list[str], limit: int) -> str:
     return f"{shown} (+{extra} more)" if extra > 0 else shown
 
 
-def blast_radius_summary(evidence: dict | None, changed_files: list[str]) -> str:
-    if not evidence:
-        return ""
+def count_direct_dependents(evidence: dict, changed_files: list[str]) -> dict[str, int]:
+    """How many OTHER files (not already in `changed_files`) import each of
+    `changed_files`, read directly from evidence's own `imported_by`
+    adjacency - no BFS, no `find_blast_radius`, no
+    `aletheore.query._BLAST_RADIUS_MAX_DIRECT` cap.
+
+    Real gap found on final review: `compute_blast_radius`'s `per_target`
+    counts come from `find_blast_radius`, which truncates a single
+    target's `direct_dependents` to 50 *before* the already-in-PR
+    exclusion runs - fine for a rendered, human-read, already-capped list
+    (`blast_radius_summary`'s own output), but a per-file count surfaced
+    as an exact number (the PR file-overview section's "N dependents")
+    must not silently undercount a hub file just because the cap fired
+    first. This reads the raw adjacency list instead, so there's nothing
+    to truncate.
+
+    Returns {path: count} only for paths in `changed_files` that both
+    exist as a scanned module in `evidence` and have at least one such
+    dependent - callers should treat a missing path as 0.
+    """
+    modules_by_path = {
+        m["path"]: m for m in (evidence.get("repository", {}).get("modules") or []) if m.get("path")
+    }
+    changed = set(changed_files)
+    counts: dict[str, int] = {}
+    for path in changed_files:
+        module = modules_by_path.get(path)
+        if module is None:
+            continue
+        dependents = [p for p in (module.get("imported_by") or []) if p not in changed]
+        if dependents:
+            counts[path] = len(dependents)
+    return counts
+
+
+def compute_blast_radius(evidence: dict, changed_files: list[str]) -> dict:
+    """Direct/transitive dependents of each of `changed_files`, from the
+    import graph of `evidence` (must be scanned at the commit being
+    described - see this module's own docstring). Pulled out of
+    `blast_radius_summary` so its rendering can be tested against this
+    computation directly. (The PR file-overview section's per-file
+    dependents count uses `count_direct_dependents` instead, not this
+    function - `per_target` below is capped at `find_blast_radius`'s own
+    50-per-target limit, which is fine for this module's rendered,
+    human-read list but would silently undercount an exact per-file
+    count.)
+
+    Returns {"per_target": {path: [direct dependent paths]}, "direct":
+    set[str], "indirect": set[str], "truncated": bool, "analysed": int}.
+    `per_target` only carries a path when it has at least one direct
+    dependent NOT already in `changed_files` (dependents already under
+    review don't need calling out); `direct`/`indirect` are the pooled
+    sets across every analysed target, matching what `blast_radius_
+    summary`'s own rendering already reported before this refactor.
+    """
     modules = evidence.get("repository", {}).get("modules") or []
     known = {m.get("path") for m in modules if m.get("path")}
     changed = set(changed_files)
@@ -53,15 +105,30 @@ def blast_radius_summary(evidence: dict | None, changed_files: list[str]) -> str
         if direct_here:
             per_target[path] = sorted(direct_here)
     indirect -= direct
-    if not analysed:
+    return {
+        "per_target": per_target,
+        "direct": direct,
+        "indirect": indirect,
+        "truncated": truncated,
+        "analysed": analysed,
+    }
+
+
+def blast_radius_summary(evidence: dict | None, changed_files: list[str]) -> str:
+    if not evidence:
+        return ""
+    result = compute_blast_radius(evidence, changed_files)
+    if not result["analysed"]:
         return ""
 
+    direct, indirect = result["direct"], result["indirect"]
     if not direct and not indirect:
         return (
             "\n\n_Blast radius: no other file in the repo imports the changed file(s), "
             "per this commit's import graph._"
         )
 
+    per_target, truncated = result["per_target"], result["truncated"]
     total = len(direct) + len(indirect)
     lines = [
         f"\n\n<details><summary>Blast radius: {total} other file(s) depend on what this PR changes "

@@ -33,8 +33,8 @@ from aletheore.evidence_resolution import (
     normalize_resolution,
     resolve_code_evidence,
 )
-from aletheore.history import compute_diff
-from aletheore.pr_comment import COMMENT_MARKER, format_diff_comment
+from aletheore.history import compute_diff, summarize_file_changes
+from aletheore.pr_comment import COMMENT_MARKER, format_diff_comment, format_file_overview
 from aletheore.healthcheck import run_healthcheck
 from aletheore.repo_config import parse_repo_config
 from aletheore.signature_diff import find_regression_fence_violations
@@ -60,7 +60,7 @@ from app_server.rate_limit import (
 from app_server.url_validation import UnsafeURLError, validate_and_pin_https_url
 from aletheore.docs_reference import build_api_reference
 from scan_worker import live_docs, live_wiki
-from scan_worker.blast_radius_summary import blast_radius_summary
+from scan_worker.blast_radius_summary import blast_radius_summary, count_direct_dependents
 from scan_worker.db import (
     apply_monthly_credit_reset,
     check_and_reserve_flash_review_attempt,
@@ -144,6 +144,7 @@ from scan_worker.flash_review_cache import (
     store_result as store_flash_review_result,
 )
 from scan_worker.github_api import (
+    GITHUB_COMPARE_FILES_HARD_CAP,
     MAX_CONTEXT_FILE_BYTES,
     MAX_CONTEXT_FILES,
     create_check_run,
@@ -152,6 +153,7 @@ from scan_worker.github_api import (
     fetch_default_branch_head_sha,
     fetch_file_content,
     fetch_pr_changed_files,
+    fetch_pr_changed_files_detailed,
     fetch_pr_diff,
     fetch_pr_is_open,
     fetch_pr_title,
@@ -1372,8 +1374,44 @@ def run_pr_scan_job(
                 diff["vulnerabilities"]["new"], "vulnerability", dismissed["vulnerability"]
             )
 
+            # Piece B of the PR-comment-presentation redesign: a fully
+            # deterministic per-file "what changed" section, leading this
+            # same comment, posted every run regardless of tier or whether
+            # Flash Review ran at all - see docs/superpowers/specs/
+            # 2026-09-27-pr-comment-presentation-design.md section 3.
+            # Failure here must never cost the PR its findings comment
+            # (posted right below, unconditionally) - same fail-open
+            # contract as every other side computation in this function
+            # (see _maybe_send_slack_alert and the three _maybe_create_
+            # *_check_run calls further down).
+            file_overview = ""
+            changed_files_detailed = None
+            try:
+                changed_files_detailed = fetch_pr_changed_files_detailed(
+                    get_github_api_client(), token, repo_full_name, base_sha, head_sha
+                )
+                overview_rows = summarize_file_changes(old, new, changed_files_detailed)
+                dependents_counts = count_direct_dependents(
+                    new, [row["path"] for row in overview_rows]
+                )
+                for row in overview_rows:
+                    row["dependents_count"] = dependents_counts.get(row["path"], 0)
+                # Past GitHub's own compare-API file cap, files beyond it were
+                # never returned at all - "+N more" below would understate
+                # the true total rather than merely truncate a known one.
+                possibly_capped = len(changed_files_detailed) >= GITHUB_COMPARE_FILES_HARD_CAP
+                file_overview = format_file_overview(overview_rows, possibly_capped=possibly_capped)
+            except Exception:  # noqa: BLE001
+                logging.getLogger("scan_worker.jobs").warning(
+                    "could not build the PR file-overview section for installation=%s repo=%s",
+                    installation_id, repo_full_name, exc_info=True,
+                )
+
             client = get_github_api_client()
-            upsert_pr_comment(client, token, repo_full_name, pr_number, format_diff_comment(diff))
+            upsert_pr_comment(
+                client, token, repo_full_name, pr_number,
+                format_diff_comment(diff, file_overview=file_overview),
+            )
         history_id = _insert_history(installation_id, repo_full_name, new, head_sha=head_sha)
 
         # These are side effects, not the primary deliverable above - a failure in
@@ -1417,10 +1455,16 @@ def run_pr_scan_job(
                 "static analysis check run failed for installation=%s repo=%s",
                 installation_id, repo_full_name, exc_info=True,
             )
-        try:
-            changed_files = fetch_pr_changed_files(client, token, repo_full_name, base_sha, head_sha)
-        except Exception:  # noqa: BLE001
-            changed_files = None
+        if changed_files_detailed is not None:
+            # Already fetched above for the file-overview section - same
+            # base/head pair, same GitHub compare endpoint. Reusing its
+            # filenames avoids a second identical request per PR scan.
+            changed_files = [f["filename"] for f in changed_files_detailed]
+        else:
+            try:
+                changed_files = fetch_pr_changed_files(client, token, repo_full_name, base_sha, head_sha)
+            except Exception:  # noqa: BLE001
+                changed_files = None
         if changed_files is not None:
             # Enqueued as their own jobs rather than called inline - see
             # run_live_wiki_incremental_update_job's docstring for why: real

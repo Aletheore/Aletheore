@@ -15,6 +15,7 @@ from scan_worker.github_api import (
     fetch_default_branch_head_sha,
     fetch_file_content,
     fetch_pr_changed_files,
+    fetch_pr_changed_files_detailed,
     fetch_pr_diff,
     fetch_pr_is_open,
     fetch_recent_commits_for_path,
@@ -772,6 +773,99 @@ def test_fetch_pr_changed_files_logs_when_compare_api_hits_the_300_file_cap(capl
     client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
     with caplog.at_level("WARNING", logger="scan_worker.github_api"):
         result = fetch_pr_changed_files(client, "tok", "octocat/hello-world", "aaa", "bbb")
+
+    assert len(result) == 300
+    assert any("300-file cap" in record.message for record in caplog.records)
+
+
+def test_fetch_pr_changed_files_detailed_returns_status_and_line_counts():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "files": [
+                    {"filename": "app.py", "status": "modified", "additions": 5, "deletions": 2},
+                    {"filename": "new_module.py", "status": "added", "additions": 40, "deletions": 0},
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    result = fetch_pr_changed_files_detailed(client, "tok", "octocat/hello-world", "aaa", "bbb")
+
+    assert result == [
+        {
+            "filename": "app.py",
+            "status": "modified",
+            "additions": 5,
+            "deletions": 2,
+            "previous_filename": None,
+        },
+        {
+            "filename": "new_module.py",
+            "status": "added",
+            "additions": 40,
+            "deletions": 0,
+            "previous_filename": None,
+        },
+    ]
+
+
+def test_fetch_pr_changed_files_detailed_carries_previous_filename_for_a_rename():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "files": [
+                    {
+                        "filename": "src/new_name.py",
+                        "status": "renamed",
+                        "additions": 1,
+                        "deletions": 1,
+                        "previous_filename": "src/old_name.py",
+                    }
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    result = fetch_pr_changed_files_detailed(client, "tok", "octocat/hello-world", "aaa", "bbb")
+
+    assert result[0]["previous_filename"] == "src/old_name.py"
+
+
+def test_fetch_pr_changed_files_detailed_excludes_ignored_paths():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "files": [
+                    {"filename": "app.py", "status": "modified", "additions": 1, "deletions": 1},
+                    {"filename": "vendor/lib.js", "status": "modified", "additions": 1, "deletions": 1},
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    result = fetch_pr_changed_files_detailed(
+        client, "tok", "octocat/hello-world", "aaa", "bbb", ignored_paths=["vendor/**"]
+    )
+
+    assert [f["filename"] for f in result] == ["app.py"]
+
+
+def test_fetch_pr_changed_files_detailed_logs_when_compare_api_hits_the_300_file_cap(caplog):
+    compare_files = [
+        {"filename": f"file-{i}.py", "status": "modified", "additions": 1, "deletions": 0}
+        for i in range(300)
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"files": compare_files})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    with caplog.at_level("WARNING", logger="scan_worker.github_api"):
+        result = fetch_pr_changed_files_detailed(client, "tok", "octocat/hello-world", "aaa", "bbb")
 
     assert len(result) == 300
     assert any("300-file cap" in record.message for record in caplog.records)

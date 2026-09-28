@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from pathlib import Path
 
 from aletheore.repo_config import load_repo_config
@@ -97,6 +98,82 @@ def _new_and_resolved(
     new_only = [f for f in new_findings if _identity_key(f, fields) not in old_keys]
     resolved = [f for f in old_findings if _identity_key(f, fields) not in new_keys]
     return new_only, resolved
+
+
+def _module_symbol_names(module: dict | None) -> tuple[Counter, Counter]:
+    """(function_names, class_names) declared in `module`'s scan evidence,
+    as multisets, or two empty Counters when `module` is None - the file
+    didn't exist as a scanned code module at this commit, either because
+    it never existed or because aletheore's scanner doesn't parse it as
+    code (docs, config, binary assets).
+
+    Counters, not sets - real gap found on final review: the scanner
+    stores methods in symbols.functions under their bare name with no
+    class qualifier (confirmed live: a file with `A.run`, `B.run`, and a
+    top-level `run()` all show up as three unqualified "run" entries). A
+    set-based diff collapsed all three into one name, so deleting class B
+    (and its `run` method) while class A's own `run` survived elsewhere
+    in the file reported zero removed functions. A multiset diff (Counter
+    subtraction) counts instances, not distinct names, so removing one of
+    two same-named methods correctly shows one removal.
+    """
+    if module is None:
+        return Counter(), Counter()
+    symbols = module.get("symbols", {})
+    functions = Counter(e["name"] for e in symbols.get("functions", []) if e.get("name"))
+    classes = Counter(e["name"] for e in symbols.get("classes", []) if e.get("name"))
+    return functions, classes
+
+
+def summarize_file_changes(old: dict, new: dict, changed_files: list[dict]) -> list[dict]:
+    """Per-file function/class-level summary for every file GitHub's
+    compare API reports as changed between the commits `old` and `new`
+    were scanned at.
+
+    `changed_files` is `github_api.fetch_pr_changed_files_detailed`'s own
+    shape: each dict needs "filename", "status", "additions", "deletions",
+    and (for a rename) "previous_filename". A renamed file is looked up at
+    its *previous* path in `old` and its current path in `new` - looking
+    both up at the current path would misreport a pure rename's whole
+    function/class set as freshly added, since `old`'s module list was
+    never indexed at the new path.
+
+    Returns one dict per input file, in the same order: {"path", "status",
+    "additions", "deletions", "previous_path", "functions_added",
+    "functions_removed", "classes_added", "classes_removed",
+    "has_module_data"}. `has_module_data` is False only when neither
+    commit's evidence scanned this path as a code module at all (a
+    non-code file, or one aletheore's scanner doesn't parse) - a renderer
+    needs this to tell "nothing changed" apart from "never had symbols to
+    diff in the first place" instead of reporting both identically.
+    """
+    old_modules = {m["path"]: m for m in old.get("repository", {}).get("modules", []) if m.get("path")}
+    new_modules = {m["path"]: m for m in new.get("repository", {}).get("modules", []) if m.get("path")}
+
+    rows = []
+    for file in changed_files:
+        path = file["filename"]
+        previous_path = file.get("previous_filename")
+        old_lookup_path = previous_path if previous_path else path
+        old_module = old_modules.get(old_lookup_path)
+        new_module = new_modules.get(path)
+
+        old_functions, old_classes = _module_symbol_names(old_module)
+        new_functions, new_classes = _module_symbol_names(new_module)
+
+        rows.append({
+            "path": path,
+            "status": file.get("status", "modified"),
+            "additions": file.get("additions", 0),
+            "deletions": file.get("deletions", 0),
+            "previous_path": previous_path,
+            "functions_added": sorted((new_functions - old_functions).elements()),
+            "functions_removed": sorted((old_functions - new_functions).elements()),
+            "classes_added": sorted((new_classes - old_classes).elements()),
+            "classes_removed": sorted((old_classes - new_classes).elements()),
+            "has_module_data": old_module is not None or new_module is not None,
+        })
+    return rows
 
 
 def _endpoint_block(evidence: dict) -> dict:
