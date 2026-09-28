@@ -9,9 +9,9 @@
 `master` (commit `e159e6b`, tagged `github-app-deploy-2026-09-28-2`) and re-verified live via SSH
 the same session. 3 commits since the previous deploy tag (`github-app-deploy-2026-09-28`): #871
 (a real thread-join race in `test_postgres_graph_store.py` that could leak a straggler thread's DB
-write into a later test's already-truncated `installations` table - test-only, no runtime impact),
-#860 (this doc, no-op for running services), and #861 - the only one with real runtime impact: the
-`/dashboard` repo picker's empty state (no installation, or one still on the free plan) now shows
+write into a later test's already-truncated `installations` table - test-only, no runtime impact)
+and #860 (this doc, no-op for running services) - only #861 had real runtime impact:
+`/dashboard`'s repo picker empty state (no installation, or one still on the free plan) now shows
 real "Install the Aletheore GitHub App" and "Subscribe to AIR" buttons instead of explanatory text
 with nothing clickable. No migrations. `app-server` alone rebuilt and force-recreated (the only
 image #861's `frontend.py` change touches; #871/#860 have no runtime code); confirmed healthy via
