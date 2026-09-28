@@ -833,13 +833,17 @@ SIGNIN_HTML = f"""<!DOCTYPE html>
 </div>
 """
 
+@lru_cache(maxsize=1)
 def _picker_html() -> str:
-    # Computed per-request, not a module-level constant: the install URL
-    # depends on settings.github_app_slug, and baking that in at import
-    # time would bake in whatever GITHUB_APP_SLUG happened to be set (or
-    # unset) the moment this module first loaded - wrong in tests, and
-    # stale if it were ever rotated without a process restart.
-    install_url = github_app_install_url("/dashboard")
+    # A function, not a module-level constant - the install URL depends on
+    # settings.github_app_slug, and calling get_settings() at real module-
+    # import time would make importing this file require a fully
+    # configured settings environment just to load the module, the same
+    # regression _settings_html's own docstring describes. lru_cache
+    # defers that call to the first real request while still computing the
+    # page only once for the process's lifetime, matching that page's
+    # shape.
+    install_url = escape(github_app_install_url("/dashboard"))
     return f"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Your repositories — Aletheore</title>
