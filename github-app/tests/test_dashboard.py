@@ -159,6 +159,10 @@ async def _async_false(*args, **kwargs) -> bool:
     return False
 
 
+async def _async_none(*args, **kwargs):
+    return None
+
+
 async def _logged_in_client(pool, monkeypatch, administered_ids):
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
     await create_session(
@@ -1012,6 +1016,30 @@ async def test_dashboard_rejects_unadministered_installation_with_the_same_404_a
     # the status code alone is a repo-existence oracle for any
     # authenticated user (docs/audits/Claude_Audit.md finding 34).
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[999])
+    async with client:
+        response = await client.get("/app/octocat/hello-world")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_dashboard_returns_404_if_the_installation_row_is_gone(pool, monkeypatch):
+    # Real gap found auditing _require_dashboard_installation (Flash Review
+    # follow-up sweep, 2026-09-28): it only ran the real plan/seat check
+    # inside `if installation is not None:`, then returned success either
+    # way. repo_history's installation_id has an ON DELETE CASCADE FK to
+    # installations, so a completed delete can't leave this exact orphan
+    # behind, but get_installation() racing an in-flight delete (or a
+    # scanned repo whose installation row is otherwise gone) hits the same
+    # branch - and the coarse administered_ids check above it is not, by
+    # itself, enough to trust with this route's data (same reasoning as
+    # every other fix in this PR). Must 404, not silently succeed with no
+    # seat/plan check ever having run.
+    await upsert_installation(pool, 513, "octocat")
+    await insert_repo_history(
+        pool, 513, "octocat/hello-world", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[513])
+    monkeypatch.setattr("app_server.dashboard.get_installation", _async_none)
     async with client:
         response = await client.get("/app/octocat/hello-world")
     assert response.status_code == 404

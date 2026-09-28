@@ -27,6 +27,7 @@ from app_server.admin import (
 from app_server.auth import decrypt_access_token, encrypt_access_token, sign_session_id
 from app_server.url_validation import UnsafeURLError
 from app_server import admin
+from app_server.github_pagination import GITHUB_LIST_PER_PAGE
 from app_server.db import (
     add_installation_member,
     add_paddle_ids_to_installation,
@@ -2113,6 +2114,81 @@ async def test_require_real_admin_or_member_passes_silently_for_a_real_admin(poo
 
     # Raises nothing - the caller's own code after this line is what runs next.
     await _require_real_admin_or_member(pool, 906, "octocat", "acme/some-repo")
+
+
+@pytest.mark.asyncio
+async def test_verify_installation_ids_runs_checks_concurrently(monkeypatch):
+    # Real gap found by Flash Review on PR #858 (2026-09-27): every caller
+    # of _is_real_installation_member_or_admin across several installations
+    # was awaiting it one at a time in a comprehension, and each check can
+    # cost up to three GitHub API round trips for an unseated login - a
+    # login coarsely qualified for many installations serialized all of
+    # them. This pins that _verify_installation_ids runs them concurrently
+    # instead: each fake check only returns once BOTH have started, so a
+    # sequential implementation would deadlock (the first can never start
+    # the second) and this test would time out.
+    started = []
+    both_started = asyncio.Event()
+
+    async def fake_check(pool, installation_id, github_login):
+        started.append(installation_id)
+        if len(started) == 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), timeout=2)
+        return True
+
+    monkeypatch.setattr("app_server.admin._is_real_installation_member_or_admin", fake_check)
+
+    result = await asyncio.wait_for(
+        admin._verify_installation_ids(None, [1, 2], "octocat"), timeout=2
+    )
+
+    assert result == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_verify_installation_ids_filters_to_only_the_verified_ones(monkeypatch):
+    async def fake_check(pool, installation_id, github_login):
+        return installation_id in (2, 4)
+
+    monkeypatch.setattr("app_server.admin._is_real_installation_member_or_admin", fake_check)
+
+    result = await admin._verify_installation_ids(None, [1, 2, 3, 4], "octocat")
+
+    assert result == [2, 4]
+
+
+@pytest.mark.asyncio
+async def test_fetch_any_covered_repo_sync_fetches_only_one_small_page(monkeypatch):
+    # Real gap found by Flash Review on PR #858 (2026-09-27): this used
+    # fetch_paginated_github_collection, which pages through EVERY repo an
+    # installation covers just to discard all but the first - many wasted
+    # GitHub API calls (and rate-limit budget) per verification attempt on
+    # a large installation. Pin that it now asks for one repo, one page:
+    # the mock returns a full page (GITHUB_LIST_PER_PAGE items) - a
+    # pagination loop would have to fetch a second page to know it was
+    # done, so a second request here would mean the old behavior is back.
+    monkeypatch.setattr("app_server.admin.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("app_server.admin.get_installation_token", lambda *a, **k: "fake-installation-token")
+
+    requests_seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        assert request.url.path == "/installation/repositories"
+        full_page = [{"full_name": f"acme/repo-{i}"} for i in range(GITHUB_LIST_PER_PAGE)]
+        return httpx.Response(200, json={"repositories": full_page})
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    result = admin._fetch_any_covered_repo_sync(905)
+
+    assert result == "acme/repo-0"
+    assert len(requests_seen) == 1
+    assert requests_seen[0].url.params.get("per_page") == "1"
 
 
 @pytest.mark.asyncio

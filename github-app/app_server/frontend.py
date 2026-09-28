@@ -23,7 +23,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app_server.admin import (
     _administered_installation_ids_for_session_or_401,
-    _is_real_installation_member_or_admin,
+    _verify_installation_ids,
 )
 from app_server.auth import SESSION_COOKIE_NAME, get_current_session, sign_checkout_installation_id
 from app_server.config import get_settings
@@ -4054,11 +4054,7 @@ async def subscribe_page(request: Request, plan: str = "", interval: str = ""):
     # their own checkout option. Filtered to installations this login is
     # actually seated on, or has real GitHub admin permission on - same bar
     # dashboard.py's list_my_repos now applies for the identical reason.
-    verified_ids = [
-        installation_id
-        for installation_id in administered_ids
-        if await _is_real_installation_member_or_admin(pool, installation_id, session["github_login"])
-    ]
+    verified_ids = await _verify_installation_ids(pool, administered_ids, session["github_login"])
     if not verified_ids:
         return _no_store_html(_subscribe_install_prompt_page(plan, next_path))
 

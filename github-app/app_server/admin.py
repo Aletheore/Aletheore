@@ -491,15 +491,21 @@ def _fetch_any_covered_repo_sync(installation_id: int) -> str | None:
     settings = get_settings()
     app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
     installation_token = get_installation_token(installation_id, app_jwt)
-    repositories = fetch_paginated_github_collection(
-        _github_http_client(),
+    # A single item is all this needs, unlike dashboard.py's
+    # _fetch_uninitialized_repos_sync (which genuinely needs every repo) -
+    # fetch_paginated_github_collection would page through the whole
+    # installation just to discard all but the first, real wasted latency
+    # and rate-limit budget on a large installation (Flash Review, PR #858).
+    response = _github_http_client().get(
         "/installation/repositories",
         headers={
             "Authorization": f"Bearer {installation_token}",
             "Accept": "application/vnd.github+json",
         },
-        collection_key="repositories",
+        params={"per_page": 1, "page": 1},
     )
+    response.raise_for_status()
+    repositories = response.json().get("repositories", [])
     return repositories[0]["full_name"] if repositories else None
 
 
@@ -551,6 +557,30 @@ async def _is_real_installation_member_or_admin(pool, installation_id: int, gith
     if repo_full_name is None:
         return False
     return await _has_real_admin_permission(installation_id, github_login, repo_full_name)
+
+
+async def _verify_installation_ids(pool, installation_ids, github_login: str) -> list[int]:
+    """`_is_real_installation_member_or_admin`, checked concurrently across
+    every id in `installation_ids` instead of one at a time.
+
+    Every LISTING endpoint that fans out across several installations
+    (`/app/repos`, `/subscribe`, the credits page's sibling-installations
+    list, `/v1/my-installations`) was awaiting the per-installation check
+    in a plain comprehension - sequential, even though each check can cost
+    up to three GitHub API round trips for a login with no seat. A login
+    coarsely qualified for many installations turned that into a
+    multi-second page load and burned through the GitHub rate-limit budget
+    on every request; for `/v1/my-installations` (the CLI's login route),
+    rate-limit exhaustion there locks the user out of login entirely.
+    Found by Flash Review on PR #858 (2026-09-27), fixed the same PR.
+    """
+    results = await asyncio.gather(
+        *(
+            _is_real_installation_member_or_admin(pool, installation_id, github_login)
+            for installation_id in installation_ids
+        )
+    )
+    return [installation_id for installation_id, ok in zip(installation_ids, results) if ok]
 
 
 async def _require_real_admin_or_member(
@@ -1689,11 +1719,7 @@ async def my_installations(request: Request):
     # own login path - filtered to installations this login is actually
     # seated on, or has real GitHub admin permission on.
     github_login = await asyncio.to_thread(_fetch_github_login, github_token)
-    verified_ids = [
-        installation_id
-        for installation_id in administered_ids
-        if await _is_real_installation_member_or_admin(pool, installation_id, github_login)
-    ]
+    verified_ids = await _verify_installation_ids(pool, administered_ids, github_login)
     rows = await pool.fetch(
         """
         SELECT installation_id, account_login

@@ -19,6 +19,7 @@ from app_server.admin import (
     _repo_installation_id,
     _require_admin_installation,
     _require_seat_if_paid,
+    _verify_installation_ids,
 )
 from app_server.auth import get_current_session, sign_checkout_installation_id
 from app_server.config import get_settings
@@ -180,11 +181,7 @@ async def list_my_repos(request: Request):
     # Filtered down to installations this login is actually seated on, or
     # has real per-repo GitHub admin permission on - the same bar every
     # individual dashboard page already enforces via _require_seat_if_paid.
-    verified_ids = {
-        installation_id
-        for installation_id in administered_ids
-        if await _is_real_installation_member_or_admin(pool, installation_id, session["github_login"])
-    }
+    verified_ids = set(await _verify_installation_ids(pool, administered_ids, session["github_login"]))
     repos = await list_repos_for_installations(pool, list(verified_ids))
     result = []
     known_by_installation: dict[int, set[str]] = {}
@@ -338,11 +335,9 @@ async def get_credits(installation_id: int, request: Request):
             # Same real gap, same fix: the raw coarse set must not be
             # listed here either, only installations this login is
             # actually seated on or has real GitHub admin rights on.
-            verified_sibling_ids = [
-                installation_id
-                for installation_id in administered_ids
-                if await _is_real_installation_member_or_admin(pool, installation_id, session["github_login"])
-            ]
+            verified_sibling_ids = await _verify_installation_ids(
+                pool, administered_ids, session["github_login"]
+            )
             sibling_installations = [
                 {
                     "installation_id": row["installation_id"],
@@ -522,11 +517,21 @@ async def _require_dashboard_installation(request: Request, org: str, repo: str)
         raise HTTPException(status_code=404, detail="no such repo")
 
     installation = await get_installation(pool, installation_id)
-    if installation is not None:
-        # AIR-exclusive - no managed dashboard for flash either.
-        if installation["plan"] != "air":
-            raise HTTPException(status_code=402, detail="the managed dashboard requires the AIR plan")
-        await _require_seat_if_paid(pool, installation, session["github_login"], f"{org}/{repo}")
+    # Real gap found auditing this route (2026-09-28): the plan/seat check
+    # below only ran `if installation is not None:`, then returned success
+    # either way - so an installation_id resolved from repo_history but
+    # missing from the installations table (a delete racing this request;
+    # repo_history's own FK is ON DELETE CASCADE, so a completed delete
+    # can't leave this behind, but the two aren't in the same query) skipped
+    # every real check and succeeded on the coarse administered_ids
+    # membership alone - the exact class of gap this whole file was already
+    # fixed for everywhere else.
+    if installation is None:
+        raise HTTPException(status_code=404, detail="no such repo")
+    # AIR-exclusive - no managed dashboard for flash either.
+    if installation["plan"] != "air":
+        raise HTTPException(status_code=402, detail="the managed dashboard requires the AIR plan")
+    await _require_seat_if_paid(pool, installation, session["github_login"], f"{org}/{repo}")
 
     return session, installation_id
 
