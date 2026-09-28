@@ -170,6 +170,7 @@ a { color: var(--accent); }
 .field { width: 100%; font-family: var(--font-mono); font-size: 12px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--slate-100); color: var(--ink-900); }
 .field:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .empty-state { padding: 1.5rem; text-align: center; color: var(--slate-600); font-size: 13px; }
+.empty-state-actions { display: flex; justify-content: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
 .error-banner { background: var(--critical-soft); color: var(--critical); border-radius: 10px; padding: 12px 15px; font-size: 13px; margin: 1rem 0; }
 .locked-feature { position: relative; border-radius: 10px; overflow: hidden; min-height: 150px; }
 .locked-preview { filter: blur(5px); opacity: 0.65; pointer-events: none; user-select: none; padding: 2px; }
@@ -832,7 +833,14 @@ SIGNIN_HTML = f"""<!DOCTYPE html>
 </div>
 """
 
-PICKER_HTML = f"""<!DOCTYPE html>
+def _picker_html() -> str:
+    # Computed per-request, not a module-level constant: the install URL
+    # depends on settings.github_app_slug, and baking that in at import
+    # time would bake in whatever GITHUB_APP_SLUG happened to be set (or
+    # unset) the moment this module first loaded - wrong in tests, and
+    # stale if it were ever rotated without a process restart.
+    install_url = github_app_install_url("/dashboard")
+    return f"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Your repositories — Aletheore</title>
 <link rel="icon" type="image/png" href="{BRAND_MARK_DATA_URI}">
@@ -858,7 +866,18 @@ PICKER_HTML = f"""<!DOCTYPE html>
   // on an org).
   const billingAccounts = data.billing_accounts || [];
   if (data.repos.length === 0 && billingAccounts.length === 0) {{
-    body.innerHTML = '<div class="empty-state">No managed repositories yet. Aletheore Community (free) runs self-service - the CLI, the free GitHub Action, and free GitHub App usage all work without a hosted dashboard, so a free installation won\\'t appear here. Install the Aletheore GitHub App on an organization and subscribe to AIR to get a managed dashboard.</div>';
+    // Real gap found dogfooding this page (2026-09-28): a login with no
+    // installation at all, or with one that's still on the free plan (Flash
+    // installations never get a dashboard either, by design), landed here
+    // with an accurate explanation but nothing clickable - no way to tell
+    // what to actually do next. AIR is named specifically, not "any paid
+    // plan": Flash still wouldn't unlock this page, so pointing someone at
+    // it here would be a dead end.
+    body.innerHTML = '<div class="empty-state">No managed repositories yet. Aletheore Community (free) runs self-service - the CLI, the free GitHub Action, and free GitHub App usage all work without a hosted dashboard, so a free installation won\\'t appear here. Install the Aletheore GitHub App on an organization and subscribe to AIR to get a managed dashboard.' +
+      '<div class="empty-state-actions">' +
+      '<a class="btn btn-accent" href="{install_url}">Install the Aletheore GitHub App</a>' +
+      '<a class="btn" href="/subscribe?plan=air&amp;interval=month">Subscribe to AIR</a>' +
+      '</div></div>';
     return;
   }}
   const byOrg = {{}};
@@ -4076,7 +4095,7 @@ async def repo_picker_page(request: Request):
     session = await get_current_session(request)
     if session is None:
         return RedirectResponse(url="/", status_code=307)
-    return _no_store_html(PICKER_HTML)
+    return _no_store_html(_picker_html())
 
 
 async def _require_session_or_redirect(request: Request):
