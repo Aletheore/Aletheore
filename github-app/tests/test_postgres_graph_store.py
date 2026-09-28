@@ -265,9 +265,29 @@ async def test_apply_commits_lock_does_not_serialize_different_repos(pool):
             time.sleep(0.3)
         return original_write(self, cur, branch, merged, new_sync_sha, new_sync_at)
 
-    with patch.object(PostgresRepoGraphStore, "_write_merged", _slow_write):
-        thread_a = threading.Thread(
-            target=lambda: store_a.apply_commits(
+    # Real bug found chasing a one-off CI failure: thread_a used to be
+    # fire-and-forget beyond a bare `join(timeout=5)` that neither checked
+    # whether the join actually succeeded nor propagated an exception
+    # raised inside the thread. On a loaded full-suite run, thread_a's real
+    # Postgres round-trip can occasionally take longer than 5s (GIL/OS
+    # scheduling contention, not a product bug); when that happened, this
+    # test returned green while thread_a kept running in the background,
+    # still holding its own connection and about to write with
+    # installation_id=610 - and the very next test's `pool` fixture
+    # unconditionally TRUNCATEs installations (see conftest.py) at that
+    # exact moment. thread_a's now-orphaned write then hit a
+    # ForeignKeyViolation ("Key (installation_id)=(610) is not present in
+    # table installations"), surfacing as an unhandled-thread-exception
+    # warning attributed to whichever test happened to be running,
+    # reproduced standalone by sleeping thread_a past a concurrent
+    # truncate. thread_a_error/the liveness assert below turn that failure
+    # mode into a normal, attributable assertion in this test itself, and
+    # stop the thread from ever outliving this test's own scope.
+    thread_a_error: list[BaseException] = []
+
+    def _run_store_a():
+        try:
+            store_a.apply_commits(
                 "unused",
                 "main",
                 [_touch("s1", "Alice", "a@example.com", "2026-06-01T00:00:00", ("a.txt",))],
@@ -275,7 +295,11 @@ async def test_apply_commits_lock_does_not_serialize_different_repos(pool):
                 new_sync_at=datetime(2026, 6, 1),
                 reset=True,
             )
-        )
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the main thread below
+            thread_a_error.append(exc)
+
+    with patch.object(PostgresRepoGraphStore, "_write_merged", _slow_write):
+        thread_a = threading.Thread(target=_run_store_a)
         thread_a.start()
         time.sleep(0.05)  # let thread_a acquire its lock and enter the slow write first
 
@@ -290,6 +314,13 @@ async def test_apply_commits_lock_does_not_serialize_different_repos(pool):
         )
         elapsed = time.monotonic() - start
         thread_a.join(timeout=5)
+
+    assert not thread_a.is_alive(), (
+        "thread_a did not finish within its join timeout - failing here instead of letting "
+        "it leak into a later test's database state"
+    )
+    if thread_a_error:
+        raise thread_a_error[0]
 
     # store_b's own call was never patched to be slow, and a different repo
     # must not be blocked by store_a's in-flight lock - it should return
