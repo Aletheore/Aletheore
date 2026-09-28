@@ -2,9 +2,11 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from aletheore.evidence import EVIDENCE_VERSION
+from app_server import admin
 from app_server.auth import encrypt_access_token, sign_session_id
 from app_server.db import (
     add_installation_member,
@@ -476,6 +478,72 @@ async def test_credits_404s_a_free_installation(pool, monkeypatch):
         response = await client.get("/app/installations/735/credits")
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_credits_sibling_list_stays_empty_on_a_dead_session_token(pool, monkeypatch):
+    # The pre-existing, intentional case this try/except exists for: the
+    # stored GitHub token died between the main gate's own lookup and this
+    # one (both go through the same 401-raising helper). Must not surface
+    # as a 500 for the main credits response - an empty sibling list is
+    # the correct degrade.
+    await upsert_installation(pool, 736, "my-org")
+    await set_installation_plan(pool, 736, "flash")
+    await insert_repo_history(
+        pool, 736, "my-org/service", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[736])
+    calls = {"n": 0}
+    real = admin._administered_installation_ids_for_session_or_401
+
+    async def fail_second_call(pool, session):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise HTTPException(status_code=401, detail="session expired")
+        return await real(pool, session)
+
+    monkeypatch.setattr("app_server.dashboard._administered_installation_ids_for_session_or_401", fail_second_call)
+
+    async with client:
+        response = await client.get("/app/installations/736/credits")
+
+    assert response.status_code == 200
+    assert response.json()["sibling_installations"] == []
+
+
+@pytest.mark.asyncio
+async def test_credits_does_not_silently_swallow_an_unexpected_sibling_lookup_error(pool, monkeypatch):
+    # Real gap found auditing this route (Flash Review, 2026-09-27): the
+    # try/except around the sibling-installations block caught bare
+    # HTTPException, which also covers any error _verify_installation_ids
+    # (or anything else in the block) might raise for a reason that has
+    # nothing to do with a dead token - silently returning an empty
+    # sibling list either way, with nothing in the response or the logs to
+    # say verification never actually ran. An unexpected failure here must
+    # surface, not disappear into "no siblings."
+    await upsert_installation(pool, 737, "my-org")
+    await set_installation_plan(pool, 737, "flash")
+    await insert_repo_history(
+        pool, 737, "my-org/service", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+
+    await _logged_in_client(pool, monkeypatch, administered_ids=[737])
+
+    async def boom(pool, installation_ids, github_login):
+        raise RuntimeError("verification backend unavailable")
+
+    monkeypatch.setattr("app_server.dashboard._verify_installation_ids", boom)
+
+    # raise_app_exceptions=False: an unhandled exception must come back as
+    # this route's own 500, not propagate through the test transport - see
+    # test_main.py's identical setup for the same reasoning.
+    signed = sign_session_id("sess-1", "test-session-secret")
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed}) as client:
+        response = await client.get("/app/installations/737/credits")
+
+    assert response.status_code == 500
 
 
 # alert_email, credits, and review-history all now share the same real bar
