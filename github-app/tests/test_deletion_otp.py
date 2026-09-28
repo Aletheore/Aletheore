@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from test_admin import _logged_in_client
+from test_admin import _async_false, _logged_in_client
 
 
 @pytest.mark.asyncio
@@ -29,6 +29,25 @@ async def test_request_otp_rejects_non_administrator(pool, monkeypatch):
         response = await client.post("/admin/globex/web/delete-all-data/request-otp")
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_request_otp_denies_a_non_admin_in_the_coarse_installations_set(pool, monkeypatch):
+    # Real gap closed 2026-09-27: the coarse set alone used to be enough
+    # to get a real OTP code sent (to the CALLER's own verified email,
+    # proving nothing about their access to THIS installation) - one step
+    # away from a real, full data deletion. Now requires the same
+    # real-membership-or-admin bar delete-all-data itself already checks.
+    client = await _logged_in_client(pool, monkeypatch)
+    await pool.execute(
+        "INSERT INTO github_user_emails (github_login, email) VALUES ('octocat', 'octocat@example.com') "
+        "ON CONFLICT (github_login) DO UPDATE SET email = EXCLUDED.email"
+    )
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_false)
+    async with client:
+        response = await client.post("/admin/octocat/hello-world/delete-all-data/request-otp")
+
+    assert response.status_code == 403
 
 
 @pytest.mark.asyncio

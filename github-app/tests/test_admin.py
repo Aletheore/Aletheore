@@ -18,14 +18,18 @@ from app_server.admin import (
     _administered_installation_ids_for_session_or_401,
     _build_updated_seat_items,
     _has_real_admin_permission,
+    _is_real_installation_member_or_admin,
     _looks_like_email,
     _monitored_endpoint_keys,
     _repo_installation_id,
+    _require_real_admin_or_member,
 )
 from app_server.auth import decrypt_access_token, encrypt_access_token, sign_session_id
 from app_server.url_validation import UnsafeURLError
 from app_server import admin
+from app_server.github_pagination import GITHUB_LIST_PER_PAGE
 from app_server.db import (
+    add_installation_member,
     add_paddle_ids_to_installation,
     create_session,
     get_max_tokens,
@@ -100,8 +104,10 @@ async def _async_false(*args, **kwargs) -> bool:
     return False
 
 
-async def _mock_github_installations(monkeypatch, installation_ids: list[int]):
+async def _mock_github_installations(monkeypatch, installation_ids: list[int], github_login: str = "octocat"):
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/user":
+            return httpx.Response(200, json={"login": github_login})
         return httpx.Response(
             200,
             json={
@@ -114,6 +120,13 @@ async def _mock_github_installations(monkeypatch, installation_ids: list[int]):
         "app_server.admin._github_http_client",
         lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
     )
+    # Default "administered" represents a real GitHub admin on the
+    # installation - _is_real_installation_member_or_admin would otherwise
+    # attempt a live GitHub API call (via app_server.github_auth, a
+    # different client than the coarse-check mock above) and fail closed.
+    # Tests exercising the narrower, coarse-only-not-really-admin case
+    # override this back to _async_false after calling this fixture.
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
 
 
 async def _create_session_with_tokens(
@@ -1278,6 +1291,10 @@ async def test_set_webhook_url_rejects_non_https(pool, monkeypatch):
 async def test_my_installations_returns_only_paid_and_administered(pool, monkeypatch):
     await upsert_installation(pool, 100, "acme")
     await set_installation_plan(pool, 100, "air")
+    await insert_repo_history(
+        pool, 100, "acme/some-repo", datetime.now(timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "scanned_at": "x"},
+    )
     await upsert_installation(pool, 200, "free-org")
     await set_installation_plan(pool, 200, "free")
     await upsert_installation(pool, 300, "not-mine")
@@ -1331,6 +1348,10 @@ async def test_my_installations_requires_bearer_token(pool):
 async def test_create_cli_token_mints_token_for_administered_paid_installation(pool, monkeypatch):
     await upsert_installation(pool, 100, "acme")
     await set_installation_plan(pool, 100, "air")
+    await insert_repo_history(
+        pool, 100, "acme/some-repo", datetime.now(timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "scanned_at": "x"},
+    )
     await _mock_github_installations(monkeypatch, [100])
 
     app.state.db_pool = pool
@@ -1368,6 +1389,10 @@ async def test_create_cli_token_rejects_unadministered_installation(pool, monkey
 async def test_create_cli_token_rejects_free_plan(pool, monkeypatch):
     await upsert_installation(pool, 100, "acme")
     await set_installation_plan(pool, 100, "free")
+    await insert_repo_history(
+        pool, 100, "acme/some-repo", datetime.now(timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "scanned_at": "x"},
+    )
     await _mock_github_installations(monkeypatch, [100])
 
     app.state.db_pool = pool
@@ -1386,6 +1411,10 @@ async def test_create_cli_token_rejects_free_plan(pool, monkeypatch):
 async def test_create_cli_token_enforces_seat_cap(pool, monkeypatch):
     await upsert_installation(pool, 100, "acme")
     await set_installation_plan(pool, 100, "air")
+    await insert_repo_history(
+        pool, 100, "acme/some-repo", datetime.now(timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "scanned_at": "x"},
+    )
     await _mock_github_installations(monkeypatch, [100])
 
     app.state.db_pool = pool
@@ -1968,6 +1997,198 @@ async def test_has_real_admin_permission_fails_closed_on_a_github_error(monkeypa
     monkeypatch.setattr("app_server.admin.get_installation_token", _boom)
 
     assert await _has_real_admin_permission(100, "octocat", "octocat/hello-world") is False
+
+
+@pytest.mark.asyncio
+async def test_is_real_installation_member_or_admin_trusts_a_seated_member_outright(pool, monkeypatch):
+    await upsert_installation(pool, 900, "acme")
+    await add_installation_member(pool, 900, "octocat", "octocat")
+    # No covered repo, and a real-admin check that would fail - a seated
+    # member must never need either.
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_false)
+
+    assert await _is_real_installation_member_or_admin(pool, 900, "octocat") is True
+
+
+@pytest.mark.asyncio
+async def test_is_real_installation_member_or_admin_checks_a_scanned_repo_first(pool, monkeypatch):
+    await upsert_installation(pool, 901, "acme")
+    await insert_repo_history(
+        pool, 901, "acme/scanned-repo", datetime.now(timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "scanned_at": "x"},
+    )
+    seen_repos = []
+
+    async def fake_has_real_admin_permission(installation_id, github_login, repo_full_name):
+        seen_repos.append(repo_full_name)
+        return True
+
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", fake_has_real_admin_permission)
+
+    assert await _is_real_installation_member_or_admin(pool, 901, "octocat") is True
+    assert seen_repos == ["acme/scanned-repo"]
+
+
+@pytest.mark.asyncio
+async def test_is_real_installation_member_or_admin_falls_back_to_github_when_never_scanned(pool, monkeypatch):
+    # Real regression this pins: a brand-new (or freshly-upgraded)
+    # installation has no repo_history row until its first scan completes
+    # - list_repos_for_installations alone has nothing to verify real
+    # admin permission against. A first version of this fix failed closed
+    # here unconditionally, which would have locked a legitimate new
+    # customer out of their own /app/repos listing and /subscribe
+    # checkout page before their first scan ever ran - caught by this
+    # test suite before shipping, not in production.
+    await upsert_installation(pool, 902, "acme")
+    monkeypatch.setattr("app_server.admin.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("app_server.admin.get_installation_token", lambda *a, **k: "fake-installation-token")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/installation/repositories"
+        return httpx.Response(200, json={"repositories": [{"full_name": "acme/never-scanned"}]})
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+    seen_repos = []
+
+    async def fake_has_real_admin_permission(installation_id, github_login, repo_full_name):
+        seen_repos.append(repo_full_name)
+        return True
+
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", fake_has_real_admin_permission)
+
+    assert await _is_real_installation_member_or_admin(pool, 902, "octocat") is True
+    assert seen_repos == ["acme/never-scanned"]
+
+
+@pytest.mark.asyncio
+async def test_is_real_installation_member_or_admin_fails_closed_with_zero_covered_repos(pool, monkeypatch):
+    await upsert_installation(pool, 903, "acme")
+    monkeypatch.setattr("app_server.admin.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("app_server.admin.get_installation_token", lambda *a, **k: "fake-installation-token")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"repositories": []})
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    assert await _is_real_installation_member_or_admin(pool, 903, "octocat") is False
+
+
+@pytest.mark.asyncio
+async def test_is_real_installation_member_or_admin_fails_closed_on_github_fallback_error(pool, monkeypatch):
+    await upsert_installation(pool, 904, "acme")
+    monkeypatch.setattr("app_server.admin.generate_app_jwt", lambda *a, **k: "fake-jwt")
+
+    def _boom(*a, **k):
+        raise RuntimeError("GitHub API unavailable")
+
+    monkeypatch.setattr("app_server.admin.get_installation_token", _boom)
+
+    assert await _is_real_installation_member_or_admin(pool, 904, "octocat") is False
+
+
+@pytest.mark.asyncio
+async def test_require_real_admin_or_member_raises_403_for_a_non_admin(pool, monkeypatch):
+    # _require_real_admin_or_member takes repo_full_name directly (from the
+    # URL path), so unlike _is_real_installation_member_or_admin it never
+    # needs list_repos_for_installations or the GitHub-fallback lookup -
+    # _has_real_admin_permission is checked against that repo directly.
+    await upsert_installation(pool, 905, "acme")
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_false)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _require_real_admin_or_member(pool, 905, "octocat", "acme/some-repo")
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_require_real_admin_or_member_passes_silently_for_a_real_admin(pool, monkeypatch):
+    await upsert_installation(pool, 906, "acme")
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
+
+    # Raises nothing - the caller's own code after this line is what runs next.
+    await _require_real_admin_or_member(pool, 906, "octocat", "acme/some-repo")
+
+
+@pytest.mark.asyncio
+async def test_verify_installation_ids_runs_checks_concurrently(monkeypatch):
+    # Real gap found by Flash Review on PR #858 (2026-09-27): every caller
+    # of _is_real_installation_member_or_admin across several installations
+    # was awaiting it one at a time in a comprehension, and each check can
+    # cost up to three GitHub API round trips for an unseated login - a
+    # login coarsely qualified for many installations serialized all of
+    # them. This pins that _verify_installation_ids runs them concurrently
+    # instead: each fake check only returns once BOTH have started, so a
+    # sequential implementation would deadlock (the first can never start
+    # the second) and this test would time out.
+    started = []
+    both_started = asyncio.Event()
+
+    async def fake_check(pool, installation_id, github_login):
+        started.append(installation_id)
+        if len(started) == 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), timeout=2)
+        return True
+
+    monkeypatch.setattr("app_server.admin._is_real_installation_member_or_admin", fake_check)
+
+    result = await asyncio.wait_for(
+        admin._verify_installation_ids(None, [1, 2], "octocat"), timeout=2
+    )
+
+    assert result == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_verify_installation_ids_filters_to_only_the_verified_ones(monkeypatch):
+    async def fake_check(pool, installation_id, github_login):
+        return installation_id in (2, 4)
+
+    monkeypatch.setattr("app_server.admin._is_real_installation_member_or_admin", fake_check)
+
+    result = await admin._verify_installation_ids(None, [1, 2, 3, 4], "octocat")
+
+    assert result == [2, 4]
+
+
+@pytest.mark.asyncio
+async def test_fetch_any_covered_repo_sync_fetches_only_one_small_page(monkeypatch):
+    # Real gap found by Flash Review on PR #858 (2026-09-27): this used
+    # fetch_paginated_github_collection, which pages through EVERY repo an
+    # installation covers just to discard all but the first - many wasted
+    # GitHub API calls (and rate-limit budget) per verification attempt on
+    # a large installation. Pin that it now asks for one repo, one page:
+    # the mock returns a full page (GITHUB_LIST_PER_PAGE items) - a
+    # pagination loop would have to fetch a second page to know it was
+    # done, so a second request here would mean the old behavior is back.
+    monkeypatch.setattr("app_server.admin.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("app_server.admin.get_installation_token", lambda *a, **k: "fake-installation-token")
+
+    requests_seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        assert request.url.path == "/installation/repositories"
+        full_page = [{"full_name": f"acme/repo-{i}"} for i in range(GITHUB_LIST_PER_PAGE)]
+        return httpx.Response(200, json={"repositories": full_page})
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    result = admin._fetch_any_covered_repo_sync(905)
+
+    assert result == "acme/repo-0"
+    assert len(requests_seen) == 1
+    assert requests_seen[0].url.params.get("per_page") == "1"
 
 
 @pytest.mark.asyncio

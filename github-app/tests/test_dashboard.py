@@ -2,9 +2,11 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from aletheore.evidence import EVIDENCE_VERSION
+from app_server import admin
 from app_server.auth import encrypt_access_token, sign_session_id
 from app_server.db import (
     add_installation_member,
@@ -157,6 +159,10 @@ async def _async_true(*args, **kwargs) -> bool:
 
 async def _async_false(*args, **kwargs) -> bool:
     return False
+
+
+async def _async_none(*args, **kwargs):
+    return None
 
 
 async def _logged_in_client(pool, monkeypatch, administered_ids):
@@ -322,6 +328,9 @@ async def test_credits_requires_login(pool):
 async def test_credits_returns_balance_and_checkout_data_for_a_flash_installation(pool, monkeypatch):
     await upsert_installation(pool, 731, "my-org")
     await set_installation_plan(pool, 731, "flash")
+    await insert_repo_history(
+        pool, 731, "my-org/service", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
     await pool.execute(
         "UPDATE installations SET base_credit_remaining_usd = 4.5, topup_credit_balance_usd = 2 WHERE installation_id = 731"
     )
@@ -345,6 +354,9 @@ async def test_credits_returns_balance_and_checkout_data_for_a_flash_installatio
 async def test_credits_works_for_an_air_installation_too(pool, monkeypatch):
     await upsert_installation(pool, 732, "personal-account")
     await set_installation_plan(pool, 732, "air")
+    await insert_repo_history(
+        pool, 732, "personal-account/app", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
 
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[732])
     async with client:
@@ -367,6 +379,9 @@ async def test_credits_includes_purchased_extra_seats_in_the_credit_allotment(po
 
     await upsert_installation(pool, 733, "seated-org")
     await set_installation_plan(pool, 733, "air")
+    await insert_repo_history(
+        pool, 733, "seated-org/app", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
     await pool.execute("UPDATE installations SET extra_seats = 3 WHERE installation_id = 733")
 
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[733])
@@ -387,6 +402,9 @@ async def test_credits_keeps_the_real_subscription_id_when_the_paddle_lookup_fai
     # in frontend.py branches on exactly this field for that reason).
     await upsert_installation(pool, 737, "my-org")
     await set_installation_plan(pool, 737, "flash")
+    await insert_repo_history(
+        pool, 737, "my-org/service", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
     await add_paddle_ids_to_installation(pool, 737, "sub_test_flaky", "ctm_test_flaky")
 
     def _boom(api_key, subscription_id):
@@ -462,19 +480,83 @@ async def test_credits_404s_a_free_installation(pool, monkeypatch):
     assert response.status_code == 404
 
 
-# alert_email is a stronger bar than credits/review-history: it also
-# receives AIR endpoint-health alerts and can be changed, not just read, so
-# _require_paid_installation_or_404's coarse "administers this installation"
-# check (which GitHub documents as including anyone with mere read access
-# to one covered repo) is not enough - _has_real_admin_permission or a real
-# installation_members seat is required, same bar as admin.py's own
-# billing-portal route. Note _logged_in_client's own _async_true patch on
-# app_server.admin._has_real_admin_permission does NOT affect these tests:
-# that name is bound separately inside app_server.dashboard (a `from ...
-# import` binds a new name in the importing module, unaffected by
-# patching the origin module's attribute afterward) - the routes under
-# test call app_server.dashboard._has_real_admin_permission, which must be
-# patched explicitly per test.
+@pytest.mark.asyncio
+async def test_credits_sibling_list_stays_empty_on_a_dead_session_token(pool, monkeypatch):
+    # The pre-existing, intentional case this try/except exists for: the
+    # stored GitHub token died between the main gate's own lookup and this
+    # one (both go through the same 401-raising helper). Must not surface
+    # as a 500 for the main credits response - an empty sibling list is
+    # the correct degrade.
+    await upsert_installation(pool, 736, "my-org")
+    await set_installation_plan(pool, 736, "flash")
+    await insert_repo_history(
+        pool, 736, "my-org/service", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[736])
+    calls = {"n": 0}
+    real = admin._administered_installation_ids_for_session_or_401
+
+    async def fail_second_call(pool, session):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise HTTPException(status_code=401, detail="session expired")
+        return await real(pool, session)
+
+    monkeypatch.setattr("app_server.dashboard._administered_installation_ids_for_session_or_401", fail_second_call)
+
+    async with client:
+        response = await client.get("/app/installations/736/credits")
+
+    assert response.status_code == 200
+    assert response.json()["sibling_installations"] == []
+
+
+@pytest.mark.asyncio
+async def test_credits_does_not_silently_swallow_an_unexpected_sibling_lookup_error(pool, monkeypatch):
+    # Real gap found auditing this route (Flash Review, 2026-09-27): the
+    # try/except around the sibling-installations block caught bare
+    # HTTPException, which also covers any error _verify_installation_ids
+    # (or anything else in the block) might raise for a reason that has
+    # nothing to do with a dead token - silently returning an empty
+    # sibling list either way, with nothing in the response or the logs to
+    # say verification never actually ran. An unexpected failure here must
+    # surface, not disappear into "no siblings."
+    await upsert_installation(pool, 737, "my-org")
+    await set_installation_plan(pool, 737, "flash")
+    await insert_repo_history(
+        pool, 737, "my-org/service", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+
+    await _logged_in_client(pool, monkeypatch, administered_ids=[737])
+
+    async def boom(pool, installation_ids, github_login):
+        raise RuntimeError("verification backend unavailable")
+
+    monkeypatch.setattr("app_server.dashboard._verify_installation_ids", boom)
+
+    # raise_app_exceptions=False: an unhandled exception must come back as
+    # this route's own 500, not propagate through the test transport - see
+    # test_main.py's identical setup for the same reasoning.
+    signed = sign_session_id("sess-1", "test-session-secret")
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed}) as client:
+        response = await client.get("/app/installations/737/credits")
+
+    assert response.status_code == 500
+
+
+# alert_email, credits, and review-history all now share the same real bar
+# (_require_installation_admin_permission_or_404, which calls admin.py's
+# _is_real_installation_member_or_admin): the coarse "administers this
+# installation" check alone (which GitHub documents as including anyone
+# with mere read access to one covered repo) is not enough -
+# _has_real_admin_permission or a real installation_members seat is
+# required, same bar admin.py's own billing-portal route already used.
+# _logged_in_client's own _async_true patch on
+# app_server.admin._has_real_admin_permission covers the common case by
+# default; tests below that need the narrower "not a real admin" case
+# override it back to _async_false explicitly.
 
 
 @pytest.mark.asyncio
@@ -494,7 +576,7 @@ async def test_alert_email_denies_a_non_admin_in_the_coarse_installations_set(po
         pool, 740, "my-org/repo", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
     )
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[740])
-    monkeypatch.setattr("app_server.dashboard._has_real_admin_permission", _async_false)
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_false)
 
     async with client:
         response = await client.get("/app/installations/740/alert-email")
@@ -511,7 +593,7 @@ async def test_alert_email_denies_when_no_covered_repo_exists(pool, monkeypatch)
     await upsert_installation(pool, 741, "my-org")
     await set_installation_plan(pool, 741, "flash")
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[741])
-    monkeypatch.setattr("app_server.dashboard._has_real_admin_permission", _async_true)
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
 
     async with client:
         response = await client.get("/app/installations/741/alert-email")
@@ -528,7 +610,7 @@ async def test_alert_email_allows_a_real_admin_with_a_covered_repo(pool, monkeyp
         pool, 742, "my-org/repo", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
     )
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[742])
-    monkeypatch.setattr("app_server.dashboard._has_real_admin_permission", _async_true)
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
 
     async with client:
         response = await client.get("/app/installations/742/alert-email")
@@ -547,7 +629,7 @@ async def test_alert_email_allows_a_seated_member_without_a_github_check(pool, m
     await set_installation_plan(pool, 743, "flash")
     await add_installation_member(pool, 743, "octocat", "octocat")
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[743])
-    monkeypatch.setattr("app_server.dashboard._has_real_admin_permission", _async_false)
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_false)
 
     async with client:
         response = await client.get("/app/installations/743/alert-email")
@@ -596,7 +678,7 @@ async def test_set_alert_email_denies_a_non_admin_in_the_coarse_installations_se
         pool, 746, "my-org/repo", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
     )
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[746])
-    monkeypatch.setattr("app_server.dashboard._has_real_admin_permission", _async_false)
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_false)
 
     async with client:
         response = await client.post("/app/installations/746/alert-email", json={"alert_email": "attacker@example.com"})
@@ -614,7 +696,7 @@ async def test_billing_portal_denies_a_non_admin_in_the_coarse_installations_set
         pool, 747, "my-org/repo", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
     )
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[747])
-    monkeypatch.setattr("app_server.dashboard._has_real_admin_permission", _async_false)
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_false)
 
     async with client:
         response = await client.get("/app/installations/747/billing-portal")
@@ -708,6 +790,21 @@ async def test_list_my_repos_includes_uninitialized_repos_with_no_scan_yet(pool,
         "app_server.dashboard._github_http_client",
         lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
     )
+    # _is_real_installation_member_or_admin's own real-admin verification
+    # (a genuinely separate GitHub call, via app_server.admin's own
+    # generate_app_jwt/get_installation_token bindings - a `from ...
+    # import` binds a new name per importing module, so the dashboard-side
+    # mocks above don't cover it) is exercised directly in
+    # test_admin.py's own _is_real_installation_member_or_admin tests;
+    # mocked true here so this test stays focused on the uninitialized-
+    # repos feature it's named for. This installation has zero repo_history
+    # (that's the point of this test), so the real-admin check's own
+    # GitHub-fallback lookup (_fetch_any_covered_repo_sync) also needs its
+    # own generate_app_jwt/get_installation_token bindings mocked, same
+    # reason as above.
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
+    monkeypatch.setattr("app_server.admin.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("app_server.admin.get_installation_token", fake_get_installation_token)
 
     app.state.db_pool = pool
     signed = sign_session_id("sess-1", "test-session-secret")
@@ -770,6 +867,12 @@ async def test_list_my_repos_flags_uninitialized_repos_when_monthly_scan_cap_rea
         "app_server.dashboard._github_http_client",
         lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
     )
+    # Same admin-side mocks as the sibling "no scan yet" test above - this
+    # installation also has zero repo_history, so the real-admin check's
+    # own GitHub-fallback lookup needs its own JWT bindings mocked too.
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
+    monkeypatch.setattr("app_server.admin.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("app_server.admin.get_installation_token", fake_get_installation_token)
 
     app.state.db_pool = pool
     signed = sign_session_id("sess-2", "test-session-secret")
@@ -830,6 +933,7 @@ async def test_list_my_repos_does_not_duplicate_already_scanned_repos(pool, monk
         "app_server.dashboard._github_http_client",
         lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
     )
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
 
     app.state.db_pool = pool
     signed = sign_session_id("sess-1", "test-session-secret")
@@ -980,6 +1084,30 @@ async def test_dashboard_rejects_unadministered_installation_with_the_same_404_a
     # the status code alone is a repo-existence oracle for any
     # authenticated user (docs/audits/Claude_Audit.md finding 34).
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[999])
+    async with client:
+        response = await client.get("/app/octocat/hello-world")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_dashboard_returns_404_if_the_installation_row_is_gone(pool, monkeypatch):
+    # Real gap found auditing _require_dashboard_installation (Flash Review
+    # follow-up sweep, 2026-09-28): it only ran the real plan/seat check
+    # inside `if installation is not None:`, then returned success either
+    # way. repo_history's installation_id has an ON DELETE CASCADE FK to
+    # installations, so a completed delete can't leave this exact orphan
+    # behind, but get_installation() racing an in-flight delete (or a
+    # scanned repo whose installation row is otherwise gone) hits the same
+    # branch - and the coarse administered_ids check above it is not, by
+    # itself, enough to trust with this route's data (same reasoning as
+    # every other fix in this PR). Must 404, not silently succeed with no
+    # seat/plan check ever having run.
+    await upsert_installation(pool, 513, "octocat")
+    await insert_repo_history(
+        pool, 513, "octocat/hello-world", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[513])
+    monkeypatch.setattr("app_server.dashboard.get_installation", _async_none)
     async with client:
         response = await client.get("/app/octocat/hello-world")
     assert response.status_code == 404

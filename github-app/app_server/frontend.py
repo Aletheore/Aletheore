@@ -21,7 +21,10 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from app_server.admin import _administered_installation_ids_for_session_or_401
+from app_server.admin import (
+    _administered_installation_ids_for_session_or_401,
+    _verify_installation_ids,
+)
 from app_server.auth import SESSION_COOKIE_NAME, get_current_session, sign_checkout_installation_id
 from app_server.config import get_settings
 from app_server.db import list_installations_for_ids
@@ -4044,10 +4047,18 @@ async def subscribe_page(request: Request, plan: str = "", interval: str = ""):
             return response
         raise
 
-    if not administered_ids:
+    # Real gap closed here (2026-09-27): the coarse set alone let anyone
+    # coarsely qualified for someone else's installation see (and pick, as
+    # a real subscribe target) that installation's account here - confirmed
+    # live against two real accounts, both shown someone else's account as
+    # their own checkout option. Filtered to installations this login is
+    # actually seated on, or has real GitHub admin permission on - same bar
+    # dashboard.py's list_my_repos now applies for the identical reason.
+    verified_ids = await _verify_installation_ids(pool, administered_ids, session["github_login"])
+    if not verified_ids:
         return _no_store_html(_subscribe_install_prompt_page(plan, next_path))
 
-    installations = await list_installations_for_ids(pool, list(administered_ids))
+    installations = await list_installations_for_ids(pool, verified_ids)
     price_id = resolve_price_id_for_plan(plan, interval)
     return _no_store_html(_subscribe_checkout_page(plan, price_id, installations))
 

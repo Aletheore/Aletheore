@@ -13,12 +13,13 @@ from scan_worker.live_wiki import build_file_fallback_detail
 from app_server.admin import (
     _administered_installation_ids_for_session_or_401,
     _github_http_client,
-    _has_real_admin_permission,
+    _is_real_installation_member_or_admin,
     _looks_like_email,
     _monitored_endpoint_keys,
     _repo_installation_id,
     _require_admin_installation,
     _require_seat_if_paid,
+    _verify_installation_ids,
 )
 from app_server.auth import get_current_session, sign_checkout_installation_id
 from app_server.config import get_settings
@@ -45,7 +46,6 @@ from app_server.db import (
     get_wiki_build_status,
     get_wiki_overview,
     get_wiki_subsystem,
-    is_installation_member,
     list_docs_symbols,
     list_installations_for_ids,
     list_repos_for_installations,
@@ -172,7 +172,17 @@ async def list_my_repos(request: Request):
 
     pool = request.app.state.db_pool
     administered_ids = await _administered_installation_ids_for_session_or_401(pool, session)
-    repos = await list_repos_for_installations(pool, list(administered_ids))
+    # Real gap closed here (2026-09-27): the coarse set alone (GitHub's own
+    # definition - read/write/OR admin on any ONE repo the installation
+    # covers, including a single PUBLIC repo, no invitation needed) is not
+    # proof this login should see every OTHER repo the installation also
+    # covers. Confirmed live: two unrelated accounts each saw the founder's
+    # full private repo list here despite no real access to any of them.
+    # Filtered down to installations this login is actually seated on, or
+    # has real per-repo GitHub admin permission on - the same bar every
+    # individual dashboard page already enforces via _require_seat_if_paid.
+    verified_ids = set(await _verify_installation_ids(pool, administered_ids, session["github_login"]))
+    repos = await list_repos_for_installations(pool, list(verified_ids))
     result = []
     known_by_installation: dict[int, set[str]] = {}
     for row in repos:
@@ -210,7 +220,7 @@ async def list_my_repos(request: Request):
     # personal account and Flash on an org), so this is collected alongside the
     # AIR repos, never instead of them.
     billing_accounts = []
-    for installation_id in administered_ids:
+    for installation_id in verified_ids:
         installation = await get_installation(pool, installation_id)
         if installation is not None and installation["plan"] == "flash":
             billing_accounts.append(
@@ -239,15 +249,19 @@ async def list_my_repos(request: Request):
 
 
 async def _require_paid_installation_or_404(request: Request, installation_id: int) -> dict:
-    """Session + "administers this installation" only - deliberately not the
-    AIR-only admin.py gate. A Flash installation has no managed dashboard, so
-    the handful of /app/installations/{id}/... routes built on this are the
-    only place its owner can reach these low-risk, installation-scoped
-    preferences (credit balance/top-up, alert email, review history) - none
-    of them expose or move anything beyond this one installation's own data.
-    Free (or lapsed) installations get the same 404 as an installation the
-    caller doesn't administer, so the response never reveals which
-    installations exist.
+    """Session + "administers this installation" (Flash or AIR, not free)
+    only - deliberately not the AIR-only admin.py gate, since a Flash
+    installation has no managed dashboard but its owner still needs
+    somewhere to reach credit balance/top-up, alert email, and review
+    history. Free (or lapsed) installations get the same 404 as an
+    installation the caller doesn't administer, so the response never
+    reveals which installations exist.
+
+    Coarse-only, by itself: only a real building block for
+    `_require_installation_admin_permission_or_404`, which every actual
+    route now goes through (2026-09-27) - this alone is not enough to
+    trust with anything sensitive, see that function's own docstring for
+    why.
     """
     session = await get_current_session(request)
     if session is None:
@@ -265,8 +279,15 @@ async def _require_paid_installation_or_404(request: Request, installation_id: i
 
 @dashboard_router.get("/app/installations/{installation_id}/credits")
 async def get_credits(installation_id: int, request: Request):
-    """Credit balance and top-up checkout data for one paid installation."""
-    installation = await _require_paid_installation_or_404(request, installation_id)
+    """Credit balance and top-up checkout data for one paid installation.
+
+    Real gap closed here (2026-09-27): this returned real Paddle billing
+    data (balance, subscription id, renewal date, customer id) to anyone
+    in the coarse administered-installations set - upgraded to the same
+    real-membership-or-admin bar _require_installation_admin_permission_or_404
+    already applies to the alert-email and billing-portal routes.
+    """
+    installation = await _require_installation_admin_permission_or_404(request, installation_id)
     pool = request.app.state.db_pool
 
     subscription_renews_at = None
@@ -311,13 +332,19 @@ async def get_credits(installation_id: int, request: Request):
     if session is not None:
         try:
             administered_ids = await _administered_installation_ids_for_session_or_401(pool, session)
+            # Same real gap, same fix: the raw coarse set must not be
+            # listed here either, only installations this login is
+            # actually seated on or has real GitHub admin rights on.
+            verified_sibling_ids = await _verify_installation_ids(
+                pool, administered_ids, session["github_login"]
+            )
             sibling_installations = [
                 {
                     "installation_id": row["installation_id"],
                     "account_login": row["account_login"],
                     "plan": row["plan"],
                 }
-                for row in await list_installations_for_ids(pool, list(administered_ids))
+                for row in await list_installations_for_ids(pool, verified_sibling_ids)
             ]
         except HTTPException:
             sibling_installations = []
@@ -371,12 +398,7 @@ async def _require_installation_admin_permission_or_404(request: Request, instal
     installation = await _require_paid_installation_or_404(request, installation_id)
     session = await get_current_session(request)
     pool = request.app.state.db_pool
-    if await is_installation_member(pool, installation_id, session["github_login"]):
-        return installation
-    repos = await list_repos_for_installations(pool, [installation_id])
-    if not repos or not await _has_real_admin_permission(
-        installation_id, session["github_login"], repos[0]["repo_full_name"]
-    ):
+    if not await _is_real_installation_member_or_admin(pool, installation_id, session["github_login"]):
         raise HTTPException(
             status_code=403, detail="you do not have admin access to this installation on GitHub"
         )
@@ -453,7 +475,9 @@ async def get_installation_billing_portal_url(installation_id: int, request: Req
 
 @dashboard_router.get("/app/installations/{installation_id}/review-history")
 async def get_installation_review_history(installation_id: int, request: Request):
-    await _require_paid_installation_or_404(request, installation_id)
+    # Real gap closed here (2026-09-27): repo names, PR numbers, and finding
+    # counts to anyone in the coarse set - same upgrade as get_credits above.
+    await _require_installation_admin_permission_or_404(request, installation_id)
     pool = request.app.state.db_pool
     rows = await get_review_history(pool, installation_id)
     return {
@@ -493,11 +517,21 @@ async def _require_dashboard_installation(request: Request, org: str, repo: str)
         raise HTTPException(status_code=404, detail="no such repo")
 
     installation = await get_installation(pool, installation_id)
-    if installation is not None:
-        # AIR-exclusive - no managed dashboard for flash either.
-        if installation["plan"] != "air":
-            raise HTTPException(status_code=402, detail="the managed dashboard requires the AIR plan")
-        await _require_seat_if_paid(pool, installation, session["github_login"], f"{org}/{repo}")
+    # Real gap found auditing this route (2026-09-28): the plan/seat check
+    # below only ran `if installation is not None:`, then returned success
+    # either way - so an installation_id resolved from repo_history but
+    # missing from the installations table (a delete racing this request;
+    # repo_history's own FK is ON DELETE CASCADE, so a completed delete
+    # can't leave this behind, but the two aren't in the same query) skipped
+    # every real check and succeeded on the coarse administered_ids
+    # membership alone - the exact class of gap this whole file was already
+    # fixed for everywhere else.
+    if installation is None:
+        raise HTTPException(status_code=404, detail="no such repo")
+    # AIR-exclusive - no managed dashboard for flash either.
+    if installation["plan"] != "air":
+        raise HTTPException(status_code=402, detail="the managed dashboard requires the AIR plan")
+    await _require_seat_if_paid(pool, installation, session["github_login"], f"{org}/{repo}")
 
     return session, installation_id
 
