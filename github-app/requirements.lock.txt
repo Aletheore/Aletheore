@@ -591,9 +591,9 @@ opentelemetry-api==1.25.0 \
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
     #   semgrep
-opentelemetry-exporter-otlp-proto-common==1.25.0 \
-    --hash=sha256:15637b7d580c2675f70246563363775b4e6de947871e01d0f4e3881d1848d693 \
-    --hash=sha256:c93f4e30da4eee02bacd1e004eb82ce4da143a2f8e15b987a9f603e0a85407d3
+opentelemetry-exporter-otlp-proto-common==1.44.0 \
+    --hash=sha256:9a9fe61bba73d802904bc989f1d6b4a7b1ee40f06c40e98d6f85af65aaebb694 \
+    --hash=sha256:dc87a5a5bc58f149a56d1547e4691588fa12994cdc3bc039a694ccb3375862ac
     # via opentelemetry-exporter-otlp-proto-http
 opentelemetry-exporter-otlp-proto-http==1.25.0 \
     --hash=sha256:2eca686ee11b27acd28198b3ea5e5863a53d1266b91cda47c839d95d5e0541a6 \
