@@ -1,7 +1,11 @@
 import json
 from unittest.mock import MagicMock, patch
 
-from aletheore.static_analysis.bandit_scanner import _relative_path, check_bandit
+from aletheore.static_analysis.bandit_scanner import (
+    _relative_path,
+    _sql_injection_is_plausible,
+    check_bandit,
+)
 
 
 def _mock_run(returncode: int, stdout: str = "", stderr: str = "") -> MagicMock:
@@ -138,3 +142,135 @@ def test_check_bandit_filters_known_noisy_rules(tmp_path):
 
     assert len(result["findings"]) == 1
     assert result["findings"][0]["rule_id"] == "B602"
+
+
+# Real false positive found live on PR #858 (Aletheore/Aletheore): Bandit's
+# own B608 check flagged github-app/app_server/frontend.py's WIKI_HTML - a
+# huge f-string building the AIRview page's HTML/JS, with zero SQL or
+# database calls anywhere in that module - as "Possible SQL injection
+# vector through string-based query construction." Root cause confirmed by
+# running the real `bandit` binary against that file directly and tracing
+# its own SIMPLE_SQL_RE (bandit/plugins/injection_sql.py): it pairs
+# "update\s" with a later "set\s" using an UNBOUNDED `.*` under re.DOTALL,
+# so it bridges thousands of characters of unrelated JS/HTML between them.
+# The real match: the word "update" in a code comment ("a later
+# incremental update broke, not the first build"), paired ~5,700
+# characters later with the trailing whitespace after the JS identifier
+# "nodeSet" (`const nodeSet = ...`) - "Set " satisfies `set\s`
+# case-insensitively. This fixture reproduces that exact shape (confirmed
+# against the real bandit binary to still trigger B608 unfiltered, before
+# _sql_injection_is_plausible's extra check is applied) at a much smaller
+# scale: a JS/HTML f-string with "update" and a "...Set " identifier
+# separated by enough filler comment lines to exceed the 300-character
+# bound _SQL_KEYWORD_PAIR_RE now requires between a keyword pair.
+_WIKI_LIKE_FALSE_POSITIVE_SOURCE = (
+    'FETCH_HELPERS = "x"\n'
+    "\n"
+    "\n"
+    "def build(repo):\n"
+    '    return "<div>" + f"""\n'
+    "<script>\n"
+    "{FETCH_HELPERS}\n"
+    "// a later incremental update broke, not the first build\n"
+    + "".join(
+        f"// filler comment line {i} just to add distance between the two words\n"
+        for i in range(40)
+    )
+    + "const nodeSet = new Set();\n"
+    "</script>\n"
+    '"""\n'
+)
+
+
+def test_sql_injection_is_plausible_rejects_html_js_fstring_with_distant_keywords():
+    # The flagged JoinedStr starts at line 5 (the `f"""` line) - matches
+    # what a real bandit run reports for this exact fixture.
+    assert _sql_injection_is_plausible(_WIKI_LIKE_FALSE_POSITIVE_SOURCE, 5) is False
+
+
+def test_sql_injection_is_plausible_accepts_percent_format_query_string():
+    source = (
+        "def get_user(cursor, user_id):\n"
+        "    query = \"SELECT * FROM users WHERE id = '%s'\" % user_id\n"
+        "    cursor.execute(query)\n"
+    )
+    assert _sql_injection_is_plausible(source, 2) is True
+
+
+def test_sql_injection_is_plausible_accepts_concatenated_query_string():
+    source = (
+        "def get_user(cursor, table, user_id):\n"
+        '    query = "SELECT * FROM " + table + " WHERE id = " + user_id\n'
+        "    cursor.execute(query)\n"
+    )
+    assert _sql_injection_is_plausible(source, 2) is True
+
+
+def test_sql_injection_is_plausible_accepts_format_call_query_string():
+    source = (
+        "def get_user(cursor, user_id):\n"
+        "    cursor.execute(\"SELECT * FROM users WHERE id = {}\".format(user_id))\n"
+    )
+    assert _sql_injection_is_plausible(source, 2) is True
+
+
+def test_sql_injection_is_plausible_accepts_fstring_with_no_literal_keywords_when_executed():
+    # No literal SQL keyword pair sits in the string's own text at all (the
+    # whole "FROM users" clause is split around the interpolation), so this
+    # only qualifies via the direct cursor.execute(...) wrapping - the "or
+    # being passed to a known DB-execute call" half of the fix.
+    source = (
+        "def get_user(cursor, table, user_id):\n"
+        '    return cursor.execute(f"SELECT * FROM {table} WHERE id = {user_id}")\n'
+    )
+    assert _sql_injection_is_plausible(source, 2) is True
+
+
+def test_check_bandit_drops_b608_false_positive_shaped_like_wiki_html(tmp_path):
+    (tmp_path / "frontend.py").write_text(_WIKI_LIKE_FALSE_POSITIVE_SOURCE)
+    payload = {
+        "results": [
+            {
+                "filename": "./frontend.py",
+                "issue_severity": "MEDIUM",
+                "issue_text": "Possible SQL injection vector through string-based query construction.",
+                "line_number": 5,
+                "test_id": "B608",
+            },
+        ]
+    }
+    mock_result = _mock_run(1, stdout=json.dumps(payload))
+
+    with patch("aletheore.static_analysis.bandit_scanner.shutil.which", return_value="/usr/bin/bandit"), \
+         patch("aletheore.static_analysis.bandit_scanner.subprocess.run", return_value=mock_result):
+        result = check_bandit(tmp_path)
+
+    assert result["findings"] == []
+
+
+def test_check_bandit_keeps_a_real_b608_true_positive(tmp_path):
+    (tmp_path / "vuln.py").write_text(
+        "def get_user(cursor, user_id):\n"
+        "    query = \"SELECT * FROM users WHERE id = '%s'\" % user_id\n"
+        "    cursor.execute(query)\n"
+    )
+    payload = {
+        "results": [
+            {
+                "filename": "./vuln.py",
+                "issue_severity": "MEDIUM",
+                "issue_text": "Possible SQL injection vector through string-based query construction.",
+                "line_number": 2,
+                "test_id": "B608",
+            },
+        ]
+    }
+    mock_result = _mock_run(1, stdout=json.dumps(payload))
+
+    with patch("aletheore.static_analysis.bandit_scanner.shutil.which", return_value="/usr/bin/bandit"), \
+         patch("aletheore.static_analysis.bandit_scanner.subprocess.run", return_value=mock_result):
+        result = check_bandit(tmp_path)
+
+    assert len(result["findings"]) == 1
+    assert result["findings"][0]["rule_id"] == "B608"
+    assert result["findings"][0]["line"] == 2
