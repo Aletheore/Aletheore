@@ -4,8 +4,38 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-09-28
-**Snapshot Freshness:** CURRENT as of 2026-09-28 (second deploy) - production was redeployed to
+**Last Updated:** 2026-09-29
+**Snapshot Freshness:** CURRENT as of 2026-09-29 - production was redeployed to `master` (commit
+`8288446`, tagged `github-app-deploy-2026-09-29`) and re-verified live via SSH the same session. 1
+commit since the previous deploy tag (`github-app-deploy-2026-09-28-2`): #859, a real fix to
+Aletheore's own hosted Deterministic Scan (Bandit's B608 SQL-injection rule) - its SQL-shape regex
+paired an `update` keyword with a `set` keyword using an unbounded `.*` under `re.DOTALL`, so it
+matched across arbitrary distance in a file; reproduced live against the real `bandit` binary,
+where it paired the word "update" in a code comment with the JS identifier `nodeSet` roughly 5,700
+characters later in `frontend.py`'s `WIKI_HTML` - a large f-string with no SQL involved anywhere in
+that module, and the exact false positive that had been repeatedly flagging PR #858. Fix: a new
+`_sql_injection_is_plausible()` AST re-check on B608 findings only, requiring a SQL-shaped keyword
+pair within 300 characters or the string being passed directly to a real `execute()`/`executemany()`
+call; fails open (keeps the finding) on anything it can't parse or recognize, so it never silently
+hides a real vulnerability of a shape it wasn't built to catch. Independently re-verified before
+merging, not just trusted: read the actual new function and its regex, confirmed the bounded
+`.{0,300}?` replaced the unbounded original, confirmed it's wired into `check_bandit`'s filtering,
+and confirmed the two Deterministic-Scan findings still showing on this PR's own diff
+(`bandit_scanner.py`'s pre-existing `import subprocess` and `subprocess.run(cmd, ...)` call to
+invoke the real `bandit` binary) are untouched-by-this-diff code, the same "whole file gets
+rescanned" pattern already seen elsewhere, not new issues. One CI failure
+(`pytest-macos (3.12)`, unrelated `test_aletheore_search_regex_mode`) confirmed flaky, not caused by
+this change - the sibling `pytest-macos (3.14)` job in the same run passed, and the retry passed
+clean. No migrations. All five app-relevant services rebuilt and force-recreated (`app-server`,
+`scan-worker`, `scan-worker-2`, `health-worker`, `scheduler` - the only file changed,
+`src/aletheore/static_analysis/bandit_scanner.py`, is pip-installed by all five); confirmed healthy
+via `docker compose ps` (`Up`, `healthy` within ~13s of recreation), zero errors in logs in the 30s
+since restart, `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`, and
+the fix confirmed present in the *running* `scan-worker` container's actual source via
+`inspect.getsource(aletheore.static_analysis.bandit_scanner)` - not re-read from the repo:
+`_sql_injection_is_plausible` present, the bounded `{0,300}` regex present, wired into `check_bandit`.
+
+**Previous:** CURRENT as of 2026-09-28 (second deploy) - production was redeployed to
 `master` (commit `e159e6b`, tagged `github-app-deploy-2026-09-28-2`) and re-verified live via SSH
 the same session. 3 commits since the previous deploy tag (`github-app-deploy-2026-09-28`): #871
 (a real thread-join race in `test_postgres_graph_store.py` that could leak a straggler thread's DB
