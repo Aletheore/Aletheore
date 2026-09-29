@@ -200,6 +200,9 @@
     "Kulisiewicz",
     "fchmod",
     "unparseable",
-    "lancedb"
+    "lancedb",
+    "DOTALL",
+    "executemany",
+    "rescanned"
   ]
 }
