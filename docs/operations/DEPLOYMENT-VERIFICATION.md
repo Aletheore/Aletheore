@@ -4,8 +4,38 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-09-29
-**Snapshot Freshness:** CURRENT as of 2026-09-29 - production was redeployed to `master` (commit
+**Last Updated:** 2026-09-30
+**Snapshot Freshness:** CURRENT as of 2026-09-30 - production was redeployed to `master` (commit
+`9be2a34`, tagged `github-app-deploy-2026-09-30`) and re-verified live via SSH the same session. 4
+commits since the previous deploy tag (`github-app-deploy-2026-09-29`): #874 (fixes a self-
+referenced delegate in a C# file being counted against its own type-reference edge cap, crowding
+out real cross-file edges - the same bug independently found in two different code shapes,
+`src/aletheore/scanner/graph.py`), #878 and #879 (identical fix in two places -
+`search_index._is_test_path` and `dead_code.py`'s own test-path check - both missed PHP/Swift/Scala
+co-located test-file naming, e.g. `BarTest.php`, `BarTests.swift`, having only ever been extended
+for the JVM shape), and #877 (AIRview now synthesizes a dedicated "Tests" subsystem instead of just
+ranking-demoting individual test files 0.15x, so "how is this codebase tested" questions have a
+subsystem-shaped answer to retrieve - closes the one real, measured quality gap found via a
+36-question blind benchmark against RepoWise; live-verified for real after merge, not just
+unit-tested: Testing-category delta flipped from -1.778 to +1.222 on Flask, and a second,
+internal old-vs-new check on automapper (C#, 82% test files) showed +1.111, confirming the fix
+generalizes across languages, not just architecturally but empirically - see
+`~/.aletheore-bench/airview-tests-subsystem-verification-2026-09-30/` for the full writeup). No
+migrations; the only lockfile change was an already-merged, unrelated pyjwt bump
+(2.14.0 -> 2.15.0, #862). All five app-relevant services (`app-server`, `scan-worker`, `scan-worker-2`,
+`health-worker`, `scheduler`) rebuilt and force-recreated - `src/aletheore` changed (pip-installed
+by all five) and `scan_worker/live_wiki.py` changed directly (#877); `jina-embed` untouched (no
+lockfile change of its own). All five `Up`, all five reporting Docker-healthcheck `healthy` within
+~34 seconds of recreation. Zero errors, tracebacks, or exceptions in any of the five services' logs
+in the 60 seconds since restart. `/healthz` returns `200 {"status":"ok","checks":{"database":"ok",
+"redis":"ok"}}`. All four fixes confirmed present in the *running* `scan-worker` container's actual
+source, not re-read from the repo: `live_wiki.TESTS_SUBSYSTEM_ID == -1`,
+`live_wiki.TESTS_SUBSYSTEM_NAME == "Tests"`, and `_build_tests_subsystem_brief` importable (#877);
+`search_index._COLOCATED_TEST_SUFFIX_RE.pattern` includes `php|swift|scala` (#878); `dead_code.py`'s
+source contains the same `php|swift|scala` pattern (#879); `graph.py`'s source shows
+`own_type_names = set(_csharp_declared_type_names(...))` (#874).
+
+**Previous:** CURRENT as of 2026-09-29 - production was redeployed to `master` (commit
 `8288446`, tagged `github-app-deploy-2026-09-29`) and re-verified live via SSH the same session. 1
 commit since the previous deploy tag (`github-app-deploy-2026-09-28-2`): #859, a real fix to
 Aletheore's own hosted Deterministic Scan (Bandit's B608 SQL-injection rule) - its SQL-shape regex
