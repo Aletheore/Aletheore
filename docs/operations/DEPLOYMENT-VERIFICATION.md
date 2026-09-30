@@ -4,10 +4,35 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-09-30
-**Snapshot Freshness:** CURRENT as of 2026-09-30 - production was redeployed to `master` (commit
-`9be2a34`, tagged `github-app-deploy-2026-09-30`) and re-verified live via SSH the same session. 4
-commits since the previous deploy tag (`github-app-deploy-2026-09-29`): #874 (fixes a self-
+**Last Updated:** 2026-09-30 (second deploy)
+**Snapshot Freshness:** CURRENT as of 2026-09-30 (second deploy) - production was redeployed to
+`master` (commit `f11d1bbe`, tagged `github-app-deploy-2026-09-30-2`) and re-verified live via SSH
+the same session. 1 commit since the previous deploy tag (`github-app-deploy-2026-09-30`): #881, a
+Mermaid dependency-graph diagram (changed files -> their direct dependents, GitHub-native
+rendering, no image generation or hosting needed) added to the PR evidence-diff comment, right
+before the existing text "What changed" file overview - the diagram gives the shape, the text
+gives the exact detail. Built entirely from data already computed today
+(`blast_radius_summary.compute_blast_radius`'s already-deterministic direct-dependent data, the
+diff's already-computed `static_analysis["new"]` to mark a changed file with a new finding
+distinctly) - no new computation or failure mode, fails open like the file-overview section it
+sits alongside. One real Flash Review finding on the PR itself, fixed before merge: a bare
+basename (e.g. `utils.py`) couldn't distinguish `src/utils.py` from `tests/utils.py`, so colliding
+nodes would render identically-labeled with no way to tell them apart - fixed to fall back to the
+full path only for paths whose basename collides with another node in the same diagram, verified
+via a new RED-then-GREEN test reproducing the exact collision. No migrations; no lockfile changes.
+All five app-relevant services (`app-server`, `scan-worker`, `scan-worker-2`, `health-worker`,
+`scheduler`) rebuilt and force-recreated - `src/aletheore` and `scan_worker/jobs.py` both changed;
+`jina-embed` untouched (no lockfile change of its own). All five `Up`, all five reporting
+Docker-healthcheck `healthy` within ~25 seconds of recreation. Zero errors, tracebacks, or
+exceptions in any of the five services' logs in the 30 seconds since restart. `/healthz` returns
+`200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`. The fix (including the basename-
+collision disambiguation) confirmed present in the *running* `scan-worker` container's actual
+source, not re-read from the repo: `blast_radius_summary.build_change_diagram` importable, its
+source contains `basename_counts` (the collision-disambiguation fix) and the Mermaid fence marker.
+
+**Previous:** CURRENT as of 2026-09-30 (first deploy) - production was redeployed to `master`
+(commit `9be2a34`, tagged `github-app-deploy-2026-09-30`) and re-verified live via SSH the same
+session. 4 commits since the previous deploy tag (`github-app-deploy-2026-09-29`): #874 (fixes a self-
 referenced delegate in a C# file being counted against its own type-reference edge cap, crowding
 out real cross-file edges - the same bug independently found in two different code shapes,
 `src/aletheore/scanner/graph.py`), #878 and #879 (identical fix in two places -
