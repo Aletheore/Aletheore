@@ -5,6 +5,7 @@ from aletheore.dead_code import (
     _raw_external_import_roots,
     _ruby_content_derived_constant,
     find_dead_code,
+    is_test_file,
 )
 
 
@@ -529,6 +530,22 @@ def test_kotlin_package_reachability_does_not_leak_from_a_test_file(tmp_path):
     result = find_dead_code(tmp_path, modules, config=None)
     paths = [m["path"] for m in result["unreachable_modules"]]
     assert "prod/Orphan.kt" in paths
+
+
+def test_is_test_file_excludes_colocated_test_suffix_beyond_jvm():
+    # Real gap found via audit: search_index._is_test_path had the
+    # identical scope limitation (kt/kts/java only for the co-located
+    # "ClassNameTest(s).<ext>" convention) and was already fixed there -
+    # this module's own, independently-implemented TEST_PATH_PATTERNS
+    # never got the same fix, so a PHP or Swift test file invoked only via
+    # its test runner (never a plain import) would be flagged as dead code.
+    assert is_test_file("src/Foo/BarTest.php")
+    assert is_test_file("src/Foo/BarTests.swift")
+    assert is_test_file("src/Foo/BarTest.scala")
+    # Ordinary words merely ending in "Test(s)" must still survive, same
+    # false-positive class the JVM pattern already guards against.
+    assert not is_test_file("src/Foo/Contest.php")
+    assert not is_test_file("src/Foo/Attestation.swift")
 
 
 def test_main_swift_is_never_unreachable(tmp_path):

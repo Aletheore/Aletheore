@@ -68,12 +68,16 @@ TEST_PATH_PATTERNS = [
     # where the previous case-sensitive version missed every single test
     # file, flagging them all as dead code.
     re.compile(r"(^|/)(tests?|__tests__)/", re.IGNORECASE),
-    # JVM (Java/Kotlin) PascalCase suffix convention - e.g. TaskDaoTest.kt,
-    # StatisticsScreenTest.kt. Confirmed against a real repo
-    # (android/architecture-samples): without this, every androidTest file
-    # flagged as dead code purely because JUnit/instrumentation invokes them
-    # by reflection, never a plain import.
-    re.compile(r"(^|/)[^/]+Test\.(kt|kts|java)$"),
+    # PascalCase co-located test-suffix convention - e.g. TaskDaoTest.kt,
+    # StatisticsScreenTest.kt, BarTest.php, BarTests.swift. The JVM shape
+    # confirmed against a real repo (android/architecture-samples): without
+    # this, every androidTest file flagged as dead code purely because
+    # JUnit/instrumentation invokes them by reflection, never a plain
+    # import. Originally scoped to kt/kts/java only; PHP (PHPUnit) and
+    # Swift (XCTest) use the identical convention and were never added -
+    # search_index._is_test_path had the same gap, already fixed there.
+    # "Tests?" (not just "Test") to cover Swift's common pluralized form.
+    re.compile(r"(^|/)[^/]+Tests?\.(kt|kts|java|php|swift|scala)$"),
     # Gradle's androidTest/test source-set convention - doesn't require the
     # PascalCase suffix above (e.g. a test helper/fixture file), and
     # "androidTest" isn't matched by the tests?/__tests__ pattern above
