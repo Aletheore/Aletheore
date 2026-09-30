@@ -21,8 +21,8 @@ unit-tested: Testing-category delta flipped from -1.778 to +1.222 on Flask, and 
 internal old-vs-new check on automapper (C#, 82% test files) showed +1.111, confirming the fix
 generalizes across languages, not just architecturally but empirically - see
 `~/.aletheore-bench/airview-tests-subsystem-verification-2026-09-30/` for the full writeup). No
-migrations; the only lockfile change was an already-merged, unrelated pyjwt bump (2.14.0 -> 2.15.0,
-#862). All five app-relevant services (`app-server`, `scan-worker`, `scan-worker-2`,
+migrations; the only lockfile change was an already-merged, unrelated pyjwt bump
+(2.14.0 -> 2.15.0, #862). All five app-relevant services (`app-server`, `scan-worker`, `scan-worker-2`,
 `health-worker`, `scheduler`) rebuilt and force-recreated - `src/aletheore` changed (pip-installed
 by all five) and `scan_worker/live_wiki.py` changed directly (#877); `jina-embed` untouched (no
 lockfile change of its own). All five `Up`, all five reporting Docker-healthcheck `healthy` within
