@@ -951,6 +951,41 @@ def affected_cluster_ids(evidence: dict, changed_files: list[str]) -> set[int]:
     }
 
 
+TESTS_SUBSYSTEM_ID = -1
+TESTS_SUBSYSTEM_NAME = "Tests"
+
+
+def _build_tests_subsystem_brief(evidence: dict) -> dict | None:
+    """A synthetic brief covering every test file, so "how is this codebase
+    tested" questions have a subsystem-shaped answer to retrieve.
+
+    Real clusters never contain test files - build_clusters excludes them
+    before community detection even runs (src/aletheore/architecture.py) -
+    so without this, no subsystem anywhere describes test organization.
+
+    Uses _is_test_path (search_index.py), not this file's own
+    is_demoted_path: is_demoted_path's segment matching misses .NET-style
+    test directories (UnitTests/, IntegrationTests/), confirmed on real
+    AutoMapper paths - _is_test_path already handles that correctly.
+    """
+    from aletheore.search_index import _is_test_path
+    from aletheore.wiki_mapping import _key_symbols
+
+    modules_by_path = {m["path"]: m for m in evidence.get("repository", {}).get("modules", [])}
+    test_paths = [p for p in modules_by_path if _is_test_path(p)]
+    if not test_paths:
+        return None
+    files = [
+        {
+            "path": path,
+            "language": modules_by_path[path].get("language"),
+            "key_symbols": _key_symbols(modules_by_path[path]),
+        }
+        for path in test_paths
+    ]
+    return {"cluster_id": TESTS_SUBSYSTEM_ID, "files": files, "fallback_name": TESTS_SUBSYSTEM_NAME}
+
+
 def _drop_test_only_briefs(briefs: list[dict]) -> list[dict]:
     """Removes clusters whose every file is a test, example or doc.
 
@@ -1044,11 +1079,24 @@ def generate_subsystems(
     if cluster_ids is not None:
         briefs = [b for b in briefs if b["cluster_id"] in cluster_ids]
     briefs = _drop_test_only_briefs(briefs)
-    if not briefs:
+
+    tests_brief = None
+    if cluster_ids is None or TESTS_SUBSYSTEM_ID in cluster_ids:
+        tests_brief = _build_tests_subsystem_brief(evidence)
+
+    if not briefs and tests_brief is None:
         return []
 
     names = propose_cluster_names(briefs, naming_adapter)
     clusters_by_id = {c["id"]: c for c in evidence.get("architecture", {}).get("clusters", [])}
+
+    if tests_brief is not None:
+        names[TESTS_SUBSYSTEM_ID] = TESTS_SUBSYSTEM_NAME
+        clusters_by_id[TESTS_SUBSYSTEM_ID] = {
+            "id": TESTS_SUBSYSTEM_ID,
+            "modules": [f["path"] for f in tests_brief["files"]],
+        }
+        briefs = briefs + [tests_brief]
 
     # Cache lookups are cheap and per-cluster, so they run first, before any
     # decision about whether the remaining clusters get one call each or

@@ -1459,6 +1459,73 @@ def test_generate_subsystems_keeps_a_mixed_cluster():
     assert _drop_test_only_briefs(briefs) == briefs
 
 
+def test_generate_subsystems_adds_a_tests_subsystem_when_test_files_exist():
+    # Real clusters never contain test files - build_clusters excludes them
+    # before community detection even runs - so without a dedicated synthetic
+    # subsystem, no page anywhere describes how the repo is tested.
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "auth/login.py", "language": "python", "imports": [],
+                    "symbols": {"functions": [{"name": "do_login", "start_line": 10, "end_line": 20}], "classes": []},
+                },
+                {
+                    "path": "tests/test_login.py", "language": "python", "imports": [],
+                    "symbols": {"functions": [{"name": "test_do_login", "start_line": 1, "end_line": 5}], "classes": []},
+                },
+            ],
+            "dependency_graph": {"nodes": [], "edges": []},
+        },
+        "architecture": {"clusters": [{"id": 0, "modules": ["auth/login.py"], "internal_edges": 0}]},
+    }
+    naming_adapter = _adapter(json.dumps({"0": "Authentication"}))
+    writing_adapter = _adapter(json.dumps({"description": "Handles things.", "files": []}))
+
+    records = generate_subsystems(evidence, naming_adapter, writing_adapter)
+
+    by_name = {r["name"]: r for r in records}
+    assert "Tests" in by_name
+    assert [f["path"] for f in by_name["Tests"]["files"]] == ["tests/test_login.py"]
+    assert "Authentication" in by_name
+
+
+def test_generate_subsystems_omits_tests_subsystem_when_no_test_files_exist():
+    evidence = make_evidence()
+    naming_adapter = _adapter(json.dumps({"0": "Authentication"}))
+    writing_adapter = _adapter(json.dumps({"description": "Auth stuff.", "files": []}))
+
+    records = generate_subsystems(evidence, naming_adapter, writing_adapter)
+
+    assert "Tests" not in {r["name"] for r in records}
+
+
+def test_generate_subsystems_tests_only_repo_does_not_call_naming_adapter():
+    # propose_cluster_names short-circuits on an empty brief list without
+    # calling the adapter - the Tests subsystem is named directly, so an
+    # all-test repo should never spend a naming call at all.
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "tests/test_a.py", "language": "python", "imports": [],
+                    "symbols": {"functions": [], "classes": []},
+                },
+            ],
+            "dependency_graph": {"nodes": [], "edges": []},
+        },
+        "architecture": {"clusters": []},
+    }
+    naming_adapter = MagicMock()
+    writing_adapter = _adapter(json.dumps({"description": "Tests everything.", "files": []}))
+
+    records = generate_subsystems(evidence, naming_adapter, writing_adapter)
+
+    assert len(records) == 1
+    assert records[0]["name"] == "Tests"
+    naming_adapter.simple_completion.assert_not_called()
+
+
 def test_file_page_salvages_verified_prose_instead_of_discarding_the_page():
     """Dropping a page over one bad citation threw away correct, verified prose:
     on Flask that lost debughelpers.py - 7 functions, 4 classes - entirely.
