@@ -4,6 +4,9 @@ Which files elsewhere in the repo import the files a PR changes, taken straight 
 evidence's import graph (aletheore.query.find_blast_radius). No model is involved and nothing is
 guessed: the caller only passes evidence scanned at the PR's own head commit, and this returns ""
 when there is no such evidence or none of the changed files is a module the scan knows about.
+
+Demo-only comment: exercising the new Mermaid change diagram (#881) end to
+end on a real PR against this same repo.
 """
 import logging
 from pathlib import Path

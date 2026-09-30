@@ -1,4 +1,8 @@
-"""Format Aletheore diff results as pull request comment bodies."""
+"""Format Aletheore diff results as pull request comment bodies.
+
+Demo-only comment: exercising the new Mermaid change diagram (#881) end to
+end on a real PR against this same repo.
+"""
 
 import re
 
