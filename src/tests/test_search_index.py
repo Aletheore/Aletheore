@@ -2644,6 +2644,22 @@ def test_is_test_path_does_not_exclude_ordinary_words_ending_in_tests():
     assert _is_test_path("src/IntegrationTests/Foo.java")
 
 
+def test_is_test_path_excludes_colocated_test_suffix_beyond_jvm():
+    # Real gap found while extending this same convention to file-page
+    # ranking (wiki_mapping.is_demoted_path): the co-located suffix check
+    # was scoped to kt/kts/java only, so PHP (PHPUnit) and Swift (XCTest)
+    # test files using the identical "ClassNameTest(s).<ext>" convention -
+    # confirmed empirically, not assumed - were never excluded, the same
+    # false-negative class the JVM fix above exists for.
+    assert _is_test_path("src/Foo/BarTest.php")
+    assert _is_test_path("src/Foo/BarTests.swift")
+    assert _is_test_path("src/Foo/BarTest.scala")
+    # Ordinary words merely ending in "Test(s)" must still survive, same
+    # false-positive class the JVM fix already guards against.
+    assert not _is_test_path("src/Foo/Contest.php")
+    assert not _is_test_path("src/Foo/Attestation.swift")
+
+
 def test_is_test_path_excludes_jvm_colocated_test_suffix():
     # Real bug found via audit: dead_code.py already excludes this exact
     # shape (its own TEST_PATH_PATTERNS, citing android/architecture-
