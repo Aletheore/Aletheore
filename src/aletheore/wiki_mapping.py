@@ -85,8 +85,22 @@ def is_demoted_path(path: str) -> bool:
 
     Public because the wiki generator needs the same judgement to decide which
     clusters are worth an LLM call, and both must agree on what "demoted" means.
+
+    Test detection delegates to search_index._is_test_path rather than
+    duplicating it: this function's own _DEMOTED_SEGMENTS only matches a
+    literal lowercase "tests/" segment, which misses .NET-style test
+    project naming ("UnitTests/", "AutoMapper.DI.Tests/") - confirmed live
+    on AutoMapper, where those files ranked in the top 10 of file-page
+    selection, undemoted. _is_test_path already handles this correctly
+    (including the dotnet-suffix case) for the identical reason it exists
+    for retrieval and clustering - single source of truth, not a second
+    independent implementation.
     """
+    from aletheore.search_index import _is_test_path
+
     normalized = path.replace(os.sep, "/")
+    if _is_test_path(normalized):
+        return True
     if os.path.basename(normalized) in _DEMOTED_BASENAMES:
         return True
     return any(seg in f"/{normalized}" for seg in (f"/{s}" for s in _DEMOTED_SEGMENTS))

@@ -1,6 +1,7 @@
 from aletheore.wiki_mapping import (
     MAX_SYMBOLS_PER_FILE,
     build_cluster_briefs,
+    is_demoted_path,
     rank_files_by_importance,
 )
 
@@ -165,3 +166,32 @@ def test_rank_files_by_importance_lifts_public_api_over_internal_utilities():
     assert order.index("pkg/api.py") < order.index("pkg/compat.py")
     assert next(r for r in ranked if r["path"] == "pkg/api.py")["public_api"] is True
     assert next(r for r in ranked if r["path"] == "pkg/compat.py")["public_api"] is False
+
+
+def test_is_demoted_path_excludes_dotnet_test_project_conventions():
+    # Real gap found live: AutoMapper's own test projects are named after
+    # the assembly they cover ("UnitTests", "IntegrationTests",
+    # "AutoMapper.DI.Tests") - none of which contains the literal segment
+    # "tests/" this function's own _DEMOTED_SEGMENTS list matches on, so
+    # file-page ranking never demoted them. search_index._is_test_path was
+    # already fixed for the identical reason (see its own dotnet-suffix
+    # test coverage) - reused here as the single source of truth instead
+    # of a second, independent test-detection implementation.
+    assert is_demoted_path("src/UnitTests/AutoMapperSpecBase.cs")
+    assert is_demoted_path("src/IntegrationTests/NullSubstitute.cs")
+    assert is_demoted_path("src/AutoMapper.DI.Tests/Profiles.cs")
+
+
+def test_is_demoted_path_still_matches_plain_lowercase_test_segments():
+    assert is_demoted_path("tests/test_login.py")
+    assert is_demoted_path("test/foo_test.go")
+
+
+def test_is_demoted_path_still_matches_examples_and_docs():
+    assert is_demoted_path("examples/demo/main.py")
+    assert is_demoted_path("docs/guide.md")
+
+
+def test_is_demoted_path_does_not_flag_ordinary_source():
+    assert not is_demoted_path("src/AutoMapper/Mapper.cs")
+    assert not is_demoted_path("auth/login.py")
