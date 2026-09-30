@@ -566,3 +566,44 @@ def test_csharp_short_type_names_are_not_matched(tmp_path):
     modules, _edges = build_module_graph(repo)[:2]
     by_path = {m["path"]: m for m in modules}
     assert by_path["Consumer.cs"]["imports"] == []
+
+
+def test_csharp_own_delegate_reference_does_not_waste_an_edge_slot(tmp_path):
+    """own_type_names is derived from _extract_csharp's local `classes` list,
+    which walks class/interface/struct/record_declaration but not
+    delegate_declaration - the one node kind _csharp_declared_type_names
+    (the correct, shared index used to build csharp_type_owners) already
+    covers. A file that both declares and references its own delegate had
+    that self-reference treated as an external one:
+    _csharp_type_reference_targets found it in csharp_type_owners
+    (correctly, since the delegate IS declared there), counted it toward
+    the type-edge cap, and only the caller's `target != rel_path` check
+    filtered it back out - too late to free the slot. A file with several
+    self-referenced delegates could silently drop real cross-file edges
+    behind them. Proven directly: with the cap patched to 1, Mapper.cs's
+    self-reference to its own FooHandler delegate must not crowd out its
+    real cross-file reference to Registry.cs.
+    """
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "Registry.cs").write_text(
+        "namespace App;\n"
+        "public class TypeMapRegistry\n"
+        "{\n"
+        "    public object Resolve(object s) => s;\n"
+        "}\n"
+    )
+    (repo / "src" / "Mapper.cs").write_text(
+        "namespace App;\n"
+        "public delegate void FooHandler();\n"
+        "public class Mapper\n"
+        "{\n"
+        "    private readonly TypeMapRegistry _registry = new TypeMapRegistry();\n"
+        "    public FooHandler H;\n"
+        "    public object Map(object src) => _registry.Resolve(src);\n"
+        "}\n"
+    )
+    with patch("aletheore.scanner.graph._CSHARP_MAX_TYPE_EDGES", 1):
+        modules, _edges = build_module_graph(repo)[:2]
+    by_path = {m["path"]: m for m in modules}
+    assert by_path["src/Mapper.cs"]["imports"] == ["src/Registry.cs"]
