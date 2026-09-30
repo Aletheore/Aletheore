@@ -141,7 +141,7 @@ def format_file_overview(rows: list[dict], possibly_capped: bool = False) -> str
     return "\n".join(lines)
 
 
-def format_diff_comment(diff: dict, file_overview: str = "") -> str:
+def format_diff_comment(diff: dict, file_overview: str = "", change_diagram: str = "") -> str:
     """Return the markdown body for an ``aletheore.history.compute_diff`` result.
 
     `file_overview` is Piece B's per-file "what changed" section (see
@@ -149,9 +149,18 @@ def format_diff_comment(diff: dict, file_overview: str = "") -> str:
     header and before everything else, per the PR-comment-presentation
     design's "Decided" note: one leading section on this same comment,
     not a new comment type.
+
+    `change_diagram` (see `scan_worker.blast_radius_summary.
+    build_change_diagram`) is a fenced ```mermaid block GitHub renders
+    natively - prepended, when non-empty, before `file_overview`: the
+    diagram gives the shape of what changed, the file overview right
+    below it gives the exact detail.
     """
 
     body = [COMMENT_MARKER, "### 🔍 Aletheore evidence diff", ""]
+
+    if change_diagram:
+        body.append(change_diagram)
 
     if file_overview:
         body.append(file_overview)

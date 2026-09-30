@@ -294,3 +294,16 @@ def test_format_diff_comment_still_says_nothing_to_report_alongside_a_file_overv
 def test_format_diff_comment_with_no_file_overview_is_unchanged():
     body = format_diff_comment(_empty_diff())
     assert "What changed" not in body
+
+
+def test_format_diff_comment_prepends_change_diagram_before_the_file_overview():
+    diff = _empty_diff()
+    overview = format_file_overview([_row("app.py")])
+    diagram = "```mermaid\ngraph LR\n    n0[\"app.py\"]\n```"
+    body = format_diff_comment(diff, file_overview=overview, change_diagram=diagram)
+    assert body.index("```mermaid") < body.index("What changed")
+
+
+def test_format_diff_comment_with_no_change_diagram_is_unchanged():
+    body = format_diff_comment(_empty_diff())
+    assert "```mermaid" not in body

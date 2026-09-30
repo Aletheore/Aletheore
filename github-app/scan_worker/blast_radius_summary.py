@@ -114,6 +114,91 @@ def compute_blast_radius(evidence: dict, changed_files: list[str]) -> dict:
     }
 
 
+def _escape_mermaid_label(text: str) -> str:
+    """A raw double quote inside a Mermaid `["label"]` node would close the
+    quoted label early and corrupt the diagram syntax - HTML-entity-escape
+    it the same way Mermaid's own docs recommend for label text."""
+    return text.replace('"', "&quot;")
+
+
+def build_change_diagram(
+    evidence: dict | None,
+    changed_files: list[str],
+    files_with_findings: set[str] | None = None,
+) -> str:
+    """A Mermaid dependency diagram (fenced ```mermaid block, GitHub renders
+    it natively in markdown - no image generation or hosting needed) of
+    which changed files have direct dependents elsewhere in the repo, and
+    what those dependents are. Reuses `compute_blast_radius`'s own
+    `per_target` - already deterministic, already excludes files under
+    review from counting as each other's dependents, already capped by
+    `find_blast_radius`'s own direct-dependent limit - so this adds no new
+    computation or failure mode beyond what `blast_radius_summary` already
+    has. Direct dependents only, matching the design decision that
+    transitive dependents belong in the existing text section, not a
+    diagram meant to stay readable at a glance.
+
+    `files_with_findings` - paths (from the diff's own already-computed
+    `static_analysis["new"]`) that get a visually distinct node class, so
+    the diagram doubles as "what changed" and "where something needs a
+    look," not just a plain dependency map. Optional: omit it (or pass an
+    empty set) for a purely structural diagram.
+
+    Returns "" when no changed file has a direct dependent - same
+    graceful-degradation shape as `blast_radius_summary`, so a caller can
+    unconditionally prepend this without a separate emptiness check.
+    """
+    if not evidence:
+        return ""
+    try:
+        result = compute_blast_radius(evidence, changed_files)
+    except Exception:  # noqa: BLE001 - a malformed module entry must never block the comment
+        logger.debug("change diagram skipped: compute_blast_radius failed", exc_info=True)
+        return ""
+    per_target = result["per_target"]
+    if not per_target:
+        return ""
+    findings = files_with_findings or set()
+
+    targets = sorted(per_target)
+    dependent_only = sorted({dep for deps in per_target.values() for dep in deps} - set(targets))
+
+    node_ids: dict[str, str] = {}
+    all_paths = targets + dependent_only
+    for path in all_paths:
+        node_ids[path] = f"n{len(node_ids)}"
+
+    # Flash Review finding on this PR: a bare basename can't tell src/utils.py
+    # and tests/utils.py apart - both would render as two identically-labeled
+    # nodes, defeating the diagram's whole point of showing exactly what
+    # depends on what. Fall back to the full path only for paths whose
+    # basename collides with another path in this same diagram; the common
+    # case (no collision) keeps the short label.
+    basename_counts: dict[str, int] = {}
+    for path in all_paths:
+        name = Path(path).name
+        basename_counts[name] = basename_counts.get(name, 0) + 1
+
+    lines = ["```mermaid", "graph LR"]
+    for path in all_paths:
+        name = Path(path).name
+        label = _escape_mermaid_label(path if basename_counts[name] > 1 else name)
+        lines.append(f'    {node_ids[path]}["{label}"]')
+    for target in targets:
+        for dep in per_target[target]:
+            lines.append(f"    {node_ids[target]} --> {node_ids[dep]}")
+    lines.append("    classDef changed fill:#d9772c,color:#fff,stroke:#b85f1c;")
+    lines.append("    classDef changedFinding fill:#c0392b,color:#fff,stroke:#922b21;")
+    lines.append("    classDef dependent fill:#f2f0ec,color:#18140f,stroke:#d6d0c5;")
+    for target in targets:
+        css_class = "changedFinding" if target in findings else "changed"
+        lines.append(f"    class {node_ids[target]} {css_class}")
+    for dep in dependent_only:
+        lines.append(f"    class {node_ids[dep]} dependent")
+    lines.append("```")
+    return "\n".join(lines)
+
+
 def blast_radius_summary(evidence: dict | None, changed_files: list[str]) -> str:
     if not evidence:
         return ""

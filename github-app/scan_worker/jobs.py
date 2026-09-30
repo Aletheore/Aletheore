@@ -60,7 +60,7 @@ from app_server.rate_limit import (
 from app_server.url_validation import UnsafeURLError, validate_and_pin_https_url
 from aletheore.docs_reference import build_api_reference
 from scan_worker import live_docs, live_wiki
-from scan_worker.blast_radius_summary import blast_radius_summary, count_direct_dependents
+from scan_worker.blast_radius_summary import blast_radius_summary, build_change_diagram, count_direct_dependents
 from scan_worker.db import (
     apply_monthly_credit_reset,
     check_and_reserve_flash_review_attempt,
@@ -1385,6 +1385,7 @@ def run_pr_scan_job(
             # (see _maybe_send_slack_alert and the three _maybe_create_
             # *_check_run calls further down).
             file_overview = ""
+            change_diagram = ""
             changed_files_detailed = None
             try:
                 changed_files_detailed = fetch_pr_changed_files_detailed(
@@ -1401,6 +1402,19 @@ def run_pr_scan_job(
                 # the true total rather than merely truncate a known one.
                 possibly_capped = len(changed_files_detailed) >= GITHUB_COMPARE_FILES_HARD_CAP
                 file_overview = format_file_overview(overview_rows, possibly_capped=possibly_capped)
+                # Same already-computed data as the file overview above (the
+                # import graph in `new`, this same changed-files list) plus
+                # the static-analysis findings this same diff already
+                # carries - a Mermaid diagram of the shape, not just a count,
+                # of what depends on what changed. Deliberately inside this
+                # same try/except: a diagram bug must not cost the PR its
+                # file-overview section either, same fail-open contract.
+                files_with_findings = {
+                    f["path"] for f in diff.get("static_analysis", {}).get("new", []) if f.get("path")
+                }
+                change_diagram = build_change_diagram(
+                    new, [row["path"] for row in overview_rows], files_with_findings
+                )
             except Exception:  # noqa: BLE001
                 logging.getLogger("scan_worker.jobs").warning(
                     "could not build the PR file-overview section for installation=%s repo=%s",
@@ -1410,7 +1424,7 @@ def run_pr_scan_job(
             client = get_github_api_client()
             upsert_pr_comment(
                 client, token, repo_full_name, pr_number,
-                format_diff_comment(diff, file_overview=file_overview),
+                format_diff_comment(diff, file_overview=file_overview, change_diagram=change_diagram),
             )
         history_id = _insert_history(installation_id, repo_full_name, new, head_sha=head_sha)
 
