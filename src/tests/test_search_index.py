@@ -442,7 +442,9 @@ def test_try_auto_pull_returns_true_on_successful_pull(mock_which, mock_run):
     assert _try_auto_pull_ollama_model("nomic-embed-text") is True
 
     args = mock_run.call_args[0][0]
-    assert args == ["ollama", "pull", "nomic-embed-text"]
+    # Bandit B607: a bare "ollama" re-resolves PATH at execution time even
+    # though shutil.which just resolved it above - use that resolved path.
+    assert args == ["/usr/local/bin/ollama", "pull", "nomic-embed-text"]
 
 
 @patch("aletheore.search_index.httpx.get")
@@ -721,7 +723,8 @@ def test_auto_start_spawns_serve_and_returns_true_once_reachable(
     assert _try_auto_start_ollama_server("http://localhost:11434/v1") is True
 
     popen_args, popen_kwargs = mock_popen.call_args
-    assert popen_args[0] == ["ollama", "serve"]
+    # Bandit B607: use the path shutil.which just resolved, not a bare name.
+    assert popen_args[0] == ["/usr/local/bin/ollama", "serve"]
     # Real gap found on Windows CI: this test doesn't pin sys.platform (unlike
     # test_auto_start_uses_windows_detachment_flags_not_start_new_session
     # below, which deliberately does), so it runs the real detachment branch
@@ -762,7 +765,7 @@ def test_auto_start_uses_windows_detachment_flags_not_start_new_session(
     assert _try_auto_start_ollama_server() is True
 
     popen_args, popen_kwargs = mock_popen.call_args
-    assert popen_args[0] == ["ollama", "serve"]
+    assert popen_args[0] == ["C:\\ollama\\ollama.exe", "serve"]
     assert "start_new_session" not in popen_kwargs
     assert popen_kwargs.get("creationflags") == 0x08000000 | 0x00000200
 
