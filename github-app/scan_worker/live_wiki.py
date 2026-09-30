@@ -279,7 +279,44 @@ AIRVIEW_PROMPT_VERSION = "6"
 # a page-per-file: the top of the importance ranking is where a reader spends
 # their attention, and the tail is mostly re-exports and fixtures whose pages
 # cost tokens to produce and nothing to skip.
+#
+# This is the FLOOR of the budget, not the whole of it - see
+# resolve_max_file_pages. A flat 40 documents a 513-module repository as thinly
+# as an 80-module one, which is measurable: on the comprehension benchmark
+# AutoMapper (513 modules, pinned at exactly 40 pages, 7.8% covered) is the
+# worst loss against RepoWise at -1.08, while flask (83 modules, 22 pages, 26%
+# covered) is the best win at +1.00.
 DEFAULT_MAX_FILE_PAGES = 40
+
+# Pages allowed per module once a repository is big enough for the flat floor
+# to bind. Modest on purpose: this buys coverage on large repositories, and
+# every page is a paid LLM call.
+FILE_PAGES_PER_MODULE = 0.2
+
+# Hard ceiling, so a monorepo cannot turn one build into thousands of calls.
+MAX_FILE_PAGES_CEILING = 150
+
+
+def resolve_max_file_pages(
+    evidence: dict,
+    *,
+    default: int = DEFAULT_MAX_FILE_PAGES,
+    per_module: float = FILE_PAGES_PER_MODULE,
+    ceiling: int = MAX_FILE_PAGES_CEILING,
+) -> int:
+    """The page budget for this repository: never below `default`, never above
+    `ceiling`, proportional to module count in between.
+
+    Small repositories are unaffected by construction, and that is the point.
+    `select_file_page_paths` applies FILE_PAGE_SCORE_FLOOR *before* truncating
+    to this budget, so on a repository whose ranking already yields fewer than
+    `default` files the budget never binds and raising it cannot add a single
+    call. Measured on the benchmark corpora: flask plans 23 and fmt 26, both
+    under the floor of 40, so both are byte-identical before and after this
+    change. Only jq and AutoMapper - which were pinned at exactly 40 - move.
+    """
+    modules = len(evidence.get("repository", {}).get("modules", []) or [])
+    return max(default, min(ceiling, round(modules * per_module)))
 
 # Files scoring below this share of the *median* non-demoted file are not worth
 # a page even if the budget has room. Anchored to the median rather than the top
@@ -1108,13 +1145,18 @@ def generate_subsystems(
 def select_file_page_paths(
     evidence: dict,
     *,
-    max_files: int = DEFAULT_MAX_FILE_PAGES,
+    max_files: int | None = None,
 ) -> list[str]:
     """Which files earn their own reference page, most important first.
 
     Split out from generation so a caller can see and cost the plan without
     spending anything, and so the choice is testable without an LLM.
+
+    `max_files=None` scales the budget to repository size via
+    resolve_max_file_pages; pass an explicit int to pin it.
     """
+    if max_files is None:
+        max_files = resolve_max_file_pages(evidence)
     ranked = rank_files_by_importance(evidence)
     if not ranked:
         return []
@@ -1493,7 +1535,7 @@ def generate_file_pages(
     writing_adapter,
     *,
     paths: list[str] | None = None,
-    max_files: int = DEFAULT_MAX_FILE_PAGES,
+    max_files: int | None = None,
     subsystem_by_path: dict[str, str] | None = None,
     fetch_line_count: Callable[[str], int | None] | None = None,
     include_repo_context: bool = False,
@@ -1503,7 +1545,9 @@ def generate_file_pages(
     The subsystem pages answer "what is this group of files for"; these answer
     "how does this specific file work", which is the question a reader actually
     arrives with. Pass `paths` to regenerate only some files (incremental
-    update); otherwise the top `max_files` by importance are written.
+    update); otherwise the top files by importance are written, using the
+    repository-scaled budget from resolve_max_file_pages unless `max_files`
+    pins it.
 
     include_repo_context: attach airview_scanner_context.build_repo_context's
     repo-wide scanner summary (schema/endpoints/vulnerabilities/licenses/

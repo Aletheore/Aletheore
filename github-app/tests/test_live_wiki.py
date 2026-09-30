@@ -21,6 +21,9 @@ from scan_worker.live_wiki import (
     build_file_page_record,
     generate_file_pages,
     select_file_page_paths,
+    resolve_max_file_pages,
+    DEFAULT_MAX_FILE_PAGES,
+    MAX_FILE_PAGES_CEILING,
     _drop_test_only_briefs,
     _run_concurrently,
     _strip_unverified_lines,
@@ -1538,3 +1541,65 @@ def test_subsystem_files_survive_a_truncated_model_response():
     by_path = {f["path"]: f for f in record["files"]}
     assert by_path["auth/login.py"]["role"] == "Entry point."
     assert by_path["auth/tokens.py"]["role"] == ""
+
+
+def _evidence_with_modules(count: int) -> dict:
+    """A repository of `count` equally-ranked modules, for budget arithmetic."""
+    return {
+        "repository": {
+            "modules": [
+                {
+                    "path": f"pkg/mod_{i:04d}.py",
+                    "language": "python",
+                    "imports": [],
+                    "symbols": {
+                        "functions": [{"name": f"fn_{i}", "start_line": 1, "end_line": 5}],
+                        "classes": [],
+                    },
+                }
+                for i in range(count)
+            ],
+            "dependency_graph": {"nodes": [], "edges": []},
+        },
+        "architecture": {"clusters": []},
+    }
+
+
+def test_resolve_max_file_pages_never_goes_below_the_flat_default():
+    """The whole safety property: a small repository cannot get a bigger budget
+    than it had, so scaling can never add spend where the cap wasn't binding."""
+    for module_count in (0, 1, 20, 83, 199):
+        assert resolve_max_file_pages(_evidence_with_modules(module_count)) == DEFAULT_MAX_FILE_PAGES
+
+
+def test_resolve_max_file_pages_scales_once_the_default_stops_binding():
+    # 513 modules is AutoMapper, the corpus this exists for: 0.2 * 513 = 103.
+    assert resolve_max_file_pages(_evidence_with_modules(513)) == 103
+
+
+def test_resolve_max_file_pages_is_capped_so_a_monorepo_cannot_run_away():
+    assert resolve_max_file_pages(_evidence_with_modules(100_000)) == MAX_FILE_PAGES_CEILING
+
+
+def test_resolve_max_file_pages_survives_missing_or_null_modules():
+    assert resolve_max_file_pages({}) == DEFAULT_MAX_FILE_PAGES
+    assert resolve_max_file_pages({"repository": {"modules": None}}) == DEFAULT_MAX_FILE_PAGES
+
+
+def test_scaled_budget_does_not_change_selection_when_the_score_floor_binds():
+    """Where the ranking already yields fewer files than the flat default, the
+    budget is inert - selection must be identical with it pinned or scaled."""
+    evidence = _evidence_with_modules(30)
+    assert select_file_page_paths(evidence) == select_file_page_paths(
+        evidence, max_files=DEFAULT_MAX_FILE_PAGES
+    )
+
+
+def test_scaled_budget_admits_more_pages_on_a_large_repository():
+    evidence = _evidence_with_modules(513)
+    pinned = select_file_page_paths(evidence, max_files=DEFAULT_MAX_FILE_PAGES)
+    scaled = select_file_page_paths(evidence)
+    assert len(pinned) == DEFAULT_MAX_FILE_PAGES
+    assert len(scaled) > len(pinned)
+    # and it stays a prefix: the same ranking, just less truncated
+    assert scaled[: len(pinned)] == pinned

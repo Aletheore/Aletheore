@@ -3316,7 +3316,17 @@ def _extract_module(
                         import_confidence[target] = "inferred"
         # Same-namespace references need no `using`, so usings alone leave
         # the graph near-empty - see _csharp_type_reference_targets.
-        own_type_names = {c["name"] for c in classes if c.get("name")}
+        #
+        # own_type_names uses _csharp_declared_type_names (the same index
+        # that builds csharp_type_owners below), not the local `classes`
+        # list: _extract_csharp's own type-walking omits
+        # delegate_declaration, so a file that both declares and
+        # references its own delegate had that name treated as an
+        # external reference - each self-reference silently consumed a
+        # slot of the type-edge cap that a real cross-file edge needed,
+        # since the self-edge itself is only filtered out afterward
+        # (target != rel_path), too late to free the slot back up.
+        own_type_names = set(_csharp_declared_type_names(tree.root_node, source))
         already = set(resolved_imports)
         for target_path, type_ref_ambiguous in _csharp_type_reference_targets(
             source, own_type_names, csharp_type_owners or {}
