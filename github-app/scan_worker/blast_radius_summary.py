@@ -164,12 +164,25 @@ def build_change_diagram(
     dependent_only = sorted({dep for deps in per_target.values() for dep in deps} - set(targets))
 
     node_ids: dict[str, str] = {}
-    for path in targets + dependent_only:
+    all_paths = targets + dependent_only
+    for path in all_paths:
         node_ids[path] = f"n{len(node_ids)}"
 
+    # Flash Review finding on this PR: a bare basename can't tell src/utils.py
+    # and tests/utils.py apart - both would render as two identically-labeled
+    # nodes, defeating the diagram's whole point of showing exactly what
+    # depends on what. Fall back to the full path only for paths whose
+    # basename collides with another path in this same diagram; the common
+    # case (no collision) keeps the short label.
+    basename_counts: dict[str, int] = {}
+    for path in all_paths:
+        name = Path(path).name
+        basename_counts[name] = basename_counts.get(name, 0) + 1
+
     lines = ["```mermaid", "graph LR"]
-    for path in targets + dependent_only:
-        label = _escape_mermaid_label(Path(path).name)
+    for path in all_paths:
+        name = Path(path).name
+        label = _escape_mermaid_label(path if basename_counts[name] > 1 else name)
         lines.append(f'    {node_ids[path]}["{label}"]')
     for target in targets:
         for dep in per_target[target]:

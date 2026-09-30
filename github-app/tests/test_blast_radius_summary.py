@@ -234,6 +234,18 @@ def test_change_diagram_uses_basenames_not_full_paths_as_labels():
     assert '"src/core.py"' not in out
 
 
+def test_change_diagram_disambiguates_colliding_basenames_with_full_paths():
+    # Flash Review finding on this PR: src/utils.py and tests/utils.py would
+    # otherwise both render as two identically-labeled "utils.py" nodes with
+    # no way to tell them apart - defeats the diagram's whole point.
+    evidence = _evidence({"src/utils.py": ["tests/utils.py"]})
+    out = build_change_diagram(evidence, ["src/utils.py"])
+
+    assert '"src/utils.py"' in out
+    assert '"tests/utils.py"' in out
+    assert out.count('"utils.py"') == 0
+
+
 def test_change_diagram_escapes_a_double_quote_in_a_filename():
     evidence = _evidence({'weird"file.py': ["svc.py"]})
     out = build_change_diagram(evidence, ['weird"file.py'])
