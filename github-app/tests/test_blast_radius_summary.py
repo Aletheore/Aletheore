@@ -1,6 +1,11 @@
 import pytest
 
-from scan_worker.blast_radius_summary import blast_radius_summary, compute_blast_radius, count_direct_dependents
+from scan_worker.blast_radius_summary import (
+    blast_radius_summary,
+    build_change_diagram,
+    compute_blast_radius,
+    count_direct_dependents,
+)
 
 
 def _evidence(edges: dict[str, list[str]]) -> dict:
@@ -177,3 +182,70 @@ def test_summary_section_never_fails_the_review(monkeypatch):
 
     monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", boom)
     assert jobs._blast_radius_section_for("dsn", 1, "o/r", "abc123", ["core.py"]) == ""
+
+
+def test_change_diagram_is_empty_when_no_changed_file_has_dependents():
+    evidence = _evidence({"leaf.py": []})
+    assert build_change_diagram(evidence, ["leaf.py"]) == ""
+
+
+def test_change_diagram_includes_changed_file_and_its_direct_dependents():
+    evidence = _evidence({"core.py": ["svc.py", "cli.py"]})
+    out = build_change_diagram(evidence, ["core.py"])
+
+    assert "```mermaid" in out and "```" in out.split("```mermaid", 1)[1]
+    assert '"core.py"' in out
+    assert '"svc.py"' in out
+    assert '"cli.py"' in out
+    assert out.count("-->") == 2
+
+
+def test_change_diagram_omits_a_changed_file_with_no_dependents():
+    evidence = _evidence({"core.py": ["svc.py"], "untouched.py": []})
+    out = build_change_diagram(evidence, ["core.py", "untouched.py"])
+
+    assert '"core.py"' in out
+    assert "untouched.py" not in out
+
+
+def test_change_diagram_marks_a_changed_file_that_has_a_new_finding():
+    evidence = _evidence({"core.py": ["svc.py"]})
+    out = build_change_diagram(evidence, ["core.py"], files_with_findings={"core.py"})
+
+    assert "classDef changedFinding" in out
+    assert "class n0 changedFinding" in out
+
+
+def test_change_diagram_does_not_mark_a_changed_file_with_no_finding():
+    evidence = _evidence({"core.py": ["svc.py"]})
+    out = build_change_diagram(evidence, ["core.py"], files_with_findings={"other.py"})
+
+    # classDef changedFinding is always pre-declared (harmless, unused-if-absent);
+    # what matters is that it's never actually assigned to a node here.
+    assert "class n0 changed\n" in out
+    assert "class n0 changedFinding" not in out
+
+
+def test_change_diagram_uses_basenames_not_full_paths_as_labels():
+    evidence = _evidence({"src/core.py": ["src/svc.py"]})
+    out = build_change_diagram(evidence, ["src/core.py"])
+
+    assert '"core.py"' in out
+    assert '"src/core.py"' not in out
+
+
+def test_change_diagram_escapes_a_double_quote_in_a_filename():
+    evidence = _evidence({'weird"file.py': ["svc.py"]})
+    out = build_change_diagram(evidence, ['weird"file.py'])
+
+    # a raw unescaped quote inside a quoted Mermaid label would break the node syntax
+    assert 'weird"file.py"' not in out
+    assert "weird" in out
+
+
+def test_change_diagram_never_raises_on_a_malformed_module_entry(monkeypatch):
+    def boom(*a, **k):
+        raise KeyError("imported_by")
+
+    monkeypatch.setattr("scan_worker.blast_radius_summary.find_blast_radius", boom)
+    assert build_change_diagram(_evidence({"core.py": ["a.py"]}), ["core.py"]) == ""

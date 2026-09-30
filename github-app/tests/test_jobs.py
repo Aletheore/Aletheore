@@ -1114,6 +1114,97 @@ def test_run_pr_scan_job_still_posts_the_diff_comment_when_the_file_overview_fet
     assert any("file-overview section" in record.message for record in caplog.records)
 
 
+def test_run_pr_scan_job_posts_a_change_diagram_before_the_file_overview(
+    bare_repo_with_two_commits, monkeypatch
+):
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+    posted = {}
+
+    def fake_upsert(client, token, repo_full_name, pr_number, body):
+        posted["body"] = body
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_pr_changed_files_detailed",
+        lambda *a, **k: [{
+            "filename": "app.py", "status": "modified", "additions": 1, "deletions": 1,
+            "previous_filename": None,
+        }],
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.build_change_diagram",
+        lambda evidence, changed_files, files_with_findings=None: '```mermaid\ngraph LR\n    n0["app.py"]\n```',
+    )
+
+    run_pr_scan_job(
+        installation_id=1, repo_full_name="octocat/hello-world", pr_number=7,
+        base_sha=base_sha, head_sha=head_sha,
+    )
+
+    assert "```mermaid" in posted["body"]
+    assert posted["body"].index("```mermaid") < posted["body"].index("What changed")
+
+
+def test_run_pr_scan_job_still_posts_the_diff_comment_when_the_change_diagram_build_fails(
+    bare_repo_with_two_commits, monkeypatch, caplog
+):
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+    posted = {}
+
+    def fake_upsert(client, token, repo_full_name, pr_number, body):
+        posted["body"] = body
+
+    def raise_error(*a, **k):
+        raise RuntimeError("blast radius computation is down")
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_pr_changed_files_detailed",
+        lambda *a, **k: [{
+            "filename": "app.py", "status": "modified", "additions": 1, "deletions": 1,
+            "previous_filename": None,
+        }],
+    )
+    monkeypatch.setattr("scan_worker.jobs.build_change_diagram", raise_error)
+
+    with caplog.at_level("WARNING", logger="scan_worker.jobs"):
+        run_pr_scan_job(
+            installation_id=1, repo_full_name="octocat/hello-world", pr_number=7,
+            base_sha=base_sha, head_sha=head_sha,
+        )
+
+    # file_overview is built earlier in the same try block, so its success
+    # survives a later failure in that block computing the diagram - only
+    # the diagram itself is missing.
+    assert "```mermaid" not in posted["body"]
+    assert "What changed" in posted["body"]
+    assert any("file-overview section" in record.message for record in caplog.records)
+
+
 def test_run_pr_scan_job_reuses_the_detailed_fetch_instead_of_a_second_compare_call(
     bare_repo_with_two_commits, monkeypatch
 ):
