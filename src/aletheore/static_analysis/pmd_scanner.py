@@ -9,15 +9,20 @@ from aletheore.static_analysis._exclusions import count_real_files, excluded_dir
 # 2026-09-21): the unfiltered bestpractices+errorprone+security combo
 # produced 3,582 violations, 70% of them two JUnit-authoring-convention
 # rules (WrongTestAnnotation, UnitTestContainsTooManyAsserts) that flag
-# test-code style, not bugs. CloseResource - a real bug-class rule in
-# principle - sampled as a real false positive on this same repo
-# (Gson.java:545 flags a JsonTreeWriter, an in-memory tree builder whose
-# close() is a no-op, not a real I/O resource PMD's heuristic can't tell
-# apart from one that is). Excluded here rather than assumed safe by
-# category alone - the remaining ruleset (271 findings on the same repo,
-# CloseResource excluded) is bug-shaped: AssignmentInOperand,
-# NullAssignment, AvoidCatchingGenericException, CompareObjectsWithEquals,
-# and similar, each spot-checked against real source before trusting it.
+# test-code style, not bugs. The remaining ruleset (271 findings on the
+# same repo) is bug-shaped: AssignmentInOperand, NullAssignment,
+# AvoidCatchingGenericException, CompareObjectsWithEquals, and similar,
+# each spot-checked against real source before trusting it.
+#
+# CloseResource was excluded here too at first, on a single sampled false
+# positive on this same repo (Gson.java:545 flags a JsonTreeWriter, an
+# in-memory tree builder whose close() is a no-op, not a real I/O
+# resource PMD's heuristic can't tell apart from one that is) - but
+# blanket-silencing a real bug-class rule for every repo because of one
+# unrelated open-source sample meant a genuine unclosed file/socket/
+# stream leak in ANY repo scanned through this pipeline would never be
+# flagged at all. Re-enabled: an occasional in-memory-writer false
+# positive is the right trade-off against losing the whole rule.
 _NOISY_RULES = frozenset(
     {
         "WrongTestAnnotation",
@@ -29,7 +34,6 @@ _NOISY_RULES = frozenset(
         "ReplaceJavaUtilDate",
         "ReplaceJavaUtilCalendar",
         "AvoidLiteralsInIfCondition",
-        "CloseResource",
     }
 )
 

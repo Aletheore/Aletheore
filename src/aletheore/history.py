@@ -188,7 +188,49 @@ def _static_analysis_block(evidence: dict) -> dict:
     )
 
 
-def _compute_curated_diff(old: dict, new: dict) -> dict:
+# The two markers check_static_analysis's own orchestrator (static_analysis/
+# __init__.py) already uses for an INTENTIONAL skip - bearer/joern simply
+# not opted into this run, or SonarQube not configured - as opposed to a
+# default-on scanner (semgrep/gosec/bandit/trivy/pmd) that was supposed to
+# run and didn't (tool missing, timed out, crashed, produced unparseable
+# output). Matching on these exact strings rather than a tool allowlist:
+# an opted-in bearer/joern run that genuinely fails gets its own scanner's
+# real failure reason instead, which won't match either marker and
+# correctly reads as unexpected.
+_INTENTIONAL_SKIP_MARKERS = ("skipped (opt-in", "SonarQube not configured")
+
+
+def _unexpected_tool_skips(tools_skipped: list[dict]) -> list[dict]:
+    """tools_skipped entries that mean a scanner was SUPPOSED to run this
+    pass but didn't - as opposed to bearer/joern/SonarQube's normal,
+    expected not-opted-in/not-configured state. Real gap this closes: a
+    default-on scanner failing (registry outage, binary missing, a crash)
+    left new_findings empty for the exact same reason a genuinely clean
+    repo would - nothing distinguished "nothing wrong" from "didn't look"
+    anywhere downstream of compute_diff."""
+    return [
+        skip
+        for skip in tools_skipped
+        if not str(skip.get("reason", "")).startswith(_INTENTIONAL_SKIP_MARKERS)
+    ]
+
+
+def _rename_aware_findings(findings: list[dict], renamed_paths: dict[str, str]) -> list[dict]:
+    """Return `findings` with each finding's "path" remapped through
+    `renamed_paths` ({old_path: new_path}, GitHub compare API's own
+    previous_filename -> filename shape) when it names an old path that
+    was renamed - a shallow copy per remapped finding, so the caller's
+    original list/dicts are never mutated. A finding whose path isn't a
+    renamed_paths key is returned unchanged (same dict, not copied)."""
+    if not renamed_paths:
+        return findings
+    return [
+        {**f, "path": renamed_paths[f["path"]]} if f.get("path") in renamed_paths else f
+        for f in findings
+    ]
+
+
+def _compute_curated_diff(old: dict, new: dict, renamed_paths: dict[str, str] | None = None) -> dict:
     result: dict = {}
     caveats = []
 
@@ -291,13 +333,23 @@ def _compute_curated_diff(old: dict, new: dict) -> dict:
     # unchanged finding (line shift from unrelated edits elsewhere in the
     # file) reads as both a new and a resolved entry here, the same known
     # limitation _new_and_resolved already has for every other category
-    # above, not something unique to this one.
+    # above, not something unique to this one. Path is also part of the
+    # identity, so a pure file rename has the exact same failure mode -
+    # remapping the OLD findings' paths through renamed_paths first (when
+    # the caller has that data) means a carried-over finding's identity
+    # actually matches across the rename instead of reading as both
+    # resolved (old path) and new (new path).
+    new_static_analysis_tool_skips = new_static_analysis.get("tools_skipped", [])
     new_static_analysis, resolved_static_analysis = _new_and_resolved(
-        old_static_analysis["findings"],
+        _rename_aware_findings(old_static_analysis["findings"], renamed_paths or {}),
         new_static_analysis["findings"],
         ("tool", "rule_id", "path", "line"),
     )
-    result["static_analysis"] = {"new": new_static_analysis, "resolved": resolved_static_analysis}
+    result["static_analysis"] = {
+        "new": new_static_analysis,
+        "resolved": resolved_static_analysis,
+        "unexpected_tool_skips": _unexpected_tool_skips(new_static_analysis_tool_skips),
+    }
 
     new_violations, resolved_violations = _new_and_resolved(
         old["architecture"]["layer_violations"]["violations"],
@@ -398,10 +450,19 @@ def _secret_identity_fields(old_findings: list[dict], new_findings: list[dict]) 
     return ("path", "pattern", "match_preview")
 
 
-def compute_diff(old: dict, new: dict, full: bool = False) -> dict:
+def compute_diff(
+    old: dict, new: dict, full: bool = False, renamed_paths: dict[str, str] | None = None
+) -> dict:
+    """`renamed_paths` ({old_path: new_path}) is optional, curated-mode-only
+    data (GitHub compare API's own previous_filename -> filename shape, the
+    same data summarize_file_changes already consumes) that makes the
+    static-analysis new/resolved split rename-aware. Omitting it preserves
+    the prior behavior exactly - a renamed file's carried-over findings
+    still read as both resolved and new, same as every caller that can't
+    supply rename data."""
     if full:
         return _compute_full_diff(old, new)
-    return _compute_curated_diff(old, new)
+    return _compute_curated_diff(old, new, renamed_paths=renamed_paths)
 
 
 def _aletheore_version() -> str:

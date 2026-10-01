@@ -211,6 +211,22 @@ def test_detect_languages_ignores_cache_dirs(tmp_path):
     assert by_name["python"]["file_count"] == 1
 
 
+def test_detect_languages_ignores_repowise_cache_dir(tmp_path):
+    # .repowise is Repowise's own index/cache directory - no .git of its own
+    # (so the nested-git-worktree detector never catches it), gitignored by
+    # convention, never project source. Already flagged as a known gap in
+    # _exclusions.py's own comment (the secrets/static-analysis scanners
+    # exclude it, but language detection's IGNORED_DIRS never did).
+    repo = tmp_path / "repo"
+    cache = repo / ".repowise" / "index"
+    cache.mkdir(parents=True)
+    (cache / "cached_module.py").write_text("x = 1\n")
+    (repo / "main.py").write_text("x = 1\n")
+    languages = detect_languages(repo)
+    by_name = {entry["name"]: entry for entry in languages}
+    assert by_name["python"]["file_count"] == 1
+
+
 def test_detect_languages_ignores_nested_git_worktree(tmp_path):
     # A linked git worktree (`git worktree add`) is a directory containing its own
     # `.git` file (not a directory - that's what distinguishes it from a submodule
