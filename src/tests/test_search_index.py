@@ -633,8 +633,9 @@ def test_auto_install_downloads_and_runs_the_real_installer_script_on_confirm(
     mock_get, mock_run, mock_which
 ):
     # Not on PATH before, on PATH after a clean install - the exact script
-    # Ollama's own docs publish, run via `sh`, not a guessed alternative.
-    mock_which.side_effect = [None, "/usr/local/bin/ollama"]
+    # Ollama's own docs publish, run via the shutil.which-resolved `sh`
+    # path, not a bare "sh" string and not a guessed alternative.
+    mock_which.side_effect = [None, "/bin/sh", "/usr/local/bin/ollama"]
     mock_get.return_value = MagicMock(text="#!/bin/sh\necho installing", status_code=200)
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
@@ -644,7 +645,7 @@ def test_auto_install_downloads_and_runs_the_real_installer_script_on_confirm(
         "https://ollama.com/install.sh", timeout=30.0, follow_redirects=True
     )
     run_args, run_kwargs = mock_run.call_args
-    assert run_args[0] == ["sh"]
+    assert run_args[0] == ["/bin/sh"]
     assert run_kwargs["input"] == "#!/bin/sh\necho installing"
 
 
@@ -659,18 +660,22 @@ def test_auto_install_returns_false_when_the_installer_cannot_be_downloaded(
     mock_run.assert_not_called()
 
 
-@patch("aletheore.search_index.shutil.which", return_value=None)
-@patch("aletheore.search_index.subprocess.run", side_effect=OSError("no such file"))
+@patch("aletheore.search_index.shutil.which", side_effect=lambda name: None)
+@patch("aletheore.search_index.subprocess.run")
 @patch("aletheore.search_index.httpx.get")
 @patch("aletheore.search_index.sys.platform", "darwin")
 def test_auto_install_returns_false_when_sh_is_unavailable(
     mock_get, mock_run, mock_which
 ):
+    # Neither "ollama" nor "sh" resolve - caught by the shutil.which check
+    # before ever attempting to exec, not discovered via an OSError at
+    # run time.
     mock_get.return_value = MagicMock(text="#!/bin/sh", status_code=200)
     assert _try_auto_install_ollama(lambda: True) is False
+    mock_run.assert_not_called()
 
 
-@patch("aletheore.search_index.shutil.which", return_value=None)
+@patch("aletheore.search_index.shutil.which", side_effect=lambda name: "/bin/sh" if name == "sh" else None)
 @patch("aletheore.search_index.subprocess.run")
 @patch("aletheore.search_index.httpx.get")
 @patch("aletheore.search_index.sys.platform", "darwin")
@@ -683,7 +688,7 @@ def test_auto_install_returns_false_on_nonzero_install_exit(
     assert _try_auto_install_ollama(lambda: True) is False
 
 
-@patch("aletheore.search_index.shutil.which", return_value=None)
+@patch("aletheore.search_index.shutil.which", side_effect=lambda name: "/bin/sh" if name == "sh" else None)
 @patch("aletheore.search_index.subprocess.run")
 @patch("aletheore.search_index.httpx.get")
 @patch("aletheore.search_index.sys.platform", "darwin")

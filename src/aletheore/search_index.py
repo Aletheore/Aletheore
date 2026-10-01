@@ -1061,9 +1061,17 @@ def _try_auto_install_ollama(confirm_fn: Callable[[], bool] | None = None) -> bo
         )
         return False
 
+    sh_path = shutil.which("sh")
+    if sh_path is None:
+        print(
+            "aletheore: 'sh' isn't on PATH; continuing without installing Ollama",
+            file=sys.stderr,
+        )
+        return False
     try:
+        # Bandit B607: use the resolved path, not a bare "sh" name.
         result = subprocess.run(
-            ["sh"],
+            [sh_path],
             input=script.text,
             capture_output=True,
             text=True,
