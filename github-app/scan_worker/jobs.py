@@ -388,6 +388,29 @@ def _url_without_credentials(url: str) -> str:
     return urlunsplit(parts._replace(netloc=parts.hostname))
 
 
+_GIT_PATH: str | None = None
+
+
+def _git_path() -> str:
+    """shutil.which("git"), resolved once per process and cached - every
+    call site in this module that invokes git passes this instead of the
+    bare "git" string (Bandit B607, same partial-executable-path class as
+    the ollama/sh fixes elsewhere in this codebase: a bare name re-
+    resolves PATH again at execution time, which could pick up a
+    different binary than the one a security review of PATH would have
+    checked). Falls back to the bare name only if git genuinely isn't on
+    PATH - every function here that shells out to git already assumes
+    it's installed and lets the subprocess call fail naturally if it
+    isn't, so there's no new "git missing" handling to add; this only
+    changes which path component runs, the same already-accepted failure
+    mode either way.
+    """
+    global _GIT_PATH
+    if _GIT_PATH is None:
+        _GIT_PATH = shutil.which("git") or "git"
+    return _GIT_PATH
+
+
 def _run_git(args: list[str], **kwargs) -> None:
     """subprocess.run wrapper for git invocations whose argv may embed a
     credentialed clone URL (see _clone_url). A failing git command raises
@@ -399,7 +422,13 @@ def _run_git(args: list[str], **kwargs) -> None:
     installation token to an inbox and a log store. Scrubs any arg that
     parses as a URL with embedded credentials before letting the error
     propagate.
+
+    Also resolves a leading bare "git" to _git_path() - the one
+    chokepoint nearly every git invocation in this module goes through,
+    so this alone fixes every ["git", ...] call site that uses it.
     """
+    if args and args[0] == "git":
+        args = [_git_path(), *args[1:]]
     try:
         subprocess.run(args, check=True, **kwargs)
     except subprocess.CalledProcessError as exc:
@@ -433,17 +462,17 @@ def _checkout_sha(dest: Path, sha: str, pr_number: int | None, *, force: bool = 
     scan's branch head are always on a real, live branch ref, so callers
     pass pr_number=None for both and this never takes the fallback path.
     """
-    args = ["git", "checkout", "-q", *(["-f"] if force else []), sha]
+    args = [_git_path(), "checkout", "-q", *(["-f"] if force else []), sha]
     try:
         subprocess.run(args, cwd=dest, check=True)
     except subprocess.CalledProcessError:
         if pr_number is None:
             raise
         subprocess.run(
-            ["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"], cwd=dest, check=True
+            [_git_path(), "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"], cwd=dest, check=True
         )
         subprocess.run(
-            ["git", "checkout", "-q", *(["-f"] if force else []), "FETCH_HEAD"], cwd=dest, check=True
+            [_git_path(), "checkout", "-q", *(["-f"] if force else []), "FETCH_HEAD"], cwd=dest, check=True
         )
 
 
@@ -475,16 +504,16 @@ def _fetch_and_checkout(dest: Path, sha: str, pr_number: int | None) -> None:
     small as `--depth 1`, which isn't safe for any current caller.
     """
     try:
-        subprocess.run(["git", "fetch", "-q", "origin", sha], cwd=dest, check=True)
+        subprocess.run([_git_path(), "fetch", "-q", "origin", sha], cwd=dest, check=True)
     except subprocess.CalledProcessError:
         if pr_number is None:
             raise
         subprocess.run(
-            ["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
+            [_git_path(), "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
             cwd=dest,
             check=True,
         )
-    subprocess.run(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest, check=True)
+    subprocess.run([_git_path(), "checkout", "-q", "FETCH_HEAD"], cwd=dest, check=True)
 
 
 def _clone_ref(url: str, ref: str, dest: Path, pr_number: int | None = None) -> None:
@@ -529,7 +558,7 @@ def _clone_ref(url: str, ref: str, dest: Path, pr_number: int | None = None) -> 
     finally:
         if (dest / ".git").exists():
             subprocess.run(
-                ["git", "remote", "set-url", "origin", _url_without_credentials(url)],
+                [_git_path(), "remote", "set-url", "origin", _url_without_credentials(url)],
                 cwd=dest,
                 check=True,
             )
@@ -612,12 +641,14 @@ def _ensure_persistent_checkout(
     if (checkout_dir / ".git").exists():
         _run_git(["git", "remote", "set-url", "origin", url], cwd=checkout_dir)
         try:
-            subprocess.run(["git", "fetch", "-q", "origin"], cwd=checkout_dir, check=True)
+            subprocess.run([_git_path(), "fetch", "-q", "origin"], cwd=checkout_dir, check=True)
             _checkout_sha(checkout_dir, checkout_sha, pr_number, force=True)
-            subprocess.run(["git", "clean", "-q", "-fdx"], cwd=checkout_dir, check=True)
+            subprocess.run([_git_path(), "clean", "-q", "-fdx"], cwd=checkout_dir, check=True)
         finally:
             subprocess.run(
-                ["git", "remote", "set-url", "origin", credential_free_url], cwd=checkout_dir, check=True
+                [_git_path(), "remote", "set-url", "origin", credential_free_url],
+                cwd=checkout_dir,
+                check=True,
             )
     else:
         checkout_dir.mkdir(parents=True, exist_ok=True)
@@ -627,7 +658,7 @@ def _ensure_persistent_checkout(
         finally:
             if (checkout_dir / ".git").exists():
                 subprocess.run(
-                    ["git", "remote", "set-url", "origin", credential_free_url],
+                    [_git_path(), "remote", "set-url", "origin", credential_free_url],
                     cwd=checkout_dir,
                     check=True,
                 )
@@ -688,7 +719,7 @@ def _build_unchanged_scan_cache(
     if previous_sha is None:
         return None
     diff_result = subprocess.run(
-        ["git", "diff", "--name-only", previous_sha, current_sha],
+        [_git_path(), "diff", "--name-only", previous_sha, current_sha],
         cwd=checkout_dir, capture_output=True, text=True, errors="ignore",
     )
     if diff_result.returncode != 0:
@@ -754,7 +785,10 @@ def _run_scan(repo_dir: Path, unchanged_scan_cache_path: Path | None = None) -> 
     # win on a developer's own machine. Left unset for a developer running
     # `aletheore scan` directly, same as the depth caps above.
     env["ALETHEORE_DISABLE_PARALLEL_PARSE"] = "1"
-    subprocess.run(["aletheore", "scan", str(repo_dir)], check=True, env=env)
+    # Bandit B607: resolve the CLI's own installed path rather than a bare
+    # "aletheore" name, same class as _git_path() above.
+    aletheore_path = shutil.which("aletheore") or "aletheore"
+    subprocess.run([aletheore_path, "scan", str(repo_dir)], check=True, env=env)
     return repo_dir / ".aletheore" / "air.json"
 
 
@@ -1785,15 +1819,15 @@ def _clone_pr_head(url: str, pr_number: int, dest: Path) -> None:
         _run_git(["git", "init", "-q", str(dest)])
         _run_git(["git", "remote", "add", "origin", url], cwd=dest)
         subprocess.run(
-            ["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
+            [_git_path(), "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
             cwd=dest,
             check=True,
         )
-        subprocess.run(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest, check=True)
+        subprocess.run([_git_path(), "checkout", "-q", "FETCH_HEAD"], cwd=dest, check=True)
     finally:
         if (dest / ".git").exists():
             subprocess.run(
-                ["git", "remote", "set-url", "origin", _url_without_credentials(url)],
+                [_git_path(), "remote", "set-url", "origin", _url_without_credentials(url)],
                 cwd=dest,
                 check=True,
             )
@@ -1802,7 +1836,7 @@ def _clone_pr_head(url: str, pr_number: int, dest: Path) -> None:
 def _git_rev_parse_head(repo_dir: Path) -> str | None:
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=repo_dir, check=True, capture_output=True, text=True
+            [_git_path(), "rev-parse", "HEAD"], cwd=repo_dir, check=True, capture_output=True, text=True
         )
         return result.stdout.strip()
     except Exception:  # noqa: BLE001

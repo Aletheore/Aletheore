@@ -113,6 +113,27 @@ def _clear_redis_client_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_git_path_cache(monkeypatch):
+    # scan_worker.jobs._git_path() caches shutil.which("git") at module
+    # level - without resetting it per test, whichever test runs first in
+    # the whole session pins every later test to that one resolved value.
+    # Most existing git-subprocess tests here mock subprocess.run and
+    # assert on the literal "git" argv they themselves pass in, not
+    # whatever absolute path this machine happens to resolve it to, so
+    # this also defaults shutil.which("git") to return "git" itself -
+    # unchanged behavior for those tests. A test that wants to verify
+    # real path resolution (see test_run_git_resolves_the_bare_git_name_
+    # to_its_shutil_which_path) mocks shutil.which itself within the test
+    # body, which overrides this default the normal monkeypatch way.
+    from scan_worker import jobs
+
+    monkeypatch.setattr(jobs.shutil, "which", lambda name: "git" if name == "git" else None)
+    jobs._GIT_PATH = None
+    yield
+    jobs._GIT_PATH = None
+
+
+@pytest.fixture(autouse=True)
 def _no_real_paddle_ip_fetch(monkeypatch):
     # Without this, every full-route webhook test would make a real network
     # call to Paddle's /ips endpoint on the first request (module-level

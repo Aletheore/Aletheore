@@ -11768,6 +11768,55 @@ def test_run_git_scrubs_credentialed_url_from_a_failed_clone_error(tmp_path):
     assert "https://github.com/acme/does-not-exist.git" in exc_info.value.cmd
 
 
+def test_run_git_resolves_the_bare_git_name_to_its_shutil_which_path(monkeypatch):
+    # Bandit B607: a bare "git" string re-resolves PATH again at execution
+    # time, which could pick up a different binary than a security review
+    # of PATH would have checked - same class as the ollama/sh fixes
+    # elsewhere in this codebase, just in jobs.py's own git-shelling-out
+    # helper. _run_git is the one chokepoint nearly every git invocation
+    # in this module goes through, so resolving here fixes every
+    # ["git", ...] call site that uses it in one place.
+    from scan_worker import jobs
+
+    monkeypatch.setattr(jobs.shutil, "which", lambda name: "/usr/local/bin/git" if name == "git" else None)
+    jobs._GIT_PATH = None  # reset the module-level cache between tests
+    captured = {}
+    monkeypatch.setattr(
+        jobs.subprocess, "run", lambda args, **kw: captured.update(args=args, kwargs=kw)
+    )
+
+    jobs._run_git(["git", "status"], cwd="/tmp")
+
+    assert captured["args"] == ["/usr/local/bin/git", "status"]
+    assert captured["kwargs"]["check"] is True
+
+
+def test_git_path_falls_back_to_the_bare_name_when_git_is_not_on_path(monkeypatch):
+    from scan_worker import jobs
+
+    monkeypatch.setattr(jobs.shutil, "which", lambda name: None)
+    jobs._GIT_PATH = None
+
+    assert jobs._git_path() == "git"
+
+
+def test_run_scan_resolves_the_bare_aletheore_cli_name(tmp_path, monkeypatch):
+    # Same Bandit B607 class as the git fixes above, one more bare
+    # executable name this file passed straight to subprocess.run.
+    from scan_worker import jobs
+
+    monkeypatch.setattr(jobs.shutil, "which", lambda name: "/opt/venv/bin/aletheore" if name == "aletheore" else None)
+    captured = {}
+    monkeypatch.setattr(
+        jobs.subprocess, "run", lambda args, **kw: captured.update(args=args, kwargs=kw)
+    )
+
+    jobs._run_scan(tmp_path)
+
+    assert captured["args"][0] == "/opt/venv/bin/aletheore"
+    assert captured["args"][1:3] == ["scan", str(tmp_path)]
+
+
 def test_evidence_for_review_prefers_the_exact_head_sha_scan(monkeypatch):
     # Real staleness bug this fixes: run_pr_scan_job and run_flash_review_job
     # are enqueued independently on the same webhook event with no ordering
