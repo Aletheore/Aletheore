@@ -364,11 +364,11 @@ recently started.
 
 ## Current Server Snapshot
 
-As of 2026-10-01, following a redeploy to `master` (`git fetch` + `git reset --hard origin/master`
-+ `docker compose build app-server scan-worker health-worker scheduler` + `docker compose up -d
---no-deps --scale scan-worker=2` for those four, then a corrective `docker compose build
-scan-worker-2` + `docker compose up -d --no-deps --scale scan-worker=1 scan-worker scan-worker-2`),
-a partial inspection found (host-side output was read back from the operator rather than run
+As of 2026-10-01, following a redeploy to `master` (`git fetch`, then `git reset --hard
+origin/master`, then `docker compose build app-server scan-worker health-worker scheduler`, then
+`docker compose up -d --no-deps --scale scan-worker=2` for those four, then a corrective
+`docker compose build scan-worker-2` and `docker compose up -d --no-deps --scale scan-worker=1
+scan-worker scan-worker-2`), a partial inspection found (host-side output was read back from the operator rather than run
 directly, and the pass covered less than the full Required Checks list; the gaps are the last
 bullet):
 
