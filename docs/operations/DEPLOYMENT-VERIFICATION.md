@@ -341,7 +341,63 @@ Before claiming a hardening change is live, verify:
 - Backup script availability.
 - Restore drill target database availability.
 
+## Deploy Recipe
+
+Repo on the host: `/root/aletheore` (compose file in `github-app/`). `scan-worker` and
+`scan-worker-2` are two separate Compose services, each with its own image name, not one service
+scaled to two replicas. Roll them as separate services:
+
+```bash
+cd /root/aletheore && git fetch origin && git reset --hard origin/master && cd github-app
+docker compose build app-server scan-worker scan-worker-2 health-worker scheduler
+docker compose up -d --no-deps app-server scan-worker scan-worker-2 health-worker scheduler
+```
+
+Do not pass `--scale scan-worker=2`. The 2026-08-22 to 2026-08-24 snapshots below used it, and on
+2026-10-01 it created a third worker (`github-app-scan-worker-2`, a second replica of the
+`scan-worker` service) while the real `scan-worker-2` service kept running on its old image, so
+jobs could still be picked up by pre-deploy code. Building only `scan-worker` does not rebuild
+`scan-worker-2`: they have separate image tags even though they share a Dockerfile, so the
+second build is a fast cache hit but still has to be run. After any deploy, `docker ps` should
+list exactly `github-app-scan-worker-1` and `github-app-scan-worker-2-1`, both `healthy` and both
+recently started.
+
 ## Current Server Snapshot
+
+As of 2026-10-01, following a redeploy to `master` (`git fetch`, then `git reset --hard
+origin/master`, then `docker compose build app-server scan-worker health-worker scheduler`, then
+`docker compose up -d --no-deps --scale scan-worker=2` for those four, then a corrective
+`docker compose build scan-worker-2` and `docker compose up -d --no-deps --scale scan-worker=1
+scan-worker scan-worker-2`), a partial inspection found (host-side output was read back from the operator rather than run
+directly, and the pass covered less than the full Required Checks list; the gaps are the last
+bullet):
+
+- Host: `srv1675832` (`root@187.127.169.89`), path `/root/aletheore`.
+- Commit: `72ece8d` (#890), which includes #889. No migrations in either PR.
+- Changes live: the deterministic-scan hardening (#889: a scanner that silently failed or was
+  skipped now reports a neutral check instead of a false green, the new/resolved split follows
+  file renames, PMD's `CloseResource` rule is no longer blanket-silenced, `.repowise` is excluded,
+  and subprocess calls to `git` and the `aletheore` CLI resolve their full path first) and the
+  static-analysis dismissal wiring plus content-fingerprint identity (#890: a dismissed finding no
+  longer fails the check, and a finding whose line shifted is no longer reported as both new and
+  resolved).
+- First pass used the stale `--scale scan-worker=2` form: `scan-worker` and `scan-worker-2` ended up
+  as three containers, one of them (`github-app-scan-worker-2-1`) still on the old image. The
+  corrective command above rebuilt and recreated `scan-worker-2` and removed the extra replica.
+  Final `docker ps`: `github-app-scan-worker-1` and `github-app-scan-worker-2-1`, both `healthy`,
+  alongside `app-server`, `health-worker`, `scheduler` (all `healthy`), plus the untouched
+  `jina-embed`, `postgres`, `redis`, `caddy`, `autoheal`.
+- Verified live: `grep -c "_git_path" /app/scan_worker/jobs.py` inside `github-app-scan-worker-1`
+  returned 20 (the new code, not just the repo checkout); `docker logs --since 10m` on the same
+  container matched zero lines for `error|traceback`; the public `https://app.aletheore.com/healthz`
+  returned `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`.
+- Not re-verified this pass: working tree status, the `app-server` startup/migration log line, the
+  other containers' logs, and every item under Required Checks that no change in this deploy
+  touches (Docker socket mount absence, non-root users, CPU/memory limits, backup cron, base image
+  digest pinning, restore drill, disk space). `scan-worker-2-1` was not grep-checked for
+  `_git_path` directly; its image was built from the same cached layers as `scan-worker-1`'s.
+
+## 2026-09-11 Snapshot
 
 As of 2026-09-11, following a redeploy to `master` (`git fetch` + `git merge --ff-only
 origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker
