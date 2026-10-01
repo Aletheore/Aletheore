@@ -25,6 +25,42 @@ os.environ.setdefault("PADDLE_WEBHOOK_SECRET", "pdl_ntfset_test_secret")
 os.environ.setdefault("PADDLE_CLIENT_TOKEN", "test_conftest_client_token")
 os.environ.setdefault("PUBLIC_BASE_URL", "http://test")
 
+MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
+
+# data_deletion_log, webhook_deliveries, and affiliates are listed explicitly
+# because none has an FK to installations (see 035_data_deletion_log.sql,
+# 036_webhook_deliveries.sql, and 046_affiliate_program.sql) - the CASCADE
+# from installations doesn't reach them, so without this their rows would
+# leak from one test into the next. affiliate_referrals/affiliate_commissions
+# need no separate entry: both DO have an installations FK with ON DELETE
+# CASCADE, so truncating installations already clears them.
+# processed_paddle_transactions is listed explicitly for the same reason as
+# webhook_deliveries above: it has no FK to installations (a transaction_id
+# is a Paddle identifier, not an installation one), so the CASCADE from
+# truncating installations never reaches it - without this it would leak
+# rows across tests/runs, and
+# test_credit_topup_purchase_is_idempotent_on_replayed_transaction relies on
+# a clean slate to tell a genuine first credit from a stale row left by a
+# previous run.
+_TRUNCATE_SQL = (
+    "TRUNCATE installations, sessions, cli_telemetry_events, "
+    "github_user_emails, sent_emails, data_deletion_log, webhook_deliveries, affiliates, "
+    "processed_paddle_transactions CASCADE"
+)
+
+
+async def _apply_migrations(conn) -> None:
+    # Every migration file is idempotent (CREATE TABLE IF NOT EXISTS, etc. -
+    # see scripts/migrate.py), so it's safe to apply all of them here
+    # regardless of whether this database already has some or all of them
+    # applied.
+    for migration in sorted(MIGRATIONS_DIR.glob("*.sql")):
+        await conn.execute(migration.read_text())
+
+
+async def _truncate_test_tables(conn) -> None:
+    await conn.execute(_TRUNCATE_SQL)
+
 
 @pytest_asyncio.fixture
 async def pool():
@@ -33,35 +69,23 @@ async def pool():
     except OSError as exc:
         pytest.skip(f"test Postgres unavailable: {exc}")
     async with p.acquire() as conn:
-        # Every migration file is idempotent (CREATE TABLE IF NOT EXISTS,
-        # etc. - see scripts/migrate.py), so it's safe to apply all of
-        # them here regardless of whether this database already has some
-        # or all of them applied.
-        migrations_dir = Path(__file__).resolve().parents[1] / "migrations"
-        for migration in sorted(migrations_dir.glob("*.sql")):
-            await conn.execute(migration.read_text())
-        # data_deletion_log, webhook_deliveries, and affiliates are listed
-        # explicitly because none has an FK to installations (see
-        # 035_data_deletion_log.sql, 036_webhook_deliveries.sql, and
-        # 046_affiliate_program.sql) - the CASCADE from installations
-        # doesn't reach them, so without this their rows would leak from
-        # one test into the next. affiliate_referrals/affiliate_commissions
-        # need no separate entry: both DO have an installations FK with ON
-        # DELETE CASCADE, so truncating installations already clears them.
-        # processed_paddle_transactions is listed explicitly for the same
-        # reason as webhook_deliveries above: it has no FK to installations
-        # (a transaction_id is a Paddle identifier, not an installation
-        # one), so the CASCADE from truncating installations never reaches
-        # it - without this it would leak rows across tests/runs, and
-        # test_credit_topup_purchase_is_idempotent_on_replayed_transaction
-        # relies on a clean slate to tell a genuine first credit from a
-        # stale row left by a previous run.
-        await conn.execute(
-            "TRUNCATE installations, sessions, cli_telemetry_events, "
-            "github_user_emails, sent_emails, data_deletion_log, webhook_deliveries, affiliates, "
-            "processed_paddle_transactions CASCADE"
-        )
+        await _apply_migrations(conn)
+        await _truncate_test_tables(conn)
     yield p
+    async with p.acquire() as conn:
+        # Also truncate on teardown, not just setup - a row this test itself
+        # inserted (e.g. a dismissed_findings row) otherwise survives in the
+        # real, persistent test Postgres until the *next* test's setup
+        # truncate runs - but that next test's setup replays every migration
+        # file FIRST (see _apply_migrations) and reaches this leftover row
+        # while a migration (058) has its CHECK constraint temporarily
+        # narrowed, before a later migration (068) widens it again - e.g. a
+        # leftover 'static_analysis' finding_type row fails migration 058's
+        # replayed ALTER TABLE ADD CONSTRAINT with a CheckViolationError
+        # that has nothing to do with whatever the next test actually
+        # asserts. Same before-and-after shape as _flush_test_redis below
+        # for the same cross-test-leakage reason.
+        await _truncate_test_tables(conn)
     await p.close()
 
 
