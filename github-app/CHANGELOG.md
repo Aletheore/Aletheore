@@ -18,6 +18,22 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-10-01
+
+Commit `72ece8d`, no migrations. `app-server`, `scan-worker`, `scan-worker-2`, `health-worker`
+and `scheduler` rebuilt; see the "Current Server Snapshot" in `DEPLOYMENT-VERIFICATION.md` for what
+was and was not verified live, and for a deploy-recipe correction (do not use `--scale
+scan-worker=2`, `scan-worker-2` is its own service).
+
+- **#889 - deterministic scan hardening.** A default-on scanner that was skipped or crashed now
+  makes the "Aletheore Deterministic Scan" check neutral instead of a false green. The
+  new/resolved split follows file renames. PMD's `CloseResource` rule is no longer blanket-silenced
+  and `.repowise` is excluded from scans. Subprocess calls to `git` and the `aletheore` CLI now
+  resolve their full executable path first (Bandit B607).
+- **#890 - static-analysis check run false failures.** Dismissed static-analysis findings are now
+  filtered out of the check run, and a finding whose line moved because of an unrelated edit is
+  matched by a content fingerprint instead of being reported as both new and resolved.
+
 ## 2026-09-26
 
 Tagged `github-app-deploy-2026-09-26` (commit `3c09867`), no migrations. One deploy, all five code
