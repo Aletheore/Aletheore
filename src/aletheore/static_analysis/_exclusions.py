@@ -14,11 +14,13 @@ from aletheore.scanner.detect import IGNORED_DIRS
 # `git status` as real untracked content) nor ".repowise" (Repowise's own
 # local index/wiki cache - 51MB, confirmed live as the reason a full Bearer
 # scan of this repo took over 10 minutes when the same scan scoped to just
-# github-app/ took 18.7s) is in IGNORED_DIRS at all. Both are real,
-# separate gaps worth fixing in scanner/detect.py too (language detection/
-# dead-code/secrets scanning would double-count or slow down the same
-# way), flagged here rather than silently patched into the shared constant
-# as a side effect of this change.
+# github-app/ took 18.7s) was in IGNORED_DIRS at the time this was written.
+# ".repowise" has since been added to the shared IGNORED_DIRS constant
+# (language detection/dead-code/secrets scanning get it for free now) -
+# kept here too as a harmless, defense-in-depth duplicate rather than
+# trusting a single list. ".worktrees" has no fixed name requirement for
+# EnterWorktree's own directories and isn't a stable constant to add to
+# IGNORED_DIRS the same way; it stays local to this module.
 _EXTRA_EXCLUDED_DIRS = {".worktrees", ".repowise"}
 
 

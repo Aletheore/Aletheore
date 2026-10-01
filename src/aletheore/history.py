@@ -197,7 +197,49 @@ def _static_analysis_block(evidence: dict) -> dict:
     )
 
 
-def _compute_curated_diff(old: dict, new: dict) -> dict:
+# The two markers check_static_analysis's own orchestrator (static_analysis/
+# __init__.py) already uses for an INTENTIONAL skip - bearer/joern simply
+# not opted into this run, or SonarQube not configured - as opposed to a
+# default-on scanner (semgrep/gosec/bandit/trivy/pmd) that was supposed to
+# run and didn't (tool missing, timed out, crashed, produced unparseable
+# output). Matching on these exact strings rather than a tool allowlist:
+# an opted-in bearer/joern run that genuinely fails gets its own scanner's
+# real failure reason instead, which won't match either marker and
+# correctly reads as unexpected.
+_INTENTIONAL_SKIP_MARKERS = ("skipped (opt-in", "SonarQube not configured")
+
+
+def _unexpected_tool_skips(tools_skipped: list[dict]) -> list[dict]:
+    """tools_skipped entries that mean a scanner was SUPPOSED to run this
+    pass but didn't - as opposed to bearer/joern/SonarQube's normal,
+    expected not-opted-in/not-configured state. Real gap this closes: a
+    default-on scanner failing (registry outage, binary missing, a crash)
+    left new_findings empty for the exact same reason a genuinely clean
+    repo would - nothing distinguished "nothing wrong" from "didn't look"
+    anywhere downstream of compute_diff."""
+    return [
+        skip
+        for skip in tools_skipped
+        if not str(skip.get("reason", "")).startswith(_INTENTIONAL_SKIP_MARKERS)
+    ]
+
+
+def _rename_aware_findings(findings: list[dict], renamed_paths: dict[str, str]) -> list[dict]:
+    """Return `findings` with each finding's "path" remapped through
+    `renamed_paths` ({old_path: new_path}, GitHub compare API's own
+    previous_filename -> filename shape) when it names an old path that
+    was renamed - a shallow copy per remapped finding, so the caller's
+    original list/dicts are never mutated. A finding whose path isn't a
+    renamed_paths key is returned unchanged (same dict, not copied)."""
+    if not renamed_paths:
+        return findings
+    return [
+        {**f, "path": renamed_paths[f["path"]]} if f.get("path") in renamed_paths else f
+        for f in findings
+    ]
+
+
+def _compute_curated_diff(old: dict, new: dict, renamed_paths: dict[str, str] | None = None) -> dict:
     result: dict = {}
     caveats = []
 
@@ -294,24 +336,35 @@ def _compute_curated_diff(old: dict, new: dict) -> dict:
     resolved_vulns = filter_by_severity(resolved_vulns, severity_threshold)
     result["vulnerabilities"] = {"new": new_vulns, "resolved": resolved_vulns}
 
-    # Identity prefers each finding's own content_fingerprint (a hash of
-    # the source lines around it - see static_analysis/__init__.py's
-    # _add_content_fingerprints) over its exact line number, so an
-    # unrelated edit earlier in the same file that shifts every later
-    # finding's line doesn't read as that finding being resolved and a
-    # new one appearing in its place - real case: PR #888, where fixing one
-    # Bandit finding shifted 4 unrelated, pre-existing findings below it and
-    # failed the static-analysis check run on all 4. Falls back to the
-    # old (tool, rule_id, path, line) identity per-finding when no
-    # fingerprint exists (a line-less misconfig finding, or evidence from
-    # before this field existed) - see
-    # docs/audits/2026-10-01-static-analysis-dismissal-and-line-shift.md.
+    # Two complementary identity mechanisms, both needed:
+    # - content_fingerprint (a hash of the source lines around a finding -
+    #   see static_analysis/__init__.py's _add_content_fingerprints) is
+    #   preferred over exact line number, so an unrelated edit earlier in
+    #   the same file that shifts every later finding's line doesn't read
+    #   as that finding being resolved and a new one appearing in its
+    #   place - real case: PR #888, where fixing one Bandit finding
+    #   shifted 4 unrelated, pre-existing findings below it and failed the
+    #   static-analysis check run on all 4. Falls back to the old (tool,
+    #   rule_id, path, line) identity per-finding when no fingerprint
+    #   exists (a line-less misconfig finding, or evidence from before
+    #   this field existed) - see
+    #   docs/audits/2026-10-01-static-analysis-dismissal-and-line-shift.md.
+    # - renamed_paths (below, via _rename_aware_findings) covers the other
+    #   half of the same failure mode: a pure file rename, where even a
+    #   matching content_fingerprint can't help because "path" is still
+    #   part of the identity tuple and differs between the old and new
+    #   finding.
+    new_static_analysis_tool_skips = new_static_analysis.get("tools_skipped", [])
     new_static_analysis, resolved_static_analysis = _new_and_resolved(
-        old_static_analysis["findings"],
+        _rename_aware_findings(old_static_analysis["findings"], renamed_paths or {}),
         new_static_analysis["findings"],
         key_fn=_static_analysis_identity_fn(old_static_analysis["findings"], new_static_analysis["findings"]),
     )
-    result["static_analysis"] = {"new": new_static_analysis, "resolved": resolved_static_analysis}
+    result["static_analysis"] = {
+        "new": new_static_analysis,
+        "resolved": resolved_static_analysis,
+        "unexpected_tool_skips": _unexpected_tool_skips(new_static_analysis_tool_skips),
+    }
 
     new_violations, resolved_violations = _new_and_resolved(
         old["architecture"]["layer_violations"]["violations"],
@@ -463,10 +516,19 @@ def _static_analysis_identity_fn(old_findings: list[dict], new_findings: list[di
     return lambda f: _static_analysis_identity(f, coarse)
 
 
-def compute_diff(old: dict, new: dict, full: bool = False) -> dict:
+def compute_diff(
+    old: dict, new: dict, full: bool = False, renamed_paths: dict[str, str] | None = None
+) -> dict:
+    """`renamed_paths` ({old_path: new_path}) is optional, curated-mode-only
+    data (GitHub compare API's own previous_filename -> filename shape, the
+    same data summarize_file_changes already consumes) that makes the
+    static-analysis new/resolved split rename-aware. Omitting it preserves
+    the prior behavior exactly - a renamed file's carried-over findings
+    still read as both resolved and new, same as every caller that can't
+    supply rename data."""
     if full:
         return _compute_full_diff(old, new)
-    return _compute_curated_diff(old, new)
+    return _compute_curated_diff(old, new, renamed_paths=renamed_paths)
 
 
 def _aletheore_version() -> str:

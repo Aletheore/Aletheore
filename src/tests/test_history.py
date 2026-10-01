@@ -203,7 +203,7 @@ def test_compute_diff_reports_no_new_or_resolved_when_identical():
 
     assert diff["secrets"] == {"new": [], "resolved": []}
     assert diff["vulnerabilities"] == {"new": [], "resolved": []}
-    assert diff["static_analysis"] == {"new": [], "resolved": []}
+    assert diff["static_analysis"] == {"new": [], "resolved": [], "unexpected_tool_skips": []}
     assert diff["layer_violations"] == {"new": [], "resolved": []}
     assert diff["endpoints"] == {"new": [], "resolved": []}
     assert diff["aggregate_deltas"] == {
@@ -298,6 +298,116 @@ def test_compute_diff_detects_a_resolved_static_analysis_finding():
     assert diff["static_analysis"]["new"] == []
     assert len(diff["static_analysis"]["resolved"]) == 1
     assert diff["static_analysis"]["resolved"][0]["rule_id"] == "some-rule"
+
+
+def test_compute_diff_rename_aware_static_analysis_does_not_misreport_an_unchanged_finding():
+    # Real gap: static-analysis identity is (tool, rule_id, path, line) -
+    # a file rename with zero content change makes every finding in it
+    # "resolved" at the old path and "new" at the new path, 100% of the
+    # time, since path is part of the identity tuple and nothing told the
+    # diff the two paths are the same file. Passing renamed_paths (the
+    # same {old: new} mapping GitHub's compare API already reports via
+    # previous_filename, and that summarize_file_changes already consumes
+    # for the file-overview section) lets the identity check follow the
+    # rename instead of seeing two unrelated files.
+    old = base_evidence()
+    new = base_evidence()
+    new["security"]["static_analysis"]["findings"][0]["path"] = "c.py"
+
+    diff = compute_diff(old, new, renamed_paths={"a.py": "c.py"})
+
+    assert diff["static_analysis"]["new"] == []
+    assert diff["static_analysis"]["resolved"] == []
+
+
+def test_compute_diff_without_renamed_paths_still_reports_the_old_false_positive():
+    # Documents the status quo for a caller that doesn't pass renamed_paths
+    # (e.g. full_diff mode, or any caller without PR rename data handy) -
+    # renamed_paths is opt-in, not a silent behavior change for existing
+    # callers.
+    old = base_evidence()
+    new = base_evidence()
+    new["security"]["static_analysis"]["findings"][0]["path"] = "c.py"
+
+    diff = compute_diff(old, new)
+
+    assert len(diff["static_analysis"]["new"]) == 1
+    assert len(diff["static_analysis"]["resolved"]) == 1
+
+
+def test_compute_diff_rename_aware_static_analysis_still_detects_a_real_new_finding_at_the_new_path():
+    # A rename must not suppress a genuinely NEW finding introduced at the
+    # new path alongside the carried-over one.
+    old = base_evidence()
+    new = base_evidence()
+    new["security"]["static_analysis"]["findings"][0]["path"] = "c.py"
+    new["security"]["static_analysis"]["findings"].append(
+        {
+            "tool": "semgrep",
+            "rule_id": "another-rule",
+            "severity": "major",
+            "type": "bug",
+            "path": "c.py",
+            "line": 99,
+            "message": "m2",
+        }
+    )
+
+    diff = compute_diff(old, new, renamed_paths={"a.py": "c.py"})
+
+    assert len(diff["static_analysis"]["new"]) == 1
+    assert diff["static_analysis"]["new"][0]["rule_id"] == "another-rule"
+    assert diff["static_analysis"]["resolved"] == []
+
+
+def test_compute_diff_surfaces_an_unexpected_default_on_scanner_skip():
+    # Real gap: a default-on scanner (semgrep/gosec/bandit/trivy/pmd)
+    # failing to run - a registry outage, the binary disappearing, an
+    # unparseable-output edge case _run_scanner_safely() catches - was
+    # recorded in evidence's own tools_skipped list but never read by
+    # anything downstream of compute_diff, so new_findings staying empty
+    # (because the tool never ran, not because nothing was wrong) posted
+    # as a clean "all findings resolved" result with zero visible signal
+    # a scanner didn't run at all.
+    old = base_evidence()
+    new = base_evidence()
+    new["security"]["static_analysis"]["tools_skipped"] = [
+        {"tool": "semgrep", "reason": "semgrep exited 2: registry unreachable"},
+    ]
+
+    diff = compute_diff(old, new)
+
+    assert diff["static_analysis"]["unexpected_tool_skips"] == [
+        {"tool": "semgrep", "reason": "semgrep exited 2: registry unreachable"},
+    ]
+
+
+def test_compute_diff_does_not_surface_an_intentional_opt_in_skip():
+    # bearer/joern not being opted into, and SonarQube not being
+    # configured, are the normal, expected case on almost every scan -
+    # surfacing those as "unexpected" would make this fire on nearly
+    # every PR and defeat the point of a signal that's supposed to mean
+    # something broke.
+    old = base_evidence()
+    new = base_evidence()
+    new["security"]["static_analysis"]["tools_skipped"] = [
+        {
+            "tool": "bearer",
+            "reason": "skipped (opt-in - pass --check-bearer to include it; useful but "
+            "can take significantly longer than the other scanners on a large repo)",
+        },
+        {
+            "tool": "joern",
+            "reason": "skipped (opt-in - pass --check-joern to include it; requires Joern "
+            "installed separately, and a CPG build is real per-scan JVM/parsing cost, "
+            "not a fast stateless subprocess call like the other scanners here)",
+        },
+        {"tool": "sonarqube", "reason": "SonarQube not configured (set SONARQUBE_HOST_URL to enable)"},
+    ]
+
+    diff = compute_diff(old, new)
+
+    assert diff["static_analysis"]["unexpected_tool_skips"] == []
 
 
 def test_compute_diff_does_not_crash_diffing_evidence_missing_static_analysis_entirely():

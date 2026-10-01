@@ -12,6 +12,10 @@ IGNORED_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".aletheore",
     ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".cache",
     "dist", "build", "out", "release", ".next", "coverage", "htmlcov",
+    # Repowise's own index/cache directory - no .git of its own (so the
+    # nested-git-worktree detector below never catches it), gitignored by
+    # convention, never project source.
+    ".repowise",
     # .NET's intermediate build directory - confirmed by a real `dotnet build`:
     # it fills this with auto-generated .cs files (assembly attributes, etc.)
     # that would otherwise get scanned as real source. Not adding "bin" (.NET's
