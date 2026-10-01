@@ -1824,6 +1824,107 @@ def test_maybe_create_static_analysis_check_run_succeeds_with_no_new_findings(mo
     assert created[0][1] == "Aletheore Deterministic Scan"
 
 
+def test_maybe_create_static_analysis_check_run_reports_neutral_when_a_default_on_scanner_was_skipped(
+    monkeypatch,
+):
+    # Real gap: a default-on scanner (semgrep/gosec/bandit/trivy/pmd)
+    # failing to run left new_findings empty for the exact same reason a
+    # genuinely clean repo would, so this posted "success" with zero
+    # visible signal the result might be incomplete. "neutral" (not
+    # "failure") - a scanner outage shouldn't block merge on every PR the
+    # way a real finding should, but it must not read as a clean pass
+    # either.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    created = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run",
+        lambda client, token, repo, sha, conclusion, summary, name="", annotations=None: created.append(
+            (conclusion, name, summary)
+        ),
+    )
+
+    from scan_worker.jobs import _maybe_create_static_analysis_check_run
+
+    _maybe_create_static_analysis_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        diff={
+            "static_analysis": {
+                "new": [],
+                "resolved": [],
+                "unexpected_tool_skips": [
+                    {"tool": "semgrep", "reason": "semgrep exited 2: registry unreachable"}
+                ],
+            }
+        },
+    )
+
+    assert len(created) == 1
+    conclusion, name, summary = created[0]
+    assert conclusion == "neutral"
+    assert name == "Aletheore Deterministic Scan"
+    assert "semgrep" in summary
+    assert "registry unreachable" in summary
+
+
+def test_maybe_create_static_analysis_check_run_fails_with_new_findings_even_when_a_scanner_was_also_skipped(
+    monkeypatch,
+):
+    # A real finding from the scanners that DID run must still fail the
+    # check even if a different scanner didn't run - the skip is
+    # transparency on top of a real result, never a reason to downgrade
+    # an actual finding to "neutral".
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    created = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run",
+        lambda client, token, repo, sha, conclusion, summary, name="", annotations=None: created.append(
+            (conclusion, name, summary)
+        ),
+    )
+
+    from scan_worker.jobs import _maybe_create_static_analysis_check_run
+
+    _maybe_create_static_analysis_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        diff={
+            "static_analysis": {
+                "new": [
+                    {
+                        "tool": "bandit",
+                        "rule_id": "B607",
+                        "severity": "major",
+                        "type": "bug",
+                        "path": "app.py",
+                        "line": 10,
+                        "message": "partial executable path",
+                    }
+                ],
+                "resolved": [],
+                "unexpected_tool_skips": [
+                    {"tool": "trivy", "reason": "trivy timed out after 60s"}
+                ],
+            }
+        },
+    )
+
+    assert len(created) == 1
+    conclusion, name, summary = created[0]
+    assert conclusion == "failure"
+    assert "app.py:10" in summary
+    assert "trivy" in summary
+    assert "timed out" in summary
+
+
 def test_maybe_create_static_analysis_check_run_runs_on_free_plan(monkeypatch):
     # Real, deliberate difference from every other check run in this file
     # (secrets, vulnerabilities, regression fence, regression risk all

@@ -1092,15 +1092,38 @@ def _maybe_create_static_analysis_check_run(
         return
 
     new_findings = diff.get("static_analysis", {}).get("new", [])
+    # compute_diff's own tools_skipped filtering already drops the normal,
+    # expected case (bearer/joern not opted in, SonarQube not configured) -
+    # anything that survives here means a default-on scanner (semgrep/
+    # gosec/bandit/trivy/pmd) was supposed to run this pass and didn't,
+    # so new_findings staying empty might mean "didn't look", not "nothing
+    # wrong". See history.py's _unexpected_tool_skips.
+    unexpected_skips = diff.get("static_analysis", {}).get("unexpected_tool_skips", [])
+    skip_note = (
+        "\n\n⚠️ The following scanner(s) did not run, so this result may be incomplete:\n"
+        + "\n".join(f"- {skip.get('tool')}: {skip.get('reason')}" for skip in unexpected_skips)
+        if unexpected_skips
+        else ""
+    )
+
     if new_findings:
         summary = "\n".join(
             f"- `{finding.get('path')}:{finding.get('line')}` - {finding.get('message')}"
             for finding in new_findings
-        )
+        ) + skip_note
         create_check_run(
             client, token, repo_full_name, head_sha, "failure", summary,
             name="Aletheore Deterministic Scan",
             annotations=_static_analysis_annotations(new_findings),
+        )
+    elif unexpected_skips:
+        # Neutral, not success: a scanner outage shouldn't block merge on
+        # every PR the way a real finding should, but it must not read as
+        # a clean pass either.
+        create_check_run(
+            client, token, repo_full_name, head_sha, "neutral",
+            "No new static analysis findings, but not every scanner ran." + skip_note,
+            name="Aletheore Deterministic Scan",
         )
     else:
         create_check_run(

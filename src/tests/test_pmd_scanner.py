@@ -155,8 +155,7 @@ def test_check_pmd_filters_known_noisy_rules(tmp_path):
     # Real finding (2026-09-21): unfiltered against gson (264 real Java
     # files), WrongTestAnnotation/UnitTestContainsTooManyAsserts alone
     # accounted for 70% of all violations - test-authoring-convention
-    # noise, not bugs. CloseResource sampled as a real false positive
-    # (flagged an in-memory JsonTreeWriter whose close() is a no-op).
+    # noise, not bugs.
     (tmp_path / "App.java").write_text("public class App {}\n")
     payload = {
         "files": [
@@ -164,7 +163,6 @@ def test_check_pmd_filters_known_noisy_rules(tmp_path):
                 "filename": str(tmp_path / "App.java"),
                 "violations": [
                     {"beginline": 1, "rule": "WrongTestAnnotation", "ruleset": "Error Prone", "priority": 3, "description": "m"},
-                    {"beginline": 2, "rule": "CloseResource", "ruleset": "Error Prone", "priority": 3, "description": "m"},
                     {"beginline": 3, "rule": "NullAssignment", "ruleset": "Error Prone", "priority": 3, "description": "real one"},
                 ],
             }
@@ -178,6 +176,37 @@ def test_check_pmd_filters_known_noisy_rules(tmp_path):
 
     assert len(result["findings"]) == 1
     assert result["findings"][0]["rule_id"] == "NullAssignment"
+
+
+def test_check_pmd_no_longer_blanket_silences_closeresource(tmp_path):
+    # CloseResource used to be in _NOISY_RULES repo-wide because ONE
+    # sampled hit on gson (Gson.java:545, a JsonTreeWriter whose close()
+    # is a no-op, not a real I/O resource) read as a false positive -
+    # but blanket-excluding a real bug-class rule for every repo because
+    # of one unrelated open-source sample meant a genuine unclosed file/
+    # socket/stream leak in any customer's Java code was never flagged
+    # through this pipeline at all. CloseResource is real findings now;
+    # an occasional in-memory-writer false positive is the right
+    # trade-off against silently losing the whole rule.
+    (tmp_path / "App.java").write_text("public class App {}\n")
+    payload = {
+        "files": [
+            {
+                "filename": str(tmp_path / "App.java"),
+                "violations": [
+                    {"beginline": 2, "rule": "CloseResource", "ruleset": "Error Prone", "priority": 3, "description": "stream never closed"},
+                ],
+            }
+        ]
+    }
+    mock_result = _mock_run(4, stdout=json.dumps(payload))
+
+    with patch("aletheore.static_analysis.pmd_scanner.shutil.which", return_value="/usr/local/bin/pmd"), \
+         patch("aletheore.static_analysis.pmd_scanner.subprocess.run", return_value=mock_result):
+        result = check_pmd(tmp_path)
+
+    assert len(result["findings"]) == 1
+    assert result["findings"][0]["rule_id"] == "CloseResource"
 
 
 def test_check_pmd_treats_a_fatal_exit_code_as_a_real_failure(tmp_path):
