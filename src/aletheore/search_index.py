@@ -918,7 +918,8 @@ def _try_auto_pull_ollama_model(model: str, base_url: str = DEFAULT_EMBEDDING_BA
     False if it didn't (no `ollama` CLI on PATH, network failure, pull
     itself failed) - the caller falls back to the same unavailable-provider
     handling as any other failure in that case."""
-    if shutil.which("ollama") is None:
+    ollama_path = shutil.which("ollama")
+    if ollama_path is None:
         return False
     print(
         f"aletheore: local embedding model '{model}' isn't pulled yet - running "
@@ -926,8 +927,11 @@ def _try_auto_pull_ollama_model(model: str, base_url: str = DEFAULT_EMBEDDING_BA
         file=sys.stderr,
     )
     try:
+        # Bandit B607: pass the path shutil.which just resolved, not a bare
+        # "ollama" - a bare name re-resolves PATH again at execution time,
+        # which could pick up a different binary than the one just checked.
         result = subprocess.run(
-            ["ollama", "pull", model],
+            [ollama_path, "pull", model],
             capture_output=True,
             text=True,
             timeout=OLLAMA_PULL_TIMEOUT_SECONDS,
@@ -1057,9 +1061,17 @@ def _try_auto_install_ollama(confirm_fn: Callable[[], bool] | None = None) -> bo
         )
         return False
 
+    sh_path = shutil.which("sh")
+    if sh_path is None:
+        print(
+            "aletheore: 'sh' isn't on PATH; continuing without installing Ollama",
+            file=sys.stderr,
+        )
+        return False
     try:
+        # Bandit B607: use the resolved path, not a bare "sh" name.
         result = subprocess.run(
-            ["sh"],
+            [sh_path],
             input=script.text,
             capture_output=True,
             text=True,
@@ -1119,7 +1131,8 @@ def _try_auto_start_ollama_server(base_url: str = DEFAULT_EMBEDDING_BASE_URL) ->
     OLLAMA_SERVER_START_TIMEOUT_SECONDS - the caller falls back to the
     same unavailable-provider handling as any other failure.
     """
-    if shutil.which("ollama") is None:
+    ollama_path = shutil.which("ollama")
+    if ollama_path is None:
         return False
     print(
         "aletheore: Ollama is installed but its server isn't running - starting "
@@ -1134,8 +1147,9 @@ def _try_auto_start_ollama_server(base_url: str = DEFAULT_EMBEDDING_BASE_URL) ->
             )
         else:
             popen_kwargs["start_new_session"] = True
+        # Bandit B607: use the resolved path, not a bare "ollama" name.
         subprocess.Popen(
-            ["ollama", "serve"],
+            [ollama_path, "serve"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
