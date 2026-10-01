@@ -750,7 +750,7 @@ def test_run_pr_scan_job_uses_persistent_checkout_and_unchanged_cache_for_head(
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
@@ -820,7 +820,7 @@ def test_run_pr_scan_job_never_syncs_the_pr_head_checkout_into_the_persistent_gi
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
@@ -868,7 +868,7 @@ def test_run_pr_scan_job_never_syncs_the_pr_head_checkout_into_the_persistent_co
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
@@ -909,7 +909,7 @@ def test_happy_path_posts_comment_and_writes_history(bare_repo_with_two_commits,
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
@@ -954,7 +954,7 @@ def test_run_pr_scan_job_excludes_a_dismissed_secret_from_the_pr_comment(
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": {"dismiss-everything"}, "vulnerability": set()},
+        lambda *a, **k: {"secret": {"dismiss-everything"}, "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr(
         "scan_worker.jobs.filter_dismissed",
@@ -982,6 +982,93 @@ def test_run_pr_scan_job_excludes_a_dismissed_secret_from_the_pr_comment(
     assert "Secrets" not in posted["body"]
 
 
+def test_run_pr_scan_job_excludes_a_dismissed_static_analysis_finding_from_the_check_run(
+    bare_repo_with_two_commits, monkeypatch
+):
+    # Real gap: unlike diff["secrets"]["new"]/diff["vulnerabilities"]["new"]
+    # above, diff["static_analysis"]["new"] was never run through
+    # filter_dismissed before _maybe_create_static_analysis_check_run read
+    # it - a dashboard dismissal of a static-analysis finding had no effect
+    # on this check run at all. compute_diff is faked here (rather than
+    # relying on a real scanner finding, as the fixture plants a secret, not
+    # a static-analysis issue) so this test can control exactly one static
+    # analysis finding and assert the check run ignores it once dismissed -
+    # filter_dismissed/finding_identity_key's own correctness is covered
+    # directly in test_dismissed_findings.py, this test is only about the
+    # wiring: that run_pr_scan_job actually applies the filter before the
+    # static analysis check run is created.
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+
+    fake_diff = {
+        "secrets": {"new": [], "resolved": []},
+        "history_secrets": {"new": [], "resolved": []},
+        "vulnerabilities": {"new": [], "resolved": []},
+        "static_analysis": {
+            "new": [
+                {
+                    "tool": "bandit",
+                    "rule_id": "B607",
+                    "severity": "minor",
+                    "type": "security",
+                    "path": "app.py",
+                    "line": 42,
+                    "message": "subprocess call - check for execution of untrusted input",
+                }
+            ],
+            "resolved": [],
+        },
+        "layer_violations": {"new": [], "resolved": []},
+        "endpoints": {"new": [], "resolved": []},
+        "aggregate_deltas": {"module_count": 0, "dependency_graph_edge_count": 0, "total_commits": 0},
+    }
+
+    created = []
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.compute_diff", lambda *a, **k: fake_diff)
+    # "free", not "air" - run_pr_scan_job's own monthly-repo-scan-slot gate
+    # (a real DB call) only engages for a non-free plan; the static analysis
+    # check run itself is deliberately NOT plan-gated (see its docstring),
+    # so "free" exercises this wiring without needing a real database.
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"})
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {
+            "secret": set(), "vulnerability": set(), "static_analysis": {"dismiss-everything"},
+        },
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.filter_dismissed",
+        lambda findings, finding_type, dismissed_keys: (
+            [] if finding_type == "static_analysis" and dismissed_keys == {"dismiss-everything"} else findings
+        ),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run",
+        lambda client, token, repo, sha, conclusion, summary, name="", annotations=None: created.append(
+            (conclusion, name)
+        ),
+    )
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+
+    run_pr_scan_job(
+        installation_id=1,
+        repo_full_name="octocat/hello-world",
+        pr_number=7,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    static_analysis_runs = [c for c in created if c[1] == "Aletheore Deterministic Scan"]
+    assert len(static_analysis_runs) == 1
+    assert static_analysis_runs[0][0] == "success"
+
+
 def test_run_pr_scan_job_posts_a_file_overview_section(bare_repo_with_two_commits, monkeypatch):
     bare_path, base_sha, head_sha = bare_repo_with_two_commits
     posted = {}
@@ -993,7 +1080,7 @@ def test_run_pr_scan_job_posts_a_file_overview_section(bare_repo_with_two_commit
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
@@ -1036,7 +1123,7 @@ def test_run_pr_scan_job_posts_a_file_overview_even_with_no_new_findings(bare_re
         # Dismiss the fixture's own planted secret so this run really has
         # zero new findings, exercising the "nothing new" + file-overview
         # combination end to end.
-        lambda *a, **k: {"secret": {"dismiss-everything"}, "vulnerability": set()},
+        lambda *a, **k: {"secret": {"dismiss-everything"}, "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr(
         "scan_worker.jobs.filter_dismissed",
@@ -1092,7 +1179,7 @@ def test_run_pr_scan_job_still_posts_the_diff_comment_when_the_file_overview_fet
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
@@ -1127,7 +1214,7 @@ def test_run_pr_scan_job_posts_a_change_diagram_before_the_file_overview(
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
@@ -1173,7 +1260,7 @@ def test_run_pr_scan_job_still_posts_the_diff_comment_when_the_change_diagram_bu
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
@@ -1226,7 +1313,7 @@ def test_run_pr_scan_job_reuses_the_detailed_fetch_instead_of_a_second_compare_c
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
@@ -1277,7 +1364,7 @@ def test_run_pr_scan_job_falls_back_to_fetch_pr_changed_files_when_the_detailed_
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
@@ -1311,7 +1398,7 @@ def test_check_run_failure_does_not_overwrite_diff_comment(bare_repo_with_two_co
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
@@ -1348,7 +1435,7 @@ def test_temp_dir_cleaned_up_on_success(bare_repo_with_two_commits, monkeypatch)
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
@@ -1590,7 +1677,7 @@ def test_slack_alert_fires_on_paid_install_with_webhook_url_and_new_secret(
     )
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     sent = {}
@@ -1620,7 +1707,7 @@ def test_check_run_failure_on_new_secret(bare_repo_with_two_commits, monkeypatch
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     created = {}
@@ -1676,7 +1763,7 @@ def test_vulnerability_check_run_fails_on_real_known_cve_bump(
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     created_runs = []
@@ -1716,7 +1803,7 @@ def test_vulnerability_check_run_succeeds_when_no_new_vulnerability(
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     created_runs = []
@@ -8911,7 +8998,7 @@ def test_run_pr_scan_job_enqueues_live_wiki_and_docs_update_jobs(bare_repo_with_
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
@@ -8976,7 +9063,7 @@ def test_run_pr_scan_job_logs_slack_alert_failure_instead_of_swallowing_it(
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
@@ -9337,7 +9424,7 @@ def test_run_pr_scan_job_free_plan_is_not_subject_to_monthly_scan_cap(bare_repo_
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"})
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr(
         "scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot",

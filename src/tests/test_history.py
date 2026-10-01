@@ -422,6 +422,117 @@ def test_compute_diff_does_not_crash_diffing_evidence_missing_static_analysis_en
     assert any("static analysis" in caveat for caveat in diff["caveats"])
 
 
+def _static_analysis_finding(line: int, fingerprint: str = "fp-same", **overrides) -> dict:
+    finding = {
+        "tool": "bandit", "rule_id": "B607", "severity": "minor", "type": "vulnerability",
+        "path": "app.py", "line": line, "message": "subprocess call - check for execution of untrusted input",
+        "content_fingerprint": fingerprint,
+    }
+    finding.update(overrides)
+    return finding
+
+
+def test_compute_diff_does_not_misclassify_a_finding_whose_line_shifted_but_content_did_not():
+    # The real PR #888 case: an edit earlier in the file (unrelated to this
+    # finding) shifted every later line down. Same content_fingerprint
+    # (static_analysis/__init__.py hashes the source lines around the
+    # finding, not the line number itself), different line - must not
+    # read as one finding resolved plus a new one appearing in its place.
+    old = base_evidence()
+    old["security"]["static_analysis"]["findings"] = [_static_analysis_finding(line=10)]
+    new = base_evidence()
+    new["security"]["static_analysis"]["findings"] = [_static_analysis_finding(line=15)]
+
+    diff = compute_diff(old, new)
+
+    assert diff["static_analysis"]["new"] == []
+    assert diff["static_analysis"]["resolved"] == []
+
+
+def test_compute_diff_still_detects_a_genuinely_new_static_analysis_finding_with_fingerprints():
+    old = base_evidence()
+    old["security"]["static_analysis"]["findings"] = [_static_analysis_finding(line=10)]
+    new = base_evidence()
+    new["security"]["static_analysis"]["findings"] = [
+        _static_analysis_finding(line=10),
+        _static_analysis_finding(line=22, fingerprint="fp-different", rule_id="B602", path="b.py"),
+    ]
+
+    diff = compute_diff(old, new)
+
+    assert [f["path"] for f in diff["static_analysis"]["new"]] == ["b.py"]
+    assert diff["static_analysis"]["resolved"] == []
+
+
+def test_compute_diff_still_detects_a_resolved_static_analysis_finding_with_fingerprints():
+    old = base_evidence()
+    old["security"]["static_analysis"]["findings"] = [_static_analysis_finding(line=10)]
+    new = base_evidence()
+    new["security"]["static_analysis"]["findings"] = []
+
+    diff = compute_diff(old, new)
+
+    assert diff["static_analysis"]["new"] == []
+    assert len(diff["static_analysis"]["resolved"]) == 1
+
+
+def test_compute_diff_does_not_report_every_static_analysis_finding_as_new_when_fingerprinting_is_newly_added():
+    # Same straddling-upgrade problem as the secret match_preview format
+    # change (see test_diff_does_not_report_every_secret_as_new_when_the_
+    # preview_format_changes below): old evidence predates
+    # content_fingerprint existing at all; new evidence has it because it
+    # was freshly (re-)scanned with the newer code. Diffed naively every
+    # pre-existing finding would show as both newly added and resolved -
+    # exactly what `aletheore changes` (which diffs the two most recent
+    # stored snapshots) would hit on the first scan after upgrading.
+    old = base_evidence()
+    old["security"]["static_analysis"]["findings"] = [
+        {"tool": "bandit", "rule_id": "B607", "severity": "minor", "type": "vulnerability",
+         "path": "app.py", "line": 10, "message": "m"},
+    ]
+    new = base_evidence()
+    new["security"]["static_analysis"]["findings"] = [_static_analysis_finding(line=15)]
+
+    diff = compute_diff(old, new)
+
+    assert diff["static_analysis"]["new"] == []
+    assert diff["static_analysis"]["resolved"] == []
+
+
+def test_compute_diff_still_detects_a_genuinely_new_finding_across_the_fingerprinting_upgrade():
+    old = base_evidence()
+    old["security"]["static_analysis"]["findings"] = [
+        {"tool": "bandit", "rule_id": "B607", "severity": "minor", "type": "vulnerability",
+         "path": "app.py", "line": 10, "message": "m"},
+    ]
+    new = base_evidence()
+    new["security"]["static_analysis"]["findings"] = [
+        _static_analysis_finding(line=15),
+        _static_analysis_finding(line=30, fingerprint="fp-different", rule_id="B602", path="new.py"),
+    ]
+
+    diff = compute_diff(old, new)
+
+    assert [f["path"] for f in diff["static_analysis"]["new"]] == ["new.py"]
+    assert diff["static_analysis"]["resolved"] == []
+
+
+def test_compute_diff_uses_the_full_static_analysis_identity_once_both_sides_are_fingerprinted():
+    # Self-healing: the coarse (tool, rule_id, path) fallback only applies
+    # to the one straddling scan - once both sides carry real fingerprints,
+    # a finding that is genuinely different (different fingerprint) at the
+    # same rule+path is correctly both resolved and new again.
+    old = base_evidence()
+    old["security"]["static_analysis"]["findings"] = [_static_analysis_finding(line=10, fingerprint="fp-aaaa")]
+    new = base_evidence()
+    new["security"]["static_analysis"]["findings"] = [_static_analysis_finding(line=10, fingerprint="fp-bbbb")]
+
+    diff = compute_diff(old, new)
+
+    assert len(diff["static_analysis"]["new"]) == 1
+    assert len(diff["static_analysis"]["resolved"]) == 1
+
+
 def test_compute_diff_filters_new_vulnerabilities_by_severity_threshold(tmp_path):
     (tmp_path / ".aletheore.json").write_text(json.dumps({"severity_threshold": "high"}))
 

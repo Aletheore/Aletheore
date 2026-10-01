@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 from aletheore.static_analysis.bandit_scanner import check_bandit
@@ -99,6 +100,55 @@ def _run_scanner_safely(name: str, scanner, *args, **kwargs) -> dict:
         }
 
 
+def _content_fingerprint(repo_path: Path, path: str, line: int, file_cache: dict[str, list[str] | None]) -> str | None:
+    """Hash of the 3-line window (line-1, line, line+1, each trimmed) around
+    a finding's own reported line, read from the checkout while it's still
+    on disk here - this is history.py's one alternative to matching a
+    static-analysis finding's identity on its exact line number (see
+    _static_analysis_identity there). An unrelated edit earlier in the same
+    file shifts every later finding's line number without changing what's
+    actually on that line; this fingerprint doesn't move when the line
+    doesn't move with it, only when the surrounding content itself does.
+
+    Returns None - no fingerprint, history.py falls back to its old
+    line-based identity - when there's nothing real to hash: no real line
+    (the misconfig-finding case _static_analysis_annotations in jobs.py
+    already special-cases, e.g. a Dockerfile-wide finding with no single
+    offending line), the path isn't readable as UTF-8 text, or the line
+    number is past the end of the file.
+
+    Known, accepted imprecision, same class as dismissed_findings.py's own
+    issue-text fingerprint: two genuinely different findings that happen to
+    sit on identical surrounding lines (e.g. the same boilerplate repeated
+    twice in one file) collapse to the same fingerprint. Narrower than
+    hashing the rule's own (often generic, identical-across-every-call-site)
+    message text alone would be, but not immune to it.
+    """
+    if path not in file_cache:
+        try:
+            file_cache[path] = (repo_path / path).read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            file_cache[path] = None
+    lines = file_cache[path]
+    if lines is None or line < 1 or line > len(lines):
+        return None
+    idx = line - 1
+    window = [lines[i].strip() if 0 <= i < len(lines) else "" for i in (idx - 1, idx, idx + 1)]
+    return hashlib.sha256("\n".join(window).encode()).hexdigest()[:16]
+
+
+def _add_content_fingerprints(findings: list[dict], repo_path: Path) -> list[dict]:
+    file_cache: dict[str, list[str] | None] = {}
+    for finding in findings:
+        path = finding.get("path")
+        line = finding.get("line")
+        if isinstance(path, str) and path and isinstance(line, int):
+            finding["content_fingerprint"] = _content_fingerprint(repo_path, path, line, file_cache)
+        else:
+            finding["content_fingerprint"] = None
+    return findings
+
+
 def check_static_analysis(
     repo_path: Path,
     run_bearer: bool = False,
@@ -142,5 +192,5 @@ def check_static_analysis(
         "checked": True,
         "tools_run": tools_run,
         "tools_skipped": tools_skipped,
-        "findings": findings,
+        "findings": _add_content_fingerprints(findings, repo_path),
     }

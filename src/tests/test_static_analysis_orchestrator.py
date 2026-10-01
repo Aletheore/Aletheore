@@ -196,3 +196,93 @@ def test_check_static_analysis_passes_sonarqube_host_url_through(tmp_path, monke
         check_static_analysis(tmp_path, sonarqube_host_url="http://localhost:9000")
 
     mock_sonarqube.assert_called_once_with(tmp_path, host_url="http://localhost:9000")
+
+
+def test_check_static_analysis_adds_a_content_fingerprint_to_findings_with_a_real_line(tmp_path, monkeypatch):
+    # Real gap this closes (PR #888): history.py's diffing keyed a
+    # static-analysis finding's identity on its exact line number, so an
+    # unrelated edit earlier in the same file that shifts every later line
+    # down made every finding below it look "new" (and the old line
+    # "resolved") even though nothing about the finding itself changed.
+    # A content fingerprint - computed here, once, while the scanner's
+    # checkout is on disk - gives history.py something to match on instead
+    # of the line number. See history.py's _static_analysis_identity.
+    (tmp_path / "a.py").write_text("one\ntwo\nthree\nfour\nfive\n")
+    finding = {"tool": "semgrep", "rule_id": "r1", "severity": "major", "type": "bug", "path": "a.py", "line": 3, "message": "m"}
+
+    _patch_required_scanners(monkeypatch, semgrep=lambda repo_path: _checked([finding]))
+    _patch_optional_scanners(monkeypatch)
+
+    with patch("aletheore.static_analysis.check_sonarqube", return_value=_checked([])):
+        result = check_static_analysis(tmp_path)
+
+    assert len(result["findings"]) == 1
+    fingerprint = result["findings"][0]["content_fingerprint"]
+    assert isinstance(fingerprint, str) and fingerprint
+
+
+def test_check_static_analysis_fingerprint_is_stable_across_a_line_shift(tmp_path, monkeypatch):
+    # The whole point: the SAME finding (same 3-line window of real source
+    # around it) at a DIFFERENT line number must fingerprint identically -
+    # that's what lets history.py recognize it as unmoved rather than as a
+    # brand new finding plus a resolved old one.
+    (tmp_path / "a.py").write_text("one\ntwo\nthree\nfour\nfive\n")
+    (tmp_path / "b.py").write_text("zero\nzero\none\ntwo\nthree\nfour\nfive\n")
+    finding_at_3 = {"tool": "semgrep", "rule_id": "r1", "severity": "major", "type": "bug", "path": "a.py", "line": 3, "message": "m"}
+    finding_at_5 = {"tool": "semgrep", "rule_id": "r1", "severity": "major", "type": "bug", "path": "b.py", "line": 5, "message": "m"}
+
+    _patch_required_scanners(monkeypatch, semgrep=lambda repo_path: _checked([finding_at_3, finding_at_5]))
+    _patch_optional_scanners(monkeypatch)
+
+    with patch("aletheore.static_analysis.check_sonarqube", return_value=_checked([])):
+        result = check_static_analysis(tmp_path)
+
+    fp_at_3, fp_at_5 = (f["content_fingerprint"] for f in result["findings"])
+    assert fp_at_3 == fp_at_5
+
+
+def test_check_static_analysis_fingerprint_differs_for_different_content(tmp_path, monkeypatch):
+    (tmp_path / "a.py").write_text("one\ntwo\nthree\nfour\nfive\n")
+    (tmp_path / "b.py").write_text("one\ntwo\nTHREE-DIFFERENT\nfour\nfive\n")
+    finding_a = {"tool": "semgrep", "rule_id": "r1", "severity": "major", "type": "bug", "path": "a.py", "line": 3, "message": "m"}
+    finding_b = {"tool": "semgrep", "rule_id": "r1", "severity": "major", "type": "bug", "path": "b.py", "line": 3, "message": "m"}
+
+    _patch_required_scanners(monkeypatch, semgrep=lambda repo_path: _checked([finding_a, finding_b]))
+    _patch_optional_scanners(monkeypatch)
+
+    with patch("aletheore.static_analysis.check_sonarqube", return_value=_checked([])):
+        result = check_static_analysis(tmp_path)
+
+    fp_a, fp_b = (f["content_fingerprint"] for f in result["findings"])
+    assert fp_a != fp_b
+
+
+def test_check_static_analysis_no_fingerprint_when_line_is_not_real(tmp_path, monkeypatch):
+    # Same misconfig-finding-with-no-real-line case jobs.py's
+    # _static_analysis_annotations already special-cases: nothing to hash
+    # against, so no fingerprint is attached, and history.py's identity
+    # falls back to the old (tool, rule_id, path, line) behavior for it.
+    finding = {"tool": "trivy", "rule_id": "no-healthcheck", "severity": "minor", "type": "misconfig", "path": "Dockerfile", "line": 0, "message": "m"}
+
+    _patch_required_scanners(monkeypatch, trivy=lambda repo_path: _checked([finding]))
+    _patch_optional_scanners(monkeypatch)
+
+    with patch("aletheore.static_analysis.check_sonarqube", return_value=_checked([])):
+        result = check_static_analysis(tmp_path)
+
+    assert result["findings"][0].get("content_fingerprint") is None
+
+
+def test_check_static_analysis_no_fingerprint_when_file_is_unreadable(tmp_path, monkeypatch):
+    # The finding's own path doesn't exist on disk at all (e.g. a stale
+    # finding from a cache, or a path the scanner reported relative to a
+    # different root) - must not crash the whole scan over it.
+    finding = {"tool": "semgrep", "rule_id": "r1", "severity": "major", "type": "bug", "path": "missing.py", "line": 3, "message": "m"}
+
+    _patch_required_scanners(monkeypatch, semgrep=lambda repo_path: _checked([finding]))
+    _patch_optional_scanners(monkeypatch)
+
+    with patch("aletheore.static_analysis.check_sonarqube", return_value=_checked([])):
+        result = check_static_analysis(tmp_path)
+
+    assert result["findings"][0].get("content_fingerprint") is None
