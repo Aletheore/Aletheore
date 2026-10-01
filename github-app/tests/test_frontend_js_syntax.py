@@ -412,6 +412,89 @@ console.log('ok');
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_finding_identity_key_prefers_content_fingerprint_over_line():
+    # Mirrors app_server/dismissed_findings.py's finding_identity_key() -
+    # real gap this guards against: that Python function now prefers a
+    # static-analysis finding's content_fingerprint over its exact line
+    # number (so a dismissal survives a later, unrelated line shift - see
+    # docs/audits/2026-10-01-static-analysis-dismissal-and-line-shift.md),
+    # but this client-side copy used to check "is this already dismissed"
+    # was never updated to match. Left stale, a finding dismissed under
+    # its fingerprint-based key would never be recognized as dismissed
+    # here and would keep reappearing in the open-findings list.
+    js = frontend.SECURITY_HTML
+    fn = _extract_js_function(js, "findingIdentityKey")
+    harness = fn + """
+const withFingerprint = findingIdentityKey('static_analysis', { path: 'a.py', line: 10, tool: 'bandit', rule_id: 'B607', content_fingerprint: 'fp-aaaa' });
+const movedSameFingerprint = findingIdentityKey('static_analysis', { path: 'a.py', line: 25, tool: 'bandit', rule_id: 'B607', content_fingerprint: 'fp-aaaa' });
+if (withFingerprint !== movedSameFingerprint) {
+  throw new Error('identity changed across a line shift despite the same fingerprint: ' + withFingerprint + ' vs ' + movedSameFingerprint);
+}
+const noFingerprint = findingIdentityKey('static_analysis', { path: 'a.py', line: 10, tool: 'bandit', rule_id: 'B607' });
+if (noFingerprint !== 'a.py\\x1f10\\x1fbandit\\x1fB607') {
+  throw new Error('fallback-to-line identity wrong: ' + noFingerprint);
+}
+console.log('ok');
+"""
+    result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_finding_action_button_carries_the_content_fingerprint_through_to_the_dismiss_payload():
+    # findingActionButtonHtml renders a static-analysis Dismiss/Undismiss
+    # button from a finding object; findingPayloadFromButton reads that
+    # same button back to build the POST body /findings/dismiss sends.
+    # Both must round-trip content_fingerprint - without it, every real
+    # dashboard dismissal falls back to the old line-based identity
+    # server-side regardless of what dismissed_findings.py prefers, since
+    # the server only ever sees what this payload actually sends.
+    js = frontend.SECURITY_HTML
+    button_fn = _extract_js_function(js, "findingActionButtonHtml")
+    payload_fn = _extract_js_function(js, "findingPayloadFromButton")
+    harness = (
+        "function escapeHtml(s) { return String(s); }\n"
+        + button_fn
+        + "\n"
+        + payload_fn
+        + """
+const html = findingActionButtonHtml('static_analysis', { path: 'a.py', line: 10, tool: 'bandit', rule_id: 'B607', content_fingerprint: 'fp-aaaa' }, 'Dismiss', 'dismissFinding');
+if (html.indexOf('data-content-fingerprint="fp-aaaa"') === -1) {
+  throw new Error('button did not carry the fingerprint: ' + html);
+}
+
+// Minimal DOMTokenList-free stand-in for the button's dataset, parsed out of
+// the rendered HTML above - this is what findingPayloadFromButton actually reads.
+function datasetFromHtml(html) {
+  const dataset = {};
+  const re = /data-([a-z-]+)="([^"]*)"/g;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const camel = m[1].replace(/-([a-z])/g, function (_, c) { return c.toUpperCase(); });
+    dataset[camel] = m[2];
+  }
+  return dataset;
+}
+
+const btn = { dataset: datasetFromHtml(html) };
+const payload = findingPayloadFromButton(btn);
+if (payload.finding.content_fingerprint !== 'fp-aaaa') {
+  throw new Error('payload lost the fingerprint: ' + JSON.stringify(payload));
+}
+
+const btnNoFingerprint = { dataset: datasetFromHtml(findingActionButtonHtml('static_analysis', { path: 'a.py', line: 10, tool: 'bandit', rule_id: 'B607' }, 'Dismiss', 'dismissFinding')) };
+const payloadNoFingerprint = findingPayloadFromButton(btnNoFingerprint);
+if (payloadNoFingerprint.finding.content_fingerprint) {
+  throw new Error('payload invented a fingerprint that was never there: ' + JSON.stringify(payloadNoFingerprint));
+}
+console.log('ok');
+"""
+    )
+    result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 _CLASS_ATTR = re.compile(r'class="([^"]*)"')
 _CSS_CLASS_SELECTOR = re.compile(r"\.([a-zA-Z][a-zA-Z0-9_-]*)")
 

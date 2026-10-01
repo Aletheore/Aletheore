@@ -91,12 +91,21 @@ def _identity_key(finding: dict, fields: tuple[str, ...]) -> tuple:
 
 
 def _new_and_resolved(
-    old_findings: list[dict], new_findings: list[dict], fields: tuple[str, ...]
+    old_findings: list[dict],
+    new_findings: list[dict],
+    fields: tuple[str, ...] = (),
+    key_fn=None,
 ) -> tuple[list[dict], list[dict]]:
-    old_keys = {_identity_key(f, fields) for f in old_findings}
-    new_keys = {_identity_key(f, fields) for f in new_findings}
-    new_only = [f for f in new_findings if _identity_key(f, fields) not in old_keys]
-    resolved = [f for f in old_findings if _identity_key(f, fields) not in new_keys]
+    """`fields` is the common case: identity is just those fields read off
+    the finding dict. `key_fn` is for a category whose identity can't be
+    expressed as a flat field tuple - static_analysis uses it to prefer a
+    content fingerprint over the finding's own (shift-prone) line number,
+    see _static_analysis_identity below."""
+    key = key_fn if key_fn is not None else (lambda f: _identity_key(f, fields))
+    old_keys = {key(f) for f in old_findings}
+    new_keys = {key(f) for f in new_findings}
+    new_only = [f for f in new_findings if key(f) not in old_keys]
+    resolved = [f for f in old_findings if key(f) not in new_keys]
     return new_only, resolved
 
 
@@ -285,19 +294,22 @@ def _compute_curated_diff(old: dict, new: dict) -> dict:
     resolved_vulns = filter_by_severity(resolved_vulns, severity_threshold)
     result["vulnerabilities"] = {"new": new_vulns, "resolved": resolved_vulns}
 
-    # (tool, rule_id, path, line) - the exact same identity Semgrep/gosec/
-    # Bandit/Trivy/Bearer/Joern/SonarQube findings already use for
-    # dismissal tracking (see dismissed_findings.py) - a moved-but-
-    # unchanged finding (line shift from unrelated edits elsewhere in the
-    # file) reads as both a new and a resolved entry here, the same known
-    # limitation _new_and_resolved already has for every other category
-    # above, not something unique to this one. Real-world case (PR #888)
-    # and why a fix needs more than a line-window tolerance:
+    # Identity prefers each finding's own content_fingerprint (a hash of
+    # the source lines around it - see static_analysis/__init__.py's
+    # _add_content_fingerprints) over its exact line number, so an
+    # unrelated edit earlier in the same file that shifts every later
+    # finding's line doesn't read as that finding being resolved and a
+    # new one appearing in its place - real case: PR #888, where fixing one
+    # Bandit finding shifted 4 unrelated, pre-existing findings below it and
+    # failed the static-analysis check run on all 4. Falls back to the
+    # old (tool, rule_id, path, line) identity per-finding when no
+    # fingerprint exists (a line-less misconfig finding, or evidence from
+    # before this field existed) - see
     # docs/audits/2026-10-01-static-analysis-dismissal-and-line-shift.md.
     new_static_analysis, resolved_static_analysis = _new_and_resolved(
         old_static_analysis["findings"],
         new_static_analysis["findings"],
-        ("tool", "rule_id", "path", "line"),
+        key_fn=_static_analysis_identity_fn(old_static_analysis["findings"], new_static_analysis["findings"]),
     )
     result["static_analysis"] = {"new": new_static_analysis, "resolved": resolved_static_analysis}
 
@@ -398,6 +410,57 @@ def _secret_identity_fields(old_findings: list[dict], new_findings: list[dict]) 
     if _has_legacy_previews(old_findings) and not _has_legacy_previews(new_findings):
         return ("path", "pattern")
     return ("path", "pattern", "match_preview")
+
+
+def _has_legacy_static_analysis_identity(findings: list[dict]) -> bool:
+    """True when every finding that could carry a content_fingerprint
+    (i.e. has a real line - see static_analysis/__init__.py's
+    _add_content_fingerprints) doesn't. A line-less misconfig finding is
+    never fingerprinted regardless of scanner version, so it's excluded
+    here rather than making every scan look "legacy" forever because of it.
+    """
+    fingerprintable = [f for f in findings if isinstance(f.get("line"), int) and f.get("line", 0) >= 1]
+    return bool(fingerprintable) and all(not f.get("content_fingerprint") for f in fingerprintable)
+
+
+def _static_analysis_identity(finding: dict, coarse: bool) -> tuple:
+    if coarse:
+        return (finding.get("tool"), finding.get("rule_id"), finding.get("path"))
+    return (
+        finding.get("tool"),
+        finding.get("rule_id"),
+        finding.get("path"),
+        finding.get("content_fingerprint") or ("line", finding.get("line")),
+    )
+
+
+def _static_analysis_identity_fn(old_findings: list[dict], new_findings: list[dict]):
+    """Same straddling-upgrade problem _secret_identity_fields solves for
+    secrets' match_preview format change, for static_analysis's own
+    content_fingerprint addition (see static_analysis/__init__.py). Old
+    evidence computed before that field existed has no fingerprint on any
+    finding; freshly-scanned evidence does. Matched naively, that one diff
+    reports every pre-existing static-analysis finding as both newly added
+    and resolved, purely because the old record's identity has no
+    fingerprint to compare against the new record's real one - exactly
+    the `aletheore changes` path, which diffs the two most recent stored
+    snapshots (src/aletheore/cli.py's _query_changes), would hit on the
+    first scan after upgrading.
+
+    Falling back to (tool, rule_id, path) for that one diff - dropping
+    line and fingerprint both - still surfaces a genuinely new finding
+    (new file, or a new rule firing in a known file) while matching
+    pre-existing ones to their old records. Coarser only in that two
+    findings of the same rule in the same file collapse together for that
+    one scan; the next scan compares fingerprint-to-fingerprint (or
+    line-to-line, for a finding neither side could fingerprint) and this
+    stops applying on its own - same self-healing shape as the secrets
+    case.
+    """
+    coarse = _has_legacy_static_analysis_identity(old_findings) and not _has_legacy_static_analysis_identity(
+        new_findings
+    )
+    return lambda f: _static_analysis_identity(f, coarse)
 
 
 def compute_diff(old: dict, new: dict, full: bool = False) -> dict:

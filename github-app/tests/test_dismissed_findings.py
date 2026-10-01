@@ -55,6 +55,38 @@ def test_finding_identity_key_static_analysis_different_tool_same_rule_id_differ
     )
 
 
+def test_finding_identity_key_static_analysis_prefers_content_fingerprint_over_line():
+    # Real gap this closes: a dismissal keyed on the exact line stops
+    # matching the moment that line shifts (an unrelated edit elsewhere in
+    # the file), even after history.py's own diffing was taught to ignore
+    # that shift (see src/aletheore/history.py's _static_analysis_identity
+    # and docs/audits/2026-10-01-static-analysis-dismissal-and-line-shift.md).
+    # The same finding, same content, at two different line numbers must
+    # resolve to the same identity key once both carry the fingerprint
+    # static_analysis/__init__.py now computes at scan time.
+    moved = {**STATIC_ANALYSIS_FINDING, "line": 99, "content_fingerprint": "fp-aaaa"}
+    with_fingerprint = {**STATIC_ANALYSIS_FINDING, "content_fingerprint": "fp-aaaa"}
+    assert finding_identity_key("static_analysis", with_fingerprint) == finding_identity_key(
+        "static_analysis", moved
+    )
+
+
+def test_finding_identity_key_static_analysis_falls_back_to_line_without_a_fingerprint():
+    # Backward compatible with every dismissal recorded before
+    # content_fingerprint existed, and with a finding that can never get
+    # one (no real line - the misconfig-finding case).
+    assert "content_fingerprint" not in STATIC_ANALYSIS_FINDING
+    assert finding_identity_key("static_analysis", STATIC_ANALYSIS_FINDING) == "app.py\x1f42\x1fsemgrep\x1foauth-state-not-random"
+
+
+def test_finding_identity_key_static_analysis_different_fingerprint_same_line_differs():
+    # Two different findings that happen to land on the same line after a
+    # fix-then-regress cycle must not collide just because the line matches.
+    a = {**STATIC_ANALYSIS_FINDING, "content_fingerprint": "fp-aaaa"}
+    b = {**STATIC_ANALYSIS_FINDING, "content_fingerprint": "fp-bbbb"}
+    assert finding_identity_key("static_analysis", a) != finding_identity_key("static_analysis", b)
+
+
 def test_finding_identity_key_raises_on_unknown_type():
     with pytest.raises(ValueError):
         finding_identity_key("layer_violation", {})

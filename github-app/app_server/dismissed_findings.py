@@ -71,11 +71,24 @@ def finding_identity_key(finding_type: str, finding: dict) -> str:
 
     static_analysis (SonarQube/Semgrep/Bearer/gosec/Bandit/Joern/Trivy/PMD, normalized
     into security.static_analysis - see src/aletheore/static_analysis/)
-    uses path+line+tool+rule_id. Unlike Flash Review's free-text issue
-    field, a deterministic scanner's rule_id is stable across re-runs of
-    the same code (it's the rule that fired, not a model's own phrasing of
-    why), so this doesn't need _issue_fingerprint's reworded-text
-    tolerance - exact structured fields, same as secret/vulnerability.
+    uses path+position+tool+rule_id, where position is the finding's
+    content_fingerprint when one exists (a hash of the source lines around
+    it, computed at scan time - see static_analysis/__init__.py's
+    _add_content_fingerprints) or its line number otherwise. A deterministic
+    scanner's rule_id is stable across re-runs of the same code, so this
+    doesn't need _issue_fingerprint's reworded-text tolerance - but the line
+    number alone is not: an unrelated edit elsewhere in the file shifts it
+    without changing the finding, which used to permanently orphan a
+    dismissal the moment that happened (see history.py's own identical
+    problem on the diffing side, and
+    docs/audits/2026-10-01-static-analysis-dismissal-and-line-shift.md).
+    Falling back to line when no fingerprint exists keeps every dismissal
+    recorded before this field existed matching exactly as before - same
+    straddling-upgrade shape as the secret match_preview format change
+    above, and the same accepted cost: a dismissal recorded against a real,
+    fingerprint-capable line *before* this shipped stops matching once that
+    finding is next scanned with a fingerprint attached, and needs dismissing
+    once more.
     """
     if finding_type == "secret":
         return f"{finding['path']}\x1f{finding['pattern']}\x1f{finding['match_preview']}"
@@ -84,7 +97,8 @@ def finding_identity_key(finding_type: str, finding: dict) -> str:
     if finding_type in ("flash_review_llm", "flash_review_semantic"):
         return f"{finding['file']}\x1f{finding['line']}\x1f{_issue_fingerprint(finding['issue'])}"
     if finding_type == "static_analysis":
-        return f"{finding['path']}\x1f{finding['line']}\x1f{finding['tool']}\x1f{finding['rule_id']}"
+        position = finding.get("content_fingerprint") or finding["line"]
+        return f"{finding['path']}\x1f{position}\x1f{finding['tool']}\x1f{finding['rule_id']}"
     raise ValueError(f"unknown finding_type: {finding_type!r}")
 
 

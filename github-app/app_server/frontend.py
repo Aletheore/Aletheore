@@ -710,7 +710,7 @@ function findingIdentityKey(findingType, f) {
   // membership against the dismissed_finding_keys set the read endpoint
   // already returns.
   if (findingType === 'secret') return f.path + '\x1f' + f.pattern + '\x1f' + f.match_preview;
-  if (findingType === 'static_analysis') return f.path + '\x1f' + f.line + '\x1f' + f.tool + '\x1f' + f.rule_id;
+  if (findingType === 'static_analysis') return f.path + '\x1f' + (f.content_fingerprint || f.line) + '\x1f' + f.tool + '\x1f' + f.rule_id;
   return f.ecosystem + '\x1f' + f.package + '\x1f' + f.advisory_id;
 }
 function staticAnalysisSevChip(severity) {
@@ -1458,6 +1458,7 @@ function findingActionButtonHtml(findingType, f, label, handler) {{
   if (findingType === 'static_analysis') {{
     return '<button class="btn" data-type="static_analysis" data-path="' + escapeHtml(f.path) +
       '" data-line="' + f.line + '" data-tool="' + escapeHtml(f.tool) + '" data-rule-id="' + escapeHtml(f.rule_id) +
+      '" data-content-fingerprint="' + escapeHtml(f.content_fingerprint || '') +
       '" onclick="' + handler + '(this)">' + label + '</button>';
   }}
   return '<button class="btn" data-type="vulnerability" data-ecosystem="' + escapeHtml(f.ecosystem) +
@@ -1475,7 +1476,10 @@ function findingPayloadFromButton(btn) {{
   if (btn.dataset.type === 'static_analysis') {{
     return {{
       finding_type: 'static_analysis',
-      finding: {{ path: btn.dataset.path, line: Number(btn.dataset.line), tool: btn.dataset.tool, rule_id: btn.dataset.ruleId }},
+      finding: {{
+        path: btn.dataset.path, line: Number(btn.dataset.line), tool: btn.dataset.tool, rule_id: btn.dataset.ruleId,
+        content_fingerprint: btn.dataset.contentFingerprint || null,
+      }},
     }};
   }}
   return {{
