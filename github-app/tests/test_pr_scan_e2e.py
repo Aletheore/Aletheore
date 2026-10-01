@@ -41,7 +41,7 @@ def test_pull_request_webhook_to_pr_comment_end_to_end(
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_dismissed_identity_keys",
-        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
     # This test deliberately makes no other GitHub API mock - real

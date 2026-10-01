@@ -1373,6 +1373,9 @@ def run_pr_scan_job(
             diff["vulnerabilities"]["new"] = filter_dismissed(
                 diff["vulnerabilities"]["new"], "vulnerability", dismissed["vulnerability"]
             )
+            diff["static_analysis"]["new"] = filter_dismissed(
+                diff["static_analysis"]["new"], "static_analysis", dismissed["static_analysis"]
+            )
 
             # Piece B of the PR-comment-presentation redesign: a fully
             # deterministic per-file "what changed" section, leading this

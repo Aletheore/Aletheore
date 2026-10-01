@@ -291,7 +291,9 @@ def _compute_curated_diff(old: dict, new: dict) -> dict:
     # unchanged finding (line shift from unrelated edits elsewhere in the
     # file) reads as both a new and a resolved entry here, the same known
     # limitation _new_and_resolved already has for every other category
-    # above, not something unique to this one.
+    # above, not something unique to this one. Real-world case (PR #888)
+    # and why a fix needs more than a line-window tolerance:
+    # docs/audits/2026-10-01-static-analysis-dismissal-and-line-shift.md.
     new_static_analysis, resolved_static_analysis = _new_and_resolved(
         old_static_analysis["findings"],
         new_static_analysis["findings"],

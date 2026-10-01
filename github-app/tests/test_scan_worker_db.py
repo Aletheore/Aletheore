@@ -2318,7 +2318,28 @@ async def test_get_dismissed_identity_keys_sync_returns_empty_sets_when_none_dis
         "vulnerability": set(),
         "flash_review_llm": set(),
         "flash_review_semantic": set(),
+        "static_analysis": set(),
     }
+
+
+@pytest.mark.asyncio
+async def test_get_dismissed_identity_keys_sync_includes_a_dismissed_static_analysis_finding(pool):
+    # Real gap this closes: the sync reader's result dict never
+    # pre-initialized a "static_analysis" key at all (unlike its async
+    # counterpart in app_server/dismissed_findings.py, which does), so a
+    # dismissed static_analysis row made `result[finding_type].add(...)`
+    # raise KeyError here - dismissing a static-analysis finding via the
+    # dashboard would have crashed the PR-scan job's read of this table,
+    # not just silently failed to filter it.
+    from app_server.dismissed_findings import dismiss_finding, finding_identity_key
+
+    await _insert_installation(pool, 811, "co")
+    finding = {"path": "app.py", "line": 42, "tool": "bandit", "rule_id": "B607"}
+    await dismiss_finding(pool, 811, "co/repo", "static_analysis", finding, "octocat")
+
+    dismissed = get_dismissed_identity_keys(TEST_DATABASE_URL, 811, "co/repo")
+
+    assert finding_identity_key("static_analysis", finding) in dismissed["static_analysis"]
 
 
 @pytest.mark.asyncio

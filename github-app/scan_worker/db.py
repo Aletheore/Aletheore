@@ -905,6 +905,7 @@ def get_dismissed_identity_keys(dsn: str, installation_id: int, repo_full_name: 
                 "vulnerability": set(),
                 "flash_review_llm": set(),
                 "flash_review_semantic": set(),
+                "static_analysis": set(),
             }
             for finding_type, identity_key in cur.fetchall():
                 result[finding_type].add(identity_key)
