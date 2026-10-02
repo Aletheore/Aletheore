@@ -71,13 +71,24 @@ PLAN_BASE_CREDIT_USD = {
     "air": 18.00,
 }
 
+# Monthly credit for an ANNUAL subscriber. The annual price is 2 months free
+# ($299.90 vs 12 x $29.99), so the included credit follows the same discount:
+# 10 months of credit over the year ($15/month = $180) instead of 12. At $18
+# a month the year's $216 of credit exceeded what is left of $299.90 after
+# Paddle's fee, tax and an affiliate commission. A plan with no annual price
+# (flash) has no entry and falls back to its monthly amount.
+ANNUAL_PLAN_BASE_CREDIT_USD = {
+    "air": 15.00,
+}
 
-def base_credit_for_plan(plan: str, extra_seats: int) -> float:
+
+def base_credit_for_plan(plan: str, extra_seats: int, is_annual: bool = False) -> float:
     """The base credit an installation's balance resets to on a real
     renewal. Applies the same per-seat bonus monthly_cap_for_installation
     already used, so a larger AIR team keeps getting proportionally more
     credit, not the same flat amount regardless of seat count."""
-    base = PLAN_BASE_CREDIT_USD.get(plan, 0.0)
+    monthly_base = PLAN_BASE_CREDIT_USD.get(plan, 0.0)
+    base = ANNUAL_PLAN_BASE_CREDIT_USD.get(plan, monthly_base) if is_annual else monthly_base
     if base == 0.0:
         return 0.0
     return base + EXTRA_SEAT_LLM_CAP_USD * extra_seats

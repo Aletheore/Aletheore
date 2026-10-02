@@ -59,6 +59,9 @@ def test_create_discount_sends_post_with_expected_body(monkeypatch):
         "recur": True,
         "maximum_recurring_intervals": 1,
         "enabled_for_checkout": True,
+        # Affiliates are AIR-only: a code must not be applicable to Flash,
+        # extra seats or credit top-ups.
+        "restrict_to": ["pri_01kyhevc8bkcghfpwjymz16y2h", "pri_01kyhevc9xn6z2nghmy8057jvp"],
     }
 
 

@@ -1,6 +1,7 @@
 import httpx
 
 from app_server.http_client import get_generic_http_client
+from app_server.paddle_pricing import PLAN_INTERVAL_TO_PRICE_ID
 
 _PADDLE_API_BASE = "https://api.paddle.com"
 _PADDLE_TIMEOUT_SECONDS = 15.0
@@ -102,7 +103,9 @@ def create_portal_session(
 def create_discount(api_key: str | None, code: str, description: str) -> dict:
     """Creates a merchant-defined percentage discount code in Paddle for an
     affiliate: 10% off, applied to exactly one billing period
-    (maximum_recurring_intervals=1), enabled for checkout entry. The
+    (maximum_recurring_intervals=1), enabled for checkout entry, and
+    restricted to the AIR plan prices (affiliates are AIR-only - the code
+    must not apply to Flash, extra seats or credit top-ups). The
     returned discount's id (dsc_...) is the attribution key stored against
     the affiliates row - see app_server/affiliates.py."""
     if not api_key:
@@ -115,6 +118,10 @@ def create_discount(api_key: str | None, code: str, description: str) -> dict:
         "recur": True,
         "maximum_recurring_intervals": 1,
         "enabled_for_checkout": True,
+        "restrict_to": [
+            PLAN_INTERVAL_TO_PRICE_ID[("air", "month")],
+            PLAN_INTERVAL_TO_PRICE_ID[("air", "year")],
+        ],
     }
     try:
         response = get_generic_http_client().post(

@@ -161,3 +161,18 @@ def test_base_credit_for_plan_air_with_extra_seats():
 
 def test_base_credit_for_plan_unknown_plan_is_zero():
     assert base_credit_for_plan("free", extra_seats=0) == 0.0
+
+
+def test_base_credit_for_plan_air_annual_gets_ten_months_of_credit():
+    # The annual price is 2 months free ($299.90 vs 12 x $29.99); the
+    # included credit follows the same discount: $15/month = $180/year.
+    assert base_credit_for_plan("air", extra_seats=0, is_annual=True) == 15.00
+    assert base_credit_for_plan("air", extra_seats=0, is_annual=False) == 18.00
+
+
+def test_base_credit_for_plan_air_annual_keeps_the_per_seat_bonus():
+    assert base_credit_for_plan("air", extra_seats=2, is_annual=True) == 15.00 + 2 * 3.00
+
+
+def test_base_credit_for_plan_ignores_annual_for_a_plan_with_no_annual_price():
+    assert base_credit_for_plan("flash", extra_seats=0, is_annual=True) == 5.00

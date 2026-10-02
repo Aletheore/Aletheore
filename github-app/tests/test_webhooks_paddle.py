@@ -100,8 +100,14 @@ def _transaction_completed_payload(
     event_id: str = "evt_txn_default",
     currency_code: str = "USD",
     payout_totals: dict | None = None,
+    price_ids: tuple[str, ...] = ("pri_01kyhevc8bkcghfpwjymz16y2h",),
+    earnings_cents: str | None = None,
 ) -> dict:
-    details = {"totals": {"total": total_cents, "currency_code": currency_code}}
+    # earnings (what Paddle pays out after tax and its fee) defaults to the
+    # total so a test that does not care about the difference is unaffected.
+    details = {"totals": {
+        "total": total_cents, "earnings": earnings_cents or total_cents, "currency_code": currency_code,
+    }}
     if payout_totals is not None:
         details["payout_totals"] = payout_totals
     return {
@@ -110,6 +116,7 @@ def _transaction_completed_payload(
         "data": {
             "id": transaction_id,
             "custom_data": {"installation_token": _installation_token(installation_id)},
+            "items": [{"price": {"id": price_id}, "quantity": 1} for price_id in price_ids],
             "details": details,
             "billed_at": "2026-08-10T12:00:00Z",
         },
@@ -502,12 +509,12 @@ async def test_free_to_flash_transition_does_not_trigger_live_wiki_full_build(po
 
 
 @pytest.mark.asyncio
-async def test_free_to_flash_transition_with_known_discount_id_still_records_referral(pool):
-    """Affiliate attribution is deliberately NOT gated on plan == "air" -
-    an affiliate should get credit for a flash referral too, even though
-    the AIRview/Docs build (tested above) correctly does not fire."""
+async def test_free_to_flash_transition_with_known_discount_id_does_not_record_a_referral(pool):
+    """Affiliates are AIR-only: a flash signup that somehow carries an
+    affiliate's discount id must not attribute a referral (Flash's margin
+    cannot carry a 15% recurring commission)."""
     fake_queue = MagicMock()
-    affiliate = await create_affiliate(pool, "SARAH10", "dsc_sarah_wh", "Sarah")
+    await create_affiliate(pool, "SARAH10", "dsc_sarah_wh", "Sarah")
     await upsert_installation(pool, 203, "acme")
 
     payload = _subscription_created_payload(
@@ -515,9 +522,7 @@ async def test_free_to_flash_transition_with_known_discount_id_still_records_ref
     )
     await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
 
-    referral = await get_referral(pool, 203)
-    assert referral is not None
-    assert referral["affiliate_id"] == affiliate["id"]
+    assert await get_referral(pool, 203) is None
     fake_queue.enqueue.assert_not_called()
 
 
@@ -1572,7 +1577,8 @@ async def test_reset_billing_period_credit_arms_the_monthly_clock_for_an_annual_
     # year, so this reset is the only one they will get from Paddle for the
     # next 12 months. next_monthly_credit_reset_at is what lets
     # run_monthly_credit_reset_sweep_job hand them the other 11 months of
-    # the $18/month allotment they actually paid for.
+    # the $15/month allotment (10 months of credit for the 10 months of
+    # price the annual plan charges) they actually paid for.
     await pool.execute(
         "INSERT INTO installations (installation_id, account_login, plan) VALUES (420, 'annual-co', 'air')"
     )
@@ -1587,7 +1593,7 @@ async def test_reset_billing_period_credit_arms_the_monthly_clock_for_an_annual_
         "FROM installations WHERE installation_id = $1",
         420,
     )
-    assert float(row["base_credit_remaining_usd"]) == pytest.approx(18.00)
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(15.00)
     # One month past THIS reset, not past "now" - see the 30-day note in
     # reset_billing_period_credit's docstring on why dateutil's exact
     # relativedelta isn't used (it is not a dependency of this service).
@@ -1832,7 +1838,7 @@ async def test_annual_air_subscriber_really_gets_re_credited_mid_year(pool):
     # End-to-end proof of the bug this whole mechanism exists to fix. An
     # annual AIR subscriber's current_billing_period.starts_at advances once
     # a YEAR, so before this the webhook reset below was the ONLY credit
-    # they would see for 12 months: $18 for the year instead of $18 a month.
+    # they would see for 12 months: one month of credit for the year.
     #
     # Two halves, in order: the real annual renewal webhook arms the
     # synthetic monthly clock one month out, and then the sweep - the thing
@@ -1864,7 +1870,7 @@ async def test_annual_air_subscriber_really_gets_re_credited_mid_year(pool):
         "FROM installations WHERE installation_id = $1",
         431,
     )
-    assert float(row["base_credit_remaining_usd"]) == pytest.approx(18.00)
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(15.00)
     assert row["balance_epoch"] == 1
     assert row["next_monthly_credit_reset_at"] == datetime(
         2026, 9, 1, tzinfo=timezone.utc
@@ -1890,8 +1896,8 @@ async def test_annual_air_subscriber_really_gets_re_credited_mid_year(pool):
     )
     # The whole point: a full monthly allotment again, mid-year, with no
     # Paddle renewal anywhere near it.
-    assert float(row["base_credit_remaining_usd"]) == pytest.approx(18.00)
-    assert float(row["base_credit_allotment_usd"]) == pytest.approx(18.00)
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(15.00)
+    assert float(row["base_credit_allotment_usd"]) == pytest.approx(15.00)
     # Bumped so the low-balance/exhausted emails they may already have been
     # sent this year don't suppress next month's (the dedupe key is
     # f"credit_low_balance:{installation_id}:{balance_epoch}").
@@ -2231,21 +2237,22 @@ async def test_transaction_completed_topup_that_cannot_be_priced_credits_nothing
 
 @pytest.mark.asyncio
 async def test_transaction_completed_commission_uses_the_usd_payout_amount_for_a_non_usd_transaction(pool):
-    # Rs 766.56 (Flash, INR, tax included) is not $766.56. The payout
-    # totals are Paddle's own conversion into the account's USD payout
-    # currency ($8.00 here), which is what the 15% must apply to.
+    # Rs 766.56 (INR, tax included) is not $766.56. The payout totals are
+    # Paddle's own conversion into the account's USD payout currency.
     affiliate = await create_affiliate(pool, "INR15", "dsc_inr_wh", "Ira")
     await upsert_installation(pool, 1944, "acme")
     await record_referral(pool, 1944, affiliate["id"])
     payload = _transaction_completed_payload(
         1944, "76656", transaction_id="txn_inr_commission", currency_code="INR",
-        payout_totals={"total": "800", "currency_code": "USD", "exchange_rate": "0.0104"},
+        payout_totals={"total": "800", "earnings": "700", "currency_code": "USD", "exchange_rate": "0.0104"},
     )
 
     await handle_paddle_webhook_event(payload, pool, "redis://unused")
 
+    # 15% of the $7.00 Paddle actually pays out (after tax and its fee), not
+    # of the $8.00 the customer paid.
     totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
-    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("1.20")
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("1.05")
 
 
 @pytest.mark.asyncio
@@ -2500,3 +2507,124 @@ async def test_non_refund_adjustments_of_a_credited_topup_do_not_fire_the_alert(
     await handle_paddle_webhook_event(_adjustment_payload("txn_topup_not_refunded", action), pool, "redis://unused")
 
     assert alerts == []
+
+
+async def _referred_installation(pool, installation_id: int, code: str):
+    affiliate = await create_affiliate(pool, code, f"dsc_{code.lower()}", code.title())
+    await upsert_installation(pool, installation_id, "acme")
+    await record_referral(pool, installation_id, affiliate["id"])
+    return affiliate
+
+
+async def _owed(pool, affiliate) -> Decimal:
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    return totals[affiliate["id"]]["total_owed_usd"]
+
+
+@pytest.mark.asyncio
+async def test_commission_is_not_recorded_for_a_flash_transaction_of_a_referred_installation(pool):
+    # An installation referred while on AIR that later downgrades to Flash
+    # stops earning its affiliate a commission: affiliates are AIR-only.
+    affiliate = await _referred_installation(pool, 1960, "FLASHDOWN")
+    payload = _transaction_completed_payload(
+        1960, "800", transaction_id="txn_flash_payment", price_ids=("pri_01m1dj0m1netz6ze1mmckz73nm",)
+    )
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    assert await _owed(pool, affiliate) == Decimal("0.00")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "price_ids",
+    [
+        ("pri_01kyhevc8bkcghfpwjymz16y2h",),
+        ("pri_01kyhevc9xn6z2nghmy8057jvp",),
+        ("pri_01kyhevc8bkcghfpwjymz16y2h", "pri_01m123rwvvtgbm6bmmxcbav4hh"),
+        ("pri_01m123rwvvtgbm6bmmxcbav4hh",),
+    ],
+    ids=["air-monthly", "air-annual", "air-plus-seat", "seat-only-renewal"],
+)
+async def test_commission_is_recorded_for_an_air_transaction_of_a_referred_installation(pool, price_ids):
+    affiliate = await _referred_installation(pool, 1961, "AIRPAYS")
+    payload = _transaction_completed_payload(
+        1961, "2000", transaction_id="txn_air_payment", price_ids=price_ids
+    )
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    assert await _owed(pool, affiliate) == Decimal("3.00")
+
+
+@pytest.mark.asyncio
+async def test_commission_is_not_recorded_when_the_transaction_has_no_line_items(pool):
+    # Can't prove it was an AIR payment, so nothing is paid out.
+    affiliate = await _referred_installation(pool, 1962, "NOITEMS")
+    payload = _transaction_completed_payload(1962, "2000", transaction_id="txn_no_items")
+    payload["data"]["items"] = []
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    assert await _owed(pool, affiliate) == Decimal("0.00")
+
+
+@pytest.mark.asyncio
+async def test_commission_is_fifteen_percent_of_earnings_not_of_the_tax_inclusive_total(pool):
+    # Earnings are what Paddle pays out after tax and its own fee: 15% of
+    # that, never of money that goes to the tax authority or to Paddle.
+    affiliate = await _referred_installation(pool, 1963, "EARNINGS")
+    payload = _transaction_completed_payload(
+        1963, "11800", earnings_cents="9500", transaction_id="txn_earnings"
+    )
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    assert await _owed(pool, affiliate) == Decimal("14.25")
+
+
+@pytest.mark.asyncio
+async def test_commission_is_skipped_when_the_transaction_has_no_earnings_figure(pool, caplog):
+    affiliate = await _referred_installation(pool, 1964, "NOEARN")
+    payload = _transaction_completed_payload(1964, "2000", transaction_id="txn_no_earnings")
+    del payload["data"]["details"]["totals"]["earnings"]
+
+    with caplog.at_level(logging.WARNING):
+        await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    assert await _owed(pool, affiliate) == Decimal("0.00")
+    assert "missing fields" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_annual_subscription_created_credits_fifteen_dollars_not_eighteen(pool):
+    await upsert_installation(pool, 1965, "annual-co")
+
+    payload = _subscription_created_payload("pri_01kyhevc9xn6z2nghmy8057jvp", 1965)
+    payload["data"]["current_billing_period"] = {"starts_at": "2026-10-02T00:00:00Z"}
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=MagicMock())
+
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, base_credit_allotment_usd FROM installations WHERE installation_id = 1965"
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(15.00)
+    assert float(row["base_credit_allotment_usd"]) == pytest.approx(15.00)
+
+
+@pytest.mark.asyncio
+async def test_extra_seat_purchase_on_an_annual_plan_is_clamped_to_the_annual_ceiling(pool):
+    # Ceiling for an annual AIR installation with 1 extra seat is
+    # 15 + 3 = $18, not the monthly plan's 18 + 3 = $21.
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan, base_credit_remaining_usd, "
+        "base_credit_allotment_usd) VALUES (1966, 'annual-seats', 'air', 20.00, 15.00)"
+    )
+
+    await credit_extra_seat_purchase(pool, 1966, 1, "air", 1, is_annual=True)
+
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, base_credit_allotment_usd FROM installations WHERE installation_id = 1966"
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(18.00)
+    assert float(row["base_credit_allotment_usd"]) == pytest.approx(18.00)
