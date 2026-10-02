@@ -2680,3 +2680,39 @@ async def test_legacy_topup_price_still_credits_after_the_price_swap(pool):
         "SELECT topup_credit_balance_usd FROM installations WHERE installation_id = $1", 1951
     )
     assert float(row["topup_credit_balance_usd"]) == pytest.approx(10.00)
+
+
+_PURCHASED_TOTALS = {"subtotal": "575", "tax": "104", "total": "679", "discount": "0", "currency_code": "USD"}
+
+
+@pytest.mark.asyncio
+async def test_topup_webhook_processed_long_after_checkout_opened_still_credits(pool):
+    # The checkout token is minted when the buyer clicks "Buy credit", but the
+    # webhook can be processed much later (a Paddle retry after an outage, a
+    # payment that sat on a bank confirmation). The 30-minute browser TTL must
+    # not turn a paid top-up into a silent no-op.
+    await upsert_installation(pool, 1960, "acme")
+    payload = _topup_payload(1960, 5, _PURCHASED_TOTALS, "txn_late_1960")
+    with patch("itsdangerous.timed.time.time", return_value=time.time() - 2 * 3600):
+        payload["data"]["custom_data"]["installation_token"] = _installation_token(1960)
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    assert await _topup_balance(pool, 1960) == pytest.approx(5.00)
+
+
+@pytest.mark.asyncio
+async def test_paid_topup_with_an_unusable_token_is_surfaced_not_dropped_silently(pool, monkeypatch):
+    from app_server.webhooks import paddle as paddle_module
+
+    await upsert_installation(pool, 1961, "acme")
+    alerts = []
+    monkeypatch.setattr(paddle_module, "send_error_alert", lambda *a, **k: alerts.append((a, k)))
+    payload = _topup_payload(1961, 5, _PURCHASED_TOTALS, "txn_badtoken_1961")
+    payload["data"]["custom_data"]["installation_token"] = "not-a-real-token"
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    assert await _topup_balance(pool, 1961) == pytest.approx(0.00)
+    assert len(alerts) == 1
+    assert "txn_badtoken_1961" in str(alerts[0])

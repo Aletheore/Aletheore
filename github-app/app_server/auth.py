@@ -40,6 +40,12 @@ NEXT_COOKIE_NAME = "aletheore_oauth_next"
 # overlay; short enough that a leaked token (a shared screenshot, a proxy
 # log) isn't a standing bearer credential for someone else's installation.
 CHECKOUT_TOKEN_TTL = timedelta(minutes=30)
+# A checkout token is minted when the buyer clicks, but the webhook for that
+# purchase can be processed long afterwards: Paddle retries a failed delivery
+# for up to three days. The short TTL guards the browser-facing mint; a webhook
+# is already authenticated by Paddle's signature, so it accepts a token for as
+# long as Paddle might still be retrying.
+CHECKOUT_TOKEN_WEBHOOK_MAX_AGE = timedelta(days=3)
 
 # GitHub's own OAuth flow already gates against credential brute-forcing
 # (there's no password here to guess), but neither /auth/login nor
@@ -285,11 +291,13 @@ def sign_checkout_installation_id(installation_id: int, secret: str) -> str:
     )
 
 
-def unsign_checkout_installation_id(signed: str, secret: str) -> int | None:
+def unsign_checkout_installation_id(
+    signed: str, secret: str, max_age: timedelta = CHECKOUT_TOKEN_TTL
+) -> int | None:
     try:
         value = URLSafeTimedSerializer(_signing_secret(secret), salt="checkout-installation-id").loads(
             signed,
-            max_age=int(CHECKOUT_TOKEN_TTL.total_seconds()),
+            max_age=int(max_age.total_seconds()),
         )
         return int(value)
     except (BadSignature, ValueError, TypeError):
