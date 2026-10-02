@@ -92,14 +92,19 @@ def _transaction_completed_payload(
     total_cents: str,
     transaction_id: str = "txn_test_1",
     event_id: str = "evt_txn_default",
+    currency_code: str = "USD",
+    payout_totals: dict | None = None,
 ) -> dict:
+    details = {"totals": {"total": total_cents, "currency_code": currency_code}}
+    if payout_totals is not None:
+        details["payout_totals"] = payout_totals
     return {
         "event_id": event_id,
         "event_type": "transaction.completed",
         "data": {
             "id": transaction_id,
             "custom_data": {"installation_token": _installation_token(installation_id)},
-            "details": {"totals": {"total": total_cents}},
+            "details": details,
             "billed_at": "2026-08-10T12:00:00Z",
         },
     }
@@ -2070,13 +2075,13 @@ async def test_transaction_completed_credits_topup_purchase(pool):
             "customer_id": "ctm_test_1910",
             "custom_data": {"installation_token": _installation_token(installation_id)},
             "items": [{"price": {"id": CREDIT_TOPUP_PRICE_ID}, "quantity": 10}],
-            # details.totals.total (Paddle's actual collected amount, in
-            # cents) is what determines the credited amount, not quantity -
-            # this happens to be a round, undiscounted $10.00 (quantity * 100
-            # cents) so this test alone doesn't prove the fix; see
-            # test_transaction_completed_credits_topup_purchase_at_discounted_total
-            # below for the case where they deliberately diverge.
-            "details": {"totals": {"total": "1000"}},
+            # Real shape (txn_01m3cm6mtf7kqxwngp356s09j2): a tax-inclusive
+            # $10 price, so subtotal + tax == total. The credit is quantity
+            # at $1/unit scaled by the discount fraction, never `total`.
+            "details": {"totals": {
+                "subtotal": "847", "tax": "153", "total": "1000", "discount": "0",
+                "currency_code": "USD",
+            }},
             "billed_at": "2026-09-01T12:00:00Z",
         },
     }
@@ -2093,12 +2098,10 @@ async def test_transaction_completed_credits_topup_purchase(pool):
 
 @pytest.mark.asyncio
 async def test_transaction_completed_credits_topup_purchase_at_discounted_total(pool):
-    # Real production billing bug: crediting used to trust the line item's
-    # raw quantity (assuming exactly $1.00/unit was collected), ignoring
-    # any discount actually applied by Paddle. Here quantity is 10 (which
-    # would wrongly credit $10.00) but Paddle only collected $8.00 net of a
-    # discount - proving the fix credits details.totals.total, not
-    # quantity.
+    # Quantity is 10 but a 20% discount was applied, so the credit is $8.00,
+    # not $10.00. Tax is added on top of this one (subtotal 1000, discount
+    # 200, tax 144, total 944) - the credit must scale by the discount
+    # fraction of the pre-tax subtotal, so tax never inflates it.
     await upsert_installation(pool, 1914, "acme")
     installation_id = 1914
     payload = {
@@ -2109,7 +2112,10 @@ async def test_transaction_completed_credits_topup_purchase_at_discounted_total(
             "customer_id": "ctm_test_1914",
             "custom_data": {"installation_token": _installation_token(installation_id)},
             "items": [{"price": {"id": CREDIT_TOPUP_PRICE_ID}, "quantity": 10}],
-            "details": {"totals": {"total": "800"}},
+            "details": {"totals": {
+                "subtotal": "1000", "discount": "200", "tax": "144", "total": "944",
+                "currency_code": "USD",
+            }},
             "billed_at": "2026-09-01T12:00:00Z",
         },
     }
@@ -2122,6 +2128,137 @@ async def test_transaction_completed_credits_topup_purchase_at_discounted_total(
     )
     assert float(row["topup_credit_balance_usd"]) == pytest.approx(8.00)
     assert row["balance_epoch"] == 1
+
+
+def _topup_payload(installation_id: int, quantity, totals: dict, transaction_id: str) -> dict:
+    return {
+        "event_id": f"evt_{transaction_id}",
+        "event_type": "transaction.completed",
+        "data": {
+            "id": transaction_id,
+            "customer_id": f"ctm_{transaction_id}",
+            "custom_data": {"installation_token": _installation_token(installation_id)},
+            "items": [{"price": {"id": CREDIT_TOPUP_PRICE_ID}, "quantity": quantity}],
+            "details": {"totals": totals},
+            "billed_at": "2026-10-02T12:00:00Z",
+        },
+    }
+
+
+async def _topup_balance(pool, installation_id: int) -> float:
+    row = await pool.fetchrow(
+        "SELECT topup_credit_balance_usd FROM installations WHERE installation_id = $1", installation_id
+    )
+    return float(row["topup_credit_balance_usd"])
+
+
+@pytest.mark.asyncio
+async def test_transaction_completed_credits_a_non_usd_topup_by_quantity_not_by_the_local_currency_total(pool):
+    # Real production shape (txn_01m25vednn7h318t90vjygr100): a $5 top-up
+    # (quantity 5 at $1/unit) checked out by a customer in India, so Paddle
+    # localized it to INR. totals.total is 47785 *INR minor units* (Rs 477.85,
+    # tax included). Crediting total/100 as dollars would credit $477.85 for
+    # a $5 purchase.
+    installation_id = 1940
+    await upsert_installation(pool, installation_id, "acme")
+    payload = _topup_payload(installation_id, 5, {
+        "subtotal": "40496", "tax": "7289", "total": "47785", "discount": "0", "currency_code": "INR",
+    }, "txn_topup_inr_1940")
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    assert await _topup_balance(pool, installation_id) == pytest.approx(5.00)
+
+
+@pytest.mark.asyncio
+async def test_transaction_completed_topup_credit_excludes_tax_added_on_top(pool):
+    # Tax-exclusive checkout: 10 units at $1 plus 18% tax is collected as
+    # 1180, but only $10.00 of top-up was purchased.
+    installation_id = 1941
+    await upsert_installation(pool, installation_id, "acme")
+    payload = _topup_payload(installation_id, 10, {
+        "subtotal": "1000", "tax": "180", "total": "1180", "discount": "0", "currency_code": "USD",
+    }, "txn_topup_tax_1941")
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    assert await _topup_balance(pool, installation_id) == pytest.approx(10.00)
+
+
+@pytest.mark.asyncio
+async def test_transaction_completed_topup_with_a_100_percent_discount_credits_nothing(pool):
+    installation_id = 1942
+    await upsert_installation(pool, installation_id, "acme")
+    payload = _topup_payload(installation_id, 10, {
+        "subtotal": "847", "tax": "0", "total": "0", "discount": "847", "currency_code": "USD",
+    }, "txn_topup_free_1942")
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    assert await _topup_balance(pool, installation_id) == pytest.approx(0.00)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "quantity, totals",
+    [
+        (10, {"total": "1000", "currency_code": "USD"}),
+        (10, {"subtotal": "0", "total": "0", "currency_code": "USD"}),
+        (10, {"subtotal": "not-a-number", "total": "1000", "currency_code": "USD"}),
+        (0, {"subtotal": "847", "total": "1000", "discount": "0", "currency_code": "USD"}),
+        (10, {"subtotal": "100", "total": "100", "discount": "200", "currency_code": "USD"}),
+    ],
+)
+async def test_transaction_completed_topup_that_cannot_be_priced_credits_nothing_and_says_so(
+    pool, caplog, quantity, totals
+):
+    installation_id = 1943
+    await upsert_installation(pool, installation_id, "acme")
+    payload = _topup_payload(installation_id, quantity, totals, "txn_topup_bad_1943")
+
+    with caplog.at_level(logging.WARNING):
+        await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    assert await _topup_balance(pool, installation_id) == pytest.approx(0.00)
+    assert "credit topup" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_transaction_completed_commission_uses_the_usd_payout_amount_for_a_non_usd_transaction(pool):
+    # Rs 766.56 (Flash, INR, tax included) is not $766.56. The payout
+    # totals are Paddle's own conversion into the account's USD payout
+    # currency ($8.00 here), which is what the 15% must apply to.
+    affiliate = await create_affiliate(pool, "INR15", "dsc_inr_wh", "Ira")
+    await upsert_installation(pool, 1944, "acme")
+    await record_referral(pool, 1944, affiliate["id"])
+    payload = _transaction_completed_payload(
+        1944, "76656", transaction_id="txn_inr_commission", currency_code="INR",
+        payout_totals={"total": "800", "currency_code": "USD", "exchange_rate": "0.0104"},
+    )
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("1.20")
+
+
+@pytest.mark.asyncio
+async def test_transaction_completed_commission_is_skipped_for_a_non_usd_transaction_without_usd_payout(
+    pool, caplog
+):
+    affiliate = await create_affiliate(pool, "INR16", "dsc_inr_wh2", "Isha")
+    await upsert_installation(pool, 1945, "acme")
+    await record_referral(pool, 1945, affiliate["id"])
+    payload = _transaction_completed_payload(
+        1945, "76656", transaction_id="txn_inr_no_payout", currency_code="INR"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("0.00")
+    assert "non-USD" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -2183,7 +2320,7 @@ async def test_transaction_completed_topup_is_independent_of_referral_commission
             "customer_id": "ctm_test_1911",
             "custom_data": {"installation_token": _installation_token(installation_id)},
             "items": [{"price": {"id": CREDIT_TOPUP_PRICE_ID}, "quantity": 5}],
-            "details": {"totals": {"total": "500"}},
+            "details": {"totals": {"subtotal": "424", "tax": "76", "total": "500", "discount": "0", "currency_code": "USD"}},
             "billed_at": "2026-09-01T12:00:00Z",
         },
     }
@@ -2227,7 +2364,9 @@ async def test_transaction_completed_topup_for_referred_installation_is_excluded
             # A large total (20 * $1 topup unit price scope aside) - if the
             # commission bug were still present this would pay a very
             # visible $3.00 (15% of $20.00) commission.
-            "details": {"totals": {"total": "2000"}},
+            "details": {"totals": {
+                "subtotal": "1695", "tax": "305", "total": "2000", "discount": "0", "currency_code": "USD",
+            }},
             "billed_at": "2026-09-01T12:00:00Z",
         },
     }

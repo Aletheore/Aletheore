@@ -97,6 +97,59 @@ class PaddleWebhookAttributionError(RuntimeError):
     to any installation - see the installation_id is None branch below."""
 
 
+class PaddleWebhookAmountError(RuntimeError):
+    """A real, signature-verified Paddle transaction whose paid amount
+    can't be turned into a credit or commission - the customer paid but
+    nothing was applied, so a human has to follow up."""
+
+
+def _finite_decimal(value) -> Decimal | None:
+    try:
+        parsed = Decimal(str(value))
+    except InvalidOperation:
+        return None
+    return parsed if parsed.is_finite() else None
+
+
+def _topup_credit_usd(topup_item: dict, totals: dict) -> Decimal | None:
+    """USD of top-up credit one transaction bought, or None if the payload
+    can't be trusted to price it.
+
+    Never derived from totals.total: that is in the customer's checkout
+    currency (a $5 top-up checked out in INR arrives as 47785, i.e. Rs
+    477.85, and would have been credited as $477.85) and includes any tax
+    added on top. The price is $1.00 USD per unit, so the credit is the
+    quantity scaled by the share of the pre-tax subtotal that was not
+    discounted - a ratio, so it holds in any currency and with any tax mode.
+    """
+    quantity = _seat_item_quantity(topup_item)
+    subtotal = _finite_decimal(totals.get("subtotal"))
+    raw_discount = totals.get("discount")
+    discount = Decimal(0) if raw_discount is None else _finite_decimal(raw_discount)
+    if quantity <= 0 or subtotal is None or subtotal <= 0 or discount is None:
+        return None
+    if discount < 0 or discount > subtotal:
+        return None
+    return (Decimal(quantity) * (subtotal - discount) / subtotal).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+
+
+def _usd_collected_minor_units(data: dict) -> tuple[Decimal | None, bool]:
+    """(amount in USD cents, whether the amount was unavailable only
+    because the transaction is not in USD). Prefers Paddle's own conversion
+    into the USD payout currency (details.payout_totals) so a non-USD
+    checkout is commissioned on its USD value, never on its local-currency
+    number."""
+    details = data.get("details") or {}
+    payout = details.get("payout_totals") or {}
+    totals = details.get("totals") or {}
+    for source in (payout, totals):
+        if source.get("currency_code") == "USD":
+            return _finite_decimal(source.get("total")), False
+    return None, True
+
+
 def _seat_item_quantity(item: dict) -> int:
     """A line item's quantity, coerced to a real int - never trusts Paddle's
     own JSON shape to guarantee an int the way `item.get("quantity", 0)`
@@ -497,43 +550,33 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
         # real transaction shaped this way to build correct per-item parsing
         # against - skip and log instead of guessing.
         transaction_id = data.get("id")
-        total_raw = ((data.get("details") or {}).get("totals") or {}).get("total")
+        totals = (data.get("details") or {}).get("totals") or {}
         if len(items) != 1:
             logger.warning(
                 "credit topup transaction.completed bundled with other line items, "
                 "skipping to avoid over-crediting: %s",
                 data.get("id"),
             )
-        elif transaction_id and total_raw is not None:
-            try:
-                total_minor_units = Decimal(str(total_raw))
-            except InvalidOperation:
+        elif transaction_id:
+            amount_usd = _topup_credit_usd(topup_item, totals)
+            if amount_usd is None:
                 logger.warning(
-                    "credit topup transaction.completed has an unparseable total: %s",
+                    "credit topup transaction.completed has a missing or inconsistent "
+                    "quantity/subtotal/discount, not crediting: %s",
                     data.get("id"),
                 )
-            else:
-                amount_usd = (total_minor_units / Decimal(100)).quantize(
-                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                send_error_alert(
+                    "paddle_webhook",
+                    PaddleWebhookAmountError("credit top-up could not be priced from its payload"),
+                    f"transaction_id={transaction_id} installation_id={installation_id}",
                 )
+            elif amount_usd > 0:
                 await credit_topup_purchase(pool, installation_id, float(amount_usd), transaction_id)
         else:
             logger.warning(
-                "credit topup transaction.completed missing total or id: %s",
+                "credit topup transaction.completed missing id: %s",
                 data.get("id"),
             )
-        # Credit top-ups are pass-through LLM spend with near-zero margin -
-        # paying 15% affiliate commission on them (as the code below would,
-        # unconditionally, on the full transaction total) is a real loss with
-        # no offsetting revenue to pay it from, unlike commission on a genuine
-        # subscription/seat sale. Deliberately conservative: skip commission
-        # for the WHOLE transaction if it contains a top-up item at all,
-        # rather than trying to parse Paddle's per-line-item totals to
-        # subtract just the top-up portion (this codebase has never parsed
-        # per-item totals, only the transaction-level total) - the current
-        # buyCredit() checkout flow is a standalone purchase action that
-        # never bundles a top-up with a subscription/seat item in the same
-        # transaction, so this has no practical downside today.
         return
 
     referral = await get_referral(pool, installation_id)
@@ -541,9 +584,21 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
         return
 
     transaction_id = data.get("id")
-    total_raw = ((data.get("details") or {}).get("totals") or {}).get("total")
+    total_minor_units, non_usd = _usd_collected_minor_units(data)
     billed_at_raw = data.get("billed_at") or data.get("created_at")
-    if not transaction_id or total_raw is None or not billed_at_raw:
+    if transaction_id and non_usd:
+        logger.warning(
+            "transaction.completed for a referred installation is in a non-USD currency "
+            "with no USD payout total, skipping commission: %s",
+            transaction_id,
+        )
+        send_error_alert(
+            "paddle_webhook",
+            PaddleWebhookAmountError("affiliate commission skipped: non-USD transaction without a USD payout total"),
+            f"transaction_id={transaction_id} installation_id={installation_id}",
+        )
+        return
+    if not transaction_id or total_minor_units is None or not billed_at_raw:
         logger.warning(
             "transaction.completed for a referred installation is missing fields "
             "needed for commission calculation"
@@ -551,10 +606,9 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
         return
 
     try:
-        total_minor_units = Decimal(str(total_raw))
         billed_at = datetime.fromisoformat(billed_at_raw)
-    except (InvalidOperation, ValueError):
-        logger.warning("transaction.completed has an unparseable total or billed_at")
+    except ValueError:
+        logger.warning("transaction.completed has an unparseable billed_at")
         return
 
     commission_usd = (total_minor_units / Decimal(100) * _AFFILIATE_COMMISSION_RATE).quantize(
