@@ -12327,3 +12327,50 @@ def test_flash_review_still_releases_the_reservation_when_it_fails_before_the_tr
 
     releases = _flash_job_with_run_review_stub(monkeypatch, run_review)
     assert len(releases) == 1 and releases[0] > 0
+
+
+def test_purge_repo_checkout_job_deletes_only_that_repos_checkout(tmp_path, monkeypatch):
+    from scan_worker.jobs import _persistent_checkout_dir, purge_repo_checkout_job
+
+    monkeypatch.setenv("ALETHEORE_REPO_CHECKOUT_ROOT", str(tmp_path))
+    target = _persistent_checkout_dir(7, "org/gone")
+    same_installation_sibling = _persistent_checkout_dir(7, "org/kept")
+    other_installation_same_name = _persistent_checkout_dir(8, "org/gone")
+    for checkout in (target, same_installation_sibling, other_installation_same_name):
+        (checkout / ".git").mkdir(parents=True)
+        (checkout / "secret.py").write_text("password = 'x'\n")
+
+    purge_repo_checkout_job(7, "org/gone")
+
+    assert not target.exists()
+    assert (same_installation_sibling / "secret.py").exists()
+    assert (other_installation_same_name / "secret.py").exists()
+
+
+def test_purge_repo_checkout_job_is_a_noop_when_the_repo_was_never_checked_out(tmp_path, monkeypatch):
+    from scan_worker.jobs import purge_repo_checkout_job
+
+    monkeypatch.setenv("ALETHEORE_REPO_CHECKOUT_ROOT", str(tmp_path))
+    purge_repo_checkout_job(7, "org/never-scanned")
+
+
+@pytest.mark.parametrize("bad_name", ["..", ".", "", "../8", "org/.."])
+def test_purge_repo_checkout_job_never_deletes_outside_the_repos_own_directory(
+    tmp_path, monkeypatch, bad_name
+):
+    # shutil.rmtree on an escaped path would delete another installation's
+    # (or every installation's) checkouts - refuse anything that doesn't
+    # resolve to a directory directly under this installation's own root.
+    from scan_worker.jobs import _persistent_checkout_dir, purge_repo_checkout_job
+
+    monkeypatch.setenv("ALETHEORE_REPO_CHECKOUT_ROOT", str(tmp_path))
+    own = _persistent_checkout_dir(7, "org/kept")
+    other_installation = _persistent_checkout_dir(8, "org/kept")
+    for checkout in (own, other_installation):
+        checkout.mkdir(parents=True)
+        (checkout / "secret.py").write_text("x")
+
+    purge_repo_checkout_job(7, bad_name)
+
+    assert (own / "secret.py").exists()
+    assert (other_installation / "secret.py").exists()

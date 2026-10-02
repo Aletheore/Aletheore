@@ -165,7 +165,32 @@ async def test_installation_repositories_removed_does_not_enqueue_a_scan(pool, m
         "installation_repositories", payload, pool, "redis://unused", queue=fake_queue
     )
 
-    fake_queue.enqueue.assert_not_called()
+    enqueued_jobs = [call.args[0] for call in fake_queue.enqueue.call_args_list]
+    assert "scan_worker.jobs.run_initial_scan_job" not in enqueued_jobs
+
+
+@pytest.mark.asyncio
+async def test_installation_repositories_removed_enqueues_deletion_of_each_repos_source_checkout(pool):
+    # Soft-hiding keeps derived evidence, but our retained working copy is
+    # the customer's actual source code - once they revoke access to a repo
+    # it must not stay on disk (the privacy policy promises erasure of the
+    # working copy; a removed repo is the one case that used to skip it).
+    fake_queue = MagicMock()
+    payload = {
+        "action": "removed",
+        "installation": {"id": 564, "account": {"login": "someorg"}},
+        "repositories_removed": [{"full_name": "someorg/gone"}, {"full_name": "someorg/also-gone"}],
+    }
+    await handle_installation_event(
+        "installation_repositories", payload, pool, "redis://unused", queue=fake_queue
+    )
+
+    purges = [
+        call for call in fake_queue.enqueue.call_args_list
+        if call.args[0] == "scan_worker.jobs.purge_repo_checkout_job"
+    ]
+    assert sorted(call.kwargs["repo_full_name"] for call in purges) == ["someorg/also-gone", "someorg/gone"]
+    assert {call.kwargs["installation_id"] for call in purges} == {564}
 
 
 @pytest.mark.asyncio
