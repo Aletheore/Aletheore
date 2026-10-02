@@ -39,7 +39,7 @@ and `up -d --no-deps`, no `--scale`). See the "Current Server Snapshot" in
 - **#898 - pricing.** Flash is $10/month (`pri_01m3xpabbam5t2gkzwzmg0y9eq`) and credit top-ups are
   $1.15 per $1.00 of credit with tax added on top (`pri_01m3xpabknvke00n5vsxn4wpe0`). The webhook
   still accepts the old $1.00 top-up price so a checkout opened before the swap credits. The old
-  $8 Flash price and the old $1.00 top-up price are to be archived in Paddle after this deploy.
+  $8 Flash price and the old $1.00 top-up price were archived in Paddle after this deploy.
 
 ## 2026-10-01
 

@@ -380,10 +380,12 @@ As of 2026-10-02, following a redeploy to `master` (`git fetch`, `git reset --ha
   returned `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`.
 - Not verified this pass: container logs, the `app-server` startup line, and every Required Checks
   item that no change in this deploy touches.
-- Open follow-ups: archive the old $8 Flash price (`pri_01m1dj0m1netz6ze1mmckz73nm`, zero
-  subscribers in any state) and the old $1.00 top-up price (`pri_01m23jw9qbsnm4zmv28bfebx4t`) in
-  Paddle (only abandoned draft checkouts from 2026-09-10 to 2026-09-27 reference them); run a real
-  $5 top-up and refund end to end, which has never been done with real money.
+- Paddle: the old $8 Flash price (`pri_01m1dj0m1netz6ze1mmckz73nm`, zero subscribers in any state)
+  and the old $1.00 top-up price (`pri_01m23jw9qbsnm4zmv28bfebx4t`) are archived after this deploy
+  (read back from Paddle: both `archived`, the two new prices `active`). Only abandoned draft
+  checkouts from 2026-09-10 to 2026-09-27 referenced them.
+- Open follow-up: run a real $5 top-up and refund end to end, which has never been done with real
+  money.
 
 ## 2026-10-01 Snapshot
 
