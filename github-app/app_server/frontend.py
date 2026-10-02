@@ -668,6 +668,29 @@ svg#depgraph:active { cursor: grabbing; }
 </style>
 """
 
+# Pure helpers for any page that shows a credit balance, kept free of DOM access
+# so they run (and are tested) in Node exactly as in the browser. The headline
+# is TOTAL available credit: showing only the plan's included credit made a
+# top-up look like it had not landed.
+CREDIT_SUMMARY_JS = """
+function creditSummary(data) {
+  const base = data.base_credit_remaining_usd || 0;
+  const topup = data.topup_credit_balance_usd || 0;
+  const allotment = data.base_credit_allotment_usd || 0;
+  const pct = allotment > 0 ? Math.max(0, Math.min(100, Math.round((base / allotment) * 100))) : 0;
+  const parts = [];
+  if (allotment > 0) parts.push('$' + base.toFixed(2) + ' of $' + allotment.toFixed(2) + ' included this month');
+  if (topup > 0) parts.push('$' + topup.toFixed(2) + ' purchased, never expires');
+  return { base: base, topup: topup, allotment: allotment, total: base + topup, pct: pct, parts: parts };
+}
+// Purchased credit that arrived between two balance readings. Under half a
+// cent is rounding noise, not a purchase.
+function topupArrival(before, current) {
+  const added = (current || 0) - (before || 0);
+  return added > 0.005 ? added : 0;
+}
+"""
+
 FETCH_HELPERS = """
 async function apiGet(url) {
   const res = await fetch(url);
@@ -2998,6 +3021,7 @@ def _settings_html() -> str:
 <script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
 <script>
 {FETCH_HELPERS}
+{CREDIT_SUMMARY_JS}
 {PAGE_HEAD_JS}
 {CONFIRM_UPGRADE_JS}
 
@@ -3435,10 +3459,9 @@ async function loadSettings() {{
       '</div><div id="seat-billing-status" class="settings-block-hint"></div>'
     : '<div class="settings-block-hint">Extra seats need an active subscription - subscribe first to buy one.</div>';
 
-  const baseCredit = data.base_credit_remaining_usd || 0;
-  const topupCredit = data.topup_credit_balance_usd || 0;
-  const allotment = data.base_credit_allotment_usd || 0;
-  const creditPct = allotment > 0 ? Math.max(0, Math.min(100, Math.round((baseCredit / allotment) * 100))) : 0;
+  const summary = creditSummary(data);
+  const allotment = summary.allotment;
+  const creditPct = summary.pct;
   // Ported verbatim from Overview's own credit block (which is being
   // removed as a duplicate - see its own comment) rather than the plain
   // text-line version this page had: same credit-figure/meter/breakdown
@@ -3449,11 +3472,9 @@ async function loadSettings() {{
       '<h2>Usage</h2>' +
       '<div class="settings-block">' +
         '<div class="settings-block-label">Credit balance</div>' +
-        '<div class="credit-figure">$' + baseCredit.toFixed(2) + (allotment > 0 ? ' <span class="of">of $' + allotment.toFixed(2) + '</span>' : '') + '</div>' +
+        '<div class="credit-figure">$' + summary.total.toFixed(2) + ' <span class="of">available</span></div>' +
         (allotment > 0 ? '<div class="credit-meter"><div class="credit-meter-fill" style="width:' + creditPct + '%"></div></div>' : '') +
-        '<div class="credit-breakdown"><span>$' + allotment.toFixed(2) + ' included this month</span>' +
-          '<span>' + (topupCredit > 0 ? '+ $' + topupCredit.toFixed(2) + ' purchased, never expires' : '') + '</span>' +
-        '</div>' +
+        '<div class="credit-breakdown">' + summary.parts.map(function (part) {{ return '<span>' + part + '</span>'; }}).join('') + '</div>' +
         (data.credit_topup_price_id
           ? '<div class="divider-label">buy more credit</div>' +
             '<div class="qty-row">' +
@@ -3734,6 +3755,66 @@ function renderInstallsList(siblings, currentId) {
     '</a></li>';
   }).join('');
 }
+function renderCreditHero(data) {
+  const summary = creditSummary(data);
+  // The purchased balance at render time, kept so a checkout can record what
+  // it started from and the return trip can tell that new credit arrived.
+  window._topupBalance = summary.topup;
+  document.getElementById('credit-figure').innerHTML =
+    '$' + summary.total.toFixed(2) + ' <span class="of">available</span>';
+  document.getElementById('credit-meter-fill').style.width = summary.pct + '%';
+  const avg = data.average_cost_per_review_usd;
+  let reviewsText;
+  if (avg && avg > 0) {
+    const reviewsLeft = Math.floor(summary.total / avg);
+    reviewsText = '~' + reviewsLeft + (reviewsLeft === 1 ? ' review' : ' reviews') + ' left this month, at your recent average cost per review';
+  } else {
+    reviewsText = data.flash_review_count_this_month > 0 ? 'Credit available for automatic reviews' : 'No completed reviews yet this month';
+  }
+  document.getElementById('credit-sub').textContent = summary.parts.concat([reviewsText]).join(' \\u00b7 ');
+  document.getElementById('credit-hero').style.display = '';
+}
+// Checkout returns here with ?purchased=1. The payment is confirmed by Paddle
+// to our server a moment later, so poll briefly and say what happened: a
+// silent reload left the buyer unable to tell whether the payment worked.
+async function confirmPurchaseIfReturning() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('purchased') !== '1') return;
+  history.replaceState(null, '', window.location.pathname);
+  const banner = document.getElementById('purchase-banner');
+  const key = 'aletheoreTopupBefore:' + installationId;
+  let before = null;
+  try {
+    const raw = sessionStorage.getItem(key);
+    sessionStorage.removeItem(key);
+    if (raw !== null && !isNaN(parseFloat(raw))) before = parseFloat(raw);
+  } catch (e) { before = null; }
+  if (before === null) {
+    // Another browser or tab started this checkout, so there is no starting
+    // balance to compare against. The balance above is already current.
+    banner.textContent = 'Payment received. The balance above includes any credit that has been added.';
+    banner.style.color = 'var(--success)';
+    return;
+  }
+  banner.textContent = 'Payment received. Adding your credit...';
+  banner.style.color = '';
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const res = await fetch(creditsApi);
+    if (res.ok) {
+      const data = await res.json();
+      const added = topupArrival(before, data.topup_credit_balance_usd || 0);
+      if (added > 0) {
+        renderCreditHero(data);
+        banner.textContent = '$' + added.toFixed(2) + ' of credit added. Thank you.';
+        banner.style.color = 'var(--success)';
+        return;
+      }
+    }
+    await new Promise(function (resolve) { setTimeout(resolve, 3000); });
+  }
+  banner.textContent = 'Your payment went through, but the credit has not appeared yet. It normally arrives within a minute. If it is still missing in a few minutes, email support@aletheore.com with your Paddle receipt.';
+  banner.style.color = 'var(--critical)';
+}
 async function loadCredits() {
   const res = await fetch(creditsApi);
   if (res.status === 401) { window.location.href = '/auth/logout'; return; }
@@ -3754,24 +3835,7 @@ async function loadCredits() {
   document.getElementById('plan-pill').textContent = planShortName(data.plan);
   renderInstallsList(data.sibling_installations || [], data.installation_id);
 
-  const base = data.base_credit_remaining_usd || 0;
-  const topup = data.topup_credit_balance_usd || 0;
-  const allotment = data.base_credit_allotment_usd || 0;
-  const pct = allotment > 0 ? Math.max(0, Math.min(100, Math.round((base / allotment) * 100))) : 0;
-  document.getElementById('credit-figure').innerHTML =
-    '$' + base.toFixed(2) + (allotment > 0 ? ' <span class="of">of $' + allotment.toFixed(2) + '</span>' : '');
-  document.getElementById('credit-meter-fill').style.width = pct + '%';
-  const avg = data.average_cost_per_review_usd;
-  let subText;
-  if (avg && avg > 0) {
-    const reviewsLeft = Math.floor((base + topup) / avg);
-    subText = '~' + reviewsLeft + (reviewsLeft === 1 ? ' review' : ' reviews') + ' left this month, at your recent average cost per review';
-  } else {
-    subText = data.flash_review_count_this_month > 0 ? 'Credit available for automatic reviews' : 'No completed reviews yet this month';
-  }
-  if (topup > 0) subText += ' \\u00b7 $' + topup.toFixed(2) + ' purchased credit also available';
-  document.getElementById('credit-sub').textContent = subText;
-  document.getElementById('credit-hero').style.display = '';
+  renderCreditHero(data);
 
   document.getElementById('billing-cadence-line').textContent = billingCadenceText(data);
 
@@ -3876,6 +3940,9 @@ async function buyCredit(btn) {
   setStatus('Opening checkout...');
   try {
     window._creditCheckoutCompleted = false;
+    // Remember the starting purchased balance so the page that checkout
+    // returns to can tell whether new credit arrived.
+    try { sessionStorage.setItem('aletheoreTopupBefore:' + installationId, String(window._topupBalance || 0)); } catch (e) {}
     // The checkout token has a 30-minute TTL, so it is re-fetched at click time
     // instead of reusing the page-load copy.
     const res = await fetch(creditsApi);
@@ -3888,7 +3955,7 @@ async function buyCredit(btn) {
       settings: {
         displayMode: 'overlay',
         variant: 'one-page',
-        successUrl: 'https://app.aletheore.com/credits/' + installationId,
+        successUrl: window.location.origin + window.location.pathname + '?purchased=1',
       },
     });
   } finally {
@@ -3917,7 +3984,7 @@ if (typeof Paddle !== 'undefined') {
     },
   });
 }
-loadCredits();
+loadCredits().then(confirmPurchaseIfReturning);
 """
 
 
@@ -3932,9 +3999,7 @@ def _credits_page(installation_id: int) -> str:
     /app/installations/{id}/credits and friends, which do the real
     authorization; nothing sensitive is baked into this HTML."""
     settings = get_settings()
-    script = (
-        _CREDITS_JS.replace("__INSTALLATION_ID__", str(int(installation_id)))
-    )
+    script = CREDIT_SUMMARY_JS + _CREDITS_JS.replace("__INSTALLATION_ID__", str(int(installation_id)))
     return f"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Aletheore</title>
@@ -3964,6 +4029,7 @@ def _credits_page(installation_id: int) -> str:
       </div>
     </div>
     <div id="top-error"></div>
+    <div id="purchase-banner" class="settings-block-hint" style="margin-bottom:14px;font-size:14px"></div>
     <div class="credit-hero" id="credit-hero" style="display:none">
       <div>
         <div class="credit-figure" id="credit-figure"></div>
