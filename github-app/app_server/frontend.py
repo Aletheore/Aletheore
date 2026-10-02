@@ -3875,20 +3875,39 @@ if (typeof Paddle !== 'undefined') {
   });
 }
 async function initCredits() {
-  if (!installationId) {
-    const res = await apiGet(adminBase);
-    if (!res) return;
-    if (!res.ok) {
-      document.getElementById('top-error').innerHTML = '<div class="error-banner">Usage &amp; credit is available on paid plans, to people who administer this installation.</div>';
-      return;
-    }
-    const admin = await res.json();
-    useInstallation(admin.installation.installation_id);
-  }
+  const showError = function (message) {
+    document.getElementById('top-error').innerHTML = '<div class="error-banner">' + message + '</div>';
+    // Nothing below the message can load, so hide the empty placeholders.
+    ['review-head', 'review-history-body', 'flash-settings-grid'].forEach(function (id) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+  };
   try {
-    await loadCredits();
-  } finally {
-    await confirmPurchaseIfReturning();
+    if (!installationId) {
+      // Asked directly (not through apiGet, which returns null for every
+      // non-OK status) so a free plan, a missing permission and a server
+      // error each get their own message instead of a blank page.
+      const res = await fetch(adminBase);
+      if (res.status === 401) { window.location.href = '/auth/logout'; return; }
+      if (res.status === 402 || res.status === 403 || res.status === 404) {
+        showError('Usage &amp; credit is available on paid plans, to people who administer this installation.');
+        return;
+      }
+      if (!res.ok) {
+        showError('We could not load Usage &amp; credit right now. Please reload in a moment.');
+        return;
+      }
+      const admin = await res.json();
+      useInstallation(admin.installation.installation_id);
+    }
+    try {
+      await loadCredits();
+    } finally {
+      await confirmPurchaseIfReturning();
+    }
+  } catch (e) {
+    showError('We could not load Usage &amp; credit right now. Please reload in a moment.');
   }
 }
 initCredits();
@@ -3925,7 +3944,7 @@ def _credits_body_html() -> str:
       </div>
     </div>
 
-    <div class="plain-section-head">
+    <div class="plain-section-head" id="review-head">
       <h2>Recent reviews</h2>
       <div class="count">last 30 days</div>
     </div>

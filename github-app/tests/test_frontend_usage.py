@@ -189,3 +189,24 @@ def test_a_login_with_only_one_flash_installation_lands_straight_on_its_credit_p
     # through. It only redirects when there is nothing else to choose from.
     assert "data.repos.length === 0 && billingAccounts.length === 1" in html
     assert "window.location.replace('/credits/'" in html
+
+
+def test_the_usage_page_explains_every_way_the_installation_lookup_can_fail():
+    # apiGet returns null for ANY non-OK response, so it cannot tell a free
+    # plan from a server error; the page asks the admin API directly and says
+    # which one happened instead of staying blank.
+    html = frontend._usage_html()
+    start = html.index("async function initCredits()")
+    init = html[start:html.index("initCredits();", start)]
+
+    assert "apiGet(" not in init
+    assert "res.status === 402" in init
+    assert "could not load Usage &amp; credit right now" in init
+    assert "catch (e)" in init
+
+
+def test_a_load_error_hides_the_empty_placeholders_under_the_message():
+    html = frontend._usage_html()
+
+    assert 'id="review-head"' in html
+    assert "['review-head', 'review-history-body', 'flash-settings-grid']" in html
