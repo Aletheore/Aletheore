@@ -3670,6 +3670,7 @@ async function confirmPurchaseIfReturning() {
   if (params.get('purchased') !== '1') return;
   history.replaceState(null, '', window.location.pathname);
   const banner = document.getElementById('purchase-banner');
+  if (!banner) return;
   const key = 'aletheoreTopupBefore:' + installationId;
   let before = null;
   try {
@@ -3884,8 +3885,11 @@ async function initCredits() {
     const admin = await res.json();
     useInstallation(admin.installation.installation_id);
   }
-  await loadCredits();
-  await confirmPurchaseIfReturning();
+  try {
+    await loadCredits();
+  } finally {
+    await confirmPurchaseIfReturning();
+  }
 }
 initCredits();
 """
