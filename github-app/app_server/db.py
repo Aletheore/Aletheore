@@ -1,6 +1,7 @@
 import json
 import logging
 from datetime import datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 
 import asyncpg
 
@@ -334,18 +335,31 @@ async def credit_extra_seat_purchase(
 
 
 async def credit_topup_purchase(
-    pool: asyncpg.Pool, installation_id: int, amount_usd: float, transaction_id: str
+    pool: asyncpg.Pool,
+    installation_id: int,
+    amount_usd: float,
+    transaction_id: str,
+    charged_total_minor: Decimal | None = None,
 ) -> bool:
     """Credits a real, customer-purchased top-up to topup_credit_balance_
     usd, exactly once per transaction_id even if the webhook is
     redelivered. Returns whether this call actually credited anything
-    (False on a replay)."""
+    (False on a replay).
+
+    Also records what the top-up granted and what was charged (in the
+    transaction's own currency, minor units), which is what lets a later
+    refund or chargeback take back the right share of the credit."""
     async with pool.acquire() as conn:
         async with conn.transaction():
             inserted = await conn.fetchrow(
-                "INSERT INTO processed_paddle_transactions (id) VALUES ($1) "
+                "INSERT INTO processed_paddle_transactions "
+                "(id, installation_id, credited_usd, charged_total_minor) "
+                "VALUES ($1, $2, $3, $4) "
                 "ON CONFLICT (id) DO NOTHING RETURNING id",
                 transaction_id,
+                installation_id,
+                Decimal(str(amount_usd)),
+                charged_total_minor,
             )
             if inserted is None:
                 return False
@@ -356,6 +370,84 @@ async def credit_topup_purchase(
                 installation_id, amount_usd,
             )
     return True
+
+
+async def claw_back_topup_credit(
+    pool: asyncpg.Pool, adjustment_id: str, transaction_id: str, refunded_total_minor: Decimal
+) -> dict:
+    """Takes back the share of a top-up's credit that an approved refund or
+    chargeback returned money for.
+
+    The share is refunded_total_minor over what was charged (both in the
+    transaction's own currency), so it holds for any currency and for a
+    partial refund. It never exceeds what the top-up granted, however many
+    adjustments arrive, and the balance floors at zero: credit the buyer has
+    already spent cannot be recovered here, so that part is returned as
+    shortfall_usd for a human to deal with.
+
+    Returns {"status": ...}: "clawed" (with installation_id, clawed_usd,
+    shortfall_usd), "duplicate" (this adjustment was already applied), or
+    "no_record" (the top-up predates the ledger recording amounts, so there
+    is nothing to compute from)."""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT installation_id, credited_usd, charged_total_minor, clawed_back_usd "
+                "FROM processed_paddle_transactions WHERE id = $1 FOR UPDATE",
+                transaction_id,
+            )
+            if (
+                row is None
+                or row["installation_id"] is None
+                or row["credited_usd"] is None
+                or not row["charged_total_minor"]
+            ):
+                return {"status": "no_record"}
+            claimed = await conn.fetchrow(
+                "INSERT INTO paddle_topup_adjustments (adjustment_id, transaction_id) "
+                "VALUES ($1, $2) ON CONFLICT (adjustment_id) DO NOTHING RETURNING adjustment_id",
+                adjustment_id, transaction_id,
+            )
+            if claimed is None:
+                return {"status": "duplicate"}
+
+            installation_id = row["installation_id"]
+            remaining = row["credited_usd"] - row["clawed_back_usd"]
+            share = min(Decimal(1), refunded_total_minor / row["charged_total_minor"])
+            if remaining <= 0 or share <= 0:
+                claw = Decimal(0)
+            elif share >= 1:
+                claw = remaining
+            else:
+                claw = min(remaining, (row["credited_usd"] * share).quantize(Decimal("0.01"), ROUND_HALF_UP))
+
+            balance = await conn.fetchval(
+                "SELECT topup_credit_balance_usd FROM installations "
+                "WHERE installation_id = $1 FOR UPDATE",
+                installation_id,
+            )
+            deducted = min(balance or Decimal(0), claw)
+            shortfall = claw - deducted
+            await conn.execute(
+                "UPDATE installations SET topup_credit_balance_usd = topup_credit_balance_usd - $2, "
+                "balance_epoch = balance_epoch + 1 WHERE installation_id = $1",
+                installation_id, deducted,
+            )
+            await conn.execute(
+                "UPDATE processed_paddle_transactions SET clawed_back_usd = clawed_back_usd + $2 WHERE id = $1",
+                transaction_id, claw,
+            )
+            await conn.execute(
+                "UPDATE paddle_topup_adjustments SET clawed_back_usd = $2, shortfall_usd = $3 "
+                "WHERE adjustment_id = $1",
+                adjustment_id, claw, shortfall,
+            )
+    return {
+        "status": "clawed",
+        "installation_id": installation_id,
+        "clawed_usd": claw,
+        "shortfall_usd": shortfall,
+    }
 
 
 async def is_credited_topup_transaction(pool: asyncpg.Pool, transaction_id: str) -> bool:

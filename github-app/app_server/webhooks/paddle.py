@@ -14,6 +14,7 @@ from app_server.db import (
     claim_free_to_paid_plan,
     claim_paid_setup,
     credit_extra_seat_purchase,
+    claw_back_topup_credit,
     credit_topup_purchase,
     disarm_monthly_credit_reset_clock,
     is_credited_topup_transaction,
@@ -53,7 +54,8 @@ logger = logging.getLogger(__name__)
 # the referring affiliate's commission un-reversed indefinitely.
 #
 # The events this file's code paths handle: transaction.completed,
-# adjustment.created, transaction.updated, and every name in
+# adjustment.created, adjustment.updated (the approval of a refund, which is
+# when a top-up's credit is taken back), transaction.updated, and every name in
 # _SUBSCRIPTION_EVENT_TYPES below. All of those except transaction.updated
 # must always be a subset of the live destination's subscribed_events -
 # transaction.updated is the deliberate exception: it's only checked for a
@@ -105,9 +107,16 @@ class PaddleWebhookAmountError(RuntimeError):
 
 
 class PaddleTopupRefundedError(RuntimeError):
-    """Paddle refunded or charged back a credit top-up. The credit it
-    granted is deliberately not clawed back automatically, so a human has
-    to decide whether the installation's balance needs adjusting."""
+    """Paddle raised a refund or chargeback on a credit top-up. The credit
+    is taken back only once the adjustment is approved (see
+    _claw_back_refunded_topup); this alert is the early heads-up."""
+
+
+class PaddleTopupClawbackError(RuntimeError):
+    """An approved refund or chargeback of a credit top-up could not be fully
+    taken back from the balance: either the buyer had already spent part of
+    it, or the top-up predates the ledger recording amounts. A human has to
+    decide what to do about the difference."""
 
 
 # Adjustment actions that return a customer's money. Others ("credit",
@@ -203,12 +212,12 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
     if event_type == "transaction.completed":
         await _handle_transaction_completed(payload.get("data") or {}, pool)
         return
-    if event_type == "adjustment.created" or (
+    if event_type in ("adjustment.created", "adjustment.updated") or (
         event_type == "transaction.updated"
         and (payload.get("data") or {}).get("status")
         in {"refunded", "partially_refunded", "charged_back"}
     ):
-        await _handle_adjustment_created(payload.get("data") or {}, pool)
+        await _handle_adjustment_created(payload.get("data") or {}, pool, event_type)
         return
     if event_type not in _SUBSCRIPTION_EVENT_TYPES:
         return
@@ -603,7 +612,10 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
                     f"transaction_id={transaction_id} installation_id={installation_id}",
                 )
             elif amount_usd > 0:
-                await credit_topup_purchase(pool, installation_id, float(amount_usd), transaction_id)
+                await credit_topup_purchase(
+                    pool, installation_id, float(amount_usd), transaction_id,
+                    charged_total_minor=_finite_decimal(totals.get("total")),
+                )
         else:
             logger.warning(
                 "credit topup transaction.completed missing id: %s",
@@ -670,34 +682,89 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
     )
 
 
-async def _handle_adjustment_created(data: dict, pool) -> None:
-    """Reverse a commission when Paddle refunds or charges back a transaction."""
+async def _handle_adjustment_created(data: dict, pool, event_type: str = "adjustment.created") -> None:
+    """Reverse a commission when Paddle refunds or charges back a transaction,
+    and take a credit top-up's credit back once that is approved."""
     transaction_id = (
         data.get("transaction_id")
         or data.get("id")
         or (data.get("transaction") or {}).get("id")
     )
-    if transaction_id:
+    if not transaction_id:
+        return
+
+    action = data.get("action")
+    money_returning = action is None or action in _MONEY_RETURNING_ADJUSTMENT_ACTIONS
+    is_topup = money_returning and await is_credited_topup_transaction(pool, transaction_id)
+
+    # The first sighting of an adjustment (and a transaction.updated status
+    # change) does the commission reversal and the heads-up alert. A later
+    # adjustment.updated for the same refund only carries the approval, so it
+    # must not repeat either.
+    if event_type != "adjustment.updated":
         from app_server.affiliates import reverse_commission
 
         await reverse_commission(pool, transaction_id)
-
         # transaction.updated payloads carry no adjustment action; they only
         # reach this handler for a refunded/charged-back status, so a missing
         # action means money was returned.
-        action = data.get("action")
-        if (
-            action is None or action in _MONEY_RETURNING_ADJUSTMENT_ACTIONS
-        ) and await is_credited_topup_transaction(pool, transaction_id):
+        if is_topup:
             logger.warning(
-                "credit top-up %s was refunded or charged back; its credit was not clawed back",
-                transaction_id,
+                "credit top-up %s has a refund or chargeback (status=%s); credit is taken back once it is approved",
+                transaction_id, data.get("status"),
             )
             send_error_alert(
                 "paddle_webhook",
-                PaddleTopupRefundedError("credit top-up refunded or charged back"),
-                f"transaction_id={transaction_id} action={action or 'transaction.updated'}",
+                PaddleTopupRefundedError("credit top-up refund or chargeback raised"),
+                f"transaction_id={transaction_id} action={action or 'transaction.updated'} "
+                f"status={data.get('status')}",
             )
+
+    if is_topup and data.get("id") and data.get("status") == "approved" and action is not None:
+        await _claw_back_refunded_topup(data, transaction_id, pool)
+
+
+async def _claw_back_refunded_topup(data: dict, transaction_id: str, pool) -> None:
+    """Takes back the credit for an APPROVED refund or chargeback of a top-up.
+    A pending refund can still be rejected, and a rejected one must leave the
+    buyer's credit alone, so nothing here runs before approval."""
+    adjustment_id = data["id"]
+    refunded = _finite_decimal((data.get("totals") or {}).get("total"))
+    if refunded is None or refunded <= 0:
+        logger.warning(
+            "approved adjustment %s for top-up %s has no usable refunded total, not taking credit back",
+            adjustment_id, transaction_id,
+        )
+        send_error_alert(
+            "paddle_webhook",
+            PaddleTopupClawbackError("approved top-up refund has no usable refunded total"),
+            f"transaction_id={transaction_id} adjustment_id={adjustment_id}",
+        )
+        return
+
+    result = await claw_back_topup_credit(pool, adjustment_id, transaction_id, refunded)
+    if result["status"] == "duplicate":
+        return
+    if result["status"] == "no_record":
+        logger.warning("approved refund of top-up %s has no recorded grant to reverse", transaction_id)
+        send_error_alert(
+            "paddle_webhook",
+            PaddleTopupClawbackError("approved top-up refund could not be reversed: no recorded grant"),
+            f"transaction_id={transaction_id} adjustment_id={adjustment_id}",
+        )
+        return
+
+    logger.info(
+        "took back $%s of top-up credit for installation %s (refund %s of %s)",
+        result["clawed_usd"], result["installation_id"], adjustment_id, transaction_id,
+    )
+    if result["shortfall_usd"] > 0:
+        send_error_alert(
+            "paddle_webhook",
+            PaddleTopupClawbackError("refunded top-up credit was already spent"),
+            f"transaction_id={transaction_id} adjustment_id={adjustment_id} "
+            f"installation_id={result['installation_id']} shortfall_usd={result['shortfall_usd']:.2f}",
+        )
 
 
 @paddle_webhook_router.post("/webhooks/paddle")
