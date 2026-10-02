@@ -30,6 +30,24 @@ def _enqueue_checkout_purge(installation_id: int, redis_url: str, queue=None) ->
     )
 
 
+def _enqueue_repo_checkout_purge(
+    installation_id: int, repo_full_name: str, redis_url: str, queue=None
+) -> None:
+    """The per-repo counterpart to _enqueue_checkout_purge, for a repo
+    removed from an installation that stays installed."""
+    if queue is None:
+        from redis import Redis
+        from rq import Queue
+
+        queue = Queue("scans", connection=Redis.from_url(redis_url))
+    queue.enqueue(
+        "scan_worker.jobs.purge_repo_checkout_job",
+        job_timeout=120,
+        installation_id=installation_id,
+        repo_full_name=repo_full_name,
+    )
+
+
 def _fetch_installation_repos_sync(installation_id: int, app_jwt: str) -> list[str]:
     token = get_installation_token(installation_id, app_jwt)
     repositories = fetch_paginated_github_collection(
@@ -118,8 +136,12 @@ async def handle_installation_event(
         # runs first (just above) so hidden_repos' FK to installations is
         # always satisfied, even for a "removed" event somehow arriving
         # before this installation's own "created" event was processed.
+        #
+        # The one thing that is NOT kept is our retained working copy: it is
+        # the customer's source code, and they just revoked our access to it.
         for repo in payload.get("repositories_removed", []):
             await hide_repo(pool, installation_id, repo["full_name"])
+            _enqueue_repo_checkout_purge(installation_id, repo["full_name"], redis_url, queue)
         return
 
     # Without this, a repo with no open pull requests never gets scanned

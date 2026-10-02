@@ -599,6 +599,29 @@ def purge_persistent_checkouts_job(installation_id: int) -> None:
     shutil.rmtree(_installation_checkout_root(installation_id), ignore_errors=True)
 
 
+@log_job
+def purge_repo_checkout_job(installation_id: int, repo_full_name: str) -> None:
+    """Deletes one repo's persistent checkout - the source code we keep on
+    disk between scans. Enqueued when a repo is removed from an existing
+    installation: the customer revoked our access to it, so the working copy
+    must not outlive that, even though the derived evidence is only soft-hidden
+    (see handle_installation_event).
+
+    shutil.rmtree on a path that escaped this installation's own directory
+    would delete other installations' source, so anything that doesn't
+    resolve to a direct child of this installation's root is refused.
+    """
+    installation_root = _installation_checkout_root(installation_id).resolve()
+    target = _persistent_checkout_dir(installation_id, repo_full_name)
+    if target.resolve().parent != installation_root:
+        logging.getLogger("scan_worker.jobs").warning(
+            "refusing to purge checkout for installation %s: %r is not a direct child of its checkout root",
+            installation_id, repo_full_name,
+        )
+        return
+    shutil.rmtree(target, ignore_errors=True)
+
+
 def _ensure_persistent_checkout(
     url: str, checkout_sha: str, checkout_dir: Path, pr_number: int | None = None
 ) -> None:
