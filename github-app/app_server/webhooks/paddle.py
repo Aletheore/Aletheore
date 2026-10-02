@@ -16,6 +16,7 @@ from app_server.db import (
     credit_extra_seat_purchase,
     credit_topup_purchase,
     disarm_monthly_credit_reset_clock,
+    is_credited_topup_transaction,
     get_extra_seats,
     get_installation,
     list_installation_member_emails,
@@ -101,6 +102,17 @@ class PaddleWebhookAmountError(RuntimeError):
     """A real, signature-verified Paddle transaction whose paid amount
     can't be turned into a credit or commission - the customer paid but
     nothing was applied, so a human has to follow up."""
+
+
+class PaddleTopupRefundedError(RuntimeError):
+    """Paddle refunded or charged back a credit top-up. The credit it
+    granted is deliberately not clawed back automatically, so a human has
+    to decide whether the installation's balance needs adjusting."""
+
+
+# Adjustment actions that return a customer's money. Others ("credit",
+# "chargeback_reverse", "chargeback_warning", ...) do not.
+_MONEY_RETURNING_ADJUSTMENT_ACTIONS = {"refund", "chargeback"}
 
 
 def _finite_decimal(value) -> Decimal | None:
@@ -636,6 +648,23 @@ async def _handle_adjustment_created(data: dict, pool) -> None:
         from app_server.affiliates import reverse_commission
 
         await reverse_commission(pool, transaction_id)
+
+        # transaction.updated payloads carry no adjustment action; they only
+        # reach this handler for a refunded/charged-back status, so a missing
+        # action means money was returned.
+        action = data.get("action")
+        if (
+            action is None or action in _MONEY_RETURNING_ADJUSTMENT_ACTIONS
+        ) and await is_credited_topup_transaction(pool, transaction_id):
+            logger.warning(
+                "credit top-up %s was refunded or charged back; its credit was not clawed back",
+                transaction_id,
+            )
+            send_error_alert(
+                "paddle_webhook",
+                PaddleTopupRefundedError("credit top-up refunded or charged back"),
+                f"transaction_id={transaction_id} action={action or 'transaction.updated'}",
+            )
 
 
 @paddle_webhook_router.post("/webhooks/paddle")

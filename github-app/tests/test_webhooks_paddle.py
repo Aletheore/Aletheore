@@ -13,7 +13,13 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app_server import paddle_ip_allowlist
-from app_server.affiliates import create_affiliate, get_referral, list_affiliates_with_totals, record_referral
+from app_server.affiliates import (
+    create_affiliate,
+    get_referral,
+    list_affiliates_with_totals,
+    record_commission,
+    record_referral,
+)
 from app_server.auth import sign_checkout_installation_id
 from app_server.db import (
     add_installation_member,
@@ -2403,3 +2409,94 @@ async def test_transaction_completed_regular_purchase_for_referred_installation_
 
     totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
     assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("4.05")
+
+
+def _adjustment_payload(transaction_id: str, action: str = "refund") -> dict:
+    return {
+        "event_id": f"evt_adj_{transaction_id}_{action}",
+        "event_type": "adjustment.created",
+        "data": {"id": "adj_test_1", "transaction_id": transaction_id, "action": action, "status": "pending_approval"},
+    }
+
+
+def _capture_alerts(monkeypatch) -> list:
+    from app_server.webhooks import paddle as paddle_module
+
+    alerts = []
+    monkeypatch.setattr(paddle_module, "send_error_alert", lambda *a, **k: alerts.append((a, k)))
+    return alerts
+
+
+@pytest.mark.asyncio
+async def test_adjustment_created_reverses_the_commission_for_the_refunded_transaction(pool, monkeypatch):
+    _capture_alerts(monkeypatch)
+    affiliate = await create_affiliate(pool, "REFUND10", "dsc_refund_wh", "Rhea")
+    await upsert_installation(pool, 1950, "acme")
+    await record_referral(pool, 1950, affiliate["id"])
+    await record_commission(
+        pool, affiliate["id"], 1950, "txn_refunded_sub", Decimal("1.20"),
+        datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+
+    await handle_paddle_webhook_event(_adjustment_payload("txn_refunded_sub"), pool, "redis://unused")
+
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("0.00")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["refund", "chargeback"])
+async def test_refund_or_chargeback_of_a_credited_topup_fires_an_ops_alert(pool, monkeypatch, action):
+    # Refunds are Paddle's decision (we never issue them), but a refunded
+    # top-up leaves its credit in place. The alert is how a human finds out
+    # in time to look at the balance - the credit is deliberately not
+    # clawed back automatically.
+    alerts = _capture_alerts(monkeypatch)
+    await upsert_installation(pool, 1951, "acme")
+    await credit_topup_purchase(pool, 1951, 5.0, "txn_topup_refunded")
+
+    await handle_paddle_webhook_event(_adjustment_payload("txn_topup_refunded", action), pool, "redis://unused")
+
+    assert len(alerts) == 1
+    args, _ = alerts[0]
+    assert args[0] == "paddle_webhook"
+    assert "txn_topup_refunded" in args[2]
+    row = await pool.fetchrow("SELECT topup_credit_balance_usd FROM installations WHERE installation_id = 1951")
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(5.00)
+
+
+@pytest.mark.asyncio
+async def test_transaction_updated_to_refunded_for_a_credited_topup_fires_an_ops_alert(pool, monkeypatch):
+    alerts = _capture_alerts(monkeypatch)
+    await upsert_installation(pool, 1952, "acme")
+    await credit_topup_purchase(pool, 1952, 10.0, "txn_topup_status_refund")
+    payload = {
+        "event_id": "evt_txn_updated_refund",
+        "event_type": "transaction.updated",
+        "data": {"id": "txn_topup_status_refund", "status": "refunded"},
+    }
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    assert len(alerts) == 1
+
+
+@pytest.mark.asyncio
+async def test_refund_of_a_transaction_that_was_not_a_topup_does_not_fire_the_topup_alert(pool, monkeypatch):
+    alerts = _capture_alerts(monkeypatch)
+
+    await handle_paddle_webhook_event(_adjustment_payload("txn_a_subscription_payment"), pool, "redis://unused")
+
+    assert alerts == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["credit", "chargeback_reverse", "chargeback_warning"])
+async def test_non_refund_adjustments_of_a_credited_topup_do_not_fire_the_alert(pool, monkeypatch, action):
+    alerts = _capture_alerts(monkeypatch)
+    await upsert_installation(pool, 1953, "acme")
+    await credit_topup_purchase(pool, 1953, 5.0, "txn_topup_not_refunded")
+
+    await handle_paddle_webhook_event(_adjustment_payload("txn_topup_not_refunded", action), pool, "redis://unused")
+
+    assert alerts == []
