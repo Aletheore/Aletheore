@@ -186,7 +186,7 @@ Using the same DeepSeek V4 Pro adapter setup already proven working this session
 
 ```bash
 cd /Users/arihantkaul/Documents/GitHub/Veridion/prototype
-export DEEPSEEK_API_KEY=$(ssh -o BatchMode=yes -o ConnectTimeout=8 root@187.127.169.89 "cd /root/aletheore/github-app && docker compose exec -T scan-worker printenv DEEPSEEK_API_KEY")
+export DEEPSEEK_API_KEY=$(ssh -o BatchMode=yes -o ConnectTimeout=8 $PROD_SSH "cd /root/aletheore/github-app && docker compose exec -T scan-worker printenv DEEPSEEK_API_KEY")
 python3 - <<'PYEOF'
 import sys
 sys.path.insert(0, ".")

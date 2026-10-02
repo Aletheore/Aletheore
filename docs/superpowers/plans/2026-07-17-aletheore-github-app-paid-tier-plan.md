@@ -2817,7 +2817,7 @@ git push origin master
 - [ ] **Step 3: On the KVM4 server - pull, add the new `.env` values**
 
 ```bash
-ssh root@187.127.169.89 "cd /root/aletheore && git pull --ff-only origin master"
+ssh $PROD_SSH "cd /root/aletheore && git pull --ff-only origin master"
 ```
 
 Generate a real session secret and edit `/root/aletheore/github-app/.env` on the server to add real values for `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` (both visible on the App's settings page), `SESSION_SECRET` (generate with the command shown in Step 1), `PUBLIC_BASE_URL=https://aletheore.com`, and a real `ANTHROPIC_API_KEY`.
@@ -2833,7 +2833,7 @@ Generate a real session secret and edit `/root/aletheore/github-app/.env` on the
 - [ ] **Step 5: Apply migration 002 to the live database**
 
 ```bash
-ssh root@187.127.169.89 "cd /root/aletheore/github-app && docker compose exec -T postgres psql -U aletheore -d aletheore_app < migrations/002_paid_tier.sql"
+ssh $PROD_SSH "cd /root/aletheore/github-app && docker compose exec -T postgres psql -U aletheore -d aletheore_app < migrations/002_paid_tier.sql"
 ```
 
 Expected: `ALTER TABLE` x2, `CREATE TABLE` x2, `CREATE INDEX`, no errors.
@@ -2841,7 +2841,7 @@ Expected: `ALTER TABLE` x2, `CREATE TABLE` x2, `CREATE INDEX`, no errors.
 - [ ] **Step 6: Rebuild and restart**
 
 ```bash
-ssh root@187.127.169.89 "cd /root/aletheore/github-app && docker compose up -d --build"
+ssh $PROD_SSH "cd /root/aletheore/github-app && docker compose up -d --build"
 ```
 
 Confirm zero restarts the same way every prior deploy in this session was verified - `docker compose ps` shows all services `Up`, then check `docker inspect <container> --format '{{.RestartCount}}'` for `app-server`, `scan-worker`, `postgres`, `redis`, `caddy` all report `0`.

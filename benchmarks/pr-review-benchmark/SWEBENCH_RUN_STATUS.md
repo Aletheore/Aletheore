@@ -86,7 +86,7 @@ content, not marker presence.
 
 **Root cause of the underlying failures** (separate from the lock-scope bug,
 confirmed via production Postgres logs): checkpoints on the prod host
-(`root@187.127.169.89`, `github-app-postgres-1`) take 60-160s to write out,
+(`$PROD_SSH`, `github-app-postgres-1`) take 60-160s to write out,
 recurring roughly every 5 minutes (`checkpoint_timeout` default), and every
 observed `LockNotAvailable` failure timestamp falls inside a checkpoint
 window. This is real infra signal, tracked separately (see task chip "Fix

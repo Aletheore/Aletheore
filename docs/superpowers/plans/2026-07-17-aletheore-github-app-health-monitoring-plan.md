@@ -894,14 +894,14 @@ git commit -m "feat(github-app): Ofelia scheduler - health-check sweep every 3 m
 - [ ] **Step 1: Pull and apply migration on the live server**
 
 ```bash
-ssh root@187.127.169.89 "cd /root/aletheore && git pull --ff-only origin master"
-ssh root@187.127.169.89 "cd /root/aletheore/github-app && docker compose exec -T postgres psql -U aletheore -d aletheore_app < migrations/003_health_monitoring.sql"
+ssh $PROD_SSH "cd /root/aletheore && git pull --ff-only origin master"
+ssh $PROD_SSH "cd /root/aletheore/github-app && docker compose exec -T postgres psql -U aletheore -d aletheore_app < migrations/003_health_monitoring.sql"
 ```
 
 - [ ] **Step 2: Rebuild and restart**
 
 ```bash
-ssh root@187.127.169.89 "cd /root/aletheore/github-app && docker compose up -d --build"
+ssh $PROD_SSH "cd /root/aletheore/github-app && docker compose up -d --build"
 ```
 
 Confirm `docker compose ps` shows all services `Up` including the new `ofelia` container, and `RestartCount: 0` across the board (same bar every prior deploy this session was held to).

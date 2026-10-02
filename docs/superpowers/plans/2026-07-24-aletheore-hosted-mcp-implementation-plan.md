@@ -1391,7 +1391,7 @@ git commit -m "feat: hosted answer tool with self-hosted Qwen2.5-3B and a concur
 
 - [ ] **Step 1: Edit the `ollama` service definition**
 
-Change (verified live host capacity: 4 vCPU / 15GB RAM, 14GB free, confirmed via SSH `nproc`/`free -h` on `root@187.127.169.89`):
+Change (verified live host capacity: 4 vCPU / 15GB RAM, 14GB free, confirmed via SSH `nproc`/`free -h` on `$PROD_SSH`):
 
 ```yaml
   ollama:
@@ -1412,7 +1412,7 @@ Change (verified live host capacity: 4 vCPU / 15GB RAM, 14GB free, confirmed via
 This step happens at actual deploy time (Task 13), not standalone — noted here so the docker-compose change isn't forgotten. Verification command once deployed:
 
 ```bash
-ssh root@187.127.169.89 "docker exec github-app-ollama-1 ollama list"
+ssh $PROD_SSH "docker exec github-app-ollama-1 ollama list"
 ```
 Expected output includes both `nomic-embed-text` and `qwen2.5:3b-instruct`.
 
@@ -1593,21 +1593,21 @@ Follow this session's established pattern exactly: push branch, `gh pr create`, 
 - [ ] **Step 2: Deploy**
 
 ```bash
-ssh root@187.127.169.89 "cd /root/aletheore && git pull && mkdir -p /var/aletheore/mirrors && docker compose build app-server scan-worker ollama && docker compose up -d"
+ssh $PROD_SSH "cd /root/aletheore && git pull && mkdir -p /var/aletheore/mirrors && docker compose build app-server scan-worker ollama && docker compose up -d"
 ```
 Note the new `mkdir -p /var/aletheore/mirrors` — this must exist and be a mounted/persistent path (add a bind mount for it in `docker-compose.yml`'s `app-server` and `scan-worker` service definitions if not already present, since mirrors need to survive container restarts and be visible to both services).
 
 - [ ] **Step 3: Verify migrations applied**
 
 ```bash
-ssh root@187.127.169.89 "docker compose logs app-server | grep -i migration | tail -5"
+ssh $PROD_SSH "docker compose logs app-server | grep -i migration | tail -5"
 ```
 Expected: confirmation that migrations 016 and 017 applied.
 
 - [ ] **Step 4: Verify Ollama has both models**
 
 ```bash
-ssh root@187.127.169.89 "docker exec github-app-ollama-1 ollama list"
+ssh $PROD_SSH "docker exec github-app-ollama-1 ollama list"
 ```
 Expected: `nomic-embed-text` and `qwen2.5:3b-instruct` both listed.
 
