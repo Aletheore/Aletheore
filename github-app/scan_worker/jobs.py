@@ -2242,7 +2242,12 @@ def run_flash_review_job(
 
     is_free_tier = installation["plan"] == "free"
 
-    if not check_and_reserve_monthly_repo_scan_slot(
+    # The distinct-repo cap is a paid-plan limit: every other job in this
+    # file skips it for the free plan ("free plan is not subject to this cap"
+    # in app_server/db.py), and the free tier already has its own review
+    # budget below. This job applied it to free installs anyway, so an
+    # eleventh repo got no review at all instead of one of the free ones.
+    if not is_free_tier and not check_and_reserve_monthly_repo_scan_slot(
         settings.database_url, installation_id, repo_full_name, MAX_SCANNED_REPOS_PER_MONTH
     ):
         _record_review_outcome(
@@ -2281,6 +2286,9 @@ def run_flash_review_job(
     # the reservation itself IS the spend, applied atomically at the moment
     # of the check.
     reserved_spend = 0.0
+    # How much of reserved_spend was drawn from purchased top-up credit, so a
+    # release (the true-up refund or the failure path below) goes back there.
+    reserved_topup: dict = {}
     if is_free_tier:
         # Not recorded to history - always free tier here, and
         # _record_review_outcome no-ops for free tier anyway (see its own
@@ -2316,7 +2324,8 @@ def run_flash_review_job(
         if 0 < combined_balance < reserved_spend:
             reserved_spend = combined_balance
         if not reserve_llm_spend_with_email_hooks(
-            settings.database_url, installation_id, reserved_spend, feature="flash_review"
+            settings.database_url, installation_id, reserved_spend, feature="flash_review",
+            topup_out=reserved_topup,
         ):
             release_flash_review_count_reservation(settings.database_url, installation_id)
             _record_review_outcome(
@@ -2330,7 +2339,7 @@ def run_flash_review_job(
     # exception AFTER that point (posting comments, recording history) leaves
     # review_ran False, and the finally below used to release the whole
     # reservation a second time: free credit on every such failure.
-    reservation_state = {"settled": False}
+    reservation_state = {"settled": False, "topup_usd": reserved_topup.get("topup_usd", 0.0)}
     try:
         review_ran = _run_flash_review(
             settings, installation_id, repo_full_name, pr_number, base_sha, head_sha,
@@ -2398,7 +2407,10 @@ def run_flash_review_job(
         if not review_ran:
             release_flash_review_count_reservation(settings.database_url, installation_id)
             if reserved_spend and not reservation_state["settled"]:
-                release_llm_spend_reservation(settings.database_url, installation_id, reserved_spend)
+                _release_spend(
+                    settings.database_url, installation_id, reserved_spend,
+                    reservation_state["topup_usd"],
+                )
 
 
 def _flash_review_finding_type(finding: dict) -> str:
@@ -3207,7 +3219,10 @@ def _run_flash_review(
                 if remaining > 0:
                     reserve_llm_spend(settings.database_url, installation_id, remaining)
     elif delta < 0:
-        release_llm_spend_reservation(settings.database_url, installation_id, -delta)
+        _release_spend(
+            settings.database_url, installation_id, -delta,
+            (reservation_state or {}).get("topup_usd", 0.0),
+        )
     if reservation_state is not None:
         # Settled the moment the credit-balance true-up above lands, not
         # after the record_llm_spend() call below: that call only writes
@@ -5184,8 +5199,28 @@ def _llm_spend_cap_reached(dsn: str, installation_id: int, plan: str) -> tuple[b
 LOW_BALANCE_WARNING_FRACTION = 0.15
 
 
+def _release_spend(
+    dsn: str, installation_id: int, amount: float, topup_usd: float = 0.0
+) -> None:
+    """release_llm_spend_reservation, sending back to the top-up bucket the
+    part of this refund that the reservation originally drew from it (see
+    reserve_llm_spend's topup_out). The extra argument is only passed when
+    there is something to say, so a reservation paid entirely from plan
+    credit releases exactly as it always did."""
+    if topup_usd > 0:
+        release_llm_spend_reservation(
+            dsn, installation_id, amount, topup_usd=min(amount, topup_usd)
+        )
+    else:
+        release_llm_spend_reservation(dsn, installation_id, amount)
+
+
 def reserve_llm_spend_with_email_hooks(
-    dsn: str, installation_id: int, reserve_usd: float, feature: str
+    dsn: str,
+    installation_id: int,
+    reserve_usd: float,
+    feature: str,
+    topup_out: dict | None = None,
 ) -> bool:
     """Wraps reserve_llm_spend with the two customer-facing email triggers -
     reused by both the Flash Review direct-reservation path and
@@ -5217,12 +5252,12 @@ def reserve_llm_spend_with_email_hooks(
     """
     row = get_installation_row(dsn, installation_id)
     if row is None:
-        return reserve_llm_spend(dsn, installation_id, reserve_usd)
+        return reserve_llm_spend(dsn, installation_id, reserve_usd, topup_out=topup_out)
 
     before_total = float(row.get("base_credit_remaining_usd", 0)) + float(
         row.get("topup_credit_balance_usd", 0)
     )
-    ok = reserve_llm_spend(dsn, installation_id, reserve_usd)
+    ok = reserve_llm_spend(dsn, installation_id, reserve_usd, topup_out=topup_out)
 
     if not ok:
         _enqueue_credit_balance_email("credit_exhausted", installation_id, row)
@@ -5365,12 +5400,18 @@ class _IncrementalSpendBudget:
         # reserves again for the next one - this class has no concurrent-
         # reservation caller.
         self._pending_reserve_usd = 0.0
+        # The part of _pending_reserve_usd that came out of purchased top-up
+        # credit, so giving any of it back returns it to top-up.
+        self._pending_topup_usd = 0.0
 
     def can_start_next_call(self) -> bool:
+        drawn: dict = {}
         ok = reserve_llm_spend_with_email_hooks(
-            self.dsn, self.installation_id, self.next_call_reserve_usd, self.feature
+            self.dsn, self.installation_id, self.next_call_reserve_usd, self.feature,
+            topup_out=drawn,
         )
         if ok:
+            self._pending_topup_usd += drawn.get("topup_usd", 0.0)
             # Accumulate, never overwrite: two reservations outstanding for one
             # call (an adapter that checks the budget twice, e.g. a provider
             # fallback) used to leave the first one unreachable by
@@ -5437,8 +5478,9 @@ class _IncrementalSpendBudget:
         with the real amount."""
         amount = self._pending_reserve_usd
         if amount:
-            release_llm_spend_reservation(self.dsn, self.installation_id, amount)
+            _release_spend(self.dsn, self.installation_id, amount, self._pending_topup_usd)
             self._pending_reserve_usd = 0.0
+            self._pending_topup_usd = 0.0
         return amount
 
     def record_usage(
@@ -5450,7 +5492,9 @@ class _IncrementalSpendBudget:
         # in full, where the old fixed subtraction refunded a reservation that
         # had already been given back.
         reserved = self._pending_reserve_usd
+        reserved_topup = self._pending_topup_usd
         self._pending_reserve_usd = 0.0
+        self._pending_topup_usd = 0.0
         if cached_tokens:
             # Visibility only - cost_for_usage below still prices the full
             # prompt_tokens count, so cached tokens aren't yet discounted
@@ -5487,7 +5531,7 @@ class _IncrementalSpendBudget:
                     if remaining > 0:
                         reserve_llm_spend(self.dsn, self.installation_id, remaining)
         elif delta < 0:
-            release_llm_spend_reservation(self.dsn, self.installation_id, -delta)
+            _release_spend(self.dsn, self.installation_id, -delta, reserved_topup)
         # Always call through, even when delta == 0 (real cost landed
         # exactly on the reservation) - the aggregate write is a genuine
         # no-op then, but skipping the call used to also skip ledgering

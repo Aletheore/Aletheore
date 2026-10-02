@@ -1304,6 +1304,114 @@ async def test_reserve_llm_spend_succeeds_when_reserve_exactly_equals_combined_b
     assert reserve_llm_spend(TEST_DATABASE_URL, 410, 0.01) is False
 
 
+async def _balances(pool, installation_id):
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, topup_credit_balance_usd "
+        "FROM installations WHERE installation_id = $1",
+        installation_id,
+    )
+    return float(row["base_credit_remaining_usd"]), float(row["topup_credit_balance_usd"])
+
+
+@pytest.mark.asyncio
+async def test_reserve_llm_spend_reports_how_much_it_drew_from_topup(pool):
+    await _insert_installation(
+        pool, 1501, "a", base_credit_remaining_usd=1.00, topup_credit_balance_usd=10.00
+    )
+    drawn: dict = {}
+    assert reserve_llm_spend(TEST_DATABASE_URL, 1501, 3.00, topup_out=drawn) is True
+    assert drawn["topup_usd"] == pytest.approx(2.00)
+
+    # Entirely from the plan bucket: nothing came from top-up.
+    await _insert_installation(
+        pool, 1502, "b", base_credit_remaining_usd=5.00, topup_credit_balance_usd=10.00
+    )
+    drawn = {}
+    assert reserve_llm_spend(TEST_DATABASE_URL, 1502, 2.00, topup_out=drawn) is True
+    assert drawn["topup_usd"] == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_reserve_llm_spend_leaves_topup_out_alone_when_rejected(pool):
+    await _insert_installation(
+        pool, 1503, "a", base_credit_remaining_usd=1.00, topup_credit_balance_usd=1.00
+    )
+    drawn: dict = {}
+    assert reserve_llm_spend(TEST_DATABASE_URL, 1503, 5.00, topup_out=drawn) is False
+    assert drawn == {}
+
+
+@pytest.mark.asyncio
+async def test_partial_release_after_a_topup_draw_goes_back_to_topup_not_the_plan_bucket(pool):
+    # The leak found in the 10/2 money audit: plan credit used up, a $0.50
+    # reservation comes entirely out of purchased credit, and the true-up
+    # gives back $0.495. Releasing into the plan bucket turned $0.495 of
+    # purchased credit into credit that expires at the next renewal.
+    await _insert_installation(
+        pool, 1504, "a",
+        base_credit_remaining_usd=0.00, base_credit_allotment_usd=18.00,
+        topup_credit_balance_usd=5.00,
+    )
+    drawn: dict = {}
+    assert reserve_llm_spend(TEST_DATABASE_URL, 1504, 0.50, topup_out=drawn) is True
+    assert await _balances(pool, 1504) == pytest.approx((0.00, 4.50))
+
+    release_llm_spend_reservation(TEST_DATABASE_URL, 1504, 0.495, topup_usd=drawn["topup_usd"])
+
+    base, topup = await _balances(pool, 1504)
+    assert base == pytest.approx(0.00)
+    assert topup == pytest.approx(4.995)
+
+
+@pytest.mark.asyncio
+async def test_release_after_a_split_draw_returns_topup_first_then_plan_credit(pool):
+    # $0.30 came from the plan bucket and $0.70 from top-up. Giving back
+    # $0.90 returns the $0.70 to top-up and only the last $0.20 to plan credit.
+    await _insert_installation(
+        pool, 1505, "a",
+        base_credit_remaining_usd=0.30, base_credit_allotment_usd=18.00,
+        topup_credit_balance_usd=5.00,
+    )
+    drawn: dict = {}
+    assert reserve_llm_spend(TEST_DATABASE_URL, 1505, 1.00, topup_out=drawn) is True
+    assert drawn["topup_usd"] == pytest.approx(0.70)
+
+    release_llm_spend_reservation(TEST_DATABASE_URL, 1505, 0.90, topup_usd=0.70)
+
+    base, topup = await _balances(pool, 1505)
+    assert base == pytest.approx(0.20)
+    assert topup == pytest.approx(5.00 - 0.70 + 0.70)
+
+
+@pytest.mark.asyncio
+async def test_release_without_a_topup_figure_behaves_exactly_as_before(pool):
+    await _insert_installation(
+        pool, 1506, "a",
+        base_credit_remaining_usd=0.00, base_credit_allotment_usd=18.00,
+        topup_credit_balance_usd=4.50,
+    )
+    release_llm_spend_reservation(TEST_DATABASE_URL, 1506, 0.495)
+    base, topup = await _balances(pool, 1506)
+    assert base == pytest.approx(0.495)
+    assert topup == pytest.approx(4.50)
+
+
+@pytest.mark.asyncio
+async def test_release_never_sends_more_to_topup_than_was_released(pool):
+    # A stale or oversized topup figure cannot mint credit: total balance only
+    # ever rises by the amount released.
+    await _insert_installation(
+        pool, 1507, "a",
+        base_credit_remaining_usd=1.00, base_credit_allotment_usd=18.00,
+        topup_credit_balance_usd=2.00,
+    )
+    release_llm_spend_reservation(TEST_DATABASE_URL, 1507, 0.40, topup_usd=9.00)
+    base, topup = await _balances(pool, 1507)
+    assert base + topup == pytest.approx(3.40)
+    assert base == pytest.approx(1.00)
+    assert topup == pytest.approx(2.40)
+
+
 @pytest.mark.asyncio
 async def test_release_llm_spend_reservation_spills_to_topup_when_base_is_at_its_allotment(pool):
     # No room in base (it is already sitting at this billing period's full

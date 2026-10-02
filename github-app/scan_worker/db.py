@@ -445,7 +445,9 @@ def release_flash_review_count_reservation(dsn: str, installation_id: int) -> No
         conn.commit()
 
 
-def reserve_llm_spend(dsn: str, installation_id: int, reserve_usd: float) -> bool:
+def reserve_llm_spend(
+    dsn: str, installation_id: int, reserve_usd: float, topup_out: dict | None = None
+) -> bool:
     """Atomically reserves reserve_usd against an installation's real
     credit balance (base_credit_remaining_usd, drawn down first, then
     topup_credit_balance_usd) - replaces the old flat monthly_cap
@@ -453,9 +455,26 @@ def reserve_llm_spend(dsn: str, installation_id: int, reserve_usd: float) -> boo
     stored balance, not a constant shared by every installation on the
     same plan. Same atomicity guarantee as before: a single UPDATE ...
     WHERE, so two concurrent callers against the same installation can
-    never together reserve more than what's actually available."""
+    never together reserve more than what's actually available.
+
+    topup_out, when given, receives {"topup_usd": <dollars this reservation
+    took from the purchased top-up bucket>} on success. A caller that later
+    gives part of the reservation back passes that figure to
+    release_llm_spend_reservation so the refund goes back to the bucket it
+    came from. Without it a release refills the plan bucket first, and
+    purchased credit that was drawn because the plan bucket was empty
+    reappears as plan credit, which resets at renewal."""
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
+            # The row lock makes the before/after read below consistent with
+            # the UPDATE: a concurrent reservation waits here instead of
+            # slipping between the two statements.
+            cur.execute(
+                "SELECT topup_credit_balance_usd FROM installations "
+                "WHERE installation_id = %s FOR UPDATE",
+                (installation_id,),
+            )
+            before = cur.fetchone()
             cur.execute(
                 """
                 UPDATE installations
@@ -465,16 +484,23 @@ def reserve_llm_spend(dsn: str, installation_id: int, reserve_usd: float) -> boo
                         - GREATEST(%(reserve)s - base_credit_remaining_usd, 0)
                 WHERE installation_id = %(installation_id)s
                     AND base_credit_remaining_usd + topup_credit_balance_usd >= %(reserve)s
-                RETURNING installation_id
+                RETURNING topup_credit_balance_usd
                 """,
                 {"reserve": reserve_usd, "installation_id": installation_id},
             )
             row = cur.fetchone()
         conn.commit()
-    return row is not None
+    if row is None:
+        return False
+    if topup_out is not None:
+        drawn = float(before[0]) - float(row[0]) if before is not None else 0.0
+        topup_out["topup_usd"] = max(drawn, 0.0)
+    return True
 
 
-def release_llm_spend_reservation(dsn: str, installation_id: int, reserve_usd: float) -> None:
+def release_llm_spend_reservation(
+    dsn: str, installation_id: int, reserve_usd: float, topup_usd: float = 0.0
+) -> None:
     """Undoes one reserve_llm_spend reservation - credits base_credit_
     remaining_usd first, capped at this installation's stored
     base_credit_allotment_usd (this billing period's real ceiling), and
@@ -482,6 +508,13 @@ def release_llm_spend_reservation(dsn: str, installation_id: int, reserve_usd: f
     the allotment is what makes base credit actually reset every
     renewal instead of permanently leaking into the never-expiring
     topup bucket on every partial release.
+
+    topup_usd is how much of the reservation being undone was originally
+    drawn from the top-up bucket (reserve_llm_spend's topup_out). That part
+    of the refund (at most reserve_usd) goes back to top-up first, because
+    the plan bucket was empty when it was drawn: sending it to the plan
+    bucket would turn purchased credit into credit that expires at the next
+    renewal. Only the rest follows the base-first rule above.
 
     The cap only ever limits how much a release ADDS to base: it never
     lowers a base balance that is already above the stored allotment. The
@@ -496,15 +529,24 @@ def release_llm_spend_reservation(dsn: str, installation_id: int, reserve_usd: f
                 UPDATE installations
                 SET
                     base_credit_remaining_usd = base_credit_remaining_usd
-                        + LEAST(%(reserve)s, GREATEST(base_credit_allotment_usd - base_credit_remaining_usd, 0)),
+                        + LEAST(
+                            %(reserve)s - LEAST(%(reserve)s, %(topup)s),
+                            GREATEST(base_credit_allotment_usd - base_credit_remaining_usd, 0)
+                        ),
                     topup_credit_balance_usd = topup_credit_balance_usd
+                        + LEAST(%(reserve)s, %(topup)s)
                         + GREATEST(
-                            %(reserve)s - GREATEST(base_credit_allotment_usd - base_credit_remaining_usd, 0),
+                            %(reserve)s - LEAST(%(reserve)s, %(topup)s)
+                                - GREATEST(base_credit_allotment_usd - base_credit_remaining_usd, 0),
                             0
                         )
                 WHERE installation_id = %(installation_id)s
                 """,
-                {"reserve": reserve_usd, "installation_id": installation_id},
+                {
+                    "reserve": reserve_usd,
+                    "topup": max(topup_usd, 0.0),
+                    "installation_id": installation_id,
+                },
             )
         conn.commit()
 
