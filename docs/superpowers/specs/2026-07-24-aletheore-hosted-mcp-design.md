@@ -120,7 +120,7 @@ This is the section flagged as needing to be done properly, not glossed over, si
 
 ## Model Serving
 
-**Resource allocation**: verified live on the production host (`root@187.127.169.89`, 4 vCPU / 15GB RAM total, 14GB currently free — confirmed via `free -h`/`nproc` over SSH; every other container combined currently uses well under 200MB). The `ollama` service's current `docker-compose.yml` limits (`cpus: "1.0"`, `mem_limit: 1g`) are self-imposed, not a host ceiling. Bump to `cpus: "2.0"`, `mem_limit: 6g` — `nomic-embed-text` (~274MB) plus Qwen2.5-3B-Instruct quantized (~2GB) leaves real headroom for request buffers/KV cache, and still leaves 2 CPUs / 8GB+ for the rest of the stack.
+**Resource allocation**: verified live on the production host (`$PROD_SSH`, 4 vCPU / 15GB RAM total, 14GB currently free — confirmed via `free -h`/`nproc` over SSH; every other container combined currently uses well under 200MB). The `ollama` service's current `docker-compose.yml` limits (`cpus: "1.0"`, `mem_limit: 1g`) are self-imposed, not a host ceiling. Bump to `cpus: "2.0"`, `mem_limit: 6g` — `nomic-embed-text` (~274MB) plus Qwen2.5-3B-Instruct quantized (~2GB) leaves real headroom for request buffers/KV cache, and still leaves 2 CPUs / 8GB+ for the rest of the stack.
 
 **Model**: add `ollama pull qwen2.5:3b-instruct` (or the appropriate quantized tag) to the `ollama` service's startup command alongside the existing `ollama pull nomic-embed-text` (`github-app/docker-compose.yml`'s `ollama.command`).
 

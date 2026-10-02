@@ -859,7 +859,7 @@ cat /tmp/flash-review-test/real.diff
 
 ```bash
 cd /Users/arihantkaul/Documents/GitHub/Veridion/github-app
-export DEEPSEEK_API_KEY=$(ssh -o BatchMode=yes -o ConnectTimeout=8 root@187.127.169.89 "cd /root/aletheore/github-app && docker compose exec -T scan-worker printenv DEEPSEEK_API_KEY")
+export DEEPSEEK_API_KEY=$(ssh -o BatchMode=yes -o ConnectTimeout=8 $PROD_SSH "cd /root/aletheore/github-app && docker compose exec -T scan-worker printenv DEEPSEEK_API_KEY")
 python3 -c "
 from scan_worker.flash_review import review_diff
 diff_text = open('/tmp/flash-review-test/real.diff').read()

@@ -343,6 +343,8 @@ Before claiming a hardening change is live, verify:
 
 ## Deploy Recipe
 
+The production host's address and login are deliberately not recorded in this public repo; the operator keeps them outside it, and example SSH commands in older docs use `$PROD_SSH` for them.
+
 Repo on the host: `/root/aletheore` (compose file in `github-app/`). `scan-worker` and
 `scan-worker-2` are two separate Compose services, each with its own image name, not one service
 scaled to two replicas. Roll them as separate services:
@@ -368,7 +370,7 @@ As of 2026-10-02, following a redeploy to `master` (`git fetch`, `git reset --ha
 `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler`, then
 `docker compose up -d --no-deps` for the same five services, no `--scale`), the operator read back:
 
-- Host: `srv1675832` (`root@187.127.169.89`), path `/root/aletheore`.
+- Host: the production host, path `/root/aletheore`.
 - Commit: `efa1f0e` (#898), which includes #892 to #897. No migrations.
 - `docker ps`: `github-app-app-server-1`, `github-app-health-worker-1`, `github-app-scan-worker-1`,
   `github-app-scan-worker-2-1` and `github-app-scheduler-1` all `healthy` and 28 seconds old;
@@ -398,7 +400,7 @@ scan-worker scan-worker-2`), a partial inspection found (host-side output was re
 directly, and the pass covered less than the full Required Checks list; the gaps are the last
 bullet):
 
-- Host: `srv1675832` (`root@187.127.169.89`), path `/root/aletheore`.
+- Host: the production host, path `/root/aletheore`.
 - Commit: `72ece8d` (#890), which includes #889. No migrations in either PR.
 - Changes live: the deterministic-scan hardening (#889: a scanner that silently failed or was
   skipped now reports a neutral check instead of a false green, the new/resolved split follows
@@ -431,7 +433,7 @@ scheduler` + `docker compose up -d --no-deps --force-recreate` for those five - 
 changed, plus the three services that share the `scan-worker` image with the two that actually
 changed - no migrations, no lockfile changes), live inspection found:
 
-- Host: `srv1675832` (`root@187.127.169.89`).
+- Host: the production host.
 - Commit: `6451c41` (tag `github-app-deploy-2026-09-11`).
 - Working tree: clean aside from the expected untracked `backups/` directory.
 - 4 commits since the previous deploy tag (`github-app-deploy-2026-09-10-3`), all real bug fixes,
@@ -485,7 +487,7 @@ origin/master` + `docker compose build app-server scan-worker scan-worker-2 heal
 scheduler` + `docker compose up -d --no-deps --force-recreate` for those five - the usual five, no
 lockfile changes in this batch), live inspection found:
 
-- Host: `srv1675832` (`root@187.127.169.89`).
+- Host: the production host.
 - Commit: `ee927c8`.
 - Working tree: clean aside from the expected untracked `backups/` directory.
 - 25 commits since the previous deploy tag (`github-app-deploy-2026-09-08-2`) - see
@@ -526,7 +528,7 @@ lockfile changes in this batch), live inspection found:
 
 As of 2026-09-08 (second deploy), following a redeploy to `master` (`git fetch` + `git merge --ff-only origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five - the usual five; the only lockfile change in this batch was `requirements-demo-scan-worker.lock.txt` itself being deleted, so nothing else needed rebuilding), live inspection found:
 
-- Host: `srv1675832` (`root@187.127.169.89`).
+- Host: the production host.
 - Commit: `a6e2457`.
 - Working tree: clean aside from the expected untracked `github-app/backups/` directory.
 - 14 commits since the previous deploy tag (`github-app-deploy-2026-09-08`) - see Snapshot
@@ -567,7 +569,7 @@ As of 2026-09-08 (second deploy), following a redeploy to `master` (`git fetch` 
 
 As of 2026-09-08 (first deploy), following a redeploy to `master` (`git fetch` + `git merge --ff-only origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five - back to the usual five, no lockfile changes in this batch so `jina-embed`/`demo-scan-worker` didn't need rebuilding), live inspection found:
 
-- Host: `srv1675832` (`root@187.127.169.89`).
+- Host: the production host.
 - Commit: `fd7c2c3`.
 - Working tree: clean aside from the expected untracked `github-app/backups/` directory.
 - 12 commits since the previous deploy tag (`github-app-deploy-2026-09-07`) - see Snapshot
@@ -606,7 +608,7 @@ As of 2026-09-08 (first deploy), following a redeploy to `master` (`git fetch` +
 
 As of 2026-09-07, following a redeploy to `master` (`git fetch` + `git merge --ff-only origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler jina-embed demo-scan-worker` + `docker compose up -d --no-deps --force-recreate` for those seven - two more than every prior deploy's usual five, since `jina-embed` and `demo-scan-worker` each pin `anyio` directly in their own lockfiles and #577's bump touched both), live inspection found:
 
-- Host: `srv1675832` (`root@187.127.169.89`).
+- Host: the production host.
 - Commit: `ce5ab60`.
 - Working tree: clean aside from the expected untracked `github-app/backups/` directory.
 - 18 commits since the previous deploy tag (`github-app-deploy-2026-09-06`) - see Snapshot
@@ -642,7 +644,7 @@ As of 2026-09-07, following a redeploy to `master` (`git fetch` + `git merge --f
 
 As of 2026-09-06, following a redeploy to `master` (`git fetch` + `git merge --ff-only origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five - same five as every prior deploy; this batch touched both `github-app/app_server`/`github-app/scan_worker` directly and `src/aletheore/*`, which all five images `pip install` as a package), live inspection found:
 
-- Host: `srv1675832` (`root@187.127.169.89`).
+- Host: the production host.
 - Commit: `cf8d40f`.
 - Working tree: clean aside from the expected untracked `github-app/backups/` directory.
 - 19 commits since the previous deploy tag (`github-app-deploy-2026-09-04`) - see Snapshot
@@ -679,7 +681,7 @@ As of 2026-09-06, following a redeploy to `master` (`git fetch` + `git merge --f
 
 As of 2026-09-04, following a redeploy to `master` (`git fetch` + `git merge --ff-only origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five - same five as every prior deploy, since none of this batch touched `github-app/app_server`/`github-app/scan_worker` directly, only `src/aletheore/*`, which all five images `pip install` as a package), live inspection found:
 
-- Host: `srv1675832` (`root@187.127.169.89`).
+- Host: the production host.
 - Commit: `8bf52ef`.
 - Working tree: clean aside from the expected untracked `github-app/backups/` directory.
 - 6 commits since the previous deploy tag (`github-app-deploy-2026-09-03`): #526 (this doc, no-op),
@@ -719,7 +721,7 @@ As of 2026-09-04, following a redeploy to `master` (`git fetch` + `git merge --f
 
 As of 2026-09-03, following a redeploy to `master` (`git fetch` + `git merge --ff-only origin/master` - a plain `git reset --hard` was blocked by this session's own destructive-command guard, but the working tree was already confirmed clean so a fast-forward merge landed the identical result - + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five), live inspection found:
 
-- Host: `srv1675832` (`root@187.127.169.89`).
+- Host: the production host.
 - Commit: `e655be2`.
 - Working tree: clean aside from the expected untracked `github-app/backups/` directory.
 - 13 commits since the previous deploy tag (`github-app-deploy-2026-08-26`): #513 (docs-only,
@@ -762,7 +764,7 @@ As of 2026-09-03, following a redeploy to `master` (`git fetch` + `git merge --f
 
 As of 2026-08-27 (fifth deploy), following a redeploy to `master` (`git fetch` + `git reset --hard origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five), live inspection found:
 
-- Host: `srv1675832` (`root@187.127.169.89`).
+- Host: the production host.
 - Commit: `17ffd99`.
 - Working tree: clean aside from the expected untracked `github-app/backups/` directory.
 - 2 commits since the previous deploy tag (`github-app-deploy-2026-08-27-4`): a docs-only deploy
@@ -818,7 +820,7 @@ As of 2026-08-27 (fifth deploy), following a redeploy to `master` (`git fetch` +
 
 As of 2026-08-27 (fourth deploy), following a redeploy to `master` (`git fetch` + `git reset --hard origin/master` + `docker compose build app-server` + `docker compose up -d --no-deps --force-recreate app-server`), live inspection found:
 
-- Host: `srv1675832` (`root@187.127.169.89`).
+- Host: the production host.
 - Commit: `084d5d2`.
 - Working tree: clean aside from the expected untracked `github-app/backups/` directory.
 - 3 commits since the previous deploy tag (`github-app-deploy-2026-08-27-3`): a version-number-only
@@ -856,7 +858,7 @@ As of 2026-08-27 (fourth deploy), following a redeploy to `master` (`git fetch` 
 
 As of 2026-08-27 (third deploy), following a redeploy to `master` (`git fetch` + `git reset --hard origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five), live inspection found:
 
-- Host: `srv1675832` (`root@187.127.169.89`).
+- Host: the production host.
 - Commit: `12baf31`.
 - Working tree: clean aside from the expected untracked `github-app/backups/` directory.
 - 2 commits since the previous deploy tag (`github-app-deploy-2026-08-27-2`): #428 fixed
@@ -895,7 +897,7 @@ As of 2026-08-27 (third deploy), following a redeploy to `master` (`git fetch` +
 
 As of 2026-08-27 (second deploy), following a redeploy to `master` (`git reset --hard origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five), live inspection found:
 
-- Host: `srv1675832` (`root@187.127.169.89`).
+- Host: the production host.
 - Commit: `d90bd87`.
 - Working tree: clean aside from the expected untracked `github-app/backups/` directory.
 - 20 commits since the previous deploy tag (`github-app-deploy-2026-08-27`) - the headline changes:
@@ -935,7 +937,7 @@ As of 2026-08-27 (second deploy), following a redeploy to `master` (`git reset -
 
 As of 2026-08-27 (first deploy), following a redeploy to `master` (`git pull origin master` + `docker compose build scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those four - `app-server` deliberately left untouched, see below), live inspection found:
 
-- Host: `srv1675832` (`root@187.127.169.89`).
+- Host: the production host.
 - Commit: `3b89249`.
 - Working tree: clean aside from the expected untracked `github-app/backups/` directory.
 - 5 commits since the previous deploy tag (`github-app-deploy-2026-08-26-2`) - three real bugs in
@@ -978,7 +980,7 @@ As of 2026-08-27 (first deploy), following a redeploy to `master` (`git pull ori
 
 As of 2026-08-24, following a redeploy to `master` (`git reset --hard origin/master` + `docker compose build app-server scan-worker health-worker scheduler` + `docker compose up -d --no-deps --scale scan-worker=2` for those four), live inspection found:
 
-- Host: `srv1675832` (`root@187.127.169.89`).
+- Host: the production host.
 - Commit: `23a94ab`.
 - Working tree: clean aside from the expected untracked `github-app/backups/` directory.
 - 6 commits since the previous deploy tag (`github-app-deploy-2026-08-23`) - two real fixes plus
@@ -1020,7 +1022,7 @@ As of 2026-08-24, following a redeploy to `master` (`git reset --hard origin/mas
 
 As of 2026-08-23, following a redeploy to `master` (`git reset --hard origin/master` + `docker compose build app-server scan-worker health-worker scheduler` + `docker compose up -d --no-deps --scale scan-worker=2` for those four), live inspection found:
 
-- Host: `srv1675832` (`root@187.127.169.89`).
+- Host: the production host.
 - Commit: `f992751`.
 - Working tree: clean aside from the expected untracked `github-app/backups/` directory.
 - 5 commits since the previous deploy tag (`github-app-deploy-2026-08-22-2`) - triggered by a user
@@ -1062,7 +1064,7 @@ As of 2026-08-23, following a redeploy to `master` (`git reset --hard origin/mas
 
 As of 2026-08-22 (second deploy), following a redeploy to `master` (`git reset --hard origin/master` + `docker compose build app-server scan-worker health-worker scheduler` + `docker compose up -d --no-deps --scale scan-worker=2` for those four), live inspection found:
 
-- Host: `srv1675832` (`root@187.127.169.89`).
+- Host: the production host.
 - Deployment path: `/root/aletheore`.
 - Remote: `https://github.com/Aletheore/Aletheore.git`.
 - Branch: `master`.

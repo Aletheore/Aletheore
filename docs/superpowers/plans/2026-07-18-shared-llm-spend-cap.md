@@ -908,7 +908,7 @@ Expected: all pass in both.
 This touches the production Postgres — confirm with the user before running, per this project's standing rule that direct production SQL migrations need explicit sign-off:
 
 ```bash
-ssh root@187.127.169.89 "cd /root/aletheore && git pull origin master && cd github-app && docker compose exec -T postgres psql -U aletheore -d aletheore_app -f /root/aletheore/github-app/migrations/005_llm_spend_cap.sql"
+ssh $PROD_SSH "cd /root/aletheore && git pull origin master && cd github-app && docker compose exec -T postgres psql -U aletheore -d aletheore_app -f /root/aletheore/github-app/migrations/005_llm_spend_cap.sql"
 ```
 
 Expected: `ALTER TABLE` then `CREATE TABLE`.
@@ -921,7 +921,7 @@ Check the DeepSeek balance before, run a real managed audit (same technique alre
 
 Run (against the production database, read-only):
 ```bash
-ssh root@187.127.169.89 "cd /root/aletheore/github-app && docker compose exec -T postgres psql -U aletheore -d aletheore_app -c \"SELECT * FROM llm_spend;\""
+ssh $PROD_SSH "cd /root/aletheore/github-app && docker compose exec -T postgres psql -U aletheore -d aletheore_app -c \"SELECT * FROM llm_spend;\""
 ```
 Expected: a real row for the test installation's ID, with `total_cost_usd` matching what Step 3 calculated.
 

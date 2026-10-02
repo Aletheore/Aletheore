@@ -13,7 +13,7 @@ before minting discount codes via /admin/affiliates.
 
 ## 1. Load testing - three of four original scope items done (2026-08-24), one gap
 
-Production is a single server (`srv1675832`, per
+Production is a single server (the production host, per
 `docs/operations/DEPLOYMENT-VERIFICATION.md`). Rather than risk hitting it
 directly, both load tests ran locally against the real code (`scan_repository()`
 for scan-worker, a real `uvicorn app_server.main:app` process for app-server)
