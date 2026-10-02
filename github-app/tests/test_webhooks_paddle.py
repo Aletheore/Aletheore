@@ -2716,3 +2716,197 @@ async def test_paid_topup_with_an_unusable_token_is_surfaced_not_dropped_silentl
     assert await _topup_balance(pool, 1961) == pytest.approx(0.00)
     assert len(alerts) == 1
     assert "txn_badtoken_1961" in str(alerts[0])
+
+
+# ---------------------------------------------------------------------------
+# Refund and chargeback clawback of top-up credit. Shapes mirror a real Paddle
+# adjustment (adj_01m3y4pw...): status starts as pending_approval, the
+# refunded amount is totals.total in the transaction's own currency.
+# ---------------------------------------------------------------------------
+_INR_TOTALS = {"subtotal": "55255", "tax": "9946", "total": "65201", "discount": "0", "currency_code": "INR"}
+
+
+def _adjustment_event(event_type, adjustment_id, transaction_id, status, total="65201", action="refund"):
+    return {
+        "event_id": f"evt_{event_type}_{adjustment_id}_{status}",
+        "event_type": event_type,
+        "data": {
+            "id": adjustment_id,
+            "action": action,
+            "status": status,
+            "transaction_id": transaction_id,
+            "currency_code": "INR",
+            "totals": {"total": total, "currency_code": "INR"},
+        },
+    }
+
+
+async def _credited_topup(pool, installation_id, transaction_id):
+    await upsert_installation(pool, installation_id, "acme")
+    payload = _priced_topup_payload(installation_id, CREDIT_TOPUP_PRICE_ID, 5, _INR_TOTALS, transaction_id)
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+    assert await _topup_balance(pool, installation_id) == pytest.approx(5.00)
+
+
+@pytest.mark.asyncio
+async def test_a_credited_topup_records_what_it_granted_and_what_was_charged(pool):
+    await _credited_topup(pool, 1970, "txn_ledger_1970")
+
+    row = await pool.fetchrow(
+        "SELECT installation_id, credited_usd, charged_total_minor, clawed_back_usd "
+        "FROM processed_paddle_transactions WHERE id = $1",
+        "txn_ledger_1970",
+    )
+    assert row["installation_id"] == 1970
+    assert float(row["credited_usd"]) == pytest.approx(5.00)
+    assert int(row["charged_total_minor"]) == 65201
+    assert float(row["clawed_back_usd"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_an_approved_full_refund_takes_the_topup_credit_back(pool, monkeypatch):
+    _capture_alerts(monkeypatch)
+    await _credited_topup(pool, 1971, "txn_full_1971")
+    epoch_before = await pool.fetchval("SELECT balance_epoch FROM installations WHERE installation_id = 1971")
+
+    await handle_paddle_webhook_event(
+        _adjustment_event("adjustment.updated", "adj_full_1971", "txn_full_1971", "approved"), pool, "redis://unused"
+    )
+
+    assert await _topup_balance(pool, 1971) == pytest.approx(0.00)
+    assert await pool.fetchval("SELECT balance_epoch FROM installations WHERE installation_id = 1971") > epoch_before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["pending_approval", "rejected"])
+async def test_a_refund_that_is_not_approved_leaves_the_credit_alone(pool, monkeypatch, status):
+    _capture_alerts(monkeypatch)
+    await _credited_topup(pool, 1972, "txn_notapproved_1972")
+
+    await handle_paddle_webhook_event(
+        _adjustment_event("adjustment.created", "adj_na_1972", "txn_notapproved_1972", status), pool, "redis://unused"
+    )
+
+    assert await _topup_balance(pool, 1972) == pytest.approx(5.00)
+
+
+@pytest.mark.asyncio
+async def test_an_approved_partial_refund_takes_back_a_proportional_share(pool, monkeypatch):
+    _capture_alerts(monkeypatch)
+    await _credited_topup(pool, 1973, "txn_part_1973")
+
+    await handle_paddle_webhook_event(
+        _adjustment_event("adjustment.updated", "adj_part_1973", "txn_part_1973", "approved", total="32600"),
+        pool, "redis://unused",
+    )
+
+    assert await _topup_balance(pool, 1973) == pytest.approx(2.50)
+
+
+@pytest.mark.asyncio
+async def test_the_same_approved_refund_delivered_twice_is_only_applied_once(pool, monkeypatch):
+    _capture_alerts(monkeypatch)
+    await _credited_topup(pool, 1974, "txn_dup_1974")
+    created = _adjustment_event("adjustment.created", "adj_dup_1974", "txn_dup_1974", "approved")
+    updated = _adjustment_event("adjustment.updated", "adj_dup_1974", "txn_dup_1974", "approved")
+
+    await handle_paddle_webhook_event(created, pool, "redis://unused")
+    await handle_paddle_webhook_event(updated, pool, "redis://unused")
+
+    assert await _topup_balance(pool, 1974) == pytest.approx(0.00)
+    await pool.execute("UPDATE installations SET topup_credit_balance_usd = 7 WHERE installation_id = 1974")
+    await handle_paddle_webhook_event(updated, pool, "redis://unused")
+    assert await _topup_balance(pool, 1974) == pytest.approx(7.00)
+
+
+@pytest.mark.asyncio
+async def test_refunds_can_never_take_back_more_than_the_top_up_granted(pool, monkeypatch):
+    _capture_alerts(monkeypatch)
+    await _credited_topup(pool, 1975, "txn_cap_1975")
+    await pool.execute("UPDATE installations SET topup_credit_balance_usd = 20 WHERE installation_id = 1975")
+
+    for adj in ("adj_cap_a", "adj_cap_b"):
+        await handle_paddle_webhook_event(
+            _adjustment_event("adjustment.updated", adj, "txn_cap_1975", "approved"), pool, "redis://unused"
+        )
+
+    # 20 - 5 (the one top-up) = 15, not 20 - 10.
+    assert await _topup_balance(pool, 1975) == pytest.approx(15.00)
+
+
+@pytest.mark.asyncio
+async def test_a_refund_after_the_credit_was_spent_floors_at_zero_and_alerts_with_the_shortfall(pool, monkeypatch):
+    alerts = _capture_alerts(monkeypatch)
+    await _credited_topup(pool, 1976, "txn_spent_1976")
+    await pool.execute("UPDATE installations SET topup_credit_balance_usd = 1.00 WHERE installation_id = 1976")
+    alerts.clear()
+
+    await handle_paddle_webhook_event(
+        _adjustment_event("adjustment.updated", "adj_spent_1976", "txn_spent_1976", "approved"), pool, "redis://unused"
+    )
+
+    assert await _topup_balance(pool, 1976) == pytest.approx(0.00)
+    assert len(alerts) == 1
+    assert "txn_spent_1976" in str(alerts[0]) and "4.00" in str(alerts[0])
+
+
+@pytest.mark.asyncio
+async def test_an_approved_chargeback_takes_the_topup_credit_back(pool, monkeypatch):
+    _capture_alerts(monkeypatch)
+    await _credited_topup(pool, 1977, "txn_cb_1977")
+
+    await handle_paddle_webhook_event(
+        _adjustment_event("adjustment.created", "adj_cb_1977", "txn_cb_1977", "approved", action="chargeback"),
+        pool, "redis://unused",
+    )
+
+    assert await _topup_balance(pool, 1977) == pytest.approx(0.00)
+
+
+@pytest.mark.asyncio
+async def test_a_refund_of_a_topup_with_no_recorded_grant_alerts_for_manual_follow_up(pool, monkeypatch):
+    alerts = _capture_alerts(monkeypatch)
+    await upsert_installation(pool, 1978, "acme")
+    # A top-up credited before the ledger recorded amounts: id only.
+    await pool.execute("INSERT INTO processed_paddle_transactions (id) VALUES ('txn_legacy_1978')")
+    await pool.execute("UPDATE installations SET topup_credit_balance_usd = 5 WHERE installation_id = 1978")
+
+    await handle_paddle_webhook_event(
+        _adjustment_event("adjustment.updated", "adj_legacy_1978", "txn_legacy_1978", "approved"), pool, "redis://unused"
+    )
+
+    assert await _topup_balance(pool, 1978) == pytest.approx(5.00)
+    assert any("txn_legacy_1978" in str(a) for a in alerts)
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_installation_erases_its_topup_ledger_rows(pool, monkeypatch):
+    from app_server.db import purge_installation_data
+
+    _capture_alerts(monkeypatch)
+    await _credited_topup(pool, 1979, "txn_purge_1979")
+    await handle_paddle_webhook_event(
+        _adjustment_event("adjustment.updated", "adj_purge_1979", "txn_purge_1979", "approved", total="10000"),
+        pool, "redis://unused",
+    )
+    assert await pool.fetchval("SELECT count(*) FROM paddle_topup_adjustments WHERE transaction_id = 'txn_purge_1979'") == 1
+
+    await purge_installation_data(pool, 1979, "ops")
+
+    assert await pool.fetchval("SELECT count(*) FROM processed_paddle_transactions WHERE id = 'txn_purge_1979'") == 0
+    assert await pool.fetchval("SELECT count(*) FROM paddle_topup_adjustments WHERE transaction_id = 'txn_purge_1979'") == 0
+
+
+@pytest.mark.asyncio
+async def test_a_refund_never_adds_credit_even_if_the_balance_is_already_negative(pool, monkeypatch):
+    alerts = _capture_alerts(monkeypatch)
+    await _credited_topup(pool, 1980, "txn_neg_1980")
+    await pool.execute("UPDATE installations SET topup_credit_balance_usd = -0.50 WHERE installation_id = 1980")
+    alerts.clear()
+
+    await handle_paddle_webhook_event(
+        _adjustment_event("adjustment.updated", "adj_neg_1980", "txn_neg_1980", "approved"), pool, "redis://unused"
+    )
+
+    assert await _topup_balance(pool, 1980) == pytest.approx(-0.50)
+    assert len(alerts) == 1 and "shortfall_usd=5.00" in str(alerts[0])
