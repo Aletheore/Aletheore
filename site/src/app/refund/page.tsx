@@ -4,7 +4,7 @@ import legal from "@/data/legal.json";
 
 export const metadata: Metadata = {
   title: "Refund Policy",
-  description: "Aletheore's 14-day refund window and how to request one.",
+  description: "How refunds work for Aletheore purchases, which are handled by Paddle as merchant of record.",
   alternates: { canonical: "/refund" },
 };
 
