@@ -74,6 +74,56 @@ def test_writing_adapter_for_builds_openai_adapter_when_key_configured(monkeypat
     assert adapter._api_key_env_var == "OPENAI_API_KEY"
 
 
+def test_writing_adapter_for_json_output_turns_on_json_mode_for_the_openai_model(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    assert writing_adapter_for("some-fallback", json_output=True)._json_mode is True
+    assert writing_adapter_for("some-fallback")._json_mode is False
+
+
+def test_writing_adapter_for_json_output_leaves_the_deepseek_path_alone(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+    assert writing_adapter_for("some-fallback", json_output=True)._json_mode is False
+    # AIRview is pinned to DeepSeek even when OpenAI is configured.
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    assert writing_adapter_for_airview("some-fallback", json_output=True)._json_mode is False
+
+
+def test_writing_adapter_for_plan_threads_json_output(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    assert writing_adapter_for_plan("air", json_output=True)._json_mode is True
+    assert writing_adapter_for_plan("air")._json_mode is False
+
+
+def test_docs_builders_ask_the_openai_model_for_json(monkeypatch):
+    # Docs parses every response as JSON, and on gpt-5.6-luna a malformed long
+    # response drops the whole batch.
+    from scan_worker.jobs import _live_docs_full_build_writing_adapter, _live_docs_update_writing_adapter
+
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    assert _live_docs_full_build_writing_adapter("air")._json_mode is True
+    assert _live_docs_update_writing_adapter()._json_mode is True
+
+
+def test_every_prompt_sent_in_json_mode_mentions_json():
+    # OpenAI rejects response_format=json_object (HTTP 400) when no message
+    # contains the word "JSON", so each prompt must say it.
+    from scan_worker import live_docs, live_wiki
+
+    prompts = [
+        live_wiki.NAMING_SYSTEM_PROMPT,
+        live_wiki.SUBSYSTEM_WRITING_SYSTEM_PROMPT,
+        live_wiki.BATCH_SUBSYSTEM_WRITING_SYSTEM_PROMPT,
+        live_wiki.FILE_PAGE_WRITING_SYSTEM_PROMPT,
+        live_wiki.BATCH_FILE_PAGE_WRITING_SYSTEM_PROMPT,
+        live_wiki.OVERVIEW_WRITING_SYSTEM_PROMPT,
+        live_docs.COMBINED_SYSTEM_PROMPT,
+        live_docs.DESCRIBE_SYSTEM_PROMPT,
+        live_docs.POLISH_SYSTEM_PROMPT,
+    ]
+    for prompt in prompts:
+        assert "json" in prompt.lower()
+
+
 def test_writing_adapter_for_falls_back_to_deepseek_when_key_not_configured(monkeypatch, caplog):
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
     with caplog.at_level(logging.WARNING, logger="scan_worker.model_tiers"):

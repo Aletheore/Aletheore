@@ -768,6 +768,47 @@ def test_simple_completion_makes_one_plain_completion_call(mock_openai_class, tm
     assert "tools" not in call.kwargs
 
 
+def _plain_completion_client(mock_openai_class):
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_message = MagicMock()
+    mock_message.content = "{}"
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock(message=mock_message)]
+    mock_response.usage = None
+    mock_client.chat.completions.create.return_value = mock_response
+    return mock_client
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_simple_completion_asks_for_json_only_when_json_mode_is_on(mock_openai_class, tmp_path):
+    mock_client = _plain_completion_client(mock_openai_class)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        _adapter(tmp_path, json_mode=True).simple_completion("return json", "u", cwd=".")
+        _adapter(tmp_path).simple_completion("plain", "u", cwd=".")
+
+    json_call, plain_call = mock_client.chat.completions.create.call_args_list
+    assert json_call.kwargs["response_format"] == {"type": "json_object"}
+    assert "response_format" not in plain_call.kwargs
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_json_mode_does_not_leak_into_the_tool_calling_loop(mock_openai_class, tmp_path):
+    # invoke() sends tools; a JSON response format there would be wrong, which
+    # is why json_mode is its own flag and not part of extra_body.
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.side_effect = _write_all_sections_then_finish_responses()
+
+    adapter = _adapter(tmp_path, name="OpenAI", needs_key=False, json_mode=True)
+    adapter.invoke("audit this repo", cwd=str(repo))
+
+    for call in mock_client.chat.completions.create.call_args_list:
+        assert "response_format" not in call.kwargs
+        assert "response_format" not in call.kwargs.get("extra_body", {})
+
+
 @patch("aletheore.adapters.openai_compatible.OpenAI")
 def test_simple_completion_calls_on_usage(mock_openai_class, tmp_path):
     mock_client = MagicMock()

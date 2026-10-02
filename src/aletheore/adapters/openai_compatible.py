@@ -306,6 +306,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         allow_partial_report: bool = False,
         extra_body: dict | None = None,
         temperature: float | None = None,
+        json_mode: bool = False,
     ) -> None:
         # Provider-specific request fields the OpenAI schema has no slot for.
         # Exists for one measured reason: every model we write with is a
@@ -316,6 +317,14 @@ class OpenAICompatibleAdapter(AgentAdapter):
         # See model_tiers.NO_THINKING_BODY for the per-provider values.
         self._extra_body = extra_body or {}
         self._temperature = temperature
+        # Asks the API for syntactically valid JSON on simple_completion()
+        # calls. Not part of extra_body on purpose: invoke()'s tool-calling
+        # loop reuses extra_body, and a JSON response format is wrong there.
+        # Without it gpt-6-luna mis-nested a closing brace in about half of
+        # long batched responses; one bad brace made the parser drop the
+        # whole batch and AIRview withheld every description. The caller's
+        # prompt must mention JSON, or the API rejects the request.
+        self._json_mode = json_mode
         self.name = name
         self.requires_consent = requires_consent
         self._base_url = base_url
@@ -356,6 +365,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
                     timeout=REQUEST_TIMEOUT_SECONDS,
                     **({"extra_body": self._extra_body} if self._extra_body else {}),
                     **({"temperature": self._temperature} if self._temperature is not None else {}),
+                    **({"response_format": {"type": "json_object"}} if self._json_mode else {}),
                 )
             )
         except Exception as exc:
