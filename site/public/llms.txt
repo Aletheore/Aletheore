@@ -88,7 +88,7 @@ This is a local process you start and stop. It is not a hosted service, and noth
 
 A free **Community** tier covers the CLI, the GitHub Action, the MCP server, and the local dashboard, permanently and without an account.
 
-**Aletheore Flash: $8/month** (monthly billing only, no annual price yet). Adds a hosted GitHub App:
+**Aletheore Flash: $10/month** (monthly billing only, no annual price yet). Adds a hosted GitHub App:
 
 - **Flash review**: automated PR review on every push to an open pull request, grounded in evidence for the changed files, powered by $5 of AI credit each month (about 400 PR reviews; larger PRs use more, smaller ones less)
 

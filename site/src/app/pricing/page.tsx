@@ -10,7 +10,7 @@ import { credit, enterprise, footnotes, installHref, installNote, pricingHead, p
 export const metadata: Metadata = {
   title: "Pricing",
   description:
-    "Free local CLI forever. Flash is $8/mo for automatic PR reviews on $5 of AI credit. AIR is $29.99/mo with $18 of credit, audits, AIRview, AI Docs, endpoint monitoring and team seats.",
+    "Free local CLI forever. Flash is $10/mo for automatic PR reviews on $5 of AI credit. AIR is $29.99/mo with $18 of credit, audits, AIRview, AI Docs, endpoint monitoring and team seats.",
   alternates: { canonical: "/pricing" },
 };
 

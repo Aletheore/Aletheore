@@ -56,7 +56,7 @@ EXTRA_SEAT_LLM_CAP_USD = 3.00
 # spend cap is a monthly rolling figure either way.
 PLAN_MONTHLY_PRICE_USD = {
     "air": 29.99,
-    "flash": 8.00,
+    "flash": 10.00,
 }
 
 # The customer-facing, advertised included credit per plan - replaces the

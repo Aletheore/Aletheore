@@ -3466,7 +3466,7 @@ async function loadSettings() {{
               '<button class="btn btn-accent" onclick="buyCredit(this)">Buy credit</button>' +
             '</div>' +
             '<div id="topup-status" class="settings-block-hint"></div>' +
-            '<div class="settings-block-hint">$5 minimum &middot; charged once, added immediately</div>'
+            '<div class="settings-block-hint">$5 minimum &middot; $1.15 per $1.00 of credit (includes a service charge), plus tax where it applies &middot; charged once, added immediately</div>'
           : '<div class="settings-block-hint" style="margin-top:10px;">Buying additional credit is coming soon.</div>') +
       '</div>' +
     '</section>';
@@ -3981,6 +3981,7 @@ def _credits_page(installation_id: int) -> str:
           <button class="btn btn-accent" id="topup-button">Buy credit</button>
         </div>
         <div id="topup-status" class="settings-block-hint"></div>
+        <div class="settings-block-hint">$5 minimum &middot; $1.15 per $1.00 of credit (includes a service charge), plus tax where it applies</div>
         <button class="btn btn-small" id="billing-portal-btn">Manage billing</button>
         <div id="billing-portal-status" class="settings-block-hint"></div>
       </div>

@@ -21,3 +21,21 @@ def test_resolve_price_id_for_plan_round_trips_both_intervals():
 def test_resolve_price_id_for_plan_returns_none_for_unknown_plan_or_interval():
     assert resolve_price_id_for_plan("free", "month") is None
     assert resolve_price_id_for_plan("air", "week") is None
+
+
+def test_flash_resolves_only_the_current_ten_dollar_price():
+    assert resolve_price_id_for_plan("flash", "month") == "pri_01m3xpabbam5t2gkzwzmg0y9eq"
+    assert resolve_plan_for_price_id("pri_01m3xpabbam5t2gkzwzmg0y9eq") == "flash"
+    # The archived $8 price is never offered at checkout again.
+    assert resolve_plan_for_price_id("pri_01m1dj0m1netz6ze1mmckz73nm") is None
+
+
+def test_current_topup_price_is_accepted_alongside_the_legacy_one():
+    from app_server.paddle_pricing import (
+        ACCEPTED_CREDIT_TOPUP_PRICE_IDS,
+        CREDIT_TOPUP_PRICE_ID,
+        LEGACY_CREDIT_TOPUP_PRICE_IDS,
+    )
+
+    assert CREDIT_TOPUP_PRICE_ID not in LEGACY_CREDIT_TOPUP_PRICE_IDS
+    assert ACCEPTED_CREDIT_TOPUP_PRICE_IDS == {CREDIT_TOPUP_PRICE_ID} | LEGACY_CREDIT_TOPUP_PRICE_IDS

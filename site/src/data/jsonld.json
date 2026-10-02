@@ -16,7 +16,7 @@
     {
       "@type": "Offer",
       "name": "Aletheore Flash",
-      "price": "8",
+      "price": "10",
       "priceCurrency": "USD",
       "description": "Automatic PR reviews on every push, powered by $5 of AI credit a month (about 400 PRs), one model."
     },
