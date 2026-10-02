@@ -426,7 +426,9 @@ async def claw_back_topup_credit(
                 "WHERE installation_id = $1 FOR UPDATE",
                 installation_id,
             )
-            deducted = min(balance or Decimal(0), claw)
+            # Clamped at zero on both sides: a clawback only ever lowers a
+            # balance, even if another code path left it slightly negative.
+            deducted = max(Decimal(0), min(balance or Decimal(0), claw))
             shortfall = claw - deducted
             await conn.execute(
                 "UPDATE installations SET topup_credit_balance_usd = topup_credit_balance_usd - $2, "

@@ -2895,3 +2895,18 @@ async def test_deleting_an_installation_erases_its_topup_ledger_rows(pool, monke
 
     assert await pool.fetchval("SELECT count(*) FROM processed_paddle_transactions WHERE id = 'txn_purge_1979'") == 0
     assert await pool.fetchval("SELECT count(*) FROM paddle_topup_adjustments WHERE transaction_id = 'txn_purge_1979'") == 0
+
+
+@pytest.mark.asyncio
+async def test_a_refund_never_adds_credit_even_if_the_balance_is_already_negative(pool, monkeypatch):
+    alerts = _capture_alerts(monkeypatch)
+    await _credited_topup(pool, 1980, "txn_neg_1980")
+    await pool.execute("UPDATE installations SET topup_credit_balance_usd = -0.50 WHERE installation_id = 1980")
+    alerts.clear()
+
+    await handle_paddle_webhook_event(
+        _adjustment_event("adjustment.updated", "adj_neg_1980", "txn_neg_1980", "approved"), pool, "redis://unused"
+    )
+
+    assert await _topup_balance(pool, 1980) == pytest.approx(-0.50)
+    assert len(alerts) == 1 and "shortfall_usd=5.00" in str(alerts[0])
