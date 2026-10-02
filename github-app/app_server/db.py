@@ -353,6 +353,18 @@ async def credit_topup_purchase(
     return True
 
 
+async def is_credited_topup_transaction(pool: asyncpg.Pool, transaction_id: str) -> bool:
+    """Whether this Paddle transaction was a credit top-up that
+    credit_topup_purchase already credited (the only thing that writes
+    processed_paddle_transactions)."""
+    return bool(
+        await pool.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM processed_paddle_transactions WHERE id = $1)",
+            transaction_id,
+        )
+    )
+
+
 async def disarm_monthly_credit_reset_clock(pool: asyncpg.Pool, installation_id: int) -> None:
     """Clears next_monthly_credit_reset_at on a transition to the free
     plan (cancel/pause/past-due) - the same reasoning webhooks/paddle.py
