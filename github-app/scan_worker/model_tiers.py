@@ -186,7 +186,12 @@ def writing_adapter_for(
     on_call_failed: Callable[[], None] | None = None,
     allow_partial_report: bool = False,
     _prefer_luna: bool = True,
+    json_output: bool = False,
 ) -> OpenAICompatibleAdapter:
+    """json_output: the caller's completions are parsed as JSON (AIRview and
+    Docs writing). Applied to the OpenAI model only, where long responses
+    come back malformed often enough to drop whole batches; the DeepSeek
+    path is left exactly as it was."""
     if _prefer_luna and _openai_available():
         return OpenAICompatibleAdapter(
             name="OpenAI",
@@ -198,6 +203,7 @@ def writing_adapter_for(
             before_llm_call=before_llm_call,
             on_call_failed=on_call_failed,
             allow_partial_report=allow_partial_report,
+            json_mode=json_output,
         )
     if not _prefer_luna:
         logging.getLogger(__name__).info(
@@ -361,6 +367,7 @@ def writing_adapter_for_airview(
     on_usage: Callable[[int, int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
     on_call_failed: Callable[[], None] | None = None,
+    json_output: bool = False,
 ) -> OpenAICompatibleAdapter:
     """Always DeepSeek for AIRview specifically - never Luna, regardless of
     OPENAI_API_KEY availability.
@@ -385,6 +392,7 @@ def writing_adapter_for_airview(
         before_llm_call=before_llm_call,
         on_call_failed=on_call_failed,
         _prefer_luna=False,
+        json_output=json_output,
     )
 
 
@@ -442,6 +450,7 @@ def writing_adapter_for_plan(
     before_llm_call: Callable[[], bool] | None = None,
     on_call_failed: Callable[[], None] | None = None,
     allow_partial_report: bool = False,
+    json_output: bool = False,
 ) -> OpenAICompatibleAdapter:
     return writing_adapter_for(
         PRO_MODEL,
@@ -449,6 +458,7 @@ def writing_adapter_for_plan(
         on_call_failed=on_call_failed,
         before_llm_call=before_llm_call,
         allow_partial_report=allow_partial_report,
+        json_output=json_output,
     )
 
 
