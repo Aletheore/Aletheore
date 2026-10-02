@@ -30,7 +30,7 @@ from app_server.email_queue import enqueue_transactional_email
 from app_server.error_alerts import send_error_alert
 from app_server.paddle_ip_allowlist import client_ip_from_forwarded_for, is_known_paddle_ip
 from app_server.paddle_pricing import (
-    CREDIT_TOPUP_PRICE_ID,
+    ACCEPTED_CREDIT_TOPUP_PRICE_IDS,
     EXTRA_SEAT_PRICE_ID,
     PLAN_INTERVAL_TO_PRICE_ID,
     resolve_plan_for_price_id,
@@ -542,7 +542,7 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
     # it is deliberately excluded from earning its referrer any commission.
     items = data.get("items") or []
     topup_item = next(
-        (item for item in items if (item.get("price") or {}).get("id") == CREDIT_TOPUP_PRICE_ID),
+        (item for item in items if (item.get("price") or {}).get("id") in ACCEPTED_CREDIT_TOPUP_PRICE_IDS),
         None,
     )
     if topup_item is not None:

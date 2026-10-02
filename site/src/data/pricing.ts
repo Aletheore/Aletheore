@@ -41,7 +41,7 @@ export const plans: Plan[] = [
   {
     id: "flash",
     name: "Flash",
-    price: "$8",
+    price: "$10",
     priceNote: "/month",
     desc: "Automatic PR reviews on every push. $5 of AI credit a month, about 400 reviews.",
     flagship: true,

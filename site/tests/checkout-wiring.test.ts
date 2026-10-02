@@ -7,7 +7,7 @@ import { subscribedPlan } from "@/lib/subscribed";
 const BACKEND: Record<string, string> = {
   "air:month": "pri_01kyhevc8bkcghfpwjymz16y2h",
   "air:year": "pri_01kyhevc9xn6z2nghmy8057jvp",
-  "flash:month": "pri_01m1dj0m1netz6ze1mmckz73nm",
+  "flash:month": "pri_01m3xpabbam5t2gkzwzmg0y9eq",
 };
 
 describe("checkout wiring against the backend", () => {

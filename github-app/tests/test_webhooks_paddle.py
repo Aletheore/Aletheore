@@ -36,6 +36,7 @@ from app_server.db import (
 from app_server.main import app
 from app_server.paddle_pricing import (
     CREDIT_TOPUP_PRICE_ID,
+    LEGACY_CREDIT_TOPUP_PRICE_IDS,
     EXTRA_SEAT_PRICE_ID,
     PLAN_INTERVAL_TO_PRICE_ID,
 )
@@ -500,7 +501,7 @@ async def test_free_to_flash_transition_does_not_trigger_live_wiki_full_build(po
     fake_queue = MagicMock()
     await upsert_installation(pool, 202, "acme")  # defaults to plan='free'
 
-    payload = _subscription_created_payload("pri_01m1dj0m1netz6ze1mmckz73nm", 202)
+    payload = _subscription_created_payload("pri_01m3xpabbam5t2gkzwzmg0y9eq", 202)
     await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
 
     installation = await get_installation(pool, 202)
@@ -518,7 +519,7 @@ async def test_free_to_flash_transition_with_known_discount_id_does_not_record_a
     await upsert_installation(pool, 203, "acme")
 
     payload = _subscription_created_payload(
-        "pri_01m1dj0m1netz6ze1mmckz73nm", 203, discount_id="dsc_sarah_wh"
+        "pri_01m3xpabbam5t2gkzwzmg0y9eq", 203, discount_id="dsc_sarah_wh"
     )
     await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
 
@@ -539,7 +540,7 @@ async def test_flash_to_air_upgrade_does_not_retrigger_live_wiki_full_build(pool
     fake_queue = MagicMock()
     await upsert_installation(pool, 204, "acme")
     await handle_paddle_webhook_event(
-        _subscription_created_payload("pri_01m1dj0m1netz6ze1mmckz73nm", 204, event_id="evt_flash_first"),
+        _subscription_created_payload("pri_01m3xpabbam5t2gkzwzmg0y9eq", 204, event_id="evt_flash_first"),
         pool,
         "redis://unused",
         queue=fake_queue,
@@ -2527,7 +2528,7 @@ async def test_commission_is_not_recorded_for_a_flash_transaction_of_a_referred_
     # stops earning its affiliate a commission: affiliates are AIR-only.
     affiliate = await _referred_installation(pool, 1960, "FLASHDOWN")
     payload = _transaction_completed_payload(
-        1960, "800", transaction_id="txn_flash_payment", price_ids=("pri_01m1dj0m1netz6ze1mmckz73nm",)
+        1960, "800", transaction_id="txn_flash_payment", price_ids=("pri_01m3xpabbam5t2gkzwzmg0y9eq",)
     )
 
     await handle_paddle_webhook_event(payload, pool, "redis://unused")
@@ -2628,3 +2629,54 @@ async def test_extra_seat_purchase_on_an_annual_plan_is_clamped_to_the_annual_ce
     )
     assert float(row["base_credit_remaining_usd"]) == pytest.approx(18.00)
     assert float(row["base_credit_allotment_usd"]) == pytest.approx(18.00)
+
+
+def _priced_topup_payload(installation_id, price_id, quantity, totals, txn):
+    return {
+        "event_id": f"evt_{txn}",
+        "event_type": "transaction.completed",
+        "data": {
+            "id": txn,
+            "customer_id": f"ctm_{txn}",
+            "custom_data": {"installation_token": _installation_token(installation_id)},
+            "items": [{"price": {"id": price_id}, "quantity": quantity}],
+            "details": {"totals": {"discount": "0", "currency_code": "USD", **totals}},
+            "billed_at": "2026-10-02T12:00:00Z",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_serviced_topup_price_credits_quantity_not_amount_paid(pool):
+    # $1.15/unit with tax on top: 5 units collect $5.75 + $1.04 tax, but the
+    # service charge and the tax are never credit - the credit is exactly 5.00.
+    await upsert_installation(pool, 1950, "acme")
+    payload = _priced_topup_payload(
+        1950, CREDIT_TOPUP_PRICE_ID, 5,
+        {"subtotal": "575", "tax": "104", "total": "679"}, "txn_serviced_1950",
+    )
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    row = await pool.fetchrow(
+        "SELECT topup_credit_balance_usd FROM installations WHERE installation_id = $1", 1950
+    )
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(5.00)
+
+
+@pytest.mark.asyncio
+async def test_legacy_topup_price_still_credits_after_the_price_swap(pool):
+    # A checkout opened on the old $1.00 price before the swap must still credit.
+    await upsert_installation(pool, 1951, "acme")
+    (legacy_id,) = LEGACY_CREDIT_TOPUP_PRICE_IDS
+    payload = _priced_topup_payload(
+        1951, legacy_id, 10,
+        {"subtotal": "1000", "tax": "0", "total": "1000"}, "txn_legacy_1951",
+    )
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    row = await pool.fetchrow(
+        "SELECT topup_credit_balance_usd FROM installations WHERE installation_id = $1", 1951
+    )
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(10.00)
