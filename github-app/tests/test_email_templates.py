@@ -243,10 +243,18 @@ def test_credit_emails_still_say_upgrade_for_flash_without_an_installation_id():
     assert "/credits/" not in message["html"]
 
 
-def test_credit_emails_keep_air_on_its_dashboard():
+def test_credit_emails_send_air_to_the_credits_address_which_forwards_to_usage():
     message = credit_exhausted_email(
         account_login="acme", plan="air",
         base_credit_remaining_usd=0.00, topup_credit_balance_usd=0.00, installation_id=7,
+    )
+    assert "https://app.aletheore.com/credits/7" in message["html"]
+
+
+def test_credit_emails_keep_air_on_its_dashboard_without_an_installation_id():
+    message = credit_exhausted_email(
+        account_login="acme", plan="air",
+        base_credit_remaining_usd=0.00, topup_credit_balance_usd=0.00,
     )
     assert "https://app.aletheore.com/dashboard" in message["html"]
     assert "/credits/" not in message["html"]
