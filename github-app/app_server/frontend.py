@@ -892,6 +892,13 @@ def _picker_html() -> str:
   // because one login can administer both (AIR on a personal account, Flash
   // on an org).
   const billingAccounts = data.billing_accounts || [];
+  // A login whose only paid installation is one Flash organization has nothing
+  // to choose between: go straight to its credit page instead of showing a
+  // one-card page to click through.
+  if (data.repos.length === 0 && billingAccounts.length === 1) {{
+    window.location.replace('/credits/' + encodeURIComponent(billingAccounts[0].installation_id));
+    return;
+  }}
   if (data.repos.length === 0 && billingAccounts.length === 0) {{
     // Real gap found dogfooding this page (2026-09-28): a login with no
     // installation at all, or with one that's still on the free plan (Flash
@@ -972,6 +979,7 @@ def _sidebar(active: str) -> str:
         for key, suffix, icon, label in _NAV_ITEMS
     )
     settings_active = " active" if active == "settings" else ""
+    usage_active = " active" if active == "usage" else ""
     return f"""
   <nav class="sidebar" aria-label="Dashboard navigation">
     <div class="brand"><img class="brand-mark" src="{BRAND_MARK_DATA_URI}" alt="" width="28" height="28"><span class="brand-name">Aletheore</span></div>
@@ -986,6 +994,7 @@ def _sidebar(active: str) -> str:
     <div>
       <div class="nav-group-label">Account</div>
       <ul class="nav-list">
+        <li><a class="nav-item{usage_active}" data-href="/usage"><i class="ti ti-coin" aria-hidden="true"></i>Usage &amp; credit</a></li>
         <li><a class="nav-item{settings_active}" data-href="/settings"><i class="ti ti-settings" aria-hidden="true"></i>Settings</a></li>
         <li><a class="nav-item" href="/auth/logout"><i class="ti ti-logout" aria-hidden="true"></i>Sign out</a></li>
       </ul>
@@ -1166,71 +1175,6 @@ async function openBillingPortal() {
   if (status) {
     status.textContent = data.detail || 'Could not open the billing portal.';
     status.style.color = 'var(--critical)';
-  }
-}
-
-async function buyCredit(btn) {
-  const statusEl = document.getElementById('topup-status');
-  if (typeof Paddle === "undefined") {
-    statusEl.textContent = 'Checkout is unavailable right now - try disabling any ad/script blocker and reload.';
-    return;
-  }
-  // parseInt would accept "7.9" (silently truncated to 7) or "1e5" (parsed
-  // as 1) - Number() + an explicit integer check rejects both instead of
-  // quietly charging a different amount than what's on screen.
-  const rawAmount = Number(document.getElementById('topup-amount').value);
-  const amount = Number.isInteger(rawAmount) ? rawAmount : NaN;
-  if (!amount || amount < 5 || amount > 1000) {
-    statusEl.textContent = 'Enter an amount between $5 and $1000.';
-    return;
-  }
-  // Real gap found via audit: buySeat/removeSeat both guard against a
-  // rapid double-click firing two independent purchases (see buySeat's
-  // comment); this button had no guard at all - two clicks before the
-  // first apiGet() round trip returns could open two stacked
-  // Paddle.Checkout.open() overlays with two different signed
-  // checkout_installation_tokens. Re-enabled in finally - unlike
-  // buySeat/removeSeat, this button's DOM node is never replaced by a
-  // re-render, so it must actually come back (e.g. the customer closes
-  // the overlay without completing checkout and wants to try again).
-  btn.disabled = true;
-  statusEl.textContent = 'Opening checkout...';
-  statusEl.style.color = '';
-  try {
-    window._creditCheckoutCompleted = false;
-    // The installation token is minted with a 30-minute TTL (auth.py's
-    // sign_checkout_installation_id) - re-fetch it fresh here instead of
-    // reusing page-load time's copy, so a tab left open past 30 minutes
-    // doesn't send Paddle a token the webhook can no longer resolve (money
-    // taken, no credit granted). window._creditTopupPriceId is a static
-    // price id set once at page load and doesn't need refreshing.
-    const res = await apiGet(adminBase);
-    if (!res || !res.ok) {
-      statusEl.textContent = 'Could not start checkout - try again.';
-      return;
-    }
-    const data = await res.json();
-    // Associates the checkout with the installation's existing Paddle
-    // customer record (already returned in data.installation, same source
-    // /subscribe's checkout page reads for its own pwCustomer wiring) -
-    // without it, an existing subscriber topping up credit would re-enter
-    // their email and Paddle would silently open a second customer record,
-    // splitting billing history and producing a transaction whose
-    // customer_id the subscription webhook path can't attribute back to
-    // this installation.
-    const paddleCustomerId = data.installation && data.installation.paddle_customer_id;
-    Paddle.Checkout.open({
-      items: [{ priceId: window._creditTopupPriceId, quantity: amount }],
-      customData: { installation_token: data.checkout_installation_token },
-      ...(paddleCustomerId ? { customer: { id: paddleCustomerId } } : {}),
-      settings: {
-        displayMode: 'overlay',
-        variant: 'one-page',
-        successUrl: 'https://app.aletheore.com/dashboard',
-      },
-    });
-  } finally {
-    btn.disabled = false;
   }
 }
 """
@@ -3018,54 +2962,10 @@ def _settings_html() -> str:
     </section>
 """
 ) + f"""
-<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
 <script>
 {FETCH_HELPERS}
-{CREDIT_SUMMARY_JS}
 {PAGE_HEAD_JS}
 {CONFIRM_UPGRADE_JS}
-
-// Only the settings page's own buyCredit() (a one-time credit top-up) needs
-// a client-side Paddle.Checkout.open() call - seat purchases go through a
-// server-side POST to /seats/buy instead. paddle_client_token is Paddle's
-// client-side publishable token, already sent to every browser today via
-// the /subscribe page's own Paddle.Initialize() call - not a secret being
-// newly exposed here.
-// cdn.paddle.com/paddle/v2/paddle.js is a third-party script an adblocker or
-// corporate proxy can legitimately block - guarded so a blocked load only
-// disables the credit top-up button (buyCredit() re-checks the same guard),
-// instead of throwing on this unconditional top-level statement and taking
-// down the rest of this script block, including the loadSettings() call at
-// the bottom that renders the whole page.
-if (typeof Paddle !== "undefined") {{
-  Paddle.Environment.set("{get_settings().paddle_environment}");
-  // eventCallback is global (Paddle.Initialize() runs once for the whole
-  // page) - buyCredit() is the only flow that opens a checkout here, so
-  // topup-status is the only element it needs to drive. Without this,
-  // buyCredit()'s "Opening checkout..." status never changes again: there
-  // was no handler for the overlay actually loading, the user closing it,
-  // a mid-checkout error, or a completed payment, so the text just sat
-  // there regardless of what happened next.
-  Paddle.Initialize({{
-    token: "{get_settings().paddle_client_token}",
-    eventCallback: function (event) {{
-      const status = document.getElementById('topup-status');
-      if (!status || !event || !event.name) return;
-      if (event.name === 'checkout.loaded') {{
-        status.textContent = '';
-      }} else if (event.name === 'checkout.completed') {{
-        window._creditCheckoutCompleted = true;
-        status.textContent = 'Purchase complete - your balance updates once the payment is confirmed.';
-        status.style.color = 'var(--success)';
-      }} else if (event.name === 'checkout.closed' && !window._creditCheckoutCompleted) {{
-        status.textContent = '';
-      }} else if (event.name === 'checkout.error') {{
-        status.textContent = 'Checkout error - try again.';
-        status.style.color = 'var(--critical)';
-      }}
-    }},
-  }});
-}}
 
 async function revokeToken(tokenId, btn) {{
   btn.disabled = true;
@@ -3440,16 +3340,6 @@ async function loadSettings() {{
   const installation = data.installation;
   window._hasActiveSubscription = !!installation.paddle_subscription_id;
   window._extraSeats = data.extra_seats || 0;
-  // Per-installation, only known after this per-request JSON fetch resolves
-  // (unlike the Paddle client token/environment, which are static app-wide
-  // values baked into the page's own <script> at module-import time) -
-  // buyCredit() reads this at click time to authorize its checkout call.
-  window._checkoutInstallationToken = data.checkout_installation_token;
-  // Static app-wide price id, not per-session like the token above - set
-  // once here and never re-fetched. Falsy (null) until the backend's
-  // CREDIT_TOPUP_PRICE_ID constant lands; the buy-flow UI below is gated
-  // on it so there's no dead, clickable button in the meantime.
-  window._creditTopupPriceId = data.credit_topup_price_id;
 
   const seatBillingHtml = window._hasActiveSubscription
     ? '<div class="form-row">' +
@@ -3459,36 +3349,14 @@ async function loadSettings() {{
       '</div><div id="seat-billing-status" class="settings-block-hint"></div>'
     : '<div class="settings-block-hint">Extra seats need an active subscription - subscribe first to buy one.</div>';
 
-  const summary = creditSummary(data);
-  const allotment = summary.allotment;
-  const creditPct = summary.pct;
-  // Ported verbatim from Overview's own credit block (which is being
-  // removed as a duplicate - see its own comment) rather than the plain
-  // text-line version this page had: same credit-figure/meter/breakdown
-  // markup, same buyCredit() flow, just the one canonical presentation
-  // instead of two different-looking widgets for the same data.
+  // Balance, top-ups and review history have their own page; selling credit
+  // from two places meant every price or wording change had to be made twice.
   const usageHtml =
     '<section class="settings-section" id="usage-section">' +
-      '<h2>Usage</h2>' +
+      '<h2>Usage &amp; credit</h2>' +
       '<div class="settings-block">' +
-        '<div class="settings-block-label">Credit balance</div>' +
-        '<div class="credit-figure">$' + summary.total.toFixed(2) + ' <span class="of">available</span></div>' +
-        (allotment > 0 ? '<div class="credit-meter"><div class="credit-meter-fill" style="width:' + creditPct + '%"></div></div>' : '') +
-        '<div class="credit-breakdown">' + summary.parts.map(function (part) {{ return '<span>' + part + '</span>'; }}).join('') + '</div>' +
-        (data.credit_topup_price_id
-          ? '<div class="divider-label">buy more credit</div>' +
-            '<div class="qty-row">' +
-              '<span class="qty-prefix">$</span>' +
-              '<div class="stepper">' +
-                '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepDown()" aria-label="Decrease amount">&minus;</button>' +
-                '<input type="number" id="topup-amount" min="5" max="1000" step="5" value="10">' +
-                '<button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepUp()" aria-label="Increase amount">+</button>' +
-              '</div>' +
-              '<button class="btn btn-accent" onclick="buyCredit(this)">Buy credit</button>' +
-            '</div>' +
-            '<div id="topup-status" class="settings-block-hint"></div>' +
-            '<div class="settings-block-hint">$5 minimum &middot; $1.15 per $1.00 of credit (includes a service charge), plus tax where it applies &middot; charged once, added immediately</div>'
-          : '<div class="settings-block-hint" style="margin-top:10px;">Buying additional credit is coming soon.</div>') +
+        '<div class="settings-block-hint">Your credit balance, top-ups and recent reviews are on the Usage &amp; credit page.</div>' +
+        '<div class="form-row"><a class="btn" data-href="/usage">Open Usage &amp; credit</a></div>' +
       '</div>' +
     '</section>';
 
@@ -3714,8 +3582,20 @@ document.getElementById("continue-checkout").addEventListener("click", (event) =
 
 
 _CREDITS_JS = """
-const installationId = __INSTALLATION_ID__;
-const creditsApi = '/app/installations/' + installationId + '/credits';
+// Known up front on the Flash page (its address carries the installation id).
+// The AIR Usage & credit page is addressed by repo, so it learns the id from
+// the admin API and calls useInstallation() before anything else runs.
+let installationId = __INSTALLATION_ID__;
+let creditsApi = '';
+function useInstallation(id) {
+  installationId = id;
+  creditsApi = '/app/installations/' + id + '/credits';
+}
+if (installationId) useInstallation(installationId);
+function setText(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
 function setStatus(text, color) {
   const el = document.getElementById('topup-status');
   el.textContent = text;
@@ -3736,6 +3616,7 @@ function billingCadenceText(data) {
 }
 function renderInstallsList(siblings, currentId) {
   const list = document.getElementById('installs-list');
+  if (!list) return;
   if (siblings.length === 0) { list.innerHTML = ''; return; }
   list.innerHTML = siblings.map(function (s) {
     const label = escapeHtml(s.account_login);
@@ -3771,7 +3652,14 @@ function renderCreditHero(data) {
   } else {
     reviewsText = data.flash_review_count_this_month > 0 ? 'Credit available for automatic reviews' : 'No completed reviews yet this month';
   }
-  document.getElementById('credit-sub').textContent = summary.parts.concat([reviewsText]).join(' \\u00b7 ');
+  // One line per fact so the breakdown stays readable in a narrow column.
+  const sub = document.getElementById('credit-sub');
+  sub.textContent = '';
+  summary.parts.concat([reviewsText]).forEach(function (text) {
+    const line = document.createElement('div');
+    line.textContent = text;
+    sub.appendChild(line);
+  });
   document.getElementById('credit-hero').style.display = '';
 }
 // Checkout returns here with ?purchased=1. The payment is confirmed by Paddle
@@ -3782,6 +3670,7 @@ async function confirmPurchaseIfReturning() {
   if (params.get('purchased') !== '1') return;
   history.replaceState(null, '', window.location.pathname);
   const banner = document.getElementById('purchase-banner');
+  if (!banner) return;
   const key = 'aletheoreTopupBefore:' + installationId;
   let before = null;
   try {
@@ -3830,22 +3719,23 @@ async function loadCredits() {
   const data = await res.json();
   window._creditTopupPriceId = data.credit_topup_price_id;
 
-  document.title = data.account_login + ' - Aletheore';
-  document.getElementById('install-name').textContent = data.account_login;
-  document.getElementById('plan-pill').textContent = planShortName(data.plan);
+  // Only the Flash page has its own title block; the AIR page keeps its
+  // page title and the shared AIR header.
+  if (document.getElementById('install-name')) document.title = data.account_login + ' - Aletheore';
+  setText('install-name', data.account_login);
+  setText('plan-pill', planShortName(data.plan));
   renderInstallsList(data.sibling_installations || [], data.installation_id);
 
   renderCreditHero(data);
 
-  document.getElementById('billing-cadence-line').textContent = billingCadenceText(data);
+  setText('billing-cadence-line', billingCadenceText(data));
 
   // The mockup's own "1 repo on Flash, 1 on the free tier" line assumes
   // repo-level plan granularity a GitHub App installation doesn't have -
   // plan is set per installation, and one installation can cover several
   // repos. The honest equivalent: this install's own real repo count.
   const repoCount = data.repo_count || 0;
-  document.getElementById('sibling-summary-line').textContent =
-    repoCount + (repoCount === 1 ? ' repo' : ' repos') + ' on ' + planShortName(data.plan);
+  setText('sibling-summary-line', repoCount + (repoCount === 1 ? ' repo' : ' repos') + ' on ' + planShortName(data.plan));
 
   document.getElementById('topup-button').addEventListener('click', function () { buyCredit(this); });
   document.getElementById('billing-portal-btn').addEventListener('click', openInstallationBillingPortal);
@@ -3984,7 +3874,99 @@ if (typeof Paddle !== 'undefined') {
     },
   });
 }
-loadCredits().then(confirmPurchaseIfReturning);
+async function initCredits() {
+  const showError = function (message) {
+    document.getElementById('top-error').innerHTML = '<div class="error-banner">' + message + '</div>';
+    // Nothing below the message can load, so hide the empty placeholders.
+    ['review-head', 'review-history-body', 'flash-settings-grid'].forEach(function (id) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+  };
+  try {
+    if (!installationId) {
+      // Asked directly (not through apiGet, which returns null for every
+      // non-OK status) so a free plan, a missing permission and a server
+      // error each get their own message instead of a blank page.
+      const res = await fetch(adminBase);
+      if (res.status === 401) { window.location.href = '/auth/logout'; return; }
+      if (res.status === 402 || res.status === 403 || res.status === 404) {
+        showError('Usage &amp; credit is available on paid plans, to people who administer this installation.');
+        return;
+      }
+      if (!res.ok) {
+        showError('We could not load Usage &amp; credit right now. Please reload in a moment.');
+        return;
+      }
+      const admin = await res.json();
+      useInstallation(admin.installation.installation_id);
+    }
+    try {
+      await loadCredits();
+    } finally {
+      await confirmPurchaseIfReturning();
+    }
+  } catch (e) {
+    showError('We could not load Usage &amp; credit right now. Please reload in a moment.');
+  }
+}
+initCredits();
+"""
+
+
+def _credits_body_html() -> str:
+    """The credit balance, top-up, review history and low-credit address.
+    Shared by the Flash credits page and the AIR Usage & credit page, so both
+    plans show exactly the same thing and a change is made once."""
+    return """
+    <div id="top-error"></div>
+    <div id="purchase-banner" class="settings-block-hint" style="margin-bottom:14px;font-size:14px"></div>
+    <div class="credit-hero" id="credit-hero" style="display:none">
+      <div>
+        <div class="credit-figure" id="credit-figure"></div>
+        <div class="credit-meter"><div class="credit-meter-fill" id="credit-meter-fill"></div></div>
+        <div class="credit-sub" id="credit-sub"></div>
+      </div>
+      <div class="credit-actions">
+        <div class="qty-row">
+          <span class="qty-prefix">$</span>
+          <div class="stepper">
+            <button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepDown()" aria-label="Decrease amount">&minus;</button>
+            <input type="number" id="topup-amount" min="5" max="1000" step="5" value="10">
+            <button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepUp()" aria-label="Increase amount">+</button>
+          </div>
+          <button class="btn btn-accent" id="topup-button">Buy credit</button>
+        </div>
+        <div id="topup-status" class="settings-block-hint"></div>
+        <div class="settings-block-hint">$5 minimum &middot; $1.15 per $1.00 of credit (includes a service charge), plus tax where it applies</div>
+        <button class="btn btn-small" id="billing-portal-btn">Manage billing</button>
+        <div id="billing-portal-status" class="settings-block-hint"></div>
+      </div>
+    </div>
+
+    <div class="plain-section-head" id="review-head">
+      <h2>Recent reviews</h2>
+      <div class="count">last 30 days</div>
+    </div>
+    <div id="review-history-body"><div class="empty-state">Loading&hellip;</div></div>
+
+    <div class="settings-grid" id="flash-settings-grid">
+      <div class="settings-block">
+        <div class="settings-block-label">Notify when credit runs low</div>
+        <div class="form-row">
+          <input class="field" id="alert-email-input" type="email" placeholder="you@example.com">
+          <button class="btn" id="alert-email-save">Save</button>
+        </div>
+        <div id="alert-email-status" class="settings-block-hint"></div>
+        <div class="status-line"><span class="status-dot"></span>Reviews pause silently below $0 - this is the only warning you'll get before that happens.</div>
+      </div>
+      <div class="settings-block">
+        <div class="settings-block-label">This install</div>
+        <div class="settings-block-hint" id="billing-cadence-line"></div>
+        <div class="settings-block-hint" id="sibling-summary-line"></div>
+      </div>
+    </div>
+
 """
 
 
@@ -4028,55 +4010,8 @@ def _credits_page(installation_id: int) -> str:
         <div class="repo-path">Automatic PR reviews on every push</div>
       </div>
     </div>
-    <div id="top-error"></div>
-    <div id="purchase-banner" class="settings-block-hint" style="margin-bottom:14px;font-size:14px"></div>
-    <div class="credit-hero" id="credit-hero" style="display:none">
-      <div>
-        <div class="credit-figure" id="credit-figure"></div>
-        <div class="credit-meter"><div class="credit-meter-fill" id="credit-meter-fill"></div></div>
-        <div class="credit-sub" id="credit-sub"></div>
-      </div>
-      <div class="credit-actions">
-        <div class="qty-row">
-          <span class="qty-prefix">$</span>
-          <div class="stepper">
-            <button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepDown()" aria-label="Decrease amount">&minus;</button>
-            <input type="number" id="topup-amount" min="5" max="1000" step="5" value="10">
-            <button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepUp()" aria-label="Increase amount">+</button>
-          </div>
-          <button class="btn btn-accent" id="topup-button">Buy credit</button>
-        </div>
-        <div id="topup-status" class="settings-block-hint"></div>
-        <div class="settings-block-hint">$5 minimum &middot; $1.15 per $1.00 of credit (includes a service charge), plus tax where it applies</div>
-        <button class="btn btn-small" id="billing-portal-btn">Manage billing</button>
-        <div id="billing-portal-status" class="settings-block-hint"></div>
-      </div>
-    </div>
-
-    <div class="plain-section-head">
-      <h2>Recent reviews</h2>
-      <div class="count">last 30 days</div>
-    </div>
-    <div id="review-history-body"><div class="empty-state">Loading&hellip;</div></div>
-
-    <div class="settings-grid" id="flash-settings-grid">
-      <div class="settings-block">
-        <div class="settings-block-label">Notify when credit runs low</div>
-        <div class="form-row">
-          <input class="field" id="alert-email-input" type="email" placeholder="you@example.com">
-          <button class="btn" id="alert-email-save">Save</button>
-        </div>
-        <div id="alert-email-status" class="settings-block-hint"></div>
-        <div class="status-line"><span class="status-dot"></span>Reviews pause silently below $0 - this is the only warning you'll get before that happens.</div>
-      </div>
-      <div class="settings-block">
-        <div class="settings-block-label">This install</div>
-        <div class="settings-block-hint" id="billing-cadence-line"></div>
-        <div class="settings-block-hint" id="sibling-summary-line"></div>
-      </div>
-    </div>
-
-    <div class="upgrade-card">
+{_credits_body_html()}
+    <div class="upgrade-card" id="upgrade-card">
       <div>
         <h3>AIR adds AIRview, Docs, managed audits and endpoint monitoring</h3>
         <p>Same evidence-grounded reviews, plus a generated architecture map, always-current docs, and uptime checks across your repo's API. $18 of shared AI credit a month.</p>
@@ -4093,6 +4028,32 @@ def _credits_page(installation_id: int) -> str:
 """
 
 
+@lru_cache(maxsize=1)
+def _usage_html() -> str:
+    """The AIR Usage & credit page. Same content as the Flash credits page, in
+    the normal AIR dashboard shell, so Overview, Findings, AIRview, Docs and
+    Settings stay one click away. Addressed by repo like every other AIR page;
+    the script asks the admin API which installation owns the repo."""
+    settings = get_settings()
+    paddle_config = (
+        f'<div id="credits-root" data-paddle-env="{escape(settings.paddle_environment)}" '
+        f'data-paddle-client-token="{escape(settings.paddle_client_token)}"></div>'
+    )
+    return _page_head("Usage &amp; credit - {repo} - Aletheore") + _shell(
+        "usage",
+        _topbar("Usage &amp; credit") + paddle_config + _credits_body_html(),
+    ) + f"""
+<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
+<script>
+{FETCH_HELPERS}
+{PAGE_HEAD_JS}
+{CREDIT_SUMMARY_JS}
+{_CREDITS_JS.replace("__INSTALLATION_ID__", "0")}
+loadPlanBadge();
+</script>
+"""
+
+
 @frontend_router.get("/credits/{installation_id}", response_class=HTMLResponse)
 async def credits_page(installation_id: int, request: Request):
     # GitHub installation ids are positive 64-bit integers; anything else is not an installation.
@@ -4102,7 +4063,36 @@ async def credits_page(installation_id: int, request: Request):
     if session is None:
         # The only variable part of this same-site redirect is a validated integer.
         return RedirectResponse(url="/auth/login?next=%2Fcredits%2F" + str(installation_id), status_code=307)
+    air_usage_page = await _air_usage_page_for(request, installation_id)
+    if air_usage_page is not None:
+        return RedirectResponse(url=air_usage_page, status_code=307)
     return _no_store_html(_credits_page(installation_id))
+
+
+async def _air_usage_page_for(request: Request, installation_id: int) -> str | None:
+    """Where an AIR installation's credit page now lives, or None to keep
+    serving the standalone page. /credits/<id> is the address in emails and
+    bookmarks, so for AIR it forwards to the Usage & credit page inside the
+    dashboard. Only for a caller who administers this paid installation, so
+    the redirect never reveals which repo belongs to whom; everyone else gets
+    the same page as before."""
+    from app_server.dashboard import _require_paid_installation_or_404
+
+    try:
+        installation = await _require_paid_installation_or_404(request, installation_id)
+    except HTTPException:
+        return None
+    if installation["plan"] != "air":
+        return None
+    repo_full_name = await request.app.state.db_pool.fetchval(
+        "SELECT repo_full_name FROM repo_history WHERE installation_id = $1 "
+        "ORDER BY scanned_at DESC LIMIT 1",
+        installation_id,
+    )
+    if not repo_full_name or "/" not in repo_full_name:
+        return None
+    org, repo = repo_full_name.split("/", 1)
+    return f"/dashboard/{quote(org, safe='')}/{quote(repo, safe='')}/usage"
 
 
 @frontend_router.get("/subscribe", response_class=HTMLResponse)
@@ -4226,6 +4216,14 @@ async def dashboard_docs_page(org: str, repo: str, request: Request):
     if redirect is not None:
         return redirect
     return _no_store_html(DOCS_HTML)
+
+
+@frontend_router.get("/dashboard/{org}/{repo}/usage", response_class=HTMLResponse)
+async def dashboard_usage_page(org: str, repo: str, request: Request):
+    redirect = await _require_session_or_redirect(request)
+    if redirect is not None:
+        return redirect
+    return _no_store_html(_usage_html())
 
 
 @frontend_router.get("/dashboard/{org}/{repo}/settings", response_class=HTMLResponse)

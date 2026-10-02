@@ -222,8 +222,8 @@ def test_credits_page_embeds_only_the_installation_id_not_any_secret(monkeypatch
     html = _credits_page(4321)
     get_settings.cache_clear()
 
-    assert "const installationId = 4321;" in html
-    assert "/app/installations/' + installationId + '/credits" in html
+    assert "let installationId = 4321;" in html
+    assert "/app/installations/' + id + '/credits" in html
     # No placeholder left un-substituted, and the page never inlines a checkout
     # token (that is minted per request by the API, after authorization).
     assert "__INSTALLATION_ID__" not in html and "__PADDLE" not in html
@@ -252,7 +252,7 @@ async def test_credits_route_serves_the_page_when_signed_in(pool, monkeypatch):
         response = await client.get("/credits/555")
 
     assert response.status_code == 200
-    assert "const installationId = 555;" in response.text
+    assert "let installationId = 555;" in response.text
     assert "no-store" in response.headers.get("cache-control", "")
 
 

@@ -369,13 +369,14 @@ def subscription_canceled_email(account_login: str, plan: str) -> dict:
 
 def _credit_purchase_link(plan: str, installation_id: int | None) -> str | None:
     """Where a customer on `plan` can actually buy more credit, or None when
-    they can't without upgrading. AIR buys from its dashboard settings; Flash
-    has no dashboard, so it buys from the standalone /credits page (needs the
-    installation id to link to it)."""
+    they can't without upgrading. Both paid plans link to /credits/<id>: Flash
+    is served the standalone credit page there, and for AIR the same address
+    forwards to the Usage & credit page inside the dashboard. Without an
+    installation id (an old queued job) AIR falls back to the dashboard."""
+    if plan in ("air", "flash") and installation_id is not None:
+        return f"{_APP_URL}/credits/{installation_id}"
     if plan == "air":
         return _DASHBOARD_URL
-    if plan == "flash" and installation_id is not None:
-        return f"{_APP_URL}/credits/{installation_id}"
     return None
 
 

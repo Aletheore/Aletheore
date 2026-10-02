@@ -81,5 +81,14 @@ def test_the_credits_page_headline_uses_the_shared_summary():
     assert "available" in html
 
 
-def test_the_settings_page_headline_also_counts_purchased_credit():
-    assert "creditSummary(" in frontend._settings_html()
+def test_the_air_usage_page_headline_uses_the_same_shared_summary():
+    assert "creditSummary(" in frontend._usage_html()
+
+
+def test_a_purchase_confirmation_survives_a_failed_balance_load_and_a_missing_banner():
+    # A failed first balance fetch must not also swallow the "payment received"
+    # message, and a page without the banner element must not throw.
+    html = frontend._credits_page(123)
+
+    assert "try {\n      await loadCredits();\n    } finally {\n      await confirmPurchaseIfReturning();\n    }" in html
+    assert "if (!banner) return;" in html
