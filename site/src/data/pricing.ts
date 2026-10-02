@@ -101,7 +101,7 @@ export const footnotes = [
   {
     mark: "**",
     title: "AI credit:",
-    body: "Flash includes $5 and AIR includes $18 of AI credit each month, spent as reviews and builds run, with no fixed review limit. As a guide, $5 covers about 400 PR reviews on Flash. On AIR the $18 is shared across PR reviews, Docs, managed audits and AIRview: as a guide it covers about 400 PR reviews alongside typical use of the others, and more reviews if you use less of them, while heavy use of any one leaves less for the rest. Larger pull requests and repositories use more credit, smaller ones less. Figures are estimates from our measured average cost per review, not a guarantee.",
+    body: "Flash includes $5 and AIR includes $18 of AI credit each month, spent as reviews and builds run, with no fixed review limit. As a guide, $5 covers about 400 PR reviews on Flash. On AIR the $18 is shared across PR reviews, Docs, managed audits and AIRview: as a guide it covers about 400 PR reviews alongside typical use of the others, and more reviews if you use less of them, while heavy use of any one leaves less for the rest. Larger pull requests and repositories use more credit, smaller ones less. The annual AIR plan includes $15 of AI credit each month, so the 2 months free applies to the credit as well as the price. Figures are estimates from our measured average cost per review, not a guarantee.",
   },
 ];
 

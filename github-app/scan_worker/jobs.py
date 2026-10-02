@@ -5138,7 +5138,7 @@ def run_monthly_credit_reset_sweep_job() -> None:
                 continue
 
             new_credit = base_credit_for_plan(
-                installation["plan"], get_extra_seats(dsn, installation_id)
+                installation["plan"], get_extra_seats(dsn, installation_id), is_annual=True
             )
             apply_monthly_credit_reset(dsn, installation_id, new_credit)
         except Exception:  # noqa: BLE001
@@ -5251,7 +5251,9 @@ def reserve_llm_spend_with_email_hooks(
     # high-water mark isn't stored anywhere, and adding a column for it is a
     # larger change than this; the plan allotment is the right reference
     # anyway, since that IS what a renewal resets the balance to.
-    plan_allotment = base_credit_for_plan(
+    # The stored allotment is this installation's real ceiling (annual and
+    # monthly subscribers differ); the plan constant is only the fallback.
+    plan_allotment = float(row.get("base_credit_allotment_usd") or 0) or base_credit_for_plan(
         row.get("plan", ""), get_extra_seats(dsn, installation_id)
     )
     threshold = plan_allotment * LOW_BALANCE_WARNING_FRACTION

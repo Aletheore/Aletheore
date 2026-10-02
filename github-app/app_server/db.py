@@ -250,7 +250,7 @@ async def reset_billing_period_credit(
     - and the real annual renewal re-synchronizes this column from
     period_start every year, so the slight calendar drift can never
     accumulate beyond one billing year."""
-    new_credit = base_credit_for_plan(plan, extra_seats)
+    new_credit = base_credit_for_plan(plan, extra_seats, is_annual)
     # Paddle sends ISO 8601 with a trailing "Z" (e.g.
     # "2026-09-01T00:00:00Z") - same format webhooks/paddle.py already
     # parses for billed_at via datetime.fromisoformat (Python 3.11+
@@ -277,7 +277,12 @@ async def reset_billing_period_credit(
 
 
 async def credit_extra_seat_purchase(
-    pool: asyncpg.Pool, installation_id: int, added_seats: int, plan: str, extra_seats: int
+    pool: asyncpg.Pool,
+    installation_id: int,
+    added_seats: int,
+    plan: str,
+    extra_seats: int,
+    is_annual: bool = False,
 ) -> None:
     """Credits the per-seat LLM bonus for seats bought MID-CYCLE, when
     reset_billing_period_credit cannot - clamped at what the CURRENT seat
@@ -317,7 +322,7 @@ async def credit_extra_seat_purchase(
     this billing period."""
     if added_seats <= 0:
         return
-    ceiling = base_credit_for_plan(plan, extra_seats)
+    ceiling = base_credit_for_plan(plan, extra_seats, is_annual)
     await pool.execute(
         "UPDATE installations SET "
         "base_credit_remaining_usd = LEAST(base_credit_remaining_usd + $2, $3), "

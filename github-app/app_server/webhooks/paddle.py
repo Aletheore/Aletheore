@@ -147,18 +147,20 @@ def _topup_credit_usd(topup_item: dict, totals: dict) -> Decimal | None:
     )
 
 
-def _usd_collected_minor_units(data: dict) -> tuple[Decimal | None, bool]:
-    """(amount in USD cents, whether the amount was unavailable only
-    because the transaction is not in USD). Prefers Paddle's own conversion
-    into the USD payout currency (details.payout_totals) so a non-USD
-    checkout is commissioned on its USD value, never on its local-currency
-    number."""
+def _usd_earnings_minor_units(data: dict) -> tuple[Decimal | None, bool]:
+    """(Paddle earnings in USD cents, whether the amount was unavailable
+    only because the transaction is not in USD). Earnings are what Paddle
+    pays out after tax and its own fee - the base for affiliate commission,
+    so an affiliate is never paid on money that goes to the tax authority or
+    to Paddle. Prefers Paddle's own conversion into the USD payout currency
+    (details.payout_totals) so a non-USD checkout is commissioned on its USD
+    value, never on its local-currency number."""
     details = data.get("details") or {}
     payout = details.get("payout_totals") or {}
     totals = details.get("totals") or {}
     for source in (payout, totals):
         if source.get("currency_code") == "USD":
-            return _finite_decimal(source.get("total")), False
+            return _finite_decimal(source.get("earnings")), False
     return None, True
 
 
@@ -379,7 +381,7 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
             # it would double-count.
             if plan != "free" and not reset_happened and extra_seats > previous_extra_seats:
                 await credit_extra_seat_purchase(
-                    conn, installation_id, extra_seats - previous_extra_seats, plan, extra_seats
+                    conn, installation_id, extra_seats - previous_extra_seats, plan, extra_seats, is_annual
                 )
 
             if plan != "free":
@@ -411,7 +413,8 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
 
     if should_run_paid_setup:
         # Attribution: first time this installation goes free -> paid, on
-        # ANY paid plan (flash included) - if it was checked out with a
+        # the AIR plan only (affiliates are AIR-only: Flash's margin cannot
+        # carry a recurring 15% commission) - if it was checked out with a
         # known affiliate's discount code, credit that affiliate. Gated on
         # the same paid-setup claim as the AIRview/Docs build below, so a
         # later subscription.updated for the same installation (e.g.
@@ -419,7 +422,7 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
         # - record_referral is also itself a database-enforced no-op past
         # the first row (installation_id is that table's primary key).
         discount_id = (data.get("discount") or {}).get("id")
-        if discount_id:
+        if discount_id and plan == "air":
             affiliate = await get_affiliate_by_discount_id(pool, discount_id)
             if affiliate is not None:
                 await record_referral(pool, installation_id, affiliate["id"])
@@ -503,7 +506,8 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
 
 async def _handle_transaction_completed(data: dict, pool) -> None:
     """Records an affiliate commission for one completed transaction, if
-    and only if the paying installation has a referral on file AND the
+    and only if the paying installation has a referral on file, the
+    transaction pays for the AIR plan (or its extra seats), AND the
     transaction is not a credit top-up purchase (see the early return
     below - top-ups are pass-through LLM spend with no margin to pay a
     commission from). Every other (unreferred, or top-up) transaction.completed
@@ -595,8 +599,21 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
     if referral is None:
         return
 
+    # Affiliates are AIR-only: a referred installation that later moves to
+    # Flash stops earning commission. Decided from this transaction's own
+    # line items (not the installation's current plan) so the first payment
+    # is still commissioned even if this event arrives before the
+    # subscription event that flips the plan. The extra-seat add-on only
+    # exists on AIR subscriptions.
+    if not any(
+        (price_id := (item.get("price") or {}).get("id")) == EXTRA_SEAT_PRICE_ID
+        or resolve_plan_for_price_id(price_id) == "air"
+        for item in items
+    ):
+        return
+
     transaction_id = data.get("id")
-    total_minor_units, non_usd = _usd_collected_minor_units(data)
+    earnings_minor_units, non_usd = _usd_earnings_minor_units(data)
     billed_at_raw = data.get("billed_at") or data.get("created_at")
     if transaction_id and non_usd:
         logger.warning(
@@ -610,7 +627,7 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
             f"transaction_id={transaction_id} installation_id={installation_id}",
         )
         return
-    if not transaction_id or total_minor_units is None or not billed_at_raw:
+    if not transaction_id or earnings_minor_units is None or not billed_at_raw:
         logger.warning(
             "transaction.completed for a referred installation is missing fields "
             "needed for commission calculation"
@@ -623,7 +640,7 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
         logger.warning("transaction.completed has an unparseable billed_at")
         return
 
-    commission_usd = (total_minor_units / Decimal(100) * _AFFILIATE_COMMISSION_RATE).quantize(
+    commission_usd = (earnings_minor_units / Decimal(100) * _AFFILIATE_COMMISSION_RATE).quantize(
         Decimal("0.01"), rounding=ROUND_HALF_UP
     )
 
