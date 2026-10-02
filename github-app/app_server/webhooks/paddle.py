@@ -6,7 +6,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from fastapi import APIRouter, Request, Response
 
 from app_server.affiliates import get_affiliate_by_discount_id, get_referral, record_commission, record_referral
-from app_server.auth import unsign_checkout_installation_id
+from app_server.auth import CHECKOUT_TOKEN_WEBHOOK_MAX_AGE, unsign_checkout_installation_id
 from app_server.config import get_settings
 from app_server.db import (
     add_paddle_ids_to_installation,
@@ -526,13 +526,34 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
     themselves name a different, referred installation and misattribute the
     resulting commission to that installation's affiliate.
     """
+    items = data.get("items") or []
+    topup_item = next(
+        (item for item in items if (item.get("price") or {}).get("id") in ACCEPTED_CREDIT_TOPUP_PRICE_IDS),
+        None,
+    )
     installation_token = (data.get("custom_data") or {}).get("installation_token")
     installation_id = (
-        unsign_checkout_installation_id(installation_token, get_settings().session_secret)
+        unsign_checkout_installation_id(
+            installation_token, get_settings().session_secret, max_age=CHECKOUT_TOKEN_WEBHOOK_MAX_AGE
+        )
         if installation_token
         else None
     )
     if installation_id is None:
+        # Most transactions legitimately carry no usable token and are a
+        # silent no-op here. A paid credit top-up that can't be attributed is
+        # different: money was collected and nothing was credited, so say so
+        # rather than letting it look like a success.
+        if topup_item is not None:
+            logger.warning(
+                "credit top-up transaction.completed has a missing or invalid installation_token: %s",
+                data.get("id"),
+            )
+            send_error_alert(
+                "paddle_webhook",
+                PaddleWebhookAttributionError("paid credit top-up has a missing or invalid installation_token"),
+                f"transaction_id={data.get('id')}",
+            )
         return
 
     # A customer-purchased credit top-up. This still needs to run before the
@@ -540,11 +561,6 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
     # referral"), because a referred installation's top-up must still be
     # credited even though - see the early return at the end of this block -
     # it is deliberately excluded from earning its referrer any commission.
-    items = data.get("items") or []
-    topup_item = next(
-        (item for item in items if (item.get("price") or {}).get("id") in ACCEPTED_CREDIT_TOPUP_PRICE_IDS),
-        None,
-    )
     if topup_item is not None:
         # Credit the amount Paddle actually COLLECTED for this transaction,
         # not the line item's quantity - quantity assumes exactly $1 of
