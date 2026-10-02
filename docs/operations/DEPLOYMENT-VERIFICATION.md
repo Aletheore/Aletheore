@@ -364,6 +364,32 @@ recently started.
 
 ## Current Server Snapshot
 
+As of 2026-10-02, following a redeploy to `master` (`git fetch`, `git reset --hard origin/master`,
+`docker compose build app-server scan-worker scan-worker-2 health-worker scheduler`, then
+`docker compose up -d --no-deps` for the same five services, no `--scale`), the operator read back:
+
+- Host: `srv1675832` (`root@187.127.169.89`), path `/root/aletheore`.
+- Commit: `efa1f0e` (#898), which includes #892 to #897. No migrations.
+- `docker ps`: `github-app-app-server-1`, `github-app-health-worker-1`, `github-app-scan-worker-1`,
+  `github-app-scan-worker-2-1` and `github-app-scheduler-1` all `healthy` and 28 seconds old;
+  `autoheal`, `caddy`, `jina-embed`, `postgres` and `redis` untouched. Exactly one replica of each
+  scan worker, as the recipe requires.
+- Verified live: inside `github-app-app-server-1`, `CREDIT_TOPUP_PRICE_ID` is
+  `pri_01m3xpabknvke00n5vsxn4wpe0` and `resolve_plan_for_price_id("pri_01m3xpabbam5t2gkzwzmg0y9eq")`
+  returns `flash`, so the new prices are in the running code; `https://app.aletheore.com/healthz`
+  returned `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`.
+- Not verified this pass: container logs, the `app-server` startup line, and every Required Checks
+  item that no change in this deploy touches.
+- Paddle: the old $8 Flash price (`pri_01m1dj0m1netz6ze1mmckz73nm`, zero subscribers in any state)
+  and the old $1.00 top-up price (`pri_01m23jw9qbsnm4zmv28bfebx4t`) are archived after this deploy
+  (read back from Paddle: both `archived`, the two new prices `active`). Only abandoned draft
+  checkouts from 2026-09-10 to 2026-09-27 referenced them.
+- Open follow-up: run a real $5 top-up and refund end to end, which has never been done with real
+  money.
+
+## 2026-10-01 Snapshot
+
+
 As of 2026-10-01, following a redeploy to `master` (`git fetch`, then `git reset --hard
 origin/master`, then `docker compose build app-server scan-worker health-worker scheduler`, then
 `docker compose up -d --no-deps --scale scan-worker=2` for those four, then a corrective

@@ -18,6 +18,29 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-10-02
+
+Commit `efa1f0e` (#898), no migrations. `app-server`, `scan-worker`, `scan-worker-2`,
+`health-worker` and `scheduler` rebuilt and recreated with the corrected recipe (separate build
+and `up -d --no-deps`, no `--scale`). See the "Current Server Snapshot" in
+`DEPLOYMENT-VERIFICATION.md` for what was verified live.
+
+- **#892 - repo removal.** A removed repo's retained checkout is deleted, and the privacy policy
+  now matches that behavior.
+- **#893 - top-up and commission currency.** Credit top-ups and affiliate commissions are priced
+  in USD, not the checkout currency, so a localized (for example INR) purchase no longer
+  mis-credits or mis-pays.
+- **#894 - refund alert.** An alert fires when Paddle refunds or charges back a credit top-up.
+  Credit already granted is not clawed back automatically.
+- **#895 - refund policy.** The site states that refunds are handled by Paddle. Site copy only.
+- **#897 - affiliates and annual credit.** Affiliates apply to AIR only (discount codes are
+  restricted to the AIR prices), commission is paid on Paddle earnings, and annual AIR subscribers
+  get $15 of credit per month instead of $18.
+- **#898 - pricing.** Flash is $10/month (`pri_01m3xpabbam5t2gkzwzmg0y9eq`) and credit top-ups are
+  $1.15 per $1.00 of credit with tax added on top (`pri_01m3xpabknvke00n5vsxn4wpe0`). The webhook
+  still accepts the old $1.00 top-up price so a checkout opened before the swap credits. The old
+  $8 Flash price and the old $1.00 top-up price were archived in Paddle after this deploy.
+
 ## 2026-10-01
 
 Commit `72ece8d`, no migrations. `app-server`, `scan-worker`, `scan-worker-2`, `health-worker`
