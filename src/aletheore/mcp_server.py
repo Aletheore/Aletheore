@@ -218,6 +218,7 @@ _TOOL_NAME_TO_QUERY_KIND = {
     "aletheore_database": "database",
     "aletheore_infrastructure": "infrastructure",
     "aletheore_environment_variables": "environment-variables",
+    "aletheore_error_handling": "error-handling",
 }
 
 # One real description per query kind, naming exactly what `target` expects
@@ -247,6 +248,9 @@ _QUERY_TOOL_DESCRIPTIONS = {
     "database": "Detected database usage - ORMs, connection strings, migrations. Takes no target.",
     "infrastructure": "Detected infrastructure config - Docker, CI, IaC files. Takes no target.",
     "environment-variables": "Environment variables referenced in the codebase. Takes no target.",
+    "error-handling": "Where the code defines, raises and catches errors: error types, raise or throw sites "
+    "and catch handlers (file and line), plus per-type counts. Python, C/C++, JS/TS, Java, C#, PHP, Kotlin, "
+    "Ruby, Swift, Go and Rust. Takes no target.",
 }
 
 _SEARCH_MATCH_CAP = 200

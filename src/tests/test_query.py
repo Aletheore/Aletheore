@@ -560,6 +560,15 @@ def test_find_infrastructure_returns_the_whole_block_ignoring_target():
     ]
 
 
+def test_find_error_handling_returns_the_section_and_degrades_for_old_evidence():
+    from aletheore.query import find_error_handling
+
+    evidence = make_evidence()
+    assert find_error_handling(evidence, None)["checked"] is False  # fixture predates the section
+    evidence["repository"]["error_handling"] = {"checked": True, "error_types": []}
+    assert find_error_handling(evidence, None) == {"checked": True, "error_types": []}
+
+
 def test_find_environment_variables_returns_the_whole_block_ignoring_target():
     result = find_environment_variables(make_evidence(), None)
     assert result == make_evidence()["repository"]["environment_variables"]
@@ -588,6 +597,7 @@ def test_query_functions_registry_has_all_kinds_with_correct_requires_target():
         "database": False,
         "infrastructure": False,
         "environment-variables": False,
+        "error-handling": False,
         "evidence-for-endpoint": True,
         "evidence-for-symbol": True,
         "evidence-for-dependency": True,

@@ -13,6 +13,7 @@ from aletheore.air_schema import validate_evidence
 from aletheore.architecture import build_clusters, detect_layer_violations, load_architecture_config
 from aletheore.dead_code import find_dead_code
 from aletheore.endpoints import map_api_endpoints
+from aletheore.error_handling import map_error_handling
 from aletheore.evidence_resolution import find_symbol_at_location
 from aletheore.git_intel.analyzer import analyze_git, compute_hotspots, compute_recently_updated
 from aletheore.licenses import check_dependency_licenses
@@ -42,7 +43,7 @@ from aletheore.static_analysis import check_static_analysis as run_static_analys
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.vulnerabilities import check_vulnerabilities as check_dependency_vulnerabilities
 
-EVIDENCE_VERSION = "0.7.0"
+EVIDENCE_VERSION = "0.8.0"
 
 
 def _version_compatibility_key(version: str) -> tuple[int, int] | None:
@@ -564,6 +565,12 @@ def scan_repository(
             "endpoints": [],
         }
 
+    report("Mapping error handling")
+    try:
+        error_handling_data = map_error_handling(repo_path, ignored_paths=ignored_paths)
+    except Exception:  # noqa: BLE001 - an evidence extra must never fail the scan
+        error_handling_data = {"checked": False}
+
     report("Detecting dead code")
     # api_endpoints computed just above (not re-parsed here) - dead code's
     # Rails/Laravel route-handler resolvers reuse the same extracted route
@@ -662,6 +669,7 @@ def scan_repository(
             "dependency_graph": dependency_graph,
             "unparseable_files": unparseable_files,
             "api_endpoints": api_endpoints_data,
+            "error_handling": error_handling_data,
             "dead_code": dead_code_data,
         },
         "git": git_data,
