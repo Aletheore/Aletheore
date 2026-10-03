@@ -407,11 +407,20 @@ def _go(root: Node, rel: str, classes: list, raises: list, handlers: list) -> No
                 _add_raise(raises, rel, node, callee)
             elif callee == "recover":
                 _add_handler(handlers, rel, node, [])
-            elif callee in ("errors.Is", "errors.As") and args is not None and len(args.named_children) >= 2:
-                target = args.named_children[1]
-                if target.type == "unary_expression" and target.named_children:
-                    target = target.named_children[0]
-                _add_handler(handlers, rel, node, [_text(target)])
+            elif callee == "errors.Is" and args is not None and len(args.named_children) >= 2:
+                # The second argument is typically a sentinel error value
+                # (errors.Is(err, ErrNotFound)) - unlike errors.As below, its
+                # name is at least a plausible error identifier, not a bare
+                # local variable, so it's still worth recording as a catch.
+                _add_handler(handlers, rel, node, [_text(args.named_children[1])])
+            elif callee == "errors.As" and args is not None and len(args.named_children) >= 2:
+                # The second argument is a pointer destination
+                # (errors.As(err, &perr)), not a type or a sentinel name -
+                # recording its variable name (e.g. "perr") would pollute
+                # by_error_type's caught counts with non-type identifiers.
+                # No static type resolution here, so this catches with no
+                # identifiable type, same as recover() above.
+                _add_handler(handlers, rel, node, [])
 
 
 _RUST_PANIC_MACROS = {"panic", "unreachable", "todo", "unimplemented", "bail", "ensure"}

@@ -263,6 +263,27 @@ def test_go_errors_are_values_sentinels_custom_types_and_panics(tmp_path):
     assert "(any)" in catches and "ErrNotFound" in catches
 
 
+def test_go_errors_as_does_not_record_its_pointer_target_as_a_caught_type(tmp_path):
+    # Real gap: errors.As(err, &perr)'s second argument is a pointer
+    # destination, not a type or a sentinel - recording "perr" as a caught
+    # error type pollutes by_error_type's summary with a local variable
+    # name. errors.Is keeps recording its sentinel argument (ErrNotFound
+    # above), since that one is at least a plausible error identifier.
+    r = _scan(tmp_path, "a.go", (
+        "package p\n"
+        "func f() error {\n"
+        "  var perr *MyErr\n"
+        "  if errors.As(err, &perr) { return perr }\n"
+        "  return nil\n"
+        "}\n"
+    ))
+    catches = [c for h in r["handlers"] for c in h["catches"]]
+    assert "perr" not in catches
+    # _add_handler turns an empty catches list into ["(any)"], same as
+    # recover() above - an errors.As handler with no identifiable type.
+    assert catches == ["(any)"]
+
+
 def test_rust_errors(tmp_path):
     r = _scan(tmp_path, "a.rs", (
         "#[derive(Debug, thiserror::Error)]\nenum AppError { #[error(\"x\")] Bad }\n"

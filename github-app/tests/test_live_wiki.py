@@ -1713,6 +1713,29 @@ def test_repo_error_digest_ranks_types_and_gives_real_locations():
     assert _repo_error_digest(make_evidence()) is None
 
 
+def test_repo_error_digest_matches_go_constructor_examples_to_their_by_error_type_entry():
+    # Real gap: by_error_type entries are keyed by error_handling.py's own
+    # _last, which keeps Go constructors like "errors.New"/"fmt.Errorf"
+    # whole - but examples used to be keyed by a plain rsplit that strips
+    # them down to "New"/"Errorf", so examples.get(entry["name"], []) never
+    # matched and every Go repo's most-used error types showed empty
+    # examples. _last keeps both sides consistent.
+    from scan_worker.live_wiki import _repo_error_digest
+
+    evidence = _with_error_handling(make_evidence())
+    evidence["repository"]["error_handling"]["raise_sites"] = [
+        {"file": "pkg/x.go", "line": 7, "error_type": "errors.New", "function": "F"},
+    ]
+    evidence["repository"]["error_handling"]["by_error_type"] = [
+        {"name": "errors.New", "defined_in": "", "raised": 1, "caught": 0},
+    ]
+
+    digest = _repo_error_digest(evidence)
+
+    assert digest["error_types"][0]["name"] == "errors.New"
+    assert digest["error_types"][0]["examples"] == ["pkg/x.go:7"]
+
+
 def test_overview_makes_no_extra_call_without_error_evidence():
     from scan_worker.live_wiki import generate_overview
 

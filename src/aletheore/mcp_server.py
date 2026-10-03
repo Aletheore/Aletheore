@@ -249,7 +249,8 @@ _QUERY_TOOL_DESCRIPTIONS = {
     "infrastructure": "Detected infrastructure config - Docker, CI, IaC files. Takes no target.",
     "environment-variables": "Environment variables referenced in the codebase. Takes no target.",
     "error-handling": "Where the code defines, raises and catches errors: error types, raise or throw sites "
-    "and catch handlers (file and line), plus per-type counts. Python and C/C++. Takes no target.",
+    "and catch handlers (file and line), plus per-type counts. Python, C/C++, JS/TS, Java, C#, PHP, Kotlin, "
+    "Ruby, Swift, Go and Rust. Takes no target.",
 }
 
 _SEARCH_MATCH_CAP = 200

@@ -410,13 +410,21 @@ def _repo_error_digest(evidence: dict) -> dict | None:
     """Repo-wide counterpart of _error_digest, for the overview: the most used error types
     with where each is defined and a couple of real raise sites, plus a few handlers.
     None when the scan has no error-handling section or it is empty."""
+    from aletheore.error_handling import _last
+
     section = evidence.get("repository", {}).get("error_handling")
     if not section or not section.get("checked"):
         return None
     definitions = {t["name"]: f"{t['file']}:{t['line']}" for t in section.get("error_types", [])}
     examples: dict[str, list[str]] = {}
     for site in section.get("raise_sites", []):
-        bucket = examples.setdefault(site["error_type"].rsplit("::", 1)[-1].rsplit(".", 1)[-1], [])
+        # _last, not a bare rsplit: by_error_type entries below are keyed by
+        # _last too (map_error_handling's own _entry_for(_last(...))), which
+        # keeps Go constructors like errors.New/fmt.Errorf whole instead of
+        # splitting them to "New"/"Errorf" - a plain rsplit here would never
+        # match those entries' examples, leaving Go's most-used error types
+        # with no raise-site examples at all.
+        bucket = examples.setdefault(_last(site["error_type"]), [])
         if len(bucket) < MAX_ERROR_EXAMPLES:
             bucket.append(f"{site['file']}:{site['line']}")
     types = []
