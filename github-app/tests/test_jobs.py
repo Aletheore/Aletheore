@@ -11380,7 +11380,7 @@ def test_health_fix_suggestion_adapter_uses_luna_when_openai_key_configured(monk
     adapter = _health_fix_suggestion_adapter()
 
     assert adapter.name == "OpenAI"
-    assert adapter._model == "gpt-5.6-luna"
+    assert adapter._model == "gpt-6-luna"
 
 
 def test_health_fix_suggestion_adapter_falls_back_to_deepseek_pro(monkeypatch):

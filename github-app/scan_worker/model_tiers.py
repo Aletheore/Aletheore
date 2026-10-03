@@ -126,7 +126,10 @@ def _true_up_openai_free_tier_reservation(
     if delta != 0:
         redis_conn.incrby(key if key is not None else _openai_free_tier_token_key(), delta)
 
-LUNA_MODEL = "gpt-5.6-luna"
+# Endpoint-health fix suggestions are the only surface left on the default Luna,
+# and they return plain text. gpt-6-luna lists at half the price and is the model
+# every other OpenAI surface has moved to (see DOCS_MODEL).
+LUNA_MODEL = "gpt-6-luna"
 # Docs descriptions. Measured 10/2 on 205 symbols across five languages, scored
 # blind against the source by two judges from different vendors: gpt-6-luna had
 # the fewest unsupported claims (7.1% vs 9.3% for gpt-5.6-luna on one judge,
