@@ -11,7 +11,7 @@ from app_server.affiliates import (
     mark_commissions_paid,
     record_commission,
     record_referral,
-    reverse_commission,
+    reverse_commission_partial,
 )
 from app_server.db import upsert_installation
 
@@ -104,6 +104,9 @@ async def test_duplicate_paddle_transaction_id_does_not_double_count(pool):
 
 @pytest.mark.asyncio
 async def test_reversed_commission_is_preserved_but_excluded_from_totals(pool):
+    # No charged_total_minor recorded (the pre-migration shape) - nothing to
+    # prorate against, so the first adjustment takes the whole commission,
+    # same as the old all-or-nothing reverse_commission.
     affiliate = await create_affiliate(pool, "REV10", "dsc_rev", "Referred")
     await upsert_installation(pool, 907, "acme")
     await record_referral(pool, 907, affiliate["id"])
@@ -111,13 +114,71 @@ async def test_reversed_commission_is_preserved_but_excluded_from_totals(pool):
         pool, affiliate["id"], 907, "txn_refund", Decimal("4.50"), datetime.now(timezone.utc)
     )
 
-    assert await reverse_commission(pool, "txn_refund") is True
-    assert await reverse_commission(pool, "txn_refund") is False
+    first = await reverse_commission_partial(pool, "adj_refund", "txn_refund", Decimal("999999"))
+    assert first == {"status": "reversed", "reversed_usd": Decimal("4.50"), "remaining_usd": Decimal("0")}
+    duplicate = await reverse_commission_partial(pool, "adj_refund", "txn_refund", Decimal("999999"))
+    assert duplicate == {"status": "duplicate"}
     totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
     assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("0")
     assert await pool.fetchval(
         "SELECT reversed FROM affiliate_commissions WHERE paddle_transaction_id = 'txn_refund'"
     ) is True
+
+
+@pytest.mark.asyncio
+async def test_a_partial_refund_prorates_the_commission_instead_of_zeroing_it(pool):
+    # $29.99 charged, $29.99 * 0.15 = $4.50 commissioned, a $2.00 partial
+    # refund (a billing-correction credit note) should take back ~15% of
+    # that refund's share, not the whole commission.
+    affiliate = await create_affiliate(pool, "PRO10", "dsc_pro", "Prorated")
+    await upsert_installation(pool, 950, "acme")
+    await record_referral(pool, 950, affiliate["id"])
+    await record_commission(
+        pool, affiliate["id"], 950, "txn_partial", Decimal("4.50"), datetime.now(timezone.utc),
+        charged_total_minor=Decimal("2999"),
+    )
+
+    result = await reverse_commission_partial(pool, "adj_partial_1", "txn_partial", Decimal("200"))
+
+    assert result["status"] == "reversed"
+    # share = 200/2999 = 0.0667.., 4.50 * share rounds to 0.30
+    assert result["reversed_usd"] == Decimal("0.30")
+    assert result["remaining_usd"] == Decimal("4.20")
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("4.20")
+    assert await pool.fetchval(
+        "SELECT reversed FROM affiliate_commissions WHERE paddle_transaction_id = 'txn_partial'"
+    ) is False
+
+
+@pytest.mark.asyncio
+async def test_multiple_partial_refunds_accumulate_and_cap_at_the_full_commission(pool):
+    affiliate = await create_affiliate(pool, "ACC10", "dsc_acc", "Accumulated")
+    await upsert_installation(pool, 951, "acme")
+    await record_referral(pool, 951, affiliate["id"])
+    await record_commission(
+        pool, affiliate["id"], 951, "txn_multi", Decimal("4.50"), datetime.now(timezone.utc),
+        charged_total_minor=Decimal("2999"),
+    )
+
+    first = await reverse_commission_partial(pool, "adj_multi_1", "txn_multi", Decimal("1500"))
+    assert first["reversed_usd"] == Decimal("2.25")
+    # A second, much larger refund than what's left charged must not take
+    # back more than the commission has remaining.
+    second = await reverse_commission_partial(pool, "adj_multi_2", "txn_multi", Decimal("1499"))
+    assert second["reversed_usd"] == Decimal("2.25")
+    assert second["remaining_usd"] == Decimal("0")
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("0")
+    assert await pool.fetchval(
+        "SELECT reversed FROM affiliate_commissions WHERE paddle_transaction_id = 'txn_multi'"
+    ) is True
+
+
+@pytest.mark.asyncio
+async def test_reverse_commission_partial_is_a_noop_for_an_uncommissioned_transaction(pool):
+    result = await reverse_commission_partial(pool, "adj_none", "txn_never_commissioned", Decimal("500"))
+    assert result == {"status": "not_found"}
 
 
 @pytest.mark.asyncio
@@ -180,7 +241,7 @@ async def test_mark_commissions_paid_does_not_touch_other_affiliates(pool):
 @pytest.mark.asyncio
 async def test_mark_commissions_paid_does_not_touch_a_reversed_commission(pool):
     # Regression test: a commission reversed via the Paddle
-    # refund/chargeback webhook path (reverse_commission) was already
+    # refund/chargeback webhook path (reverse_commission_partial) was already
     # correctly excluded from total_owed_usd, but mark_commissions_paid's
     # UPDATE had no NOT reversed filter, so an admin's "mark everything
     # paid" click could still flip it to paid=true - after which it's ALSO
@@ -193,7 +254,7 @@ async def test_mark_commissions_paid_does_not_touch_a_reversed_commission(pool):
     await record_referral(pool, 910, affiliate["id"])
     now = datetime.now(timezone.utc)
     await record_commission(pool, affiliate["id"], 910, "txn_reversed", Decimal("4.00"), now)
-    await reverse_commission(pool, "txn_reversed")
+    await reverse_commission_partial(pool, "adj_reversed", "txn_reversed", Decimal("999999"))
 
     marked = await mark_commissions_paid(pool, affiliate["id"])
 
@@ -211,7 +272,7 @@ async def test_mark_commissions_paid_still_pays_unreversed_commissions_alongside
     now = datetime.now(timezone.utc)
     await record_commission(pool, affiliate["id"], 911, "txn_good", Decimal("5.00"), now)
     await record_commission(pool, affiliate["id"], 911, "txn_bad", Decimal("4.00"), now)
-    await reverse_commission(pool, "txn_bad")
+    await reverse_commission_partial(pool, "adj_bad", "txn_bad", Decimal("999999"))
 
     marked = await mark_commissions_paid(pool, affiliate["id"])
 

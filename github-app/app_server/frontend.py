@@ -3724,6 +3724,13 @@ async function loadCredits() {
   if (document.getElementById('install-name')) document.title = data.account_login + ' - Aletheore';
   setText('install-name', data.account_login);
   setText('plan-pill', planShortName(data.plan));
+  // _usage_html() (the AIR page) has no #upgrade-card at all, so this is
+  // safe on both pages - but an AIR installation with no repo_history row
+  // yet still falls through to this Flash-shell page (see
+  // _air_usage_page_for's redirect gate), and would otherwise see an
+  // "upgrade to AIR" pitch while already paying for AIR.
+  var upgradeCard = document.getElementById('upgrade-card');
+  if (upgradeCard) upgradeCard.style.display = data.plan === 'air' ? 'none' : '';
   renderInstallsList(data.sibling_installations || [], data.installation_id);
 
   renderCreditHero(data);

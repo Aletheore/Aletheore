@@ -214,6 +214,22 @@ def test_sql_injection_is_plausible_accepts_format_call_query_string():
     assert _sql_injection_is_plausible(source, 2) is True
 
 
+def test_sql_injection_is_plausible_accepts_a_wide_insert_with_many_columns():
+    # Real false-negative found live (backward-audit, 2026-10-03): a wide
+    # INSERT against a many-column table puts more than 300 characters
+    # between INSERT INTO and VALUES, which the old bound silently dropped
+    # even though this is a real, unambiguous SQL statement built with
+    # `%`-interpolation.
+    columns = ", ".join(f"column_number_{i}" for i in range(30))
+    placeholders = ", ".join("%s" for _ in range(30))
+    source = (
+        "def insert_row(cursor, values):\n"
+        f'    query = "INSERT INTO wide_table ({columns}) VALUES ({placeholders})"\n'
+        "    cursor.execute(query % values)\n"
+    )
+    assert _sql_injection_is_plausible(source, 2) is True
+
+
 def test_sql_injection_is_plausible_accepts_fstring_with_no_literal_keywords_when_executed():
     # No literal SQL keyword pair sits in the string's own text at all (the
     # whole "FROM users" clause is split around the interpolation), so this

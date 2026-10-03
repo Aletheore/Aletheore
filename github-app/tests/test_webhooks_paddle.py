@@ -2453,6 +2453,39 @@ async def test_adjustment_created_reverses_the_commission_for_the_refunded_trans
 
 
 @pytest.mark.asyncio
+async def test_transaction_updated_to_refunded_also_reverses_the_commission(pool, monkeypatch):
+    # transaction.updated carries no adjustment id or incremental refund
+    # total (just the transaction's own current status), so this path can
+    # only take the whole commission back in one shot - same as the old
+    # all-or-nothing reverse_commission - not prorate it like a real
+    # adjustment.created event can.
+    _capture_alerts(monkeypatch)
+    affiliate = await create_affiliate(pool, "STATUS10", "dsc_status_wh", "Stacy")
+    await upsert_installation(pool, 1954, "acme")
+    await record_referral(pool, 1954, affiliate["id"])
+    await record_commission(
+        pool, affiliate["id"], 1954, "txn_status_refund", Decimal("2.40"),
+        datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+    payload = {
+        "event_id": "evt_txn_updated_commission_refund",
+        "event_type": "transaction.updated",
+        "data": {"id": "txn_status_refund", "status": "refunded"},
+    }
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("0.00")
+
+    # Redelivery of the same status change must not be a second reversal
+    # (there's nothing left to reverse, but this also proves the synthetic
+    # txn-status adjustment key is actually idempotent).
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("0.00")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["refund", "chargeback"])
 async def test_refund_or_chargeback_of_a_credited_topup_fires_an_ops_alert(pool, monkeypatch, action):
     # Refunds are Paddle's decision (we never issue them), but a refunded
