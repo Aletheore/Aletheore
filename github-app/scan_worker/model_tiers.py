@@ -127,6 +127,11 @@ def _true_up_openai_free_tier_reservation(
         redis_conn.incrby(key if key is not None else _openai_free_tier_token_key(), delta)
 
 LUNA_MODEL = "gpt-5.6-luna"
+# Docs descriptions. Measured 10/2 on 205 symbols across five languages, scored
+# blind against the source by two judges from different vendors: gpt-6-luna had
+# the fewest unsupported claims (7.1% vs 9.3% for gpt-5.6-luna on one judge,
+# 0.7% vs 2.5% on the other), equal usefulness, and costs about half as much.
+DOCS_MODEL = "gpt-6-luna"
 PRO_MODEL = "deepseek-v4-pro"
 VERIFICATION_MODEL = "deepseek-v4-flash"
 
@@ -170,6 +175,12 @@ def _openai_available() -> bool:
     return has_api_key("OPENAI_API_KEY", "OpenAI")
 
 
+def resolve_docs_model(fallback_model: str) -> str:
+    """The model writing_adapter_for_docs will actually use: what cost
+    accounting and cache labels must be written against."""
+    return DOCS_MODEL if _openai_available() else fallback_model
+
+
 def resolve_model(fallback_model: str) -> str:
     """The model name writing_adapter_for(fallback_model, ...) will
     actually construct right now - used for cost accounting and cache
@@ -187,8 +198,12 @@ def writing_adapter_for(
     allow_partial_report: bool = False,
     _prefer_luna: bool = True,
     json_output: bool = False,
+    openai_model: str = LUNA_MODEL,
 ) -> OpenAICompatibleAdapter:
-    """json_output: the caller's completions are parsed as JSON (AIRview and
+    """openai_model: which OpenAI model to use when OpenAI is configured. Only
+    the Docs builders override it (DOCS_MODEL); every other surface keeps LUNA_MODEL.
+
+    json_output: the caller's completions are parsed as JSON (AIRview and
     Docs writing). Applied to the OpenAI model only, where long responses
     come back malformed often enough to drop whole batches; the DeepSeek
     path is left exactly as it was."""
@@ -197,7 +212,7 @@ def writing_adapter_for(
             name="OpenAI",
             base_url="https://api.openai.com/v1",
             api_key_env_var="OPENAI_API_KEY",
-            model=LUNA_MODEL,
+            model=openai_model,
             extra_body=_reasoning_body(NO_THINKING_OPENAI),
             on_usage=on_usage,
             before_llm_call=before_llm_call,
@@ -437,6 +452,25 @@ def writing_adapter_for_managed_audit(
         on_call_failed=on_call_failed,
         allow_partial_report=allow_partial_report,
         _prefer_luna=False,
+    )
+
+
+def writing_adapter_for_docs(
+    fallback_model: str,
+    on_usage: Callable[[int, int, int], None] | None = None,
+    before_llm_call: Callable[[], bool] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
+) -> OpenAICompatibleAdapter:
+    """Docs descriptions: DOCS_MODEL when OpenAI is configured, the given
+    DeepSeek model otherwise. Always asks for JSON (Docs parses every response
+    as JSON), which only applies to the OpenAI model."""
+    return writing_adapter_for(
+        fallback_model,
+        on_usage=on_usage,
+        before_llm_call=before_llm_call,
+        on_call_failed=on_call_failed,
+        json_output=True,
+        openai_model=DOCS_MODEL,
     )
 
 

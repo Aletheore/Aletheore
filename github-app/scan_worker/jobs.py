@@ -178,6 +178,8 @@ from scan_worker.model_tiers import (
     VERIFICATION_MODEL,
     flash_review_model_used,
     model_for_plan,
+    resolve_docs_model,
+    writing_adapter_for_docs,
     resolve_model,
     writing_adapter_for,
     writing_adapter_for_airview,
@@ -6237,7 +6239,7 @@ def _live_docs_full_build_writing_adapter(
     # - it only fires on a real failure, and closes the exact gap that
     # existed before it: a module's LLM call failing after the per-module
     # reservation left that $0.10-$1.00 unreleased with zero ledger trace.
-    return writing_adapter_for_plan(plan, on_usage=on_usage, on_call_failed=on_call_failed, json_output=True)
+    return writing_adapter_for_docs(PRO_MODEL, on_usage=on_usage, on_call_failed=on_call_failed)
 
 
 def _live_docs_update_writing_adapter(
@@ -6246,9 +6248,7 @@ def _live_docs_update_writing_adapter(
 ) -> OpenAICompatibleAdapter:
     # See _live_docs_full_build_writing_adapter's comment on why
     # before_llm_call is deliberately not wired here.
-    return writing_adapter_for(
-        live_docs.FLASH_MODEL, on_usage=on_usage, on_call_failed=on_call_failed, json_output=True
-    )
+    return writing_adapter_for_docs(live_docs.FLASH_MODEL, on_usage=on_usage, on_call_failed=on_call_failed)
 
 
 def _github_client_and_token(installation_id: int) -> tuple[httpx.Client, str] | None:
@@ -6573,7 +6573,7 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
         )
         return
 
-    full_build_model = model_for_plan(plan)
+    full_build_model = resolve_docs_model(PRO_MODEL)
     spend_budget = _IncrementalSpendBudget(
         dsn, installation_id, full_build_model,
         next_call_reserve_usd=DOCS_FULL_BUILD_LLM_RESERVE_USD, feature="docs_full_build",
@@ -6729,7 +6729,7 @@ def _maybe_update_live_docs(
         )
         return
 
-    update_model = resolve_model(live_docs.FLASH_MODEL)
+    update_model = resolve_docs_model(live_docs.FLASH_MODEL)
     spend_budget = _IncrementalSpendBudget(
         dsn, installation_id, update_model,
         next_call_reserve_usd=DOCS_INCREMENTAL_LLM_RESERVE_USD, feature="docs_incremental",

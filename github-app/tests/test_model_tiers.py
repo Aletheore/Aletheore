@@ -6,6 +6,7 @@ import pytest
 
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from scan_worker.model_tiers import (
+    DOCS_MODEL,
     LUNA_MODEL,
     MANAGED_AUDIT_MODEL,
     OPENAI_FREE_TIER_DAILY_TOKEN_CAP,
@@ -13,12 +14,14 @@ from scan_worker.model_tiers import (
     VERIFICATION_MODEL,
     FreeTierFallbackExhausted,
     model_for_plan,
+    resolve_docs_model,
     resolve_model,
     run_with_free_tier_fallback,
     verification_adapter,
     writing_adapter_chain_for_free_tier,
     writing_adapter_for,
     writing_adapter_for_airview,
+    writing_adapter_for_docs,
     writing_adapter_for_managed_audit,
     writing_adapter_for_plan,
 )
@@ -94,6 +97,34 @@ def test_writing_adapter_for_plan_threads_json_output(monkeypatch):
     assert writing_adapter_for_plan("air")._json_mode is False
 
 
+def test_docs_use_gpt_6_luna_while_other_surfaces_keep_gpt_5_6_luna(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    assert DOCS_MODEL == "gpt-6-luna"
+    docs = writing_adapter_for_docs("some-fallback")
+    assert docs._model == DOCS_MODEL
+    assert docs._json_mode is True
+    assert resolve_docs_model("some-fallback") == DOCS_MODEL
+    # Everything else is untouched.
+    assert writing_adapter_for("some-fallback")._model == LUNA_MODEL
+    assert resolve_model("some-fallback") == LUNA_MODEL
+
+
+def test_docs_fall_back_to_the_given_deepseek_model_without_an_openai_key(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+    adapter = writing_adapter_for_docs("deepseek-v4-flash")
+    assert adapter.name == "DeepSeek"
+    assert adapter._model == "deepseek-v4-flash"
+    assert adapter._json_mode is False
+    assert resolve_docs_model("deepseek-v4-flash") == "deepseek-v4-flash"
+
+
+def test_the_docs_model_is_priced():
+    # Cost accounting raises KeyError for a model with no rate entry.
+    from app_server.llm_cost import cost_for_usage
+
+    assert cost_for_usage(DOCS_MODEL, 1_000_000, 1_000_000) == pytest.approx(0.60)
+
+
 def test_docs_builders_ask_the_openai_model_for_json(monkeypatch):
     # Docs parses every response as JSON, and on gpt-5.6-luna a malformed long
     # response drops the whole batch.
@@ -102,6 +133,8 @@ def test_docs_builders_ask_the_openai_model_for_json(monkeypatch):
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
     assert _live_docs_full_build_writing_adapter("air")._json_mode is True
     assert _live_docs_update_writing_adapter()._json_mode is True
+    assert _live_docs_full_build_writing_adapter("air")._model == DOCS_MODEL
+    assert _live_docs_update_writing_adapter()._model == DOCS_MODEL
 
 
 def test_every_prompt_sent_in_json_mode_mentions_json():
