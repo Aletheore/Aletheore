@@ -126,6 +126,81 @@ async def test_reversed_commission_is_preserved_but_excluded_from_totals(pool):
 
 
 @pytest.mark.asyncio
+async def test_migration_071_backfills_reversed_usd_for_a_legacy_reversed_row(pool):
+    # Real gap found by Flash Review on this same PR: a row already
+    # reversed=true under the old all-or-nothing reverse_commission has
+    # reversed_usd=0 from the column's own DEFAULT, not amount_usd. Left
+    # unbackfilled, a later adjustment on the same transaction would compute
+    # remaining = amount_usd - 0 and reverse the whole amount a second time.
+    # This test re-runs migration 071's own backfill statement (verbatim)
+    # against a row manually put into that exact pre-migration shape, since
+    # by the time any test body runs, _apply_migrations has already applied
+    # 071 to an empty table and there is no way to observe a real
+    # historical row to backfill.
+    affiliate = await create_affiliate(pool, "LEGACY10", "dsc_legacy", "Legacy")
+    await upsert_installation(pool, 960, "acme")
+    await record_referral(pool, 960, affiliate["id"])
+    await record_commission(
+        pool, affiliate["id"], 960, "txn_legacy", Decimal("4.50"), datetime.now(timezone.utc)
+    )
+    await pool.execute(
+        "UPDATE affiliate_commissions SET reversed = true WHERE paddle_transaction_id = 'txn_legacy'"
+    )
+    assert await pool.fetchval(
+        "SELECT reversed_usd FROM affiliate_commissions WHERE paddle_transaction_id = 'txn_legacy'"
+    ) == Decimal("0.00")
+
+    await pool.execute("UPDATE affiliate_commissions SET reversed_usd = amount_usd WHERE reversed")
+
+    assert await pool.fetchval(
+        "SELECT reversed_usd FROM affiliate_commissions WHERE paddle_transaction_id = 'txn_legacy'"
+    ) == Decimal("4.50")
+    # With the backfill applied, a later adjustment (e.g. a second,
+    # unrelated chargeback event on the same transaction) correctly finds
+    # nothing left to reverse instead of taking the full amount again.
+    result = await reverse_commission_partial(pool, "adj_after_legacy", "txn_legacy", Decimal("999999"))
+    assert result == {"status": "nothing_remaining", "reversed_usd": Decimal("0"), "remaining_usd": Decimal("0.00")}
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("0")
+
+
+@pytest.mark.asyncio
+async def test_a_redundant_adjustment_after_full_reversal_reports_nothing_remaining(pool):
+    affiliate = await create_affiliate(pool, "REDUN10", "dsc_redun", "Redundant")
+    await upsert_installation(pool, 961, "acme")
+    await record_referral(pool, 961, affiliate["id"])
+    await record_commission(
+        pool, affiliate["id"], 961, "txn_redundant", Decimal("3.00"), datetime.now(timezone.utc)
+    )
+    first = await reverse_commission_partial(pool, "adj_redundant_1", "txn_redundant", Decimal("999999"))
+    assert first["status"] == "reversed"
+
+    second = await reverse_commission_partial(pool, "adj_redundant_2", "txn_redundant", Decimal("999999"))
+
+    assert second == {"status": "nothing_remaining", "reversed_usd": Decimal("0"), "remaining_usd": Decimal("0")}
+
+
+@pytest.mark.asyncio
+async def test_a_zero_charged_total_minor_does_not_crash_and_reverses_in_full(pool):
+    # A legitimately recorded charged_total_minor of exactly 0 (a
+    # 100%-discounted checkout) must not be mistaken for "no total was ever
+    # recorded" by truthiness, but it also can't be prorated against (any
+    # share of 0 is undefined) - falls back to the same full-reversal path
+    # as a pre-migration NULL row, not a ZeroDivisionError.
+    affiliate = await create_affiliate(pool, "ZERO10", "dsc_zero", "Zero")
+    await upsert_installation(pool, 962, "acme")
+    await record_referral(pool, 962, affiliate["id"])
+    await record_commission(
+        pool, affiliate["id"], 962, "txn_zero_total", Decimal("1.00"), datetime.now(timezone.utc),
+        charged_total_minor=Decimal("0"),
+    )
+
+    result = await reverse_commission_partial(pool, "adj_zero", "txn_zero_total", Decimal("500"))
+
+    assert result == {"status": "reversed", "reversed_usd": Decimal("1.00"), "remaining_usd": Decimal("0")}
+
+
+@pytest.mark.asyncio
 async def test_a_partial_refund_prorates_the_commission_instead_of_zeroing_it(pool):
     # $29.99 charged, $29.99 * 0.15 = $4.50 commissioned, a $2.00 partial
     # refund (a billing-correction credit note) should take back ~15% of

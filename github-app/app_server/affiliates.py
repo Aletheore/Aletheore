@@ -84,7 +84,10 @@ async def record_commission(
 
 
 async def reverse_commission_partial(
-    pool: asyncpg.Pool, adjustment_id: str, paddle_transaction_id: str, refunded_total_minor: Decimal
+    pool: asyncpg.Pool,
+    adjustment_id: str | None,
+    paddle_transaction_id: str,
+    refunded_total_minor: Decimal | None,
 ) -> dict:
     """Reduces a commission by the same share of it that a refund or
     chargeback adjustment returned, instead of zeroing the whole thing for a
@@ -96,9 +99,23 @@ async def reverse_commission_partial(
     nothing to prorate against, so it keeps the old behavior: the first
     adjustment reverses it in full.
 
-    Returns {"status": "reversed", reversed_usd, remaining_usd}, "duplicate"
-    (this adjustment_id was already applied), or "not_found" (no commission
-    for this transaction, e.g. it wasn't a referred installation)."""
+    adjustment_id/refunded_total_minor may be None (an unexpectedly-shaped
+    Paddle payload missing an id or a usable totals.total) - the row lookup
+    happens before either is required, so a transaction with no commission
+    at all (not a referred installation, e.g. most transactions) still
+    returns "not_found" rather than a status implying a commission was
+    affected. This lets the caller alert only when a real commission
+    couldn't be resolved, not on every malformed-looking payload.
+
+    Returns {"status": "reversed", reversed_usd, remaining_usd};
+    "nothing_remaining" (same shape as "reversed", reversed_usd=0, but the
+    commission was already fully reversed - e.g. a legacy row backfilled by
+    migration 071, or a later adjustment arriving after an earlier one
+    already zeroed it); "duplicate" (this adjustment_id was already
+    applied); "missing_adjustment_id" or "unknown_amount" (a real
+    commission exists for this transaction, but the payload didn't carry
+    what's needed to apply or dedupe the reversal); or "not_found" (no
+    commission for this transaction at all)."""
     async with pool.acquire() as conn:
         async with conn.transaction():
             row = await conn.fetchrow(
@@ -108,6 +125,10 @@ async def reverse_commission_partial(
             )
             if row is None:
                 return {"status": "not_found"}
+            if adjustment_id is None:
+                return {"status": "missing_adjustment_id"}
+            if refunded_total_minor is None:
+                return {"status": "unknown_amount"}
             claimed = await conn.fetchrow(
                 "INSERT INTO affiliate_commission_adjustments (adjustment_id, transaction_id) "
                 "VALUES ($1, $2) ON CONFLICT (adjustment_id) DO NOTHING RETURNING adjustment_id",
@@ -118,8 +139,13 @@ async def reverse_commission_partial(
 
             remaining = row["amount_usd"] - row["reversed_usd"]
             if remaining <= 0:
-                reverse = Decimal(0)
-            elif row["charged_total_minor"]:
+                return {"status": "nothing_remaining", "reversed_usd": Decimal(0), "remaining_usd": remaining}
+            # `is not None` rather than truthiness: a legitimately recorded
+            # charged_total_minor of exactly 0 (a 100%-discounted checkout)
+            # must not be treated the same as a legacy NULL row - both would
+            # otherwise take the same "can't prorate, take it all" path, but
+            # only NULL actually means "no total was ever recorded".
+            if row["charged_total_minor"] is not None and row["charged_total_minor"] > 0:
                 share = min(Decimal(1), refunded_total_minor / row["charged_total_minor"])
                 reverse = (
                     remaining
@@ -127,9 +153,10 @@ async def reverse_commission_partial(
                     else min(remaining, (row["amount_usd"] * share).quantize(Decimal("0.01"), ROUND_HALF_UP))
                 )
             else:
-                # No original-currency total recorded (pre-migration row) -
-                # can't prorate, so the first adjustment takes it all, same
-                # as the old all-or-nothing reverse_commission.
+                # No original-currency total recorded (pre-migration row, or
+                # a recorded zero) - can't prorate, so the first adjustment
+                # takes it all, same as the old all-or-nothing
+                # reverse_commission.
                 reverse = remaining
 
             new_reversed_usd = row["reversed_usd"] + reverse

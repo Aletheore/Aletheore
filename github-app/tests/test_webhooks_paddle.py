@@ -2419,11 +2419,18 @@ async def test_transaction_completed_regular_purchase_for_referred_installation_
     assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("4.05")
 
 
-def _adjustment_payload(transaction_id: str, action: str = "refund") -> dict:
+def _adjustment_payload(
+    transaction_id: str, action: str = "refund", total: str | None = None, adjustment_id: str | None = "adj_test_1"
+) -> dict:
+    data = {"transaction_id": transaction_id, "action": action, "status": "pending_approval"}
+    if adjustment_id is not None:
+        data["id"] = adjustment_id
+    if total is not None:
+        data["totals"] = {"total": total}
     return {
         "event_id": f"evt_adj_{transaction_id}_{action}",
         "event_type": "adjustment.created",
-        "data": {"id": "adj_test_1", "transaction_id": transaction_id, "action": action, "status": "pending_approval"},
+        "data": data,
     }
 
 
@@ -2446,10 +2453,70 @@ async def test_adjustment_created_reverses_the_commission_for_the_refunded_trans
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
 
-    await handle_paddle_webhook_event(_adjustment_payload("txn_refunded_sub"), pool, "redis://unused")
+    await handle_paddle_webhook_event(
+        _adjustment_payload("txn_refunded_sub", total="100"), pool, "redis://unused"
+    )
 
     totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
     assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("0.00")
+
+
+@pytest.mark.asyncio
+async def test_adjustment_created_with_no_usable_total_alerts_instead_of_reversing_in_full(pool, monkeypatch):
+    # Real gap found by Flash Review on this same PR: falling back to a full
+    # reversal when totals.total is missing/non-finite on a REAL adjustment
+    # event could unfairly cost the affiliate commission on what may have
+    # been a small partial refund - alert for manual follow-up instead, same
+    # as _claw_back_refunded_topup does for the identical gap on the credit
+    # side.
+    alerts = _capture_alerts(monkeypatch)
+    affiliate = await create_affiliate(pool, "NOTOTAL10", "dsc_no_total", "Nora")
+    await upsert_installation(pool, 1955, "acme")
+    await record_referral(pool, 1955, affiliate["id"])
+    await record_commission(
+        pool, affiliate["id"], 1955, "txn_no_total", Decimal("1.20"),
+        datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+
+    await handle_paddle_webhook_event(_adjustment_payload("txn_no_total"), pool, "redis://unused")
+
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("1.20")
+    assert any("unknown_amount" in str(a) for a in alerts)
+
+
+@pytest.mark.asyncio
+async def test_adjustment_created_with_no_id_alerts_instead_of_silently_skipping(pool, monkeypatch):
+    alerts = _capture_alerts(monkeypatch)
+    affiliate = await create_affiliate(pool, "NOID10", "dsc_no_id", "Nadia")
+    await upsert_installation(pool, 1956, "acme")
+    await record_referral(pool, 1956, affiliate["id"])
+    await record_commission(
+        pool, affiliate["id"], 1956, "txn_no_id", Decimal("1.20"),
+        datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+
+    await handle_paddle_webhook_event(
+        _adjustment_payload("txn_no_id", total="100", adjustment_id=None), pool, "redis://unused"
+    )
+
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("1.20")
+    assert any("missing_adjustment_id" in str(a) for a in alerts)
+
+
+@pytest.mark.asyncio
+async def test_adjustment_created_with_no_usable_total_does_not_alert_for_an_uncommissioned_transaction(
+    pool, monkeypatch
+):
+    # The vast majority of transactions aren't referred installations at
+    # all - a missing totals.total on one of those must not page anyone,
+    # since there's no commission it could have affected.
+    alerts = _capture_alerts(monkeypatch)
+
+    await handle_paddle_webhook_event(_adjustment_payload("txn_not_commissioned"), pool, "redis://unused")
+
+    assert alerts == []
 
 
 @pytest.mark.asyncio
