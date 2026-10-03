@@ -39,13 +39,12 @@ def run(repo: Path, *args: str):
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
 
 
-def test_evidence_version_is_0_7_0():
-    # Bumped 0.6.0 -> 0.7.0 alongside AIR_JSON_SCHEMA's new
-    # git.recently_updated field - see docs/AIR-SCHEMA.md's migration
-    # rules (any schema change requires a MINOR bump). This test asserts
-    # the exact pin deliberately, so it must move in lockstep with the next
-    # schema change too.
-    assert EVIDENCE_VERSION == "0.7.0"
+def test_evidence_version_is_0_8_0():
+    # Bumped 0.7.0 -> 0.8.0 alongside AIR_JSON_SCHEMA's new repository.error_handling
+    # section - see docs/AIR-SCHEMA.md's migration rules (any schema change requires a
+    # MINOR bump). This test asserts the exact pin deliberately, so it must move in
+    # lockstep with the next schema change too.
+    assert EVIDENCE_VERSION == "0.8.0"
 
 
 def make_repo(tmp_path: Path) -> Path:

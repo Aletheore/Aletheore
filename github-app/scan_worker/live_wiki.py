@@ -258,6 +258,18 @@ what's given. No markdown fences."""
 )
 
 
+ERROR_HANDLING_WRITING_SYSTEM_PROMPT = (
+    """You write one short paragraph for a codebase wiki's landing page about how the system deals
+with errors. You are given a JSON object: `error_types` (the most used error types, each with
+how often it is raised and caught, where it is defined and example raise locations) and `handlers`
+(sample catch sites with what they catch). Respond with ONLY a JSON object:
+{"description": "2-3 sentences on how the system defines, raises and catches errors, naming the
+most used error types"}. Cite file:line values only from `defined_at`, `examples` and `at` in the
+input, exactly as given. Do not invent types, counts or locations. No markdown fences."""
+    + _INJECTION_GUARD
+)
+
+
 # Bump whenever any prompt in this module changes. It rides in the evidence
 # packet, so a bump invalidates cached pages written by the previous prompt
 # instead of serving them forever.
@@ -387,6 +399,38 @@ def _reduce_source_text(path: str, source_text: str) -> str:
             if re.fullmatch(r"[-=]{3,}", lines[i].strip()) and lines[i - 1].strip():
                 return "\n".join(lines[: i - 1]).strip()
     return source_text
+
+
+MAX_ERROR_EXAMPLES = 2
+MAX_REPO_ERROR_TYPES = 8
+MAX_REPO_ERROR_HANDLERS = 4
+
+
+def _repo_error_digest(evidence: dict) -> dict | None:
+    """Repo-wide counterpart of _error_digest, for the overview: the most used error types
+    with where each is defined and a couple of real raise sites, plus a few handlers.
+    None when the scan has no error-handling section or it is empty."""
+    section = evidence.get("repository", {}).get("error_handling")
+    if not section or not section.get("checked"):
+        return None
+    definitions = {t["name"]: f"{t['file']}:{t['line']}" for t in section.get("error_types", [])}
+    examples: dict[str, list[str]] = {}
+    for site in section.get("raise_sites", []):
+        bucket = examples.setdefault(site["error_type"].rsplit("::", 1)[-1].rsplit(".", 1)[-1], [])
+        if len(bucket) < MAX_ERROR_EXAMPLES:
+            bucket.append(f"{site['file']}:{site['line']}")
+    types = []
+    for entry in section.get("by_error_type", [])[:MAX_REPO_ERROR_TYPES]:
+        item = {"name": entry["name"], "raised": entry["raised"], "caught": entry["caught"],
+                "examples": examples.get(entry["name"], [])}
+        if entry["name"] in definitions:
+            item["defined_at"] = definitions[entry["name"]]
+        types.append(item)
+    handlers = [{"catches": h["catches"], "at": f"{h['file']}:{h['line']}"}
+                for h in section.get("handlers", [])][:MAX_REPO_ERROR_HANDLERS]
+    if not (types or handlers):
+        return None
+    return {"error_types": types, "handlers": handlers}
 
 
 def _related_files(evidence: dict, brief: dict) -> list[str]:
@@ -1688,4 +1732,33 @@ def generate_overview(
             )
             description = "Overview description unavailable."
 
+    if description != "Overview description unavailable.":
+        paragraph = _error_handling_paragraph(evidence, writing_adapter, fetch_line_count)
+        if paragraph:
+            description = f"{description}\n\n{paragraph}"
+
     return {"description": description, "diagram_mermaid": diagram}
+
+
+def _error_handling_paragraph(evidence: dict, writing_adapter, fetch_line_count) -> str | None:
+    """A short repo-wide paragraph on how errors are defined, raised and caught, written from
+    the scan's error-handling evidence in a call of its own. Its citations are verified on
+    their own, so a citation that does not resolve drops only this paragraph and never the
+    overview it is appended to. None when there is no evidence or the paragraph fails."""
+    digest = _repo_error_digest(evidence)
+    if digest is None:
+        return None
+    try:
+        raw = writing_adapter.simple_completion(ERROR_HANDLING_WRITING_SYSTEM_PROMPT, json.dumps(digest), cwd=".")
+    except Exception as exc:  # noqa: BLE001 - this paragraph is optional
+        logger.info("AIRview error-handling paragraph skipped: %s", type(exc).__name__)
+        return None
+    parsed = _parse_json_object(raw)
+    text = parsed.get("description") if parsed else None
+    if not isinstance(text, str) or not text.strip():
+        return None
+    result = verify_citations(text, evidence, fetch_line_count=fetch_line_count)
+    if not result["all_verified"]:
+        logger.info("AIRview error-handling paragraph dropped: %d citation(s) unverified", len(result["unverified"]))
+        return None
+    return text.strip()

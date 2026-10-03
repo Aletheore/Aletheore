@@ -1670,3 +1670,96 @@ def test_scaled_budget_admits_more_pages_on_a_large_repository():
     assert len(scaled) > len(pinned)
     # and it stays a prefix: the same ranking, just less truncated
     assert scaled[: len(pinned)] == pinned
+
+
+def _with_error_handling(evidence: dict) -> dict:
+    evidence["repository"]["error_handling"] = {
+        "checked": True,
+        "error_types": [{"name": "AuthError", "file": "auth/login.py", "line": 3, "bases": ["Exception"]}],
+        "raise_sites": [
+            {"file": "auth/login.py", "line": 12, "error_type": "AuthError", "function": "do_login"},
+            {"file": "auth/login.py", "line": 15, "error_type": "AuthError", "function": "do_login"},
+            {"file": "auth/login.py", "line": 18, "error_type": "ValueError", "function": "do_login"},
+            {"file": "elsewhere/other.py", "line": 5, "error_type": "KeyError", "function": "f"},
+        ],
+        "handlers": [{"file": "auth/login.py", "line": 20, "catches": ["AuthError"], "function": "run"}],
+        "by_error_type": [], "truncated": False,
+    }
+    return evidence
+
+
+
+
+
+
+
+
+
+
+def test_repo_error_digest_ranks_types_and_gives_real_locations():
+    from scan_worker.live_wiki import _repo_error_digest
+
+    evidence = _with_error_handling(make_evidence())
+    evidence["repository"]["error_handling"]["by_error_type"] = [
+        {"name": "AuthError", "defined_in": "auth/login.py", "raised": 2, "caught": 1},
+        {"name": "KeyError", "defined_in": "", "raised": 1, "caught": 0},
+    ]
+    digest = _repo_error_digest(evidence)
+
+    top = digest["error_types"][0]
+    assert (top["name"], top["raised"], top["caught"], top["defined_at"]) == ("AuthError", 2, 1, "auth/login.py:3")
+    assert top["examples"] == ["auth/login.py:12", "auth/login.py:15"]
+    assert digest["handlers"] == [{"catches": ["AuthError"], "at": "auth/login.py:20"}]
+    assert _repo_error_digest(make_evidence()) is None
+
+
+def test_overview_makes_no_extra_call_without_error_evidence():
+    from scan_worker.live_wiki import generate_overview
+
+    adapter = _adapter(json.dumps({"description": "A login system."}))
+    result = generate_overview(
+        make_evidence(), [{"subsystem_id": "0", "name": "Auth", "description": "Handles login."}], adapter
+    )
+    assert adapter.simple_completion.call_count == 1
+    assert result["description"] == "A login system."
+
+
+def _overview_adapter(error_text):
+    adapter = MagicMock()
+    adapter.simple_completion.side_effect = [
+        json.dumps({"description": "A login system."}),
+        json.dumps({"description": error_text}),
+    ]
+    return adapter
+
+
+def test_overview_appends_a_separately_verified_error_paragraph():
+    from scan_worker.live_wiki import generate_overview
+
+    evidence = _with_error_handling(make_evidence())
+    evidence["repository"]["error_handling"]["by_error_type"] = [
+        {"name": "AuthError", "defined_in": "auth/login.py", "raised": 2, "caught": 1},
+    ]
+    adapter = _overview_adapter("AuthError is raised twice (auth/login.py:12).")
+    result = generate_overview(
+        evidence, [{"subsystem_id": "0", "name": "Auth", "description": "Handles login."}], adapter,
+        fetch_line_count=lambda path: 100,
+    )
+    assert result["description"] == "A login system.\n\nAuthError is raised twice (auth/login.py:12)."
+    second_prompt = json.loads(adapter.simple_completion.call_args_list[1][0][1])
+    assert second_prompt["error_types"][0]["name"] == "AuthError"
+
+
+def test_a_bad_error_paragraph_citation_drops_only_the_paragraph_not_the_overview():
+    from scan_worker.live_wiki import generate_overview
+
+    evidence = _with_error_handling(make_evidence())
+    evidence["repository"]["error_handling"]["by_error_type"] = [
+        {"name": "AuthError", "defined_in": "auth/login.py", "raised": 2, "caught": 1},
+    ]
+    adapter = _overview_adapter("AuthError is raised at auth/login.py:9999.")
+    result = generate_overview(
+        evidence, [{"subsystem_id": "0", "name": "Auth", "description": "Handles login."}], adapter,
+        fetch_line_count=lambda path: 100,
+    )
+    assert result["description"] == "A login system."

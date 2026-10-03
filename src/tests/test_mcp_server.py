@@ -248,6 +248,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_database",
         "aletheore_infrastructure",
         "aletheore_environment_variables",
+        "aletheore_error_handling",
         "aletheore_changes",
         "aletheore_neighborhood",
         "aletheore_get_blast_radius",
@@ -268,7 +269,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_find_evidence_for_dependency",
     }
     assert expected.issubset(names)
-    assert len(names) == 35
+    assert len(names) == 36
     assert "aletheore_answer" not in names
 
 
@@ -316,6 +317,7 @@ async def test_dynamic_query_tools_have_distinct_non_generic_descriptions(tmp_pa
         "aletheore_database",
         "aletheore_infrastructure",
         "aletheore_environment_variables",
+        "aletheore_error_handling",
     ]
     descriptions = [by_name[name].description for name in dynamic_tool_names]
 

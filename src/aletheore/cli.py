@@ -146,7 +146,7 @@ QUERY_KIND_GROUPS: dict[str, list[str]] = {
         "ast-pattern",
     ],
     "Security": ["secrets", "vulnerabilities", "licenses", "static-analysis"],
-    "Runtime": ["endpoints", "database", "infrastructure", "environment-variables"],
+    "Runtime": ["endpoints", "database", "infrastructure", "environment-variables", "error-handling"],
     "History": ["branch", "ownership", "hotspots", "changes"],
     "Evidence": [
         "evidence-for-symbol",
