@@ -14,7 +14,9 @@ from aletheore.adapters.base import AdapterInvocationError, AgentAdapter
 from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, get_api_key, has_api_key
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 
-MAX_TOOL_ROUNDS = 20
+# gpt-6-luna issues one tool call per round, so a full audit takes 14+ rounds and
+# once hit the old limit of 20 mid-report.
+MAX_TOOL_ROUNDS = 40
 REQUEST_TIMEOUT_SECONDS = 120
 MAX_CONSECUTIVE_NO_TOOL_CALLS = 2
 

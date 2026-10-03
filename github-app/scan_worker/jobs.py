@@ -172,7 +172,7 @@ from app_server.email_queue import enqueue_transactional_email
 from app_server.email_client import send_transactional_email
 from scan_worker.managed_audit import run_managed_audit
 from scan_worker.model_tiers import (
-    MANAGED_AUDIT_MODEL,
+    resolve_managed_audit_model,
     PRO_MODEL,
     CROSS_FILE_CHECK_MODEL,
     VERIFICATION_MODEL,
@@ -2056,7 +2056,7 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
             spend_budget = _IncrementalSpendBudget(
                 settings.database_url,
                 installation_id,
-                MANAGED_AUDIT_MODEL,
+                resolve_managed_audit_model(),
                 next_call_reserve_usd=MANAGED_AUDIT_LLM_RESERVE_USD,
                 feature="managed_audit",
             )
@@ -2158,7 +2158,7 @@ def run_managed_audit_api_job(
         spend_budget = _IncrementalSpendBudget(
             settings.database_url,
             installation_id,
-            MANAGED_AUDIT_MODEL,
+            resolve_managed_audit_model(),
             next_call_reserve_usd=MANAGED_AUDIT_LLM_RESERVE_USD,
             feature="managed_audit",
         )

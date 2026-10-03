@@ -9,6 +9,7 @@ from scan_worker.model_tiers import (
     DOCS_MODEL,
     LUNA_MODEL,
     MANAGED_AUDIT_MODEL,
+    resolve_managed_audit_model,
     OPENAI_FREE_TIER_DAILY_TOKEN_CAP,
     PRO_MODEL,
     VERIFICATION_MODEL,
@@ -214,25 +215,21 @@ def test_writing_adapter_for_airview_threads_on_usage_and_before_llm_call(monkey
     assert calls_allowed == [True]
 
 
-def test_writing_adapter_for_managed_audit_never_uses_luna_even_when_openai_is_configured(monkeypatch):
-    # Measured directly against a real repo, three full audit runs: Luna
-    # cost $0.15 (6 rounds) and missed a real circular import;
-    # deepseek-v4-pro cost $1.15 (14 rounds) and caught it; deepseek-v4-flash
-    # cost $0.40 (16 rounds) and also caught it - same accuracy as Pro for a
-    # third of the cost. Unlike writing_adapter_for_plan, this must not
-    # switch to Luna just because OPENAI_API_KEY is configured.
+def test_writing_adapter_for_managed_audit_uses_gpt_6_luna_when_openai_is_configured(monkeypatch):
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
     adapter = writing_adapter_for_managed_audit()
-    assert adapter.name == "DeepSeek"
-    assert adapter._model == MANAGED_AUDIT_MODEL == "deepseek-v4-flash"
-    assert adapter._base_url == "https://api.deepseek.com"
-    assert adapter._supports_tool_choice is False
+    assert adapter.name == "OpenAI"
+    assert adapter._model == MANAGED_AUDIT_MODEL == "gpt-6-luna"
+    assert resolve_managed_audit_model() == "gpt-6-luna"
+    # A tool loop ending in a free-text report: JSON mode must stay off.
+    assert adapter._json_mode is False
 
 
 def test_writing_adapter_for_managed_audit_still_uses_deepseek_when_openai_is_not_configured(monkeypatch):
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
     adapter = writing_adapter_for_managed_audit()
     assert adapter.name == "DeepSeek"
+    assert adapter._model == resolve_managed_audit_model() == "deepseek-v4-flash"
     assert adapter._model == "deepseek-v4-flash"
 
 

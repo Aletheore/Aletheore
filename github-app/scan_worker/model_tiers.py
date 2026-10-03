@@ -414,10 +414,21 @@ def writing_adapter_for_airview(
     )
 
 
-# Not resolve_model(PRO_MODEL) or any other dynamic choice - always exactly
-# this one model, unconditionally. See writing_adapter_for_managed_audit's
-# docstring for the real numbers behind why.
-MANAGED_AUDIT_MODEL = "deepseek-v4-flash"
+# Managed audits run on gpt-6-luna, with DeepSeek Flash only as the fallback
+# when OpenAI is not configured. History: gpt-5.6-luna missed a real circular
+# import and DeepSeek Flash caught it ($0.40, 16 rounds), which is why audits
+# stayed on DeepSeek. Two things changed: gpt-6-luna replaced gpt-5.6-luna, and
+# bounded evidence reads (evidence_view.py) cut the input an audit re-sends on
+# every round about 5x, so the round-trip cost that favoured a cheap per-token
+# rate no longer dominates. Never DeepSeek Pro: 3x the rate bought nothing.
+MANAGED_AUDIT_MODEL = "gpt-6-luna"
+MANAGED_AUDIT_FALLBACK_MODEL = "deepseek-v4-flash"
+
+
+def resolve_managed_audit_model() -> str:
+    """The model writing_adapter_for_managed_audit will actually use: what cost
+    accounting must be written against."""
+    return MANAGED_AUDIT_MODEL if _openai_available() else MANAGED_AUDIT_FALLBACK_MODEL
 
 
 def writing_adapter_for_managed_audit(
@@ -426,35 +437,16 @@ def writing_adapter_for_managed_audit(
     on_call_failed: Callable[[], None] | None = None,
     allow_partial_report: bool = False,
 ) -> OpenAICompatibleAdapter:
-    """Always DeepSeek Flash for managed_audit specifically - never Luna
-    (writing_adapter_for_plan's default) and never DeepSeek Pro either.
-
-    Measured directly, three real full audit runs against this repository,
-    same evidence, same manual: Luna cost $0.15 (6 rounds) and missed a
-    real circular import; deepseek-v4-pro cost $1.15 (14 rounds) and caught
-    it; deepseek-v4-flash cost $0.40 (16 rounds) and also caught it. Pro's
-    3x-higher per-token rate over flash bought nothing here - pro actually
-    used fewer total tokens than flash, so the extra cost was pure list-
-    price premium, not more work done, for a shorter report and the
-    identical finding. Flash is the only one of the three that is both
-    accurate (matches Pro's finding) and cheap (a fraction of Pro's cost)
-    for this specific task.
-
-    This doesn't generalize from AIRview's own Luna-vs-DeepSeek finding
-    above (or the other direction, Luna-preferred by default elsewhere):
-    managed_audit is multi-round agentic tool use, not a single completion,
-    and its cost is ~96% input-token-driven because every round re-sends
-    the entire accumulated conversation - round-trip efficiency dominates
-    over any model's per-token list price, which is exactly what made Pro
-    the expensive choice here despite its higher-tier positioning.
-    """
+    """gpt-6-luna for managed_audit (see MANAGED_AUDIT_MODEL); DeepSeek Flash
+    when OpenAI is not configured. Not JSON mode: the audit is a tool loop that
+    ends in a free-text report."""
     return writing_adapter_for(
-        MANAGED_AUDIT_MODEL,
+        MANAGED_AUDIT_FALLBACK_MODEL,
         on_usage=on_usage,
         before_llm_call=before_llm_call,
         on_call_failed=on_call_failed,
         allow_partial_report=allow_partial_report,
-        _prefer_luna=False,
+        openai_model=MANAGED_AUDIT_MODEL,
     )
 
 

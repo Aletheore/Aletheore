@@ -42,11 +42,9 @@ def test_run_managed_audit_always_uses_deepseek_flash_without_openai_key(tmp_pat
     assert adapter._supports_tool_choice is False
 
 
-def test_run_managed_audit_still_uses_deepseek_flash_when_openai_key_configured(tmp_path, monkeypatch):
-    # The opposite condition from the test above - an available OpenAI key
-    # must NOT switch managed_audit to Luna. writing_adapter_for's usual
-    # Luna-preferred default is deliberately bypassed here via
-    # _prefer_luna=False, unlike every plan-based writing surface.
+def test_run_managed_audit_uses_gpt_6_luna_when_openai_key_configured(tmp_path, monkeypatch):
+    # With an OpenAI key, managed_audit runs on gpt-6-luna (DeepSeek Flash is
+    # only the fallback, see the test above).
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
     repo_path = tmp_path / "repo"
     (repo_path / ".aletheore").mkdir(parents=True)
@@ -65,8 +63,8 @@ def test_run_managed_audit_still_uses_deepseek_flash_when_openai_key_configured(
     assert "Real Report" in run_managed_audit(repo_path)
 
     adapter = captured_adapters[0]
-    assert adapter.name == "DeepSeek"
-    assert adapter._model == "deepseek-v4-flash"
+    assert adapter.name == "OpenAI"
+    assert adapter._model == "gpt-6-luna"
 
 
 def test_run_managed_audit_threads_on_usage_to_the_adapter(tmp_path, monkeypatch):
