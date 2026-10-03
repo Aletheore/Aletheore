@@ -44,11 +44,21 @@ _NOISY_RULES = frozenset({"B101"})
 # installed regex (a vendored third-party tool, not this codebase) - see
 # _sql_injection_is_plausible below. Only test_id "B608" goes through this
 # extra check; every other Bandit rule is trusted as before.
+#
+# Bound raised from 300 to 1,500 (2026-10-03, backward-audit finding): a
+# real INSERT/UPDATE against a wide table (dozens of columns) can legitimately
+# put a couple hundred characters between its keyword pair, which 300 was
+# cutting off as a false negative - see _sql_injection_is_plausible's
+# "assign the query, execute it later" gap below for the matching failure
+# mode. 1,500 stays far short of the real false positive this bound exists
+# to catch (~5,700 unrelated characters, see above) - test_bandit_scanner.py's
+# own _WIKI_LIKE_FALSE_POSITIVE_SOURCE fixture (2,750 characters of filler)
+# is a closer, still-safe tripwire for that regression.
 _SQL_KEYWORD_PAIR_RE = re.compile(
-    r"(select\s.{0,300}?from\s|"
+    r"(select\s.{0,1500}?from\s|"
     r"delete\s+from\s|"
-    r"insert\s+into\s.{0,300}?values[\s(]|"
-    r"update\s.{0,300}?set\s)",
+    r"insert\s+into\s.{0,1500}?values[\s(]|"
+    r"update\s.{0,1500}?set\s)",
     re.IGNORECASE | re.DOTALL,
 )
 
