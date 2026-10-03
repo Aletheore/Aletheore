@@ -19,7 +19,8 @@ from aletheore.adapters.openai_compatible import (
     _read_manual_text,
 )
 from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, get_api_key, has_api_key
-from aletheore.toon_encoding import ToonEncodingError, to_toon
+from aletheore.evidence_view import read_bounded
+from aletheore.toon_encoding import ToonEncodingError
 
 MAX_TOKENS = 8192
 
@@ -40,10 +41,13 @@ ANTHROPIC_TOOLS = [
         "name": "read_evidence_section",
         "description": (
             "Read a specific section of the repository evidence by dot-path. "
-            "Array items use zero-based brackets. Returns evidence wrapped in "
+            "Array items use zero-based brackets; a slice of a list uses "
+            "[start:end], such as repository.modules[0:25]. Returns evidence wrapped in "
             "an <evidence> tag, or an error message if the path does not exist. "
-            "Returns the entire matched section with no size limit - prefer a "
-            "specific, narrow path over a broad one like a large top-level array."
+            "A section too large to return whole comes back as an outline (each large "
+            "child named with its size and the path to read) or as the first page of a "
+            "list with the path for the next page. Prefer a specific, narrow path, and "
+            "only page through a large list when you need its items."
         ),
         "input_schema": {
             "type": "object",
@@ -266,11 +270,10 @@ class AnthropicAdapter(AgentAdapter):
 
     def _read_evidence_tool(self, evidence, args: dict) -> str:
         path = args.get("path", "")
-        value = _get_by_dot_path(evidence, path)
-        if value is None:
-            return f"no such path: {path}"
         try:
-            encoded = to_toon(value)
+            encoded = read_bounded(evidence, path, _get_by_dot_path)
         except ToonEncodingError as exc:
             return f"could not encode section {path}: {exc}"
+        if encoded is None:
+            return f"no such path: {path}"
         return f'<evidence path="{path}">\n{encoded}\n</evidence>'
