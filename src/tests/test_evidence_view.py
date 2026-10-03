@@ -77,7 +77,7 @@ def test_paging_through_a_large_list_loses_no_item():
 def test_a_slice_that_fits_says_where_to_continue_and_the_last_slice_is_plain():
     evidence = _evidence()
     first = read(evidence, "repository.modules[0:3]")
-    assert "read 'repository.modules[3:6]' for the next page" in first
+    assert re.search(r"read 'repository\.modules\[3:\d+\]' for the next page", first)
     assert toon.decode(first)["items"] == evidence["repository"]["modules"][0:3]
     tail = read(evidence, "repository.modules[3990:]")
     assert toon.decode(tail)[-1]["path"] == "pkg/mod_3999.py"
@@ -99,3 +99,25 @@ def test_the_root_is_an_outline_too():
     out = read(_evidence(), "")
     assert "_bounded_view" in out
     assert len(out) < MAX_SECTION_CHARS * 1.1
+
+
+def test_a_single_item_over_the_budget_is_bounded_not_returned_whole():
+    big = {"path": "big.py", "symbols": [{"name": f"s{i}", "doc": "x" * 40} for i in range(2000)], "loc": 3}
+    evidence = {"repository": {"modules": [big, {"path": "small.py"}]}}
+    out = read(evidence, "repository.modules", max_chars=5_000)
+    assert len(out) < 12_000
+    assert "too large" in out
+    assert "repository.modules[0].symbols" in out
+
+
+def test_the_next_page_hint_is_sized_by_the_budget_not_by_a_tiny_slice():
+    evidence = {"repository": {"modules": _modules(4000)}}
+    out = read(evidence, "repository.modules[0:2]")
+    end = int(re.search(r"modules\[2:(\d+)\]", out).group(1))
+    assert end > 100
+
+
+def test_slicing_a_non_list_says_so_instead_of_no_such_path():
+    out = read(_evidence(10), "git.total_commits[0:2]")
+    assert out is not None and "not a list" in out
+    assert read(_evidence(10), "nope.nothing[0:2]") is None

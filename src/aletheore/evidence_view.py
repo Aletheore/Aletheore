@@ -92,7 +92,8 @@ def _page(whole: list, base: str, start: int, end: int, max_chars: int) -> str:
         if end >= total:
             return to_toon(window)
         # The slice fits, but the list goes on: say where, so paging is mechanical.
-        step = len(window)
+        # The next page is sized by the budget, not by this (possibly tiny) slice.
+        step = _fit_count(whole[end:], max_chars)
         return to_toon(
             {
                 "_bounded_view": (
@@ -106,8 +107,25 @@ def _page(whole: list, base: str, start: int, end: int, max_chars: int) -> str:
     nxt = start + count
     hint = f"items {start}:{nxt} of {total} in '{base}'"
     if nxt < total:
-        hint += f"; read '{base}[{nxt}:{min(total, nxt + count)}]' for the next page"
+        step = _fit_count(whole[nxt:], max_chars)
+        hint += f"; read '{base}[{nxt}:{min(total, nxt + step)}]' for the next page"
+    if count == 1 and len(to_toon(window[:1])) > max_chars:
+        # One item alone is over budget: bound it like any other oversized value.
+        item_path = f"{base}[{start}]"
+        hint += f"; item {start} is itself too large and is shown bounded below"
+        return to_toon({"_bounded_view": hint}) + "\n" + _bound(window[0], item_path, max_chars)
     return to_toon({"_bounded_view": hint, "items": window[:count]})
+
+
+def _bound(value, path: str, max_chars: int) -> str:
+    encoded = to_toon(value)
+    if len(encoded) <= max_chars:
+        return encoded
+    if isinstance(value, dict):
+        return _outline(value, path, max_chars)
+    if isinstance(value, list):
+        return _page(value, path, 0, len(value), max_chars)
+    return encoded[:max_chars] + f"\n[... cut at {max_chars} characters ...]"
 
 
 def read_bounded(
@@ -124,19 +142,16 @@ def read_bounded(
         base = match.group("base")
         start = int(match.group("start") or 0)
         whole = get_by_path(evidence, base)
-        if not isinstance(whole, list):
+        if whole is None:
             return None
+        if not isinstance(whole, list):
+            return to_toon(
+                {"_bounded_view": f"'{base}' is not a list, so it cannot be sliced; read '{base}' itself"}
+            )
         end = int(match.group("end")) if match.group("end") else len(whole)
         return _page(whole, base, start, end, max_chars)
 
     value = get_by_path(evidence, path)
     if value is None:
         return None
-    encoded = to_toon(value)
-    if len(encoded) <= max_chars:
-        return encoded
-    if isinstance(value, dict):
-        return _outline(value, path, max_chars)
-    if isinstance(value, list):
-        return _page(value, path, 0, len(value), max_chars)
-    return encoded[:max_chars] + f"\n[... cut at {max_chars} characters ...]"
+    return _bound(value, path, max_chars)
