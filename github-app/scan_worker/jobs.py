@@ -175,7 +175,6 @@ from scan_worker.model_tiers import (
     MANAGED_AUDIT_MODEL,
     PRO_MODEL,
     CROSS_FILE_CHECK_MODEL,
-    VERIFICATION_MODEL,
     flash_review_model_used,
     model_for_plan,
     resolve_model,
@@ -2344,22 +2343,16 @@ def run_flash_review_job(
         review_ran = _run_flash_review(
             settings, installation_id, repo_full_name, pr_number, base_sha, head_sha,
             reserved_spend, is_free_tier=is_free_tier,
-            # No plan requests the second-model verification pass any more (it
-            # was AIR-only): with shared per-file PR context on, it added ~1 pt
-            # of precision at ~5x the generation cost and rejected a few real
-            # findings. verify_with_second_model stays False here; the
-            # capability remains in flash_review for benchmarks.
             # Both paid tiers (flash, air) - not is_free_tier. See
             # per_file_completeness's own comment at the review_diff call
             # site for the real cost numbers behind this split.
             per_file_completeness=not is_free_tier,
-            # Same gating as per_file_completeness, not verify_with_second_model:
+            # Same gating as per_file_completeness:
             # per_file_completeness is what created the triage problem this
             # solves (far more findings per PR than before), on both paid
             # tiers, so both need the fix. The call itself is cheap - it only
             # reasons over already-generated findings' text, not diffs or
-            # file context again - unlike verification's real per-finding
-            # DeepSeek cost, which is why that one stays AIR-only.
+            # file context again.
             rank_findings=not is_free_tier,
             cross_file_check_runs=_cross_file_check_runs_for(installation["plan"], is_free_tier),
             share_pr_context_per_file=_share_pr_context_for(is_free_tier),
@@ -2787,7 +2780,6 @@ def _run_flash_review(
     reserved_spend: float,
     *,
     is_free_tier: bool = False,
-    verify_with_second_model: bool = False,
     per_file_completeness: bool = False,
     rank_findings: bool = False,
     cross_file_check_runs: int = 0,
@@ -2872,14 +2864,11 @@ def _run_flash_review(
         pr_title = ""
 
     spend_accumulator = {"total": 0.0}
-    # Verification runs findings concurrently on a bounded thread pool (see
-    # flash_review._verify_findings_with_second_model), so its usage
-    # callback can arrive from multiple threads at once and needs a lock -
-    # same pattern as the live-wiki/live-docs jobs' spend_lock. Generation's
-    # own _on_usage below doesn't currently need one (one call, or a
-    # sequential free-tier fallback chain), but sharing this lock across
-    # both costs nothing and removes the need to reason about whether that
-    # stays true.
+    # The cross-file check can run several checks concurrently, so its usage
+    # callback can arrive from multiple threads and needs a lock (same pattern
+    # as the live-wiki/live-docs jobs' spend_lock). Shared with generation's
+    # own callback, which costs nothing and avoids reasoning about whether
+    # that one stays single-threaded.
     spend_lock = threading.Lock()
     grounding_result: dict = {}
     # Defined before the branch below so the tail of this function can
@@ -2994,48 +2983,13 @@ def _run_flash_review(
             with spend_lock:
                 spend_accumulator["total"] += cost
 
-        def _on_verification_usage(
-            prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0
-        ) -> None:
-            if cached_tokens:
-                logging.getLogger("scan_worker.jobs").info(
-                    "llm cache hit: model=%s feature=flash_review_verification "
-                    "cached=%d/%d prompt tokens",
-                    VERIFICATION_MODEL, cached_tokens, prompt_tokens,
-                )
-            # Verification always runs on deepseek-v4-flash regardless of
-            # which model generated the finding (see model_tiers.
-            # verification_adapter), so its cost is priced at that model's
-            # rate specifically - never flash_review_model's, which would be
-            # wrong whenever generation ran on Luna. Never called for free
-            # tier - but as of the suggestion-correctness verifier below,
-            # that's no longer because this closure is only passed to
-            # review_diff when verify_with_second_model=True (that flag is
-            # AIR-only, but this closure is ALSO the on_verification_usage
-            # the suggestion-correctness check uses, and that one runs on
-            # Flash too). It's free tier's own explicit verify_suggestions=
-            # not is_free_tier at this function's review_diff call site
-            # below that keeps this closure from ever firing there - see
-            # that call site's own comment for why.
-            #
-            # Findings are verified concurrently on a bounded thread pool
-            # (see flash_review._verify_findings_with_second_model), so this
-            # callback can run from multiple threads at once - the lock
-            # makes the read-modify-write on spend_accumulator atomic,
-            # matching the pattern live-wiki/live-docs jobs already use for
-            # the same shape of concurrent usage callback.
-            cost = cost_for_usage(VERIFICATION_MODEL, prompt_tokens, completion_tokens)
-            with spend_lock:
-                spend_accumulator["total"] += cost
-
         def _on_cross_file_check_usage(
             prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0
         ) -> None:
             # The cross-file check runs on CROSS_FILE_CHECK_MODEL (gpt-6-luna) regardless of
             # which model generated the findings, so it is priced at that model's own rate -
-            # never flash_review_model's (GLM) or VERIFICATION_MODEL's (DeepSeek). Checks can
-            # run concurrently when agreement is required, hence the lock, same as
-            # _on_verification_usage above. Never invoked for free tier (see
+            # never flash_review_model's (GLM). Checks can
+            # run concurrently when agreement is required, hence the lock. Never invoked for free tier (see
             # _cross_file_check_runs_for).
             cost = cost_for_usage(CROSS_FILE_CHECK_MODEL, prompt_tokens, completion_tokens)
             with spend_lock:
@@ -3121,37 +3075,9 @@ def _run_flash_review(
             diff_patches=diff_patches,
             adapter_chain=free_tier_chain,
             on_free_tier_exhausted=_on_free_tier_exhausted,
-            # AIR-tier only (see _on_verification_usage) - explicit, not
-            # derived from is_free_tier, because "paid" no longer means
-            # "AIR" now that the flash plan exists: flash's whole real
-            # cost/recall validation was run on solo generation, no second-model
-            # check - `not is_free_tier` would have silently given flash
-            # dual-agent verification for free, the exact cost this plan
-            # doesn't have room for. Free tier's own generation quality/
-            # cost tradeoffs are a separate, already-pooled budget this
-            # doesn't touch either way.
-            verify_with_second_model=verify_with_second_model,
-            on_verification_usage=_on_verification_usage,
-            # Independent of verify_with_second_model above (Flash tier
-            # needs this even though it skips dual-agent grounding - see
-            # flash_review._validate_findings' own comment) but still
-            # excluded for free tier specifically: this check always calls
-            # verification_adapter() (real deepseek-v4-flash), and
-            # _on_verification_usage is commented "Never called for free
-            # tier" because nothing invoked it there before this feature -
-            # unconditionally calling it now would write a real dollar cost
-            # into free tier's spend accounting for the first time, which
-            # is a correctness bug in the ledger, not a design choice to
-            # make casually. Free tier's suggestions simply stay
-            # non-clickable (an inert plain fence) until that's a real
-            # decision someone makes on purpose.
-            verify_suggestions=not is_free_tier,
-            # Per-file completeness gets its own gate, separate from
-            # verify_with_second_model above: real measured cost is ~3x
-            # single-shot generation (~$0.0028 vs ~$0.00095/review,
-            # 2026-09-21 martian-corpus benchmark), cheap enough for both
-            # paid tiers, unlike the second-model verification pass (~15x
-            # generation cost even windowed) which stays AIR-only. Free
+            # Per-file completeness: real measured cost is ~3x single-shot
+            # generation (~$0.0028 vs ~$0.00095/review, 2026-09-21 martian-
+            # corpus benchmark), cheap enough for both paid tiers. Free
             # tier is excluded here explicitly, though review_diff's own
             # `adapter_chain is None` guard already makes this a no-op for
             # free tier regardless (free_tier_chain is never None there).
@@ -3159,9 +3085,7 @@ def _run_flash_review(
             # Reuses _on_usage, not a dedicated ranking closure: this call
             # runs on the exact same model as generation itself (see
             # flash_review._rank_findings_with_severity's own docstring), so
-            # there is no separate rate to price it at the way
-            # _on_verification_usage exists specifically to avoid mispricing
-            # DeepSeek tokens at flash_review_model's rate.
+            # there is no separate rate to price it at.
             rank_findings=rank_findings,
             cross_file_check_runs=cross_file_check_runs,
             on_cross_file_check_usage=_on_cross_file_check_usage,
