@@ -40,8 +40,14 @@ def _trusted_private_dir(path: Path) -> Path | None:
     try:
         path.mkdir(mode=0o700, exist_ok=True)
         info = path.lstat()
+        # mkdir's mode argument (and st_mode on lstat) isn't meaningful on
+        # Windows - NTFS doesn't have POSIX permission bits, so mkdir never
+        # actually sets 0o700 there and this check would always fail,
+        # silently abandoning the deterministic path for the random mkdtemp
+        # one every time. Same guard as the ownership check just below,
+        # which already special-cases "no os.getuid" for the same reason.
         owned = not hasattr(os, "getuid") or info.st_uid == os.getuid()
-        private_mode = stat.S_IMODE(info.st_mode) == 0o700
+        private_mode = not hasattr(os, "getuid") or stat.S_IMODE(info.st_mode) == 0o700
         if path.is_symlink() or not path.is_dir() or not owned or not private_mode:
             return None
         return path
