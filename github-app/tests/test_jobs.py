@@ -1184,6 +1184,112 @@ def test_run_pr_scan_job_excludes_a_dismissed_static_analysis_finding_from_the_c
     assert static_analysis_runs[0][0] == "success"
 
 
+def test_run_pr_scan_job_passes_renamed_paths_to_compute_diff(bare_repo_with_two_commits, monkeypatch):
+    # Real gap: compute_diff/_rename_aware_findings (src/aletheore/history.py)
+    # can remap a renamed file's carried-over static-analysis findings so
+    # they don't read as both resolved (old path) and new (new path) - but
+    # only if a caller actually passes renamed_paths. This was built and
+    # unit-tested directly against compute_diff, but run_pr_scan_job (the
+    # only real caller) never passed it - fetch_pr_changed_files_detailed was
+    # only ever called AFTER compute_diff, for the unrelated file-overview
+    # section. A pure rename's findings read as both new and resolved 100% of
+    # the time despite the rename-aware code existing. This test is only
+    # about that wiring, not compute_diff's own remapping logic.
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+    captured_kwargs = {}
+
+    def fake_compute_diff(old, new, full=False, renamed_paths=None):
+        captured_kwargs["renamed_paths"] = renamed_paths
+        return {
+            "secrets": {"new": [], "resolved": []},
+            "history_secrets": {"new": [], "resolved": []},
+            "vulnerabilities": {"new": [], "resolved": []},
+            "static_analysis": {"new": [], "resolved": []},
+            "layer_violations": {"new": [], "resolved": []},
+            "endpoints": {"new": [], "resolved": []},
+            "aggregate_deltas": {"module_count": 0, "dependency_graph_edge_count": 0, "total_commits": 0},
+        }
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.compute_diff", fake_compute_diff)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_pr_changed_files_detailed",
+        lambda *a, **k: [
+            {"filename": "new_name.py", "status": "renamed", "additions": 0, "deletions": 0,
+             "previous_filename": "old_name.py"},
+            {"filename": "app.py", "status": "modified", "additions": 1, "deletions": 1,
+             "previous_filename": None},
+        ],
+    )
+
+    run_pr_scan_job(
+        installation_id=1, repo_full_name="octocat/hello-world", pr_number=7,
+        base_sha=base_sha, head_sha=head_sha,
+    )
+
+    assert captured_kwargs["renamed_paths"] == {"old_name.py": "new_name.py"}
+
+
+def test_run_pr_scan_job_passes_no_renamed_paths_when_the_detailed_fetch_fails(
+    bare_repo_with_two_commits, monkeypatch
+):
+    # The rename-awareness above must fail open exactly like every other
+    # caller that can't supply rename data - a broken compare-API call must
+    # not crash the scan, just lose rename-awareness for this one run.
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+    captured_kwargs = {}
+
+    def fake_compute_diff(old, new, full=False, renamed_paths=None):
+        captured_kwargs["renamed_paths"] = renamed_paths
+        return {
+            "secrets": {"new": [], "resolved": []},
+            "history_secrets": {"new": [], "resolved": []},
+            "vulnerabilities": {"new": [], "resolved": []},
+            "static_analysis": {"new": [], "resolved": []},
+            "layer_violations": {"new": [], "resolved": []},
+            "endpoints": {"new": [], "resolved": []},
+            "aggregate_deltas": {"module_count": 0, "dependency_graph_edge_count": 0, "total_commits": 0},
+        }
+
+    def raise_error(*a, **k):
+        raise RuntimeError("GitHub compare API is down")
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.compute_diff", fake_compute_diff)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set(), "static_analysis": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files_detailed", raise_error)
+
+    run_pr_scan_job(
+        installation_id=1, repo_full_name="octocat/hello-world", pr_number=7,
+        base_sha=base_sha, head_sha=head_sha,
+    )
+
+    assert captured_kwargs["renamed_paths"] is None
+
+
 def test_run_pr_scan_job_posts_a_file_overview_section(bare_repo_with_two_commits, monkeypatch):
     bare_path, base_sha, head_sha = bare_repo_with_two_commits
     posted = {}
@@ -8781,6 +8887,43 @@ def test_maybe_update_live_wiki_skips_when_no_clusters_affected(monkeypatch):
     _maybe_update_live_wiki(1, "octocat/hello-world", _wiki_evidence(), ["unrelated/file.py"], "sha1")
 
     assert called == []
+
+
+def test_maybe_update_live_wiki_still_updates_the_tests_subsystem_for_a_test_only_push(monkeypatch):
+    # Real gap: affected_cluster_ids only ever maps to real architecture
+    # clusters, and build_clusters excludes every test file from those
+    # before clustering even runs - so a PR touching only test files always
+    # got cluster_ids == set() and short-circuited right here, before
+    # generate_subsystems (and its own TESTS_SUBSYSTEM_ID handling) was ever
+    # reached. The synthetic Tests subsystem must still refresh for a
+    # test-only push, same as any other subsystem would for its own files.
+    _patch_no_spend_cap(monkeypatch)
+    from scan_worker.jobs import _maybe_update_live_wiki
+    from scan_worker.live_wiki import TESTS_SUBSYSTEM_ID
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
+    )
+    monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
+
+    captured = {}
+
+    def _fake_generate_subsystems(evidence, naming_adapter, writing_adapter, **kwargs):
+        captured["cluster_ids"] = kwargs.get("cluster_ids")
+        return []
+
+    monkeypatch.setattr("scan_worker.jobs.live_wiki.generate_subsystems", _fake_generate_subsystems)
+    monkeypatch.setattr("scan_worker.jobs._store_wiki_generation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_wiki_build_status", lambda *a, **k: None)
+
+    # Not in any real cluster (_wiki_evidence's one cluster only contains
+    # auth/login.py), and a test path by every language's naming convention
+    # _is_test_path checks.
+    _maybe_update_live_wiki(1, "octocat/hello-world", _wiki_evidence(), ["auth/test_login.py"], "sha1")
+
+    assert captured["cluster_ids"] == {TESTS_SUBSYSTEM_ID}
 
 
 def test_maybe_update_live_wiki_generates_and_stores_for_affected_clusters(monkeypatch):

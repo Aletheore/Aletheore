@@ -157,6 +157,12 @@ async def test_an_air_installation_without_a_repo_still_gets_the_credits_page(po
         response = await client.get("/credits/803", follow_redirects=False)
 
     assert response.status_code == 200
+    # This installation has no repo_history row yet (no scan has run), so
+    # _air_usage_page_for's redirect gate can't fire and it falls through to
+    # the Flash-shell page - which must still hide the "upgrade to AIR"
+    # upsell client-side (via data.plan), since it's already paying for AIR.
+    assert 'id="upgrade-card"' in response.text
+    assert "data.plan === 'air'" in response.text
 
 
 @pytest.mark.asyncio

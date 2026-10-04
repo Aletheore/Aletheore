@@ -1445,7 +1445,30 @@ def run_pr_scan_job(
             head_evidence_path = _run_scan(head_dir, unchanged_scan_cache_path=unchanged_scan_cache_path)
             old = json.loads(base_evidence_path.read_text(encoding="utf-8"))
             new = json.loads(head_evidence_path.read_text(encoding="utf-8"))
-            diff = compute_diff(old, new, full=False)
+            # Fetched here, ahead of compute_diff, so a pure rename's
+            # carried-over findings can be remapped through renamed_paths
+            # instead of reading as both resolved (old path) and new (new
+            # path) - see compute_diff's and _rename_aware_findings's own
+            # docstrings. Reused below for the file-overview section too,
+            # so a rename-heavy PR doesn't pay for this compare-API call
+            # twice. Fail-open: a fetch failure here just omits rename
+            # awareness, same as every caller that can't supply rename data.
+            changed_files_detailed = None
+            try:
+                changed_files_detailed = fetch_pr_changed_files_detailed(
+                    get_github_api_client(), token, repo_full_name, base_sha, head_sha
+                )
+            except Exception:  # noqa: BLE001
+                logging.getLogger("scan_worker.jobs").warning(
+                    "could not fetch PR changed-files detail for installation=%s repo=%s",
+                    installation_id, repo_full_name, exc_info=True,
+                )
+            renamed_paths = {
+                f["previous_filename"]: f["filename"]
+                for f in (changed_files_detailed or [])
+                if f.get("previous_filename")
+            } or None
+            diff = compute_diff(old, new, full=False, renamed_paths=renamed_paths)
             dismissed = get_dismissed_identity_keys(settings.database_url, installation_id, repo_full_name)
             # history_secrets shares the same (path, pattern, match_preview) identity
             # space as secrets - accepted_secrets (.aletheore.json) already treats them
@@ -1474,11 +1497,11 @@ def run_pr_scan_job(
             # *_check_run calls further down).
             file_overview = ""
             change_diagram = ""
-            changed_files_detailed = None
             try:
-                changed_files_detailed = fetch_pr_changed_files_detailed(
-                    get_github_api_client(), token, repo_full_name, base_sha, head_sha
-                )
+                if changed_files_detailed is None:
+                    changed_files_detailed = fetch_pr_changed_files_detailed(
+                        get_github_api_client(), token, repo_full_name, base_sha, head_sha
+                    )
                 overview_rows = summarize_file_changes(old, new, changed_files_detailed)
                 dependents_counts = count_direct_dependents(
                     new, [row["path"] for row in overview_rows]
@@ -6147,6 +6170,19 @@ def _maybe_update_live_wiki(
         return
 
     cluster_ids = live_wiki.affected_cluster_ids(evidence, changed_files)
+    # affected_cluster_ids only ever maps to real architecture clusters,
+    # which never contain test files (see architecture.build_clusters's own
+    # docstring) - a test-only push's changed_files can never land in any of
+    # them. Without this, a PR that only touches tests short-circuits here
+    # and generate_subsystems (below) is never even called, leaving the
+    # synthetic Tests subsystem and any touched test files' pages stale
+    # until the next full rebuild - a level earlier than TESTS_SUBSYSTEM_ID's
+    # own "if cluster_ids is None or TESTS_SUBSYSTEM_ID in cluster_ids" check
+    # in generate_subsystems can help, since that's never reached.
+    from aletheore.search_index import _is_test_path
+
+    if any(_is_test_path(path) for path in changed_files):
+        cluster_ids = cluster_ids | {live_wiki.TESTS_SUBSYSTEM_ID}
     if not cluster_ids:
         return
 

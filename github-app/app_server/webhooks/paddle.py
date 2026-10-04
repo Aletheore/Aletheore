@@ -234,7 +234,15 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
     # sign_checkout_installation_id and frontend.py's checkout page.
     installation_token = (data.get("custom_data") or {}).get("installation_token")
     installation_id = (
-        unsign_checkout_installation_id(installation_token, get_settings().session_secret)
+        # Same CHECKOUT_TOKEN_WEBHOOK_MAX_AGE as _handle_transaction_completed's
+        # top-up path below, and for the identical reason: this token is minted
+        # at the same checkout-click moment, and Paddle retries a failed
+        # delivery for up to three days - the default 30-minute
+        # CHECKOUT_TOKEN_TTL would make a delayed subscription.created/updated
+        # webhook silently fail to flip the installation's plan.
+        unsign_checkout_installation_id(
+            installation_token, get_settings().session_secret, max_age=CHECKOUT_TOKEN_WEBHOOK_MAX_AGE
+        )
         if installation_token
         else None
     )
@@ -671,6 +679,11 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
     commission_usd = (earnings_minor_units / Decimal(100) * _AFFILIATE_COMMISSION_RATE).quantize(
         Decimal("0.01"), rounding=ROUND_HALF_UP
     )
+    # Same details.totals.total the credit-topup branch above reads earlier
+    # in this function - a refund/chargeback adjustment's own totals.total
+    # arrives in this same original currency, so reverse_commission_partial
+    # can prorate against it later (see its docstring).
+    charged_total_minor = _finite_decimal(((data.get("details") or {}).get("totals") or {}).get("total"))
 
     await record_commission(
         pool,
@@ -679,6 +692,7 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
         transaction_id,
         commission_usd,
         billed_at,
+        charged_total_minor=charged_total_minor,
     )
 
 
@@ -702,9 +716,54 @@ async def _handle_adjustment_created(data: dict, pool, event_type: str = "adjust
     # adjustment.updated for the same refund only carries the approval, so it
     # must not repeat either.
     if event_type != "adjustment.updated":
-        from app_server.affiliates import reverse_commission
+        from app_server.affiliates import reverse_commission_partial
 
-        await reverse_commission(pool, transaction_id)
+        if action is not None:
+            # A real adjustment.created event: data["id"] is the adjustment's
+            # own id (same field _claw_back_refunded_topup keys on below) and
+            # data.totals.total is the amount *this* adjustment returned, in
+            # the transaction's original currency - enough to prorate. Either
+            # can be missing on an unexpectedly-shaped payload; left as None
+            # rather than guessed at here, so reverse_commission_partial can
+            # tell "no commission on this transaction at all" (the common
+            # case, not worth alerting on) apart from "a commission exists
+            # but this payload can't apply to it" (below).
+            commission_adjustment_id = data.get("id")
+            refunded_total_minor = _finite_decimal((data.get("totals") or {}).get("total"))
+        else:
+            # transaction.updated: carries only the transaction's own
+            # id/current status, no adjustment id and no incremental
+            # refunded amount to prorate against - expected for this path,
+            # not an anomaly. Reverses the whole remaining commission in one
+            # shot, same as the old all-or-nothing behavior - keyed on the
+            # transaction id itself so a repeated status-change delivery
+            # doesn't reverse it twice.
+            commission_adjustment_id = f"txn-status:{transaction_id}"
+            refunded_total_minor = Decimal("Infinity")
+
+        commission_result = await reverse_commission_partial(
+            pool, commission_adjustment_id, transaction_id, refunded_total_minor
+        )
+        if commission_result["status"] in ("missing_adjustment_id", "unknown_amount"):
+            # A real commission exists for this transaction (reverse_commission_partial
+            # already checked - "not_found" never reaches here) but this
+            # payload didn't carry what's needed to apply or dedupe the
+            # reversal. Paddle only retries on a non-2xx response, this event
+            # already got one, and guessing (full reversal on an unknown
+            # amount, or skipping silently) could either unfairly cost the
+            # affiliate or permanently drop a real claw-back - alert for
+            # manual follow-up instead, same conservative stance
+            # _claw_back_refunded_topup takes for the identical gap on the
+            # credit side.
+            logger.warning(
+                "commission reversal skipped for transaction %s (%s)",
+                transaction_id, commission_result["status"],
+            )
+            send_error_alert(
+                "paddle_webhook",
+                PaddleWebhookAmountError(f"commission reversal skipped: {commission_result['status']}"),
+                f"transaction_id={transaction_id} action={action}",
+            )
         # transaction.updated payloads carry no adjustment action; they only
         # reach this handler for a refunded/charged-back status, so a missing
         # action means money was returned.
