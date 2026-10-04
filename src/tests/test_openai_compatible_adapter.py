@@ -646,7 +646,7 @@ def test_read_evidence_section_reports_encoding_failure_instead_of_crashing(
 
     adapter = _adapter(tmp_path)
     with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
-        with patch("aletheore.adapters.openai_compatible.to_toon", _boom):
+        with patch("aletheore.evidence_view.to_toon", _boom):
             adapter.invoke("audit this repo", cwd=str(repo))
 
     second_call = mock_client.chat.completions.create.call_args_list[1]
@@ -700,7 +700,7 @@ def test_invoke_fails_fast_after_consecutive_no_tool_call_rounds(mock_openai_cla
         with pytest.raises(AdapterInvocationError, match="stopped calling tools"):
             adapter.invoke("audit this repo", cwd=str(repo))
 
-    # must fail fast (after 2 rounds), not burn through all 20 MAX_TOOL_ROUNDS
+    # must fail fast (after 2 rounds), not burn through all MAX_TOOL_ROUNDS
     assert mock_client.chat.completions.create.call_count == 2
 
 
@@ -858,6 +858,101 @@ def test_custom_request_timeout_is_threaded_through(mock_openai_class, tmp_path)
 
     first_call = mock_client.chat.completions.create.call_args_list[0]
     assert first_call.kwargs["timeout"] == 400
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_default_max_tool_rounds_matches_module_constant(mock_openai_class, tmp_path):
+    # Real gap this closes: MAX_TOOL_ROUNDS used to be a bare module global
+    # .invoke() read directly, shared by every adapter - the hosted
+    # managed_audit job and every local `aletheore audit` CLI adapter alike.
+    # Now a per-instance default (every adapter still gets this value unless
+    # it passes max_tool_rounds explicitly - see the test below).
+    from aletheore.adapters.openai_compatible import MAX_TOOL_ROUNDS
+
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    # Never calls finish_report, so the loop only ever stops by hitting the
+    # round ceiling - proves the ceiling is MAX_TOOL_ROUNDS exactly, not
+    # "at least" or "around" it.
+    mock_client.chat.completions.create.side_effect = [
+        _mock_response(tool_calls=[_mock_tool_call("write_report_section", {"name": "Summary", "content": "x"})])
+        for _ in range(MAX_TOOL_ROUNDS + 5)
+    ]
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        with pytest.raises(AdapterInvocationError, match=f"did not finish the report within {MAX_TOOL_ROUNDS}"):
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+    assert mock_client.chat.completions.create.call_count == MAX_TOOL_ROUNDS
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_custom_max_tool_rounds_is_threaded_through(mock_openai_class, tmp_path):
+    # The hosted managed_audit job passes MANAGED_AUDIT_MAX_TOOL_ROUNDS (40)
+    # explicitly (model_tiers.writing_adapter_for_managed_audit) - every
+    # other caller, including every local CLI adapter in cli.KNOWN_ADAPTERS,
+    # leaves this at the default proven above.
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.side_effect = [
+        _mock_response(tool_calls=[_mock_tool_call("write_report_section", {"name": "Summary", "content": "x"})])
+        for _ in range(10)
+    ]
+
+    adapter = _adapter(tmp_path, max_tool_rounds=3)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        with pytest.raises(AdapterInvocationError, match="did not finish the report within 3"):
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+    assert mock_client.chat.completions.create.call_count == 3
+
+
+def _mock_completion_response(content: str = "ok") -> MagicMock:
+    mock_message = MagicMock()
+    mock_message.content = content
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock(message=mock_message)]
+    mock_response.usage = MagicMock(prompt_tokens=1, completion_tokens=1)
+    return mock_response
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_simple_completion_default_request_timeout_matches_module_constant(mock_openai_class, tmp_path):
+    # Real gap: invoke() reads self._request_timeout_seconds (see the test
+    # above), but simple_completion() hard-coded the bare module constant
+    # REQUEST_TIMEOUT_SECONDS instead - a caller-supplied
+    # request_timeout_seconds (e.g. AIRVIEW_REQUEST_TIMEOUT_SECONDS=300)
+    # silently never reached simple_completion-based calls (AIRview, Docs,
+    # health-fix suggestions - everything except managed audits' invoke()).
+    from aletheore.adapters.openai_compatible import REQUEST_TIMEOUT_SECONDS
+
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.return_value = _mock_completion_response()
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        adapter.simple_completion("system prompt", "user prompt", cwd=str(tmp_path))
+
+    call = mock_client.chat.completions.create.call_args_list[0]
+    assert call.kwargs["timeout"] == REQUEST_TIMEOUT_SECONDS
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_simple_completion_custom_request_timeout_is_threaded_through(mock_openai_class, tmp_path):
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.return_value = _mock_completion_response()
+
+    adapter = _adapter(tmp_path, request_timeout_seconds=300)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        adapter.simple_completion("system prompt", "user prompt", cwd=str(tmp_path))
+
+    call = mock_client.chat.completions.create.call_args_list[0]
+    assert call.kwargs["timeout"] == 300
 
 
 @patch("aletheore.adapters.openai_compatible.OpenAI")

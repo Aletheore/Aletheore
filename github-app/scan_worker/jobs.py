@@ -172,14 +172,19 @@ from app_server.email_queue import enqueue_transactional_email
 from app_server.email_client import send_transactional_email
 from scan_worker.managed_audit import run_managed_audit
 from scan_worker.model_tiers import (
-    MANAGED_AUDIT_MODEL,
     PRO_MODEL,
     CROSS_FILE_CHECK_MODEL,
+    airview_model_used,
+    docs_model_used,
     flash_review_model_used,
+    health_fix_suggestion_model_used,
+    managed_audit_model_used,
     model_for_plan,
     resolve_model,
     writing_adapter_for,
     writing_adapter_for_airview,
+    writing_adapter_for_docs,
+    writing_adapter_for_health_fix_suggestion,
     writing_adapter_for_plan,
 )
 from scan_worker.packet_cache import lookup_cached_result, store_result
@@ -2053,7 +2058,7 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
             spend_budget = _IncrementalSpendBudget(
                 settings.database_url,
                 installation_id,
-                MANAGED_AUDIT_MODEL,
+                managed_audit_model_used(),
                 next_call_reserve_usd=MANAGED_AUDIT_LLM_RESERVE_USD,
                 feature="managed_audit",
             )
@@ -2155,7 +2160,7 @@ def run_managed_audit_api_job(
         spend_budget = _IncrementalSpendBudget(
             settings.database_url,
             installation_id,
-            MANAGED_AUDIT_MODEL,
+            managed_audit_model_used(),
             next_call_reserve_usd=MANAGED_AUDIT_LLM_RESERVE_USD,
             feature="managed_audit",
         )
@@ -3748,11 +3753,13 @@ def _health_fix_suggestion_adapter(
     on_usage: Callable[[int, int, int], None] | None = None,
     on_call_failed: Callable[[], None] | None = None,
 ) -> OpenAICompatibleAdapter:
-    # Always Pro, at one fixed cost for every Pro subscription rather than
-    # varying by a tier that no longer exists - same Luna-with-DeepSeek-
-    # fallback resolution as every other Pro-tier writing surface, via
-    # model_tiers.writing_adapter_for.
-    return writing_adapter_for(PRO_MODEL, on_usage=on_usage, on_call_failed=on_call_failed)
+    # IndieRouter (glm-5.3-flash) primary as of 2026-10-04, falling back to
+    # the previous Pro-tier resolution (Luna-with-DeepSeek-fallback via
+    # model_tiers.writing_adapter_for) unchanged - see
+    # writing_adapter_for_health_fix_suggestion's own docstring.
+    return writing_adapter_for_health_fix_suggestion(
+        on_usage=on_usage, on_call_failed=on_call_failed, fallback_model=PRO_MODEL
+    )
 
 
 def _find_enclosing_symbol(evidence: dict | None, source_file: str, source_line: int | None) -> str | None:
@@ -3822,7 +3829,7 @@ def _fix_suggestion_attachment(
         if combined_balance <= 0:
             return None
 
-        fix_suggestion_model = model_for_plan(plan)
+        fix_suggestion_model = health_fix_suggestion_model_used(plan)
         spend_budget = _IncrementalSpendBudget(
             dsn, installation_id, fix_suggestion_model,
             next_call_reserve_usd=HEALTH_FIX_SUGGESTION_LLM_RESERVE_USD, feature="health_fix_suggestion",
@@ -5321,8 +5328,22 @@ class _IncrementalSpendBudget:
         # outstanding amount - see its own docstring for the bug this
         # closes. Never two calls' worth at once: every real call site
         # reserves, then resolves (record_usage or on_call_failed), then
-        # reserves again for the next one - this class has no concurrent-
-        # reservation caller.
+        # reserves again for the next one - this class used to have no
+        # concurrent-reservation caller, but AIRview's full-build writing
+        # adapter is now shared across _generation_worker_count() (up to 16,
+        # see live_wiki.py) concurrent threads, all calling
+        # can_start_next_call/record_usage/on_call_failed through the same
+        # spend_budget instance - _lock below makes the read-modify-write on
+        # _pending_reserve_usd/_pending_topup_usd atomic across those
+        # threads. The real DB-level reserve/release calls these wrap
+        # (reserve_llm_spend_with_email_hooks, reserve_llm_spend,
+        # _release_spend) are already atomic on their own; without this lock,
+        # a lost update here (two threads' += racing on the same Python
+        # attribute) could under-count what's pending and true up the wrong
+        # amount, the same class of real-production credit-accounting gap
+        # this class's own history (see on_call_failed's docstring) was
+        # built to close for the sequential case.
+        self._lock = threading.Lock()
         self._pending_reserve_usd = 0.0
         # The part of _pending_reserve_usd that came out of purchased top-up
         # credit, so giving any of it back returns it to top-up.
@@ -5335,12 +5356,13 @@ class _IncrementalSpendBudget:
             topup_out=drawn,
         )
         if ok:
-            self._pending_topup_usd += drawn.get("topup_usd", 0.0)
-            # Accumulate, never overwrite: two reservations outstanding for one
-            # call (an adapter that checks the budget twice, e.g. a provider
-            # fallback) used to leave the first one unreachable by
-            # record_usage/on_call_failed/release_unused_reservation.
-            self._pending_reserve_usd += self.next_call_reserve_usd
+            with self._lock:
+                self._pending_topup_usd += drawn.get("topup_usd", 0.0)
+                # Accumulate, never overwrite: two reservations outstanding for one
+                # call (an adapter that checks the budget twice, e.g. a provider
+                # fallback) used to leave the first one unreachable by
+                # record_usage/on_call_failed/release_unused_reservation.
+                self._pending_reserve_usd += self.next_call_reserve_usd
         return ok
 
     def on_call_failed(self) -> None:
@@ -5400,11 +5422,16 @@ class _IncrementalSpendBudget:
         one of them were ever updated. Returns the amount released (0.0 if
         nothing was pending) so on_call_failed() can still log its warning
         with the real amount."""
-        amount = self._pending_reserve_usd
-        if amount:
-            _release_spend(self.dsn, self.installation_id, amount, self._pending_topup_usd)
+        with self._lock:
+            amount = self._pending_reserve_usd
+            topup = self._pending_topup_usd
             self._pending_reserve_usd = 0.0
             self._pending_topup_usd = 0.0
+        # The DB call happens outside the lock - snapshotting and zeroing
+        # under the lock is enough to make two concurrent callers never both
+        # see (and both release) the same outstanding amount.
+        if amount:
+            _release_spend(self.dsn, self.installation_id, amount, topup)
         return amount
 
     def record_usage(
@@ -5414,11 +5441,14 @@ class _IncrementalSpendBudget:
         # next_call_reserve_usd: a second call under the same reservation (a
         # Docs module can make two) has nothing left reserved and must be drawn
         # in full, where the old fixed subtraction refunded a reservation that
-        # had already been given back.
-        reserved = self._pending_reserve_usd
-        reserved_topup = self._pending_topup_usd
-        self._pending_reserve_usd = 0.0
-        self._pending_topup_usd = 0.0
+        # had already been given back. Snapshot-and-zero under the lock, same
+        # reasoning as _release_pending's own - the DB calls below still
+        # happen outside it.
+        with self._lock:
+            reserved = self._pending_reserve_usd
+            reserved_topup = self._pending_topup_usd
+            self._pending_reserve_usd = 0.0
+            self._pending_topup_usd = 0.0
         if cached_tokens:
             # Visibility only - cost_for_usage below still prices the full
             # prompt_tokens count, so cached tokens aren't yet discounted
@@ -5846,8 +5876,7 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
         return
 
     installation = get_installation_row(dsn, installation_id)
-    # No longer plan-dependent - see _live_wiki_full_build_writing_adapter.
-    model_used = live_wiki.FLASH_MODEL
+    model_used = airview_model_used(live_wiki.FLASH_MODEL)
 
     # Fast-fail hint only, no lock - see _IncrementalSpendBudget's docstring;
     # real enforcement is its can_start_next_call() reserving atomically per
@@ -6064,8 +6093,7 @@ def _maybe_update_live_wiki(
         )
         return
 
-    # No longer dynamic - see _live_wiki_update_writing_adapter.
-    update_model = live_wiki.UPDATE_MODEL
+    update_model = airview_model_used(live_wiki.UPDATE_MODEL)
     spend_budget = _IncrementalSpendBudget(
         dsn, installation_id, update_model,
         next_call_reserve_usd=WIKI_INCREMENTAL_LLM_RESERVE_USD, feature="airview_incremental",
@@ -6149,7 +6177,6 @@ MAX_DOCS_FULL_BUILD_FILES = 200
 
 
 def _live_docs_full_build_writing_adapter(
-    plan: str,
     on_usage: Callable[[int, int, int], None] | None = None,
     on_call_failed: Callable[[], None] | None = None,
 ) -> OpenAICompatibleAdapter:
@@ -6161,7 +6188,7 @@ def _live_docs_full_build_writing_adapter(
     # - it only fires on a real failure, and closes the exact gap that
     # existed before it: a module's LLM call failing after the per-module
     # reservation left that $0.10-$1.00 unreleased with zero ledger trace.
-    return writing_adapter_for_plan(plan, on_usage=on_usage, on_call_failed=on_call_failed, json_output=True)
+    return writing_adapter_for_docs(PRO_MODEL, on_usage=on_usage, on_call_failed=on_call_failed, json_output=True)
 
 
 def _live_docs_update_writing_adapter(
@@ -6170,7 +6197,7 @@ def _live_docs_update_writing_adapter(
 ) -> OpenAICompatibleAdapter:
     # See _live_docs_full_build_writing_adapter's comment on why
     # before_llm_call is deliberately not wired here.
-    return writing_adapter_for(
+    return writing_adapter_for_docs(
         live_docs.FLASH_MODEL, on_usage=on_usage, on_call_failed=on_call_failed, json_output=True
     )
 
@@ -6497,7 +6524,7 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
         )
         return
 
-    full_build_model = model_for_plan(plan)
+    full_build_model = docs_model_used(PRO_MODEL)
     spend_budget = _IncrementalSpendBudget(
         dsn, installation_id, full_build_model,
         next_call_reserve_usd=DOCS_FULL_BUILD_LLM_RESERVE_USD, feature="docs_full_build",
@@ -6508,7 +6535,7 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
 
     try:
         writing_adapter = _live_docs_full_build_writing_adapter(
-            plan, on_usage=_on_usage, on_call_failed=spend_budget.on_call_failed
+            on_usage=_on_usage, on_call_failed=spend_budget.on_call_failed
         )
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("scan_worker.jobs").warning(
@@ -6653,7 +6680,7 @@ def _maybe_update_live_docs(
         )
         return
 
-    update_model = resolve_model(live_docs.FLASH_MODEL)
+    update_model = docs_model_used(live_docs.FLASH_MODEL)
     spend_budget = _IncrementalSpendBudget(
         dsn, installation_id, update_model,
         next_call_reserve_usd=DOCS_INCREMENTAL_LLM_RESERVE_USD, feature="docs_incremental",

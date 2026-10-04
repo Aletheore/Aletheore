@@ -8,8 +8,11 @@ import pytest
 
 from scan_worker.live_wiki import (
     AIRVIEW_PROMPT_VERSION,
+    FILE_PAGE_WRITE_BATCH_SIZE,
     FLASH_MODEL,
+    MAX_GENERATION_WORKERS,
     SUBSYSTEM_DESCRIPTION_UNAVAILABLE,
+    SUBSYSTEM_WRITE_BATCH_SIZE,
     UPDATE_MODEL,
     build_subsystem_record,
     generate_overview,
@@ -1098,6 +1101,38 @@ def test_generate_subsystems_propagates_a_write_failure_instead_of_swallowing_it
 
     with pytest.raises(RuntimeError, match="model call failed"):
         generate_subsystems(evidence, naming_adapter, writing_adapter)
+
+
+def test_indierouter_unconfigured_in_this_test_environment():
+    # The two timing tests above (and FILE_PAGE_WRITE_BATCH_SIZE's own
+    # timing test further down) assume MAX_GENERATION_WORKERS=6/
+    # SUBSYSTEM_WRITE_BATCH_SIZE=5/FILE_PAGE_WRITE_BATCH_SIZE=5, the
+    # fallback values _generation_worker_count/_subsystem_write_batch_size/
+    # _file_page_write_batch_size return when IndieRouter isn't configured
+    # - true today (no INDIEROUTER_API_KEY, no saved credential), but
+    # nothing enforces it. This fails loudly instead of those tests failing
+    # for an unrelated-looking timing reason if that ever changes.
+    from scan_worker.live_wiki import indierouter_available
+
+    assert indierouter_available() is False
+
+
+def test_generation_worker_count_and_batch_sizes_use_indierouter_values_when_configured(monkeypatch):
+    from scan_worker.live_wiki import (
+        _file_page_write_batch_size,
+        _generation_worker_count,
+        _subsystem_write_batch_size,
+    )
+
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    assert _generation_worker_count() == 16
+    assert _subsystem_write_batch_size() == 2
+    assert _file_page_write_batch_size() == 2
+
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+    assert _generation_worker_count() == MAX_GENERATION_WORKERS == 6
+    assert _subsystem_write_batch_size() == SUBSYSTEM_WRITE_BATCH_SIZE == 5
+    assert _file_page_write_batch_size() == FILE_PAGE_WRITE_BATCH_SIZE == 5
 
 
 def test_generate_overview_happy_path():

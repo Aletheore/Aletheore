@@ -2,23 +2,27 @@
 page's model claims are read from this file, not written separately, so
 they can never drift from what actually runs.
 
-GPT-5.6 Luna is the primary model for every writing surface (managed
-audits, one-time AIRview/Docs builds, PR reviews, and AIRview/Docs
-incremental updates) as of 2026-08-09: DeepSeek V4 Flash wasn't catching
-enough real issues on PR review specifically, and DeepSeek's announced
-"significant" price hike (2x-10x per their own founder, size and date
-still unconfirmed) made staying DeepSeek-only a real vendor-risk bet, not
-just a cost one. Luna's own coding/intelligence/agentic benchmarks
-(Artificial Analysis, via OpenRouter's compare page) beat DeepSeek V4
-Pro's while pricing under it.
+GPT-5.6 Luna was the primary model for every writing surface as of
+2026-08-09 (see git history for the full reasoning). As of 2026-10-04,
+AIRview, managed audits, Docs, and endpoint-health fix suggestions moved
+to IndieRouter as the primary provider (`writing_adapter_for_airview`,
+`writing_adapter_for_managed_audit`, `writing_adapter_for_docs`,
+`writing_adapter_for_health_fix_suggestion` below) - one balance, one
+account, one privacy disclosure, and measured parity-or-better on every
+surface (docs/operations/LLM-CONSOLIDATION-HANDOVER-2026-10-03.md, local-
+only). PR review (`flash_review_generation_adapter`) was already on
+IndieRouter before this. The plain `writing_adapter_for` below (still used
+by `writing_adapter_for_plan`/Docs' fallback branch) keeps its original
+Luna-preferred behavior unchanged, for whichever surface or fallback path
+still reaches it.
 
-Falls back to the pre-existing DeepSeek model for that surface if
-OPENAI_API_KEY isn't configured yet, so a build never hard-fails on
-missing infra - logged, never silent, so this is never mistaken for the
-intended path. (The retired gpt-5.6-terra rollout crashed instead of
-falling back, but only because its price entry was missing from
-llm_cost.py, not because it lacked a fallback path - gpt-5.6-luna has a
-price entry from the start.)
+Every IndieRouter-primary builder falls back to its own pre-existing
+direct-provider path, unchanged, if INDIEROUTER_API_KEY isn't configured -
+logged, never silent, so a build never hard-fails on missing infra and
+this is never mistaken for the intended path. (The retired gpt-5.6-terra
+rollout crashed instead of falling back, but only because its price entry
+was missing from llm_cost.py, not because it lacked a fallback path -
+every model here needs a llm_cost.py entry before its first real call.)
 """
 
 import logging
@@ -27,7 +31,11 @@ import threading
 from datetime import datetime, timezone
 from typing import Callable
 
-from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
+from aletheore.adapters.openai_compatible import (
+    MANAGED_AUDIT_MAX_TOOL_ROUNDS,
+    REQUEST_TIMEOUT_SECONDS,
+    OpenAICompatibleAdapter,
+)
 from aletheore.credentials import has_api_key
 
 # Real free daily allowance, not an abuse ceiling: gpt-5-nano falls in
@@ -186,11 +194,26 @@ def writing_adapter_for(
     allow_partial_report: bool = False,
     _prefer_luna: bool = True,
     json_output: bool = False,
+    max_tool_rounds: int | None = None,
+    request_timeout_seconds: int | None = None,
 ) -> OpenAICompatibleAdapter:
     """json_output: the caller's completions are parsed as JSON (AIRview and
     Docs writing). Applied to the OpenAI model only, where long responses
     come back malformed often enough to drop whole batches; the DeepSeek
-    path is left exactly as it was."""
+    path is left exactly as it was.
+
+    max_tool_rounds: only meaningful for a caller whose adapter is used via
+    .invoke() (managed_audit - see writing_adapter_for_managed_audit), not
+    simple_completion(). request_timeout_seconds: a per-call override (see
+    AIRVIEW_REQUEST_TIMEOUT_SECONDS/MANAGED_AUDIT_REQUEST_TIMEOUT_SECONDS).
+    Both None leave OpenAICompatibleAdapter's own defaults (MAX_TOOL_ROUNDS/
+    REQUEST_TIMEOUT_SECONDS) in place, so every writing surface that
+    doesn't pass them is unaffected."""
+    override_kwargs = {}
+    if max_tool_rounds is not None:
+        override_kwargs["max_tool_rounds"] = max_tool_rounds
+    if request_timeout_seconds is not None:
+        override_kwargs["request_timeout_seconds"] = request_timeout_seconds
     if _prefer_luna and _openai_available():
         return OpenAICompatibleAdapter(
             name="OpenAI",
@@ -203,6 +226,7 @@ def writing_adapter_for(
             on_call_failed=on_call_failed,
             allow_partial_report=allow_partial_report,
             json_mode=json_output,
+            **override_kwargs,
         )
     if not _prefer_luna:
         logging.getLogger(__name__).info(
@@ -228,6 +252,7 @@ def writing_adapter_for(
         before_llm_call=before_llm_call,
         on_call_failed=on_call_failed,
         allow_partial_report=allow_partial_report,
+        **override_kwargs,
     )
 
 
@@ -263,6 +288,62 @@ FLASH_REVIEW_GENERATION_MODEL = "glm-5.3-flash"
 
 def _indierouter_available() -> bool:
     return has_api_key("INDIEROUTER_API_KEY", "IndieRouter")
+
+
+def indierouter_available() -> bool:
+    """Public wrapper of _indierouter_available for callers outside this
+    module (live_wiki's worker-count/batch-size sizing) that need the same
+    capability check without reaching into a private name."""
+    return _indierouter_available()
+
+
+# IndieRouter's full paid-tier catalogue (2026-10-03) is exactly two
+# models: glm-5.3-flash (FLASH_REVIEW_GENERATION_MODEL above, and
+# HEALTH_FIX_SUGGESTION_MODEL below) and this one. Never "deepseek-v4-flash"
+# here - that alias is IndieRouter-catalogue-only and is removed from
+# IndieRouter entirely on 2026-10-15. "deepseek-v4-flash" stays correct
+# ONLY as a direct-DeepSeek-API fallback model id, a different base_url -
+# see llm_cost.py's own comment on why the two need separate price entries.
+INDIEROUTER_DEEPSEEK_MODEL = "deepseek-v4.1-flash"
+
+
+def _indierouter_adapter(
+    model: str,
+    *,
+    on_usage: Callable[[int, int, int], None] | None = None,
+    before_llm_call: Callable[[], bool] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
+    allow_partial_report: bool = False,
+    reasoning_effort: str | None = None,
+    json_mode: bool = False,
+    request_timeout_seconds: int = REQUEST_TIMEOUT_SECONDS,
+    max_tool_rounds: int | None = None,
+) -> OpenAICompatibleAdapter:
+    """Shared constructor for every IndieRouter-primary builder below
+    (AIRview, Docs, managed audits, health-fix suggestions) - one place
+    fixing base_url/api_key_env_var so a typo in one surface's wiring
+    can't diverge from another's. Deliberately NOT used by
+    flash_review_generation_adapter above (out of scope for this change,
+    already correct) - a little duplication against that one is accepted
+    on purpose rather than touching an already-production-proven path.
+
+    max_tool_rounds: only meaningful for managed audits (the only
+    .invoke()-based caller here) - None leaves OpenAICompatibleAdapter's
+    own default (openai_compatible.MAX_TOOL_ROUNDS) in place."""
+    return OpenAICompatibleAdapter(
+        name="IndieRouter",
+        base_url="https://api.indierouter.ai/v1",
+        api_key_env_var="INDIEROUTER_API_KEY",
+        model=model,
+        extra_body={"reasoning_effort": reasoning_effort} if reasoning_effort else None,
+        json_mode=json_mode,
+        request_timeout_seconds=request_timeout_seconds,
+        on_usage=on_usage,
+        before_llm_call=before_llm_call,
+        on_call_failed=on_call_failed,
+        **({} if max_tool_rounds is None else {"max_tool_rounds": max_tool_rounds}),
+        allow_partial_report=allow_partial_report,
+    )
 
 
 def flash_review_generation_adapter(
@@ -361,6 +442,28 @@ def flash_review_model_used(fallback_model: str) -> str:
     return FLASH_REVIEW_GENERATION_MODEL if _indierouter_available() else resolve_model(fallback_model)
 
 
+# A real AIRview request once hung more than 15 minutes against IndieRouter
+# at the default REQUEST_TIMEOUT_SECONDS (120s is too short to even trigger
+# the hang-detection path on a legitimately large subsystem write) - this
+# mitigation, paired with _call_with_retry's existing retry-on-failure, is
+# what AIRview actually ships with. The hang's root cause was never
+# reproduced; the timeout is the mitigation, not a fix.
+AIRVIEW_REQUEST_TIMEOUT_SECONDS = 300
+
+# Same mitigation, same reasoning, for managed audits: a real live smoke
+# test against this repository (2026-10-04) hit a single .invoke() round
+# with a 210,846-token prompt and a 14,971-token completion - at
+# IndieRouter's own measured ~127 tokens/sec throughput, that's ~118s of
+# generation alone, 2 seconds of margin under the 120s default before that
+# one round would have timed out outright. Managed audits' rounds grow
+# every turn (the whole accumulated conversation resends each time), so a
+# later, even slightly larger round is a real, not hypothetical, risk -
+# this is not AIRVIEW_REQUEST_TIMEOUT_SECONDS reused for a different
+# reason, it is the identical problem (a legitimately large single-request
+# generation needing more than 120s) on a second surface.
+MANAGED_AUDIT_REQUEST_TIMEOUT_SECONDS = 300
+
+
 def writing_adapter_for_airview(
     fallback_model: str,
     on_usage: Callable[[int, int, int], None] | None = None,
@@ -368,8 +471,29 @@ def writing_adapter_for_airview(
     on_call_failed: Callable[[], None] | None = None,
     json_output: bool = False,
 ) -> OpenAICompatibleAdapter:
-    """Always DeepSeek for AIRview specifically - never Luna, regardless of
-    OPENAI_API_KEY availability.
+    """IndieRouter (deepseek-v4.1-flash) is AIRview's primary provider as of
+    2026-10-04, never Luna regardless of OPENAI_API_KEY availability - see
+    below for why Luna is excluded even as a fallback choice.
+
+    Primary path settings (docs/operations/LLM-CONSOLIDATION-HANDOVER-
+    2026-10-03.md, local-only): reasoning_effort=low (kept the slow arm's
+    quality - +0.44/+0.59 vs RepoWise on two judges - while building in
+    ~193s; reasoning off or default effort both scored lower at this
+    concurrency/batch size) and AIRVIEW_REQUEST_TIMEOUT_SECONDS. Does NOT
+    turn on json_mode even though real call sites pass json_output=True:
+    AIRview has never actually reached a provider's real JSON mode (the
+    DeepSeek-direct fallback below silently drops json_output on its own
+    branch of writing_adapter_for - see that function's docstring), so
+    this preserves existing real behavior rather than changing the
+    provider and the JSON-mode behavior in the same change. Not a
+    theoretical risk: this exact combination (deepseek-v4.1-flash via
+    IndieRouter, effort low, no json_mode) is what the handover's own
+    AIRview benchmark actually ran end to end - every subsystem/file-page
+    description it reports parsing successfully was parsed with
+    _parse_json_object's strict json.loads, no json_mode, no leniency.
+
+    Falls back to the pre-existing, unchanged DeepSeek-direct path (never
+    Luna - see below) if INDIEROUTER_API_KEY isn't configured.
 
     Every other writing surface prefers Luna over DeepSeek when available
     (writing_adapter_for above) because Luna measured better on real-world
@@ -382,9 +506,22 @@ def writing_adapter_for_airview(
     real loss, outside it) - same corpus, same day, same rubric. Scoped
     narrowly to AIRview because that is exactly what was measured; PR
     review was not re-tested and stays on Luna via writing_adapter_for/
-    writing_adapter_for_plan. Managed audits moved off Luna separately -
-    see writing_adapter_for_managed_audit below.
+    writing_adapter_for_plan. Managed audits also moved to IndieRouter
+    separately - see writing_adapter_for_managed_audit below.
     """
+    if _indierouter_available():
+        return _indierouter_adapter(
+            INDIEROUTER_DEEPSEEK_MODEL,
+            on_usage=on_usage,
+            before_llm_call=before_llm_call,
+            on_call_failed=on_call_failed,
+            reasoning_effort="low",
+            json_mode=False,
+            request_timeout_seconds=AIRVIEW_REQUEST_TIMEOUT_SECONDS,
+        )
+    logging.getLogger(__name__).warning(
+        "INDIEROUTER_API_KEY not configured - falling back to direct DeepSeek for AIRview"
+    )
     return writing_adapter_for(
         fallback_model,
         on_usage=on_usage,
@@ -393,6 +530,15 @@ def writing_adapter_for_airview(
         _prefer_luna=False,
         json_output=json_output,
     )
+
+
+def airview_model_used(fallback_model: str) -> str:
+    """The model writing_adapter_for_airview will actually construct right
+    now - mirrors flash_review_model_used's own role (cost accounting and
+    the evidence-packet cache's model_used label must never drift from
+    what actually ran, or a provider switch silently corrupts cache hit/
+    miss behavior)."""
+    return INDIEROUTER_DEEPSEEK_MODEL if _indierouter_available() else fallback_model
 
 
 # Not resolve_model(PRO_MODEL) or any other dynamic choice - always exactly
@@ -407,19 +553,37 @@ def writing_adapter_for_managed_audit(
     on_call_failed: Callable[[], None] | None = None,
     allow_partial_report: bool = False,
 ) -> OpenAICompatibleAdapter:
-    """Always DeepSeek Flash for managed_audit specifically - never Luna
-    (writing_adapter_for_plan's default) and never DeepSeek Pro either.
+    """IndieRouter (deepseek-v4.1-flash) is managed_audit's primary
+    provider as of 2026-10-04 - never Luna, same reasoning as below.
 
-    Measured directly, three real full audit runs against this repository,
-    same evidence, same manual: Luna cost $0.15 (6 rounds) and missed a
-    real circular import; deepseek-v4-pro cost $1.15 (14 rounds) and caught
-    it; deepseek-v4-flash cost $0.40 (16 rounds) and also caught it. Pro's
-    3x-higher per-token rate over flash bought nothing here - pro actually
-    used fewer total tokens than flash, so the extra cost was pure list-
-    price premium, not more work done, for a shorter report and the
-    identical finding. Flash is the only one of the three that is both
-    accurate (matches Pro's finding) and cheap (a fraction of Pro's cost)
-    for this specific task.
+    Primary path: reasoning_effort=low, paired with the hosted-only
+    MANAGED_AUDIT_MAX_TOOL_ROUNDS=40 ceiling (openai_compatible.py - see
+    its own comment for why this is explicit here rather than the plain
+    adapter default) - measured directly against this repository via the
+    real .invoke() tool-calling loop: 9 rounds, 132s, $0.16 list price,
+    17/17 facts and fewer unverified citations (2) than default
+    reasoning's 24-round, $0.67 run (5 unverified) - comfortably inside
+    the ceiling either way (docs/operations/LLM-CONSOLIDATION-HANDOVER-
+    2026-10-03.md, local-only). Re-verified live against this repository
+    on 2026-10-04 (real IndieRouter call, not mocked): 5 rounds, 109.6s,
+    $0.147, a full coherent report. Falls back to the pre-existing,
+    unchanged DeepSeek-Flash-direct path (supports_tool_choice=False
+    there - see writing_adapter_for's own comment on why; same
+    MANAGED_AUDIT_MAX_TOOL_ROUNDS applies there too, since the hosted
+    feature's cost reserve is already sized for it regardless of which
+    provider actually answers) if INDIEROUTER_API_KEY isn't configured.
+
+    Never Luna (writing_adapter_for_plan's default) and never DeepSeek Pro
+    either, on either path. Measured directly, three real full audit runs
+    against this repository, same evidence, same manual: Luna cost $0.15
+    (6 rounds) and missed a real circular import; deepseek-v4-pro cost
+    $1.15 (14 rounds) and caught it; deepseek-v4-flash cost $0.40 (16
+    rounds) and also caught it. Pro's 3x-higher per-token rate over flash
+    bought nothing here - pro actually used fewer total tokens than flash,
+    so the extra cost was pure list-price premium, not more work done, for
+    a shorter report and the identical finding. Flash is the only one of
+    the three that is both accurate (matches Pro's finding) and cheap (a
+    fraction of Pro's cost) for this specific task.
 
     This doesn't generalize from AIRview's own Luna-vs-DeepSeek finding
     above (or the other direction, Luna-preferred by default elsewhere):
@@ -429,6 +593,20 @@ def writing_adapter_for_managed_audit(
     over any model's per-token list price, which is exactly what made Pro
     the expensive choice here despite its higher-tier positioning.
     """
+    if _indierouter_available():
+        return _indierouter_adapter(
+            INDIEROUTER_DEEPSEEK_MODEL,
+            on_usage=on_usage,
+            before_llm_call=before_llm_call,
+            on_call_failed=on_call_failed,
+            allow_partial_report=allow_partial_report,
+            reasoning_effort="low",
+            max_tool_rounds=MANAGED_AUDIT_MAX_TOOL_ROUNDS,
+            request_timeout_seconds=MANAGED_AUDIT_REQUEST_TIMEOUT_SECONDS,
+        )
+    logging.getLogger(__name__).warning(
+        "INDIEROUTER_API_KEY not configured - falling back to direct DeepSeek Flash for managed audits"
+    )
     return writing_adapter_for(
         MANAGED_AUDIT_MODEL,
         on_usage=on_usage,
@@ -436,7 +614,16 @@ def writing_adapter_for_managed_audit(
         on_call_failed=on_call_failed,
         allow_partial_report=allow_partial_report,
         _prefer_luna=False,
+        max_tool_rounds=MANAGED_AUDIT_MAX_TOOL_ROUNDS,
+        request_timeout_seconds=MANAGED_AUDIT_REQUEST_TIMEOUT_SECONDS,
     )
+
+
+def managed_audit_model_used() -> str:
+    """Mirrors airview_model_used - the model writing_adapter_for_managed_audit
+    will actually construct right now, for _IncrementalSpendBudget's cost-
+    accounting label."""
+    return INDIEROUTER_DEEPSEEK_MODEL if _indierouter_available() else MANAGED_AUDIT_MODEL
 
 
 def model_for_plan(plan: str) -> str:
@@ -459,6 +646,109 @@ def writing_adapter_for_plan(
         allow_partial_report=allow_partial_report,
         json_output=json_output,
     )
+
+
+def writing_adapter_for_docs(
+    fallback_model: str,
+    on_usage: Callable[[int, int, int], None] | None = None,
+    before_llm_call: Callable[[], bool] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
+    allow_partial_report: bool = False,
+    json_output: bool = True,
+) -> OpenAICompatibleAdapter:
+    """IndieRouter (deepseek-v4.1-flash) is Docs' primary provider as of
+    2026-10-04, with JSON mode on - measured at 1.3% unsupported-claim
+    rate, the best of five corpora judged (docs/operations/LLM-
+    CONSOLIDATION-HANDOVER-2026-10-03.md, local-only). This is the first
+    time Docs' json_output actually reaches a provider's real
+    response_format=json_object end to end: PR #907 wired json_output
+    through writing_adapter_for's OpenAI/Luna branch, but both real Docs
+    call sites default to _prefer_luna=True and only land there when
+    OPENAI_API_KEY happens to be configured - otherwise they silently drop
+    json_output on the DeepSeek-direct branch (writing_adapter_for's own
+    docstring). Default reasoning, not reasoning_effort=low - untested for
+    Docs specifically, not carried over speculatively from AIRview/audits.
+    Per-file parallelism is also untested and not introduced here; Docs
+    stays strictly sequential per file/module.
+
+    Falls back to the pre-existing writing_adapter_for(fallback_model,
+    ...) path, unchanged, if INDIEROUTER_API_KEY isn't configured -
+    `_prefer_luna` stays at its default True so each existing call site's
+    own fallback behavior (Luna if OPENAI_API_KEY is configured, else
+    DeepSeek direct) is preserved exactly.
+    """
+    if _indierouter_available():
+        return _indierouter_adapter(
+            INDIEROUTER_DEEPSEEK_MODEL,
+            on_usage=on_usage,
+            before_llm_call=before_llm_call,
+            on_call_failed=on_call_failed,
+            allow_partial_report=allow_partial_report,
+            json_mode=json_output,
+        )
+    logging.getLogger(__name__).warning(
+        "INDIEROUTER_API_KEY not configured - falling back to the previous Docs provider"
+    )
+    return writing_adapter_for(
+        fallback_model,
+        on_usage=on_usage,
+        before_llm_call=before_llm_call,
+        on_call_failed=on_call_failed,
+        allow_partial_report=allow_partial_report,
+        json_output=json_output,
+    )
+
+
+def docs_model_used(fallback_model: str) -> str:
+    """Mirrors airview_model_used - fallback_model is whatever the caller
+    would otherwise have resolved via resolve_model (PRO_MODEL for the
+    full build, live_docs.FLASH_MODEL for incremental updates)."""
+    return INDIEROUTER_DEEPSEEK_MODEL if _indierouter_available() else resolve_model(fallback_model)
+
+
+# Same real model id as FLASH_REVIEW_GENERATION_MODEL - named separately so
+# this surface's own choice (cheaper than deepseek-v4.1-flash, already
+# proven in production for PR reviews, well suited to a short plain-text
+# diagnosis) is legible on its own, not implied by reusing a Flash-Review-
+# specific name.
+HEALTH_FIX_SUGGESTION_MODEL = "glm-5.3-flash"
+
+
+def writing_adapter_for_health_fix_suggestion(
+    on_usage: Callable[[int, int, int], None] | None = None,
+    on_call_failed: Callable[[], None] | None = None,
+    fallback_model: str = PRO_MODEL,
+) -> OpenAICompatibleAdapter:
+    """IndieRouter (glm-5.3-flash) is the endpoint-health fix-suggestion's
+    primary provider as of 2026-10-04 - genuinely new, no IndieRouter path
+    existed for this surface before. reasoning_effort=low (GLM-5.3's
+    thinking mode can't be disabled, only steered - see
+    flash_review_generation_adapter's docstring for the measured reason
+    "low" is the right steering value), plain text output, no JSON mode,
+    no temperature override (unlike Flash Review's own 0.2, PR-Agent's
+    convention for a different prompt shape - untested here, not carried
+    over speculatively). Untested on IndieRouter end to end
+    (docs/operations/LLM-CONSOLIDATION-HANDOVER-2026-10-03.md, local-only)
+    - sanity-check manually before relying on it in production.
+
+    Falls back to the pre-existing writing_adapter_for(fallback_model, ...)
+    behavior, unchanged (Luna if OPENAI_API_KEY is configured, else
+    DeepSeek Pro direct), if INDIEROUTER_API_KEY isn't configured."""
+    if _indierouter_available():
+        return _indierouter_adapter(
+            HEALTH_FIX_SUGGESTION_MODEL,
+            on_usage=on_usage,
+            on_call_failed=on_call_failed,
+            reasoning_effort="low",
+        )
+    logging.getLogger(__name__).warning(
+        "INDIEROUTER_API_KEY not configured - falling back to the previous fix-suggestion provider"
+    )
+    return writing_adapter_for(fallback_model, on_usage=on_usage, on_call_failed=on_call_failed)
+
+
+def health_fix_suggestion_model_used(plan: str) -> str:
+    return HEALTH_FIX_SUGGESTION_MODEL if _indierouter_available() else model_for_plan(plan)
 
 
 def writing_adapter_chain_for_free_tier(

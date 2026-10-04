@@ -12,9 +12,30 @@ from openai import OpenAI
 
 from aletheore.adapters.base import AdapterInvocationError, AgentAdapter
 from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, get_api_key, has_api_key
-from aletheore.toon_encoding import ToonEncodingError, to_toon
+from aletheore.evidence_view import read_bounded
+from aletheore.toon_encoding import ToonEncodingError
 
+# Default ceiling for the round-based tool-calling loop (.invoke(), below) -
+# every adapter gets this unless it passes max_tool_rounds explicitly.
+# .invoke()'s only consumer repo-wide is report.py's run_reasoning_phase,
+# reached by both the hosted managed_audit job and every local
+# `aletheore audit` CLI adapter (cli.py's KNOWN_ADAPTERS, none of which
+# override this) - local CLI users pay with their own key, so a stuck loop's
+# cost (context grows every round, so cost grows roughly per-round) stays
+# bounded at this original, long-standing value unless a caller opts up.
+# See MANAGED_AUDIT_MAX_TOOL_ROUNDS below for the hosted path's own,
+# deliberately higher ceiling.
 MAX_TOOL_ROUNDS = 20
+
+# The hosted managed_audit job's own, higher ceiling - a full audit routinely
+# takes more than 14 rounds and once hit MAX_TOOL_ROUNDS's old value (then
+# also 20) mid-report. Business-paid, already budgeted for in the hosted
+# path's spend reserve (see jobs.MANAGED_AUDIT_LLM_RESERVE_USD) - never the
+# default, only passed explicitly by writing_adapter_for_managed_audit
+# (model_tiers.py), so the local CLI's own cost exposure stays at
+# MAX_TOOL_ROUNDS above unless a user explicitly asks for more.
+MANAGED_AUDIT_MAX_TOOL_ROUNDS = 40
+
 REQUEST_TIMEOUT_SECONDS = 120
 MAX_CONSECUTIVE_NO_TOOL_CALLS = 2
 
@@ -89,9 +110,12 @@ READ_EVIDENCE_TOOL = {
         "name": "read_evidence_section",
         "description": (
             "Read a specific section of the repository evidence by dot-path. "
-            "Array items use zero-based brackets, such as repository.modules[0].path. "
-            "Returns the entire matched section with no size limit - prefer a "
-            "specific, narrow path over a broad one like a large top-level array."
+            "Array items use zero-based brackets, such as repository.modules[0].path; "
+            "a slice of a list uses [start:end], such as repository.modules[0:25]. "
+            "A section that is too large to return whole comes back as an outline "
+            "(each large child named with its size and the path to read) or as the "
+            "first page of a list with the path for the next page. Prefer a specific, "
+            "narrow path, and only page through a large list when you need its items."
         ),
         "parameters": {
             "type": "object",
@@ -307,6 +331,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         extra_body: dict | None = None,
         temperature: float | None = None,
         json_mode: bool = False,
+        max_tool_rounds: int = MAX_TOOL_ROUNDS,
     ) -> None:
         # Provider-specific request fields the OpenAI schema has no slot for.
         # Exists for one measured reason: every model we write with is a
@@ -325,6 +350,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         # whole batch and AIRview withheld every description. The caller's
         # prompt must mention JSON, or the API rejects the request.
         self._json_mode = json_mode
+        self._max_tool_rounds = max_tool_rounds
         self.name = name
         self.requires_consent = requires_consent
         self._base_url = base_url
@@ -362,7 +388,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    timeout=REQUEST_TIMEOUT_SECONDS,
+                    timeout=self._request_timeout_seconds,
                     **({"extra_body": self._extra_body} if self._extra_body else {}),
                     **({"temperature": self._temperature} if self._temperature is not None else {}),
                     **({"response_format": {"type": "json_object"}} if self._json_mode else {}),
@@ -476,7 +502,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         if self._supports_tool_choice:
             create_kwargs["tool_choice"] = "required"
 
-        for _round in range(MAX_TOOL_ROUNDS):
+        for _round in range(self._max_tool_rounds):
             if not self._has_budget_for_next_call():
                 if self._allow_partial_report:
                     return self._partial_report(sections)
@@ -568,7 +594,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
                 break
         else:
             raise AdapterInvocationError(
-                f"{self.name} did not finish the report within {MAX_TOOL_ROUNDS} "
+                f"{self.name} did not finish the report within {self._max_tool_rounds} "
                 f"tool-call rounds{WEAK_MODEL_HINT}"
             )
 
@@ -607,11 +633,10 @@ class OpenAICompatibleAdapter(AgentAdapter):
 
     def _read_evidence_tool(self, evidence, args: dict) -> str:
         path = args.get("path", "")
-        value = _get_by_dot_path(evidence, path)
-        if value is None:
-            return f"no such path: {path}"
         try:
-            encoded = to_toon(value)
+            encoded = read_bounded(evidence, path, _get_by_dot_path)
         except ToonEncodingError as exc:
             return f"could not encode section {path}: {exc}"
+        if encoded is None:
+            return f"no such path: {path}"
         return f'<evidence path="{path}">\n{encoded}\n</evidence>'
