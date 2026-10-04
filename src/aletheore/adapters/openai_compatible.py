@@ -14,13 +14,27 @@ from aletheore.adapters.base import AdapterInvocationError, AgentAdapter
 from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, get_api_key, has_api_key
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 
-# Raised 20->40 (2026-10-04): a full managed audit routinely takes more than
-# 14 rounds, and the round-based tool-calling loop (.invoke(), below) hit the
-# old limit of 20 mid-report. Model-independent - this is round *count*, not
-# which API is called - the only consumer repo-wide is this same .invoke()
-# loop, reached via report.py by both the hosted managed_audit job and the
-# local `aletheore audit` CLI command.
-MAX_TOOL_ROUNDS = 40
+# Default ceiling for the round-based tool-calling loop (.invoke(), below) -
+# every adapter gets this unless it passes max_tool_rounds explicitly.
+# .invoke()'s only consumer repo-wide is report.py's run_reasoning_phase,
+# reached by both the hosted managed_audit job and every local
+# `aletheore audit` CLI adapter (cli.py's KNOWN_ADAPTERS, none of which
+# override this) - local CLI users pay with their own key, so a stuck loop's
+# cost (context grows every round, so cost grows roughly per-round) stays
+# bounded at this original, long-standing value unless a caller opts up.
+# See MANAGED_AUDIT_MAX_TOOL_ROUNDS below for the hosted path's own,
+# deliberately higher ceiling.
+MAX_TOOL_ROUNDS = 20
+
+# The hosted managed_audit job's own, higher ceiling - a full audit routinely
+# takes more than 14 rounds and once hit MAX_TOOL_ROUNDS's old value (then
+# also 20) mid-report. Business-paid, already budgeted for in the hosted
+# path's spend reserve (see jobs.MANAGED_AUDIT_LLM_RESERVE_USD) - never the
+# default, only passed explicitly by writing_adapter_for_managed_audit
+# (model_tiers.py), so the local CLI's own cost exposure stays at
+# MAX_TOOL_ROUNDS above unless a user explicitly asks for more.
+MANAGED_AUDIT_MAX_TOOL_ROUNDS = 40
+
 REQUEST_TIMEOUT_SECONDS = 120
 MAX_CONSECUTIVE_NO_TOOL_CALLS = 2
 
@@ -313,6 +327,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         extra_body: dict | None = None,
         temperature: float | None = None,
         json_mode: bool = False,
+        max_tool_rounds: int = MAX_TOOL_ROUNDS,
     ) -> None:
         # Provider-specific request fields the OpenAI schema has no slot for.
         # Exists for one measured reason: every model we write with is a
@@ -331,6 +346,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         # whole batch and AIRview withheld every description. The caller's
         # prompt must mention JSON, or the API rejects the request.
         self._json_mode = json_mode
+        self._max_tool_rounds = max_tool_rounds
         self.name = name
         self.requires_consent = requires_consent
         self._base_url = base_url
@@ -482,7 +498,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         if self._supports_tool_choice:
             create_kwargs["tool_choice"] = "required"
 
-        for _round in range(MAX_TOOL_ROUNDS):
+        for _round in range(self._max_tool_rounds):
             if not self._has_budget_for_next_call():
                 if self._allow_partial_report:
                     return self._partial_report(sections)
@@ -574,7 +590,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
                 break
         else:
             raise AdapterInvocationError(
-                f"{self.name} did not finish the report within {MAX_TOOL_ROUNDS} "
+                f"{self.name} did not finish the report within {self._max_tool_rounds} "
                 f"tool-call rounds{WEAK_MODEL_HINT}"
             )
 

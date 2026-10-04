@@ -860,6 +860,56 @@ def test_custom_request_timeout_is_threaded_through(mock_openai_class, tmp_path)
     assert first_call.kwargs["timeout"] == 400
 
 
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_default_max_tool_rounds_matches_module_constant(mock_openai_class, tmp_path):
+    # Real gap this closes: MAX_TOOL_ROUNDS used to be a bare module global
+    # .invoke() read directly, shared by every adapter - the hosted
+    # managed_audit job and every local `aletheore audit` CLI adapter alike.
+    # Now a per-instance default (every adapter still gets this value unless
+    # it passes max_tool_rounds explicitly - see the test below).
+    from aletheore.adapters.openai_compatible import MAX_TOOL_ROUNDS
+
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    # Never calls finish_report, so the loop only ever stops by hitting the
+    # round ceiling - proves the ceiling is MAX_TOOL_ROUNDS exactly, not
+    # "at least" or "around" it.
+    mock_client.chat.completions.create.side_effect = [
+        _mock_response(tool_calls=[_mock_tool_call("write_report_section", {"name": "Summary", "content": "x"})])
+        for _ in range(MAX_TOOL_ROUNDS + 5)
+    ]
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        with pytest.raises(AdapterInvocationError, match=f"did not finish the report within {MAX_TOOL_ROUNDS}"):
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+    assert mock_client.chat.completions.create.call_count == MAX_TOOL_ROUNDS
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_custom_max_tool_rounds_is_threaded_through(mock_openai_class, tmp_path):
+    # The hosted managed_audit job passes MANAGED_AUDIT_MAX_TOOL_ROUNDS (40)
+    # explicitly (model_tiers.writing_adapter_for_managed_audit) - every
+    # other caller, including every local CLI adapter in cli.KNOWN_ADAPTERS,
+    # leaves this at the default proven above.
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.side_effect = [
+        _mock_response(tool_calls=[_mock_tool_call("write_report_section", {"name": "Summary", "content": "x"})])
+        for _ in range(10)
+    ]
+
+    adapter = _adapter(tmp_path, max_tool_rounds=3)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        with pytest.raises(AdapterInvocationError, match="did not finish the report within 3"):
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+    assert mock_client.chat.completions.create.call_count == 3
+
+
 def _mock_completion_response(content: str = "ok") -> MagicMock:
     mock_message = MagicMock()
     mock_message.content = content

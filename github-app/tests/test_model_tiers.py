@@ -10,6 +10,7 @@ from scan_worker.model_tiers import (
     INDIEROUTER_DEEPSEEK_MODEL,
     LUNA_MODEL,
     MANAGED_AUDIT_MODEL,
+    MANAGED_AUDIT_REQUEST_TIMEOUT_SECONDS,
     OPENAI_FREE_TIER_DAILY_TOKEN_CAP,
     PRO_MODEL,
     VERIFICATION_MODEL,
@@ -263,6 +264,18 @@ def test_writing_adapter_for_managed_audit_uses_indierouter_when_configured(monk
     # specific to deepseek-v4-pro's own thinking-mode quirk on the direct
     # DeepSeek API, not something seen against IndieRouter.
     assert adapter._supports_tool_choice is True
+    # The hosted-only ceiling (openai_compatible.MANAGED_AUDIT_MAX_TOOL_ROUNDS)
+    # - every other writing surface, including every local CLI adapter,
+    # stays at the plain adapter default (20).
+    from aletheore.adapters.openai_compatible import MANAGED_AUDIT_MAX_TOOL_ROUNDS
+
+    assert adapter._max_tool_rounds == MANAGED_AUDIT_MAX_TOOL_ROUNDS == 40
+    # Real gap found via a live smoke test (2026-10-04): one round hit a
+    # 210,846-token prompt and a 14,971-token completion - ~118s of
+    # generation alone at IndieRouter's own measured ~127 tokens/sec, 2s of
+    # margin under the 120s default. Same AIRVIEW_REQUEST_TIMEOUT_SECONDS
+    # mitigation, applied here too.
+    assert adapter._request_timeout_seconds == MANAGED_AUDIT_REQUEST_TIMEOUT_SECONDS == 300
 
 
 def test_writing_adapter_for_managed_audit_never_uses_luna_when_indierouter_not_configured(monkeypatch):
@@ -278,6 +291,13 @@ def test_writing_adapter_for_managed_audit_never_uses_luna_when_indierouter_not_
     assert adapter._model == MANAGED_AUDIT_MODEL == "deepseek-v4-flash"
     assert adapter._base_url == "https://api.deepseek.com"
     assert adapter._supports_tool_choice is False
+    # The hosted ceiling applies on the fallback branch too - the feature's
+    # cost reserve is already sized for it regardless of which provider
+    # actually answers. Same for the request timeout.
+    from aletheore.adapters.openai_compatible import MANAGED_AUDIT_MAX_TOOL_ROUNDS
+
+    assert adapter._max_tool_rounds == MANAGED_AUDIT_MAX_TOOL_ROUNDS == 40
+    assert adapter._request_timeout_seconds == MANAGED_AUDIT_REQUEST_TIMEOUT_SECONDS == 300
 
 
 def test_writing_adapter_for_managed_audit_still_uses_deepseek_when_nothing_is_configured(monkeypatch):
@@ -285,6 +305,33 @@ def test_writing_adapter_for_managed_audit_still_uses_deepseek_when_nothing_is_c
     adapter = writing_adapter_for_managed_audit()
     assert adapter.name == "DeepSeek"
     assert adapter._model == "deepseek-v4-flash"
+
+
+def test_only_managed_audit_raises_max_tool_rounds_above_the_plain_default(monkeypatch):
+    # Pins the intended scope of the hosted-only ceiling: AIRview, Docs, and
+    # health-fix suggestions never pass max_tool_rounds (they use
+    # simple_completion, not invoke(), so it would be inert for them anyway)
+    # - only writing_adapter_for_managed_audit does, on both its branches.
+    from aletheore.adapters.openai_compatible import MAX_TOOL_ROUNDS
+
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(indierouter=True))
+    assert writing_adapter_for_airview("deepseek-v4-flash")._max_tool_rounds == MAX_TOOL_ROUNDS
+    assert writing_adapter_for_docs(PRO_MODEL)._max_tool_rounds == MAX_TOOL_ROUNDS
+    assert writing_adapter_for_health_fix_suggestion()._max_tool_rounds == MAX_TOOL_ROUNDS
+
+
+def test_only_airview_and_managed_audit_raise_the_request_timeout_above_the_plain_default(monkeypatch):
+    # Same scoping pin as the max_tool_rounds test above, for the request
+    # timeout: Docs and health-fix suggestions never saw a hang like
+    # AIRview's or managed audit's, so they stay at the plain default (120)
+    # rather than being bumped speculatively.
+    from aletheore.adapters.openai_compatible import REQUEST_TIMEOUT_SECONDS
+
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(indierouter=True))
+    assert writing_adapter_for_docs(PRO_MODEL)._request_timeout_seconds == REQUEST_TIMEOUT_SECONDS == 120
+    assert writing_adapter_for_health_fix_suggestion()._request_timeout_seconds == REQUEST_TIMEOUT_SECONDS == 120
+    assert writing_adapter_for_airview("deepseek-v4-flash")._request_timeout_seconds == 300
+    assert writing_adapter_for_managed_audit()._request_timeout_seconds == 300
 
 
 def test_writing_adapter_for_managed_audit_falls_back_and_logs_when_indierouter_not_configured(

@@ -31,7 +31,11 @@ import threading
 from datetime import datetime, timezone
 from typing import Callable
 
-from aletheore.adapters.openai_compatible import REQUEST_TIMEOUT_SECONDS, OpenAICompatibleAdapter
+from aletheore.adapters.openai_compatible import (
+    MANAGED_AUDIT_MAX_TOOL_ROUNDS,
+    REQUEST_TIMEOUT_SECONDS,
+    OpenAICompatibleAdapter,
+)
 from aletheore.credentials import has_api_key
 
 # Real free daily allowance, not an abuse ceiling: gpt-5-nano falls in
@@ -191,11 +195,26 @@ def writing_adapter_for(
     allow_partial_report: bool = False,
     _prefer_luna: bool = True,
     json_output: bool = False,
+    max_tool_rounds: int | None = None,
+    request_timeout_seconds: int | None = None,
 ) -> OpenAICompatibleAdapter:
     """json_output: the caller's completions are parsed as JSON (AIRview and
     Docs writing). Applied to the OpenAI model only, where long responses
     come back malformed often enough to drop whole batches; the DeepSeek
-    path is left exactly as it was."""
+    path is left exactly as it was.
+
+    max_tool_rounds: only meaningful for a caller whose adapter is used via
+    .invoke() (managed_audit - see writing_adapter_for_managed_audit), not
+    simple_completion(). request_timeout_seconds: a per-call override (see
+    AIRVIEW_REQUEST_TIMEOUT_SECONDS/MANAGED_AUDIT_REQUEST_TIMEOUT_SECONDS).
+    Both None leave OpenAICompatibleAdapter's own defaults (MAX_TOOL_ROUNDS/
+    REQUEST_TIMEOUT_SECONDS) in place, so every writing surface that
+    doesn't pass them is unaffected."""
+    override_kwargs = {}
+    if max_tool_rounds is not None:
+        override_kwargs["max_tool_rounds"] = max_tool_rounds
+    if request_timeout_seconds is not None:
+        override_kwargs["request_timeout_seconds"] = request_timeout_seconds
     if _prefer_luna and _openai_available():
         return OpenAICompatibleAdapter(
             name="OpenAI",
@@ -208,6 +227,7 @@ def writing_adapter_for(
             on_call_failed=on_call_failed,
             allow_partial_report=allow_partial_report,
             json_mode=json_output,
+            **override_kwargs,
         )
     if not _prefer_luna:
         logging.getLogger(__name__).info(
@@ -233,6 +253,7 @@ def writing_adapter_for(
         before_llm_call=before_llm_call,
         on_call_failed=on_call_failed,
         allow_partial_report=allow_partial_report,
+        **override_kwargs,
     )
 
 
@@ -297,6 +318,7 @@ def _indierouter_adapter(
     reasoning_effort: str | None = None,
     json_mode: bool = False,
     request_timeout_seconds: int = REQUEST_TIMEOUT_SECONDS,
+    max_tool_rounds: int | None = None,
 ) -> OpenAICompatibleAdapter:
     """Shared constructor for every IndieRouter-primary builder below
     (AIRview, Docs, managed audits, health-fix suggestions) - one place
@@ -304,7 +326,11 @@ def _indierouter_adapter(
     can't diverge from another's. Deliberately NOT used by
     flash_review_generation_adapter above (out of scope for this change,
     already correct) - a little duplication against that one is accepted
-    on purpose rather than touching an already-production-proven path."""
+    on purpose rather than touching an already-production-proven path.
+
+    max_tool_rounds: only meaningful for managed audits (the only
+    .invoke()-based caller here) - None leaves OpenAICompatibleAdapter's
+    own default (openai_compatible.MAX_TOOL_ROUNDS) in place."""
     return OpenAICompatibleAdapter(
         name="IndieRouter",
         base_url="https://api.indierouter.ai/v1",
@@ -316,6 +342,7 @@ def _indierouter_adapter(
         on_usage=on_usage,
         before_llm_call=before_llm_call,
         on_call_failed=on_call_failed,
+        **({} if max_tool_rounds is None else {"max_tool_rounds": max_tool_rounds}),
         allow_partial_report=allow_partial_report,
     )
 
@@ -424,6 +451,19 @@ def flash_review_model_used(fallback_model: str) -> str:
 # reproduced; the timeout is the mitigation, not a fix.
 AIRVIEW_REQUEST_TIMEOUT_SECONDS = 300
 
+# Same mitigation, same reasoning, for managed audits: a real live smoke
+# test against this repository (2026-10-04) hit a single .invoke() round
+# with a 210,846-token prompt and a 14,971-token completion - at
+# IndieRouter's own measured ~127 tokens/sec throughput, that's ~118s of
+# generation alone, 2 seconds of margin under the 120s default before that
+# one round would have timed out outright. Managed audits' rounds grow
+# every turn (the whole accumulated conversation resends each time), so a
+# later, even slightly larger round is a real, not hypothetical, risk -
+# this is not AIRVIEW_REQUEST_TIMEOUT_SECONDS reused for a different
+# reason, it is the identical problem (a legitimately large single-request
+# generation needing more than 120s) on a second surface.
+MANAGED_AUDIT_REQUEST_TIMEOUT_SECONDS = 300
+
 
 def writing_adapter_for_airview(
     fallback_model: str,
@@ -517,17 +557,22 @@ def writing_adapter_for_managed_audit(
     """IndieRouter (deepseek-v4.1-flash) is managed_audit's primary
     provider as of 2026-10-04 - never Luna, same reasoning as below.
 
-    Primary path: reasoning_effort=low, paired with MAX_TOOL_ROUNDS raised
-    20->40 (src/aletheore/adapters/openai_compatible.py) - measured
-    directly against this repository via the real .invoke() tool-calling
-    loop: 9 rounds, 132s, $0.16 list price, 17/17 facts and fewer
-    unverified citations (2) than default reasoning's 24-round, $0.67 run
-    (5 unverified) - comfortably inside the new round ceiling either way
-    (docs/operations/LLM-CONSOLIDATION-HANDOVER-2026-10-03.md, local-only).
-    Falls back to the pre-existing, unchanged DeepSeek-Flash-direct path
-    (supports_tool_choice=False there - see writing_adapter_for's own
-    comment on why; untested against IndieRouter, not carried over
-    speculatively) if INDIEROUTER_API_KEY isn't configured.
+    Primary path: reasoning_effort=low, paired with the hosted-only
+    MANAGED_AUDIT_MAX_TOOL_ROUNDS=40 ceiling (openai_compatible.py - see
+    its own comment for why this is explicit here rather than the plain
+    adapter default) - measured directly against this repository via the
+    real .invoke() tool-calling loop: 9 rounds, 132s, $0.16 list price,
+    17/17 facts and fewer unverified citations (2) than default
+    reasoning's 24-round, $0.67 run (5 unverified) - comfortably inside
+    the ceiling either way (docs/operations/LLM-CONSOLIDATION-HANDOVER-
+    2026-10-03.md, local-only). Re-verified live against this repository
+    on 2026-10-04 (real IndieRouter call, not mocked): 5 rounds, 109.6s,
+    $0.147, a full coherent report. Falls back to the pre-existing,
+    unchanged DeepSeek-Flash-direct path (supports_tool_choice=False
+    there - see writing_adapter_for's own comment on why; same
+    MANAGED_AUDIT_MAX_TOOL_ROUNDS applies there too, since the hosted
+    feature's cost reserve is already sized for it regardless of which
+    provider actually answers) if INDIEROUTER_API_KEY isn't configured.
 
     Never Luna (writing_adapter_for_plan's default) and never DeepSeek Pro
     either, on either path. Measured directly, three real full audit runs
@@ -557,6 +602,8 @@ def writing_adapter_for_managed_audit(
             on_call_failed=on_call_failed,
             allow_partial_report=allow_partial_report,
             reasoning_effort="low",
+            max_tool_rounds=MANAGED_AUDIT_MAX_TOOL_ROUNDS,
+            request_timeout_seconds=MANAGED_AUDIT_REQUEST_TIMEOUT_SECONDS,
         )
     logging.getLogger(__name__).warning(
         "INDIEROUTER_API_KEY not configured - falling back to direct DeepSeek Flash for managed audits"
@@ -568,6 +615,8 @@ def writing_adapter_for_managed_audit(
         on_call_failed=on_call_failed,
         allow_partial_report=allow_partial_report,
         _prefer_luna=False,
+        max_tool_rounds=MANAGED_AUDIT_MAX_TOOL_ROUNDS,
+        request_timeout_seconds=MANAGED_AUDIT_REQUEST_TIMEOUT_SECONDS,
     )
 
 
