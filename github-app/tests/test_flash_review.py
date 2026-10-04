@@ -14,7 +14,6 @@ from scan_worker.flash_review import (
     _build_per_file_user_prompt,
     _generate_findings_per_file,
     _same_file,
-    VERIFICATION_SYSTEM_PROMPT,
     files_missing_from_review_context,
     _build_flash_review_user_prompt,
     _diff_valid_lines,
@@ -26,9 +25,6 @@ from scan_worker.flash_review import (
     _rank_findings_with_severity,
     _ranking_user_prompt,
     _validate_findings,
-    _verification_user_prompt,
-    _verify_findings_with_second_model,
-    _verify_suggestion_correctness,
     build_change_impact_context,
     build_code_evidence_context,
     build_dependency_impact_context,
@@ -927,47 +923,6 @@ def test_review_diff_writes_to_cache_after_a_fresh_call(mock_adapter_class):
     ]
 
 
-@patch("scan_worker.model_tiers.verification_adapter")
-@patch("scan_worker.flash_review.flash_review_generation_adapter")
-def test_review_diff_does_not_cache_a_finding_the_second_model_verifier_rejects(
-    mock_adapter_class, mock_verification_adapter
-):
-    # Real bug found via audit: cache_write used to receive `valid` -
-    # findings that had only passed basic structural validation - BEFORE
-    # grounding (_validate_findings) and second-model verification got a
-    # chance to reject a finding. A finding the verifier explicitly
-    # determined was a false positive still got written to the similarity
-    # cache as if it were kept. Worse than the sibling read-side bugs
-    # #549/#583 already fixed: a rejected finding WITH a quotable citation
-    # (like this one) would never be rechecked on any future cache hit
-    # (needs_recheck only rechecks findings lacking one), so it would be
-    # served as valid forever on any future similar diff for that
-    # installation/repo.
-    mock_adapter = MagicMock()
-    mock_adapter.simple_completion.return_value = (
-        '[{"file": "app.py", "line": 42, "issue": "hardcoded secret in \\"sk-abc123\\""}]'
-    )
-    mock_adapter_class.return_value = mock_adapter
-
-    mock_verifier = MagicMock()
-    mock_verifier.is_available.return_value = True
-    mock_verifier.simple_completion.return_value = '{"verdict": "REJECT", "reason": "already fixed"}'
-    mock_verification_adapter.return_value = mock_verifier
-
-    diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+key = \"sk-abc123\""
-    file_contents = {"app.py": "\n".join(f"line {i}" for i in range(1, 42)) + '\nkey = "sk-abc123"\n'}
-    written = []
-
-    findings = review_diff(
-        diff_text,
-        cache_lookup=lambda diff: None,
-        cache_write=lambda diff, findings, model_used: written.append(findings),
-        file_contents=file_contents,
-        verify_with_second_model=True,
-    )
-
-    assert findings == []
-    assert written == [[]]
 
 
 @patch("scan_worker.flash_review.flash_review_generation_adapter")
@@ -1175,53 +1130,6 @@ def test_review_diff_suggestion_field_is_optional(mock_adapter_class):
     assert findings == [{"file": "a.py", "line": 3, "issue": "off-by-one", "source": "llm"}]
 
 
-@patch("scan_worker.model_tiers.verification_adapter")
-@patch("scan_worker.flash_review.flash_review_generation_adapter")
-def test_review_diff_runs_suggestion_correctness_check_even_without_second_model_verification(
-    mock_writing_adapter_for, mock_verification_adapter, monkeypatch,
-):
-    # The suggestion-correctness gate must fire on the Flash tier too, not
-    # just when verify_with_second_model=True (AIR-only grounding recheck)
-    # - Flash tier's own solo-Luna-generation design makes it *more*
-    # exposed to a wrong-direction clickable suggestion than AIR, not less.
-    #
-    # The finding-with-a-suggestion comes from find_semantic_regressions
-    # here, not the LLM: PR-Agent's real YAML schema (KeyIssuesComponentLink)
-    # has no "suggestion" field at all, so an LLM-generated finding can
-    # never carry one anymore - deterministic/semantic findings (see
-    # semantic_checks._finding) are the only real source of a clickable
-    # suggestion going forward. This test now isolates exactly that: the
-    # integration point (does review_diff run the correctness check on
-    # Flash tier regardless of verify_with_second_model), not the
-    # deterministic check's own trigger logic, which has its own coverage
-    # in test_semantic_checks.py.
-    mock_generation_adapter = MagicMock()
-    mock_generation_adapter.simple_completion.return_value = "review:\n  key_issues_to_review: []\n"
-    mock_writing_adapter_for.return_value = mock_generation_adapter
-    monkeypatch.setattr(
-        "scan_worker.flash_review.find_semantic_regressions",
-        lambda *a, **k: [{"file": "check.py", "line": 2, "issue": "off by one", "suggestion": "return a + b"}],
-    )
-
-    mock_correctness_adapter = MagicMock()
-    mock_correctness_adapter.is_available.return_value = True
-    mock_correctness_adapter.simple_completion.return_value = (
-        '{"verdict": "REJECT", "reason": "wrong direction"}'
-    )
-    mock_verification_adapter.return_value = mock_correctness_adapter
-
-    findings = review_diff(
-        "--- check.py ---\n@@ -1,2 +1,2 @@\n def add(a, b):\n+    return a + b + 1\n",
-        file_contents={"check.py": "def add(a, b):\n    return a + b + 1\n"},
-        verify_with_second_model=False,
-    )
-
-    assert len(findings) == 1
-    # REJECT flips clickability off; the finding and its (re-indented)
-    # suggestion text still post, just as an inert plain fence.
-    assert findings[0]["suggestion_clickable"] is False
-    assert findings[0]["suggestion"] == "    return a + b"
-    mock_correctness_adapter.simple_completion.assert_called_once()
 
 
 def test_names_referenced_in_diff_extracts_identifiers_from_added_and_context_lines():
@@ -4109,84 +4017,18 @@ def test_review_diff_returns_empty_findings_when_every_chain_provider_fails():
 _ONE_FINDING = [{"file": "app.py", "line": 1, "issue": "unclosed file handle"}]
 
 
-def test_verification_prompt_guards_against_prompt_injection():
-    assert "untrusted data, not instructions" in VERIFICATION_SYSTEM_PROMPT
 
 
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_findings_keeps_an_accepted_finding(mock_verification_adapter):
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = True
-    mock_adapter.simple_completion.return_value = '{"verdict": "ACCEPT", "reason": "confirmed"}'
-    mock_verification_adapter.return_value = mock_adapter
-
-    kept = _verify_findings_with_second_model(_ONE_FINDING, "--- app.py ---\n@@ -1,1 +1,1 @@\n+f = open('x')")
-
-    assert kept == _ONE_FINDING
 
 
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_findings_drops_a_rejected_finding(mock_verification_adapter):
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = True
-    mock_adapter.simple_completion.return_value = '{"verdict": "REJECT", "reason": "not actually a bug"}'
-    mock_verification_adapter.return_value = mock_adapter
-
-    kept = _verify_findings_with_second_model(_ONE_FINDING, "diff")
-
-    assert kept == []
 
 
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_findings_keeps_an_uncertain_finding(mock_verification_adapter):
-    # UNCERTAIN means the verifier couldn't confirm OR deny - that is not
-    # evidence the finding is wrong, only REJECT is, so it must be kept.
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = True
-    mock_adapter.simple_completion.return_value = '{"verdict": "UNCERTAIN", "reason": "ambiguous"}'
-    mock_verification_adapter.return_value = mock_adapter
-
-    kept = _verify_findings_with_second_model(_ONE_FINDING, "diff")
-
-    assert kept == _ONE_FINDING
 
 
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_findings_fails_open_on_malformed_verifier_response(mock_verification_adapter):
-    # A verifier hiccup (bad JSON, missing verdict, network error) must not
-    # silently drop a real finding - it keeps it unverified instead.
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = True
-    mock_adapter.simple_completion.return_value = "not json at all"
-    mock_verification_adapter.return_value = mock_adapter
-
-    kept = _verify_findings_with_second_model(_ONE_FINDING, "diff")
-
-    assert kept == _ONE_FINDING
 
 
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_findings_fails_open_when_adapter_raises(mock_verification_adapter):
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = True
-    mock_adapter.simple_completion.side_effect = RuntimeError("network error")
-    mock_verification_adapter.return_value = mock_adapter
-
-    kept = _verify_findings_with_second_model(_ONE_FINDING, "diff")
-
-    assert kept == _ONE_FINDING
 
 
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_findings_skips_verification_when_deepseek_key_missing(mock_verification_adapter):
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = False
-    mock_verification_adapter.return_value = mock_adapter
-
-    kept = _verify_findings_with_second_model(_ONE_FINDING, "diff")
-
-    assert kept == _ONE_FINDING
-    mock_adapter.simple_completion.assert_not_called()
 
 
 # --- ranking pass (_rank_findings_with_severity) ---
@@ -4372,12 +4214,6 @@ def test_rank_findings_fails_open_when_adapter_raises(mock_generation_adapter):
     assert ranked == _TWO_FINDINGS
 
 
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_findings_does_not_call_the_adapter_at_all_for_no_findings(mock_verification_adapter):
-    kept = _verify_findings_with_second_model([], "diff")
-
-    assert kept == []
-    mock_verification_adapter.assert_not_called()
 
 
 # review_diff's single-shot generation path expects PR-Agent's real YAML
@@ -4474,52 +4310,12 @@ def test_review_diff_caches_the_ranked_result_not_the_unranked_one(mock_adapter_
     assert cached[42]["rank"] == 1 and cached[42]["severity"] == "Critical"
 
 
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_findings_checks_each_finding_independently(mock_verification_adapter):
-    findings = [
-        {"file": "a.py", "line": 1, "issue": "real bug"},
-        {"file": "b.py", "line": 2, "issue": "not a real bug"},
-    ]
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = True
-
-    def _respond(system_prompt, user_prompt, cwd):
-        if "a.py" in user_prompt:
-            return '{"verdict": "ACCEPT", "reason": "confirmed"}'
-        return '{"verdict": "REJECT", "reason": "no such issue"}'
-
-    mock_adapter.simple_completion.side_effect = _respond
-    mock_verification_adapter.return_value = mock_adapter
-
-    kept = _verify_findings_with_second_model(findings, "diff")
-
-    assert kept == [{"file": "a.py", "line": 1, "issue": "real bug"}]
 
 
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_findings_threads_on_usage_to_the_adapter(mock_verification_adapter):
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = True
-    mock_adapter.simple_completion.return_value = '{"verdict": "ACCEPT", "reason": "confirmed"}'
-    mock_verification_adapter.return_value = mock_adapter
-
-    on_usage = MagicMock()
-    _verify_findings_with_second_model(_ONE_FINDING, "diff", on_usage=on_usage)
-
-    mock_verification_adapter.assert_called_once_with(on_usage=on_usage)
 
 
-def test_verification_user_prompt_includes_surrounding_context_when_given():
-    prompt = _verification_user_prompt("diff text", _ONE_FINDING[0], context="def f():\n    pass")
-
-    assert "Surrounding file context" in prompt
-    assert "def f():\n    pass" in prompt
 
 
-def test_verification_user_prompt_omits_context_section_when_none():
-    prompt = _verification_user_prompt("diff text", _ONE_FINDING[0], context=None)
-
-    assert "Surrounding file context" not in prompt
 
 
 # Real bug fixed 2026-09-14: _verify_findings_with_second_model used to hand
@@ -4549,69 +4345,10 @@ _LOOP_FILE_CONTENTS = {
 }
 
 
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_findings_passes_surrounding_context_to_the_adapter(mock_verification_adapter):
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = True
-
-    def _respond(system_prompt, user_prompt, cwd):
-        assert "for _, arg := range args" in user_prompt, (
-            "the enclosing loop lives outside the diff hunk - the verifier can only "
-            "confirm this finding if the surrounding file context reached it"
-        )
-        return '{"verdict": "ACCEPT", "reason": "loop confirmed"}'
-
-    mock_adapter.simple_completion.side_effect = _respond
-    mock_verification_adapter.return_value = mock_adapter
-
-    kept = _verify_findings_with_second_model(
-        _LOOP_FINDING, "diff", file_contents=_LOOP_FILE_CONTENTS
-    )
-
-    assert kept == _LOOP_FINDING
 
 
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_findings_falls_back_to_diff_only_when_file_missing_from_file_contents(
-    mock_verification_adapter,
-):
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = True
-
-    def _respond(system_prompt, user_prompt, cwd):
-        assert "Surrounding file context" not in user_prompt
-        return '{"verdict": "ACCEPT", "reason": "confirmed from diff alone"}'
-
-    mock_adapter.simple_completion.side_effect = _respond
-    mock_verification_adapter.return_value = mock_adapter
-
-    kept = _verify_findings_with_second_model(
-        _LOOP_FINDING, "diff", file_contents={"other.go": "package other\n"}
-    )
-
-    assert kept == _LOOP_FINDING
 
 
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_findings_falls_back_to_diff_only_when_cited_line_out_of_bounds(
-    mock_verification_adapter,
-):
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = True
-
-    def _respond(system_prompt, user_prompt, cwd):
-        assert "Surrounding file context" not in user_prompt
-        return '{"verdict": "ACCEPT", "reason": "confirmed from diff alone"}'
-
-    mock_adapter.simple_completion.side_effect = _respond
-    mock_verification_adapter.return_value = mock_adapter
-
-    out_of_bounds_finding = [{"file": "parse.go", "line": 999, "issue": "whatever"}]
-    kept = _verify_findings_with_second_model(
-        out_of_bounds_finding, "diff", file_contents=_LOOP_FILE_CONTENTS
-    )
-
-    assert kept == out_of_bounds_finding
 
 
 _SUGGESTION_FINDING = {
@@ -4623,419 +4360,42 @@ _SUGGESTION_FINDING = {
 _SUGGESTION_FILE_CONTENTS = {"check.py": "def add(a, b):\n    return a + b + 1\n"}
 
 
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_suggestion_correctness_accepts_a_correct_fix(mock_verification_adapter):
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = True
-    mock_adapter.simple_completion.return_value = '{"verdict": "ACCEPT", "reason": "correct fix"}'
-    mock_verification_adapter.return_value = mock_adapter
 
-    result = _verify_suggestion_correctness(_SUGGESTION_FINDING, _SUGGESTION_FILE_CONTENTS)
 
-    assert result is True
 
 
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_suggestion_correctness_rejects_a_wrong_direction_fix(mock_verification_adapter):
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = True
-    mock_adapter.simple_completion.return_value = '{"verdict": "REJECT", "reason": "wrong direction"}'
-    mock_verification_adapter.return_value = mock_adapter
 
-    result = _verify_suggestion_correctness(_SUGGESTION_FINDING, _SUGGESTION_FILE_CONTENTS)
 
-    assert result is False
-
-
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_suggestion_correctness_fails_closed_when_deepseek_key_missing(mock_verification_adapter):
-    # Opposite default from _verify_findings_with_second_model's fail-open:
-    # this gate decides whether to hand out a one-click Apply button, so an
-    # unavailable verifier must default to NOT clickable, not to clickable.
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = False
-    mock_verification_adapter.return_value = mock_adapter
 
-    result = _verify_suggestion_correctness(_SUGGESTION_FINDING, _SUGGESTION_FILE_CONTENTS)
 
-    assert result is False
-    mock_adapter.simple_completion.assert_not_called()
-
 
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_suggestion_correctness_fails_closed_on_malformed_response(mock_verification_adapter):
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = True
-    mock_adapter.simple_completion.return_value = "not json at all"
-    mock_verification_adapter.return_value = mock_adapter
 
-    result = _verify_suggestion_correctness(_SUGGESTION_FINDING, _SUGGESTION_FILE_CONTENTS)
 
-    assert result is False
 
 
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_suggestion_correctness_fails_closed_when_adapter_raises(mock_verification_adapter):
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = True
-    mock_adapter.simple_completion.side_effect = RuntimeError("network error")
-    mock_verification_adapter.return_value = mock_adapter
-
-    result = _verify_suggestion_correctness(_SUGGESTION_FINDING, _SUGGESTION_FILE_CONTENTS)
-
-    assert result is False
-
-
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_suggestion_correctness_fails_closed_when_file_contents_missing(mock_verification_adapter):
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = True
-    mock_verification_adapter.return_value = mock_adapter
-
-    result = _verify_suggestion_correctness(_SUGGESTION_FINDING, {})
-
-    assert result is False
-    mock_adapter.simple_completion.assert_not_called()
-
-
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_suggestion_correctness_fails_closed_on_a_malformed_finding(mock_verification_adapter):
-    # Real gap found by independent peer review: finding["issue"] (and
-    # file/line/suggestion) used to be accessed, and `lines` indexed,
-    # BEFORE the try/except - a missing key or surprising shape raised
-    # straight out of this function instead of failing closed like every
-    # other error case here. That matters beyond this one finding: this
-    # runs inside _validate_findings' ThreadPoolExecutor pool.map(), so an
-    # uncaught exception here would have propagated out of list(pool.map())
-    # and crashed _validate_findings entirely - losing the WHOLE review's
-    # findings, not just this one suggestion's clickability.
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = True
-    mock_verification_adapter.return_value = mock_adapter
-
-    malformed_finding = {"file": "check.py", "line": 2, "suggestion": "return a + b"}  # no "issue"
-
-    result = _verify_suggestion_correctness(malformed_finding, _SUGGESTION_FILE_CONTENTS)
-
-    assert result is False
-    mock_adapter.simple_completion.assert_not_called()
-
-
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_validate_findings_does_not_lose_other_findings_when_one_suggestion_is_malformed(
-    mock_verification_adapter,
-):
-    # End-to-end version of the same gap: a batch with one well-formed
-    # clickable candidate and one malformed one must not let the malformed
-    # one's crash take down the whole batch's return value.
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = True
-    mock_adapter.simple_completion.return_value = '{"verdict": "ACCEPT", "reason": "correct fix"}'
-    mock_verification_adapter.return_value = mock_adapter
-
-    diff_text = (
-        "--- check.py ---\n@@ -1,2 +1,2 @@\n def add(a, b):\n+    return a + b + 1\n"
-        "\n"
-        "--- other.py ---\n@@ -1,1 +1,1 @@\n+broken\n"
-    )
-    file_contents = {
-        "check.py": "def add(a, b):\n    return a + b + 1\n",
-        "other.py": "broken\n",
-    }
-    findings = [
-        {"file": "check.py", "line": 2, "issue": "off by one", "suggestion": "return a + b"},
-        {"file": "other.py", "line": 1, "suggestion": "fixed"},  # missing "issue" - malformed
-    ]
-
-    kept = _validate_findings(findings, diff_text, file_contents)
-
-    assert len(kept) == 2
-    good = next(f for f in kept if f["file"] == "check.py")
-    assert good["suggestion_clickable"] is True
-
-
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_verify_suggestion_correctness_threads_on_usage_to_the_adapter(mock_verification_adapter):
-    mock_adapter = MagicMock()
-    mock_adapter.is_available.return_value = True
-    mock_adapter.simple_completion.return_value = '{"verdict": "ACCEPT", "reason": "confirmed"}'
-    mock_verification_adapter.return_value = mock_adapter
-
-    on_usage = MagicMock()
-    _verify_suggestion_correctness(_SUGGESTION_FINDING, _SUGGESTION_FILE_CONTENTS, on_usage=on_usage)
-
-    mock_verification_adapter.assert_called_once_with(on_usage=on_usage)
-
-
-@patch("scan_worker.flash_review.flash_review_generation_adapter")
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_review_diff_runs_verification_when_requested(mock_verification_adapter, mock_writing_adapter_for):
-    mock_generation_adapter = MagicMock()
-    mock_generation_adapter.simple_completion.return_value = (
-        "review:\n"
-        "  key_issues_to_review:\n"
-        "    - relevant_file: app.py\n"
-        "      issue_content: a real problem\n"
-        "      start_line: 1\n"
-        "      end_line: 1\n"
-    )
-    mock_writing_adapter_for.return_value = mock_generation_adapter
-
-    mock_verifier = MagicMock()
-    mock_verifier.is_available.return_value = True
-    mock_verifier.simple_completion.return_value = '{"verdict": "REJECT", "reason": "not real"}'
-    mock_verification_adapter.return_value = mock_verifier
-
-    findings = review_diff(
-        "--- app.py ---\n@@ -1,1 +1,1 @@\n+x = 1",
-        verify_with_second_model=True,
-    )
-
-    assert findings == []
-    mock_verifier.simple_completion.assert_called_once()
-
-
-@patch("scan_worker.flash_review.flash_review_generation_adapter")
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_review_diff_skips_verification_by_default(mock_verification_adapter, mock_writing_adapter_for):
-    mock_generation_adapter = MagicMock()
-    mock_generation_adapter.simple_completion.return_value = (
-        "review:\n"
-        "  key_issues_to_review:\n"
-        "    - relevant_file: app.py\n"
-        "      issue_content: a real problem\n"
-        "      start_line: 1\n"
-        "      end_line: 1\n"
-    )
-    mock_writing_adapter_for.return_value = mock_generation_adapter
-
-    findings = review_diff("--- app.py ---\n@@ -1,1 +1,1 @@\n+x = 1")
-
-    assert findings == [{"file": "app.py", "line": 1, "issue": "a real problem", "source": "llm"}]
-    mock_verification_adapter.assert_not_called()
-
-
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_review_diff_does_not_reverify_a_cache_hit_finding_with_verifiable_content(
-    mock_verification_adapter,
-):
-    # A cache-hit finding whose issue text quotes a real literal that still
-    # appears at the cited line already got genuine re-validation from
-    # grounding's own content check (see _has_verifiable_content_citation) -
-    # sending it through the LLM verifier too would be a second, unnecessary
-    # real-money call on every such cache hit, defeating the whole point of
-    # the similarity cache.
-    diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('buggy_handle')"
-    cached_findings = [
-        {"file": "app.py", "line": 42, "issue": "the file handle 'buggy_handle' is never closed"}
-    ]
-    file_contents = {"app.py": "\n" * 41 + "f = open('buggy_handle')\n"}
-
-    findings = review_diff(
-        diff_text,
-        cache_lookup=lambda diff: cached_findings,
-        file_contents=file_contents,
-        verify_with_second_model=True,
-    )
-
-    assert findings == [{**cached_findings[0], "source": "llm"}]
-    mock_verification_adapter.assert_not_called()
-
-
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_review_diff_rechecks_a_cache_hit_finding_with_no_quotable_content(mock_verification_adapter):
-    # Real gap this guards (found on Flash Review's own PR #547): a cached
-    # finding describing a logical/omission bug ("X is never done") has no
-    # specific buggy literal to quote, so grounding's content check can only
-    # ever fall back to "nothing to check, pass" for it - zero real
-    # re-validation against the *current* diff, even though a cache hit
-    # means this diff is merely similar to, not identical to, whatever was
-    # originally reviewed. This must get a real recheck instead of being
-    # trusted forever. verify_with_second_model=True: this recheck is
-    # AIR-tier only (see the gating test below) - jobs.py only ever passes
-    # True here for installations on the "air" plan.
-    mock_verifier = MagicMock()
-    mock_verifier.is_available.return_value = True
-    mock_verifier.simple_completion.return_value = '{"verdict": "ACCEPT", "reason": "still there"}'
-    mock_verification_adapter.return_value = mock_verifier
-
-    diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')"
-    cached_findings = [{"file": "app.py", "line": 42, "issue": "cached finding, no quoted literal"}]
-
-    findings = review_diff(
-        diff_text, cache_lookup=lambda diff: cached_findings, verify_with_second_model=True
-    )
-
-    assert findings == [{**cached_findings[0], "source": "llm"}]
-    mock_verifier.simple_completion.assert_called_once()
-
-
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_review_diff_does_not_recheck_a_cache_hit_finding_on_a_non_air_plan(mock_verification_adapter):
-    # Real bug found via audit: an earlier version of this recheck ran
-    # unconditionally on every cache hit, regardless of verify_with_second_
-    # model - silently giving Flash/free-tier installations the AIR-only
-    # DeepSeek verification call jobs.py deliberately gates
-    # (verify_with_second_model=(installation["plan"] == "air"), whose own
-    # _on_verification_usage comment says "Never called for free tier...
-    # gated to paid plans"). That both broke the tier boundary and spent
-    # real DeepSeek tokens the Flash spend cap's own sizing explicitly
-    # assumes never happens ("no dual-agent verification" - see
-    # llm_cost.py's PLAN_CAP_OVERRIDE_USD comment).
-    mock_verifier = MagicMock()
-    mock_verifier.is_available.return_value = True
-    mock_verifier.simple_completion.return_value = '{"verdict": "REJECT", "reason": "already fixed"}'
-    mock_verification_adapter.return_value = mock_verifier
-
-    diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')"
-    cached_findings = [{"file": "app.py", "line": 42, "issue": "cached finding, no quoted literal"}]
-
-    findings = review_diff(
-        diff_text, cache_lookup=lambda diff: cached_findings, verify_with_second_model=False
-    )
-
-    assert findings == [{**cached_findings[0], "source": "llm"}]
-    mock_verifier.simple_completion.assert_not_called()
-
-
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_review_diff_drops_a_cache_hit_finding_the_recheck_rejects(mock_verification_adapter):
-    # The exact PR #547 scenario: a cache-hit finding with no quotable
-    # literal, served again against a new diff that actually fixed the bug
-    # it describes. Without the recheck this survives forever, silently
-    # re-affirmed on every subsequent similar push; with it, a REJECT
-    # verdict finally lets it drop out - the same as _post_flash_review_
-    # finding_comments treating "not reproposed" as fixed.
-    mock_verifier = MagicMock()
-    mock_verifier.is_available.return_value = True
-    mock_verifier.simple_completion.return_value = '{"verdict": "REJECT", "reason": "already fixed"}'
-    mock_verification_adapter.return_value = mock_verifier
-
-    diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')"
-    cached_findings = [{"file": "app.py", "line": 42, "issue": "cached finding, no quoted literal"}]
-
-    findings = review_diff(
-        diff_text, cache_lookup=lambda diff: cached_findings, verify_with_second_model=True
-    )
-
-    assert findings == []
-
-
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_review_diff_cache_hit_recheck_prices_as_verification_not_generation(mock_verification_adapter):
-    # on_verification_usage, not on_usage: the recheck always calls
-    # verification_adapter (always DeepSeek), so pricing it at
-    # flash_review_model's rate - Luna, whenever that generated the
-    # original cached finding - would misprice real DeepSeek tokens at a
-    # different, likely more expensive model's cost.
-    mock_verifier = MagicMock()
-    mock_verifier.is_available.return_value = True
-    mock_verifier.simple_completion.return_value = '{"verdict": "ACCEPT", "reason": "still there"}'
-    mock_verification_adapter.return_value = mock_verifier
-
-    diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')"
-    cached_findings = [{"file": "app.py", "line": 42, "issue": "cached finding, no quoted literal"}]
-    generation_usage = MagicMock()
-    verification_usage = MagicMock()
-
-    review_diff(
-        diff_text,
-        cache_lookup=lambda diff: cached_findings,
-        on_usage=generation_usage,
-        on_verification_usage=verification_usage,
-        verify_with_second_model=True,
-    )
-
-    mock_verification_adapter.assert_called_once_with(on_usage=verification_usage)
-
-
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_review_diff_never_sends_a_cached_semantic_finding_to_the_recheck(mock_verification_adapter):
-    # semantic_findings are deterministic, code-verified evidence (see
-    # find_semantic_regressions), not a model guess that can go stale the
-    # way an LLM's prose claim can - even with no quoted literal and no
-    # file_contents, a cached finding tagged "source": "semantic" must
-    # never be sent through the fallible LLM recheck.
-    diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')"
-    cached_findings = [
-        {"file": "app.py", "line": 42, "issue": "no quoted literal here", "source": "semantic"}
-    ]
-
-    findings = review_diff(diff_text, cache_lookup=lambda diff: cached_findings)
-
-    assert findings == cached_findings
-    mock_verification_adapter.assert_not_called()
-
-
-@patch("scan_worker.flash_review.flash_review_generation_adapter")
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_review_diff_never_sends_a_semantic_finding_to_the_llm_verifier(
-    mock_verification_adapter, mock_writing_adapter_for
-):
-    # Real regression this guards: semantic_findings come from
-    # find_semantic_regressions - deterministic, code-verified evidence, not
-    # a model guess. Sending them through the fallible LLM verifier risks a
-    # bad-day REJECT silently dropping a real, evidence-backed finding. The
-    # model here proposes nothing at the semantic finding's own location, so
-    # if the semantic finding survives, it was never sent to the verifier at
-    # all (a REJECT-everything verifier could not have let it through).
-    mock_generation_adapter = MagicMock()
-    mock_generation_adapter.simple_completion.return_value = "[]"
-    mock_writing_adapter_for.return_value = mock_generation_adapter
-
-    mock_verifier = MagicMock()
-    mock_verifier.is_available.return_value = True
-    mock_verifier.simple_completion.return_value = '{"verdict": "REJECT", "reason": "rejects everything"}'
-    mock_verification_adapter.return_value = mock_verifier
-
-    diff_text = "--- app.py ---\n@@ -1,1 +1,1 @@\n+except Exception:\n+    pass"
-    with patch(
-        "scan_worker.flash_review.find_semantic_regressions",
-        return_value=[{"file": "app.py", "line": 2, "issue": "bare except silently swallows all errors"}],
-    ):
-        findings = review_diff(diff_text, verify_with_second_model=True)
-
-    assert findings == [
-        {"file": "app.py", "line": 2, "issue": "bare except silently swallows all errors", "source": "semantic"}
-    ]
-    mock_verifier.simple_completion.assert_not_called()
-
-
-@patch("scan_worker.flash_review.flash_review_generation_adapter")
-@patch("scan_worker.model_tiers.verification_adapter")
-def test_review_diff_verifies_model_findings_but_not_semantic_findings_in_the_same_review(
-    mock_verification_adapter, mock_writing_adapter_for
-):
-    # Both kinds of finding in one review: the semantic one must survive a
-    # REJECT-everything verifier untouched, the model one must actually be
-    # checked and dropped.
-    mock_generation_adapter = MagicMock()
-    mock_generation_adapter.simple_completion.return_value = (
-        "review:\n"
-        "  key_issues_to_review:\n"
-        "    - relevant_file: app.py\n"
-        "      issue_content: a model-proposed finding\n"
-        "      start_line: 1\n"
-        "      end_line: 1\n"
-    )
-    mock_writing_adapter_for.return_value = mock_generation_adapter
-
-    mock_verifier = MagicMock()
-    mock_verifier.is_available.return_value = True
-    mock_verifier.simple_completion.return_value = '{"verdict": "REJECT", "reason": "not real"}'
-    mock_verification_adapter.return_value = mock_verifier
-
-    diff_text = "--- app.py ---\n@@ -1,1 +1,1 @@\n+x = 1\n+except Exception:\n+    pass"
-    with patch(
-        "scan_worker.flash_review.find_semantic_regressions",
-        return_value=[{"file": "app.py", "line": 2, "issue": "bare except silently swallows all errors"}],
-    ):
-        findings = review_diff(diff_text, verify_with_second_model=True)
-
-    assert findings == [
-        {"file": "app.py", "line": 2, "issue": "bare except silently swallows all errors", "source": "semantic"}
-    ]
-    mock_verifier.simple_completion.assert_called_once()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def test_system_prompt_warns_that_diff_hunk_headers_are_not_proof_of_code_nesting():

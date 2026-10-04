@@ -13,7 +13,6 @@ from scan_worker.model_tiers import (
     MANAGED_AUDIT_REQUEST_TIMEOUT_SECONDS,
     OPENAI_FREE_TIER_DAILY_TOKEN_CAP,
     PRO_MODEL,
-    VERIFICATION_MODEL,
     FreeTierFallbackExhausted,
     airview_model_used,
     docs_model_used,
@@ -22,7 +21,6 @@ from scan_worker.model_tiers import (
     model_for_plan,
     resolve_model,
     run_with_free_tier_fallback,
-    verification_adapter,
     writing_adapter_chain_for_free_tier,
     writing_adapter_for,
     writing_adapter_for_airview,
@@ -373,30 +371,10 @@ def test_managed_audit_model_used_tracks_which_branch_will_run(monkeypatch):
     assert managed_audit_model_used() == MANAGED_AUDIT_MODEL
 
 
-def test_verification_adapter_always_uses_deepseek_even_when_openai_is_configured(monkeypatch):
-    # The whole point of independent verification is a model that didn't
-    # write the finding checking it - unlike writing_adapter_for, this must
-    # not switch to OpenAI/Luna just because it's available.
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
-    adapter = verification_adapter()
-    assert adapter.name == "DeepSeek"
-    assert adapter._model == VERIFICATION_MODEL
-    assert adapter._base_url == "https://api.deepseek.com"
-    assert adapter._api_key_env_var == "DEEPSEEK_API_KEY"
 
 
-def test_verification_adapter_still_uses_deepseek_when_openai_is_not_configured(monkeypatch):
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
-    adapter = verification_adapter()
-    assert adapter._model == VERIFICATION_MODEL
 
 
-def test_verification_adapter_threads_on_usage(monkeypatch):
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
-    received = []
-    adapter = verification_adapter(on_usage=lambda p, c: received.append((p, c)))
-    adapter._on_usage(5, 15)
-    assert received == [(5, 15)]
 
 
 def test_pro_uses_luna_when_openai_key_configured(monkeypatch):

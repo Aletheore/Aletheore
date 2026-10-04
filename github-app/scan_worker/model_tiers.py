@@ -136,7 +136,6 @@ def _true_up_openai_free_tier_reservation(
 
 LUNA_MODEL = "gpt-5.6-luna"
 PRO_MODEL = "deepseek-v4-pro"
-VERIFICATION_MODEL = "deepseek-v4-flash"
 
 # Every model we write with is a reasoning model, and reasoning tokens are
 # billed as output tokens - the most expensive kind. Nothing was switching them
@@ -269,7 +268,7 @@ def cross_file_check_adapter(
     golden catches lost, at ~$0.001/PR. The same two candidate models that were
     tried as the checker behaved very differently - deepseek-v4-flash dropped 5
     golden-bug catches and 4 true positives while catching only 3 false positives,
-    so this is deliberately not verification_adapter().
+    so this is deliberately a separate adapter.
 
     Never the generator (GLM via IndieRouter), so it can't be checking its own work.
     Needs OPENAI_API_KEY; without it the check is skipped and every finding stands.
@@ -750,31 +749,6 @@ def writing_adapter_for_health_fix_suggestion(
 
 def health_fix_suggestion_model_used(plan: str) -> str:
     return HEALTH_FIX_SUGGESTION_MODEL if _indierouter_available() else model_for_plan(plan)
-
-
-def verification_adapter(
-    on_usage: Callable[[int, int, int], None] | None = None,
-) -> OpenAICompatibleAdapter:
-    """Always DeepSeek V4 Flash, regardless of whether OpenAI is configured -
-    unlike writing_adapter_for, which prefers OpenAI when available and only
-    falls back to DeepSeek when it isn't. Independent verification only means
-    something if the checking model didn't also write the finding, so this
-    must not follow generation's own preference the way writing_adapter_for
-    does.
-    """
-    return OpenAICompatibleAdapter(
-        name="DeepSeek",
-        base_url="https://api.deepseek.com",
-        api_key_env_var="DEEPSEEK_API_KEY",
-        model=VERIFICATION_MODEL,
-        # See writing_adapter_for's DeepSeek branch - deepseek-v4-pro runs in
-        # thinking mode by default and rejects tool_choice="required", but
-        # this only matters for a model still forced onto thinking; kept
-        # here for the same reason it's kept there, not because flash-tier
-        # is known to need it.
-        supports_tool_choice=False,
-        on_usage=on_usage,
-    )
 
 
 def writing_adapter_chain_for_free_tier(
