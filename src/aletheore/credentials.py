@@ -2,6 +2,7 @@ import contextlib
 import getpass
 import json
 import os
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -189,9 +190,14 @@ def _restrict_windows_acl(path: Path) -> None:
     user = os.environ.get("USERNAME")
     if not user:
         return
+    # Bandit B607: pass the path shutil.which just resolved, not a bare
+    # "icacls" - same pattern as search_index.py's ollama/sh resolution.
+    icacls = shutil.which("icacls")
+    if not icacls:
+        return
     with contextlib.suppress(Exception):
         subprocess.run(
-            ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:F"],
+            [icacls, str(path), "/inheritance:r", "/grant:r", f"{user}:F"],
             capture_output=True,
             timeout=10,
             check=False,
