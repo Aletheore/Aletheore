@@ -700,7 +700,7 @@ def test_invoke_fails_fast_after_consecutive_no_tool_call_rounds(mock_openai_cla
         with pytest.raises(AdapterInvocationError, match="stopped calling tools"):
             adapter.invoke("audit this repo", cwd=str(repo))
 
-    # must fail fast (after 2 rounds), not burn through all 20 MAX_TOOL_ROUNDS
+    # must fail fast (after 2 rounds), not burn through all MAX_TOOL_ROUNDS
     assert mock_client.chat.completions.create.call_count == 2
 
 

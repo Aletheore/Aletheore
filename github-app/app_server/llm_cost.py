@@ -28,6 +28,13 @@ MODEL_RATES_PER_MILLION_USD = {
     # convention, every other rate quoted in USD) so cost_for_usage's
     # multiplication stays unit-consistent with every other model here.
     "glm-5.3-flash": {"input": 0.0765, "output": 0.2549, "verified_at": "2026-09-17"},
+    # IndieRouter's real rate card for this model (Rs 20/1M in, Rs 60/1M
+    # out), same Rs 88/USD conversion as glm-5.3-flash above, rounded up.
+    # A DIFFERENT model id from "deepseek-v4-flash" above - that entry is
+    # direct-DeepSeek-API pricing, a different price at a different base
+    # URL - keeping them separate avoids cost_for_usage ever pricing an
+    # IndieRouter call at the direct-API rate or vice versa.
+    "deepseek-v4.1-flash": {"input": 0.2273, "output": 0.6819, "verified_at": "2026-10-04"},
     # Embeddings bill on input only, so output is 0 rather than absent -
     # cost_for_usage multiplies both, and a missing key would KeyError
     # rather than cost nothing.

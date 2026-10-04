@@ -46,8 +46,12 @@ def test_run_managed_audit_still_uses_deepseek_flash_when_openai_key_configured(
     # The opposite condition from the test above - an available OpenAI key
     # must NOT switch managed_audit to Luna. writing_adapter_for's usual
     # Luna-preferred default is deliberately bypassed here via
-    # _prefer_luna=False, unlike every plan-based writing surface.
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    # _prefer_luna=False, unlike every plan-based writing surface. This is
+    # the fallback path (IndieRouter not configured) - see
+    # writing_adapter_for_managed_audit's own docstring for the primary one.
+    monkeypatch.setattr(
+        "scan_worker.model_tiers.has_api_key", lambda env_var, name, **k: env_var == "OPENAI_API_KEY"
+    )
     repo_path = tmp_path / "repo"
     (repo_path / ".aletheore").mkdir(parents=True)
     (repo_path / ".aletheore" / "air.toon").write_text("fake toon evidence")
@@ -67,6 +71,37 @@ def test_run_managed_audit_still_uses_deepseek_flash_when_openai_key_configured(
     adapter = captured_adapters[0]
     assert adapter.name == "DeepSeek"
     assert adapter._model == "deepseek-v4-flash"
+
+
+def test_run_managed_audit_uses_indierouter_when_configured(tmp_path, monkeypatch):
+    # Managed audit's primary provider as of 2026-10-04 - see
+    # writing_adapter_for_managed_audit's own docstring for the measured
+    # settings (effort low, 9 rounds/132s/$0.16 against this repository).
+    from scan_worker.model_tiers import INDIEROUTER_DEEPSEEK_MODEL
+
+    monkeypatch.setattr(
+        "scan_worker.model_tiers.has_api_key",
+        lambda env_var, name, **k: env_var in ("OPENAI_API_KEY", "INDIEROUTER_API_KEY"),
+    )
+    repo_path = tmp_path / "repo"
+    (repo_path / ".aletheore").mkdir(parents=True)
+    (repo_path / ".aletheore" / "air.toon").write_text("fake toon evidence")
+
+    captured_adapters = []
+
+    def fake_run_reasoning_phase(adapter, repo_path_arg, manual_dir):
+        captured_adapters.append(adapter)
+        report_path = Path(repo_path_arg) / ".aletheore" / "audit-report.md"
+        report_path.write_text("# Real Report\n\nfindings here")
+        return str(report_path)
+
+    monkeypatch.setattr("scan_worker.managed_audit.run_reasoning_phase", fake_run_reasoning_phase)
+
+    assert "Real Report" in run_managed_audit(repo_path)
+
+    adapter = captured_adapters[0]
+    assert adapter.name == "IndieRouter"
+    assert adapter._model == INDIEROUTER_DEEPSEEK_MODEL
 
 
 def test_run_managed_audit_threads_on_usage_to_the_adapter(tmp_path, monkeypatch):
