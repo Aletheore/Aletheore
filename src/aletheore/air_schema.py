@@ -50,6 +50,13 @@ def _obj(properties: dict, required: list[str] | None = None) -> dict:
     }
 
 
+def _with_optional(schema: dict, *keys: str) -> dict:
+    """`schema` with `keys` still declared but no longer required, for sections added after
+    evidence was already being stored: older air.json files stay valid until rescanned."""
+    schema["required"] = [k for k in schema["required"] if k not in keys]
+    return schema
+
+
 def _arr(items: dict | None = None) -> dict:
     return {"type": "array"} if items is None else {"type": "array", "items": items}
 
@@ -58,6 +65,10 @@ def _arr(items: dict | None = None) -> dict:
 # Detectors add their own extra keys and must stay free to; over-specifying
 # here would turn a harmless additive change into a CI failure.
 _SECRET_FINDING = _obj({"path": _STR, "line": _INT, "pattern": _STR})
+_ERROR_TYPE = _obj({"name": _STR, "file": _STR, "line": _INT, "bases": _ANY_LIST})
+_RAISE_SITE = _obj({"file": _STR, "line": _INT, "error_type": _STR, "function": _STR})
+_HANDLER = _obj({"file": _STR, "line": _INT, "catches": _ANY_LIST, "function": _STR})
+_ERROR_SUMMARY = _obj({"name": _STR, "defined_in": _STR, "raised": _INT, "caught": _INT})
 _ENDPOINT = _obj({"file": _STR, "line": _INT, "method": _STR, "path": _STR})
 # One normalized shape across every static-analysis tool (SonarQube,
 # Semgrep, Bearer, gosec, Bandit, Joern, Trivy, PMD) - every downstream consumer (MCP tool,
@@ -147,7 +158,7 @@ AIR_JSON_SCHEMA: dict = {
         "aletheore_version": _STR,
         "scanned_at": _STR,
         "repo_path": _STR,
-        "repository": _obj(
+        "repository": _with_optional(_obj(
             {
                 "languages": _arr(_LANGUAGE),
                 "frameworks": _ANY_LIST,
@@ -191,8 +202,19 @@ AIR_JSON_SCHEMA: dict = {
                         "entry_points_detected": _ANY_LIST,
                     }
                 ),
+                "error_handling": _obj(
+                    {
+                        "checked": _BOOL,
+                        "error_types": _arr(_ERROR_TYPE),
+                        "raise_sites": _arr(_RAISE_SITE),
+                        "handlers": _arr(_HANDLER),
+                        "by_error_type": _arr(_ERROR_SUMMARY),
+                        "truncated": _BOOL,
+                    },
+                    required=["checked"],
+                ),
             }
-        ),
+        ), "error_handling"),
         # A repo with no commits yields {"available": False} and nothing
         # else, so `available` is the only unconditionally required key here.
         # Consumers must branch on it before reading anything below.

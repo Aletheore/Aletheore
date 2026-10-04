@@ -420,6 +420,124 @@
           ],
           "type": "object"
         },
+        "error_handling": {
+          "properties": {
+            "by_error_type": {
+              "items": {
+                "properties": {
+                  "caught": {
+                    "type": "integer"
+                  },
+                  "defined_in": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "raised": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "caught",
+                  "defined_in",
+                  "name",
+                  "raised"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "checked": {
+              "type": "boolean"
+            },
+            "error_types": {
+              "items": {
+                "properties": {
+                  "bases": {
+                    "type": "array"
+                  },
+                  "file": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "type": "integer"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "bases",
+                  "file",
+                  "line",
+                  "name"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "handlers": {
+              "items": {
+                "properties": {
+                  "catches": {
+                    "type": "array"
+                  },
+                  "file": {
+                    "type": "string"
+                  },
+                  "function": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "catches",
+                  "file",
+                  "function",
+                  "line"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "raise_sites": {
+              "items": {
+                "properties": {
+                  "error_type": {
+                    "type": "string"
+                  },
+                  "file": {
+                    "type": "string"
+                  },
+                  "function": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "error_type",
+                  "file",
+                  "function",
+                  "line"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "checked"
+          ],
+          "type": "object"
+        },
         "frameworks": {
           "type": "array"
         },

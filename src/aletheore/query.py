@@ -456,6 +456,13 @@ def find_infrastructure(evidence: dict, target: str | None) -> dict:
     return evidence["repository"]["infrastructure"]
 
 
+def find_error_handling(evidence: dict, target: str | None) -> dict:
+    # Evidence written before 0.8.0 has no such section; say so instead of raising.
+    return evidence["repository"].get(
+        "error_handling", {"checked": False, "reason": "this evidence predates error-handling data; rescan"}
+    )
+
+
 def find_environment_variables(evidence: dict, target: str | None) -> dict:
     return evidence["repository"]["environment_variables"]
 
@@ -539,6 +546,7 @@ QUERY_FUNCTIONS: dict[str, tuple[Callable[[dict, str | None], Any], bool]] = {
     "database": (find_database, False),
     "infrastructure": (find_infrastructure, False),
     "environment-variables": (find_environment_variables, False),
+    "error-handling": (find_error_handling, False),
     "evidence-for-endpoint": (find_code_evidence_for_endpoint, True),
     "evidence-for-symbol": (find_code_evidence_for_symbol, True),
     "evidence-for-dependency": (find_code_evidence_for_dependency, True),
