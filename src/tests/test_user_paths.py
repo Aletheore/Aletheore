@@ -73,15 +73,31 @@ def test_mkdtemp_fallback_is_called_at_most_once_per_process(tmp_path, monkeypat
     assert len(calls) == 1
 
 
-def test_mkdtemp_fallback_degrades_to_the_bare_temp_dir_if_mkdtemp_fails(tmp_path, monkeypatch):
+@_posix_only
+def test_mkdtemp_fallback_tries_one_more_private_dir_if_mkdtemp_fails(tmp_path, monkeypatch):
     # Real gap found via audit: mkdtemp's own OSError (e.g. TMPDIR full or
-    # unwritable) was not caught, reintroducing the import-time crash this
-    # whole module exists to prevent.
+    # unwritable) previously fell straight to the bare, world-writable temp
+    # dir - credentials.py and the license/vulnerability caches would then
+    # write sensitive files somewhere every other user on the machine can
+    # read. Now it tries one more private, deterministically-named dir first.
     def raise_oserror(prefix=""):
         raise OSError("no space left on device")
 
     monkeypatch.setattr(user_paths.tempfile, "mkdtemp", raise_oserror)
     monkeypatch.setattr(user_paths.tempfile, "gettempdir", lambda: str(tmp_path))
+    path = user_paths._mkdtemp_fallback_home()
+    assert path != tmp_path
+    assert path.is_dir()
+    assert stat.S_IMODE(path.lstat().st_mode) == 0o700
+
+
+def test_mkdtemp_fallback_gives_up_to_the_bare_temp_dir_as_true_last_resort(tmp_path, monkeypatch):
+    def raise_oserror(prefix=""):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(user_paths.tempfile, "mkdtemp", raise_oserror)
+    monkeypatch.setattr(user_paths.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(user_paths, "_trusted_private_dir", lambda path: None)
     assert user_paths._mkdtemp_fallback_home() == tmp_path
 
 
