@@ -269,6 +269,28 @@ def _schedule_watches(observer, adapter, repo_path: Path) -> None:
         observer.schedule(adapter, str(directory), recursive=True)
 
 
+def _reconcile_watches(
+    current: set[Path], watched: set[Path], schedule: Callable[[Path], None]
+) -> None:
+    """Bring `watched` in line with `current` top-level dirs, in place.
+
+    A dir that is deleted and later recreated under the same name must be
+    treated as new again - `watched` only ever recording additions, never
+    pruning ones that disappeared, left it unwatched forever after
+    recreation. `schedule` is tried before a dir is recorded as watched, so
+    a dir that vanishes again between the triggering event and this call
+    (schedule raising) is simply retried on the next event instead of
+    crashing the watcher thread or being wrongly marked watched anyway.
+    """
+    for path in current - watched:
+        try:
+            schedule(path)
+        except OSError:
+            continue
+        watched.add(path)
+    watched.intersection_update(current)
+
+
 def _observer_handler(handler: "_DebouncedHandler", on_new_top_level_dir=None):
     """Adapt _DebouncedHandler to watchdog's real handler interface.
 
@@ -460,10 +482,11 @@ def watch(
     def watch_new_dir() -> None:
         # A top-level directory created after startup is not covered by the
         # non-recursive root watch, so register it as it appears.
-        for path in _watchable_top_level_dirs(repo_path):
-            if path not in watched:
-                watched.add(path)
-                observer.schedule(adapter, str(path), recursive=True)
+        _reconcile_watches(
+            set(_watchable_top_level_dirs(repo_path)),
+            watched,
+            lambda path: observer.schedule(adapter, str(path), recursive=True),
+        )
 
     adapter = _observer_handler(handler, watch_new_dir)
     watched.update(_watchable_top_level_dirs(repo_path))

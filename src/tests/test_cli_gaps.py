@@ -30,6 +30,28 @@ def test_diff_directory_is_clean_error(tmp_path):
     assert cli._diff(str(tmp_path), str(tmp_path), False, False) == 1
 
 
+def test_malformed_evidence_file_is_a_clean_error_not_a_traceback(tmp_path, capsys):
+    # Valid JSON, a compatible aletheore_version, but missing required AIR
+    # schema keys - load_evidence_file raises MalformedEvidenceError for
+    # this, distinct from IncompatibleEvidenceVersionError, and every
+    # load_evidence_file call site must catch both or this crashes with a
+    # traceback instead of the clean error this PR exists to guarantee.
+    bad = tmp_path / "air.json"
+    bad.write_text(json.dumps({"aletheore_version": "0.7.0"}))
+    good = tmp_path / "other.json"
+    good.write_text(json.dumps({"aletheore_version": "0.7.0"}))
+    assert cli._diff(str(bad), str(good), False, False) == 1
+    assert "Traceback" not in capsys.readouterr().out
+
+
+def test_malformed_repo_evidence_is_a_clean_error(tmp_path):
+    # Same gap via load_evidence (the repo's own .aletheore/air.json), used
+    # by _index/_query/_query_schema/_healthcheck.
+    (tmp_path / ".aletheore").mkdir()
+    (tmp_path / ".aletheore" / "air.json").write_text(json.dumps({"aletheore_version": "0.7.0"}))
+    assert cli._index(str(tmp_path)) == 1
+
+
 @pytest.mark.parametrize("port", [0, 70000, -1])
 def test_dashboard_rejects_bad_port(port, tmp_path):
     assert cli._dashboard(str(tmp_path), port) == 1
@@ -55,6 +77,14 @@ def test_jsonc_and_bom_configs_are_merged(tmp_path):
 
 def test_jsonc_keeps_slashes_inside_strings():
     assert cli._loads_jsonc('{"u": "http://x/*y*/"}') == {"u": "http://x/*y*/"}
+
+
+def test_jsonc_trailing_comma_cleanup_does_not_touch_string_contents():
+    # A string value that happens to contain a literal ",}" or ",]" (a glob
+    # brace-expansion pattern is a real example) must survive untouched -
+    # the trailing-comma cleanup is for actual JSON syntax, not string data.
+    assert cli._loads_jsonc('{"glob": "*.{js,}"}') == {"glob": "*.{js,}"}
+    assert cli._loads_jsonc('{"a": ["x,]"],}') == {"a": ["x,]"]}
 
 
 def test_aletheore_command_finds_windows_exe(tmp_path, monkeypatch):

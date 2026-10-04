@@ -41,6 +41,7 @@ from aletheore.credentials import get_api_key
 from aletheore.device_auth import infer_repo_full_name_from_cwd_git_remote
 from aletheore.evidence import (
     IncompatibleEvidenceVersionError,
+    MalformedEvidenceError,
     load_evidence,
     load_evidence_file,
     scan_repository,
@@ -712,9 +713,9 @@ def _print_update_notice_if_available() -> None:
     # not something worth cluttering the banner over when there's nothing
     # to report.
     # CI and offline machines can opt out: the check blocks up to 5s with no network.
-    if os.environ.get("ALETHEORE_NO_UPDATE_CHECK") or _installed_version() == "unknown":
-        return
     installed_version = _installed_version()
+    if os.environ.get("ALETHEORE_NO_UPDATE_CHECK") or installed_version == "unknown":
+        return
     version_note = _check_for_update(installed_version)
     if not version_note.startswith("update available: "):
         return
@@ -753,7 +754,7 @@ def _query_schema(repo_path: str) -> int:
     repo = Path(repo_path).resolve()
     try:
         evidence = load_evidence(repo)
-    except (FileNotFoundError, IncompatibleEvidenceVersionError) as exc:
+    except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
         console.print(f"[bold red]error:[/bold red] {exc}")
         return 1
 
@@ -782,7 +783,7 @@ def _query_changes(repo_path: str, full: bool) -> int:
     except json.JSONDecodeError:
         print(f"error: previous snapshot is unreadable ({snapshots[-2]})")
         return 1
-    except IncompatibleEvidenceVersionError as exc:
+    except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
         print(f"error: {exc}")
         return 1
 
@@ -791,7 +792,7 @@ def _query_changes(repo_path: str, full: bool) -> int:
     except json.JSONDecodeError:
         print(f"error: most recent snapshot is unreadable ({snapshots[-1]})")
         return 1
-    except IncompatibleEvidenceVersionError as exc:
+    except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
         print(f"error: {exc}")
         return 1
 
@@ -807,7 +808,7 @@ def _index(repo_path: str) -> int:
     except FileNotFoundError as exc:
         console.print(f"[bold red]error:[/bold red] {exc}")
         return 1
-    except IncompatibleEvidenceVersionError as exc:
+    except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
         console.print(f"[bold red]error:[/bold red] {exc}")
         return 1
     console.print(
@@ -953,7 +954,7 @@ def _query(
     repo = Path(repo_path).resolve()
     try:
         evidence = load_evidence(repo)
-    except (FileNotFoundError, IncompatibleEvidenceVersionError) as exc:
+    except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
         print(f"error: {exc}")
         return 1
 
@@ -1022,7 +1023,7 @@ def _diff(
     except OSError as exc:
         print(f"error: could not read {old_file}: {exc}")
         return 1
-    except IncompatibleEvidenceVersionError as exc:
+    except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
         print(f"error: {exc}")
         return 1
     try:
@@ -1033,7 +1034,7 @@ def _diff(
     except OSError as exc:
         print(f"error: could not read {new_file}: {exc}")
         return 1
-    except IncompatibleEvidenceVersionError as exc:
+    except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
         print(f"error: {exc}")
         return 1
 
@@ -1123,7 +1124,7 @@ def _healthcheck(repo_path: str, base_url: str) -> int:
     repo = Path(repo_path).resolve()
     try:
         evidence = load_evidence(repo)
-    except (FileNotFoundError, IncompatibleEvidenceVersionError) as exc:
+    except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
         print(f"error: {exc}")
         return 1
 
@@ -1376,7 +1377,44 @@ def _loads_jsonc(text: str) -> object:
         else:
             out.append(c)
         i += 1
-    return json.loads(re.sub(r",(\s*[}\]])", r"\1", "".join(out)))
+    return json.loads(_strip_trailing_commas("".join(out)))
+
+
+def _strip_trailing_commas(text: str) -> str:
+    """Remove a trailing comma before `}` or `]`, but only outside string
+    literals - a blind regex over the whole text would also strip a comma
+    that happens to appear inside a string value immediately before one of
+    those characters (e.g. a glob pattern like "*.{js,}"), corrupting it.
+    `text` has already had comments stripped, so no comment-skipping is
+    needed here, just the same in_str tracking."""
+    out: list[str] = []
+    i, n, in_str = 0, len(text), False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 1
+            elif c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == ",":
+            j = i + 1
+            while j < n and text[j].isspace():
+                j += 1
+            if j < n and text[j] in "}]":
+                i += 1
+                continue
+        out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def _write_json_mcp_client_config(

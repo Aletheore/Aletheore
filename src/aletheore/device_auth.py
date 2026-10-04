@@ -123,7 +123,7 @@ _GITHUB_REMOTE_PREFIXES = (
 
 
 def _github_remote_remainder(url: str) -> str | None:
-    """"org/repo[.git]" from a github.com remote URL, tolerating embedded credentials."""
+    """Returns "org/repo[.git]" from a github.com remote URL, tolerating embedded credentials."""
     url = re.sub(r"^(https?://)[^/@]+@", r"\1", url.strip())
     for prefix in _GITHUB_REMOTE_PREFIXES:
         if url.startswith(prefix):

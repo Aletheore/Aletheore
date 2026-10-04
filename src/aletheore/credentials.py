@@ -187,7 +187,15 @@ def _locked_rw_credentials_file(credentials_path: Path):
 def _restrict_windows_acl(path: Path) -> None:
     """Best effort: drop inherited ACL entries and leave only the current user,
     the Windows analogue of chmod 600. Never blocks saving a key if icacls fails."""
-    user = os.environ.get("USERNAME")
+    # os.getlogin() asks Windows for the account actually running this
+    # process; USERNAME is an arbitrary, user-settable env var that can be
+    # wrong, spoofed, or empty (e.g. in a scheduled task), which would grant
+    # /inheritance:r's stripped permissions to the wrong principal instead
+    # of the account that needs them.
+    try:
+        user = os.getlogin()
+    except OSError:
+        user = os.environ.get("USERNAME")
     if not user:
         return
     # Bandit B607: pass the path shutil.which just resolved, not a bare
