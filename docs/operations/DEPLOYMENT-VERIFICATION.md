@@ -4,8 +4,55 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-09-30 (second deploy)
-**Snapshot Freshness:** CURRENT as of 2026-09-30 (second deploy) - production was redeployed to
+**Last Updated:** 2026-10-04
+**Snapshot Freshness:** CURRENT as of 2026-10-04 - production was redeployed to `master` (commit
+`6e921475`, tagged `github-app-deploy-2026-10-04`) and re-verified live via SSH the same session.
+This file's own tracking had drifted from reality before this deploy: the previous header entry
+below (tag `github-app-deploy-2026-09-30-2`, commit `f11d1bbe`) was stale, and the "Current Server
+Snapshot" section further down (dated 2026-10-02, commit `efa1f0e`) was also stale - direct SSH
+inspection found the server actually running commit `55233d34` (#906), several commits past both
+recorded snapshots, with no record of when or how it got there. Treat the header above, not either
+of those two sections, as authoritative going forward; both are left below for history rather than
+corrected, since reconstructing the untracked deploy(s) between them isn't possible from this
+session.
+
+18 commits since the actual previous commit (`55233d34`): five merged PRs plus one pre-existing
+fix already on master. **#913** - migrates AIRview, Docs, managed audits, and endpoint-health fix
+suggestions to IndieRouter (`deepseek-v4.1-flash` / `glm-5.3-flash`) as primary, with unchanged
+fallback to the previous direct providers; live-verified end to end against real IndieRouter
+credits for all four surfaces before merge (AIRview: a real module wrapped in one synthetic
+cluster, since this repo's evidence has no computed clusters yet, produced a correct, cited
+subsystem description for $0.0019; Docs: all 5 real undocumented functions in
+`audit_signing.py` got correct descriptions for $0.0004; managed audits and health-fix suggestions
+verified in earlier sessions). **#909** - bounds the audit's evidence reads (a single read could
+return ~1M characters, driving one audit to 4.5-4.9M input tokens and real OpenAI rate-limit
+failures); now pages or outlines anything over 30,000 chars, measured 5-10x cost reduction on this
+repo. **#911** - adds `repository.error_handling` evidence (raise/catch sites per language) and an
+AIRview paragraph on it, measured +0.61 overall vs the +0.59 baseline on a 12-question judged
+corpus. **#912** - six real bugs from a backward audit of PRs since the last sweep (a rename-aware
+diff never wired in, a Paddle webhook TTL gap, an affiliate-commission proration bug, AIR/Flash
+page-gating, a stale "Tests" subsystem cache, an overly-narrow Bandit regex). **#910** - removes
+the already-disabled second-model verification path (dead code, no behavior change in production).
+One new migration (`071_affiliate_commission_partial_reversal.sql`, additive and idempotent -
+`ADD COLUMN IF NOT EXISTS`, a backfill `UPDATE` that is a no-op on rows it's already run against,
+`CREATE TABLE IF NOT EXISTS`). All five app-relevant services (`app-server`, `scan-worker`,
+`scan-worker-2`, `health-worker`, `scheduler`) rebuilt and force-recreated; all five `Up` and
+Docker-healthcheck `healthy` within ~15 seconds of recreation. Zero errors, tracebacks, or
+exceptions in any of the five services' logs in the 3 minutes since restart. Migration confirmed
+applied in Postgres, not just logged: `schema_migrations` shows `071_affiliate_commission_partial_
+reversal.sql` as the newest row, and `\d affiliate_commissions` shows the real `charged_total_minor`
+and `reversed_usd` columns. `/healthz` returns `200 {"status":"ok","checks":{"database":"ok",
+"redis":"ok"}}`. Every PR's own fix confirmed present in the *running* `scan-worker` container's
+actual source, not re-read from the repo: `model_tiers.INDIEROUTER_DEEPSEEK_MODEL ==
+"deepseek-v4.1-flash"`, `writing_adapter_for_docs`/`writing_adapter_for_health_fix_suggestion`
+importable, `verification_adapter` gone; `aletheore.evidence_view.MAX_SECTION_CHARS == 30000`;
+`aletheore.error_handling` importable. The privacy-policy wording fix (#913's own follow-up,
+"three of them are not evidence") deploys independently via Vercel and was separately confirmed
+live at `www.aletheore.com/privacy` - not part of this docker stack. Not re-verified this pass (no
+relevant Dockerfile/host changes): Docker socket mount absence, non-root users, CPU/mem limits,
+backup cron execution, base-image digest pinning, restore-drill target availability, disk space.
+
+**Previous:** CURRENT as of 2026-09-30 (second deploy) - production was redeployed to
 `master` (commit `f11d1bbe`, tagged `github-app-deploy-2026-09-30-2`) and re-verified live via SSH
 the same session. 1 commit since the previous deploy tag (`github-app-deploy-2026-09-30`): #881, a
 Mermaid dependency-graph diagram (changed files -> their direct dependents, GitHub-native
