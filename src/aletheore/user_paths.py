@@ -1,4 +1,6 @@
+import functools
 import os
+import stat
 import tempfile
 from pathlib import Path
 
@@ -25,9 +27,34 @@ def _private_fallback_home() -> Path:
         info = path.lstat()
         # A predictable name in a shared temp dir can be pre-created by another
         # user or planted as a symlink; only trust a real directory we own.
+        # mkdir(exist_ok=True) does not change an already-existing dir's
+        # mode, so a pre-created dir we own but with looser permissions
+        # (e.g. left over from before this permission check existed) would
+        # otherwise pass every other check here and be trusted as private.
         owned = not hasattr(os, "getuid") or info.st_uid == os.getuid()
-        if path.is_symlink() or not path.is_dir() or not owned:
+        private_mode = stat.S_IMODE(info.st_mode) == 0o700
+        if path.is_symlink() or not path.is_dir() or not owned or not private_mode:
             raise OSError("untrusted fallback directory")
         return path
     except OSError:
+        return _mkdtemp_fallback_home()
+
+
+@functools.lru_cache(maxsize=1)
+def _mkdtemp_fallback_home() -> Path:
+    """The last-resort fallback, computed at most once per process.
+
+    Every module-level DEFAULT_*_PATH constant (credentials.py,
+    licenses.py, vulnerabilities.py) calls user_home() independently at
+    import time; without caching, each would get its own freshly
+    mkdtemp'd directory even within a single process, scattering
+    credentials and caches that are supposed to share one home. Falls
+    back to the bare (shared, non-private) temp dir rather than raising
+    if mkdtemp itself fails (e.g. TMPDIR is full or unwritable) - this
+    function exists specifically so a filesystem problem degrades
+    gracefully instead of crashing the whole CLI at import time.
+    """
+    try:
         return Path(tempfile.mkdtemp(prefix="aletheore-home-"))
+    except OSError:
+        return Path(tempfile.gettempdir())
