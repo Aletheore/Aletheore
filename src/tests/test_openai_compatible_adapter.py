@@ -860,6 +860,51 @@ def test_custom_request_timeout_is_threaded_through(mock_openai_class, tmp_path)
     assert first_call.kwargs["timeout"] == 400
 
 
+def _mock_completion_response(content: str = "ok") -> MagicMock:
+    mock_message = MagicMock()
+    mock_message.content = content
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock(message=mock_message)]
+    mock_response.usage = MagicMock(prompt_tokens=1, completion_tokens=1)
+    return mock_response
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_simple_completion_default_request_timeout_matches_module_constant(mock_openai_class, tmp_path):
+    # Real gap: invoke() reads self._request_timeout_seconds (see the test
+    # above), but simple_completion() hard-coded the bare module constant
+    # REQUEST_TIMEOUT_SECONDS instead - a caller-supplied
+    # request_timeout_seconds (e.g. AIRVIEW_REQUEST_TIMEOUT_SECONDS=300)
+    # silently never reached simple_completion-based calls (AIRview, Docs,
+    # health-fix suggestions - everything except managed audits' invoke()).
+    from aletheore.adapters.openai_compatible import REQUEST_TIMEOUT_SECONDS
+
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.return_value = _mock_completion_response()
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        adapter.simple_completion("system prompt", "user prompt", cwd=str(tmp_path))
+
+    call = mock_client.chat.completions.create.call_args_list[0]
+    assert call.kwargs["timeout"] == REQUEST_TIMEOUT_SECONDS
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_simple_completion_custom_request_timeout_is_threaded_through(mock_openai_class, tmp_path):
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.return_value = _mock_completion_response()
+
+    adapter = _adapter(tmp_path, request_timeout_seconds=300)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        adapter.simple_completion("system prompt", "user prompt", cwd=str(tmp_path))
+
+    call = mock_client.chat.completions.create.call_args_list[0]
+    assert call.kwargs["timeout"] == 300
+
+
 @patch("aletheore.adapters.openai_compatible.OpenAI")
 def test_supports_tool_choice_false_omits_tool_choice_from_request(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})

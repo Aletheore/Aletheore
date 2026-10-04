@@ -132,11 +132,11 @@ def test_docs_builders_ask_for_json(monkeypatch):
     from scan_worker.jobs import _live_docs_full_build_writing_adapter, _live_docs_update_writing_adapter
 
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(indierouter=True))
-    assert _live_docs_full_build_writing_adapter("air")._json_mode is True
+    assert _live_docs_full_build_writing_adapter()._json_mode is True
     assert _live_docs_update_writing_adapter()._json_mode is True
 
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(openai=True))
-    assert _live_docs_full_build_writing_adapter("air")._json_mode is True
+    assert _live_docs_full_build_writing_adapter()._json_mode is True
     assert _live_docs_update_writing_adapter()._json_mode is True
 
 

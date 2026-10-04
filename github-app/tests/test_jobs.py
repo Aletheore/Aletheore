@@ -673,6 +673,50 @@ def test_clone_pr_head_does_not_attempt_a_scrub_when_init_never_created_a_git_di
     assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
 
 
+def test_incremental_spend_budget_can_start_next_call_is_atomic_across_real_concurrent_threads(monkeypatch):
+    # Real gap found alongside this PR's AIRview worker-count raise
+    # (6->16, see live_wiki._generation_worker_count): the writing adapter
+    # built once per AIRview full build is shared across every concurrent
+    # worker thread, all calling this same budget object's
+    # can_start_next_call/record_usage/on_call_failed - but
+    # _pending_reserve_usd/_pending_topup_usd were plain, unlocked instance
+    # attributes. `+=` on a shared attribute is not atomic across threads
+    # (LOAD/ADD/STORE are separate bytecode ops the GIL can interleave), so
+    # two threads reserving at once could lose one whole increment. Unlike
+    # the sequential ledger test below, this uses real threading.Thread
+    # objects and a Barrier so every thread's += genuinely races, not just
+    # runs one after another in program order - same proof shape as
+    # test_model_tiers.py's own
+    # test_openai_free_tier_reservation_is_atomic_across_real_concurrent_threads.
+    import threading
+
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.reserve_llm_spend_with_email_hooks",
+        lambda dsn, iid, amount, feature, topup_out=None, **k: True,
+    )
+
+    budget = _IncrementalSpendBudget(
+        "dsn", 1, "model", next_call_reserve_usd=0.10, feature="airview_full_build",
+    )
+
+    thread_count = 16
+    barrier = threading.Barrier(thread_count)
+
+    def _attempt():
+        barrier.wait()  # maximize actual overlap, not just thread creation order
+        budget.can_start_next_call()
+
+    threads = [threading.Thread(target=_attempt) for _ in range(thread_count)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert budget._pending_reserve_usd == pytest.approx(thread_count * 0.10)
+
+
 def test_incremental_spend_budget_record_usage_ledgers_the_real_cost_not_the_delta(monkeypatch):
     # record_usage used to pass the true-up delta (cost - reserve) as both the
     # aggregate update AND the per-feature ledger amount. The delta was wrong
@@ -10751,7 +10795,7 @@ def test_run_live_docs_full_build_job_skips_llm_call_when_spend_cap_reached(monk
     adapter_calls = []
     monkeypatch.setattr(
         "scan_worker.jobs._live_docs_full_build_writing_adapter",
-        lambda plan, on_usage=None, on_call_failed=None: adapter_calls.append(True),
+        lambda on_usage=None, on_call_failed=None: adapter_calls.append(True),
     )
     status_calls = []
     monkeypatch.setattr(
@@ -10787,7 +10831,7 @@ def test_run_live_docs_full_build_job_survives_one_module_failing(monkeypatch):
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None, on_call_failed=None: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda on_usage=None, on_call_failed=None: object()
     )
 
     def fake_fetch(client, token, repo, path, ref):
@@ -10852,7 +10896,7 @@ def test_run_docs_build_indexes_source_lines_by_real_newline_lines_not_splitline
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None, on_call_failed=None: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda on_usage=None, on_call_failed=None: object()
     )
     # Line1="header", line2=ten form feeds, line3-4=the real function.
     # splitlines() would put line 3's real content at a different index
@@ -10925,7 +10969,7 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
 
     monkeypatch.setattr(
         "scan_worker.jobs._live_docs_full_build_writing_adapter",
-        lambda plan, on_usage=None, on_call_failed=None: FakeAdapter(on_usage),
+        lambda on_usage=None, on_call_failed=None: FakeAdapter(on_usage),
     )
     stored_for = []
 
@@ -10989,7 +11033,7 @@ def test_run_live_docs_full_build_job_reports_failed_when_every_module_fails(mon
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None, on_call_failed=None: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda on_usage=None, on_call_failed=None: object()
     )
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "source")
 
@@ -11031,7 +11075,7 @@ def test_run_live_docs_full_build_job_reports_failed_when_every_fetch_returns_no
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None, on_call_failed=None: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda on_usage=None, on_call_failed=None: object()
     )
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: None)
     status_calls = []

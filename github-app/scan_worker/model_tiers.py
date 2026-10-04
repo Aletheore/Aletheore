@@ -446,7 +446,12 @@ def writing_adapter_for_airview(
     DeepSeek-direct fallback below silently drops json_output on its own
     branch of writing_adapter_for - see that function's docstring), so
     this preserves existing real behavior rather than changing the
-    provider and the JSON-mode behavior in the same change.
+    provider and the JSON-mode behavior in the same change. Not a
+    theoretical risk: this exact combination (deepseek-v4.1-flash via
+    IndieRouter, effort low, no json_mode) is what the handover's own
+    AIRview benchmark actually ran end to end - every subsystem/file-page
+    description it reports parsing successfully was parsed with
+    _parse_json_object's strict json.loads, no json_mode, no leniency.
 
     Falls back to the pre-existing, unchanged DeepSeek-direct path (never
     Luna - see below) if INDIEROUTER_API_KEY isn't configured.

@@ -368,7 +368,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    timeout=REQUEST_TIMEOUT_SECONDS,
+                    timeout=self._request_timeout_seconds,
                     **({"extra_body": self._extra_body} if self._extra_body else {}),
                     **({"temperature": self._temperature} if self._temperature is not None else {}),
                     **({"response_format": {"type": "json_object"}} if self._json_mode else {}),
