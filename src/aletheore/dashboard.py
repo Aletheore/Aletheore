@@ -241,12 +241,12 @@ def build_app(repo_path: Path) -> Starlette:
 
     # Browsers request all four of these unprompted on a page load, and every
     # one 404'd - four error lines in the log for a dashboard that had in fact
-    # served the page fine. Reusing the existing logo is enough: this is a
-    # localhost dev UI, so a dedicated .ico plus the Apple sizes would be new
-    # binary assets to maintain for no gain over the PNG every current browser
-    # accepts.
+    # served the page fine. The wordmark logo is illegible at favicon/tab
+    # size, so this uses the square "A" mark instead - a dedicated .ico plus
+    # the Apple sizes would be new binary assets to maintain for no gain over
+    # the PNG every current browser accepts.
     async def favicon(request):
-        return FileResponse(_STATIC_DIR / "logo.png", media_type="image/png")
+        return FileResponse(_STATIC_DIR / "logo-mark.png", media_type="image/png")
 
     app = Starlette(
         routes=[
