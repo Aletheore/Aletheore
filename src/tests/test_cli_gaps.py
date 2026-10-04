@@ -151,3 +151,32 @@ def test_windows_acl_helper_never_raises(tmp_path, monkeypatch):
     monkeypatch.setenv("USERNAME", "u")
     monkeypatch.setattr(credentials.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
     credentials._restrict_windows_acl(tmp_path / "c.json")
+
+
+def test_user_home_fallback_is_private_and_created(tmp_path, monkeypatch):
+    from aletheore import user_paths
+
+    def no_home():
+        raise RuntimeError("no home")
+
+    monkeypatch.setattr(user_paths.Path, "home", staticmethod(no_home))
+    monkeypatch.setattr(user_paths.tempfile, "gettempdir", lambda: str(tmp_path))
+    home = user_paths.user_home()
+    assert home.is_dir() and home.parent == tmp_path
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink creation needs privileges on Windows")
+def test_user_home_fallback_rejects_planted_symlink(tmp_path, monkeypatch):
+    import os
+
+    from aletheore import user_paths
+
+    def no_home():
+        raise RuntimeError("no home")
+
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    os.symlink(target, tmp_path / f"aletheore-home-{os.getuid()}")
+    monkeypatch.setattr(user_paths.Path, "home", staticmethod(no_home))
+    monkeypatch.setattr(user_paths.tempfile, "gettempdir", lambda: str(tmp_path))
+    assert user_paths.user_home() != tmp_path / f"aletheore-home-{os.getuid()}"
