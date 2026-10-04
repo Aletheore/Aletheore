@@ -646,7 +646,7 @@ def test_read_evidence_section_reports_encoding_failure_instead_of_crashing(
 
     adapter = _adapter(tmp_path)
     with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
-        with patch("aletheore.adapters.openai_compatible.to_toon", _boom):
+        with patch("aletheore.evidence_view.to_toon", _boom):
             adapter.invoke("audit this repo", cwd=str(repo))
 
     second_call = mock_client.chat.completions.create.call_args_list[1]
