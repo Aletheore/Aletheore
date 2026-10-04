@@ -30,6 +30,7 @@ from aletheore.wiki_diagrams import build_overview_diagram, build_subsystem_diag
 from aletheore.wiki_mapping import build_cluster_briefs, is_demoted_path, rank_files_by_importance
 
 from scan_worker.airview_scanner_context import build_repo_context
+from scan_worker.model_tiers import indierouter_available
 
 FLASH_MODEL = "deepseek-v4-flash"
 UPDATE_MODEL = "deepseek-v4-flash"
@@ -50,8 +51,25 @@ SUBSYSTEM_WRITE_ATTEMPTS = 2
 # Kept modest rather than "as many as there are items": callers' on_usage/
 # before_llm_call/cache_lookup/cache_write closures may not be written to
 # tolerate unbounded concurrent invocation, and this is a single tenant's
-# build sharing one API key, not a place to maximize provider QPS.
+# build sharing one API key, not a place to maximize provider QPS. This is
+# the fallback value for when IndieRouter isn't configured - see
+# _generation_worker_count below for the IndieRouter-primary value.
 MAX_GENERATION_WORKERS = 6
+
+
+def _generation_worker_count() -> int:
+    """16 concurrent workers when writing through IndieRouter - measured
+    for a single build (fmt corpus: 193s, quality parity with the slower,
+    lower-concurrency arm; a second corpus, jq: 201s, docs/operations/
+    LLM-CONSOLIDATION-HANDOVER-2026-10-03.md, local-only). Not yet tested
+    at multi-repo scale (many builds' worth of concurrent IndieRouter
+    requests at once), and 429s were seen under parallel load on an
+    earlier GLM AIRview run - gated on IndieRouter actually being
+    configured rather than becoming the unconditional default, so the
+    direct-DeepSeek fallback path keeps its original, more conservative
+    concurrency unchanged."""
+    return 16 if indierouter_available() else MAX_GENERATION_WORKERS
+
 
 _T = TypeVar("_T")
 
@@ -117,7 +135,9 @@ def _run_batched_with_retry(
         if not remaining:
             break
         chunks = _batches(remaining, batch_size)
-        chunk_results = _run_concurrently([lambda c=chunk: write_batch(c) for chunk in chunks])
+        chunk_results = _run_concurrently(
+            [lambda c=chunk: write_batch(c) for chunk in chunks], max_workers=_generation_worker_count()
+        )
         merged: dict[str, _BatchResult] = {}
         for chunk_result in chunk_results:
             merged.update(chunk_result)
@@ -765,6 +785,16 @@ def build_subsystem_record(
 # 2 * ceil(len(clusters) / 5) batched calls.
 SUBSYSTEM_WRITE_BATCH_SIZE = 5
 
+
+def _subsystem_write_batch_size() -> int:
+    """2 when writing through IndieRouter - a smaller batch than the
+    direct-DeepSeek fallback's 5, measured together with
+    _generation_worker_count's 16 workers (same handover doc, same
+    corpora/timings) - batch size and worker count were tuned as one
+    combination, not independently."""
+    return 2 if indierouter_available() else SUBSYSTEM_WRITE_BATCH_SIZE
+
+
 BATCH_SUBSYSTEM_WRITING_SYSTEM_PROMPT = (
     """You write one page of a codebase wiki for EACH of several subsystems, in a single response.
 You are given a JSON array of subsystem items, each with an "id" (echo this back exactly as the
@@ -895,7 +925,7 @@ def _generate_subsystem_records_for_targets(
         # resolved, nothing further to check.
         is_resolved=lambda _result: True,
         attempts=SUBSYSTEM_WRITE_ATTEMPTS,
-        batch_size=SUBSYSTEM_WRITE_BATCH_SIZE,
+        batch_size=_subsystem_write_batch_size(),
     )
 
     records: dict[str, dict] = {}
@@ -1115,7 +1145,12 @@ def generate_subsystems(
         )
         return brief, cluster, name, cached_record
 
-    lookup_results = _run_concurrently([lambda b=brief: _lookup_one(b) for brief in briefs])
+    # Cache-lookup concurrency, not LLM-provider throughput - kept sized the
+    # same as the generation phase below since both shared one constant
+    # before this split.
+    lookup_results = _run_concurrently(
+        [lambda b=brief: _lookup_one(b) for brief in briefs], max_workers=_generation_worker_count()
+    )
 
     changed_set = set(changed_files) if changed_files is not None else None
 
@@ -1356,6 +1391,14 @@ def build_file_page_record(
 
 FILE_PAGE_WRITE_BATCH_SIZE = 5
 
+
+def _file_page_write_batch_size() -> int:
+    """Same reasoning as _subsystem_write_batch_size - 2 when writing
+    through IndieRouter, tuned together with _generation_worker_count's
+    16 workers, falling back to 5 otherwise."""
+    return 2 if indierouter_available() else FILE_PAGE_WRITE_BATCH_SIZE
+
+
 BATCH_FILE_PAGE_WRITING_SYSTEM_PROMPT = (
     """You write the reference page for EACH of several source files in a codebase wiki, in a
 single response. The input is normally a JSON array of file items directly. If repo-wide context
@@ -1559,7 +1602,7 @@ def _generate_file_pages_for_targets(
         on_round_result=_on_result,
         is_resolved=lambda result: result[0] == "verified",
         attempts=SUBSYSTEM_WRITE_ATTEMPTS,
-        batch_size=FILE_PAGE_WRITE_BATCH_SIZE,
+        batch_size=_file_page_write_batch_size(),
     )
 
     for t in remaining:
