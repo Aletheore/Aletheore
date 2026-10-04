@@ -4,17 +4,13 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
+from aletheore.user_paths import user_home
+
 def _default_credentials_path() -> Path:
-    # Path.home() raises RuntimeError in containers with an arbitrary UID and no
-    # HOME; failing at import would break every command, even --version.
-    try:
-        home = Path.home()
-    except (RuntimeError, KeyError):
-        return Path(tempfile.gettempdir()) / f"aletheore-{os.getuid() if hasattr(os, 'getuid') else 'user'}" / "credentials.json"
+    home = user_home()
     legacy = home / ".config" / "aletheore" / "credentials.json"
     xdg = os.environ.get("XDG_CONFIG_HOME")
     if xdg and not legacy.exists() and sys.platform != "win32":
@@ -136,7 +132,7 @@ def _locked_rw_credentials_file(credentials_path: Path):
     # whole locked section, whether the file is new or pre-existing -
     # same reasoning _write_credentials previously used to avoid ever
     # leaving the file briefly world/group-readable.
-    fd = os.open(str(credentials_path), os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(str(credentials_path), os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
     try:
         # Real bug found on Windows: os.fchmod doesn't exist there at all
         # (unlike os.chmod, which does but only toggles the read-only

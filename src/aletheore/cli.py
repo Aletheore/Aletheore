@@ -67,6 +67,7 @@ from aletheore.report import (
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.watch import DEBOUNCE_SECONDS as WATCH_DEBOUNCE_SECONDS
 from aletheore.watch import WATCH_ENV_VAR, watching_disabled_by_env
+from aletheore.user_paths import user_home
 
 KNOWN_ADAPTERS = [
     ClaudeCodeAdapter(),
@@ -1252,7 +1253,7 @@ def _claude_desktop_config_path() -> Path | None:
     applied to PyCharm's config below.
     """
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+        return user_home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
     if sys.platform == "win32":
         # The Microsoft Store (MSIX) build keeps its config in a virtualised
         # AppData under Packages/, not in %APPDATA%.
