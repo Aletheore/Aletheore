@@ -270,7 +270,7 @@ if __name__ == "__main__":
     if sys.platform == "win32":
         out = subprocess.run(["icacls", str(p)], capture_output=True, text=True).stdout
         print(out)
-        assert "Users" not in out and "Everyone" not in out, out
+        assert "BUILTIN\\Users" not in out and "Everyone" not in out and "Authenticated Users" not in out, out
     else:
         assert stat.S_IMODE(p.stat().st_mode) == 0o600, oct(p.stat().st_mode)
     print("ok")
