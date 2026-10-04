@@ -106,7 +106,8 @@ jobs:
           echo 'def f(): return 1' > "$repo/src/a.py"
           sleep 25
           kill -INT $pid || true
-          wait $pid 2>/dev/null || true
+          for i in $(seq 1 20); do kill -0 $pid 2>/dev/null || break; sleep 0.5; done
+          kill -9 $pid 2>/dev/null || true
           cat "$RUNNER_TEMP/watch.log"
           grep -q "file(s) changed" "$RUNNER_TEMP/watch.log"
           ! grep -q Traceback "$RUNNER_TEMP/watch.log"
