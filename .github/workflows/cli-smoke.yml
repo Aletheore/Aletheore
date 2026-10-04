@@ -1,0 +1,123 @@
+name: CLI smoke
+
+# Runs the installed `aletheore` console script as a real user would on each OS
+# (piped stdio, redirected profile, no network): path errors, scan/query/diff,
+# mcp-install, dashboard port handling, watch, credentials, MCP stdio, plus
+# Linux-only checks (no HOME, tiny inotify limit). Not a required check.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/aletheore/**"
+      - ".github/scripts/cli_smoke.py"
+      - ".github/workflows/cli-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: smoke (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.12", "3.14"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Non-editable, into a venv, so the console script is exactly what pip ships.
+      - name: Install
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          if [ -d "$RUNNER_TEMP/venv/Scripts" ]; then BIN="$RUNNER_TEMP/venv/Scripts"; else BIN="$RUNNER_TEMP/venv/bin"; fi
+          "$BIN/python" -m pip install ./src
+          echo "$BIN" >> "$GITHUB_PATH"
+
+      - name: CLI smoke
+        run: python .github/scripts/cli_smoke.py
+
+  linux-edge:
+    name: smoke (linux edge cases)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m venv /opt/aletheore-venv 2>/dev/null || sudo python -m venv /opt/aletheore-venv
+          sudo /opt/aletheore-venv/bin/python -m pip install ./src
+          sudo chmod -R a+rX /opt/aletheore-venv
+
+      - name: Runs as an arbitrary UID with no HOME and no passwd entry
+        run: |
+          set +e
+          out=$(sudo setpriv --reuid=54321 --regid=54321 --clear-groups env -i PATH=/usr/bin:/bin \
+            /opt/aletheore-venv/bin/aletheore --version 2>&1)
+          rc=$?
+          echo "$out"
+          [ $rc -eq 0 ] && ! echo "$out" | grep -q Traceback
+
+      - name: Credentials still work for that UID (falls back to a temp dir)
+        run: |
+          sudo setpriv --reuid=54321 --regid=54321 --clear-groups env -i PATH=/usr/bin:/bin \
+            /opt/aletheore-venv/bin/python -c "
+          from aletheore import credentials as c
+          print(c.DEFAULT_CREDENTIALS_PATH)
+          c.save_api_token('x', 'y'); assert c.has_api_key('', 'x'); assert c.clear_api_key('x')
+          "
+
+      - name: XDG_CONFIG_HOME is honoured
+        run: |
+          d=$(mktemp -d)
+          HOME=$(mktemp -d) XDG_CONFIG_HOME=$d /opt/aletheore-venv/bin/python -c "
+          from aletheore import credentials as c
+          assert str(c.DEFAULT_CREDENTIALS_PATH).startswith('$d'), c.DEFAULT_CREDENTIALS_PATH
+          "
+
+      - name: watch survives a tiny inotify limit (ignored dirs not registered)
+        run: |
+          repo=$(mktemp -d)
+          mkdir -p "$repo/src"
+          echo 'def f(): pass' > "$repo/src/a.py"
+          for i in $(seq 1 300); do mkdir -p "$repo/node_modules/p$i"; done
+          old=$(cat /proc/sys/fs/inotify/max_user_watches)
+          sudo sysctl -w fs.inotify.max_user_watches=200
+          trap 'sudo sysctl -w fs.inotify.max_user_watches=$old' EXIT
+          /opt/aletheore-venv/bin/aletheore watch "$repo" --debounce 1 > "$RUNNER_TEMP/watch.log" 2>&1 &
+          pid=$!
+          sleep 10
+          echo 'def f(): return 1' > "$repo/src/a.py"
+          sleep 25
+          kill -INT $pid || true
+          cat "$RUNNER_TEMP/watch.log"
+          grep -q "file(s) changed" "$RUNNER_TEMP/watch.log"
+          ! grep -q Traceback "$RUNNER_TEMP/watch.log"
+
+      - name: watch reports the limit cleanly when it really is exhausted
+        run: |
+          repo=$(mktemp -d)
+          for i in $(seq 1 300); do mkdir -p "$repo/src/p$i"; done
+          old=$(cat /proc/sys/fs/inotify/max_user_watches)
+          sudo sysctl -w fs.inotify.max_user_watches=50
+          trap 'sudo sysctl -w fs.inotify.max_user_watches=$old' EXIT
+          set +e
+          out=$(timeout 60 /opt/aletheore-venv/bin/aletheore watch "$repo" 2>&1)
+          echo "$out"
+          ! echo "$out" | grep -q Traceback

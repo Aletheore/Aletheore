@@ -283,12 +283,10 @@ def _observer_handler(handler: "_DebouncedHandler", on_new_top_level_dir=None):
     class _Adapter(FileSystemEventHandler):
         def on_any_event(self, event) -> None:  # noqa: ANN001 - watchdog event type
             handler.on_any_event(event)
-            if (
-                on_new_top_level_dir is not None
-                and event.is_directory
-                and event.event_type in ("created", "moved")
-            ):
-                on_new_top_level_dir(Path(getattr(event, "dest_path", "") or event.src_path))
+            # Any directory event, not just "created": FSEvents (macOS) reports
+            # a new directory only as a "modified" event on its parent.
+            if on_new_top_level_dir is not None and event.is_directory:
+                on_new_top_level_dir()
 
     return _Adapter()
 
@@ -459,12 +457,13 @@ def watch(
     observer = Observer()
     watched: set[Path] = set()
 
-    def watch_new_dir(path: Path) -> None:
+    def watch_new_dir() -> None:
         # A top-level directory created after startup is not covered by the
         # non-recursive root watch, so register it as it appears.
-        if path.parent == repo_path and path in {*_watchable_top_level_dirs(repo_path)} - watched:
-            watched.add(path)
-            observer.schedule(adapter, str(path), recursive=True)
+        for path in _watchable_top_level_dirs(repo_path):
+            if path not in watched:
+                watched.add(path)
+                observer.schedule(adapter, str(path), recursive=True)
 
     adapter = _observer_handler(handler, watch_new_dir)
     watched.update(_watchable_top_level_dirs(repo_path))
