@@ -1,3 +1,4 @@
+import re
 import subprocess
 import time
 from collections.abc import Callable
@@ -113,35 +114,28 @@ def mint_cli_token(
     return response.json()["token"]
 
 
-def infer_org_from_cwd_git_remote(
-    run_fn: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-) -> str | None:
-    try:
-        result = run_fn(
-            ["git", "remote", "get-url", "origin"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=5,
-            check=True,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-        return None
+_GITHUB_REMOTE_PREFIXES = (
+    "git@github.com:",
+    "ssh://git@github.com/",
+    "https://github.com/",
+    "http://github.com/",
+)
 
-    url = result.stdout.strip()
-    for prefix in ("git@github.com:", "https://github.com/", "http://github.com/"):
+
+def _github_remote_remainder(url: str) -> str | None:
+    """"org/repo[.git]" from a github.com remote URL, tolerating embedded credentials."""
+    url = re.sub(r"^(https?://)[^/@]+@", r"\1", url.strip())
+    for prefix in _GITHUB_REMOTE_PREFIXES:
         if url.startswith(prefix):
-            remainder = url[len(prefix):]
-            org = remainder.split("/", 1)[0]
-            return org or None
+            return url[len(prefix):]
     return None
 
 
-def infer_repo_full_name_from_cwd_git_remote(
+def infer_org_from_cwd_git_remote(
     run_fn: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     cwd: str | None = None,
 ) -> str | None:
-    kwargs = {"capture_output": True, "text": True, "timeout": 5, "check": True}
+    kwargs = {"capture_output": True, "text": True, "encoding": "utf-8", "timeout": 5, "check": True}
     if cwd is not None:
         kwargs["cwd"] = cwd
     try:
@@ -149,13 +143,30 @@ def infer_repo_full_name_from_cwd_git_remote(
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
         return None
 
-    url = result.stdout.strip()
-    for prefix in ("git@github.com:", "https://github.com/", "http://github.com/"):
-        if url.startswith(prefix):
-            remainder = url[len(prefix):].removesuffix(".git")
-            org, _, repo = remainder.partition("/")
-            if org and repo and "/" not in repo:
-                return f"{org}/{repo}"
+    remainder = _github_remote_remainder(result.stdout)
+    if remainder is None:
+        return None
+    return remainder.split("/", 1)[0] or None
+
+
+def infer_repo_full_name_from_cwd_git_remote(
+    run_fn: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    cwd: str | None = None,
+) -> str | None:
+    kwargs = {"capture_output": True, "text": True, "encoding": "utf-8", "timeout": 5, "check": True}
+    if cwd is not None:
+        kwargs["cwd"] = cwd
+    try:
+        result = run_fn(["git", "remote", "get-url", "origin"], **kwargs)
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+    remainder = _github_remote_remainder(result.stdout)
+    if remainder is None:
+        return None
+    org, _, repo = remainder.removesuffix("/").removesuffix(".git").partition("/")
+    if org and repo and "/" not in repo:
+        return f"{org}/{repo}"
     return None
 
 

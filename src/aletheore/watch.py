@@ -244,7 +244,32 @@ class _DebouncedHandler:
         return real
 
 
-def _observer_handler(handler: "_DebouncedHandler"):
+def _watchable_top_level_dirs(repo_path: Path) -> list[Path]:
+    ignored = _ignored_dirs()
+    try:
+        entries = sorted(repo_path.iterdir())
+    except OSError:
+        return []
+    return [
+        e for e in entries
+        if e.is_dir() and not e.is_symlink() and e.name not in ignored and e.name != ".aletheore"
+    ]
+
+
+def _schedule_watches(observer, adapter, repo_path: Path) -> None:
+    """Register OS watches without descending into node_modules, .git, venvs.
+
+    A single recursive watch on the repo root registers an inotify watch for
+    every directory under it, ignored ones included, which exhausts the Linux
+    watch limit on large JS/Python repos. The root is watched non-recursively
+    and each non-ignored top-level directory recursively instead.
+    """
+    observer.schedule(adapter, str(repo_path), recursive=False)
+    for directory in _watchable_top_level_dirs(repo_path):
+        observer.schedule(adapter, str(directory), recursive=True)
+
+
+def _observer_handler(handler: "_DebouncedHandler", on_new_top_level_dir=None):
     """Adapt _DebouncedHandler to watchdog's real handler interface.
 
     Built here rather than at module scope so the watchdog import stays
@@ -258,6 +283,12 @@ def _observer_handler(handler: "_DebouncedHandler"):
     class _Adapter(FileSystemEventHandler):
         def on_any_event(self, event) -> None:  # noqa: ANN001 - watchdog event type
             handler.on_any_event(event)
+            if (
+                on_new_top_level_dir is not None
+                and event.is_directory
+                and event.event_type in ("created", "moved")
+            ):
+                on_new_top_level_dir(Path(getattr(event, "dest_path", "") or event.src_path))
 
     return _Adapter()
 
@@ -426,7 +457,18 @@ def watch(
     report(announce if announce is not None else f"watching {repo_path} - Ctrl-C to stop")
     handler = _DebouncedHandler(repo_path, known_mtimes=initial_mtimes)
     observer = Observer()
-    observer.schedule(_observer_handler(handler), str(repo_path), recursive=True)
+    watched: set[Path] = set()
+
+    def watch_new_dir(path: Path) -> None:
+        # A top-level directory created after startup is not covered by the
+        # non-recursive root watch, so register it as it appears.
+        if path.parent == repo_path and path in {*_watchable_top_level_dirs(repo_path)} - watched:
+            watched.add(path)
+            observer.schedule(adapter, str(path), recursive=True)
+
+    adapter = _observer_handler(handler, watch_new_dir)
+    watched.update(_watchable_top_level_dirs(repo_path))
+    _schedule_watches(observer, adapter, repo_path)
     observer.start()
 
     try:

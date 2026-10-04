@@ -1,11 +1,28 @@
 import contextlib
+import getpass
 import json
 import os
+import subprocess
 import sys
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-DEFAULT_CREDENTIALS_PATH = Path.home() / ".config" / "aletheore" / "credentials.json"
+def _default_credentials_path() -> Path:
+    # Path.home() raises RuntimeError in containers with an arbitrary UID and no
+    # HOME; failing at import would break every command, even --version.
+    try:
+        home = Path.home()
+    except (RuntimeError, KeyError):
+        return Path(tempfile.gettempdir()) / f"aletheore-{os.getuid() if hasattr(os, 'getuid') else 'user'}" / "credentials.json"
+    legacy = home / ".config" / "aletheore" / "credentials.json"
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg and not legacy.exists() and sys.platform != "win32":
+        return Path(xdg) / "aletheore" / "credentials.json"
+    return legacy
+
+
+DEFAULT_CREDENTIALS_PATH = _default_credentials_path()
 
 
 def has_api_key(
@@ -42,10 +59,12 @@ def get_api_key(
     if prompt_fn is input and not sys.stdin.isatty():
         return None
 
-    entered = prompt_fn(
+    key_prompt = (
         f"No {env_var} found. Enter your {provider_name} API key "
         f"(or press Enter to cancel): "
-    ).strip()
+    )
+    # A real terminal prompt must not echo the secret into the screen/scrollback.
+    entered = (getpass.getpass(key_prompt) if prompt_fn is input else prompt_fn(key_prompt)).strip()
     if not entered:
         return None
 
@@ -67,8 +86,10 @@ def _load_saved_key(provider_name: str, credentials_path: Path) -> str | None:
     if not credentials_path.exists():
         return None
     try:
-        data = json.loads(credentials_path.read_text())
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(credentials_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
         return None
     value = data.get(provider_name)
     return value if isinstance(value, str) and value else None
@@ -128,6 +149,8 @@ def _locked_rw_credentials_file(credentials_path: Path):
         # rather than best-effort-approximated with os.chmod.
         if sys.platform != "win32":
             os.fchmod(fd, 0o600)
+        else:
+            _restrict_windows_acl(credentials_path)
         if sys.platform == "win32":
             import msvcrt
 
@@ -140,13 +163,20 @@ def _locked_rw_credentials_file(credentials_path: Path):
             raw = os.read(fd, os.fstat(fd).st_size)
             try:
                 loaded = json.loads(raw) if raw else {}
-            except json.JSONDecodeError:
+            except ValueError:
+                # Never silently discard an unparseable file: keep a copy so
+                # other saved keys can be recovered by hand.
+                with contextlib.suppress(OSError):
+                    credentials_path.with_suffix(".json.bak").write_bytes(raw)
                 loaded = {}
             data = loaded if isinstance(loaded, dict) else {}
             yield data
+            # Write first, truncate to the new length after: truncating to 0
+            # first leaves a window where an interrupt wipes every saved key.
+            payload = json.dumps(data, indent=2).encode()
             os.lseek(fd, 0, os.SEEK_SET)
-            os.ftruncate(fd, 0)
-            _write_all(fd, json.dumps(data, indent=2).encode())
+            _write_all(fd, payload)
+            os.ftruncate(fd, len(payload))
         finally:
             if sys.platform == "win32":
                 os.lseek(fd, 0, os.SEEK_SET)
@@ -155,6 +185,21 @@ def _locked_rw_credentials_file(credentials_path: Path):
                 fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)
+
+
+def _restrict_windows_acl(path: Path) -> None:
+    """Best effort: drop inherited ACL entries and leave only the current user,
+    the Windows analogue of chmod 600. Never blocks saving a key if icacls fails."""
+    user = os.environ.get("USERNAME")
+    if not user:
+        return
+    with contextlib.suppress(Exception):
+        subprocess.run(
+            ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:F"],
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
 
 
 def _save_key(provider_name: str, key: str, credentials_path: Path) -> None:
