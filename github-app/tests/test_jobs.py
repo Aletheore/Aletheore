@@ -10441,16 +10441,36 @@ def test_run_live_wiki_full_build_for_installation_job_enqueues_per_repo(monkeyp
     assert repo_names == {"octocat/repo1", "octocat/repo2"}
 
 
+def test_full_build_writing_adapter_uses_indierouter_when_configured(monkeypatch):
+    # AIRview's primary provider as of 2026-10-04 - see
+    # writing_adapter_for_airview's docstring for the measured settings.
+    from scan_worker.jobs import _live_wiki_full_build_writing_adapter
+    from scan_worker.model_tiers import INDIEROUTER_DEEPSEEK_MODEL
+
+    monkeypatch.setattr(
+        "scan_worker.model_tiers.has_api_key",
+        lambda env_var, name, **k: env_var in ("OPENAI_API_KEY", "INDIEROUTER_API_KEY"),
+    )
+
+    adapter = _live_wiki_full_build_writing_adapter()
+    assert adapter.name == "IndieRouter"
+    assert adapter._model == INDIEROUTER_DEEPSEEK_MODEL
+
+
 def test_full_build_writing_adapter_always_uses_deepseek_flash_even_with_openai_key_configured(monkeypatch):
     # AIRview's own comprehension benchmark (aletheore-benchmarks,
     # AIRVIEW_GAP.md, re-measured 2026-08-22) found deepseek-v4-flash tied
     # RepoWise here while gpt-5.6-luna lost decisively - see
     # writing_adapter_for_airview's docstring. No longer plan-dependent
-    # (was Luna falling back to deepseek-v4-pro per plan).
+    # (was Luna falling back to deepseek-v4-pro per plan). This is the
+    # fallback path (IndieRouter not configured), which must still never
+    # prefer Luna even with OPENAI_API_KEY configured.
     from scan_worker.jobs import _live_wiki_full_build_writing_adapter
     from scan_worker import live_wiki
 
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "scan_worker.model_tiers.has_api_key", lambda env_var, name, **k: env_var == "OPENAI_API_KEY"
+    )
 
     adapter = _live_wiki_full_build_writing_adapter()
     assert adapter.name == "DeepSeek"
@@ -11372,10 +11392,27 @@ def test_fix_suggestion_attachment_reserves_spend_atomically_against_concurrent_
     assert len(succeeded) == 1
 
 
-def test_health_fix_suggestion_adapter_uses_luna_when_openai_key_configured(monkeypatch):
+def test_health_fix_suggestion_adapter_uses_indierouter_when_configured(monkeypatch):
+    from scan_worker.jobs import _health_fix_suggestion_adapter
+    from scan_worker.model_tiers import HEALTH_FIX_SUGGESTION_MODEL
+
+    monkeypatch.setattr(
+        "scan_worker.model_tiers.has_api_key",
+        lambda env_var, name, **k: env_var in ("OPENAI_API_KEY", "INDIEROUTER_API_KEY"),
+    )
+
+    adapter = _health_fix_suggestion_adapter()
+
+    assert adapter.name == "IndieRouter"
+    assert adapter._model == HEALTH_FIX_SUGGESTION_MODEL == "glm-5.3-flash"
+
+
+def test_health_fix_suggestion_adapter_uses_luna_when_only_openai_key_configured(monkeypatch):
     from scan_worker.jobs import _health_fix_suggestion_adapter
 
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "scan_worker.model_tiers.has_api_key", lambda env_var, name, **k: env_var == "OPENAI_API_KEY"
+    )
 
     adapter = _health_fix_suggestion_adapter()
 
@@ -11394,14 +11431,31 @@ def test_health_fix_suggestion_adapter_falls_back_to_deepseek_pro(monkeypatch):
     assert adapter._model == "deepseek-v4-pro"
 
 
+def test_live_wiki_naming_adapter_uses_indierouter_when_configured(monkeypatch):
+    from scan_worker.jobs import _live_wiki_naming_adapter
+    from scan_worker.model_tiers import INDIEROUTER_DEEPSEEK_MODEL
+
+    monkeypatch.setattr(
+        "scan_worker.model_tiers.has_api_key",
+        lambda env_var, name, **k: env_var in ("OPENAI_API_KEY", "INDIEROUTER_API_KEY"),
+    )
+
+    adapter = _live_wiki_naming_adapter()
+    assert adapter.name == "IndieRouter"
+    assert adapter._model == INDIEROUTER_DEEPSEEK_MODEL
+
+
 def test_live_wiki_naming_adapter_never_uses_luna_even_when_openai_key_configured(monkeypatch):
     # AIRview is the one writing surface that must not prefer Luna - see
     # writing_adapter_for_airview's docstring for the benchmark that
     # justifies the exception (deepseek-v4-flash tied RepoWise, Luna lost).
+    # This is the fallback path (IndieRouter not configured).
     from scan_worker.jobs import _live_wiki_naming_adapter
     from scan_worker import live_wiki
 
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "scan_worker.model_tiers.has_api_key", lambda env_var, name, **k: env_var == "OPENAI_API_KEY"
+    )
 
     adapter = _live_wiki_naming_adapter()
     assert adapter.name == "DeepSeek"
@@ -11419,11 +11473,28 @@ def test_live_wiki_naming_adapter_uses_deepseek_flash_without_openai_key_too(mon
     assert adapter._model == live_wiki.FLASH_MODEL
 
 
+def test_live_wiki_update_writing_adapter_uses_indierouter_when_configured(monkeypatch):
+    from scan_worker.jobs import _live_wiki_update_writing_adapter
+    from scan_worker.model_tiers import INDIEROUTER_DEEPSEEK_MODEL
+
+    monkeypatch.setattr(
+        "scan_worker.model_tiers.has_api_key",
+        lambda env_var, name, **k: env_var in ("OPENAI_API_KEY", "INDIEROUTER_API_KEY"),
+    )
+
+    adapter = _live_wiki_update_writing_adapter()
+    assert adapter.name == "IndieRouter"
+    assert adapter._model == INDIEROUTER_DEEPSEEK_MODEL
+
+
 def test_live_wiki_update_writing_adapter_never_uses_luna_even_when_openai_key_configured(monkeypatch):
+    # Fallback path (IndieRouter not configured).
     from scan_worker.jobs import _live_wiki_update_writing_adapter
     from scan_worker import live_wiki
 
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "scan_worker.model_tiers.has_api_key", lambda env_var, name, **k: env_var == "OPENAI_API_KEY"
+    )
 
     adapter = _live_wiki_update_writing_adapter()
     assert adapter.name == "DeepSeek"
@@ -11441,10 +11512,27 @@ def test_live_wiki_update_writing_adapter_uses_deepseek_flash_without_openai_key
     assert adapter._model == live_wiki.UPDATE_MODEL
 
 
+def test_live_docs_update_writing_adapter_uses_indierouter_when_configured(monkeypatch):
+    from scan_worker.jobs import _live_docs_update_writing_adapter
+    from scan_worker.model_tiers import INDIEROUTER_DEEPSEEK_MODEL
+
+    monkeypatch.setattr(
+        "scan_worker.model_tiers.has_api_key",
+        lambda env_var, name, **k: env_var in ("OPENAI_API_KEY", "INDIEROUTER_API_KEY"),
+    )
+
+    adapter = _live_docs_update_writing_adapter()
+    assert adapter.name == "IndieRouter"
+    assert adapter._model == INDIEROUTER_DEEPSEEK_MODEL
+
+
 def test_live_docs_update_writing_adapter_uses_luna_when_openai_key_configured(monkeypatch):
+    # Fallback path (IndieRouter not configured).
     from scan_worker.jobs import _live_docs_update_writing_adapter
 
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "scan_worker.model_tiers.has_api_key", lambda env_var, name, **k: env_var == "OPENAI_API_KEY"
+    )
 
     assert _live_docs_update_writing_adapter().name == "OpenAI"
 

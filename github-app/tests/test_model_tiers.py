@@ -6,12 +6,18 @@ import pytest
 
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from scan_worker.model_tiers import (
+    HEALTH_FIX_SUGGESTION_MODEL,
+    INDIEROUTER_DEEPSEEK_MODEL,
     LUNA_MODEL,
     MANAGED_AUDIT_MODEL,
     OPENAI_FREE_TIER_DAILY_TOKEN_CAP,
     PRO_MODEL,
     VERIFICATION_MODEL,
     FreeTierFallbackExhausted,
+    airview_model_used,
+    docs_model_used,
+    health_fix_suggestion_model_used,
+    managed_audit_model_used,
     model_for_plan,
     resolve_model,
     run_with_free_tier_fallback,
@@ -19,9 +25,28 @@ from scan_worker.model_tiers import (
     writing_adapter_chain_for_free_tier,
     writing_adapter_for,
     writing_adapter_for_airview,
+    writing_adapter_for_docs,
+    writing_adapter_for_health_fix_suggestion,
     writing_adapter_for_managed_audit,
     writing_adapter_for_plan,
 )
+
+
+def _fake_has_api_key(openai: bool = False, indierouter: bool = False):
+    """Key-aware has_api_key fake - a blanket `lambda *a, **k: True/False`
+    would make _indierouter_available() (which calls the same has_api_key)
+    agree with whatever OPENAI_API_KEY's fake value was, silently routing
+    an AIRview/Docs/managed-audit/health-fix-suggestion test meant to
+    exercise the DeepSeek-or-Luna fallback path into the new IndieRouter
+    primary path instead. Mirrors the free-tier chain tests' own
+    fake_has_api_key(env_var, name, **kwargs) shape below."""
+    def fake(env_var, name, **kwargs):
+        if env_var == "OPENAI_API_KEY":
+            return openai
+        if env_var == "INDIEROUTER_API_KEY":
+            return indierouter
+        return False
+    return fake
 
 
 class _FakeRedis:
@@ -83,8 +108,13 @@ def test_writing_adapter_for_json_output_turns_on_json_mode_for_the_openai_model
 def test_writing_adapter_for_json_output_leaves_the_deepseek_path_alone(monkeypatch):
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
     assert writing_adapter_for("some-fallback", json_output=True)._json_mode is False
-    # AIRview is pinned to DeepSeek even when OpenAI is configured.
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    # AIRview never turns on json_mode, on either path: not on IndieRouter
+    # (writing_adapter_for_airview's own docstring - preserves real existing
+    # behavior rather than changing provider and JSON mode at once), and not
+    # on its DeepSeek-direct fallback even with OpenAI configured.
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(openai=True))
+    assert writing_adapter_for_airview("some-fallback", json_output=True)._json_mode is False
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(indierouter=True))
     assert writing_adapter_for_airview("some-fallback", json_output=True)._json_mode is False
 
 
@@ -94,12 +124,18 @@ def test_writing_adapter_for_plan_threads_json_output(monkeypatch):
     assert writing_adapter_for_plan("air")._json_mode is False
 
 
-def test_docs_builders_ask_the_openai_model_for_json(monkeypatch):
-    # Docs parses every response as JSON, and on gpt-5.6-luna a malformed long
-    # response drops the whole batch.
+def test_docs_builders_ask_for_json(monkeypatch):
+    # Docs parses every response as JSON - on IndieRouter (the real primary
+    # path as of 2026-10-04) this is the first time json_output actually
+    # reaches a provider's real response_format=json_object; on the Luna
+    # fallback, a malformed long response drops the whole batch.
     from scan_worker.jobs import _live_docs_full_build_writing_adapter, _live_docs_update_writing_adapter
 
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(indierouter=True))
+    assert _live_docs_full_build_writing_adapter("air")._json_mode is True
+    assert _live_docs_update_writing_adapter()._json_mode is True
+
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(openai=True))
     assert _live_docs_full_build_writing_adapter("air")._json_mode is True
     assert _live_docs_update_writing_adapter()._json_mode is True
 
@@ -143,7 +179,23 @@ def test_writing_adapter_for_threads_on_usage_through_either_branch(monkeypatch)
         assert received == [(10, 20)], key_configured
 
 
-def test_writing_adapter_for_airview_never_uses_luna_even_when_openai_is_configured(monkeypatch):
+def test_writing_adapter_for_airview_uses_indierouter_when_configured(monkeypatch):
+    # AIRview's primary provider as of 2026-10-04 - deepseek-v4.1-flash via
+    # IndieRouter, effort low, a 300s timeout, never json_mode (see
+    # writing_adapter_for_airview's own docstring for the measured
+    # settings). Takes this path regardless of OPENAI_API_KEY.
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(openai=True, indierouter=True))
+    adapter = writing_adapter_for_airview("deepseek-v4-flash", json_output=True)
+    assert adapter.name == "IndieRouter"
+    assert adapter._model == INDIEROUTER_DEEPSEEK_MODEL
+    assert adapter._base_url == "https://api.indierouter.ai/v1"
+    assert adapter._api_key_env_var == "INDIEROUTER_API_KEY"
+    assert adapter._extra_body == {"reasoning_effort": "low"}
+    assert adapter._request_timeout_seconds == 300
+    assert adapter._json_mode is False
+
+
+def test_writing_adapter_for_airview_never_uses_luna_when_indierouter_not_configured(monkeypatch):
     # AIRview's own comprehension benchmark (aletheore-benchmarks,
     # AIRVIEW_GAP.md, re-measured 2026-08-22, full 12-question architecture
     # set, 3 judge repeats) found deepseek-v4-flash tied RepoWise (1.88 vs
@@ -151,7 +203,7 @@ def test_writing_adapter_for_airview_never_uses_luna_even_when_openai_is_configu
     # decisively (1.53 vs 2.08, outside it) - same corpus, same day, same
     # rubric. Unlike writing_adapter_for, this must not switch to Luna just
     # because OPENAI_API_KEY is configured.
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(openai=True))
     adapter = writing_adapter_for_airview("deepseek-v4-flash")
     assert adapter.name == "DeepSeek"
     assert adapter._model == "deepseek-v4-flash"
@@ -159,36 +211,68 @@ def test_writing_adapter_for_airview_never_uses_luna_even_when_openai_is_configu
     assert adapter._api_key_env_var == "DEEPSEEK_API_KEY"
 
 
-def test_writing_adapter_for_airview_still_uses_deepseek_when_openai_is_not_configured(monkeypatch):
+def test_writing_adapter_for_airview_still_uses_deepseek_when_nothing_is_configured(monkeypatch):
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
     adapter = writing_adapter_for_airview("deepseek-v4-flash")
     assert adapter.name == "DeepSeek"
     assert adapter._model == "deepseek-v4-flash"
 
 
+def test_writing_adapter_for_airview_falls_back_and_logs_when_indierouter_not_configured(monkeypatch, caplog):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+    with caplog.at_level(logging.WARNING, logger="scan_worker.model_tiers"):
+        adapter = writing_adapter_for_airview("deepseek-v4-flash")
+    assert adapter.name == "DeepSeek"
+    assert "INDIEROUTER_API_KEY not configured" in caplog.text
+
+
 def test_writing_adapter_for_airview_threads_on_usage_and_before_llm_call(monkeypatch):
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
-    received = []
-    calls_allowed = []
-    adapter = writing_adapter_for_airview(
-        "deepseek-v4-flash",
-        on_usage=lambda p, c: received.append((p, c)),
-        before_llm_call=lambda: calls_allowed.append(True) or True,
-    )
-    adapter._on_usage(7, 3)
-    assert received == [(7, 3)]
-    assert adapter._before_llm_call() is True
-    assert calls_allowed == [True]
+    for kwargs in [{"indierouter": True}, {}]:
+        monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(**kwargs))
+        received = []
+        calls_allowed = []
+        adapter = writing_adapter_for_airview(
+            "deepseek-v4-flash",
+            on_usage=lambda p, c: received.append((p, c)),
+            before_llm_call=lambda: calls_allowed.append(True) or True,
+        )
+        adapter._on_usage(7, 3)
+        assert received == [(7, 3)], kwargs
+        assert adapter._before_llm_call() is True
+        assert calls_allowed == [True], kwargs
 
 
-def test_writing_adapter_for_managed_audit_never_uses_luna_even_when_openai_is_configured(monkeypatch):
+def test_airview_model_used_tracks_which_branch_will_run(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(indierouter=True))
+    assert airview_model_used("deepseek-v4-flash") == INDIEROUTER_DEEPSEEK_MODEL
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+    assert airview_model_used("deepseek-v4-flash") == "deepseek-v4-flash"
+
+
+def test_writing_adapter_for_managed_audit_uses_indierouter_when_configured(monkeypatch):
+    # Managed audit's primary provider as of 2026-10-04 - deepseek-v4.1-flash
+    # via IndieRouter, effort low (measured 9 rounds/132s/$0.16 against this
+    # repository - see writing_adapter_for_managed_audit's own docstring).
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(openai=True, indierouter=True))
+    adapter = writing_adapter_for_managed_audit()
+    assert adapter.name == "IndieRouter"
+    assert adapter._model == INDIEROUTER_DEEPSEEK_MODEL
+    assert adapter._base_url == "https://api.indierouter.ai/v1"
+    assert adapter._extra_body == {"reasoning_effort": "low"}
+    # Default True on the IndieRouter branch - the False workaround below is
+    # specific to deepseek-v4-pro's own thinking-mode quirk on the direct
+    # DeepSeek API, not something seen against IndieRouter.
+    assert adapter._supports_tool_choice is True
+
+
+def test_writing_adapter_for_managed_audit_never_uses_luna_when_indierouter_not_configured(monkeypatch):
     # Measured directly against a real repo, three full audit runs: Luna
     # cost $0.15 (6 rounds) and missed a real circular import;
     # deepseek-v4-pro cost $1.15 (14 rounds) and caught it; deepseek-v4-flash
     # cost $0.40 (16 rounds) and also caught it - same accuracy as Pro for a
     # third of the cost. Unlike writing_adapter_for_plan, this must not
     # switch to Luna just because OPENAI_API_KEY is configured.
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(openai=True))
     adapter = writing_adapter_for_managed_audit()
     assert adapter.name == "DeepSeek"
     assert adapter._model == MANAGED_AUDIT_MODEL == "deepseek-v4-flash"
@@ -196,31 +280,50 @@ def test_writing_adapter_for_managed_audit_never_uses_luna_even_when_openai_is_c
     assert adapter._supports_tool_choice is False
 
 
-def test_writing_adapter_for_managed_audit_still_uses_deepseek_when_openai_is_not_configured(monkeypatch):
+def test_writing_adapter_for_managed_audit_still_uses_deepseek_when_nothing_is_configured(monkeypatch):
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
     adapter = writing_adapter_for_managed_audit()
     assert adapter.name == "DeepSeek"
     assert adapter._model == "deepseek-v4-flash"
 
 
+def test_writing_adapter_for_managed_audit_falls_back_and_logs_when_indierouter_not_configured(
+    monkeypatch, caplog
+):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+    with caplog.at_level(logging.WARNING, logger="scan_worker.model_tiers"):
+        adapter = writing_adapter_for_managed_audit()
+    assert adapter.name == "DeepSeek"
+    assert "INDIEROUTER_API_KEY not configured" in caplog.text
+
+
 def test_writing_adapter_for_managed_audit_threads_on_usage_and_before_llm_call(monkeypatch):
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
-    received = []
-    calls_allowed = []
-    adapter = writing_adapter_for_managed_audit(
-        on_usage=lambda p, c: received.append((p, c)),
-        before_llm_call=lambda: calls_allowed.append(True) or True,
-    )
-    adapter._on_usage(7, 3)
-    assert received == [(7, 3)]
-    assert adapter._before_llm_call() is True
-    assert calls_allowed == [True]
+    for kwargs in [{"indierouter": True}, {}]:
+        monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(**kwargs))
+        received = []
+        calls_allowed = []
+        adapter = writing_adapter_for_managed_audit(
+            on_usage=lambda p, c: received.append((p, c)),
+            before_llm_call=lambda: calls_allowed.append(True) or True,
+        )
+        adapter._on_usage(7, 3)
+        assert received == [(7, 3)], kwargs
+        assert adapter._before_llm_call() is True
+        assert calls_allowed == [True], kwargs
 
 
 def test_writing_adapter_for_managed_audit_threads_allow_partial_report(monkeypatch):
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
-    adapter = writing_adapter_for_managed_audit(allow_partial_report=True)
-    assert adapter._allow_partial_report is True
+    for kwargs in [{"indierouter": True}, {}]:
+        monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(**kwargs))
+        adapter = writing_adapter_for_managed_audit(allow_partial_report=True)
+        assert adapter._allow_partial_report is True, kwargs
+
+
+def test_managed_audit_model_used_tracks_which_branch_will_run(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(indierouter=True))
+    assert managed_audit_model_used() == INDIEROUTER_DEEPSEEK_MODEL
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+    assert managed_audit_model_used() == MANAGED_AUDIT_MODEL
 
 
 def test_verification_adapter_always_uses_deepseek_even_when_openai_is_configured(monkeypatch):
@@ -284,6 +387,107 @@ def test_model_for_plan_never_drifts_from_writing_adapter_for_plan(monkeypatch):
         for plan in ["pro", "free"]:
             adapter = writing_adapter_for_plan(plan)
             assert model_for_plan(plan) == adapter._model, (key_configured, plan)
+
+
+# ── writing_adapter_for_docs tests ───────────────────────────────────────
+
+
+def test_writing_adapter_for_docs_uses_indierouter_when_configured(monkeypatch):
+    # Docs' primary provider as of 2026-10-04 - deepseek-v4.1-flash via
+    # IndieRouter with JSON mode on (default reasoning - effort low and
+    # per-file parallelism are untested for Docs specifically, see
+    # writing_adapter_for_docs's own docstring).
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(openai=True, indierouter=True))
+    adapter = writing_adapter_for_docs(PRO_MODEL, json_output=True)
+    assert adapter.name == "IndieRouter"
+    assert adapter._model == INDIEROUTER_DEEPSEEK_MODEL
+    assert adapter._json_mode is True
+    assert adapter._extra_body == {}
+
+
+def test_writing_adapter_for_docs_falls_back_to_the_previous_resolution_when_indierouter_not_configured(
+    monkeypatch,
+):
+    # Each existing call site's own _prefer_luna=True default is preserved
+    # exactly on the fallback branch - Luna if OPENAI_API_KEY is configured,
+    # else the given fallback_model direct.
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(openai=True))
+    adapter = writing_adapter_for_docs(PRO_MODEL, json_output=True)
+    assert adapter.name == "OpenAI"
+    assert adapter._model == LUNA_MODEL
+    assert adapter._json_mode is True
+
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+    adapter = writing_adapter_for_docs("deepseek-v4-flash", json_output=True)
+    assert adapter.name == "DeepSeek"
+    assert adapter._model == "deepseek-v4-flash"
+    # The DeepSeek-direct branch of writing_adapter_for drops json_output
+    # entirely (see that function's own docstring) - unchanged, preexisting
+    # behavior, not something this change alters for the fallback path.
+    assert adapter._json_mode is False
+
+
+def test_writing_adapter_for_docs_logs_when_indierouter_not_configured(monkeypatch, caplog):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+    with caplog.at_level(logging.WARNING, logger="scan_worker.model_tiers"):
+        writing_adapter_for_docs("deepseek-v4-flash")
+    assert "INDIEROUTER_API_KEY not configured" in caplog.text
+
+
+def test_docs_model_used_tracks_which_branch_will_run(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(indierouter=True))
+    assert docs_model_used(PRO_MODEL) == INDIEROUTER_DEEPSEEK_MODEL
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(openai=True))
+    assert docs_model_used(PRO_MODEL) == LUNA_MODEL
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+    assert docs_model_used("deepseek-v4-flash") == "deepseek-v4-flash"
+
+
+# ── writing_adapter_for_health_fix_suggestion tests ──────────────────────
+
+
+def test_writing_adapter_for_health_fix_suggestion_uses_indierouter_when_configured(monkeypatch):
+    # Genuinely new surface as of 2026-10-04 - glm-5.3-flash via IndieRouter,
+    # effort low, untested end to end (see this builder's own docstring).
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(openai=True, indierouter=True))
+    adapter = writing_adapter_for_health_fix_suggestion()
+    assert adapter.name == "IndieRouter"
+    assert adapter._model == HEALTH_FIX_SUGGESTION_MODEL == "glm-5.3-flash"
+    assert adapter._extra_body == {"reasoning_effort": "low"}
+
+
+def test_writing_adapter_for_health_fix_suggestion_falls_back_to_luna_when_only_openai_is_configured(
+    monkeypatch,
+):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(openai=True))
+    adapter = writing_adapter_for_health_fix_suggestion()
+    assert adapter.name == "OpenAI"
+    assert adapter._model == LUNA_MODEL
+
+
+def test_writing_adapter_for_health_fix_suggestion_falls_back_to_deepseek_pro_when_nothing_is_configured(
+    monkeypatch,
+):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+    adapter = writing_adapter_for_health_fix_suggestion()
+    assert adapter.name == "DeepSeek"
+    assert adapter._model == PRO_MODEL
+
+
+def test_writing_adapter_for_health_fix_suggestion_logs_when_indierouter_not_configured(monkeypatch, caplog):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+    with caplog.at_level(logging.WARNING, logger="scan_worker.model_tiers"):
+        writing_adapter_for_health_fix_suggestion()
+    assert "INDIEROUTER_API_KEY not configured" in caplog.text
+
+
+def test_health_fix_suggestion_model_used_tracks_which_branch_will_run(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(indierouter=True))
+    assert health_fix_suggestion_model_used("pro") == HEALTH_FIX_SUGGESTION_MODEL
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(openai=True))
+    assert health_fix_suggestion_model_used("pro") == LUNA_MODEL
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+    assert health_fix_suggestion_model_used("pro") == PRO_MODEL
 
 
 # ── free-tier adapter chain tests ───────────────────────────────────────

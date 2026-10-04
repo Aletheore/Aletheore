@@ -26,6 +26,15 @@ def test_cost_for_usage_deepseek_v4_flash():
     )
 
 
+def test_cost_for_usage_deepseek_v4_1_flash():
+    # IndieRouter's own model id (AIRview/Docs/managed-audits primary
+    # provider as of 2026-10-04) - a different, correctly separate entry
+    # from "deepseek-v4-flash" above, which prices the direct DeepSeek API.
+    assert cost_for_usage("deepseek-v4.1-flash", 1_000_000, 1_000_000) == pytest.approx(
+        0.2273 + 0.6819
+    )
+
+
 def test_cost_for_usage_gpt_5_6_luna():
     assert cost_for_usage("gpt-5.6-luna", 1_000_000, 1_000_000) == pytest.approx(
         0.20 + 1.20

@@ -14,7 +14,13 @@ from aletheore.adapters.base import AdapterInvocationError, AgentAdapter
 from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, get_api_key, has_api_key
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 
-MAX_TOOL_ROUNDS = 20
+# Raised 20->40 (2026-10-04): a full managed audit routinely takes more than
+# 14 rounds, and the round-based tool-calling loop (.invoke(), below) hit the
+# old limit of 20 mid-report. Model-independent - this is round *count*, not
+# which API is called - the only consumer repo-wide is this same .invoke()
+# loop, reached via report.py by both the hosted managed_audit job and the
+# local `aletheore audit` CLI command.
+MAX_TOOL_ROUNDS = 40
 REQUEST_TIMEOUT_SECONDS = 120
 MAX_CONSECUTIVE_NO_TOOL_CALLS = 2
 
