@@ -630,3 +630,19 @@ def test_compute_hotspots_normalizes_paths_when_scan_root_is_subdirectory(tmp_pa
             "dependents_count": 0,
         }
     ]
+
+
+def test_analyze_git_flags_a_shallow_clone_as_partial_history(tmp_path):
+    source = make_git_repo(tmp_path)
+    clone = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth=2", f"file://{source}", str(clone)],
+        check=True, capture_output=True,
+    )
+
+    result = analyze_git(clone, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
+
+    assert result["history_depth_limited"] is True
+    assert analyze_git(source, now=datetime(2026, 7, 14, tzinfo=timezone.utc))[
+        "history_depth_limited"
+    ] is False
