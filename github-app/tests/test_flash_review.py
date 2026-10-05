@@ -2361,6 +2361,28 @@ def test_fetch_review_file_context_skips_files_where_fetch_returns_none(monkeypa
     assert file_contents == {"a.py": "real content"}
 
 
+def test_fetch_review_file_context_skips_a_file_whose_fetch_raises(monkeypatch):
+    # Real bug found via audit: fetch_file_content raises unguarded on a
+    # non-404 HTTP error (403 rate-limit, 5xx) or a network failure, and
+    # this loop's future.result() had no try/except, so one transient
+    # GitHub error on any single file aborted the whole review - every
+    # other I/O path in this file fails open and logs a warning instead.
+    from scan_worker import flash_review
+
+    def fake_fetch(client, token, repo, path, ref):
+        if path == "flaky.py":
+            raise RuntimeError("connection reset")
+        return f"content of {path}"
+
+    monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
+
+    file_contents = flash_review.fetch_review_file_context(
+        None, "tok", "o/r", ["a.py", "flaky.py"], "sha"
+    )
+
+    assert file_contents == {"a.py": "content of a.py"}
+
+
 def test_fetch_review_file_context_windows_an_oversized_file_with_diff_patches(monkeypatch):
     # The core new behavior: given real hunk-line evidence, an oversized
     # file gets a windowed excerpt instead of being dropped entirely.

@@ -2951,7 +2951,21 @@ def _run_flash_review(
         )
 
         def _fetch_symbol_source(file_path: str, start_line: int, end_line: int) -> str | None:
-            content = fetch_file_content(client, token, repo_full_name, file_path, head_sha)
+            # Real bug found via audit: fetch_file_content raises unguarded
+            # on a non-404 HTTP error or network failure - unlike every
+            # other I/O path in the Flash Review pipeline, this one had no
+            # try/except, so one transient GitHub error here aborted the
+            # whole review instead of just losing this one symbol's
+            # evidence (same reasoning as flash_review.fetch_review_file_
+            # context's own fix for the identical gap).
+            try:
+                content = fetch_file_content(client, token, repo_full_name, file_path, head_sha)
+            except Exception as exc:  # noqa: BLE001 - fail open, one symbol's fetch must not abort the whole review
+                logging.getLogger("scan_worker.jobs").warning(
+                    "referenced symbol source fetch failed for %s (%s); skipping",
+                    file_path, type(exc).__name__,
+                )
+                return None
             if content is None:
                 return None
             # split("\n"), never splitlines() - same real bug class already
