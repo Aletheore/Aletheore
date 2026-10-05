@@ -1985,10 +1985,19 @@ async def get_installation_by_token_hash(pool: asyncpg.Pool, token_hash: str) ->
     return dict(row) if row else None
 
 
-async def touch_api_token(pool: asyncpg.Pool, token_hash: str) -> None:
+async def touch_api_token(
+    pool: asyncpg.Pool, token_hash: str, min_interval_seconds: int = 0
+) -> None:
+    """Record a token use. `min_interval_seconds` skips the write when
+    last_used_at is already that fresh, for high-volume callers."""
     await pool.execute(
-        "UPDATE api_tokens SET last_used_at = now() WHERE token_hash = $1",
+        """
+        UPDATE api_tokens SET last_used_at = now()
+        WHERE token_hash = $1
+          AND (last_used_at IS NULL OR last_used_at <= now() - make_interval(secs => $2))
+        """,
         token_hash,
+        float(min_interval_seconds),
     )
 
 
