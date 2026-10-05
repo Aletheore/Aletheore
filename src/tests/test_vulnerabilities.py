@@ -1230,3 +1230,24 @@ def test_check_vulnerabilities_includes_gradle_pins(tmp_path, monkeypatch):
     vulnerabilities.check_vulnerabilities(repo, cache_path=tmp_path / "cache.json")
 
     assert ("com.example:foo", "1.0.0", "Maven") in captured["pins"]
+
+
+def test_parse_maven_pins_resolves_property_defined_via_another_property(tmp_path):
+    from aletheore.vulnerabilities import _parse_maven_pins
+
+    (tmp_path / "pom.xml").write_text(
+        '<project xmlns="http://maven.apache.org/POM/4.0.0">\n'
+        "  <properties><a>4.0.0</a><b>${a}</b><x>${y}</x><y>${x}</y></properties>\n"
+        "  <dependencies>\n"
+        "    <dependency><groupId>g</groupId><artifactId>chained</artifactId>"
+        "<version>${b}</version></dependency>\n"
+        "    <dependency><groupId>g</groupId><artifactId>cyclic</artifactId>"
+        "<version>${x}</version></dependency>\n"
+        "  </dependencies>\n"
+        "</project>\n"
+    )
+
+    pins = _parse_maven_pins(tmp_path)
+
+    assert ("g:chained", "4.0.0", "Maven") in pins
+    assert not any(p[0] == "g:cyclic" for p in pins)
