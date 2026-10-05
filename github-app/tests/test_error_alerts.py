@@ -1,3 +1,5 @@
+import sentry_sdk
+
 from app_server import error_alerts
 from app_server.error_alerts import send_error_alert
 from app_server.redis_client import get_redis_client
@@ -126,3 +128,15 @@ def test_should_alert_fails_open_when_redis_is_unreachable(monkeypatch):
     monkeypatch.setattr(error_alerts, "get_redis_client", _boom)
 
     assert error_alerts._should_alert("some:key") is True
+
+
+def test_captures_exception_in_sentry_even_when_resend_api_key_is_not_configured(monkeypatch):
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    _clear_cooldown("app_server:KeyError")
+    captured = []
+    monkeypatch.setattr(sentry_sdk, "capture_exception", lambda exc: captured.append(exc))
+
+    error = KeyError("missing")
+    send_error_alert("app_server", error)
+
+    assert captured == [error]
