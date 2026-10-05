@@ -2668,6 +2668,24 @@ def review_diff(
 
             if on_grounding_result is not None:
                 on_grounding_result({"proposed": len(combined), "kept": len(kept)})
+            if cross_file_check_runs > 0:
+                # Real gap found via audit: a cache hit used to return here
+                # without ever reaching this check, even though the cache
+                # match is similarity-based, not exact - a finding cached
+                # against one push could replay on a later, similar push
+                # whose current diff would otherwise get it dropped as
+                # contradicted. Same logic as the fresh-generation path
+                # below, against the CURRENT diff_text, not whatever was
+                # cached - same reasoning _validate_findings above already
+                # re-runs for.
+                llm_findings = [f for f in kept if f.get("source") == "llm"]
+                surviving_ids = {
+                    id(f) for f in _check_findings_against_whole_diff(
+                        llm_findings, diff_text, agreeing_checks=cross_file_check_runs,
+                        on_usage=on_cross_file_check_usage,
+                    )
+                }
+                kept = [f for f in kept if f.get("source") != "llm" or id(f) in surviving_ids]
             return kept
 
     # PR-Agent user prompt (title/date/diff) plus, when non-empty,
