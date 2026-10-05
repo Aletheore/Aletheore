@@ -1230,3 +1230,30 @@ def test_check_vulnerabilities_includes_gradle_pins(tmp_path, monkeypatch):
     vulnerabilities.check_vulnerabilities(repo, cache_path=tmp_path / "cache.json")
 
     assert ("com.example:foo", "1.0.0", "Maven") in captured["pins"]
+
+
+def test_parse_composer_pins_includes_dev_dependencies(tmp_path):
+    from aletheore.vulnerabilities import _parse_composer_pins
+
+    (tmp_path / "composer.lock").write_text(
+        json.dumps(
+            {
+                "packages": [{"name": "a/prod", "version": "v1.0.0"}],
+                "packages-dev": [{"name": "a/dev", "version": "2.0.0"}],
+            }
+        )
+    )
+    assert sorted(_parse_composer_pins(tmp_path)) == [
+        ("a/dev", "2.0.0", "Packagist"),
+        ("a/prod", "1.0.0", "Packagist"),
+    ]
+
+
+def test_parse_composer_pins_json_fallback_includes_require_dev(tmp_path):
+    from aletheore.vulnerabilities import _parse_composer_pins
+
+    (tmp_path / "composer.json").write_text(
+        json.dumps({"require": {"php": "^8.1", "a/prod": "1.2.3"}, "require-dev": {"a/dev": "4.5.6"}})
+    )
+    names = {name for name, _, _ in _parse_composer_pins(tmp_path)}
+    assert names == {"a/prod", "a/dev"}
