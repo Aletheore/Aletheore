@@ -2813,3 +2813,30 @@ def test_hosted_batches_never_drop_a_text_larger_than_the_token_cap():
     covered = [i for start, end in spans for i in range(start, end)]
     assert covered == [0, 1, 2], "every text must appear in exactly one span"
     assert (1, 2) in spans, "the oversized text goes out on its own"
+
+
+def test_provider_switch_mid_rebuild_does_not_embed_stale_chunks_twice(tmp_path):
+    def evidence(body):
+        (tmp_path / "a.py").write_text(f"def f():\n    return {body}\n")
+        (tmp_path / "b.py").write_text("def g():\n    return 2\n")
+        return {"repository": {"modules": [
+            {"path": p, "language": "python", "imports": [],
+             "symbols": {"functions": [{"name": p[0], "start_line": 1, "end_line": 2}], "classes": []}}
+            for p in ("a.py", "b.py")]}}
+
+    with patch("aletheore.search_index.embed_texts", side_effect=lambda t: [[0.1] * 768] * len(t)):
+        build_index(tmp_path, evidence(1))
+
+    embedded = []
+
+    def new_provider(texts):
+        embedded.extend(texts)
+        return [[0.2] * 1536] * len(texts)
+
+    with patch("aletheore.search_index.embed_texts", side_effect=new_provider):
+        build_index(tmp_path, evidence(99))
+
+    # a.py changed (stale) and b.py was reusable but invalidated by the switch:
+    # each chunk should be embedded exactly once, never the stale one twice.
+    assert len(embedded) == len(set(embedded))
+    assert len(embedded) == 2

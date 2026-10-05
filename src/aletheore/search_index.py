@@ -1597,10 +1597,27 @@ def build_index(
         reused_dimensions = {len(vector) for vector in reusable.values()}
         if reused_dimensions != {current_dimension} or reusable_embedder != current_embedder:
             reusable = {}
-            stale = chunks
-            fresh, current_embedder = _embed_stale_by_hash(
-                stale, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress
-            )
+            # The chunks already embedded above used the current provider, so
+            # only the chunks that were being reused need embedding now -
+            # re-embedding everything pays (metered, for hosted) twice for
+            # the stale ones.
+            missing = [chunk for chunk in chunks if chunk["chunk_hash"] not in fresh]
+            if fresh and missing:
+                extra, extra_embedder = _embed_stale_by_hash(
+                    missing, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress
+                )
+                if extra_embedder == current_embedder:
+                    fresh = {**fresh, **extra}
+                else:
+                    # Provider changed again mid-rebuild: the two halves are
+                    # not comparable, so redo everything with one provider.
+                    fresh, current_embedder = _embed_stale_by_hash(
+                        chunks, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress
+                    )
+            elif missing:
+                fresh, current_embedder = _embed_stale_by_hash(
+                    chunks, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress
+                )
 
     rows = [
         {
