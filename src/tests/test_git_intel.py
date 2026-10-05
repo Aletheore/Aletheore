@@ -630,3 +630,23 @@ def test_compute_hotspots_normalizes_paths_when_scan_root_is_subdirectory(tmp_pa
             "dependents_count": 0,
         }
     ]
+
+
+def test_analyze_git_resets_when_sync_pointer_was_rewritten_out_of_history(tmp_path):
+    # An amended-away commit still exists as an orphaned object until gc, so an
+    # existence-only check kept the stale sync pointer and double-counted the
+    # rewritten commit on the next incremental sync.
+    repo = make_git_repo(tmp_path)
+    now = datetime(2026, 7, 14, tzinfo=timezone.utc)
+    assert analyze_git(repo, now=now)["total_commits"] == 3
+
+    (repo / "a.txt").write_text("amended")
+    run(repo, "add", "a.txt")
+    env = os.environ.copy()
+    env["GIT_COMMITTER_DATE"] = "2026-07-02T00:00:00+00:00"
+    subprocess.run(
+        ["git", "commit", "--amend", "-m", "third amended", "--date", "2026-07-02T00:00:00+00:00"],
+        cwd=repo, check=True, capture_output=True, env=env,
+    )
+
+    assert analyze_git(repo, now=now)["total_commits"] == 3
