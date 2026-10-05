@@ -5317,12 +5317,14 @@ class _IncrementalSpendBudget:
     rather than being bounded to one call's worth.
 
     Known residual gaps, not addressed here:
-    - If the LLM call itself fails after can_start_next_call() reserves but
-      before record_usage() trues it up, that reservation is never
-      released - the same class of gap model_tiers._reserve_openai_free_
-      tier_budget already has for the OpenAI free-tier daily token cap.
-      Closing it needs a failure hook the adapter chain doesn't expose
-      yet; tracked separately, not part of this fix.
+    - A catchable LLM failure is NOT a gap any more: OpenAICompatibleAdapter
+      calls on_call_failed on every exception and no-usage path (wired to
+      on_call_failed() at every construction site), which releases the
+      reservation. What remains is an uncatchable one: a hard process kill
+      (OOM-kill, SIGKILL, host crash) between can_start_next_call() and the
+      adapter's own completion handling leaks that reservation, since
+      reserve_llm_spend is an immediate DB deduction and no reconciliation
+      sweep exists for it.
     - No mechanism here fully serializes every LLM-spending feature
       against the same installation's cap (installation_spend_lock exists
       and is used by Flash Review, but not by either AIRview/Docs
