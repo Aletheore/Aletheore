@@ -235,3 +235,31 @@ async def test_audit_command_on_a_hidden_repo_does_not_reach_the_permission_chec
     await handle_issue_comment_event(_payload("/aletheore audit"), pool, "redis://unused", queue=fake_queue)
     permission_check.assert_not_called()
     fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        "To run it comment:\n```\n/aletheore audit\n```",
+        "To run it comment:\n~~~\n/aletheore audit\n~~~",
+        "Example:\n\n    /aletheore audit\n",
+    ],
+)
+async def test_command_inside_a_code_block_does_not_enqueue(pool, monkeypatch, body):
+    await _seed_paid_installation(pool)
+    _mock_permission_check(monkeypatch, "write")
+    fake_queue = MagicMock()
+    await handle_issue_comment_event(_payload(body), pool, "redis://unused", queue=fake_queue)
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_command_after_a_closed_code_block_still_enqueues(pool, monkeypatch):
+    await _seed_paid_installation(pool)
+    _mock_permission_check(monkeypatch, "write")
+    fake_queue = MagicMock()
+    await handle_issue_comment_event(
+        _payload("```\nfoo\n```\n/aletheore audit"), pool, "redis://unused", queue=fake_queue
+    )
+    fake_queue.enqueue.assert_called_once()

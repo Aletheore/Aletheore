@@ -28,6 +28,27 @@ def _matches_command(line: str, command: str) -> bool:
     return line.startswith(command) and line[len(command) : len(command) + 1].isspace()
 
 
+def _command_candidate_lines(body: str):
+    """Lines of a comment that could be a real command invocation: not inside
+    a fenced code block and not an indented (4 spaces / tab) code block, so a
+    maintainer documenting the command doesn't fire a real billed audit."""
+    fence: str | None = None
+    for raw in body.splitlines():
+        stripped = raw.strip()
+        marker = stripped[:3]
+        if marker in ("```", "~~~"):
+            if fence is None:
+                fence = marker
+            elif marker == fence:
+                fence = None
+            continue
+        if fence is not None:
+            continue
+        if raw.startswith(("    ", "\t")):
+            continue
+        yield stripped
+
+
 # Anyone who can push to the repo can already do everything a managed audit
 # does (read the code, spend the org's own compute) - "read" or below is
 # exactly the set of people an outside PR commenter represents, which is
@@ -49,7 +70,7 @@ async def handle_issue_comment_event(payload: dict, pool, redis_url: str, queue=
         return
     comment = payload.get("comment", {})
     body = comment.get("body", "")
-    if not any(_matches_command(line.strip(), AUDIT_COMMAND) for line in body.splitlines()):
+    if not any(_matches_command(line, AUDIT_COMMAND) for line in _command_candidate_lines(body)):
         return
     if comment.get("user", {}).get("type") == "Bot":
         return
