@@ -1097,7 +1097,7 @@ async def add_installation_member_within_seat_limit(
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute("SELECT set_config('lock_timeout', $1, true)", ADVISORY_LOCK_TIMEOUT)
-            # Namespace 3 is reserved for installation seat admission.
+            # SEAT_LOCK_NAMESPACE (6) is reserved for installation seat admission.
             await conn.execute(
                 "SELECT pg_advisory_xact_lock($1, $2)",
                 SEAT_LOCK_NAMESPACE,
@@ -1145,7 +1145,7 @@ async def add_initial_installation_member_if_empty(
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute("SELECT set_config('lock_timeout', $1, true)", ADVISORY_LOCK_TIMEOUT)
-            # Namespace 3 is reserved for installation seat admission.
+            # SEAT_LOCK_NAMESPACE (6) is reserved for installation seat admission.
             await conn.execute(
                 "SELECT pg_advisory_xact_lock($1, $2)",
                 SEAT_LOCK_NAMESPACE,
