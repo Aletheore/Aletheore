@@ -64,12 +64,41 @@ import math
 import os
 import threading
 
-from fastapi import FastAPI
+import sentry_sdk
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from llama_cpp import Llama
 from pydantic import BaseModel
+from sentry_sdk.integrations.logging import LoggingIntegration
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _scrub_event(event: dict, hint: dict) -> dict:
+    """Strip request data and stack-frame local variables - same policy as
+    app_server/sentry_config.py's _scrub_event, duplicated here rather than
+    imported since this module is built into a separate Docker image that
+    never has app_server on its path (see Dockerfile.jina-embed).
+    """
+    event.pop("request", None)
+    for exc_value in event.get("exception", {}).get("values", []):
+        for frame in exc_value.get("stacktrace", {}).get("frames", []):
+            frame.pop("vars", None)
+    return event
+
+
+_SENTRY_DSN = os.environ.get("SENTRY_DSN", "").strip()
+if _SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=_SENTRY_DSN,
+        environment=os.environ.get("SENTRY_ENVIRONMENT", "production").strip() or "production",
+        send_default_pii=False,
+        before_send=_scrub_event,
+        traces_sample_rate=0,
+        integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+    )
+    sentry_sdk.set_tag("service", "jina_embed")
 
 _THREADS = int(os.environ.get("JINA_EMBED_THREADS", "1"))
 _MODEL_PATH = os.environ.get("JINA_EMBED_MODEL_PATH", "/app/model.gguf")
@@ -87,6 +116,15 @@ _NUM_INSTANCES = int(os.environ.get("JINA_EMBED_INSTANCES", "1"))
 _THREADS_PER_INSTANCE = max(1, _THREADS // _NUM_INSTANCES)
 
 app = FastAPI()
+
+
+@app.exception_handler(Exception)
+async def handle_unexpected_exception(request: Request, exc: Exception) -> JSONResponse:
+    # No alerting at all before this - a crash here was invisible beyond
+    # stdout logs no one was watching.
+    logger.exception("unhandled exception in request", extra={"path": request.url.path})
+    sentry_sdk.capture_exception(exc)
+    return JSONResponse(status_code=500, content={"detail": "internal error"})
 
 
 class _Instance:

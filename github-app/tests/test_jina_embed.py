@@ -6,6 +6,8 @@ import threading
 import time
 import types
 
+from fastapi.testclient import TestClient
+
 
 def _import_server(monkeypatch):
     """Import jina_embed.server with llama_cpp stubbed out.
@@ -209,3 +211,25 @@ def test_multiple_instances_actually_run_concurrently(monkeypatch):
         peak_concurrency = max(peak_concurrency, running_total)
 
     assert peak_concurrency == 2
+
+
+def test_unhandled_exception_returns_500_and_reports_to_sentry(monkeypatch):
+    server, _ = _import_server(monkeypatch)
+
+    class ExplodingLlama:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def create_embedding(self, input):
+            raise RuntimeError("boom")
+
+    server._instances = [server._Instance(ExplodingLlama())]
+    captured = []
+    monkeypatch.setattr(server.sentry_sdk, "capture_exception", lambda exc: captured.append(exc))
+
+    client = TestClient(server.app, raise_server_exceptions=False)
+    response = client.post("/embed", json={"text": "hello"})
+
+    assert response.status_code == 500
+    assert len(captured) == 1
+    assert isinstance(captured[0], RuntimeError)
