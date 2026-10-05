@@ -159,6 +159,14 @@ async def claim_paid_setup(pool: asyncpg.Pool, installation_id: int) -> bool:
     return row is not None
 
 
+async def release_paid_setup(pool: asyncpg.Pool, installation_id: int) -> None:
+    """Undo claim_paid_setup when the work it gated failed, so a retry reruns it."""
+    await pool.execute(
+        "UPDATE installations SET paid_setup_completed_at = NULL WHERE installation_id = $1",
+        installation_id,
+    )
+
+
 async def set_paid_installation_plan(
     pool: asyncpg.Pool, installation_id: int, plan: str
 ) -> None:

@@ -3010,3 +3010,34 @@ async def test_a_refund_never_adds_credit_even_if_the_balance_is_already_negativ
 
     assert await _topup_balance(pool, 1980) == pytest.approx(-0.50)
     assert len(alerts) == 1 and "shortfall_usd=5.00" in str(alerts[0])
+
+
+@pytest.mark.asyncio
+async def test_paid_setup_claim_is_released_when_the_gated_enqueue_fails(pool):
+    """The paid-setup claim commits before the build enqueue runs. If the
+    enqueue then fails, the retry must still run the one-time setup instead
+    of finding the claim consumed and silently skipping it forever."""
+    failing_queue = MagicMock()
+    failing_queue.enqueue.side_effect = ConnectionError("redis down")
+    await upsert_installation(pool, 210, "acme")
+    payload = _subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", 210)
+
+    with pytest.raises(ConnectionError):
+        await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=failing_queue)
+
+    retry_queue = MagicMock()
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=retry_queue)
+
+    assert retry_queue.enqueue.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_subscription_event_with_malformed_items_does_not_crash(pool):
+    await upsert_installation(pool, 211, "acme")
+    payload = _subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", 211)
+    payload["data"]["items"] = "not-a-list"
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=MagicMock())
+
+    payload["data"]["items"] = [None, "x", 3]
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=MagicMock())
