@@ -4453,6 +4453,39 @@ def test_generate_findings_per_file_caps_smallest_patch_first_not_raw_order(monk
     assert "large_a.py" not in called_files
 
 
+def test_generate_findings_per_file_scales_the_cap_to_each_files_own_hunk_count(monkeypatch):
+    # Real gap found via audit: review_diff computes a hunk-scaled system
+    # prompt (raising the "(0-5 issues)" cap to 8/12 for a large diff) but
+    # _generate_findings_per_file/_review_one_file always passed the raw,
+    # unscaled FLASH_REVIEW_SYSTEM_PROMPT module constant instead - the
+    # default path for every paid review (per_file_completeness=not
+    # is_free_tier). A single file with many independent changed regions
+    # and more than 5 real bugs would recur the same undercount gap at
+    # file granularity, even though the PR-level version of the problem
+    # was already fixed. Each file's own hunk count, not the whole PR's,
+    # should drive its own cap.
+    from scan_worker import flash_review
+
+    busy_patch = "\n".join(f"@@ -{i},1 +{i},1 @@\nchange {i}" for i in range(20))  # 20 hunks > 15
+    quiet_patch = "@@ -1,1 +1,1 @@\nchange 0"  # 1 hunk, stays at the default cap
+
+    diff_patches = (("busy.py", busy_patch), ("quiet.py", quiet_patch))
+    captured = {}
+
+    def fake_completion(system_prompt, user_prompt, cwd="."):
+        filename = "busy.py" if "--- busy.py ---" in user_prompt else "quiet.py"
+        captured[filename] = system_prompt
+        return "review:\n  key_issues_to_review: []\n"
+
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.side_effect = fake_completion
+
+    flash_review._generate_findings_per_file(diff_patches, "some PR", mock_adapter)
+
+    assert "(0-8 issues)" in captured["busy.py"]
+    assert captured["quiet.py"] == FLASH_REVIEW_SYSTEM_PROMPT
+
+
 _TWO_FINDINGS_SAME_LOCATION = [
     {"file": "app.py", "line": 15, "issue": "unhandled import rejection"},
     {"file": "app.py", "line": 15, "issue": "possible shape mismatch on the same line"},

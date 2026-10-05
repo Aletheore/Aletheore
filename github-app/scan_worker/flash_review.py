@@ -2576,8 +2576,16 @@ def _generate_findings_per_file(
         filename, patch = item
         other_files_context = _build_other_files_context(filename, diff_patches) if share_pr_context else ""
         user_prompt = _build_per_file_user_prompt(pr_title, filename, patch, other_files_context)
+        # Scaled to this file's own hunk count, not the whole PR's - a
+        # single file with many independent changed regions hits the same
+        # "(0-5 issues)" undercount review_diff's own hunk-scaled prompt
+        # was built to fix at the PR level (real gap found via audit:
+        # this used to always pass the raw, unscaled module constant).
+        system_prompt = _flash_review_system_prompt_for_cap(
+            _max_findings_for_diff(((filename, patch),))
+        )
         try:
-            raw = adapter.simple_completion(FLASH_REVIEW_SYSTEM_PROMPT, user_prompt, cwd=".")
+            raw = adapter.simple_completion(system_prompt, user_prompt, cwd=".")
         except Exception as exc:
             logger.warning(
                 "flash review per-file generation failed for %s (%s); skipping this file",
