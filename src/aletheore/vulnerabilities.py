@@ -220,7 +220,11 @@ def _parse_npm_pins(repo_path: Path) -> list[tuple[str, str, str]]:
         for path, details in lock_data.get("packages", {}).items():
             if not path.startswith("node_modules/"):
                 continue
-            name = path[len("node_modules/"):]
+            # A non-hoisted transitive dependency is keyed by its full nested
+            # path ("node_modules/a/node_modules/lodash"); the package name is
+            # only the segment after the LAST "node_modules/". Otherwise OSV
+            # is queried with a bogus name and the vulnerable copy is invisible.
+            name = path.rsplit("node_modules/", 1)[1]
             version = details.get("version")
             if name and version:
                 pins.append((name, version, "npm"))
