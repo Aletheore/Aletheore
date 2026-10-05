@@ -137,6 +137,10 @@ def _patch_no_spend_cap(monkeypatch) -> None:
     # reason as the mocks above.
     monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    # Same reasoning, for the persisted-reservation bookkeeping - real I/O
+    # against a fake DSN these tests never connect for real.
+    monkeypatch.setattr("scan_worker.jobs.upsert_pending_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.clear_pending_llm_spend_reservation", lambda *a, **k: None)
 
 
 async def _insert_installation(pool, installation_id: int, account_login: str, **values) -> None:
@@ -696,6 +700,10 @@ def test_incremental_spend_budget_can_start_next_call_is_atomic_across_real_conc
         "scan_worker.jobs.reserve_llm_spend_with_email_hooks",
         lambda dsn, iid, amount, feature, topup_out=None, **k: True,
     )
+    # Persistence is real I/O against self.dsn ("dsn" here, not a real
+    # connection string) - not what this test is about, which is the
+    # in-memory lock around _pending_reserve_usd/_pending_topup_usd.
+    monkeypatch.setattr("scan_worker.jobs.upsert_pending_llm_spend_reservation", lambda *a, **k: None)
 
     budget = _IncrementalSpendBudget(
         "dsn", 1, "model", next_call_reserve_usd=0.10, feature="airview_full_build",
@@ -736,6 +744,10 @@ def test_incremental_spend_budget_record_usage_ledgers_the_real_cost_not_the_del
     # fix) releases the unused reservation back to the credit balance -
     # mocked here since it's not what this test is about.
     monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    # record_usage() always clears the persisted reservation row on its way
+    # out - real I/O against self.dsn ("dsn" here), not what this test is
+    # about.
+    monkeypatch.setattr("scan_worker.jobs.clear_pending_llm_spend_reservation", lambda *a, **k: None)
 
     budget = _IncrementalSpendBudget(
         "dsn", 1, "model", next_call_reserve_usd=0.05, feature="airview_full_build",
@@ -770,6 +782,10 @@ def _budget_with_topup_draw(monkeypatch, topup_drawn, released):
         lambda dsn, iid, amount, **k: released.append((amount, k)),
     )
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    # Persistence is real I/O against self.dsn ("dsn" here) - not what any
+    # of this helper's callers are testing.
+    monkeypatch.setattr("scan_worker.jobs.upsert_pending_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.clear_pending_llm_spend_reservation", lambda *a, **k: None)
     return _IncrementalSpendBudget("dsn", 1, "model", next_call_reserve_usd=0.50, feature="x")
 
 
@@ -838,6 +854,7 @@ def test_incremental_spend_budget_record_usage_still_ledgers_when_cost_exactly_m
         lambda dsn, iid, delta, **k: calls.append((delta, k)),
     )
     monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.05)
+    monkeypatch.setattr("scan_worker.jobs.clear_pending_llm_spend_reservation", lambda *a, **k: None)
 
     budget = _IncrementalSpendBudget(
         "dsn", 1, "model", next_call_reserve_usd=0.05, feature="docs_incremental",
@@ -1747,6 +1764,48 @@ def test_run_flash_review_cache_cleanup_job_removes_only_old_rows(monkeypatch):
     run_flash_review_cache_cleanup_job()
 
     assert deleted == [("dsn", FLASH_REVIEW_CACHE_RETENTION_DAYS)]
+
+
+def test_run_evidence_packet_cache_cleanup_job_removes_only_old_rows(monkeypatch):
+    from scan_worker.jobs import (
+        EVIDENCE_PACKET_CACHE_RETENTION_DAYS,
+        run_evidence_packet_cache_cleanup_job,
+    )
+
+    deleted = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_settings",
+        lambda: type("Settings", (), {"database_url": "dsn"})(),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.delete_expired_evidence_packet_cache",
+        lambda dsn, retention_days: deleted.append((dsn, retention_days)) or 7,
+    )
+
+    run_evidence_packet_cache_cleanup_job()
+
+    assert deleted == [("dsn", EVIDENCE_PACKET_CACHE_RETENTION_DAYS)]
+
+
+def test_run_llm_spend_reservation_sweep_job_releases_only_stale_rows(monkeypatch):
+    from scan_worker.jobs import (
+        LLM_SPEND_RESERVATION_STALE_SECONDS,
+        run_llm_spend_reservation_sweep_job,
+    )
+
+    released = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_settings",
+        lambda: type("Settings", (), {"database_url": "dsn"})(),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.sweep_stale_llm_spend_reservations",
+        lambda dsn, max_age_seconds: released.append((dsn, max_age_seconds)) or 2,
+    )
+
+    run_llm_spend_reservation_sweep_job()
+
+    assert released == [("dsn", LLM_SPEND_RESERVATION_STALE_SECONDS)]
 
 
 def _patch_monthly_credit_reset_deps(monkeypatch, due, installations, applied):
@@ -3607,6 +3666,10 @@ def test_managed_audit_api_job_records_each_call_and_exposes_budget_stop(monkeyp
     # this test exercises; the real credit-balance columns this call would
     # otherwise touch have their own dedicated real-DB tests).
     monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    # Persistence is real I/O against a DSN this test never connects for
+    # real ("postgresql://unused") - not what this test is about.
+    monkeypatch.setattr("scan_worker.jobs.upsert_pending_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.clear_pending_llm_spend_reservation", lambda *a, **k: None)
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.insert_audit_report", lambda *a, **k: None)
 
@@ -3794,6 +3857,8 @@ def test_managed_audit_pr_job_records_each_call_and_stops_mid_run_when_cap_reach
     # See test_managed_audit_api_job_records_each_call_and_exposes_budget_stop
     # for why this must be a no-op rather than touching spend_state.
     monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pending_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.clear_pending_llm_spend_reservation", lambda *a, **k: None)
 
     budget_checks = []
 
@@ -8917,6 +8982,9 @@ def test_maybe_update_live_wiki_reserves_spend_atomically_against_concurrent_pus
     # against this test's fake DSN - same gap already closed for the
     # sibling full-build test this one mirrors.
     monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    # Same defensive reasoning, for the persisted-reservation bookkeeping.
+    monkeypatch.setattr("scan_worker.jobs.upsert_pending_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.clear_pending_llm_spend_reservation", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.cost_for_usage", lambda *a, **k: WIKI_INCREMENTAL_LLM_RESERVE_USD
     )
@@ -9881,6 +9949,10 @@ def test_run_live_wiki_full_build_job_reserves_spend_atomically_against_concurre
     monkeypatch.setattr(
         "scan_worker.jobs.cost_for_usage", lambda *a, **k: WIKI_FULL_BUILD_LLM_RESERVE_USD
     )
+    # Persistence is real I/O against this test's fake DSN - not what this
+    # test is about.
+    monkeypatch.setattr("scan_worker.jobs.upsert_pending_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.clear_pending_llm_spend_reservation", lambda *a, **k: None)
 
     build_status_calls = []
     monkeypatch.setattr(
@@ -10938,6 +11010,8 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
     # for why record_usage's new true-up call for this test's negative
     # delta must be a no-op here rather than touching spend_state.
     monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pending_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.clear_pending_llm_spend_reservation", lambda *a, **k: None)
     status_calls = []
     monkeypatch.setattr(
         "scan_worker.jobs.set_docs_build_status",
@@ -11335,6 +11409,9 @@ def test_fix_suggestion_attachment_reserves_spend_atomically_against_concurrent_
     # test's fake DSN - same gap already closed for the sibling
     # full-build/incremental-update tests this one mirrors.
     monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    # Same defensive reasoning, for the persisted-reservation bookkeeping.
+    monkeypatch.setattr("scan_worker.jobs.upsert_pending_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.clear_pending_llm_spend_reservation", lambda *a, **k: None)
     # Real cost equal to the flat reservation, so record_usage's true-up
     # delta is exactly 0 (a no-op) - isolates this test to the reservation
     # race itself, instead of a coincidental true-up masking it.
@@ -12394,6 +12471,117 @@ async def test_incremental_spend_budget_release_unused_reservation_gives_the_mon
 
 
 @pytest.mark.asyncio
+async def test_incremental_spend_budget_can_start_next_call_persists_a_reservation_row(pool):
+    # The hard-kill gap this closes: reserve_llm_spend is an immediate real
+    # DB balance deduction, so if the owning process is killed before any
+    # of record_usage/on_call_failed/release_unused_reservation can run,
+    # nothing else in this codebase can find and release it. Persisting the
+    # reservation here is what gives run_llm_spend_reservation_sweep_job
+    # something to find.
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    installation_id = 9910
+    await _insert_installation(
+        pool, installation_id, "a",
+        base_credit_allotment_usd=5.00, base_credit_remaining_usd=5.00, topup_credit_balance_usd=0.00,
+    )
+    budget = _IncrementalSpendBudget(
+        TEST_DATABASE_URL, installation_id, "deepseek-v4-flash",
+        next_call_reserve_usd=0.10, feature="docs_incremental",
+    )
+
+    assert budget.can_start_next_call() is True
+
+    rows = await pool.fetch(
+        "SELECT installation_id, feature, reserve_usd, topup_usd FROM llm_spend_reservations "
+        "WHERE installation_id = $1",
+        installation_id,
+    )
+    assert len(rows) == 1
+    assert rows[0]["feature"] == "docs_incremental"
+    assert float(rows[0]["reserve_usd"]) == pytest.approx(0.10)
+
+    # A second reservation on the same instance (accumulated, not a second
+    # row - mirrors the in-memory _pending_reserve_usd accumulation).
+    assert budget.can_start_next_call() is True
+    rows = await pool.fetch(
+        "SELECT reserve_usd FROM llm_spend_reservations WHERE installation_id = $1",
+        installation_id,
+    )
+    assert len(rows) == 1
+    assert float(rows[0]["reserve_usd"]) == pytest.approx(0.20)
+
+
+@pytest.mark.asyncio
+async def test_incremental_spend_budget_record_usage_clears_the_persisted_reservation_row(pool):
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    installation_id = 9911
+    await _insert_installation(
+        pool, installation_id, "a",
+        base_credit_allotment_usd=5.00, base_credit_remaining_usd=5.00, topup_credit_balance_usd=0.00,
+    )
+    budget = _IncrementalSpendBudget(
+        TEST_DATABASE_URL, installation_id, "deepseek-v4-flash",
+        next_call_reserve_usd=0.10, feature="docs_incremental",
+    )
+    assert budget.can_start_next_call() is True
+
+    budget.record_usage(prompt_tokens=10, completion_tokens=1)
+
+    rows = await pool.fetch(
+        "SELECT 1 FROM llm_spend_reservations WHERE installation_id = $1", installation_id
+    )
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_incremental_spend_budget_on_call_failed_clears_the_persisted_reservation_row(pool):
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    installation_id = 9912
+    await _insert_installation(
+        pool, installation_id, "a",
+        base_credit_allotment_usd=5.00, base_credit_remaining_usd=5.00, topup_credit_balance_usd=0.00,
+    )
+    budget = _IncrementalSpendBudget(
+        TEST_DATABASE_URL, installation_id, "deepseek-v4-flash",
+        next_call_reserve_usd=0.10, feature="docs_incremental",
+    )
+    assert budget.can_start_next_call() is True
+
+    budget.on_call_failed()
+
+    rows = await pool.fetch(
+        "SELECT 1 FROM llm_spend_reservations WHERE installation_id = $1", installation_id
+    )
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_incremental_spend_budget_release_unused_reservation_clears_the_persisted_reservation_row(pool):
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    installation_id = 9913
+    await _insert_installation(
+        pool, installation_id, "a",
+        base_credit_allotment_usd=5.00, base_credit_remaining_usd=5.00, topup_credit_balance_usd=0.00,
+    )
+    budget = _IncrementalSpendBudget(
+        TEST_DATABASE_URL, installation_id, "deepseek-v4-flash",
+        next_call_reserve_usd=0.10, feature="docs_incremental",
+    )
+    assert budget.can_start_next_call() is True
+
+    budget.release_unused_reservation()
+
+    rows = await pool.fetch(
+        "SELECT 1 FROM llm_spend_reservations WHERE installation_id = $1", installation_id
+    )
+    assert rows == []
+
+
+@pytest.mark.asyncio
 async def test_docs_build_over_modules_that_need_no_llm_call_does_not_drain_credit(pool, monkeypatch):
     # The loop-level regression for the leak above: 30 modules that make no LLM
     # call used to drain $3.00 ($0.10 each) with nothing in the ledger.
@@ -12517,6 +12705,7 @@ def test_record_usage_adds_the_real_cost_to_the_monthly_aggregate_not_a_negative
     )
     monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.004)
     monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.clear_pending_llm_spend_reservation", lambda *a, **k: None)
     budget = _IncrementalSpendBudget("dsn", 1, "m", next_call_reserve_usd=0.10, feature="docs_incremental")
     budget._pending_reserve_usd = 0.10
     budget.record_usage(prompt_tokens=1, completion_tokens=1)

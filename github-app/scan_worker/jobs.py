@@ -66,10 +66,12 @@ from scan_worker.db import (
     check_and_reserve_flash_review_attempt,
     check_and_reserve_managed_audit,
     check_and_reserve_monthly_repo_scan_slot,
+    clear_pending_llm_spend_reservation,
     count_repo_scans_since,
     delete_docs_symbols_not_in,
     get_docs_symbol_hashes,
     delete_expired_endpoint_health,
+    delete_expired_evidence_packet_cache,
     delete_expired_flash_review_cache,
     delete_expired_sessions,
     delete_expired_webhook_deliveries,
@@ -101,6 +103,7 @@ from scan_worker.db import (
     release_llm_spend_reservation,
     reserve_flash_review_count,
     reserve_llm_spend,
+    sweep_stale_llm_spend_reservations,
     list_docs_symbols,
     list_health_check_targets_all,
     list_installation_member_emails,
@@ -124,6 +127,7 @@ from scan_worker.db import (
     set_wiki_build_status,
     touch_flash_review_finding_comment,
     upsert_docs_symbol,
+    upsert_pending_llm_spend_reservation,
     upsert_wiki_overview,
     upsert_wiki_subsystem,
     wiki_write_lock,
@@ -4420,6 +4424,43 @@ def run_flash_review_cache_cleanup_job() -> None:
     )
 
 
+# evidence_packet_cache had no retention sweep at all - unlike every other
+# table in db.py, including its own structural sibling flash_review_cache
+# (same embedder-identity column, same list_recent_*_rows(limit=200) lookup
+# cap, same record_*_hit function). The LIMIT 200 on
+# list_recent_evidence_packet_cache_rows bounds what one lookup reads back,
+# not what the table retains, so rows accumulated forever. Same retention
+# window as FLASH_REVIEW_CACHE_RETENTION_DAYS, for the same reason.
+EVIDENCE_PACKET_CACHE_RETENTION_DAYS = 30
+
+
+@log_job
+def run_evidence_packet_cache_cleanup_job() -> None:
+    dsn = get_settings().database_url
+    deleted = delete_expired_evidence_packet_cache(dsn, EVIDENCE_PACKET_CACHE_RETENTION_DAYS)
+    logging.getLogger("scan_worker.jobs").info(
+        "evidence packet cache cleanup completed", extra={"deleted_count": deleted}
+    )
+
+
+# Closes the hard-kill gap in _IncrementalSpendBudget's own docstring: a
+# reservation row this old can only belong to a process that is actually
+# gone, never one still legitimately running, because every real
+# _IncrementalSpendBudget caller's own job_timeout (see scheduler.py) is
+# well under this - the widest is LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS/
+# DOCS_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS at 1800s. Double that plus margin.
+LLM_SPEND_RESERVATION_STALE_SECONDS = 3600
+
+
+@log_job
+def run_llm_spend_reservation_sweep_job() -> None:
+    dsn = get_settings().database_url
+    released = sweep_stale_llm_spend_reservations(dsn, LLM_SPEND_RESERVATION_STALE_SECONDS)
+    logging.getLogger("scan_worker.jobs").info(
+        "llm spend reservation sweep completed", extra={"released_count": released}
+    )
+
+
 # Matches GitHub's own ~30-day delivery-log horizon, so a redelivered or
 # replayed event can never outlive its ledger entry. See
 # delete_expired_webhook_deliveries.
@@ -5317,12 +5358,25 @@ class _IncrementalSpendBudget:
     rather than being bounded to one call's worth.
 
     Known residual gaps, not addressed here:
-    - If the LLM call itself fails after can_start_next_call() reserves but
-      before record_usage() trues it up, that reservation is never
-      released - the same class of gap model_tiers._reserve_openai_free_
-      tier_budget already has for the OpenAI free-tier daily token cap.
-      Closing it needs a failure hook the adapter chain doesn't expose
-      yet; tracked separately, not part of this fix.
+    - A *catchable* failure between can_start_next_call() reserving and
+      record_usage() truing up (a real API exception, a 200 with no usage
+      field, etc.) is closed: on_call_failed() below releases exactly that
+      reservation, and every real construction site in this file wires it
+      through the adapter chain's own on_call_failed hook. An *uncatchable*
+      failure in that same window - a hard process kill (OOM-kill, SIGKILL,
+      host crash), where no Python code ever runs to call on_call_failed()
+      - is also closed, but not by this class's own in-process bookkeeping:
+      reserve_llm_spend is an immediate real DB balance deduction, so
+      can_start_next_call() and _release_pending()/record_usage() also
+      persist/clear a row in llm_spend_reservations (see
+      upsert_pending_llm_spend_reservation/clear_pending_llm_spend_
+      reservation), and run_llm_spend_reservation_sweep_job periodically
+      finds and releases any row old enough that no owning process could
+      still legitimately be running - the same class of gap
+      model_tiers._reserve_openai_free_tier_budget has a different fix for
+      (a self-expiring daily Redis counter, which only works because that
+      cap resets every day; this one does not, so it needs the persisted
+      sweep instead).
     - No mechanism here fully serializes every LLM-spending feature
       against the same installation's cap (installation_spend_lock exists
       and is used by Flash Review, but not by either AIRview/Docs
@@ -5371,6 +5425,12 @@ class _IncrementalSpendBudget:
         # The part of _pending_reserve_usd that came out of purchased top-up
         # credit, so giving any of it back returns it to top-up.
         self._pending_topup_usd = 0.0
+        # One key per instance, not per call - persisted alongside
+        # _pending_reserve_usd/_pending_topup_usd so a process killed before
+        # this instance's reservation is resolved leaves a row
+        # run_llm_spend_reservation_sweep_job can find. See
+        # upsert_pending_llm_spend_reservation's own docstring.
+        self._reservation_key = uuid.uuid4().hex
 
     def can_start_next_call(self) -> bool:
         drawn: dict = {}
@@ -5386,6 +5446,19 @@ class _IncrementalSpendBudget:
                 # fallback) used to leave the first one unreachable by
                 # record_usage/on_call_failed/release_unused_reservation.
                 self._pending_reserve_usd += self.next_call_reserve_usd
+                reserve_snapshot = self._pending_reserve_usd
+                topup_snapshot = self._pending_topup_usd
+            # Outside the lock, same reasoning as _release_pending's own DB
+            # call: the snapshot above is already consistent, and this
+            # upsert always overwrites with the latest total rather than
+            # accumulating, so a write ordered after a concurrent caller's
+            # newer snapshot would be the only way this could go stale -
+            # vanishingly unlikely for the rare multi-reservation case this
+            # exists for, and self-corrects on this instance's next call.
+            upsert_pending_llm_spend_reservation(
+                self.dsn, self._reservation_key, self.installation_id, self.feature,
+                reserve_snapshot, topup_snapshot,
+            )
         return ok
 
     def on_call_failed(self) -> None:
@@ -5455,6 +5528,11 @@ class _IncrementalSpendBudget:
         # see (and both release) the same outstanding amount.
         if amount:
             _release_spend(self.dsn, self.installation_id, amount, topup)
+        # Resolved through the normal (non-crash) path - clear the
+        # persisted row so run_llm_spend_reservation_sweep_job never finds
+        # and double-releases what this call just released itself.
+        # Idempotent, same as this method's own callers' idempotency.
+        clear_pending_llm_spend_reservation(self.dsn, self._reservation_key)
         return amount
 
     def record_usage(
@@ -5525,6 +5603,9 @@ class _IncrementalSpendBudget:
         record_llm_spend(
             self.dsn, self.installation_id, cost, feature=self.feature,
         )
+        # Resolved through the normal (non-crash) path - same reasoning as
+        # _release_pending's own clear call.
+        clear_pending_llm_spend_reservation(self.dsn, self._reservation_key)
 
     def cap_message(self) -> str:
         # Reads the real current balance at the point can_start_next_call()
