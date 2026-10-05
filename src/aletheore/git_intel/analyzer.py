@@ -281,10 +281,14 @@ def _last_commit_at(churn: FileChurnTotal) -> datetime | None:
     return churn.recent_commits[0].committed_at if churn.recent_commits else None
 
 
-def _hotspots_summary(snapshot: GraphSnapshot, modules: list[dict]) -> list[dict]:
+def _hotspots_summary(
+    snapshot: GraphSnapshot, modules: list[dict], repo_path: Path | None = None
+) -> list[dict]:
     dependents_by_path = {module["path"]: len(module.get("imported_by", [])) for module in modules}
     hotspots = []
     for path, churn in snapshot.file_churn.items():
+        if repo_path is not None and not (repo_path / path).exists():
+            continue  # deleted/renamed away: churn history for a file no longer in the tree
         partners = sorted(
             churn.co_change_counts.items(), key=lambda item: (-item[1], item[0])
         )[:CO_CHANGE_PARTNERS_RETURNED]
@@ -303,7 +307,7 @@ def _hotspots_summary(snapshot: GraphSnapshot, modules: list[dict]) -> list[dict
     return sorted(hotspots, key=lambda item: (-item["churn_count"], item["path"]))[:HOTSPOT_LIMIT]
 
 
-def _recently_updated_summary(snapshot: GraphSnapshot) -> list[dict]:
+def _recently_updated_summary(snapshot: GraphSnapshot, repo_path: Path | None = None) -> list[dict]:
     """The most recently touched files repo-wide, ranked by recency rather
     than churn - a high-churn hotspot and a file edited five minutes ago are
     different questions, and HOTSPOT_LIMIT's churn-ranked top 30 can easily
@@ -323,6 +327,10 @@ def _recently_updated_summary(snapshot: GraphSnapshot) -> list[dict]:
     # passing tests because the existing tests' commits all share one
     # local timezone offset and never exercise a cross-offset comparison.
     dated.sort(key=lambda item: item[0], reverse=True)
+    if repo_path is not None:
+        # Filter after ranking and before the cut, so deleted files don't
+        # occupy slots a real, existing file should have.
+        dated = [item for item in dated if (repo_path / item[1]).exists()]
     return [
         {"path": path, "last_commit_at": last_commit_at.isoformat()}
         for last_commit_at, path in dated[:RECENTLY_UPDATED_LIMIT]
@@ -344,7 +352,7 @@ def compute_hotspots(
     finally:
         if owns_store and isinstance(store, SQLiteRepoGraphStore):
             store.close()
-    return _hotspots_summary(snapshot, modules)
+    return _hotspots_summary(snapshot, modules, repo_path)
 
 
 def compute_recently_updated(
@@ -368,7 +376,7 @@ def compute_recently_updated(
     finally:
         if owns_store and isinstance(store, SQLiteRepoGraphStore):
             store.close()
-    return _recently_updated_summary(snapshot)
+    return _recently_updated_summary(snapshot, repo_path)
 
 
 def _first_commit_at(repo_path: Path) -> datetime:

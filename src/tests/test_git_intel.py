@@ -630,3 +630,16 @@ def test_compute_hotspots_normalizes_paths_when_scan_root_is_subdirectory(tmp_pa
             "dependents_count": 0,
         }
     ]
+
+
+def test_hotspots_and_recently_updated_exclude_files_deleted_from_the_tree(tmp_path):
+    repo = _init_repo_with_hotspot_commits(tmp_path)
+    run(repo, "rm", "-q", "b.py")
+    run(repo, "commit", "-q", "-m", "delete b")
+    modules = [{"path": "a.py", "imported_by": []}]
+
+    hotspots = compute_hotspots(repo, modules)
+    recent = compute_recently_updated(repo)
+
+    assert [h["path"] for h in hotspots] == ["a.py"]
+    assert [r["path"] for r in recent] == ["a.py"]
