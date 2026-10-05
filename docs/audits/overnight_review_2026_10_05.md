@@ -375,3 +375,39 @@ Full read plus cross-file verification against every caller (`jobs.py`, `admin.p
 ## Progress tracker (updated again)
 
 Eighth-pass files reviewed: `src/aletheore/evidence_resolution.py`, `src/aletheore/healthcheck.py`, `github-app/app_server/webhooks/marketplace.py` (no longer exists, feature removed - second such result), `github-app/scan_worker/slack.py` (zero findings, genuinely clean). 3 real, verified findings (2 in evidence_resolution.py including one HIGH severity - real CVE misattribution reaching a live customer-facing alert - plus 1 in healthcheck.py). None fixed yet - audit only, per this pass's own brief.
+
+## Fix status (2026-10-05, updated as PRs open; none merged, all left open on request)
+
+One PR per finding, branched fresh off master, each with a regression test that was watched failing on master first.
+
+| PR | Finding |
+|---|---|
+| #934 | vulnerabilities.py: nested npm lockfile entries scanned under a mangled name |
+| #935 | citation_verifier.py: `host:port` parsed as a citation |
+| #936 | secrets.py: random 31+ digit numeric tokens classed as placeholders |
+| #937 | git_intel: sync pointer must be an ancestor of HEAD (history rewrites double-counted) |
+| #938 | vulnerabilities.py: npm lockfile v1 read as empty |
+| #939 | vulnerabilities.py: Maven property chains one level only |
+| #940 | vulnerabilities.py: Composer dev dependencies never scanned |
+| #941 | openai_compatible.py: reservation leak on missing key, empty `choices` |
+| #942 | mcp_server.py: wrong snapshot blamed, empty `path_glob` crash |
+| #943 | cli.py: closed-stdin `input()` crashes, network errors in login/managed audit |
+| #944 | evidence_resolution.py: every CVE attached to unresolved lookups, bare-string dependency |
+| #945 | auth.py: login 500 on GitHub outage, `BadPayload` cookies |
+| #946 | github_api.py: patch reconstruction fail-open, comment upsert pagination |
+| #947 | paddle.py: paid-setup claim released on failure, malformed `items` |
+| #948 | installation.py: initial-scan enqueue off the event loop |
+| #949 | issue_comment.py: command inside a code block |
+| #950 | analyzer.py: deleted files in hotspots/recently updated |
+| #951 | analyzer.py: shallow clone flagged as partial history |
+| #952 | healthcheck.py: truncated response body |
+| #953 | search_index.py: provider switch double-embed |
+| #954 | embeddings_api.py: token use recorded (throttled) |
+| #955 | app_server/db.py: stale "Namespace 3" comments |
+| #956 | incremental.py: stderr pipe deadlock (reproduced) |
+
+### Open decisions (deliberately not fixed, for the owner to settle)
+
+1. **`writing_adapter_for_docs` request timeout (model_tiers.py, sixth pass finding 1).** The audit reads the missing 300s override as an oversight, but `test_only_airview_and_managed_audit_raise_the_request_timeout_above_the_plain_default` pins Docs at 120s on purpose ("never saw a hang ... rather than being bumped speculatively"), and no Docs-specific incident is cited. Decide whether the IndieRouter move changes that premise.
+2. **Swallowed repo enumeration on `installation`/`created` (installation.py, seventh pass finding 1).** Making it raise would return a 500 and release the dedup claim, but GitHub does not automatically redeliver failed webhooks, so the practical gain is an alert, and `test_installation_created_does_not_crash_when_repo_enumeration_fails` asserts the no-crash behavior deliberately. Alternatives: enqueue a retry job, or let the next push or PR scan it.
+3. **Dead code in model_tiers.py (sixth pass findings 2 and 3).** `model_for_plan`, `writing_adapter_for_plan` and `openai_free_tier_tokens_today` have no production callers. Removal is safe in principle but is a deletion the owner should choose.
