@@ -122,3 +122,27 @@ def test_raises_when_private_key_path_points_to_empty_file(tmp_path, monkeypatch
 
     with pytest.raises(RuntimeError, match="GITHUB_APP_PRIVATE_KEY_PATH"):
         get_settings()
+
+
+def test_sentry_dsn_defaults_to_empty_string(monkeypatch):
+    monkeypatch.delenv("SENTRY_DSN", raising=False)
+    settings = get_settings()
+    assert settings.sentry_dsn == ""
+
+
+def test_sentry_dsn_reads_from_env(monkeypatch):
+    monkeypatch.setenv("SENTRY_DSN", "https://examplePublicKey@o0.ingest.sentry.io/0")
+    settings = get_settings()
+    assert settings.sentry_dsn == "https://examplePublicKey@o0.ingest.sentry.io/0"
+
+
+def test_sentry_environment_defaults_to_production(monkeypatch):
+    monkeypatch.delenv("SENTRY_ENVIRONMENT", raising=False)
+    settings = get_settings()
+    assert settings.sentry_environment == "production"
+
+
+def test_sentry_environment_reads_from_env(monkeypatch):
+    monkeypatch.setenv("SENTRY_ENVIRONMENT", "staging")
+    settings = get_settings()
+    assert settings.sentry_environment == "staging"

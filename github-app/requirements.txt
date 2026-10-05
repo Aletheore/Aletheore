@@ -11,3 +11,4 @@ itsdangerous>=2.2.0,<3.0
 cryptography>=50.0.1,<51.0
 bandit>=1.8.0,<2.0
 semgrep>=1.99.0,<2.0
+sentry-sdk>=2.18.0,<3.0
