@@ -405,9 +405,15 @@ One PR per finding, branched fresh off master, each with a regression test that 
 | #954 | embeddings_api.py: token use recorded (throttled) |
 | #955 | app_server/db.py: stale "Namespace 3" comments |
 | #956 | incremental.py: stderr pipe deadlock (reproduced) |
+| #957 | evidence.py: bounded the Rails `.rb` association read |
+| #958 | admin.py: archive the Paddle discount when the local affiliate insert fails |
+| #959 | analyzer.py: branch ahead/behind in one git call (with fallback) |
 
 ### Open decisions (deliberately not fixed, for the owner to settle)
 
 1. **`writing_adapter_for_docs` request timeout (model_tiers.py, sixth pass finding 1).** The audit reads the missing 300s override as an oversight, but `test_only_airview_and_managed_audit_raise_the_request_timeout_above_the_plain_default` pins Docs at 120s on purpose ("never saw a hang ... rather than being bumped speculatively"), and no Docs-specific incident is cited. Decide whether the IndieRouter move changes that premise.
 2. **Swallowed repo enumeration on `installation`/`created` (installation.py, seventh pass finding 1).** Making it raise would return a 500 and release the dedup claim, but GitHub does not automatically redeliver failed webhooks, so the practical gain is an alert, and `test_installation_created_does_not_crash_when_repo_enumeration_fails` asserts the no-crash behavior deliberately. Alternatives: enqueue a retry job, or let the next push or PR scan it.
 3. **Dead code in model_tiers.py (sixth pass findings 2 and 3).** `model_for_plan`, `writing_adapter_for_plan` and `openai_free_tier_tokens_today` have no production callers. Removal is safe in principle but is a deletion the owner should choose.
+4. **Check-run idempotency and rate-limit awareness (github_api.py, fifth pass findings 3 and 4).** Both are design changes, not local fixes. A real fix for `create_check_run` is look-up-then-update (GET existing run for name and sha, PATCH instead of POST), which adds an API call per run and makes annotation batches append to an existing run (duplicates unless de-duplicated). Rate-limit awareness needs a retry transport or `Retry-After` handling in the shared client. Decide the behavior wanted before building either.
+5. **Seat buy/remove server-side idempotency (admin.py, third pass finding 2).** Closing it needs an idempotency key from the client (frontend plus API change) so a double-click, retry or second tab collapses to one Paddle mutation. Currently only the button-disable mitigates it. Admin-only exposure.
+6. **Rails rename history split (analyzer.py, fifth pass finding 2, secondary observation).** Pre-rename commits stay attributed to the old path. The audit itself flagged this as possibly an accepted limitation; not touched.
