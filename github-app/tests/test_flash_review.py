@@ -4012,26 +4012,9 @@ def test_review_diff_returns_empty_findings_when_every_chain_provider_fails():
     assert findings == []
 
 
-# --- second-model verification (_verify_findings_with_second_model) ---
+# --- ranking pass (_rank_findings_with_severity) ---
 
 _ONE_FINDING = [{"file": "app.py", "line": 1, "issue": "unclosed file handle"}]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# --- ranking pass (_rank_findings_with_severity) ---
 
 _TWO_FINDINGS = [
     {"file": "app.py", "line": 1, "issue": "unclosed file handle"},
@@ -4308,47 +4291,6 @@ def test_review_diff_caches_the_ranked_result_not_the_unranked_one(mock_adapter_
     assert written, "cache_write was never called"
     cached = {f["line"]: f for f in written[0]}
     assert cached[42]["rank"] == 1 and cached[42]["severity"] == "Critical"
-
-
-
-
-
-
-
-
-
-
-# Real bug fixed 2026-09-14: _verify_findings_with_second_model used to hand
-# the verifier ONLY the diff hunk - a finding whose consequence depends on
-# code outside that hunk (an enclosing loop, a caller) was structurally
-# unconfirmable from what the verifier saw, and its own prompt told it to
-# REJECT exactly that case. These tests pin the fix: file_contents, when
-# given, must reach the verifier as surrounding context around the cited
-# line, and must degrade to the old diff-only behavior when unavailable.
-_LOOP_FINDING = [{
-    "file": "parse.go",
-    "line": 5,
-    "issue": "break here silently drops every remaining loop iteration",
-}]
-_LOOP_FILE_CONTENTS = {
-    "parse.go": (
-        "func parseFlags() {\n"
-        "\tfor _, arg := range args {\n"
-        "\t\tif len(arg) == 0 {\n"
-        "\t\t\t// bug lives here\n"
-        "\t\t\tbreak\n"
-        "\t\t}\n"
-        "\t\tconsume(arg)\n"
-        "\t}\n"
-        "}\n"
-    )
-}
-
-
-
-
-
-
 
 
 _SUGGESTION_FINDING = {
