@@ -74,17 +74,23 @@ def send_error_alert(source: str, error: BaseException, context: str = "") -> No
     bug into two. Call this from an except block, not instead of logging;
     it's a notification, not a substitute for the structured log entry.
     """
+    # Independent of email, and NOT gated by the cooldown below - still
+    # fires even when RESEND_API_KEY is unset or an identical error is
+    # still within email's cooldown window, since this is a second,
+    # separate alert channel, not a fallback for it. Needed alongside
+    # sentry_config.py's LoggingIntegration because some callers here
+    # (webhooks/paddle.py, jobs.py's ops monitor) log only a plain
+    # logger.warning() with no exc_info before calling this -
+    # LoggingIntegration can't build an exception event from that alone.
+    # Gating this behind the email cooldown would throw away Sentry's own
+    # server-side occurrence/frequency tracking per Issue - collapsing
+    # "this happened 40 times in the last hour" into "this happened once"
+    # from Sentry's point of view, exactly the signal Sentry exists to show.
+    sentry_sdk.capture_exception(error)
+
     key = f"{source}:{type(error).__name__}"
     if not _should_alert(key):
         return
-
-    # Independent of email - still fires even when RESEND_API_KEY is unset,
-    # since this is a second, separate alert channel, not a fallback for
-    # it. Needed alongside sentry_config.py's LoggingIntegration because
-    # some callers here (webhooks/paddle.py, jobs.py's ops monitor) log
-    # only a plain logger.warning() with no exc_info before calling this -
-    # LoggingIntegration can't build an exception event from that alone.
-    sentry_sdk.capture_exception(error)
 
     settings = get_settings()
     if not settings.resend_api_key:

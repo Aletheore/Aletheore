@@ -140,3 +140,22 @@ def test_captures_exception_in_sentry_even_when_resend_api_key_is_not_configured
     send_error_alert("app_server", error)
 
     assert captured == [error]
+
+
+def test_sentry_capture_is_not_gated_by_the_email_cooldown(monkeypatch):
+    # Sentry has its own server-side occurrence/frequency tracking per
+    # Issue - gating it behind the same 6-hour cooldown email uses would
+    # throw that away, silently collapsing "this just happened 40 times"
+    # into "this happened once" from Sentry's point of view. The two
+    # channels are independent (see the comment above the capture call);
+    # this proves it holds under repeated calls, not just a single one.
+    monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
+    _clear_cooldown("app_server:ValueError")
+    monkeypatch.setattr(error_alerts, "send_transactional_email", lambda *a, **k: None)
+    captured = []
+    monkeypatch.setattr(sentry_sdk, "capture_exception", lambda exc: captured.append(exc))
+
+    send_error_alert("app_server", ValueError("first"))
+    send_error_alert("app_server", ValueError("second"))
+
+    assert len(captured) == 2

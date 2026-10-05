@@ -7,6 +7,25 @@ import time
 import types
 
 from fastapi.testclient import TestClient
+from sentry_sdk.transport import Transport
+
+
+class _CapturingTransport(Transport):
+    """A real (non-mocked) Transport that records error events instead of
+    sending them - see tests/test_sentry_config.py's identical helper for
+    why this is duplicated rather than imported (jina_embed is built into
+    a separate Docker image with no app_server on its path, and its tests
+    follow the same self-containment the production code does).
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.events = []
+
+    def capture_envelope(self, envelope):
+        for item in envelope.items:
+            if item.data_category == "error":
+                self.events.append(item.payload.json)
 
 
 def _import_server(monkeypatch):
@@ -214,6 +233,15 @@ def test_multiple_instances_actually_run_concurrently(monkeypatch):
 
 
 def test_unhandled_exception_returns_500_and_reports_to_sentry(monkeypatch):
+    # raise_server_exceptions=False here means this proves the handler
+    # converts the exception to a real HTTP response and calls
+    # capture_exception - it does NOT prove the exception stops
+    # propagating through Starlette's own ASGI layer (it doesn't:
+    # confirmed separately that sentry_sdk's auto-enabled Starlette
+    # integration still sees exceptions a registered handler has already
+    # converted to a response - see test_client_disconnect_is_never_reported
+    # in test_sentry_config.py, and this module's own ignore_errors in the
+    # real init_sentry()-equivalent block above, for how that's handled).
     server, _ = _import_server(monkeypatch)
 
     class ExplodingLlama:
@@ -233,3 +261,56 @@ def test_unhandled_exception_returns_500_and_reports_to_sentry(monkeypatch):
     assert response.status_code == 500
     assert len(captured) == 1
     assert isinstance(captured[0], RuntimeError)
+
+
+def test_breadcrumbs_are_stripped_from_reported_events(monkeypatch):
+    # Same leak as app_server/sentry_config.py's identical test: unscrubbed,
+    # LoggingIntegration attaches recent INFO+ log records (with their
+    # formatted messages) as breadcrumbs on every event, which _scrub_event
+    # here needs to strip just as the app_server copy does.
+    monkeypatch.setenv(
+        "SENTRY_DSN", "https://examplePublicKey@o0.ingest.sentry.io/0"
+    )
+    server, _ = _import_server(monkeypatch)
+    transport = _CapturingTransport()
+    server.sentry_sdk.get_client().transport = transport
+
+    import logging
+
+    logging.getLogger("jina_embed.test").info("embedding chunk from repo %s", "acme/secret-repo")
+    server.sentry_sdk.capture_exception(RuntimeError("unrelated error"))
+
+    assert len(transport.events) == 1
+    assert "breadcrumbs" not in transport.events[0]
+
+    server.sentry_sdk.init(dsn=None)  # best-effort hygiene for later tests/files
+
+
+def test_malformed_dsn_does_not_crash_the_import(monkeypatch):
+    # SENTRY_DSN is an optional, operator-set env var - a typo in it must
+    # not prevent this process from starting (it loads a real model at
+    # import time; a crash here is the whole service going down).
+    monkeypatch.setenv("SENTRY_DSN", "not-a-valid-dsn")
+
+    _import_server(monkeypatch)  # must not raise
+
+
+def test_init_options_match_app_servers_when_dsn_is_set(monkeypatch):
+    # This module's init block is a deliberate duplicate of
+    # app_server/sentry_config.py's (see Dockerfile.jina-embed - no shared
+    # import is possible across the image boundary). The Global Constraint
+    # in the plan requires every entrypoint get the identical config, not
+    # a lighter one - this pins jina_embed's own copy directly so the two
+    # copies drifting apart would fail a test, not go unnoticed.
+    monkeypatch.setenv(
+        "SENTRY_DSN", "https://examplePublicKey@o0.ingest.sentry.io/0"
+    )
+    server, _ = _import_server(monkeypatch)
+
+    options = server.sentry_sdk.get_client().options
+    assert options["send_default_pii"] is False
+    assert options["traces_sample_rate"] == 0
+    assert options["include_local_variables"] is False
+    assert options["ignore_errors"] == [server.ClientDisconnect]
+
+    server.sentry_sdk.init(dsn=None)  # best-effort hygiene for later tests/files
