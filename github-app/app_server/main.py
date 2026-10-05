@@ -27,11 +27,13 @@ from app_server.embeddings_api import embeddings_router
 from app_server.managed_audit_api import managed_audit_router
 from app_server.metrics import metrics_router
 from app_server.runtime_events import runtime_events_router
+from app_server.sentry_config import init_sentry
 from app_server.signature import verify_signature
 from app_server.webhooks.installation import handle_installation_event
 from app_server.webhooks.paddle import paddle_webhook_router
 
 configure_json_logging()
+init_sentry("app_server")
 access_logger = logging.getLogger("app_server.access")
 
 settings = get_settings()

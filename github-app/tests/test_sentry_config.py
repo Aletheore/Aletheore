@@ -1,4 +1,5 @@
 import logging
+import os
 
 import pytest
 import sentry_sdk
@@ -12,25 +13,49 @@ _FAKE_DSN = "https://examplePublicKey@o0.ingest.sentry.io/0"
 @pytest.fixture
 def _reset_sentry_client():
     yield
-    # Global SDK state (sentry_sdk.init sets a process-wide client) must not
-    # leak into whichever test or test file runs next.
+    # Best-effort hygiene only - sentry_sdk's _Client.is_active() returns
+    # True unconditionally once any real client has ever been constructed
+    # in this process (it distinguishes _Client from the initial
+    # NonRecordingClient placeholder, not "has an active transport"), so
+    # calling init(dsn=None) here does NOT make later is_active() checks
+    # reliable again. Tests below that need to tell "init_sentry() called
+    # sentry_sdk.init()" apart from "it didn't" spy on sentry_sdk.init
+    # directly instead of reading client state, for exactly this reason.
+    #
+    # Also: sentry_sdk.init(dsn=None) does not mean "disable" - it means
+    # "resolve the DSN the normal way," which falls back to reading
+    # SENTRY_DSN from the environment. monkeypatch's own setenv revert runs
+    # AFTER this fixture's teardown (LIFO relative to this test's parameter
+    # order), so SENTRY_DSN set by a test using the real init_sentry() is
+    # still present here - popping it directly (rather than relying on
+    # monkeypatch's later revert) is what actually prevents a real client
+    # with a live (if fake) DSN from lingering and trying to flush pending
+    # events over the network at process exit. Confirmed live: omitting
+    # this line produced a real "Sentry is attempting to send N pending
+    # events" network attempt at the end of the test run.
+    os.environ.pop("SENTRY_DSN", None)
     sentry_sdk.init(dsn=None)
 
 
 def test_init_sentry_is_a_noop_when_dsn_is_unset(monkeypatch, _reset_sentry_client):
     monkeypatch.delenv("SENTRY_DSN", raising=False)
+    calls = []
+    monkeypatch.setattr(sentry_sdk, "init", lambda *a, **k: calls.append((a, k)))
 
     init_sentry("app_server")
 
-    assert not sentry_sdk.get_client().is_active()
+    assert calls == []
 
 
-def test_init_sentry_activates_client_when_dsn_is_set(monkeypatch, _reset_sentry_client):
+def test_init_sentry_calls_sentry_sdk_init_when_dsn_is_set(monkeypatch, _reset_sentry_client):
     monkeypatch.setenv("SENTRY_DSN", _FAKE_DSN)
+    calls = []
+    monkeypatch.setattr(sentry_sdk, "init", lambda *a, **k: calls.append(k))
 
     init_sentry("app_server")
 
-    assert sentry_sdk.get_client().is_active()
+    assert len(calls) == 1
+    assert calls[0]["dsn"] == _FAKE_DSN
 
 
 def test_init_sentry_configures_no_performance_tracing(monkeypatch, _reset_sentry_client):
