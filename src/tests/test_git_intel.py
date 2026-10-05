@@ -649,4 +649,6 @@ def test_analyze_git_resets_when_sync_pointer_was_rewritten_out_of_history(tmp_p
         cwd=repo, check=True, capture_output=True, env=env,
     )
 
-    assert analyze_git(repo, now=now)["total_commits"] == 3
+    result = analyze_git(repo, now=now)
+    counts = {o["email"]: o["commit_count"] for o in result["ownership"]}
+    assert counts == {"a@example.com": 2, "b@example.com": 1}
