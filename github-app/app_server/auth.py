@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
-from itsdangerous import BadSignature, URLSafeTimedSerializer
+from itsdangerous import BadPayload, BadSignature, URLSafeTimedSerializer
 
 from app_server.config import get_settings
 from app_server.db import (
@@ -174,13 +174,18 @@ def _exchange_code_and_fetch_user(
     # Synchronous httpx.Client calls, run off the event loop via
     # asyncio.to_thread by the caller - this whole function otherwise blocks
     # every other request the server is handling for its duration.
-    token_response = _github_oauth_http_client().post(
-        "/login/oauth/access_token",
-        headers={"Accept": "application/json"},
-        data={"client_id": client_id, "client_secret": client_secret, "code": code},
-    )
-    token_response.raise_for_status()
-    token_data = token_response.json()
+    try:
+        token_response = _github_oauth_http_client().post(
+            "/login/oauth/access_token",
+            headers={"Accept": "application/json"},
+            data={"client_id": client_id, "client_secret": client_secret, "code": code},
+        )
+        token_response.raise_for_status()
+        token_data = token_response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        # A GitHub 5xx/network blip is as routine and retryable as a spent
+        # code - same GitHubOAuthError path, not a raw 500 plus an alert.
+        raise GitHubOAuthError(f"code exchange request failed: {type(exc).__name__}") from exc
     if "access_token" not in token_data:
         raise GitHubOAuthError(
             token_data.get("error_description") or token_data.get("error") or "code exchange failed"
@@ -190,15 +195,18 @@ def _exchange_code_and_fetch_user(
     # tokens" turned on - absent (None) otherwise, and stored as such.
     refresh_token = token_data.get("refresh_token")
 
-    user_response = _github_http_client().get(
-        "/user",
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "Accept": "application/vnd.github+json",
-        },
-    )
-    user_response.raise_for_status()
-    user = user_response.json()
+    try:
+        user_response = _github_http_client().get(
+            "/user",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/vnd.github+json",
+            },
+        )
+        user_response.raise_for_status()
+        user = user_response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise GitHubOAuthError(f"user lookup failed: {type(exc).__name__}") from exc
 
     email = None
     try:
@@ -253,7 +261,7 @@ def unsign_session_id(signed: str, secret: str) -> str | None:
             signed,
             max_age=int(SESSION_TTL.total_seconds()),
         )
-    except BadSignature:
+    except (BadSignature, BadPayload):
         return None
 
 
@@ -267,7 +275,7 @@ def unsign_oauth_state(signed: str, secret: str) -> str | None:
             signed,
             max_age=int(OAUTH_STATE_TTL.total_seconds()),
         )
-    except BadSignature:
+    except (BadSignature, BadPayload):
         return None
 
 
@@ -300,7 +308,7 @@ def unsign_checkout_installation_id(
             max_age=int(max_age.total_seconds()),
         )
         return int(value)
-    except (BadSignature, ValueError, TypeError):
+    except (BadSignature, BadPayload, ValueError, TypeError):
         return None
 
 
