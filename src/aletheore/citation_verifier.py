@@ -44,6 +44,25 @@ logger = logging.getLogger("aletheore.citation_verifier")
 _CITATION_PATTERN = re.compile(r"`?([\w./-]+\.[A-Za-z0-9]+):(\d+)`?")
 
 
+# Dotted hostnames and IPs ("api.example.com:443", "10.0.0.1:5432") satisfy
+# _CITATION_PATTERN's "name.ext:digits" shape, with the TLD read as a file
+# extension. They are infrastructure addresses, not citations, and treating
+# them as unverifiable citations flips a whole report to "not all verified".
+_HOST_TLDS = frozenset(
+    "com org net io dev app ai co us uk de fr eu in cloud local internal lan "
+    "localhost test example edu gov info biz xyz".split()
+)
+_IPV4 = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
+
+
+def _looks_like_host(path: str, known_paths: set[str] | None) -> bool:
+    if known_paths and path in known_paths:
+        return False
+    if _IPV4.fullmatch(path):
+        return True
+    return "/" not in path and path.rsplit(".", 1)[-1].lower() in _HOST_TLDS
+
+
 def _known_file_paths(evidence: dict) -> set[str]:
     repository = evidence.get("repository", {})
     paths = {m.get("path") for m in repository.get("modules", []) if m.get("path")}
@@ -94,6 +113,8 @@ def extract_citations(report_text: str, known_paths: set[str] | None = None) -> 
     for pattern in patterns:
         for match in pattern.finditer(report_text):
             file_path, line_str = match.groups()
+            if pattern is _CITATION_PATTERN and _looks_like_host(file_path, known_paths):
+                continue
             key = (file_path, int(line_str))
             if key in seen:
                 continue
