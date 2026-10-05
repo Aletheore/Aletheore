@@ -476,6 +476,15 @@ def _resolve_bearer_toggle(check_bearer: bool | None) -> bool:
     return input("Include Bearer in this scan? [y/N]: ").strip().lower() == "y"
 
 
+def _read_input(prompt: str) -> str | None:
+    """input() that returns None instead of raising EOFError when stdin is
+    closed or redirected from /dev/null (CI, scripts, the hosted worker)."""
+    try:
+        return input(prompt)
+    except EOFError:
+        return None
+
+
 def _scan(
     repo_path: str,
     check_vulnerabilities: bool | None,
@@ -568,8 +577,15 @@ def _audit(
             f"[bold yellow]This will send this repository's evidence "
             f"(not source code) to {adapter.name}'s API.[/bold yellow]"
         )
-        confirmed = input("Continue? [y/N]: ").strip().lower() == "y"
-        if not confirmed:
+        answer = _read_input("Continue? [y/N]: ")
+        if answer is None:
+            console.print(
+                "[bold red]error:[/bold red] consent is required before sending evidence "
+                "to this adapter and there is no interactive input to confirm it. "
+                "Run this in a terminal."
+            )
+            return 1
+        if answer.strip().lower() != "y":
             console.print("Cancelled - no data was sent.")
             return 0
 
@@ -636,7 +652,7 @@ def _managed_audit(
     try:
         with _ElapsedTicker("Waiting on the managed audit service"):
             report_text = run_managed_audit_request(evidence, resolved_token, repo_full_name=repo_full_name)
-    except ManagedAuditError as exc:
+    except (ManagedAuditError, httpx.HTTPError) as exc:
         console.print(f"[bold red]error:[/bold red] {exc}")
         console.print(f"Evidence is still available at {evidence_path} for manual use.")
         return 1
@@ -891,7 +907,15 @@ def _query(
                 f"[bold yellow]This will send retrieved code chunks and your question "
                 f"to {adapter.name}'s API.[/bold yellow]"
             )
-            if input("Continue? [y/N]: ").strip().lower() != "y":
+            answer = _read_input("Continue? [y/N]: ")
+            if answer is None:
+                console.print(
+                    "[bold red]error:[/bold red] consent is required before sending code "
+                    "chunks to this adapter and there is no interactive input to confirm it. "
+                    "Run this in a terminal."
+                )
+                return 1
+            if answer.strip().lower() != "y":
                 console.print("Cancelled - no data was sent.")
                 return 0
         from aletheore.answer import answer_question
@@ -2032,7 +2056,14 @@ def login() -> None:
             for index, candidate in enumerate(resolved, start=1):
                 console.print(f"  {index}. {candidate['account_login']}")
             while True:
-                raw = input(f"Enter a number [1-{len(resolved)}]: ").strip()
+                answer = _read_input(f"Enter a number [1-{len(resolved)}]: ")
+                if answer is None:
+                    console.print(
+                        "[bold red]error:[/bold red] multiple installations found and no "
+                        "interactive input is available to pick one. Run this in a terminal."
+                    )
+                    raise typer.Exit(code=1)
+                raw = answer.strip()
                 if raw.isdigit() and 1 <= int(raw) <= len(resolved):
                     installation = resolved[int(raw) - 1]
                     break
@@ -2048,7 +2079,7 @@ def login() -> None:
             f"[bold]{installation['account_login']}[/bold]. "
             "This replaces any previously saved token."
         )
-    except DeviceFlowError as exc:
+    except (DeviceFlowError, httpx.HTTPError) as exc:
         console.print(f"[bold red]error:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
 
