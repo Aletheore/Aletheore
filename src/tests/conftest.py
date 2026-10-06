@@ -56,3 +56,40 @@ def _isolate_saved_credentials(tmp_path, monkeypatch):
     # get_api_key(...) with no credentials_path). Rebinding the module
     # constant afterwards cannot reach those.
     monkeypatch.setattr(credentials, "_load_saved_key", _loader_ignoring_the_real_file)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_crash_reporting_preferences(tmp_path, monkeypatch):
+    """Global safety net, same class of bug as _isolate_saved_credentials
+    above: no test run should ever read or write this machine's real
+    ~/.config/aletheore/preferences.json. Also forces crash reporting off
+    for the whole suite by default (ALETHEORE_CRASH_REPORTING=0) - unlike
+    the backend's Sentry setup (SENTRY_DSN simply unset in every test
+    environment), this CLI's DSN is a baked-in constant, so nothing else
+    stops a test that reaches main()'s crash path from configuring a real
+    Sentry client against the live aletheore-cli project. Tests that
+    specifically exercise the capture call override this env var
+    themselves and stub sentry_sdk.capture_exception directly - never a
+    real client.
+    """
+    monkeypatch.setenv("ALETHEORE_CRASH_REPORTING", "0")
+
+    import aletheore.preferences as preferences
+
+    fake = tmp_path / "preferences.json"
+    real_default = preferences.DEFAULT_PREFERENCES_PATH
+    real_load = preferences._load_preferences
+    real_save = preferences._save_preference
+
+    def _load_ignoring_the_real_file(preferences_path):
+        if preferences_path == real_default:
+            preferences_path = fake
+        return real_load(preferences_path)
+
+    def _save_ignoring_the_real_file(preferences_path, key, value):
+        if preferences_path == real_default:
+            preferences_path = fake
+        return real_save(preferences_path, key, value)
+
+    monkeypatch.setattr(preferences, "_load_preferences", _load_ignoring_the_real_file)
+    monkeypatch.setattr(preferences, "_save_preference", _save_ignoring_the_real_file)
