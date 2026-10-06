@@ -135,7 +135,7 @@ async def claim_free_to_paid_plan(
     return row is not None
 
 
-async def claim_paid_setup(pool: asyncpg.Pool, installation_id: int) -> bool:
+async def claim_paid_setup(pool: asyncpg.Pool, installation_id: int) -> datetime | None:
     """Atomically claim the one-time paid setup (initial wiki/docs build,
     affiliate attribution) for an installation.
 
@@ -146,17 +146,50 @@ async def claim_paid_setup(pool: asyncpg.Pool, installation_id: int) -> bool:
     ran. Gating setup on this claim instead of on that transition boolean
     means the retry still runs it exactly once, rather than skipping it
     forever because the plan write it depended on already happened.
+
+    Returns the claimed paid_setup_completed_at timestamp on success, or
+    None if it was already claimed. The caller must hold onto that
+    timestamp and pass it to release_paid_setup - see that function's
+    docstring for why a plain unconditional release is unsafe.
     """
     row = await pool.fetchrow(
         """
         UPDATE installations
         SET paid_setup_completed_at = now()
         WHERE installation_id = $1 AND paid_setup_completed_at IS NULL
-        RETURNING installation_id
+        RETURNING paid_setup_completed_at
         """,
         installation_id,
     )
-    return row is not None
+    return row["paid_setup_completed_at"] if row is not None else None
+
+
+async def release_paid_setup(
+    pool: asyncpg.Pool, installation_id: int, claimed_at: datetime
+) -> None:
+    """Undo claim_paid_setup when the work it gated failed, so a retry reruns it.
+
+    Compare-and-set, not an unconditional clear: real bug this closes - a
+    caller only ever gets here after ITS OWN claim_paid_setup call
+    succeeded, but an unconditional NULL write doesn't know that. If a
+    Paddle retry lands and re-claims (a newer paid_setup_completed_at) while
+    this caller is still stuck between its own failed enqueue and this
+    release call, an unconditional release would wipe out that NEWER claim's
+    completion marker too - letting yet another delivery re-run the
+    one-time build/attribution a second time. Scoping the UPDATE's WHERE to
+    the exact timestamp this caller's own claim set means the write is a
+    no-op once a newer claim has replaced it, so only the release that
+    actually owns the current claim can clear it.
+    """
+    await pool.execute(
+        """
+        UPDATE installations
+        SET paid_setup_completed_at = NULL
+        WHERE installation_id = $1 AND paid_setup_completed_at = $2
+        """,
+        installation_id,
+        claimed_at,
+    )
 
 
 async def set_paid_installation_plan(
