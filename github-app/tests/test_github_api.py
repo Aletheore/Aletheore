@@ -1226,3 +1226,31 @@ def test_ensure_docs_pull_request_creates_new_pr_when_none_open():
         client, "token", "octocat/hello-world", "aletheore/docs-update", "main", "title", "body",
     )
     assert number == 9
+
+
+def test_upsert_pr_comment_finds_marker_comment_past_the_first_page():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.params.get("page")))
+        if request.method == "GET":
+            if request.url.params.get("page") == "1":
+                return httpx.Response(200, json=[{"id": i, "body": "chatter"} for i in range(100)])
+            return httpx.Response(200, json=[{"id": 999, "body": f"{COMMENT_MARKER}\nold"}])
+        return httpx.Response(200, json={"id": 999})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    upsert_pr_comment(client, "token", "octocat/hello-world", 42, f"{COMMENT_MARKER}\nnew")
+
+    assert [method for method, _ in calls] == ["GET", "GET", "PATCH"]
+
+
+def test_reconstruct_missing_patch_returns_none_when_a_fetch_raises():
+    from scan_worker.github_api import _reconstruct_missing_patch
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(502, json={})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+
+    assert _reconstruct_missing_patch(client, "t", "o/r", "a.py", "base", "head") is None

@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from app_server.db import (
     get_installation_by_token_hash,
+    touch_api_token,
 )
 from app_server.rate_limit import acquire_concurrency_slot, is_rate_limited, release_concurrency_slot
 from app_server.redis_client import get_redis_client
@@ -143,6 +144,9 @@ async def _authenticated_installation(request: Request) -> dict:
     return installation
 
 
+_TOKEN_TOUCH_MIN_INTERVAL_SECONDS = 60
+
+
 @embeddings_router.post("/v1/embeddings")
 async def create_embeddings(request: Request, body: EmbeddingsRequest):
     installation = await _authenticated_installation(request)
@@ -217,6 +221,20 @@ async def create_embeddings(request: Request, body: EmbeddingsRequest):
             detail="too many embedding requests",
             headers={"Retry-After": str(RATE_LIMIT_WINDOW_SECONDS)},
         )
+
+    # Same as managed_audit_api/runtime_events: a token used only for hosted
+    # embeddings otherwise shows "never used" in the dashboard forever.
+    # Throttled, since this endpoint sees far higher volume than those two.
+    try:
+        await touch_api_token(
+            request.app.state.db_pool,
+            hashlib.sha256(
+                request.headers.get("Authorization", "").removeprefix("Bearer ").encode()
+            ).hexdigest(),
+            min_interval_seconds=_TOKEN_TOUCH_MIN_INTERVAL_SECONDS,
+        )
+    except Exception as exc:  # noqa: BLE001 - bookkeeping must never fail the request
+        logger.warning("could not record api token use (%s)", exc)
 
     slot_id = uuid.uuid4().hex
     try:

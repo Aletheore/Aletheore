@@ -1042,3 +1042,36 @@ def test_invoke_does_not_force_reasoning_effort_for_non_openai_provider(mock_ope
 
     first_call = mock_client.chat.completions.create.call_args_list[0]
     assert "extra_body" not in first_call.kwargs
+
+
+def test_simple_completion_releases_reservation_when_api_key_is_missing(tmp_path):
+    failed_calls = []
+    adapter = _adapter(tmp_path, on_call_failed=lambda: failed_calls.append(1))
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value=None):
+        with pytest.raises(AdapterInvocationError):
+            adapter.simple_completion("system", "user", cwd="/repo")
+
+    assert failed_calls == [1]
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_simple_completion_raises_adapter_error_on_empty_choices(mock_openai_class, tmp_path):
+    response = MagicMock()
+    response.choices = []
+    mock_openai_class.return_value.chat.completions.create.return_value = response
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        with pytest.raises(AdapterInvocationError):
+            adapter.simple_completion("system", "user", cwd="/repo")
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_invoke_raises_adapter_error_on_empty_choices(mock_openai_class, tmp_path):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    response = MagicMock()
+    response.choices = []
+    mock_openai_class.return_value.chat.completions.create.return_value = response
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        with pytest.raises(AdapterInvocationError):
+            adapter.invoke("audit this repo", cwd=str(repo))

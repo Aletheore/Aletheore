@@ -892,3 +892,22 @@ def test_a_baseline_written_in_the_new_preview_format_matches(tmp_path):
     findings = find_secrets(repo, baseline=baseline)["findings"]
 
     assert findings[0]["accepted"] is True
+
+
+def test_find_secrets_does_not_mark_random_long_decimal_token_as_placeholder(tmp_path):
+    # Pure-digit values compress to zlib's floor sooner than hex (10 vs 16
+    # symbols), so the hex cap of 36 mislabeled random 31-36 digit credentials
+    # as placeholders (96.8% at 36) and every consumer silently dropped them.
+    import random
+
+    rng = random.Random(7)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for i, length in enumerate((32, 34, 36)):
+        token = "".join(rng.choice("0123456789") for _ in range(length))
+        (repo / f"config{i}.py").write_text(f'API_TOKEN = "{token}"\n')
+
+    result = find_secrets(repo)
+
+    assert len(result["findings"]) == 3
+    assert all(f["likely_placeholder"] is False for f in result["findings"])

@@ -30,6 +30,14 @@ ENDPOINT_HEALTH_CLEANUP_JOB_TIMEOUT_SECONDS = 60
 # Same shape as the endpoint health cleanup: one range DELETE over an
 # index on flash_review_cache.created_at.
 FLASH_REVIEW_CACHE_CLEANUP_JOB_TIMEOUT_SECONDS = 60
+# Same shape as FLASH_REVIEW_CACHE_CLEANUP_JOB_TIMEOUT_SECONDS: one range
+# DELETE over an index on evidence_packet_cache.created_at.
+EVIDENCE_PACKET_CACHE_CLEANUP_JOB_TIMEOUT_SECONDS = 60
+# One indexed SELECT plus, for the rare stale row, one UPDATE (release) and
+# one DELETE per row - bounded the same way the other sub-minute sweeps here
+# are, since a stale reservation row (one process's hard-kill leak) is a
+# rare event, not a per-tick norm.
+LLM_SPEND_RESERVATION_SWEEP_JOB_TIMEOUT_SECONDS = 60
 # The sweep itself only calls run_live_docs_full_build_job for repos that
 # list_paid_repos_due_for_docs_catchup already filtered to "genuinely due"
 # (48h+ since last sweep, real activity since then) - most ticks this
@@ -116,6 +124,14 @@ def run_forever(
         scans_queue.enqueue(
             "scan_worker.jobs.run_flash_review_cache_cleanup_job",
             job_timeout=FLASH_REVIEW_CACHE_CLEANUP_JOB_TIMEOUT_SECONDS,
+        )
+        scans_queue.enqueue(
+            "scan_worker.jobs.run_evidence_packet_cache_cleanup_job",
+            job_timeout=EVIDENCE_PACKET_CACHE_CLEANUP_JOB_TIMEOUT_SECONDS,
+        )
+        scans_queue.enqueue(
+            "scan_worker.jobs.run_llm_spend_reservation_sweep_job",
+            job_timeout=LLM_SPEND_RESERVATION_SWEEP_JOB_TIMEOUT_SECONDS,
         )
         scans_queue.enqueue(
             "scan_worker.jobs.run_live_docs_catchup_sweep_job",

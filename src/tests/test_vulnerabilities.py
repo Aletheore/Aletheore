@@ -1232,6 +1232,55 @@ def test_check_vulnerabilities_includes_gradle_pins(tmp_path, monkeypatch):
     assert ("com.example:foo", "1.0.0", "Maven") in captured["pins"]
 
 
+def test_parse_npm_pins_extracts_real_name_for_nested_nonhoisted_dependency(tmp_path):
+    from aletheore.vulnerabilities import _parse_npm_pins
+
+    repo = tmp_path
+    (repo / "package-lock.json").write_text(
+        json.dumps(
+            {
+                "lockfileVersion": 3,
+                "packages": {
+                    "": {"name": "app"},
+                    "node_modules/lodash": {"version": "4.17.21"},
+                    "node_modules/some-plugin/node_modules/lodash": {"version": "4.17.4"},
+                    "node_modules/some-plugin/node_modules/@scope/pkg": {"version": "1.0.0"},
+                },
+            }
+        )
+    )
+    pins = _parse_npm_pins(repo)
+    assert ("lodash", "4.17.4", "npm") in pins
+    assert ("lodash", "4.17.21", "npm") in pins
+    assert ("@scope/pkg", "1.0.0", "npm") in pins
+    assert not any("node_modules" in name for name, _, _ in pins)
+
+
+def test_parse_npm_pins_reads_legacy_lockfile_version_1_tree(tmp_path):
+    from aletheore.vulnerabilities import _parse_npm_pins
+
+    (tmp_path / "package-lock.json").write_text(
+        json.dumps(
+            {
+                "lockfileVersion": 1,
+                "dependencies": {
+                    "express": {
+                        "version": "4.17.1",
+                        "dependencies": {"qs": {"version": "6.7.0"}},
+                    },
+                    "lodash": {"version": "4.17.21"},
+                },
+            }
+        )
+    )
+    pins = _parse_npm_pins(tmp_path)
+    assert sorted(pins) == [
+        ("express", "4.17.1", "npm"),
+        ("lodash", "4.17.21", "npm"),
+        ("qs", "6.7.0", "npm"),
+    ]
+
+
 def test_parse_maven_pins_resolves_property_defined_via_another_property(tmp_path):
     from aletheore.vulnerabilities import _parse_maven_pins
 
