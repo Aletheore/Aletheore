@@ -28,21 +28,52 @@ def _matches_command(line: str, command: str) -> bool:
     return line.startswith(command) and line[len(command) : len(command) + 1].isspace()
 
 
+def _fence_marker(stripped: str) -> tuple[str, int] | None:
+    """Return (fence_char, run_length) if `stripped` is a fence marker line
+    (a run of 3+ backticks or tildes), else None."""
+    if not stripped:
+        return None
+    char = stripped[0]
+    if char not in ("`", "~"):
+        return None
+    length = len(stripped) - len(stripped.lstrip(char))
+    if length < 3:
+        return None
+    return char, length
+
+
 def _command_candidate_lines(body: str):
     """Lines of a comment that could be a real command invocation: not inside
     a fenced code block and not an indented (4 spaces / tab) code block, so a
-    maintainer documenting the command doesn't fire a real billed audit."""
-    fence: str | None = None
+    maintainer documenting the command doesn't fire a real billed audit.
+
+    Real bug this closes: comparing only the first 3 characters of a line
+    to decide whether it closes a fence let a closing marker SHORTER than
+    the opening one (e.g. a literal ``` line documented inside a ````-fenced
+    block) end tracking early, exposing a command still inside the real
+    fence per GitHub's own CommonMark/GFM rendering (a closing fence must
+    be >= the opening fence's length). Confirmed directly: this previously
+    let a billed audit fire from a comment whose command was, visually and
+    per GitHub's rendering, inside a code block.
+    """
+    fence_char: str | None = None
+    fence_len = 0
     for raw in body.splitlines():
         stripped = raw.strip()
-        marker = stripped[:3]
-        if marker in ("```", "~~~"):
-            if fence is None:
-                fence = marker
-            elif marker == fence:
-                fence = None
-            continue
-        if fence is not None:
+        marker = _fence_marker(stripped)
+        if marker is not None:
+            char, length = marker
+            if fence_char is None:
+                fence_char, fence_len = char, length
+                continue
+            if char == fence_char and length >= fence_len and stripped[length:].strip() == "":
+                fence_char = None
+                fence_len = 0
+                continue
+            # A fence-shaped line that doesn't close the open fence (too
+            # short, wrong character, or has trailing content) is literal
+            # content inside the fence - fall through to the check below.
+        if fence_char is not None:
             continue
         if raw.startswith(("    ", "\t")):
             continue
