@@ -7,10 +7,12 @@ import tomllib
 import urllib.error
 import urllib.request
 from pathlib import Path
+
 from xml.etree import ElementTree
 
 import certifi
 from tree_sitter import Node
+from aletheore.user_paths import user_home
 
 OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 OSV_VULN_URL_TEMPLATE = "https://api.osv.dev/v1/vulns/{vuln_id}"
@@ -22,7 +24,7 @@ DEFAULT_TIMEOUT_SECONDS = 10
 # Short enough that a day of repeated scans (of this or any other repo) on
 # the same machine doesn't re-pay the same OSV.dev round-trip for every one,
 # without letting real staleness accumulate for long.
-DEFAULT_VULNERABILITY_CACHE_PATH = Path.home() / ".cache" / "aletheore" / "vulnerability-cache.json"
+DEFAULT_VULNERABILITY_CACHE_PATH = user_home() / ".cache" / "aletheore" / "vulnerability-cache.json"
 _VULNERABILITY_CACHE_TTL_SECONDS = 24 * 60 * 60
 
 # Use certifi's CA bundle explicitly rather than the system default SSL context.

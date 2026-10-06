@@ -5403,34 +5403,71 @@ class _IncrementalSpendBudget:
         # success, cleared by record_usage() once that same reservation is
         # trued up. on_call_failed() reads this to release exactly the
         # outstanding amount - see its own docstring for the bug this
-        # closes. Never two calls' worth at once: every real call site
-        # reserves, then resolves (record_usage or on_call_failed), then
-        # reserves again for the next one - this class used to have no
-        # concurrent-reservation caller, but AIRview's full-build writing
-        # adapter is now shared across _generation_worker_count() (up to 16,
-        # see live_wiki.py) concurrent threads, all calling
-        # can_start_next_call/record_usage/on_call_failed through the same
-        # spend_budget instance - _lock below makes the read-modify-write on
-        # _pending_reserve_usd/_pending_topup_usd atomic across those
-        # threads. The real DB-level reserve/release calls these wrap
-        # (reserve_llm_spend_with_email_hooks, reserve_llm_spend,
-        # _release_spend) are already atomic on their own; without this lock,
-        # a lost update here (two threads' += racing on the same Python
-        # attribute) could under-count what's pending and true up the wrong
-        # amount, the same class of real-production credit-accounting gap
-        # this class's own history (see on_call_failed's docstring) was
-        # built to close for the sequential case.
-        self._lock = threading.Lock()
-        self._pending_reserve_usd = 0.0
-        # The part of _pending_reserve_usd that came out of purchased top-up
-        # credit, so giving any of it back returns it to top-up.
-        self._pending_topup_usd = 0.0
-        # One key per instance, not per call - persisted alongside
-        # _pending_reserve_usd/_pending_topup_usd so a process killed before
-        # this instance's reservation is resolved leaves a row
-        # run_llm_spend_reservation_sweep_job can find. See
-        # upsert_pending_llm_spend_reservation's own docstring.
-        self._reservation_key = uuid.uuid4().hex
+        # closes. Never two calls' worth at once PER THREAD: every real
+        # call site reserves, then resolves (record_usage or
+        # on_call_failed), then reserves again for the next one - but this
+        # class's single instance is now shared across
+        # _generation_worker_count() (up to 16, see live_wiki.py)
+        # concurrent threads for AIRview's full-build writing adapter, all
+        # calling can_start_next_call/record_usage/on_call_failed through
+        # the same spend_budget. A single shared `_pending_reserve_usd`
+        # scalar (even behind a lock making its += atomic) is the wrong
+        # shape for that: it would hold the SUM of every thread's
+        # in-flight reservation, so whichever thread settles first (via
+        # record_usage/on_call_failed/release_unused_reservation) would
+        # read and zero out ALL 16 threads' combined pending amount, not
+        # just its own - releasing money still legitimately reserved for
+        # the other 15 in-flight calls, and leaving them to draw their own
+        # real cost completely unreserved when they later settle. A lock
+        # only prevents a torn increment; it does not scope the value per
+        # caller. threading.local() does: each thread gets its own
+        # isolated pending_reserve_usd/pending_topup_usd slot, so the
+        # "never two calls' worth at once" invariant the rest of this
+        # class already relies on holds again, per thread, with no
+        # cross-thread interference and no lock needed at all - see
+        # _pending_reserve_usd/_pending_topup_usd below, which proxy to it
+        # so every other read/write site in this class is unchanged.
+        self._local = threading.local()
+
+    def _get_local(self, name: str) -> float:
+        return getattr(self._local, name, 0.0)
+
+    def _set_local(self, name: str, value: float) -> None:
+        setattr(self._local, name, value)
+
+    @property
+    def _pending_reserve_usd(self) -> float:
+        return self._get_local("pending_reserve_usd")
+
+    @_pending_reserve_usd.setter
+    def _pending_reserve_usd(self, value: float) -> None:
+        self._set_local("pending_reserve_usd", value)
+
+    @property
+    def _pending_topup_usd(self) -> float:
+        # The part of _pending_reserve_usd that came out of purchased
+        # top-up credit, so giving any of it back returns it to top-up.
+        return self._get_local("pending_topup_usd")
+
+    @_pending_topup_usd.setter
+    def _pending_topup_usd(self, value: float) -> None:
+        self._set_local("pending_topup_usd", value)
+
+    @property
+    def _reservation_key(self) -> str:
+        # One persisted-reservation key per THREAD, not per instance: the
+        # persisted row (see upsert_pending_llm_spend_reservation) mirrors
+        # this thread's own pending amount, so threads sharing one key
+        # would overwrite each other's row and the crash sweep would see
+        # only the last writer's amount. Created lazily on first use in
+        # each thread, so a process killed with N calls in flight leaves N
+        # rows run_llm_spend_reservation_sweep_job can each find and
+        # release - see that method's callers below.
+        key = getattr(self._local, "reservation_key", None)
+        if key is None:
+            key = uuid.uuid4().hex
+            self._local.reservation_key = key
+        return key
 
     def can_start_next_call(self) -> bool:
         drawn: dict = {}
@@ -5439,25 +5476,23 @@ class _IncrementalSpendBudget:
             topup_out=drawn,
         )
         if ok:
-            with self._lock:
-                self._pending_topup_usd += drawn.get("topup_usd", 0.0)
-                # Accumulate, never overwrite: two reservations outstanding for one
-                # call (an adapter that checks the budget twice, e.g. a provider
-                # fallback) used to leave the first one unreachable by
-                # record_usage/on_call_failed/release_unused_reservation.
-                self._pending_reserve_usd += self.next_call_reserve_usd
-                reserve_snapshot = self._pending_reserve_usd
-                topup_snapshot = self._pending_topup_usd
-            # Outside the lock, same reasoning as _release_pending's own DB
-            # call: the snapshot above is already consistent, and this
-            # upsert always overwrites with the latest total rather than
-            # accumulating, so a write ordered after a concurrent caller's
-            # newer snapshot would be the only way this could go stale -
-            # vanishingly unlikely for the rare multi-reservation case this
-            # exists for, and self-corrects on this instance's next call.
+            self._pending_topup_usd += drawn.get("topup_usd", 0.0)
+            # Accumulate, never overwrite: two reservations outstanding for one
+            # call (an adapter that checks the budget twice, e.g. a provider
+            # fallback) used to leave the first one unreachable by
+            # record_usage/on_call_failed/release_unused_reservation. No lock
+            # needed here (or anywhere else in this class): these properties
+            # proxy to a threading.local() slot, so this +=, like every
+            # other read/write of _pending_reserve_usd/_pending_topup_usd,
+            # only ever touches the calling thread's own value.
+            self._pending_reserve_usd += self.next_call_reserve_usd
+            # Persist this thread's own running total (thread-local, so no
+            # lock is needed) so a hard kill before it resolves leaves a row
+            # run_llm_spend_reservation_sweep_job can find. Always an
+            # overwrite with the latest total, never an accumulation.
             upsert_pending_llm_spend_reservation(
                 self.dsn, self._reservation_key, self.installation_id, self.feature,
-                reserve_snapshot, topup_snapshot,
+                self._pending_reserve_usd, self._pending_topup_usd,
             )
         return ok
 
@@ -5518,14 +5553,10 @@ class _IncrementalSpendBudget:
         one of them were ever updated. Returns the amount released (0.0 if
         nothing was pending) so on_call_failed() can still log its warning
         with the real amount."""
-        with self._lock:
-            amount = self._pending_reserve_usd
-            topup = self._pending_topup_usd
-            self._pending_reserve_usd = 0.0
-            self._pending_topup_usd = 0.0
-        # The DB call happens outside the lock - snapshotting and zeroing
-        # under the lock is enough to make two concurrent callers never both
-        # see (and both release) the same outstanding amount.
+        amount = self._pending_reserve_usd
+        topup = self._pending_topup_usd
+        self._pending_reserve_usd = 0.0
+        self._pending_topup_usd = 0.0
         if amount:
             _release_spend(self.dsn, self.installation_id, amount, topup)
         # Resolved through the normal (non-crash) path - clear the
@@ -5542,14 +5573,11 @@ class _IncrementalSpendBudget:
         # next_call_reserve_usd: a second call under the same reservation (a
         # Docs module can make two) has nothing left reserved and must be drawn
         # in full, where the old fixed subtraction refunded a reservation that
-        # had already been given back. Snapshot-and-zero under the lock, same
-        # reasoning as _release_pending's own - the DB calls below still
-        # happen outside it.
-        with self._lock:
-            reserved = self._pending_reserve_usd
-            reserved_topup = self._pending_topup_usd
-            self._pending_reserve_usd = 0.0
-            self._pending_topup_usd = 0.0
+        # had already been given back.
+        reserved = self._pending_reserve_usd
+        reserved_topup = self._pending_topup_usd
+        self._pending_reserve_usd = 0.0
+        self._pending_topup_usd = 0.0
         if cached_tokens:
             # Visibility only - cost_for_usage below still prices the full
             # prompt_tokens count, so cached tokens aren't yet discounted
