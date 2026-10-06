@@ -2852,3 +2852,44 @@ def test_the_mcp_command_documents_no_watch():
 
     assert option.is_flag
     assert "ALETHEORE_MCP_WATCH" in option.help
+
+
+def test_audit_exits_cleanly_when_consent_prompt_has_no_stdin(tmp_path):
+    (tmp_path / "main.py").write_text("x = 1\n")
+    fake_adapter = MagicMock()
+    fake_adapter.name = "openai"
+    fake_adapter.requires_consent = True
+
+    with patch("aletheore.cli.select_adapter", return_value=fake_adapter):
+        result = runner.invoke(app, ["audit", str(tmp_path)], input="")
+
+    # Closed stdin is treated as "no": nothing is sent, and no EOFError escapes.
+    assert result.exit_code == 0
+    assert "no data was sent" in result.output
+    assert not isinstance(result.exception, EOFError)
+    fake_adapter.invoke.assert_not_called()
+
+
+def test_login_exits_cleanly_on_network_error():
+    import httpx
+
+    with patch("aletheore.device_auth.request_device_code") as mock_request_code:
+        mock_request_code.side_effect = httpx.ConnectError("boom")
+
+        result = runner.invoke(app, ["login"])
+
+    assert result.exit_code == 1
+    assert "boom" in result.output
+
+
+def test_managed_audit_reports_network_error_instead_of_traceback(tmp_path):
+    import httpx
+
+    (tmp_path / "main.py").write_text("x = 1\n")
+    with patch("aletheore.cli.get_api_key", return_value="fake-token"), patch(
+        "aletheore.cli.run_managed_audit_request", side_effect=httpx.ConnectError("down")
+    ):
+        result = runner.invoke(app, ["audit", str(tmp_path), "--managed"])
+
+    assert result.exit_code == 1
+    assert "Evidence is still available" in result.output

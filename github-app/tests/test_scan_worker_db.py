@@ -510,6 +510,133 @@ async def test_delete_expired_flash_review_cache_keeps_rows_inside_the_window(po
 
 
 @pytest.mark.asyncio
+async def test_delete_expired_evidence_packet_cache_keeps_rows_inside_the_window(pool):
+    # evidence_packet_cache had no retention sweep at all (unlike its
+    # structural sibling flash_review_cache) - this is the matching fix.
+    await _insert_installation(pool, 416, "evidence-cache-retention-org")
+    now = datetime.now(timezone.utc)
+    await pool.execute(
+        """
+        INSERT INTO evidence_packet_cache
+            (installation_id, repo_full_name, content_hash, embedding,
+             packet_json, model_output, model_used, created_at)
+        VALUES
+            (416, 'evidence-cache-retention-org/repo', 'old-hash', '{0.1}',
+             '{}', '{}', 'deepseek-v4-pro', $1),
+            (416, 'evidence-cache-retention-org/repo', 'recent-hash', '{0.2}',
+             '{}', '{}', 'deepseek-v4-pro', $2)
+        """,
+        now - timedelta(days=31),
+        now - timedelta(days=29),
+    )
+
+    from scan_worker.db import delete_expired_evidence_packet_cache
+
+    deleted = delete_expired_evidence_packet_cache(TEST_DATABASE_URL, 30)
+
+    assert deleted == 1
+    remaining = await pool.fetch("SELECT content_hash FROM evidence_packet_cache")
+    assert {row["content_hash"] for row in remaining} == {"recent-hash"}
+
+
+@pytest.mark.asyncio
+async def test_upsert_pending_llm_spend_reservation_then_clear_removes_row(pool):
+    # _IncrementalSpendBudget persists its current outstanding reservation
+    # here so a process killed before it can resolve (record_usage/
+    # on_call_failed/release_unused_reservation) leaves a real row behind
+    # for the sweep to find - upserting on the same reservation_key must
+    # overwrite, not duplicate, and clearing must remove it entirely.
+    await _insert_installation(pool, 417, "reservation-org")
+
+    from scan_worker.db import (
+        clear_pending_llm_spend_reservation,
+        upsert_pending_llm_spend_reservation,
+    )
+
+    upsert_pending_llm_spend_reservation(TEST_DATABASE_URL, "res-key-1", 417, "docs_incremental", 0.10, 0.0)
+    upsert_pending_llm_spend_reservation(TEST_DATABASE_URL, "res-key-1", 417, "docs_incremental", 0.20, 0.05)
+
+    rows = await pool.fetch("SELECT reserve_usd, topup_usd FROM llm_spend_reservations WHERE reservation_key = 'res-key-1'")
+    assert len(rows) == 1
+    assert float(rows[0]["reserve_usd"]) == pytest.approx(0.20)
+    assert float(rows[0]["topup_usd"]) == pytest.approx(0.05)
+
+    clear_pending_llm_spend_reservation(TEST_DATABASE_URL, "res-key-1")
+
+    rows = await pool.fetch("SELECT 1 FROM llm_spend_reservations WHERE reservation_key = 'res-key-1'")
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_clear_pending_llm_spend_reservation_is_a_noop_for_unknown_key(pool):
+    from scan_worker.db import clear_pending_llm_spend_reservation
+
+    clear_pending_llm_spend_reservation(TEST_DATABASE_URL, "never-reserved")
+
+
+@pytest.mark.asyncio
+async def test_sweep_stale_llm_spend_reservations_releases_balance_and_deletes_row(pool):
+    # The hard-kill case: a reservation row sits here with no in-process
+    # code left to resolve it. The sweep must give the money back to the
+    # same installation and remove the row so a second sweep can't double-
+    # release it.
+    await _insert_installation(
+        pool, 418, "sweep-org",
+        base_credit_allotment_usd=5.00, base_credit_remaining_usd=4.80, topup_credit_balance_usd=0.00,
+    )
+    now = datetime.now(timezone.utc)
+    await pool.execute(
+        """
+        INSERT INTO llm_spend_reservations
+            (reservation_key, installation_id, feature, reserve_usd, topup_usd, updated_at)
+        VALUES ('stale-key', 418, 'docs_incremental', 0.20, 0.00, $1)
+        """,
+        now - timedelta(hours=2),
+    )
+
+    from scan_worker.db import sweep_stale_llm_spend_reservations
+
+    released = sweep_stale_llm_spend_reservations(TEST_DATABASE_URL, max_age_seconds=3600)
+
+    assert released == 1
+    balance = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd FROM installations WHERE installation_id = 418"
+    )
+    assert float(balance["base_credit_remaining_usd"]) == pytest.approx(5.00)
+    remaining_rows = await pool.fetch("SELECT 1 FROM llm_spend_reservations WHERE reservation_key = 'stale-key'")
+    assert remaining_rows == []
+
+
+@pytest.mark.asyncio
+async def test_sweep_stale_llm_spend_reservations_leaves_fresh_rows_alone(pool):
+    # A reservation younger than the staleness threshold belongs to a job
+    # that may still be legitimately running - the sweep must never touch it.
+    await _insert_installation(
+        pool, 419, "sweep-fresh-org",
+        base_credit_allotment_usd=5.00, base_credit_remaining_usd=4.80, topup_credit_balance_usd=0.00,
+    )
+    await pool.execute(
+        """
+        INSERT INTO llm_spend_reservations
+            (reservation_key, installation_id, feature, reserve_usd, topup_usd)
+        VALUES ('fresh-key', 419, 'docs_incremental', 0.20, 0.00)
+        """,
+    )
+
+    from scan_worker.db import sweep_stale_llm_spend_reservations
+
+    released = sweep_stale_llm_spend_reservations(TEST_DATABASE_URL, max_age_seconds=3600)
+
+    assert released == 0
+    balance = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd FROM installations WHERE installation_id = 419"
+    )
+    assert float(balance["base_credit_remaining_usd"]) == pytest.approx(4.80)
+    remaining_rows = await pool.fetch("SELECT 1 FROM llm_spend_reservations WHERE reservation_key = 'fresh-key'")
+    assert len(remaining_rows) == 1
+
+
+@pytest.mark.asyncio
 async def test_get_latest_evidence_returns_most_recent(pool):
     await _insert_installation(pool, 301, "a")
     # Version-stamped because get_latest_evidence now refuses evidence written
