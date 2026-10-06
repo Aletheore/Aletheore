@@ -248,6 +248,10 @@ def test_main_pins_stdout_and_stderr_to_utf8_before_running_the_cli(monkeypatch)
     monkeypatch.setattr("aletheore.cli.sys.stdout", _FakeStream())
     monkeypatch.setattr("aletheore.cli.sys.stderr", _FakeStream())
     monkeypatch.setattr("aletheore.cli.app", lambda: None)
+    # Unrelated to this test's concern (stream encoding) - without this,
+    # main()'s new first-run crash-reporting notice tries to console.print
+    # to the fake stream above, which has no .write().
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: True)
 
     main()
 
@@ -271,8 +275,134 @@ def test_main_tolerates_a_stdout_stream_with_no_reconfigure_method(monkeypatch):
     monkeypatch.setattr("aletheore.cli.sys.stdout", _StreamWithNoReconfigure())
     monkeypatch.setattr("aletheore.cli.sys.stderr", _StreamWithNoReconfigure())
     monkeypatch.setattr("aletheore.cli.app", lambda: None)
+    # Unrelated to this test's concern (stream encoding) - without this,
+    # main()'s new first-run crash-reporting notice tries to console.print
+    # to the fake stream above, which has no .write().
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: True)
 
     main()  # must not raise
+
+
+def test_main_initializes_cli_sentry_before_running_the_cli(monkeypatch):
+    from aletheore.cli import main
+
+    calls = []
+    monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: calls.append("init"))
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: True)
+    monkeypatch.setattr("aletheore.cli.app", lambda: calls.append("app"))
+
+    main()
+
+    assert calls == ["init", "app"]
+
+
+def test_main_prints_first_run_notice_once(monkeypatch):
+    from aletheore.cli import main
+
+    monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: None)
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: False)
+    marked = []
+    monkeypatch.setattr(
+        "aletheore.cli.mark_crash_reporting_notice_shown", lambda: marked.append(True)
+    )
+    monkeypatch.setattr("aletheore.cli.app", lambda: None)
+
+    main()
+
+    assert marked == [True]
+
+
+def test_main_omits_first_run_notice_when_already_shown(monkeypatch, capsys):
+    from aletheore.cli import main
+
+    monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: None)
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: True)
+    monkeypatch.setattr("aletheore.cli.app", lambda: None)
+
+    main()
+
+    assert "crashes" not in capsys.readouterr().out
+
+
+def test_main_reports_an_unhandled_exception_to_sentry_and_reraises(monkeypatch, capsys):
+    from aletheore.cli import main
+
+    monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: None)
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: True)
+    monkeypatch.setattr("aletheore.cli.is_crash_reporting_enabled", lambda: True)
+
+    def _boom():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("aletheore.cli.app", _boom)
+    captured = []
+    monkeypatch.setattr(
+        "aletheore.cli.sentry_sdk.capture_exception", lambda exc: captured.append(exc)
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        main()
+
+    assert len(captured) == 1
+    assert "This error was reported" in capsys.readouterr().out
+
+
+def test_main_does_not_report_when_crash_reporting_is_disabled(monkeypatch):
+    from aletheore.cli import main
+
+    monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: None)
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: True)
+    monkeypatch.setattr("aletheore.cli.is_crash_reporting_enabled", lambda: False)
+    monkeypatch.setattr(
+        "aletheore.cli.app", lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+    captured = []
+    monkeypatch.setattr(
+        "aletheore.cli.sentry_sdk.capture_exception", lambda exc: captured.append(exc)
+    )
+
+    with pytest.raises(RuntimeError):
+        main()
+
+    assert captured == []
+
+
+def test_main_does_not_report_keyboard_interrupt(monkeypatch):
+    from aletheore.cli import main
+
+    monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: None)
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: True)
+    monkeypatch.setattr(
+        "aletheore.cli.app", lambda: (_ for _ in ()).throw(KeyboardInterrupt())
+    )
+    captured = []
+    monkeypatch.setattr(
+        "aletheore.cli.sentry_sdk.capture_exception", lambda exc: captured.append(exc)
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        main()
+
+    assert captured == []
+
+
+def test_main_does_not_crash_when_sentry_capture_itself_raises(monkeypatch):
+    from aletheore.cli import main
+
+    monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: None)
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: True)
+    monkeypatch.setattr("aletheore.cli.is_crash_reporting_enabled", lambda: True)
+    monkeypatch.setattr(
+        "aletheore.cli.app", lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+
+    def _broken_capture(exc):
+        raise OSError("sentry transport unavailable")
+
+    monkeypatch.setattr("aletheore.cli.sentry_sdk.capture_exception", _broken_capture)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        main()
 
 
 def test_main_with_no_command_prints_update_notice_when_available():

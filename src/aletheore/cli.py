@@ -13,7 +13,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
+import click
 import httpx
+import sentry_sdk
 import tomli_w
 import typer
 import uvicorn
@@ -38,6 +40,13 @@ from aletheore.citation_verifier import (
 )
 from aletheore.credentials import get_api_key
 from aletheore.device_auth import infer_repo_full_name_from_cwd_git_remote
+from aletheore.preferences import (
+    has_shown_crash_reporting_notice,
+    is_crash_reporting_enabled,
+    mark_crash_reporting_notice_shown,
+    set_crash_reporting_enabled,
+)
+from aletheore.sentry_reporting import init_cli_sentry
 from aletheore.evidence import (
     IncompatibleEvidenceVersionError,
     load_evidence,
@@ -2118,7 +2127,37 @@ def main() -> None:
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
             reconfigure(encoding="utf-8", errors="backslashreplace")
-    app()
+
+    init_cli_sentry()
+    if not has_shown_crash_reporting_notice():
+        console.print(
+            "[dim]Aletheore reports crashes to help fix bugs across "
+            "environments we can't all test. Disable with "
+            "`aletheore config crash-reporting off`.[/dim]"
+        )
+        mark_crash_reporting_notice_shown()
+
+    try:
+        app()
+    except (typer.Exit, click.exceptions.Exit, SystemExit, KeyboardInterrupt):
+        raise
+    except Exception as exc:
+        if is_crash_reporting_enabled():
+            # A broken Sentry SDK environment (no network, a bad DSN after
+            # a future rotation, etc.) must never replace or mask the
+            # user's real crash with a second, unrelated one - reporting
+            # is a side effect, not a precondition for the exception
+            # continuing to propagate normally.
+            try:
+                sentry_sdk.capture_exception(exc)
+            except Exception:
+                pass
+            else:
+                console.print(
+                    "\n[dim]This error was reported to help fix it. "
+                    "Disable with `aletheore config crash-reporting off`.[/dim]"
+                )
+        raise
 
 
 if __name__ == "__main__":
