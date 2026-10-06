@@ -491,13 +491,15 @@ def _register_changes_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
         snapshots = list_snapshots(repo_path)
         if len(snapshots) < 2:
             return _toon_result({"message": "no prior snapshot to compare against"})
-        try:
-            old = load_evidence_file(snapshots[-2])
-            new = load_evidence_file(snapshots[-1])
-        except json.JSONDecodeError:
-            return _toon_result({"message": f"most recent snapshot is unreadable ({snapshots[-2]})"})
-        except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
-            return _toon_result({"error": str(exc)})
+        loaded = []
+        for snapshot_path, label in ((snapshots[-2], "previous"), (snapshots[-1], "most recent")):
+            try:
+                loaded.append(load_evidence_file(snapshot_path))
+            except json.JSONDecodeError:
+                return _toon_result({"message": f"{label} snapshot is unreadable ({snapshot_path})"})
+            except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
+                return _toon_result({"error": str(exc)})
+        old, new = loaded
         return _toon_result(compute_diff(old, new, full=full))
 
 
@@ -627,6 +629,8 @@ def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_search", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_search(pattern: str, regex: bool = False, path_glob: str | None = None) -> str:
         """Deterministic literal or regex search over the repository's source files."""
+        if path_glob is not None and not path_glob.strip():
+            return _toon_result({"error": "path_glob must not be empty"})
         if not regex:
             return _toon_result(_search_files(repo_path, pattern, regex, path_glob))
 

@@ -136,6 +136,23 @@ def create_discount(api_key: str | None, code: str, description: str) -> dict:
     return _data_or_raise(response, f"could not create discount {code}")
 
 
+def archive_discount(api_key: str | None, discount_id: str) -> None:
+    """Archives a discount (Paddle has no hard delete). Used to compensate for
+    a discount created but never recorded locally."""
+    if not api_key:
+        raise PaddleAPINotConfigured("PADDLE_API_KEY is not configured")
+    try:
+        response = get_generic_http_client().patch(
+            f"{_PADDLE_API_BASE}/discounts/{discount_id}",
+            headers=_headers(api_key),
+            json={"status": "archived"},
+            timeout=_PADDLE_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise PaddleAPIError(f"could not archive discount {discount_id}: {exc}") from exc
+
+
 def update_subscription_items(
     api_key: str | None,
     subscription_id: str,

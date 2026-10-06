@@ -17,6 +17,42 @@ def test_build_module_graph_records_oversized_source_without_parsing(tmp_path):
     assert unparseable == [{"path": "large.py", "reason": "file exceeds size limit"}]
 
 
+def test_build_module_graph_walks_the_repo_tree_only_once(tmp_path, monkeypatch):
+    # Real perf bug found via audit: the Java, Kotlin and C# pre-passes
+    # each called _iter_source_files(repo_path, ignored_paths) again -
+    # the exact same full os.walk (each with its own internal
+    # _nested_git_roots walk too) the main loop below them also performs -
+    # unconditionally, even for a repo with none of those languages, and
+    # never skipped by unchanged_modules (which only skips per-file
+    # parsing). Measured live: ~35% of a real scan's wall time spent
+    # re-walking for languages that aren't even present. One call is
+    # correct and sufficient; each pre-pass should filter the one shared
+    # list instead of re-walking the filesystem.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.py").write_text("def f():\n    return 1\n")
+    (repo / "b.java").write_text("package com.example;\nclass B {}\n")
+    (repo / "c.kt").write_text("package com.example\nclass C\n")
+    (repo / "d.cs").write_text("namespace Example { class D {} }\n")
+
+    from aletheore.scanner import graph as graph_module
+
+    real_iter_source_files = graph_module._iter_source_files
+    call_count = 0
+
+    def _counting_iter_source_files(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return real_iter_source_files(*args, **kwargs)
+
+    monkeypatch.setattr(graph_module, "_iter_source_files", _counting_iter_source_files)
+
+    modules, _graph, _unparseable = build_module_graph(repo)
+
+    assert call_count == 1
+    assert {m["path"] for m in modules} >= {"a.py", "b.java", "c.kt", "d.cs"}
+
+
 def test_build_module_graph_survives_invalid_utf8_in_one_file(tmp_path):
     """Regression test for docs/audits/Claude_Audit.md finding #17: every
     extractor decodes byte-slices with the plain .decode() (no errors=),

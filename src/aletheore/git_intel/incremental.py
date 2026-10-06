@@ -21,6 +21,7 @@ entry per distinct file ever touched alongside them.
 from __future__ import annotations
 
 import subprocess
+import tempfile
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -139,14 +140,22 @@ def stream_commit_touches(
         args += ["-n", str(max_commits)]
     args.append(rev_range)
 
-    proc = subprocess.Popen(
-        ["git", *args],
-        cwd=repo_path,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        errors="ignore",
-    )
+    # stderr goes to a temp file, not a PIPE: stdout is drained to completion
+    # before stderr is ever read, so a chatty stderr (>~64KB pipe buffer) would
+    # block git and deadlock this process against it.
+    stderr_file = tempfile.TemporaryFile(mode="w+", errors="ignore")
+    try:
+        proc = subprocess.Popen(
+            ["git", *args],
+            cwd=repo_path,
+            stdout=subprocess.PIPE,
+            stderr=stderr_file,
+            text=True,
+            errors="ignore",
+        )
+    except BaseException:
+        stderr_file.close()
+        raise
     assert proc.stdout is not None
 
     pending_header: tuple[str, str, str, datetime] | None = None
@@ -178,11 +187,14 @@ def stream_commit_touches(
     finally:
         proc.stdout.close()
         returncode = proc.wait()
+        stderr = ""
+        try:
+            stderr_file.seek(0)
+            stderr = stderr_file.read()
+        finally:
+            stderr_file.close()
 
     if returncode != 0:
-        stderr = proc.stderr.read() if proc.stderr else ""
-        if proc.stderr:
-            proc.stderr.close()
         if returncode < 0:
             raise GitLogStreamError(
                 f"git log {rev_range} was killed (likely out of memory) - this repository's "

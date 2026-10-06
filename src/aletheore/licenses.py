@@ -9,10 +9,12 @@ import urllib.request
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from pathlib import Path
+
 from xml.etree import ElementTree
 
 import certifi
 
+from aletheore.user_paths import user_home
 from aletheore.vulnerabilities import (
     _parse_cargo_pins,
     _parse_composer_pins,
@@ -56,7 +58,7 @@ LICENSE_FETCH_WALL_CLOCK_TIMEOUT_SECONDS = 30
 # invocations, not per-scan. 30 days is defensive against the rare
 # corrected-metadata case, not a sign this data actually changes on that
 # timescale.
-DEFAULT_LICENSE_CACHE_PATH = Path.home() / ".cache" / "aletheore" / "license-cache.json"
+DEFAULT_LICENSE_CACHE_PATH = user_home() / ".cache" / "aletheore" / "license-cache.json"
 _LICENSE_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60
 
 # Same reasoning as vulnerabilities.py: certifi's CA bundle explicitly, since a

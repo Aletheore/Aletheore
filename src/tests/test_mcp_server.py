@@ -1504,3 +1504,32 @@ async def test_aletheore_index_reads_the_evidence_only_after_it_holds_the_write_
         await server.call_tool("aletheore_index", {})
 
     assert held_when_read == [True], "evidence was read without holding the write lock"
+
+
+@pytest.mark.asyncio
+async def test_aletheore_changes_names_the_actually_corrupt_snapshot(tmp_path):
+    from aletheore.history import list_snapshots, save_snapshot
+    from tests.air_fixtures import minimal_air_evidence
+
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+    save_snapshot(minimal_air_evidence(), repo)
+    save_snapshot(minimal_air_evidence(), repo)
+    snapshots = list_snapshots(repo)
+    snapshots[-1].write_text("{not json")
+
+    result = await server.call_tool("aletheore_changes", {})
+
+    message = tool_result_body(result)["result"]["message"]
+    assert str(snapshots[-1]) in message
+    assert message.startswith("most recent snapshot")
+
+
+@pytest.mark.asyncio
+async def test_aletheore_search_rejects_empty_path_glob_with_structured_error(tmp_path):
+    repo = make_repo_with_files(tmp_path, {"a.py": "TARGET\n"})
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_search", {"pattern": "TARGET", "path_glob": ""})
+
+    assert "path_glob" in tool_result_body(result)["result"]["error"]
