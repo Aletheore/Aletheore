@@ -551,6 +551,98 @@ def release_llm_spend_reservation(
         conn.commit()
 
 
+def upsert_pending_llm_spend_reservation(
+    dsn: str, reservation_key: str, installation_id: int, feature: str,
+    reserve_usd: float, topup_usd: float,
+) -> None:
+    """Persists one _IncrementalSpendBudget instance's current total
+    outstanding reservation, keyed by its own reservation_key (a UUID
+    generated once per instance, not per call). Overwrites rather than
+    accumulates: `reserve_usd`/`topup_usd` are always the instance's full
+    current _pending_reserve_usd/_pending_topup_usd, mirroring the
+    in-memory state exactly, so this is always safe to call again before
+    the previous write's effect was ever read.
+
+    Real purpose: if the owning process is killed (OOM-kill, SIGKILL, host
+    crash) between this call and the matching clear_pending_llm_spend_
+    reservation, this row is the only record that a real balance
+    deduction (reserve_llm_spend) happened with nothing yet to true it up
+    - see sweep_stale_llm_spend_reservations, which is what actually
+    releases it back."""
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO llm_spend_reservations
+                    (reservation_key, installation_id, feature, reserve_usd, topup_usd, updated_at)
+                VALUES (%s, %s, %s, %s, %s, now())
+                ON CONFLICT (reservation_key) DO UPDATE
+                SET reserve_usd = EXCLUDED.reserve_usd,
+                    topup_usd = EXCLUDED.topup_usd,
+                    updated_at = now()
+                """,
+                (reservation_key, installation_id, feature, reserve_usd, topup_usd),
+            )
+        conn.commit()
+
+
+def clear_pending_llm_spend_reservation(dsn: str, reservation_key: str) -> None:
+    """Removes the persisted row once the matching in-memory reservation
+    actually resolved (record_usage/on_call_failed/
+    release_unused_reservation) - the normal, non-crash path where Python
+    code ran to completion. Idempotent: a key with no row (never
+    reserved, or already cleared) is a no-op, same contract as the
+    in-memory methods this mirrors."""
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM llm_spend_reservations WHERE reservation_key = %s",
+                (reservation_key,),
+            )
+        conn.commit()
+
+
+def sweep_stale_llm_spend_reservations(dsn: str, max_age_seconds: int) -> int:
+    """Finds every persisted reservation row older than max_age_seconds -
+    one no in-process code can still be legitimately running to resolve,
+    provided max_age_seconds comfortably exceeds every real caller's own
+    job_timeout (see run_llm_spend_reservation_sweep_job) - and releases
+    each one's outstanding balance back via release_llm_spend_reservation,
+    the same primitive on_call_failed/release_unused_reservation already
+    use for the in-process case. This is what actually closes the
+    hard-kill gap _IncrementalSpendBudget's own docstring describes:
+    reserve_llm_spend is an immediate real DB balance deduction, so a
+    reservation whose owning process was killed before it could call
+    on_call_failed has no other path back to the balance.
+
+    Each row is released and deleted one at a time rather than in bulk so
+    a failure partway through still leaves every row already processed
+    correctly resolved, instead of re-attempting (and double-releasing)
+    them on the next sweep tick."""
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute(
+                """
+                SELECT id, installation_id, reserve_usd, topup_usd
+                FROM llm_spend_reservations
+                WHERE updated_at < now() - make_interval(secs => %s)
+                """,
+                (max_age_seconds,),
+            )
+            stale = cur.fetchall()
+
+    for row in stale:
+        release_llm_spend_reservation(
+            dsn, row["installation_id"], float(row["reserve_usd"]), float(row["topup_usd"])
+        )
+        with get_db_pool(dsn).connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM llm_spend_reservations WHERE id = %s", (row["id"],))
+            conn.commit()
+
+    return len(stale)
+
+
 def insert_audit_report(
     dsn: str,
     installation_id: int,
@@ -1810,6 +1902,25 @@ def record_evidence_packet_cache_hit(dsn: str, row_id: int) -> None:
                 (row_id,),
             )
         conn.commit()
+
+
+def delete_expired_evidence_packet_cache(dsn: str, retention_days: int = 30) -> int:
+    """Bounds how long an AIRview writing-stage result sits in this table -
+    previously unbounded, since the only thing limiting a lookup's read was
+    list_recent_evidence_packet_cache_rows' LIMIT 200, which caps what one
+    query returns, not what the table retains. Same gap, same fix shape, as
+    delete_expired_flash_review_cache's own docstring describes for its
+    structural sibling table."""
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM evidence_packet_cache "
+                "WHERE created_at < now() - make_interval(days => %s)",
+                (retention_days,),
+            )
+            deleted = cur.rowcount
+        conn.commit()
+    return deleted
 
 
 def insert_flash_review_cache_row(

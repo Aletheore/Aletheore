@@ -346,3 +346,20 @@ async def test_one_repo_being_rate_limited_does_not_block_another_repo_on_the_sa
 
     assert blocked.status_code == 429
     assert allowed.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_successful_embeddings_request_records_token_use(pool):
+    token = "touch-token"
+    await _installation_with_token(pool, 9020, "air", token)
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    before = await pool.fetchval("SELECT last_used_at FROM api_tokens WHERE token_hash = $1", token_hash)
+    assert before is None
+
+    with patch("app_server.embeddings_api.get_jina_client", return_value=_fake_jina(count=1)), \
+         patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test"}):
+        response = await _post(pool, token, ["a"])
+
+    assert response.status_code == 200
+    after = await pool.fetchval("SELECT last_used_at FROM api_tokens WHERE token_hash = $1", token_hash)
+    assert after is not None

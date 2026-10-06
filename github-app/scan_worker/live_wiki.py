@@ -1094,6 +1094,8 @@ def _cached_subsystem_record(
     cache_lookup: Callable[[dict], tuple[dict, str] | None] | None,
     model_used: str,
     fetch_line_count: Callable[[str], int | None] | None,
+    *,
+    prior_record: dict | None = None,
 ) -> dict | None:
     """Same cache-hit check build_subsystem_record performs internally,
     split out so generate_subsystems can decide which clusters actually
@@ -1102,6 +1104,14 @@ def _cached_subsystem_record(
     single-item call path. Returns a fully-built record on a verified
     cache hit, else None (cache disabled, miss, or a hit that no longer
     reverifies against current evidence).
+
+    prior_record: same meaning as build_subsystem_record's own parameter -
+    spliced onto the cached files the same way (_splice_prior_files), so a
+    file skipped at cache-write time doesn't lose its already-generated
+    detail page on every subsequent cache hit. Real bug found via audit:
+    this function used to skip the splice entirely, silently dropping
+    `detail` for any blank-role file on every cache hit during an
+    incremental update, with nothing that run to put it back.
     """
     if cache_lookup is None:
         return None
@@ -1126,7 +1136,9 @@ def _cached_subsystem_record(
         "subsystem_id": str(cluster["id"]),
         "name": name,
         "description": description,
-        "files": _sanitize_written_files(parsed.get("files"), brief["files"]),
+        "files": _splice_prior_files(
+            _sanitize_written_files(parsed.get("files"), brief["files"]), prior_record
+        ),
         "diagram_mermaid": build_subsystem_diagram(evidence, cluster),
     }
 
@@ -1192,8 +1204,10 @@ def generate_subsystems(
         if cluster is None:
             return None
         name = names[brief["cluster_id"]]
+        prior_record = prior_records.get(str(brief["cluster_id"])) if prior_records else None
         cached_record = _cached_subsystem_record(
-            evidence, cluster, brief, name, cache_lookup, model_used, fetch_line_count
+            evidence, cluster, brief, name, cache_lookup, model_used, fetch_line_count,
+            prior_record=prior_record,
         )
         return brief, cluster, name, cached_record
 

@@ -3637,6 +3637,16 @@ def build_module_graph(
     has_rust_crate_root = _rust_has_any_crate_root(repo_path)
     python_source_roots = _python_source_roots(repo_path)
 
+    # Walked once, here, and reused by every pre-pass below plus the main
+    # loop - these used to each call _iter_source_files(repo_path,
+    # ignored_paths) again independently, the exact same full os.walk
+    # (each with its own internal _nested_git_roots walk too), every scan,
+    # even for a repo with none of that pre-pass's language present and
+    # never skipped by unchanged_modules (which only skips per-file
+    # parsing). Measured ~35% of a real scan's wall time spent re-walking
+    # for languages that aren't even present (audit finding, 2026-10-05).
+    all_source_paths = list(_iter_source_files(repo_path, ignored_paths))
+
     # Java has no single repo-root config naming a module prefix (no go.mod, no
     # Cargo.toml equivalent) - the source root (src/main/java, a bare src/, or the
     # repo root itself) has to be inferred from what each file's own package
@@ -3660,7 +3670,7 @@ def build_module_graph(
     # stays roughly one file's tree, not every file's.
     pre_parser = Parser()
     pre_parser.language = JAVA_LANGUAGE
-    for path in _iter_source_files(repo_path, ignored_paths):
+    for path in all_source_paths:
         if path.suffix != ".java":
             continue
         try:
@@ -3702,7 +3712,7 @@ def build_module_graph(
     kotlin_source_roots: list[Path] = []
     kotlin_pre_parser = Parser()
     kotlin_pre_parser.language = KOTLIN_LANGUAGE
-    for path in _iter_source_files(repo_path, ignored_paths):
+    for path in all_source_paths:
         if path.suffix not in (".kt", ".kts"):
             continue
         try:
@@ -3738,7 +3748,7 @@ def build_module_graph(
     # finding 15 memory-peak reason.
     cs_pre_parser = Parser()
     cs_pre_parser.language = CSHARP_LANGUAGE
-    for path in _iter_source_files(repo_path, ignored_paths):
+    for path in all_source_paths:
         if path.suffix != ".cs":
             continue
         try:
@@ -3783,7 +3793,7 @@ def build_module_graph(
     # imports with, by design (see the design doc).
     paths_needing_parse: list[Path] = []
 
-    for path in _iter_source_files(repo_path, ignored_paths):
+    for path in all_source_paths:
         rel_path = _rel(repo_path, path)
 
         if unchanged_modules is not None and rel_path in unchanged_modules:
