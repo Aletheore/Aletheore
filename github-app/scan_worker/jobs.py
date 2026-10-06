@@ -3294,9 +3294,9 @@ def _run_flash_review(
         )
     elif kept:
         # Grounding accepted findings (kept > 0), but the independent
-        # second-model verification step then rejected every one of them
+        # second-model cross-file check then rejected every one of them
         # before any was shown to a user (see flash_review.py's
-        # _verify_findings_with_second_model) - distinct from the elif
+        # _check_findings_against_whole_diff) - distinct from the elif
         # below, where grounding itself found nothing. Checked first: kept
         # > 0 implies proposed > 0 too, and this is the more specific,
         # more accurate diagnosis of the two.

@@ -2287,9 +2287,9 @@ def _rank_findings_with_severity(
     (Critical/High/Medium/Low) - the triage step none of per_file_completeness's
     isolated per-file generation calls could do on their own, since each of
     those runs blind to what every other file's call found. Deliberately one
-    call over the whole set, not N parallel calls like
-    _verify_findings_with_second_model - ranking is inherently relative, so
-    it needs to see everything at once to be coherent.
+    call over the whole set, not one call per finding - ranking is
+    inherently relative, so it needs to see everything at once to be
+    coherent.
 
     Built because per_file_completeness (PR #762) working as intended - Aletheore
     surfacing far more real findings per PR than before, and more than any
