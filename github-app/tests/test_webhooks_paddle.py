@@ -2316,6 +2316,47 @@ async def test_transaction_completed_skips_topup_credit_when_bundled_with_anothe
 
 
 @pytest.mark.asyncio
+async def test_transaction_completed_skips_topup_credit_when_bundled_with_malformed_item(pool, caplog):
+    # Same bundling guard as
+    # test_transaction_completed_skips_topup_credit_when_bundled_with_another_item
+    # above, but the second line item is malformed (None) rather than a
+    # well-formed dict. _line_items() drops malformed entries before the
+    # "exactly one item" count is taken, so a naive post-filter count would
+    # see len(items) == 1 and over-credit the full transaction total even
+    # though the payload actually carried 2 raw items and the dropped one
+    # could have carried real cost. Proves the guard is judged against the
+    # raw, pre-filter item count instead.
+    installation_id = 1916
+    await upsert_installation(pool, installation_id, "acme")
+    payload = {
+        "event_id": "evt_topup_1916",
+        "event_type": "transaction.completed",
+        "data": {
+            "id": "txn_topup_wire_1916",
+            "customer_id": "ctm_test_1916",
+            "custom_data": {"installation_token": _installation_token(installation_id)},
+            "items": [
+                {"price": {"id": CREDIT_TOPUP_PRICE_ID}, "quantity": 5},
+                None,
+            ],
+            "details": {"totals": {"total": "500"}},
+            "billed_at": "2026-09-01T12:00:00Z",
+        },
+    }
+
+    with caplog.at_level(logging.WARNING):
+        await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    row = await pool.fetchrow(
+        "SELECT topup_credit_balance_usd, balance_epoch FROM installations WHERE installation_id = $1",
+        installation_id,
+    )
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(0.00)
+    assert row["balance_epoch"] == 0
+    assert "bundled with other line items" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_transaction_completed_topup_is_independent_of_referral_commission(pool):
     # Proves the topup branch isn't skipped by the referral early-return
     # for unreferred transactions (the common case), since this

@@ -562,6 +562,17 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
     resulting commission to that installation's affiliate.
     """
     items = _line_items(data)
+    # Raw (pre-filter) count of whatever `items` the payload actually carried,
+    # malformed entries included. The "exactly one item" bundling guard below
+    # must be judged against this, not against `items` (which _line_items has
+    # already dropped malformed entries from) - otherwise a payload shaped
+    # like [{a real topup item}, None] (2 raw items, 1 malformed) collapses to
+    # len(items) == 1, passes the guard, and gets auto-credited for the full
+    # transaction total even though a second, unparseable line item could have
+    # carried real cost. Falls back to len(items) when `items` itself isn't a
+    # list, matching _line_items' own "non-list -> []" handling.
+    raw_items = data.get("items")
+    raw_item_count = len(raw_items) if isinstance(raw_items, list) else len(items)
     topup_item = next(
         (item for item in items if (item.get("price") or {}).get("id") in ACCEPTED_CREDIT_TOPUP_PRICE_IDS),
         None,
@@ -618,7 +629,7 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
         # against - skip and log instead of guessing.
         transaction_id = data.get("id")
         totals = (data.get("details") or {}).get("totals") or {}
-        if len(items) != 1:
+        if raw_item_count != 1:
             logger.warning(
                 "credit topup transaction.completed bundled with other line items, "
                 "skipping to avoid over-crediting: %s",
