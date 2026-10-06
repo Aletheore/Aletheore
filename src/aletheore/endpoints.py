@@ -1403,6 +1403,81 @@ def _apply_rails_module_prefix(to_value: str, module_prefix: list[str]) -> str:
     return "/".join([*module_prefix, controller_part]) + "#" + action
 
 
+def _rails_enclosing_url_prefix(call_node: Node, source: bytes) -> list[str]:
+    """Every namespace/scope block enclosing call_node that affects the
+    real URL path, outermost first - the sibling of
+    _rails_enclosing_module_prefix, which deliberately tracks the opposite
+    half (confirmed real bug: nothing composed this half into `path`,
+    only the module half into `handler`, so a route nested in namespace/
+    scope reported a confidently wrong, unprefixed path while claiming
+    unresolved: False).
+
+    `namespace :x do` affects both halves, using :x for the URL too unless
+    overridden by its own `path:` option (`namespace :api, path: "v2" do`
+    - real, documented Rails syntax: module stays Api::, URL uses "v2").
+    A bare `scope "/logs" do` or `scope path: "..." do` affects only the
+    URL. `scope module: "..." do` with no `path:` affects only the module
+    and contributes nothing here - mirrors _rails_enclosing_module_prefix's
+    own reasoning for why a bare scope must not contribute there."""
+    segments: list[str] = []
+    node = call_node.parent
+    while node is not None:
+        if node.type == "do_block":
+            enclosing_call = node.parent
+            if enclosing_call is not None and enclosing_call.type == "call":
+                method_node = enclosing_call.child_by_field_name("method")
+                block_args = enclosing_call.child_by_field_name("arguments")
+                if method_node is not None and block_args is not None:
+                    block_method = source[method_node.start_byte : method_node.end_byte].decode()
+                    path_override = None
+                    for arg in block_args.named_children:
+                        if arg.type != "pair":
+                            continue
+                        key = arg.child_by_field_name("key")
+                        value = arg.child_by_field_name("value")
+                        if (
+                            key is not None
+                            and key.type == "hash_key_symbol"
+                            and source[key.start_byte : key.end_byte].decode() == "path"
+                            and value is not None
+                            and value.type == "string"
+                        ):
+                            path_override = _ruby_string_content(value, source)
+                    segment = None
+                    if block_method == "namespace":
+                        if path_override is not None:
+                            segment = path_override
+                        else:
+                            first = next(
+                                (a for a in block_args.named_children if a.type == "simple_symbol"),
+                                None,
+                            )
+                            if first is not None:
+                                segment = source[first.start_byte : first.end_byte].decode().lstrip(":")
+                    elif block_method == "scope":
+                        if path_override is not None:
+                            segment = path_override
+                        else:
+                            first_string = next(
+                                (a for a in block_args.named_children if a.type == "string"), None
+                            )
+                            if first_string is not None:
+                                segment = _ruby_string_content(first_string, source)
+                    if segment:
+                        segments.append(segment)
+        node = node.parent
+    segments.reverse()
+    return segments
+
+
+def _apply_rails_url_prefix(path: str, url_prefix: list[str]) -> str:
+    cleaned = [s.strip("/") for s in url_prefix if s.strip("/")]
+    if not cleaned:
+        return path
+    tail = path.strip("/")
+    return "/".join([*cleaned, tail]) if tail else "/".join(cleaned)
+
+
 def _extract_rails_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
@@ -1418,10 +1493,11 @@ def _extract_rails_routes(root: Node, source: bytes, rel_path: str) -> list[dict
                     )
                     if to_value is not None and path is not None:
                         module_prefix = _rails_enclosing_module_prefix(n, source)
+                        url_prefix = _rails_enclosing_url_prefix(n, source)
                         entries.append(
                             {
                                 "method": "GET" if method_name == "root" else method_name.upper(),
-                                "path": path,
+                                "path": _apply_rails_url_prefix(path, url_prefix),
                                 "framework": "rails",
                                 "file": rel_path,
                                 "line": n.start_point[0] + 1,
