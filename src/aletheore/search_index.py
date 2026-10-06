@@ -1594,13 +1594,41 @@ def build_index(
                 [chunks[0]["text"]], repo_id=repo, allow_hosted=allow_hosted
             )
             current_dimension = len(probe_vectors[0])
+            # The probe above already paid to embed chunks[0] under
+            # whatever provider is live right now. Seed `fresh` with that
+            # vector so that if a provider mismatch is found below, the
+            # "missing" re-embed excludes chunks[0] instead of paying for
+            # it a second time - the zero-stale sibling of the
+            # fresh-and-missing case just below, which already avoids
+            # re-embedding chunks that got embedded above. Without this,
+            # the "lost the provider, nothing edited" rebuild (stale empty)
+            # embedded chunks[0]'s text twice: once here, once again via
+            # the elif missing: full re-embed.
+            fresh = {chunks[0]["chunk_hash"]: probe_vectors[0]}
         reused_dimensions = {len(vector) for vector in reusable.values()}
         if reused_dimensions != {current_dimension} or reusable_embedder != current_embedder:
             reusable = {}
-            stale = chunks
-            fresh, current_embedder = _embed_stale_by_hash(
-                stale, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress
-            )
+            # The chunks already embedded above used the current provider, so
+            # only the chunks that were being reused need embedding now -
+            # re-embedding everything pays (metered, for hosted) twice for
+            # the stale ones.
+            missing = [chunk for chunk in chunks if chunk["chunk_hash"] not in fresh]
+            if fresh and missing:
+                extra, extra_embedder = _embed_stale_by_hash(
+                    missing, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress
+                )
+                if extra_embedder == current_embedder:
+                    fresh = {**fresh, **extra}
+                else:
+                    # Provider changed again mid-rebuild: the two halves are
+                    # not comparable, so redo everything with one provider.
+                    fresh, current_embedder = _embed_stale_by_hash(
+                        chunks, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress
+                    )
+            elif missing:
+                fresh, current_embedder = _embed_stale_by_hash(
+                    chunks, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress
+                )
 
     rows = [
         {
