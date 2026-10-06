@@ -2863,8 +2863,9 @@ def test_audit_exits_cleanly_when_consent_prompt_has_no_stdin(tmp_path):
     with patch("aletheore.cli.select_adapter", return_value=fake_adapter):
         result = runner.invoke(app, ["audit", str(tmp_path)], input="")
 
-    assert result.exit_code == 1
-    assert "consent is required" in result.output
+    # Closed stdin is treated as "no": nothing is sent, and no EOFError escapes.
+    assert result.exit_code == 0
+    assert "no data was sent" in result.output
     assert not isinstance(result.exception, EOFError)
     fake_adapter.invoke.assert_not_called()
 

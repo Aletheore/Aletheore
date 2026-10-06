@@ -3,7 +3,13 @@ import sys
 
 import pytest
 
-from aletheore.credentials import clear_api_key, get_api_key, has_api_key, save_api_token
+from aletheore.credentials import (
+    _restrict_windows_acl,
+    clear_api_key,
+    get_api_key,
+    has_api_key,
+    save_api_token,
+)
 
 # POSIX-only: Windows has no fchmod (skipped there entirely, see
 # _locked_rw_credentials_file) and st_mode's owner/group/other bits don't
@@ -269,3 +275,37 @@ def test_clear_api_key_repairs_existing_file_permissions(tmp_path):
 def test_clear_api_key_returns_false_when_nothing_to_clear(tmp_path):
     path = tmp_path / "credentials.json"
     assert clear_api_key("aletheore-managed-audit", path) is False
+
+
+def test_restrict_windows_acl_uses_getlogin_when_available(tmp_path, monkeypatch):
+    monkeypatch.setattr("os.getlogin", lambda: "realuser")
+    monkeypatch.setattr("shutil.which", lambda name: "/fake/icacls")
+    calls = []
+    monkeypatch.setattr("subprocess.run", lambda args, **kw: calls.append(args))
+    _restrict_windows_acl(tmp_path / "credentials.json")
+    assert calls and "realuser:F" in calls[0]
+
+
+def test_restrict_windows_acl_falls_back_to_username_env_when_getlogin_fails(tmp_path, monkeypatch):
+    def raise_oserror():
+        raise OSError("no controlling terminal")
+
+    monkeypatch.setattr("os.getlogin", raise_oserror)
+    monkeypatch.setenv("USERNAME", "envuser")
+    monkeypatch.setattr("shutil.which", lambda name: "/fake/icacls")
+    calls = []
+    monkeypatch.setattr("subprocess.run", lambda args, **kw: calls.append(args))
+    _restrict_windows_acl(tmp_path / "credentials.json")
+    assert calls and "envuser:F" in calls[0]
+
+
+def test_restrict_windows_acl_is_a_noop_when_no_identity_available(tmp_path, monkeypatch):
+    def raise_oserror():
+        raise OSError("no controlling terminal")
+
+    monkeypatch.setattr("os.getlogin", raise_oserror)
+    monkeypatch.delenv("USERNAME", raising=False)
+    calls = []
+    monkeypatch.setattr("subprocess.run", lambda args, **kw: calls.append(args))
+    _restrict_windows_acl(tmp_path / "credentials.json")
+    assert calls == []
