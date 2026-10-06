@@ -4708,6 +4708,33 @@ def test_review_diff_drops_a_contradicted_finding_when_the_check_is_enabled(mock
 
 @patch("scan_worker.model_tiers.cross_file_check_adapter")
 @patch("scan_worker.flash_review.flash_review_generation_adapter")
+def test_review_diff_drops_a_contradicted_finding_on_a_cache_hit_too(mock_generation, mock_check_factory):
+    # Real gap found via audit: the cache-hit branch returned straight
+    # after grounding, never reaching cross_file_check_runs at all - only
+    # the fresh-generation path below it did. The packet cache is
+    # similarity-based, not exact-match, so a finding cached against one
+    # push could replay unchecked on a later, similar push whose CURRENT
+    # diff would otherwise get it dropped as contradicted. The generation
+    # adapter must never be called here (this is a cache hit).
+    cached_findings = [
+        {"file": "app.py", "line": 42, "issue": "Hardcoded secret"},
+        {"file": "app.py", "line": 43, "issue": "Unclosed handle"},
+    ]
+    _xfile_adapter(mock_check_factory, _xfile_verdicts(
+        (2, "CONTRADICTED", "app.py", "f = open('x')"),
+    ))
+    diff_text = "--- app.py ---\n@@ -40,2 +42,2 @@\n+key = \"sk-abc123\"\n+f = open('x')"
+
+    findings = review_diff(
+        diff_text, cache_lookup=lambda diff: cached_findings, cross_file_check_runs=1
+    )
+
+    mock_generation.assert_not_called()
+    assert [f["line"] for f in findings] == [42]
+
+
+@patch("scan_worker.model_tiers.cross_file_check_adapter")
+@patch("scan_worker.flash_review.flash_review_generation_adapter")
 def test_review_diff_never_calls_the_check_when_it_is_off(mock_generation, mock_check_factory):
     generation = MagicMock()
     generation.simple_completion.return_value = _pr_agent_yaml_response(_TWO_RAW_ISSUES)
