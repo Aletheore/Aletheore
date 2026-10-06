@@ -6436,6 +6436,96 @@ def test_flash_review_job_passes_referenced_symbol_context_to_review_diff(monkey
     assert "def _github_http_client() -> httpx.Client" in captured["referenced_symbol_context"]
 
 
+def test_run_flash_review_symbol_source_fetch_failure_does_not_abort_the_whole_review(monkeypatch):
+    # Real bug found via audit: _fetch_symbol_source's own fetch_file_content
+    # call was unguarded - a transient GitHub error (403 rate-limit, 5xx,
+    # network failure) on this single referenced-symbol lookup raised
+    # straight out, aborting the entire review (the outer try/except in
+    # run_flash_review_job catches it, correctly releasing the reservation,
+    # but the customer gets "review failed unexpectedly" instead of a real
+    # review). Every other I/O path in flash_review.py fails open and logs
+    # a warning; this proves _fetch_symbol_source now does too - the job
+    # must still reach review_diff, just with that one symbol's context
+    # missing rather than the whole run blowing up.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_pr_diff",
+        lambda *a, **k: "--- dashboard.py ---\n@@ -1,1 +75,1 @@\n+_github_http_client()\n",
+    )
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["dashboard.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs._latest_evidence_or_none",
+        lambda *a, **k: {
+            "repository": {
+                "modules": [
+                    {"path": "dashboard.py", "imports": ["admin.py"], "symbols": {"functions": [], "classes": []}},
+                    {
+                        "path": "admin.py",
+                        "imports": [],
+                        "symbols": {
+                            "functions": [
+                                {"name": "_github_http_client", "start_line": 2, "end_line": 3}
+                            ],
+                            "classes": [],
+                        },
+                    },
+                ],
+            },
+        },
+    )
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+
+    def _raising_fetch(client, token, repo_full_name, path, ref):
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr("scan_worker.jobs.fetch_file_content", _raising_fetch)
+    captured = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda diff_text, file_context="", **kwargs: captured.update(kwargs) or [],
+    )
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    from scan_worker.jobs import run_flash_review_job
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    # review_diff was reached at all - the job did not abort via the outer
+    # exception handler - and the one symbol whose fetch failed is simply
+    # absent rather than poisoning the whole context blob.
+    assert captured["referenced_symbol_context"] == ""
+
+
 def test_flash_review_job_never_passes_sibling_file_context_to_review_diff(monkeypatch):
     # Real, replicated benchmark finding (2026-09-19,
     # benchmarks/pr-review-benchmark/REPORT.md): sibling_file_context was

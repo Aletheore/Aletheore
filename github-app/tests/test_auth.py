@@ -812,3 +812,52 @@ async def test_callback_handles_github_200_with_error_body_gracefully(pool, monk
     # A clean redirect back to sign-in, not a raw 500.
     assert response.status_code == 307
     assert response.headers["location"] == "/auth/login"
+
+
+def test_unsign_returns_none_for_hmac_valid_but_undecodable_payload():
+    # A correctly signed payload that fails base64/zlib/JSON decoding raises
+    # itsdangerous.BadPayload (a sibling of BadSignature), e.g. after a
+    # payload-format change across a deploy.
+    from itsdangerous import URLSafeTimedSerializer
+
+    from app_server.auth import unsign_oauth_state
+
+    secret = "test-secret"
+    bad = (
+        URLSafeTimedSerializer(_signing_secret(secret))
+        .make_signer("itsdangerous")
+        .sign(b"!!not-base64!!")
+        .decode()
+    )
+    assert unsign_session_id(bad, secret) is None
+    bad_state = (
+        URLSafeTimedSerializer(_signing_secret(secret), salt="oauth-state")
+        .make_signer("itsdangerous")
+        .sign(b"!!not-base64!!")
+        .decode()
+    )
+    assert unsign_oauth_state(bad_state, secret) is None
+
+
+def test_exchange_code_turns_github_network_failure_into_oauth_error(monkeypatch):
+    from app_server import auth
+
+    class _Boom:
+        def post(self, *args, **kwargs):
+            raise httpx.ConnectError("github down")
+
+    monkeypatch.setattr(auth, "_github_oauth_http_client", lambda: _Boom())
+    with pytest.raises(auth.GitHubOAuthError):
+        auth._exchange_code_and_fetch_user("code", "id", "secret")
+
+
+def test_exchange_code_turns_github_5xx_into_oauth_error(monkeypatch):
+    from app_server import auth
+
+    class _Client:
+        def post(self, *args, **kwargs):
+            return httpx.Response(502, request=httpx.Request("POST", "https://github.com/x"))
+
+    monkeypatch.setattr(auth, "_github_oauth_http_client", lambda: _Client())
+    with pytest.raises(auth.GitHubOAuthError):
+        auth._exchange_code_and_fetch_user("code", "id", "secret")

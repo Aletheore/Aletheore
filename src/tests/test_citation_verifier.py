@@ -302,3 +302,22 @@ def test_citation_verification_section_unavailable_without_file_inventory(tmp_pa
 
     assert "Not available for this run" in section
     assert "could not be verified" not in section
+
+
+def test_extract_citations_ignores_dotted_hosts_and_ips_with_ports():
+    from aletheore.citation_verifier import extract_citations
+
+    text = (
+        "the endpoint example.com:8080 and api.internal.example.com:8443 and "
+        "10.0.0.1:5432 are infra; real cite `server/app.py:12` and README.md:3"
+    )
+    assert extract_citations(text) == [
+        {"file": "server/app.py", "line": 12},
+        {"file": "README.md", "line": 3},
+    ]
+
+
+def test_extract_citations_keeps_known_file_that_looks_like_a_host():
+    from aletheore.citation_verifier import extract_citations
+
+    assert extract_citations("see site.dev:7", {"site.dev"}) == [{"file": "site.dev", "line": 7}]

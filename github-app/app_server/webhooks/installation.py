@@ -174,15 +174,23 @@ async def handle_installation_event(
     if not repo_full_names:
         return
 
-    if queue is None:
-        from redis import Redis
-        from rq import Queue
+    def _enqueue_initial_scans() -> None:
+        scans_queue = queue
+        if scans_queue is None:
+            from redis import Redis
+            from rq import Queue
 
-        queue = Queue("scans", connection=Redis.from_url(redis_url))
-    for repo_full_name in repo_full_names:
-        queue.enqueue(
-            "scan_worker.jobs.run_initial_scan_job",
-            job_timeout=300,
-            installation_id=installation_id,
-            repo_full_name=repo_full_name,
-        )
+            scans_queue = Queue("scans", connection=Redis.from_url(redis_url))
+        for repo_full_name in repo_full_names:
+            scans_queue.enqueue(
+                "scan_worker.jobs.run_initial_scan_job",
+                job_timeout=300,
+                installation_id=installation_id,
+                repo_full_name=repo_full_name,
+            )
+
+    # One blocking Redis round-trip per repo, and an org install can name
+    # hundreds to thousands of them: run it off the shared event loop (same
+    # reasoning as the httpx call above) instead of stalling every other
+    # request this single-process server is handling.
+    await asyncio.to_thread(_enqueue_initial_scans)
