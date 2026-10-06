@@ -39,12 +39,13 @@ RUN apt-get update \
 #
 # Pinned to the exact versions this integration was evaluated against (see
 # docs/audits/deterministic_scanner_evaluation.md and pmd_scanner.py's
-# _NOISY_RULES, tuned against real 7.27.0 output), with a checksum verified
+# _NOISY_RULES, tuned against real 7.27.0 output; 7.28.0 verified to
+# report identical findings on Gson's main sources), with a checksum verified
 # against each release's own published artifact - Trivy and gosec both
 # publish a checksums.txt directly; PMD publishes only a GPG signature
 # (.asc) for this asset, so the pinned hash below was computed locally from
-# the real, currently-published pmd-dist-7.27.0-bin.zip rather than left
-# unverified.
+# the real, currently-published pmd-dist-7.28.0-bin.zip (and matching
+# GitHub's own published asset digest) rather than left unverified.
 RUN curl -sfL -o /tmp/trivy.tar.gz \
       https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz \
     && echo "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a  /tmp/trivy.tar.gz" | sha256sum -c - \
@@ -56,23 +57,16 @@ RUN curl -sfL -o /tmp/trivy.tar.gz \
     && tar -xzf /tmp/gosec.tar.gz -C /usr/local/bin gosec \
     && rm /tmp/gosec.tar.gz \
     && curl -sfL -o /tmp/pmd-dist.zip \
-      "https://github.com/pmd/pmd/releases/download/pmd_releases%2F7.27.0/pmd-dist-7.27.0-bin.zip" \
-    && echo "4ae396ffaf2b0d3ef0b73a10b2925e77066f73d57a4ce9078c60e7302bcddec9  /tmp/pmd-dist.zip" | sha256sum -c - \
+      "https://github.com/pmd/pmd/releases/download/pmd_releases%2F7.28.0/pmd-dist-7.28.0-bin.zip" \
+    && echo "f974ba571f7bc01c73fffe11bade25fbc1f438698f9e9c00e416e8d65e9fbac2  /tmp/pmd-dist.zip" | sha256sum -c - \
     && unzip -q /tmp/pmd-dist.zip -d /opt \
     && rm /tmp/pmd-dist.zip \
-    && ln -s /opt/pmd-bin-7.27.0/bin/pmd /usr/local/bin/pmd \
-    # jline-3.21.0.jar (org.jline:jline-remote-telnet) is PMD's bundled
-    # interactive-REPL telnet server, not something pmd_scanner.py's
-    # `pmd check` invocation ever starts - two real HIGH CVEs live in it
-    # (CVE-2026-56740, CVE-2026-56741, both DoS in the telnet server
-    # itself), caught by this repo's own container-security.yml image
-    # scan. Verified locally: `pmd check` runs and reports findings
-    # identically with this jar deleted (only a progressbar-rendering
-    # fallback warning changes, already the default behavior in a
-    # non-interactive container). Deleted outright rather than added to
-    # .trivyignore, since the safer fix here is removing genuinely unused
-    # attack surface, not just suppressing its detection.
-    && rm -f /opt/pmd-bin-7.27.0/lib/jline-3.21.0.jar
+    && ln -s /opt/pmd-bin-7.28.0/bin/pmd /usr/local/bin/pmd
+# PMD 7.28.0 bumps its bundled jsoup to 1.23.2, closing CVE-2026-75140
+# (memory exhaustion in XmlTreeBuilder; fixed in 1.23.2) that this repo's own
+# container-security.yml image scan flagged on 7.27.0's jsoup 1.23.1. It also
+# no longer ships jline-3.21.0.jar (org.jline:jline-remote-telnet, two HIGH
+# DoS CVEs), so the explicit delete that 7.27.0 needed is gone.
 
 RUN groupadd --system aletheore \
     && useradd --system --gid aletheore --home-dir /app --no-create-home aletheore \
