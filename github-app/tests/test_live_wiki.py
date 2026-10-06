@@ -31,6 +31,7 @@ from scan_worker.live_wiki import (
     _run_concurrently,
     _strip_unverified_lines,
     _splice_prior_files,
+    _cached_subsystem_record,
 )
 
 
@@ -579,6 +580,50 @@ def test_build_subsystem_record_still_caches_when_lookup_was_skipped():
     assert written_packet["cache_eligible"] is True
 
 
+def test_cached_subsystem_record_splices_prior_detail_on_cache_hit():
+    # Real bug found via audit: build_subsystem_record and
+    # _generate_subsystem_records_for_targets both splice the prior record's
+    # `detail` onto a blank file entry before returning (via
+    # _splice_prior_files) - but _cached_subsystem_record, the function
+    # generate_subsystems actually calls for a packet-cache hit, rebuilt
+    # `files` via _sanitize_written_files alone, with no splice step and no
+    # prior_record parameter at all. A file's already-generated reference
+    # page detail silently vanished on every cache hit during an
+    # incremental update, with no error and no recovery path that run.
+    evidence = make_evidence()
+    cluster = evidence["architecture"]["clusters"][0]
+    brief = _brief_for(evidence)
+    cached_output = {
+        "description": "Handles authentication via do_login in auth/login.py.",
+        "files": [
+            # Blank role - this file was in skip_files when this packet was cached.
+            {"path": "auth/login.py", "role": "", "key_symbols": []},
+            {"path": "auth/tokens.py", "role": "Issues tokens.", "key_symbols": []},
+        ],
+    }
+    cache_lookup = MagicMock(return_value=(cached_output, "deepseek-v4-pro"))
+    prior_record = {
+        "files": [
+            {
+                "path": "auth/login.py",
+                "role": "Login entry point.",
+                "key_symbols": [],
+                "detail": "# auth/login.py\nHandles login.",
+            },
+        ],
+    }
+
+    record = _cached_subsystem_record(
+        evidence, cluster, brief, "Authentication", cache_lookup, "deepseek-v4-pro", None,
+        prior_record=prior_record,
+    )
+
+    assert record is not None
+    login_entry = next(f for f in record["files"] if f["path"] == "auth/login.py")
+    assert login_entry["role"] == "Login entry point."
+    assert login_entry["detail"] == "# auth/login.py\nHandles login."
+
+
 def test_build_subsystem_record_without_cache_callables_is_unchanged():
     evidence = make_evidence()
     cluster = evidence["architecture"]["clusters"][0]
@@ -780,6 +825,49 @@ def test_generate_subsystems_incremental_filters_to_given_clusters():
 
     assert records == []
     naming_adapter.simple_completion.assert_not_called()
+
+
+def test_generate_subsystems_preserves_file_detail_through_a_cache_hit():
+    # End-to-end regression for the same bug as
+    # test_cached_subsystem_record_splices_prior_detail_on_cache_hit, but
+    # through generate_subsystems itself (the real entry point
+    # run_live_wiki_full_build_job/_maybe_update_live_wiki actually call) -
+    # proving the fix reaches the real incremental-update path, not just
+    # the unit-level function.
+    evidence = make_evidence()
+    naming_adapter = _adapter(json.dumps({"0": "Authentication"}))
+    writing_adapter = MagicMock()  # must never be called - this is a cache hit
+    cached_output = {
+        "description": "Handles authentication via do_login in auth/login.py.",
+        "files": [
+            {"path": "auth/login.py", "role": "", "key_symbols": []},
+            {"path": "auth/tokens.py", "role": "Issues tokens.", "key_symbols": []},
+        ],
+    }
+    cache_lookup = MagicMock(return_value=(cached_output, "deepseek-v4-pro"))
+    prior_records = {
+        "0": {
+            "files": [
+                {
+                    "path": "auth/login.py",
+                    "role": "Login entry point.",
+                    "key_symbols": [],
+                    "detail": "# auth/login.py\nHandles login.",
+                },
+            ],
+        },
+    }
+
+    records = generate_subsystems(
+        evidence, naming_adapter, writing_adapter,
+        cache_lookup=cache_lookup, prior_records=prior_records,
+        changed_files=["auth/tokens.py"],
+    )
+
+    writing_adapter.simple_completion.assert_not_called()
+    login_entry = next(f for f in records[0]["files"] if f["path"] == "auth/login.py")
+    assert login_entry["role"] == "Login entry point."
+    assert login_entry["detail"] == "# auth/login.py\nHandles login."
 
 
 def test_generate_subsystems_incremental_only_writes_changed_files_within_a_cluster():
