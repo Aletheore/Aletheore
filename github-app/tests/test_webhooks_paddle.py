@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from rq.exceptions import DuplicateJobError
 
 from app_server import paddle_ip_allowlist
 from app_server.affiliates import (
@@ -24,11 +25,13 @@ from app_server.auth import sign_checkout_installation_id
 from app_server.db import (
     add_installation_member,
     claim_free_to_paid_plan,
+    claim_paid_setup,
     claim_webhook_delivery,
     credit_extra_seat_purchase,
     credit_topup_purchase,
     get_extra_seats,
     get_installation,
+    release_paid_setup,
     reset_billing_period_credit,
     upsert_github_user_email,
     upsert_installation,
@@ -3070,6 +3073,108 @@ async def test_paid_setup_claim_is_released_when_the_gated_enqueue_fails(pool):
     await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=retry_queue)
 
     assert retry_queue.enqueue.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_release_paid_setup_does_not_clear_a_claim_retaken_after_it(pool):
+    """Flash Review HIGH finding: release_paid_setup used to unconditionally
+    NULL paid_setup_completed_at, with nothing tying the release to the
+    specific claim that caller made. If a second claim is retaken (e.g. by
+    a Paddle retry) in the window before the first (slow/failing) caller's
+    own release_paid_setup call actually runs, an unconditional release
+    would wipe out that NEWER claim's completion marker too - letting yet
+    another webhook delivery re-run the one-time build/attribution a second
+    time. The fix makes release_paid_setup a compare-and-set keyed on the
+    exact timestamp its own claim produced, so a release only ever clears
+    the claim it actually owns."""
+    await upsert_installation(pool, 213, "acme")  # defaults to plan='free'
+    # paid_setup_completed_at defaults to now() ("nothing pending") for a
+    # fresh row - only a genuine free->paid transition resets it to NULL,
+    # which is what makes claim_paid_setup claimable below.
+    assert await claim_free_to_paid_plan(pool, 213, "air") is True
+
+    first_claimed_at = await claim_paid_setup(pool, 213)
+    assert first_claimed_at is not None
+
+    # The first claim is released (as if its own gated work already failed
+    # and this ran), and a second call re-takes the claim before the first
+    # caller's own release call executes.
+    await release_paid_setup(pool, 213, first_claimed_at)
+    second_claimed_at = await claim_paid_setup(pool, 213)
+    assert second_claimed_at is not None
+    assert second_claimed_at != first_claimed_at
+
+    # The first caller's release call finally runs now, holding only its
+    # OWN (now-stale) timestamp. It must not clear the second claim.
+    await release_paid_setup(pool, 213, first_claimed_at)
+
+    row = await pool.fetchrow(
+        "SELECT paid_setup_completed_at FROM installations WHERE installation_id = $1", 213
+    )
+    assert row["paid_setup_completed_at"] == second_claimed_at
+
+
+class _DedupingFakeQueue:
+    """Mimics rq's real unique=True/job_id enqueue behavior (save_unique_job)
+    closely enough to test the dedup fix: raises DuplicateJobError when a
+    job with the given id has already been created and not removed,
+    otherwise records the enqueue and succeeds. `fail` is an optional
+    predicate used to simulate a transient failure (e.g. a Redis blip) on
+    one specific call without disturbing the dedup bookkeeping."""
+
+    def __init__(self, fail=None):
+        self._created_job_ids = []
+        self._fail = fail or (lambda *a, **k: False)
+        self.enqueue = MagicMock(side_effect=self._enqueue)
+
+    def _enqueue(self, name, job_timeout=None, installation_id=None, job_id=None, unique=False, **kwargs):
+        if self._fail(name, job_id):
+            raise ConnectionError("redis down")
+        if unique and job_id in self._created_job_ids:
+            raise DuplicateJobError(f"Job with ID '{job_id}' already exists")
+        if job_id is not None:
+            self._created_job_ids.append(job_id)
+
+
+@pytest.mark.asyncio
+async def test_retry_after_partial_enqueue_failure_does_not_duplicate_the_wiki_job(pool):
+    """Flash Review MEDIUM finding: the Live Wiki and Docs enqueues aren't
+    atomic. If the wiki enqueue succeeds and the docs enqueue then fails (a
+    Redis blip), the claim is released and the handler re-raises so Paddle
+    retries - and that retry used to call BOTH enqueues again from scratch,
+    including the wiki build that had already succeeded: a duplicate full
+    AIRview build with real LLM spend. The fix gives each enqueue a stable,
+    installation-scoped job_id with unique=True, so the retry's re-enqueue
+    of the already-succeeded wiki job is a safe no-op instead of a second
+    job."""
+    installation_id = 214
+    await upsert_installation(pool, installation_id, "acme")
+    payload = _subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", installation_id)
+
+    # First delivery: wiki enqueue succeeds, docs enqueue fails once.
+    queue = _DedupingFakeQueue(fail=lambda name, job_id: "docs_full_build" in name)
+    with pytest.raises(ConnectionError):
+        await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=queue)
+
+    assert queue._created_job_ids == [f"paid-setup-wiki-{installation_id}"]
+
+    # Paddle retries the same event against the same queue (the docs
+    # failure above released the claim, so this retry re-runs the gated
+    # block). The wiki enqueue is attempted again with the same job_id, but
+    # must not create a second job; the docs enqueue, which never actually
+    # succeeded, must now go through for real.
+    queue._fail = lambda *a, **k: False
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=queue)
+
+    wiki_job_id = f"paid-setup-wiki-{installation_id}"
+    docs_job_id = f"paid-setup-docs-{installation_id}"
+    assert queue._created_job_ids.count(wiki_job_id) == 1, "wiki build was duplicated on retry"
+    assert queue._created_job_ids.count(docs_job_id) == 1
+    # Four enqueue() calls total (wiki+docs on the first delivery, wiki+docs
+    # on the retry) - the wiki call on the retry raises DuplicateJobError
+    # and is caught as a no-op, which is exactly what the job_id assertions
+    # above confirm.
+    assert queue.enqueue.call_count == 4
 
 
 @pytest.mark.asyncio

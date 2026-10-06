@@ -436,7 +436,10 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
     # This claim is what actually decides whether to run it, so a
     # crash-then-retry still runs it exactly once instead of silently
     # skipping it forever.
-    should_run_paid_setup = plan != "free" and await claim_paid_setup(pool, installation_id)
+    paid_setup_claimed_at = (
+        await claim_paid_setup(pool, installation_id) if plan != "free" else None
+    )
+    should_run_paid_setup = paid_setup_claimed_at is not None
 
     if should_run_paid_setup:
         try:
@@ -487,22 +490,53 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
                     from rq import Queue
 
                     queue = Queue("scans", connection=Redis.from_url(redis_url))
-                queue.enqueue(
-                    "scan_worker.jobs.run_live_wiki_full_build_for_installation_job",
-                    job_timeout=60,
-                    installation_id=installation_id,
-                )
-                queue.enqueue(
-                    "scan_worker.jobs.run_live_docs_full_build_for_installation_job",
-                    job_timeout=60,
-                    installation_id=installation_id,
-                )
+
+                # Deterministic, installation-scoped job_id + unique=True:
+                # real bug this closes - the two enqueues below aren't
+                # atomic, so if the wiki enqueue succeeds and the docs
+                # enqueue then fails (a Redis blip), the except block below
+                # releases the claim and re-raises so Paddle retries. That
+                # retry used to call BOTH enqueues again from scratch,
+                # including the wiki build that had already succeeded -
+                # a duplicate full AIRview build with real LLM spend. With a
+                # stable job_id and unique=True, rq's atomic check-and-push
+                # (save_unique_job) raises DuplicateJobError instead of
+                # re-queueing a second job under the same id, so the retry's
+                # re-enqueue of the already-succeeded wiki build is a safe
+                # no-op and only the docs build (which never actually
+                # queued) runs for real.
+                from rq.exceptions import DuplicateJobError
+
+                try:
+                    queue.enqueue(
+                        "scan_worker.jobs.run_live_wiki_full_build_for_installation_job",
+                        job_timeout=60,
+                        installation_id=installation_id,
+                        job_id=f"paid-setup-wiki-{installation_id}",
+                        unique=True,
+                    )
+                except DuplicateJobError:
+                    pass
+                try:
+                    queue.enqueue(
+                        "scan_worker.jobs.run_live_docs_full_build_for_installation_job",
+                        job_timeout=60,
+                        installation_id=installation_id,
+                        job_id=f"paid-setup-docs-{installation_id}",
+                        unique=True,
+                    )
+                except DuplicateJobError:
+                    pass
         except Exception:
             # The claim above is already committed. If the work it gates
             # fails (Redis/DB blip), a Paddle retry would find the claim
             # consumed and "succeed" without ever running the one-time
-            # build/attribution. Hand the claim back so the retry reruns it.
-            await release_paid_setup(pool, installation_id)
+            # build/attribution. Hand the claim back so the retry reruns
+            # it - compare-and-set on the exact timestamp this call's own
+            # claim set, so a newer claim that raced past this failure
+            # isn't the one that gets released (see release_paid_setup's
+            # docstring).
+            await release_paid_setup(pool, installation_id, paid_setup_claimed_at)
             raise
 
     # payment_failed and subscription_canceled emails, gated on an actual
