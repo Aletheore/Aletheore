@@ -27,7 +27,7 @@ class Settings:
     email_reply_to_address: str
     affiliate_admin_token: str | None
     pushover_api_token: str | None
-    sentry_dsn: str
+    sentry_dsn: str | None
     sentry_environment: str
 
 
@@ -141,7 +141,7 @@ def get_settings() -> Settings:
         pushover_api_token=os.environ.get("PUSHOVER_API_TOKEN", "").strip() or None,
         # Optional, not required: empty means init_sentry() (sentry_config.py)
         # no-ops - local dev, tests, and CI need zero Sentry configuration.
-        sentry_dsn=os.environ.get("SENTRY_DSN", "").strip(),
+        sentry_dsn=os.environ.get("SENTRY_DSN", "").strip() or None,
         # Only meaningfully read when sentry_dsn is also set.
         sentry_environment=os.environ.get("SENTRY_ENVIRONMENT", "production").strip()
         or "production",

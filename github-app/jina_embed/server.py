@@ -134,6 +134,16 @@ app = FastAPI()
 
 @app.exception_handler(Exception)
 async def handle_unexpected_exception(request: Request, exc: Exception) -> JSONResponse:
+    if isinstance(exc, ClientDisconnect):
+        # Same reasoning as app_server/main.py's handler: the caller (app_server
+        # or scan_worker) hung up mid-request - realistic here given /embed_batch
+        # can take 24-38+ minutes per this module's own docstring. Nothing on
+        # our side failed, so this isn't a bug alert or a 5xx; it was previously
+        # logged as a full ERROR-level traceback indistinguishable from a crash.
+        logger.warning(
+            "client disconnected before the request finished", extra={"path": request.url.path}
+        )
+        return JSONResponse(status_code=499, content={"detail": "client closed request"})
     # No alerting at all before this - a crash here was invisible beyond
     # stdout logs no one was watching.
     logger.exception("unhandled exception in request", extra={"path": request.url.path})

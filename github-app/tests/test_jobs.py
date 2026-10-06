@@ -11547,6 +11547,10 @@ def test_run_health_sweep_staleness_check_job_alerts_when_stale(monkeypatch):
 
     assert len(alerts) == 1
     assert alerts[0][0][0] == "health_sweep"
+    # The exception is raised-and-caught rather than just constructed, so
+    # Sentry's capture_exception (in send_error_alert) gets a real
+    # __traceback__ instead of reporting a stack-frame-less event.
+    assert alerts[0][0][1].__traceback__ is not None
 
 
 def test_run_health_sweep_staleness_check_job_does_not_alert_when_no_current_targets(monkeypatch):
@@ -11862,6 +11866,10 @@ def test_run_ops_monitor_job_alerts_when_backup_missing(monkeypatch, tmp_path):
     assert len(alerts) == 1
     assert alerts[0][0][0] == "ops_monitor.backup_freshness.missing_dir"
     assert str(missing_dir) in alerts[0][0][2]
+    # _send_ops_alert raises-and-catches OpsMonitorError rather than just
+    # constructing it, so Sentry's capture_exception gets a real
+    # __traceback__ instead of reporting a stack-frame-less event.
+    assert alerts[0][0][1].__traceback__ is not None
 
 
 def test_check_backup_freshness_missing_dir_and_stale_backup_both_alert_within_cooldown(monkeypatch, tmp_path):

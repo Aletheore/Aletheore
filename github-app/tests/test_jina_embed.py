@@ -6,6 +6,7 @@ import threading
 import time
 import types
 
+import pytest
 from fastapi.testclient import TestClient
 from sentry_sdk.transport import Transport
 
@@ -261,6 +262,25 @@ def test_unhandled_exception_returns_500_and_reports_to_sentry(monkeypatch):
     assert response.status_code == 500
     assert len(captured) == 1
     assert isinstance(captured[0], RuntimeError)
+
+
+@pytest.mark.asyncio
+async def test_client_disconnect_is_not_logged_as_a_bug(monkeypatch):
+    # Same reasoning as app_server/main.py's handle_unexpected_exception:
+    # /embed_batch can take 24-38+ minutes per this module's own docstring,
+    # so a caller (app_server or scan_worker) hanging up mid-request is a
+    # realistic, benign occurrence - not a crash.
+    from starlette.requests import ClientDisconnect
+
+    server, _ = _import_server(monkeypatch)
+    captured = []
+    monkeypatch.setattr(server.sentry_sdk, "capture_exception", lambda exc: captured.append(exc))
+
+    scope = {"type": "http", "method": "POST", "path": "/embed_batch", "headers": []}
+    response = await server.handle_unexpected_exception(server.Request(scope), ClientDisconnect())
+
+    assert captured == []
+    assert response.status_code == 499
 
 
 def test_breadcrumbs_are_stripped_from_reported_events(monkeypatch):

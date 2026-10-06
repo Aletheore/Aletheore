@@ -124,10 +124,10 @@ def test_raises_when_private_key_path_points_to_empty_file(tmp_path, monkeypatch
         get_settings()
 
 
-def test_sentry_dsn_defaults_to_empty_string(monkeypatch):
+def test_sentry_dsn_defaults_to_none(monkeypatch):
     monkeypatch.delenv("SENTRY_DSN", raising=False)
     settings = get_settings()
-    assert settings.sentry_dsn == ""
+    assert settings.sentry_dsn is None
 
 
 def test_sentry_dsn_reads_from_env(monkeypatch):
