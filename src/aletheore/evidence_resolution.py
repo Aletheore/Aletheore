@@ -407,7 +407,13 @@ def _risk(category: str, severity: str, summary: str, evidence_path: str) -> dic
 
 def attach_risk_evidence(evidence: dict, resolution: dict, max_risks: int = 5) -> dict:
     file_path = resolution.get("file")
-    dependencies = set(resolution.get("dependency") or [])
+    raw_dependency = resolution.get("dependency")
+    # kind="dependency" lookups carry a bare string; set("yaml") would be
+    # {"y","a","m","l"} and never match any package.
+    if isinstance(raw_dependency, str):
+        dependencies = {raw_dependency}
+    else:
+        dependencies = set(raw_dependency or [])
     risks: list[dict[str, Any]] = []
     if file_path:
         for index, finding in enumerate(
@@ -453,7 +459,9 @@ def attach_risk_evidence(evidence: dict, resolution: dict, max_risks: int = 5) -
         # dead_code.py's own PACKAGE_IMPORT_ALIASES already exists to
         # handle for its own, structurally identical unused-dependency
         # check - reused here rather than re-solving the same problem.
-        if not dependencies or (package and _package_import_names(package) & dependencies):
+        # No known dependency means nothing to match against - not "attach
+        # every CVE in the repo" to a resolution that can't be tied to a file.
+        if package and _package_import_names(package) & dependencies:
             risks.append(
                 _risk(
                     "vulnerability",

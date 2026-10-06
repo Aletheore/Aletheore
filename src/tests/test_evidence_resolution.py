@@ -374,7 +374,10 @@ def test_attach_dependency_evidence_uses_module_imports():
 
 
 def test_attach_risk_evidence_attaches_matching_findings():
-    resolution = resolve_endpoint(make_evidence(), "GET", "/v1/users")
+    # Mirrors resolve_code_evidence: dependencies are attached before risks.
+    resolution = attach_dependency_evidence(
+        make_evidence(), resolve_endpoint(make_evidence(), "GET", "/v1/users")
+    )
 
     result = attach_risk_evidence(make_evidence(), resolution)
 
@@ -508,3 +511,34 @@ def test_find_symbol_at_location_skips_a_symbol_entry_missing_line_bounds():
         ],
     )
     assert find_symbol_at_location(evidence, "app.py", 15) == "handle_request"
+
+
+def test_attach_risk_evidence_does_not_attach_every_cve_to_an_unresolved_resolution():
+    evidence = {
+        "security": {
+            "dependency_vulnerabilities": {
+                "findings": [{"package": "requests", "severity": "high", "advisory_id": "CVE-1"}]
+            }
+        }
+    }
+    resolution = normalize_resolution(kind="endpoint")  # nothing resolved, no file, no deps
+
+    result = attach_risk_evidence(evidence, resolution)
+
+    assert result["risk"] == []
+
+
+def test_attach_risk_evidence_matches_bare_string_dependency_lookup():
+    # kind="dependency" carries a str; set("yaml") used to become characters.
+    evidence = {
+        "security": {
+            "dependency_vulnerabilities": {
+                "findings": [{"package": "PyYAML", "severity": "high", "advisory_id": "CVE-2"}]
+            }
+        }
+    }
+    resolution = normalize_resolution(kind="dependency", dependency="yaml")
+
+    result = attach_risk_evidence(evidence, resolution)
+
+    assert [r["category"] for r in result["risk"]] == ["vulnerability"]

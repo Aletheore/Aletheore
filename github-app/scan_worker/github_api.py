@@ -210,12 +210,23 @@ def upsert_pr_comment(
         "Accept": "application/vnd.github+json",
     }
     comments_url = f"/repos/{repo_full_name}/issues/{pr_number}/comments"
-    response = client.get(comments_url, headers=headers)
-    response.raise_for_status()
-    existing = next(
-        (comment for comment in response.json() if marker in comment.get("body", "")),
-        None,
-    )
+    # GitHub defaults to 30 comments per page, oldest first: on a busy PR the
+    # marker comment can sit past page 1, and missing it posts a duplicate.
+    existing = None
+    page = 1
+    while existing is None:
+        response = client.get(
+            comments_url, headers=headers, params={"per_page": 100, "page": page}
+        )
+        response.raise_for_status()
+        comments = response.json()
+        existing = next(
+            (comment for comment in comments if marker in comment.get("body", "")),
+            None,
+        )
+        if len(comments) < 100:
+            break
+        page += 1
 
     if existing:
         response = client.patch(
@@ -393,10 +404,17 @@ def _reconstruct_missing_patch(
     read as "no base content" and fabricate a full-file "added" diff for a
     file whose content never actually changed.
     """
-    head_content = fetch_file_content(client, token, repo_full_name, path, head_ref)
-    if head_content is None or len(head_content.encode("utf-8")) > MAX_RECONSTRUCTED_DIFF_FILE_BYTES:
+    try:
+        head_content = fetch_file_content(client, token, repo_full_name, path, head_ref)
+        if head_content is None or len(head_content.encode("utf-8")) > MAX_RECONSTRUCTED_DIFF_FILE_BYTES:
+            return None
+        base_content = fetch_file_content(client, token, repo_full_name, base_path or path, base_ref)
+    except Exception as exc:  # noqa: BLE001 - best-effort contract: never raises, one file must not abort the review
+        logger.warning(
+            "patch reconstruction fetch failed for %s (%s); treating as omitted",
+            path, type(exc).__name__,
+        )
         return None
-    base_content = fetch_file_content(client, token, repo_full_name, base_path or path, base_ref)
     if base_content is not None and len(base_content.encode("utf-8")) > MAX_RECONSTRUCTED_DIFF_FILE_BYTES:
         return None
     if base_content == head_content:

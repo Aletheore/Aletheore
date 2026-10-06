@@ -673,20 +673,26 @@ def test_clone_pr_head_does_not_attempt_a_scrub_when_init_never_created_a_git_di
     assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
 
 
-def test_incremental_spend_budget_can_start_next_call_is_atomic_across_real_concurrent_threads(monkeypatch):
-    # Real gap found alongside this PR's AIRview worker-count raise
-    # (6->16, see live_wiki._generation_worker_count): the writing adapter
-    # built once per AIRview full build is shared across every concurrent
-    # worker thread, all calling this same budget object's
-    # can_start_next_call/record_usage/on_call_failed - but
-    # _pending_reserve_usd/_pending_topup_usd were plain, unlocked instance
-    # attributes. `+=` on a shared attribute is not atomic across threads
-    # (LOAD/ADD/STORE are separate bytecode ops the GIL can interleave), so
-    # two threads reserving at once could lose one whole increment. Unlike
-    # the sequential ledger test below, this uses real threading.Thread
-    # objects and a Barrier so every thread's += genuinely races, not just
-    # runs one after another in program order - same proof shape as
-    # test_model_tiers.py's own
+def test_incremental_spend_budget_isolates_pending_reservations_per_thread(monkeypatch):
+    # Real bug found in a backward audit: _pending_reserve_usd/
+    # _pending_topup_usd used to be plain, shared instance attributes - the
+    # writing adapter built once per AIRview full build is shared across
+    # every concurrent worker thread (up to 16, see
+    # live_wiki._generation_worker_count), all calling this same budget
+    # object's can_start_next_call/record_usage/on_call_failed. A lock
+    # around the += (an earlier fix attempt) only prevents a torn
+    # increment - it does not scope the resulting value per caller. With a
+    # single shared scalar, whichever thread calls record_usage()/
+    # on_call_failed()/release_unused_reservation() first reads and zeros
+    # out the SUM of all 16 threads' in-flight reservations, not just its
+    # own: releasing money still legitimately reserved for the other 15
+    # threads' real, in-progress LLM calls, and leaving them to draw their
+    # own real cost completely unreserved when they later settle. Fixed
+    # with threading.local(): each thread must see only its own
+    # reservation, never the combined total. Proven with real
+    # threading.Thread objects and a Barrier so every thread's
+    # reserve/read genuinely races, not just runs in program order - same
+    # proof shape as test_model_tiers.py's own
     # test_openai_free_tier_reservation_is_atomic_across_real_concurrent_threads.
     import threading
 
@@ -703,18 +709,86 @@ def test_incremental_spend_budget_can_start_next_call_is_atomic_across_real_conc
 
     thread_count = 16
     barrier = threading.Barrier(thread_count)
+    seen_by_thread = [None] * thread_count
 
-    def _attempt():
+    def _attempt(idx):
         barrier.wait()  # maximize actual overlap, not just thread creation order
         budget.can_start_next_call()
+        # Read back from the SAME thread that just reserved - this is
+        # exactly what record_usage()/on_call_failed() do for real, and is
+        # the read the old shared scalar got wrong.
+        seen_by_thread[idx] = budget._pending_reserve_usd
 
-    threads = [threading.Thread(target=_attempt) for _ in range(thread_count)]
+    threads = [threading.Thread(target=_attempt, args=(i,)) for i in range(thread_count)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
 
-    assert budget._pending_reserve_usd == pytest.approx(thread_count * 0.10)
+    # Every thread must see exactly its OWN $0.10 reservation, never the
+    # 16-thread combined total ($1.60) the bug this fix closes would
+    # produce.
+    assert seen_by_thread == [pytest.approx(0.10)] * thread_count
+
+
+def test_incremental_spend_budget_one_threads_settlement_does_not_touch_anothers_reservation(monkeypatch):
+    # The failure this fix actually prevents in production: thread A
+    # settles (record_usage) while thread B is still mid-flight with its
+    # own outstanding reservation. Before threading.local(), A's
+    # record_usage() would have read and zeroed the shared scalar B's
+    # reservation was also sitting in, releasing B's money before B's real
+    # call even finished.
+    import threading
+
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.reserve_llm_spend_with_email_hooks",
+        lambda dsn, iid, amount, feature, topup_out=None, **k: True,
+    )
+    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.001)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    released = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.release_llm_spend_reservation",
+        lambda dsn, iid, amount: released.append(amount),
+    )
+
+    budget = _IncrementalSpendBudget(
+        "dsn", 1, "model", next_call_reserve_usd=0.10, feature="airview_full_build",
+    )
+
+    thread_b_reserved_before_settle = []
+    thread_b_ready = threading.Event()
+    thread_a_may_settle = threading.Event()
+
+    def thread_b():
+        budget.can_start_next_call()
+        thread_b_ready.set()
+        thread_a_may_settle.wait()
+        # B's own reservation must still be intact after A has settled.
+        thread_b_reserved_before_settle.append(budget._pending_reserve_usd)
+        budget.record_usage(prompt_tokens=10, completion_tokens=5)
+
+    tb = threading.Thread(target=thread_b)
+    tb.start()
+    thread_b_ready.wait()
+
+    budget.can_start_next_call()
+    budget.record_usage(prompt_tokens=10, completion_tokens=5)  # thread A settles first
+    thread_a_may_settle.set()
+    tb.join()
+
+    assert thread_b_reserved_before_settle == [pytest.approx(0.10)]
+    # Each thread settles its own $0.10 reservation against its own tiny
+    # $0.001 real cost, releasing its own $0.099 unused portion - two
+    # separate, correctly-sized releases. Before this fix, A's settlement
+    # would have zeroed the shared scalar (wiping B's still-outstanding
+    # reservation too), so B's own later settlement would have had
+    # reserved=0 and released nothing for its real $0.099 - the bug this
+    # asserts against.
+    assert released == [pytest.approx(0.099), pytest.approx(0.099)]
 
 
 def test_incremental_spend_budget_record_usage_ledgers_the_real_cost_not_the_delta(monkeypatch):
@@ -6360,6 +6434,96 @@ def test_flash_review_job_passes_referenced_symbol_context_to_review_diff(monkey
 
     assert "admin.py:_github_http_client" in captured["referenced_symbol_context"]
     assert "def _github_http_client() -> httpx.Client" in captured["referenced_symbol_context"]
+
+
+def test_run_flash_review_symbol_source_fetch_failure_does_not_abort_the_whole_review(monkeypatch):
+    # Real bug found via audit: _fetch_symbol_source's own fetch_file_content
+    # call was unguarded - a transient GitHub error (403 rate-limit, 5xx,
+    # network failure) on this single referenced-symbol lookup raised
+    # straight out, aborting the entire review (the outer try/except in
+    # run_flash_review_job catches it, correctly releasing the reservation,
+    # but the customer gets "review failed unexpectedly" instead of a real
+    # review). Every other I/O path in flash_review.py fails open and logs
+    # a warning; this proves _fetch_symbol_source now does too - the job
+    # must still reach review_diff, just with that one symbol's context
+    # missing rather than the whole run blowing up.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_pr_diff",
+        lambda *a, **k: "--- dashboard.py ---\n@@ -1,1 +75,1 @@\n+_github_http_client()\n",
+    )
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["dashboard.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs._latest_evidence_or_none",
+        lambda *a, **k: {
+            "repository": {
+                "modules": [
+                    {"path": "dashboard.py", "imports": ["admin.py"], "symbols": {"functions": [], "classes": []}},
+                    {
+                        "path": "admin.py",
+                        "imports": [],
+                        "symbols": {
+                            "functions": [
+                                {"name": "_github_http_client", "start_line": 2, "end_line": 3}
+                            ],
+                            "classes": [],
+                        },
+                    },
+                ],
+            },
+        },
+    )
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+
+    def _raising_fetch(client, token, repo_full_name, path, ref):
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr("scan_worker.jobs.fetch_file_content", _raising_fetch)
+    captured = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda diff_text, file_context="", **kwargs: captured.update(kwargs) or [],
+    )
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    from scan_worker.jobs import run_flash_review_job
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    # review_diff was reached at all - the job did not abort via the outer
+    # exception handler - and the one symbol whose fetch failed is simply
+    # absent rather than poisoning the whole context blob.
+    assert captured["referenced_symbol_context"] == ""
 
 
 def test_flash_review_job_never_passes_sibling_file_context_to_review_diff(monkeypatch):

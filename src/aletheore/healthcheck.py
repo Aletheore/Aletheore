@@ -154,7 +154,10 @@ def _response_shape(response) -> list[str] | None:
     try:
         raw = response.read(MAX_BODY_BYTES_FOR_SHAPE)
         data = json.loads(raw)
-    except (ValueError, TypeError, UnicodeDecodeError):
+    except (ValueError, TypeError, UnicodeDecodeError, http.client.HTTPException, OSError):
+        # A truncated chunked body (IncompleteRead is an HTTPException, not a
+        # ValueError) or a reset/timeout mid-body: the endpoint answered, so
+        # it is up - only the shape is unavailable. Must not abort the sweep.
         return None
     if isinstance(data, dict):
         return sorted(data.keys())
