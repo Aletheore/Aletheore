@@ -730,7 +730,14 @@ def fetch_review_file_context(
                 for path in paths
             }
             for future, path in futures.items():
-                content = future.result()
+                try:
+                    content = future.result()
+                except Exception as exc:  # noqa: BLE001 - fail open, one file's fetch must not abort the whole review
+                    logger.warning(
+                        "flash review file fetch failed for %s (%s); skipping",
+                        path, type(exc).__name__,
+                    )
+                    continue
                 if content is not None:
                     raw_contents[path] = content
 
