@@ -230,10 +230,28 @@ def _parse_npm_pins(repo_path: Path) -> list[tuple[str, str, str]]:
             version = details.get("version")
             if name and version:
                 pins.append((name, version, "npm"))
+        if not pins:
+            # lockfileVersion 1 (npm < 7) has no "packages" map, only a nested
+            # "dependencies" tree of {name: {version, dependencies: {...}}}.
+            pins = _walk_npm_v1_dependencies(lock_data.get("dependencies"))
         if pins:
             return pins
 
     return _parse_npm_direct_pins(repo_path)
+
+
+def _walk_npm_v1_dependencies(tree) -> list[tuple[str, str, str]]:
+    pins: list[tuple[str, str, str]] = []
+    if not isinstance(tree, dict):
+        return pins
+    for name, details in tree.items():
+        if not isinstance(details, dict):
+            continue
+        version = details.get("version")
+        if name and isinstance(version, str) and version:
+            pins.append((name, version, "npm"))
+        pins.extend(_walk_npm_v1_dependencies(details.get("dependencies")))
+    return pins
 
 
 def _parse_go_pins(repo_path: Path) -> list[tuple[str, str, str]]:
