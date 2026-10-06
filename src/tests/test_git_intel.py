@@ -632,6 +632,19 @@ def test_compute_hotspots_normalizes_paths_when_scan_root_is_subdirectory(tmp_pa
     ]
 
 
+def test_hotspots_and_recently_updated_exclude_files_deleted_from_the_tree(tmp_path):
+    repo = _init_repo_with_hotspot_commits(tmp_path)
+    run(repo, "rm", "-q", "b.py")
+    run(repo, "commit", "-q", "-m", "delete b")
+    modules = [{"path": "a.py", "imported_by": []}]
+
+    hotspots = compute_hotspots(repo, modules)
+    recent = compute_recently_updated(repo)
+
+    assert [h["path"] for h in hotspots] == ["a.py"]
+    assert [r["path"] for r in recent] == ["a.py"]
+
+
 def test_analyze_git_resets_when_sync_pointer_was_rewritten_out_of_history(tmp_path):
     # An amended-away commit still exists as an orphaned object until gc, so an
     # existence-only check kept the stale sync pointer and double-counted the
