@@ -1311,6 +1311,102 @@ def test_extract_rails_scope_module_symbol_value_gets_module_prefix():
     assert entries[0]["path"] == "admin/badges"
 
 
+def test_extract_rails_namespace_composes_the_url_prefix_too():
+    # Real bug found via audit: _rails_enclosing_module_prefix correctly
+    # composed the *module* half of `namespace :x do` (into `handler`) but
+    # nothing composed the matching *URL* half into `path` - real Rails
+    # routes `namespace :admin do get "users", to: "users#index" end` to
+    # GET /admin/users, but this extractor reported path "users" with
+    # unresolved: False, a confidently-wrong, not-honestly-unresolved value.
+    root, source = parse_ruby(
+        'namespace :admin do\n  get "users", to: "users#index"\nend\n'
+    )
+
+    entries = _extract_rails_routes(root, source, "config/routes.rb")
+
+    assert entries[0]["path"] == "admin/users"
+    assert entries[0]["handler"] == "admin/users#index"
+    assert entries[0]["unresolved"] is False
+
+
+def test_extract_rails_bare_scope_composes_the_url_prefix_into_path():
+    # The sibling of test_extract_rails_bare_scope_does_not_add_a_module_
+    # prefix: a bare `scope "/logs" do` must NOT add a module prefix, but
+    # it MUST add the URL prefix - real Rails routes this to GET
+    # /logs/recent, not /recent.
+    root, source = parse_ruby(
+        'scope "/logs" do\n  get "recent", to: "logs#recent"\nend\n'
+    )
+
+    entries = _extract_rails_routes(root, source, "config/routes.rb")
+
+    assert entries[0]["path"] == "logs/recent"
+    assert entries[0]["handler"] == "logs#recent"
+
+
+def test_extract_rails_scope_path_keyword_composes_the_url_prefix():
+    root, source = parse_ruby(
+        'scope path: "/legacy" do\n  get "recent", to: "legacy#recent"\nend\n'
+    )
+
+    entries = _extract_rails_routes(root, source, "config/routes.rb")
+
+    assert entries[0]["path"] == "legacy/recent"
+
+
+def test_extract_rails_namespace_path_override_wins_over_the_symbol_for_the_url():
+    # `namespace :api, path: "v2" do` - real, documented Rails syntax: the
+    # module/controller stays Api::, but the URL uses "v2" instead of "api".
+    root, source = parse_ruby(
+        'namespace :api, path: "v2" do\n  get "users", to: "users#index"\nend\n'
+    )
+
+    entries = _extract_rails_routes(root, source, "config/routes.rb")
+
+    assert entries[0]["path"] == "v2/users"
+    assert entries[0]["handler"] == "api/users#index"
+
+
+def test_extract_rails_scope_module_only_does_not_add_a_url_prefix():
+    # The mirror image of the module-only test: `scope module: "x" do`
+    # (no path: override) affects only the controller module, never the
+    # URL - must not regress now that URL-prefix composition exists.
+    root, source = parse_ruby(
+        'scope module: "admin" do\n  get "users", to: "users#index"\nend\n'
+    )
+
+    entries = _extract_rails_routes(root, source, "config/routes.rb")
+
+    assert entries[0]["path"] == "users"
+    assert entries[0]["handler"] == "admin/users#index"
+
+
+def test_extract_rails_nested_namespace_and_scope_compose_the_url_prefix_in_order():
+    root, source = parse_ruby(
+        'namespace :admin do\n'
+        '  scope "/legacy" do\n'
+        '    get "users", to: "users#index"\n'
+        "  end\n"
+        "end\n"
+    )
+
+    entries = _extract_rails_routes(root, source, "config/routes.rb")
+
+    assert entries[0]["path"] == "admin/legacy/users"
+    assert entries[0]["handler"] == "admin/users#index"
+
+
+def test_extract_rails_root_route_inside_namespace_composes_the_url_prefix():
+    root, source = parse_ruby(
+        'namespace :admin do\n  root to: "dashboard#index"\nend\n'
+    )
+
+    entries = _extract_rails_routes(root, source, "config/routes.rb")
+
+    assert entries[0]["path"] == "admin"
+    assert entries[0]["handler"] == "admin/dashboard#index"
+
+
 def test_extract_rails_hash_rocket_route():
     # Real gap found via a real Discourse scan: config/routes.rb uses this
     # "path" => "controller#action" form 819 times vs only 15 uses of the

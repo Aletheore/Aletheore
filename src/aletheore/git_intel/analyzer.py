@@ -160,6 +160,18 @@ def _sha_exists(repo_path: Path, sha: str) -> bool:
     return _run_git(repo_path, "cat-file", "-e", sha).returncode == 0
 
 
+def _is_ancestor_of_head(repo_path: Path, sha: str) -> bool:
+    """True only if `sha` is still reachable from HEAD.
+
+    Existence alone is not enough: git keeps orphaned objects (amend, rebase,
+    force-push) until gc, so a rewritten-away sync pointer still "exists" and
+    an `old..HEAD` range against it re-returns the whole rewritten branch.
+    """
+    return _sha_exists(repo_path, sha) and (
+        _run_git(repo_path, "merge-base", "--is-ancestor", sha, "HEAD").returncode == 0
+    )
+
+
 def default_store(repo_path: Path) -> RepoGraphStore:
     return SQLiteRepoGraphStore(default_graph_db_path(repo_path))
 
@@ -187,9 +199,12 @@ def _sync_graph(
     branch = branch if branch is not None else _current_branch(repo_path)
     snapshot = store.load(repo_key, branch)
 
-    if snapshot.last_synced_sha is None or not _sha_exists(repo_path, snapshot.last_synced_sha):
+    if snapshot.last_synced_sha is None or not _is_ancestor_of_head(
+        repo_path, snapshot.last_synced_sha
+    ):
         # No prior state, or the sync pointer no longer exists in this repo
-        # (history was rewritten out from under it, e.g. a force-push) -
+        # or is no longer an ancestor of HEAD (history was rewritten, e.g. a
+        # rebase/amend/force-push) -
         # either way, prior aggregates can't be trusted to merge into.
         rev_range = "HEAD"
         reset = True
