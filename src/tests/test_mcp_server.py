@@ -1,5 +1,6 @@
 import json
 import subprocess
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1103,6 +1104,96 @@ async def test_aletheore_search_times_out_on_catastrophic_backtracking(tmp_path)
     assert "time budget" in body["error"]
 
 
+class _FakeSpawnProcess:
+    """Stands in for a spawned child: after `startup_delay` seconds it
+    "finishes importing" and runs the target on a thread, so a test can make
+    startup arbitrarily slow without depending on real machine load."""
+
+    def __init__(self, target, args, startup_delay, send_ready):
+        self._target = target
+        self._args = args
+        self._startup_delay = startup_delay
+        self._send_ready = send_ready
+        self._thread = None
+        self.terminated = False
+
+    def start(self):
+        import threading
+
+        def run():
+            time.sleep(self._startup_delay)
+            if self._send_ready:
+                self._target(*self._args)
+
+        self._thread = threading.Thread(target=run, daemon=True)
+        self._thread.start()
+
+    def is_alive(self):
+        return self._thread is not None and self._thread.is_alive() and not self.terminated
+
+    def terminate(self):
+        self.terminated = True
+
+    def kill(self):
+        self.terminated = True
+
+    def join(self, timeout=None):
+        if not self.terminated and self._thread is not None:
+            self._thread.join(timeout)
+
+
+def _patch_spawn(monkeypatch, startup_delay, send_ready=True):
+    import queue as queue_module
+
+    from aletheore import mcp_server
+
+    class FakeContext:
+        def Queue(self):
+            return queue_module.Queue()
+
+        def Process(self, target, args):
+            return _FakeSpawnProcess(target, args, startup_delay, send_ready)
+
+    monkeypatch.setattr(mcp_server.multiprocessing, "get_context", lambda method: FakeContext())
+
+
+@pytest.mark.asyncio
+async def test_aletheore_search_regex_startup_time_does_not_count_against_the_search_budget(
+    tmp_path, monkeypatch
+):
+    # A spawned child re-imports the whole package before it can search. On a
+    # loaded machine that alone can exceed the search budget, and a deadline
+    # started at process.start() then reported a perfectly fast regex as
+    # "likely catastrophic backtracking" (intermittent KeyError 'matches' on
+    # macOS CI). Startup here takes 3x the search budget; the search itself
+    # is instant, so it must still return its matches.
+    from aletheore import mcp_server
+
+    monkeypatch.setattr(mcp_server, "_SEARCH_TIMEOUT_SECONDS", 0.3)
+    _patch_spawn(monkeypatch, startup_delay=0.9)
+    repo = make_repo_with_files(tmp_path, {"a.py": "x = 1\ny = 2\nz = 3\n"})
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_search", {"pattern": r"^[xy] = \d", "regex": True})
+
+    assert len(tool_result_body(result)["result"]["matches"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_aletheore_search_regex_reports_a_worker_that_never_starts(tmp_path, monkeypatch):
+    from aletheore import mcp_server
+
+    monkeypatch.setattr(mcp_server, "_SEARCH_STARTUP_TIMEOUT_SECONDS", 0.5)
+    _patch_spawn(monkeypatch, startup_delay=30.0, send_ready=False)
+    repo = make_repo_with_files(tmp_path, {"a.py": "x = 1\n"})
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_search", {"pattern": r"x", "regex": True})
+
+    body = tool_result_body(result)["result"]
+    assert "failed to start" in body["error"]
+
+
 @pytest.mark.asyncio
 async def test_aletheore_search_caps_at_200_and_flags_truncated(tmp_path):
     content = "\n".join(f"MATCH_ME line {i}" for i in range(250))
@@ -1504,3 +1595,32 @@ async def test_aletheore_index_reads_the_evidence_only_after_it_holds_the_write_
         await server.call_tool("aletheore_index", {})
 
     assert held_when_read == [True], "evidence was read without holding the write lock"
+
+
+@pytest.mark.asyncio
+async def test_aletheore_changes_names_the_actually_corrupt_snapshot(tmp_path):
+    from aletheore.history import list_snapshots, save_snapshot
+    from tests.air_fixtures import minimal_air_evidence
+
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+    save_snapshot(minimal_air_evidence(), repo)
+    save_snapshot(minimal_air_evidence(), repo)
+    snapshots = list_snapshots(repo)
+    snapshots[-1].write_text("{not json")
+
+    result = await server.call_tool("aletheore_changes", {})
+
+    message = tool_result_body(result)["result"]["message"]
+    assert str(snapshots[-1]) in message
+    assert message.startswith("most recent snapshot")
+
+
+@pytest.mark.asyncio
+async def test_aletheore_search_rejects_empty_path_glob_with_structured_error(tmp_path):
+    repo = make_repo_with_files(tmp_path, {"a.py": "TARGET\n"})
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_search", {"pattern": "TARGET", "path_glob": ""})
+
+    assert "path_glob" in tool_result_body(result)["result"]["error"]

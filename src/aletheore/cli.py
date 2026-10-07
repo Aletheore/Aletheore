@@ -2,6 +2,7 @@ import difflib
 import hashlib
 import json
 import os
+import re
 import shutil
 import socket
 import sys
@@ -49,6 +50,7 @@ from aletheore.preferences import (
 from aletheore.sentry_reporting import init_cli_sentry
 from aletheore.evidence import (
     IncompatibleEvidenceVersionError,
+    MalformedEvidenceError,
     load_evidence,
     load_evidence_file,
     scan_repository,
@@ -75,6 +77,7 @@ from aletheore.report import (
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.watch import DEBOUNCE_SECONDS as WATCH_DEBOUNCE_SECONDS
 from aletheore.watch import WATCH_ENV_VAR, watching_disabled_by_env
+from aletheore.user_paths import user_home
 
 KNOWN_ADAPTERS = [
     ClaudeCodeAdapter(),
@@ -205,6 +208,43 @@ def _resolve_path(positional: str, option: Optional[str]) -> str:
     and should not silently fall back to the positional default.
     """
     return positional if option is None else option
+
+
+def _checked_dir(path: str) -> str:
+    """Exit with a one-line error, not a traceback, when PATH isn't a directory."""
+    p = Path(path)
+    if not p.exists():
+        console.print(f"[bold red]error:[/bold red] path does not exist: {p}")
+        raise typer.Exit(code=1)
+    if not p.is_dir():
+        console.print(f"[bold red]error:[/bold red] path is not a directory: {p}")
+        raise typer.Exit(code=1)
+    return path
+
+
+def _confirm(prompt: str) -> bool:
+    """y/N prompt that treats a closed stdin (CI, pipes) as "no" instead of crashing."""
+    try:
+        return input(prompt).strip().lower() == "y"
+    except EOFError:
+        console.print("\n[yellow]no interactive input available - treating as 'no'[/yellow]")
+        return False
+
+
+def _installed_version() -> str:
+    import importlib.metadata
+
+    try:
+        return importlib.metadata.version("aletheore")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
+def _version_tuple(version: str) -> tuple[int, ...] | None:
+    try:
+        return tuple(int(part) for part in version.split("."))
+    except ValueError:
+        return None
 
 
 def _query_kinds_panel() -> Panel:
@@ -488,7 +528,7 @@ def _resolve_bearer_toggle(check_bearer: bool | None) -> bool:
         "with repo size and it can take significantly longer than Aletheore's other checks "
         "on a large repo."
     )
-    return input("Include Bearer in this scan? [y/N]: ").strip().lower() == "y"
+    return _confirm("Include Bearer in this scan? [y/N]: ")
 
 
 def _scan(
@@ -583,8 +623,7 @@ def _audit(
             f"[bold yellow]This will send this repository's evidence "
             f"(not source code) to {adapter.name}'s API.[/bold yellow]"
         )
-        confirmed = input("Continue? [y/N]: ").strip().lower() == "y"
-        if not confirmed:
+        if not _confirm("Continue? [y/N]: "):
             console.print("Cancelled - no data was sent.")
             return 0
 
@@ -651,8 +690,8 @@ def _managed_audit(
     try:
         with _ElapsedTicker("Waiting on the managed audit service"):
             report_text = run_managed_audit_request(evidence, resolved_token, repo_full_name=repo_full_name)
-    except ManagedAuditError as exc:
-        console.print(f"[bold red]error:[/bold red] {exc}")
+    except (ManagedAuditError, httpx.HTTPError, KeyError, ValueError) as exc:
+        console.print(f"[bold red]error:[/bold red] managed audit failed: {exc}")
         console.print(f"Evidence is still available at {evidence_path} for manual use.")
         return 1
 
@@ -672,6 +711,9 @@ def _check_for_update(installed_version: str, http_client: httpx.Client | None =
         return "couldn't check for updates"
     if latest_version == installed_version:
         return "up to date"
+    latest, installed = _version_tuple(latest_version), _version_tuple(installed_version)
+    if latest is not None and installed is not None and installed > latest:
+        return "up to date"
     return f"update available: {latest_version}"
 
 
@@ -685,9 +727,10 @@ def _print_update_notice_if_available() -> None:
     # Silent on "up to date" or a failed check - this is a friendly nudge,
     # not something worth cluttering the banner over when there's nothing
     # to report.
-    import importlib.metadata
-
-    installed_version = importlib.metadata.version("aletheore")
+    # CI and offline machines can opt out: the check blocks up to 5s with no network.
+    installed_version = _installed_version()
+    if os.environ.get("ALETHEORE_NO_UPDATE_CHECK") or installed_version == "unknown":
+        return
     version_note = _check_for_update(installed_version)
     if not version_note.startswith("update available: "):
         return
@@ -726,7 +769,7 @@ def _query_schema(repo_path: str) -> int:
     repo = Path(repo_path).resolve()
     try:
         evidence = load_evidence(repo)
-    except (FileNotFoundError, IncompatibleEvidenceVersionError) as exc:
+    except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
         console.print(f"[bold red]error:[/bold red] {exc}")
         return 1
 
@@ -753,9 +796,9 @@ def _query_changes(repo_path: str, full: bool) -> int:
     try:
         old = load_evidence_file(snapshots[-2])
     except json.JSONDecodeError:
-        print(f"error: most recent snapshot is unreadable ({snapshots[-2]})")
+        print(f"error: previous snapshot is unreadable ({snapshots[-2]})")
         return 1
-    except IncompatibleEvidenceVersionError as exc:
+    except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
         print(f"error: {exc}")
         return 1
 
@@ -764,7 +807,7 @@ def _query_changes(repo_path: str, full: bool) -> int:
     except json.JSONDecodeError:
         print(f"error: most recent snapshot is unreadable ({snapshots[-1]})")
         return 1
-    except IncompatibleEvidenceVersionError as exc:
+    except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
         print(f"error: {exc}")
         return 1
 
@@ -780,7 +823,7 @@ def _index(repo_path: str) -> int:
     except FileNotFoundError as exc:
         console.print(f"[bold red]error:[/bold red] {exc}")
         return 1
-    except IncompatibleEvidenceVersionError as exc:
+    except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
         console.print(f"[bold red]error:[/bold red] {exc}")
         return 1
     console.print(
@@ -906,7 +949,7 @@ def _query(
                 f"[bold yellow]This will send retrieved code chunks and your question "
                 f"to {adapter.name}'s API.[/bold yellow]"
             )
-            if input("Continue? [y/N]: ").strip().lower() != "y":
+            if not _confirm("Continue? [y/N]: "):
                 console.print("Cancelled - no data was sent.")
                 return 0
         from aletheore.answer import answer_question
@@ -926,7 +969,7 @@ def _query(
     repo = Path(repo_path).resolve()
     try:
         evidence = load_evidence(repo)
-    except (FileNotFoundError, IncompatibleEvidenceVersionError) as exc:
+    except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
         print(f"error: {exc}")
         return 1
 
@@ -979,27 +1022,34 @@ def _diff(
     old_file = Path(old_path)
     new_file = Path(new_path)
 
-    if not old_file.exists():
-        print(f"error: evidence file not found: {old_file}")
-        return 1
-    if not new_file.exists():
-        print(f"error: evidence file not found: {new_file}")
-        return 1
+    for candidate in (old_file, new_file):
+        if not candidate.exists():
+            print(f"error: evidence file not found: {candidate}")
+            return 1
+        if not candidate.is_file():
+            print(f"error: {candidate} is a directory, expected an air.json file")
+            return 1
 
     try:
         old = load_evidence_file(old_file)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError):
         print(f"error: {old_file} is not valid JSON")
         return 1
-    except IncompatibleEvidenceVersionError as exc:
+    except OSError as exc:
+        print(f"error: could not read {old_file}: {exc}")
+        return 1
+    except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
         print(f"error: {exc}")
         return 1
     try:
         new = load_evidence_file(new_file)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError):
         print(f"error: {new_file} is not valid JSON")
         return 1
-    except IncompatibleEvidenceVersionError as exc:
+    except OSError as exc:
+        print(f"error: could not read {new_file}: {exc}")
+        return 1
+    except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
         print(f"error: {exc}")
         return 1
 
@@ -1089,7 +1139,7 @@ def _healthcheck(repo_path: str, base_url: str) -> int:
     repo = Path(repo_path).resolve()
     try:
         evidence = load_evidence(repo)
-    except (FileNotFoundError, IncompatibleEvidenceVersionError) as exc:
+    except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
         print(f"error: {exc}")
         return 1
 
@@ -1176,9 +1226,11 @@ def _aletheore_command() -> str:
     # Falls back to a PATH search, then the bare name, only if neither
     # resolves - preserving today's behavior rather than writing something
     # obviously broken.
-    sibling = Path(sys.executable).parent / "aletheore"
-    if sibling.exists():
-        return str(sibling)
+    # Windows console scripts are aletheore.exe (in Scripts/), never a bare "aletheore".
+    for name in ("aletheore", "aletheore.exe"):
+        sibling = Path(sys.executable).parent / name
+        if sibling.exists():
+            return str(sibling)
     return shutil.which("aletheore") or "aletheore"
 
 
@@ -1217,8 +1269,16 @@ def _claude_desktop_config_path() -> Path | None:
     applied to PyCharm's config below.
     """
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+        return user_home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
     if sys.platform == "win32":
+        # The Microsoft Store (MSIX) build keeps its config in a virtualised
+        # AppData under Packages/, not in %APPDATA%.
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            for packaged in sorted((Path(local) / "Packages").glob("Claude_*")):
+                candidate = packaged / "LocalCache" / "Roaming" / "Claude" / "claude_desktop_config.json"
+                if candidate.parent.is_dir():
+                    return candidate
         appdata = os.environ.get("APPDATA")
         return Path(appdata) / "Claude" / "claude_desktop_config.json" if appdata else None
     return None
@@ -1295,9 +1355,81 @@ def _write_config_file_no_symlink_follow(config_path: Path, content: str) -> Non
     behavior rather than crashing with AttributeError on every write.
     """
     no_follow = getattr(os, "O_NOFOLLOW", 0)
+    if not no_follow and config_path.is_symlink():
+        # Windows has no O_NOFOLLOW; refuse a symlinked leaf explicitly instead.
+        raise OSError("refusing to write through a symlink")
     fd = os.open(str(config_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | no_follow, 0o644)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(content)
+
+
+def _loads_jsonc(text: str) -> object:
+    """json.loads that also accepts // and /* */ comments and trailing commas,
+    which VS Code and opencode configs routinely contain. Comments are not
+    preserved when the file is written back."""
+    out: list[str] = []
+    i, n, in_str = 0, len(text), False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 1
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+            out.append(c)
+        elif text.startswith("//", i):
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = n if end == -1 else end + 2
+            continue
+        else:
+            out.append(c)
+        i += 1
+    return json.loads(_strip_trailing_commas("".join(out)))
+
+
+def _strip_trailing_commas(text: str) -> str:
+    """Remove a trailing comma before `}` or `]`, but only outside string
+    literals - a blind regex over the whole text would also strip a comma
+    that happens to appear inside a string value immediately before one of
+    those characters (e.g. a glob pattern like "*.{js,}"), corrupting it.
+    `text` has already had comments stripped, so no comment-skipping is
+    needed here, just the same in_str tracking."""
+    out: list[str] = []
+    i, n, in_str = 0, len(text), False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 1
+            elif c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == ",":
+            j = i + 1
+            while j < n and text[j].isspace():
+                j += 1
+            if j < n and text[j] in "}]":
+                i += 1
+                continue
+        out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def _write_json_mcp_client_config(
@@ -1316,7 +1448,7 @@ def _write_json_mcp_client_config(
         return f"skipped (path escapes the repo via a symlink): {config_path}"
     if config_path.exists():
         try:
-            data = json.loads(config_path.read_text(encoding="utf-8"))
+            data = _loads_jsonc(config_path.read_text(encoding="utf-8-sig"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             return f"skipped (existing file is not valid JSON): {config_path}"
         if not isinstance(data, dict):
@@ -1355,7 +1487,7 @@ def _write_toml_mcp_client_config(
         return f"skipped (path escapes the repo via a symlink): {config_path}"
     if config_path.exists():
         try:
-            data = tomllib.loads(config_path.read_text(encoding="utf-8"))
+            data = tomllib.loads(config_path.read_text(encoding="utf-8-sig"))
         except (UnicodeDecodeError, tomllib.TOMLDecodeError):
             return f"skipped (existing file is not valid TOML): {config_path}"
         if not isinstance(data, dict):
@@ -1425,6 +1557,11 @@ def _mcp_install(path: str, targets: list[str]) -> int:
         console.print(f"[bold green]{target}[/bold green]: {message}")
 
     console.print(
+        "\n[yellow]Note:[/yellow] these files contain absolute paths to this machine's aletheore "
+        "and repo. They are not portable - add them to .gitignore rather than committing them "
+        "for teammates or other operating systems."
+    )
+    console.print(
         "\nRestart or reload your coding tool so it picks up the new MCP server - "
         "Aletheore's tools will then be available without running 'aletheore mcp' yourself."
     )
@@ -1481,11 +1618,16 @@ def _mcp_install(path: str, targets: list[str]) -> int:
 
 def _port_is_available(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if sys.platform == "win32":
+            # On Windows SO_REUSEADDR lets a second socket bind a port that is
+            # already in use, so the check would always pass; claim it exclusively.
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind((host, port))
             return True
-        except OSError:
+        except (OSError, OverflowError):
             return False
 
 
@@ -1499,6 +1641,15 @@ def _watch(repo_path: str, debounce: float) -> int:
 
     try:
         run_watch(repo, report, debounce_seconds=debounce)
+    except OSError as exc:
+        hint = ""
+        if getattr(exc, "errno", None) == 28 or "inotify" in str(exc).lower():
+            hint = (
+                " The OS file-watch limit was reached; raise fs.inotify.max_user_watches "
+                "(Linux) or point 'aletheore watch' at a smaller directory."
+            )
+        console.print(f"[bold red]error:[/bold red] could not watch {repo}: {exc}.{hint}")
+        return 1
     except KeyboardInterrupt:
         # Ctrl-C is how this command is meant to end, so it exits 0 with a
         # word rather than a traceback - the dashboard's own Ctrl-C handling
@@ -1520,6 +1671,9 @@ def _dashboard(repo_path: str, port: int) -> int:
     # showing a completely unrelated repo's data. Confirmed as a real bug,
     # not hypothetical: this exact sequence was hit against a real stale
     # process on the default port.
+    if not 1 <= port <= 65535:
+        console.print(f"[bold red]error:[/bold red] --port must be between 1 and 65535 (got {port}).")
+        return 1
     if not _port_is_available(host, port):
         console.print(
             f"[bold red]error:[/bold red] port {port} is already in use - probably another "
@@ -1531,7 +1685,9 @@ def _dashboard(repo_path: str, port: int) -> int:
     app = build_app(repo)
     url = f"http://{host}:{port}"
     console.print(f"[green]Dashboard running at[/green] {url}")
-    webbrowser.open(url)
+    # Opened shortly after the server starts listening, not before - the tab
+    # would otherwise race uvicorn's bind and hit connection-refused.
+    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
 
     # A plain uvicorn.run() hung on Ctrl-C for as long as a browser tab was
     # open: the dashboard's /events SSE stream never ends on its own, so
@@ -1569,9 +1725,7 @@ app = typer.Typer(
 
 def _version_callback(value: bool) -> None:
     if value:
-        import importlib.metadata
-
-        console.print(f"aletheore {importlib.metadata.version('aletheore')}")
+        console.print(f"aletheore {_installed_version()}")
         raise typer.Exit(code=0)
 
 
@@ -1660,6 +1814,7 @@ def audit(
     ),
 ) -> None:
     path = _resolve_path(path, path_option)
+    _checked_dir(path)
     if managed:
         if agent is not None:
             console.print(
@@ -1748,6 +1903,7 @@ def scan(
     ),
 ) -> None:
     path = _resolve_path(path, path_option)
+    _checked_dir(path)
     exit_code, _evidence, _evidence_path = _scan(
         path, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints, map_schema,
         check_static_analysis, check_bearer, check_joern,
@@ -1766,10 +1922,12 @@ def watch(
     debounce: float = typer.Option(
         WATCH_DEBOUNCE_SECONDS,
         "--debounce",
+        min=0.0,
         help="seconds of quiet before rebuilding, so one burst of saves is one rebuild",
     ),
 ) -> None:
     path = _resolve_path(path, path_option)
+    _checked_dir(path)
     raise typer.Exit(code=_watch(path, debounce))
 
 
@@ -1779,6 +1937,7 @@ def init(
     path_option: Optional[str] = _PATH_OPTION,
 ) -> None:
     path = _resolve_path(path, path_option)
+    _checked_dir(path)
     config_path = Path(path) / ".aletheore.json"
     if config_path.exists():
         console.print(f"[bold red]error:[/bold red] {config_path} already exists - not overwriting it.")
@@ -1840,6 +1999,7 @@ def index(
     path_option: Optional[str] = _PATH_OPTION,
 ) -> None:
     path = _resolve_path(path, path_option)
+    _checked_dir(path)
     raise typer.Exit(code=_index(path))
 
 
@@ -1864,7 +2024,7 @@ def query(
         False, "--full", help="show the full raw diff instead of the curated summary (only 'changes')"
     ),
     agent: Optional[str] = typer.Option(None, "--agent", help="provider for 'answer'"),
-    k: int = typer.Option(10, "--k", help="number of semantic search results"),
+    k: int = typer.Option(10, "--k", min=1, help="number of semantic search results"),
     language: Optional[str] = typer.Option(
         None,
         "--language",
@@ -1923,6 +2083,7 @@ def verify(
     it only reads the report's text and the repo's own air.json, both of
     which are just files. Exits 1 if any citation can't be verified, for
     use as a CI gate on hand-written or third-party reports too."""
+    _checked_dir(repo_path)
     raise typer.Exit(code=_verify(report, repo_path))
 
 
@@ -1946,6 +2107,7 @@ def mcp(
     ),
 ) -> None:
     path = _resolve_path(path, path_option)
+    _checked_dir(path)
     raise typer.Exit(code=_mcp(path, agent, watch=not no_watch))
 
 
@@ -1966,6 +2128,7 @@ def mcp_install(
     ),
 ) -> None:
     path = _resolve_path(path, path_option)
+    _checked_dir(path)
     raise typer.Exit(code=_mcp_install(path, target))
 
 
@@ -1976,6 +2139,7 @@ def dashboard(
     port: int = typer.Option(8420, "--port", help="port to serve the dashboard on"),
 ) -> None:
     path = _resolve_path(path, path_option)
+    _checked_dir(path)
     raise typer.Exit(code=_dashboard(path, port))
 
 
@@ -1996,6 +2160,7 @@ def healthcheck(
     ),
 ) -> None:
     path = _resolve_path(path, path_option)
+    _checked_dir(path)
     if base_url is None:
         console.print(
             "[bold red]error:[/bold red] --base-url is required - it is the root URL of a "
@@ -2074,7 +2239,11 @@ def login() -> None:
             for index, candidate in enumerate(resolved, start=1):
                 console.print(f"  {index}. {candidate['account_login']}")
             while True:
-                raw = input(f"Enter a number [1-{len(resolved)}]: ").strip()
+                try:
+                    raw = input(f"Enter a number [1-{len(resolved)}]: ").strip()
+                except EOFError:
+                    console.print("[bold red]error:[/bold red] no interactive input to choose an installation")
+                    raise typer.Exit(code=1)
                 if raw.isdigit() and 1 <= int(raw) <= len(resolved):
                     installation = resolved[int(raw) - 1]
                     break
@@ -2092,6 +2261,9 @@ def login() -> None:
         )
     except DeviceFlowError as exc:
         console.print(f"[bold red]error:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+    except (httpx.HTTPError, KeyError, ValueError) as exc:
+        console.print(f"[bold red]error:[/bold red] login failed ({type(exc).__name__}: {exc}) - check your connection and retry")
         raise typer.Exit(code=1) from exc
 
 
@@ -2111,12 +2283,14 @@ def logout() -> None:
 
 @app.command(help="show installed version, update availability, and login state")
 def status() -> None:
-    import importlib.metadata
-
     import aletheore.credentials as credentials
 
-    installed_version = importlib.metadata.version("aletheore")
-    version_note = _check_for_update(installed_version)
+    installed_version = _installed_version()
+    version_note = (
+        "couldn't check for updates"
+        if installed_version == "unknown"
+        else _check_for_update(installed_version)
+    )
     console.print(f"Aletheore v{installed_version} ({version_note})")
 
     crash_reporting_state = (
@@ -2144,7 +2318,9 @@ def status() -> None:
     if who is None:
         console.print("A token is saved locally, but it couldn't be verified right now.")
     else:
-        console.print(f"Logged in as: [bold]{who['account_login']}[/bold] ({who['plan']} plan)")
+        console.print(
+            f"Logged in as: [bold]{who.get('account_login', '?')}[/bold] ({who.get('plan', '?')} plan)"
+        )
 
 
 def main() -> None:

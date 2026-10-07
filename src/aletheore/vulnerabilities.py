@@ -7,10 +7,12 @@ import tomllib
 import urllib.error
 import urllib.request
 from pathlib import Path
+
 from xml.etree import ElementTree
 
 import certifi
 from tree_sitter import Node
+from aletheore.user_paths import user_home
 
 OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 OSV_VULN_URL_TEMPLATE = "https://api.osv.dev/v1/vulns/{vuln_id}"
@@ -22,7 +24,7 @@ DEFAULT_TIMEOUT_SECONDS = 10
 # Short enough that a day of repeated scans (of this or any other repo) on
 # the same machine doesn't re-pay the same OSV.dev round-trip for every one,
 # without letting real staleness accumulate for long.
-DEFAULT_VULNERABILITY_CACHE_PATH = Path.home() / ".cache" / "aletheore" / "vulnerability-cache.json"
+DEFAULT_VULNERABILITY_CACHE_PATH = user_home() / ".cache" / "aletheore" / "vulnerability-cache.json"
 _VULNERABILITY_CACHE_TTL_SECONDS = 24 * 60 * 60
 
 # Use certifi's CA bundle explicitly rather than the system default SSL context.
@@ -220,14 +222,36 @@ def _parse_npm_pins(repo_path: Path) -> list[tuple[str, str, str]]:
         for path, details in lock_data.get("packages", {}).items():
             if not path.startswith("node_modules/"):
                 continue
-            name = path[len("node_modules/"):]
+            # A non-hoisted transitive dependency is keyed by its full nested
+            # path ("node_modules/a/node_modules/lodash"); the package name is
+            # only the segment after the LAST "node_modules/". Otherwise OSV
+            # is queried with a bogus name and the vulnerable copy is invisible.
+            name = path.rsplit("node_modules/", 1)[1]
             version = details.get("version")
             if name and version:
                 pins.append((name, version, "npm"))
+        if not pins:
+            # lockfileVersion 1 (npm < 7) has no "packages" map, only a nested
+            # "dependencies" tree of {name: {version, dependencies: {...}}}.
+            pins = _walk_npm_v1_dependencies(lock_data.get("dependencies"))
         if pins:
             return pins
 
     return _parse_npm_direct_pins(repo_path)
+
+
+def _walk_npm_v1_dependencies(tree) -> list[tuple[str, str, str]]:
+    pins: list[tuple[str, str, str]] = []
+    if not isinstance(tree, dict):
+        return pins
+    for name, details in tree.items():
+        if not isinstance(details, dict):
+            continue
+        version = details.get("version")
+        if name and isinstance(version, str) and version:
+            pins.append((name, version, "npm"))
+        pins.extend(_walk_npm_v1_dependencies(details.get("dependencies")))
+    return pins
 
 
 def _parse_go_pins(repo_path: Path) -> list[tuple[str, str, str]]:
@@ -341,10 +365,20 @@ def _strip_xml_namespace_prefixes(root: ElementTree.Element) -> ElementTree.Elem
 def _maven_resolve_property(version: str | None, properties: dict[str, str]) -> str | None:
     if not version:
         return None
-    match = re.fullmatch(r"\$\{([^}]+)\}", version.strip())
-    if match:
-        return properties.get(match.group(1))
-    return version.strip()
+    value: str | None = version.strip()
+    # A property may itself be defined as another property (<b>${a}</b>);
+    # follow the chain, cycle-safe, instead of stopping after one hop.
+    seen: set[str] = set()
+    while value:
+        match = re.fullmatch(r"\$\{([^}]+)\}", value)
+        if not match:
+            return value
+        key = match.group(1)
+        if key in seen:
+            return None
+        seen.add(key)
+        value = properties.get(key)
+    return None
 
 
 def _swift_package_url_to_osv_name(location: str) -> str | None:
@@ -508,7 +542,9 @@ def _parse_composer_pins(repo_path: Path) -> list[tuple[str, str, str]]:
             data = {}
         pins = [
             (pkg["name"], pkg["version"].lstrip("v"), "Packagist")
-            for pkg in data.get("packages", [])
+            # packages-dev holds the dev-only locked tree (phpunit & co.); a
+            # vulnerable dev dependency is still a real finding.
+            for pkg in [*data.get("packages", []), *data.get("packages-dev", [])]
             if "name" in pkg and "version" in pkg
         ]
         if pins:
@@ -522,7 +558,7 @@ def _parse_composer_pins(repo_path: Path) -> list[tuple[str, str, str]]:
     except json.JSONDecodeError:
         return []
     pins = []
-    for name, version in data.get("require", {}).items():
+    for name, version in {**data.get("require", {}), **data.get("require-dev", {})}.items():
         if name.lower() == "php":
             continue
         cleaned = _clean_range_version(version)

@@ -630,3 +630,74 @@ def test_compute_hotspots_normalizes_paths_when_scan_root_is_subdirectory(tmp_pa
             "dependents_count": 0,
         }
     ]
+
+
+def test_hotspots_and_recently_updated_exclude_files_deleted_from_the_tree(tmp_path):
+    repo = _init_repo_with_hotspot_commits(tmp_path)
+    run(repo, "rm", "-q", "b.py")
+    run(repo, "commit", "-q", "-m", "delete b")
+    modules = [{"path": "a.py", "imported_by": []}]
+
+    hotspots = compute_hotspots(repo, modules)
+    recent = compute_recently_updated(repo)
+
+    assert [h["path"] for h in hotspots] == ["a.py"]
+    assert [r["path"] for r in recent] == ["a.py"]
+
+
+def test_analyze_git_resets_when_sync_pointer_was_rewritten_out_of_history(tmp_path):
+    # An amended-away commit still exists as an orphaned object until gc, so an
+    # existence-only check kept the stale sync pointer and double-counted the
+    # rewritten commit on the next incremental sync.
+    repo = make_git_repo(tmp_path)
+    now = datetime(2026, 7, 14, tzinfo=timezone.utc)
+    assert analyze_git(repo, now=now)["total_commits"] == 3
+
+    (repo / "a.txt").write_text("amended")
+    run(repo, "add", "a.txt")
+    env = os.environ.copy()
+    env["GIT_COMMITTER_DATE"] = "2026-07-02T00:00:00+00:00"
+    subprocess.run(
+        ["git", "commit", "--amend", "-m", "third amended", "--date", "2026-07-02T00:00:00+00:00"],
+        cwd=repo, check=True, capture_output=True, env=env,
+    )
+
+    result = analyze_git(repo, now=now)
+    counts = {o["email"]: o["commit_count"] for o in result["ownership"]}
+    assert counts == {"a@example.com": 2, "b@example.com": 1}
+
+
+def test_analyze_git_flags_a_shallow_clone_as_partial_history(tmp_path):
+    source = make_git_repo(tmp_path)
+    clone = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth=2", f"file://{source}", str(clone)],
+        check=True, capture_output=True,
+    )
+
+    result = analyze_git(clone, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
+
+    assert result["history_depth_limited"] is True
+    assert analyze_git(source, now=datetime(2026, 7, 14, tzinfo=timezone.utc))[
+        "history_depth_limited"
+    ] is False
+
+
+def test_parse_branches_computes_ahead_behind_without_a_subprocess_per_branch(tmp_path):
+    from unittest.mock import patch
+
+    from aletheore.git_intel import analyzer
+
+    repo = make_git_repo(tmp_path)
+    for i in range(4):
+        run(repo, "branch", f"extra{i}", "main")
+    now = datetime(2026, 7, 14, tzinfo=timezone.utc)
+
+    with patch.object(analyzer, "_ahead_behind", wraps=analyzer._ahead_behind) as per_branch:
+        branches = analyzer._parse_branches(repo, now)
+
+    by_name = {b["name"]: b for b in branches}
+    assert by_name["feature/old"]["ahead_of_main"] == 1
+    assert by_name["feature/old"]["behind_main"] == 1
+    assert by_name["extra0"]["ahead_of_main"] == 0
+    assert per_branch.call_count == 0

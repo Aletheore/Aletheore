@@ -3,7 +3,12 @@ from unittest.mock import MagicMock
 import pytest
 
 from app_server.db import hide_repo, set_installation_plan, upsert_installation
-from app_server.webhooks.issue_comment import handle_issue_comment_event
+from app_server.webhooks.issue_comment import (
+    AUDIT_COMMAND,
+    _command_candidate_lines,
+    _matches_command,
+    handle_issue_comment_event,
+)
 
 
 def _payload(comment_body: str, has_pr: bool = True, commenter: str = "someuser"):
@@ -235,3 +240,58 @@ async def test_audit_command_on_a_hidden_repo_does_not_reach_the_permission_chec
     await handle_issue_comment_event(_payload("/aletheore audit"), pool, "redis://unused", queue=fake_queue)
     permission_check.assert_not_called()
     fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        "To run it comment:\n```\n/aletheore audit\n```",
+        "To run it comment:\n~~~\n/aletheore audit\n~~~",
+        "Example:\n\n    /aletheore audit\n",
+    ],
+)
+async def test_command_inside_a_code_block_does_not_enqueue(pool, monkeypatch, body):
+    await _seed_paid_installation(pool)
+    _mock_permission_check(monkeypatch, "write")
+    fake_queue = MagicMock()
+    await handle_issue_comment_event(_payload(body), pool, "redis://unused", queue=fake_queue)
+    fake_queue.enqueue.assert_not_called()
+
+
+def test_command_inside_a_shorter_nested_fence_is_not_a_candidate():
+    # Real bug found via audit: the fence-close check compared only the
+    # first 3 characters of a line, ignoring fence length. Per CommonMark/
+    # GFM (how GitHub itself renders the comment), a closing fence must be
+    # the same character and >= the opening fence's length - a literal
+    # ``` line inside a ````-opened (4-backtick) fence does not close it.
+    # The old check treated any 3-of-the-same-char prefix as a valid
+    # closer, ending fence tracking early and exposing the command below
+    # it as unfenced, which fired a real, billed, AIR-tier-gated managed
+    # audit from a comment whose command was, visually and per GitHub's
+    # own rendering, still inside the code block.
+    body = "````\n```\n/aletheore audit\n````"
+    assert list(_command_candidate_lines(body)) == []
+    assert not any(_matches_command(line, AUDIT_COMMAND) for line in _command_candidate_lines(body))
+
+
+@pytest.mark.asyncio
+async def test_audit_command_inside_a_shorter_nested_fence_does_not_enqueue(pool, monkeypatch):
+    await _seed_paid_installation(pool)
+    _mock_permission_check(monkeypatch, "write")
+    fake_queue = MagicMock()
+    await handle_issue_comment_event(
+        _payload("````\n```\n/aletheore audit\n````"), pool, "redis://unused", queue=fake_queue
+    )
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_command_after_a_closed_code_block_still_enqueues(pool, monkeypatch):
+    await _seed_paid_installation(pool)
+    _mock_permission_check(monkeypatch, "write")
+    fake_queue = MagicMock()
+    await handle_issue_comment_event(
+        _payload("```\nfoo\n```\n/aletheore audit"), pool, "redis://unused", queue=fake_queue
+    )
+    fake_queue.enqueue.assert_called_once()

@@ -318,6 +318,10 @@ def _patch_fix_suggestion_spend_gate(monkeypatch, plan: str = "air") -> None:
     # times out (~30s) - same gap the flash-review true-up tests already
     # closed for their own call sites.
     monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    # Same reasoning, for the persisted-reservation bookkeeping
+    # can_start_next_call()/record_usage() now also touch.
+    monkeypatch.setattr("scan_worker.jobs.upsert_pending_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.clear_pending_llm_spend_reservation", lambda *a, **k: None)
 
 
 def test_fix_suggestion_attachment_returns_none_when_file_content_unavailable(monkeypatch):

@@ -2361,6 +2361,28 @@ def test_fetch_review_file_context_skips_files_where_fetch_returns_none(monkeypa
     assert file_contents == {"a.py": "real content"}
 
 
+def test_fetch_review_file_context_skips_a_file_whose_fetch_raises(monkeypatch):
+    # Real bug found via audit: fetch_file_content raises unguarded on a
+    # non-404 HTTP error (403 rate-limit, 5xx) or a network failure, and
+    # this loop's future.result() had no try/except, so one transient
+    # GitHub error on any single file aborted the whole review - every
+    # other I/O path in this file fails open and logs a warning instead.
+    from scan_worker import flash_review
+
+    def fake_fetch(client, token, repo, path, ref):
+        if path == "flaky.py":
+            raise RuntimeError("connection reset")
+        return f"content of {path}"
+
+    monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
+
+    file_contents = flash_review.fetch_review_file_context(
+        None, "tok", "o/r", ["a.py", "flaky.py"], "sha"
+    )
+
+    assert file_contents == {"a.py": "content of a.py"}
+
+
 def test_fetch_review_file_context_windows_an_oversized_file_with_diff_patches(monkeypatch):
     # The core new behavior: given real hunk-line evidence, an oversized
     # file gets a windowed excerpt instead of being dropped entirely.
@@ -4012,26 +4034,9 @@ def test_review_diff_returns_empty_findings_when_every_chain_provider_fails():
     assert findings == []
 
 
-# --- second-model verification (_verify_findings_with_second_model) ---
+# --- ranking pass (_rank_findings_with_severity) ---
 
 _ONE_FINDING = [{"file": "app.py", "line": 1, "issue": "unclosed file handle"}]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# --- ranking pass (_rank_findings_with_severity) ---
 
 _TWO_FINDINGS = [
     {"file": "app.py", "line": 1, "issue": "unclosed file handle"},
@@ -4310,47 +4315,6 @@ def test_review_diff_caches_the_ranked_result_not_the_unranked_one(mock_adapter_
     assert cached[42]["rank"] == 1 and cached[42]["severity"] == "Critical"
 
 
-
-
-
-
-
-
-
-
-# Real bug fixed 2026-09-14: _verify_findings_with_second_model used to hand
-# the verifier ONLY the diff hunk - a finding whose consequence depends on
-# code outside that hunk (an enclosing loop, a caller) was structurally
-# unconfirmable from what the verifier saw, and its own prompt told it to
-# REJECT exactly that case. These tests pin the fix: file_contents, when
-# given, must reach the verifier as surrounding context around the cited
-# line, and must degrade to the old diff-only behavior when unavailable.
-_LOOP_FINDING = [{
-    "file": "parse.go",
-    "line": 5,
-    "issue": "break here silently drops every remaining loop iteration",
-}]
-_LOOP_FILE_CONTENTS = {
-    "parse.go": (
-        "func parseFlags() {\n"
-        "\tfor _, arg := range args {\n"
-        "\t\tif len(arg) == 0 {\n"
-        "\t\t\t// bug lives here\n"
-        "\t\t\tbreak\n"
-        "\t\t}\n"
-        "\t\tconsume(arg)\n"
-        "\t}\n"
-        "}\n"
-    )
-}
-
-
-
-
-
-
-
-
 _SUGGESTION_FINDING = {
     "file": "check.py",
     "line": 2,
@@ -4451,6 +4415,39 @@ def test_generate_findings_per_file_caps_smallest_patch_first_not_raw_order(monk
 
     assert set(called_files) == {"tiny.py", "large_b.py"}
     assert "large_a.py" not in called_files
+
+
+def test_generate_findings_per_file_scales_the_cap_to_each_files_own_hunk_count(monkeypatch):
+    # Real gap found via audit: review_diff computes a hunk-scaled system
+    # prompt (raising the "(0-5 issues)" cap to 8/12 for a large diff) but
+    # _generate_findings_per_file/_review_one_file always passed the raw,
+    # unscaled FLASH_REVIEW_SYSTEM_PROMPT module constant instead - the
+    # default path for every paid review (per_file_completeness=not
+    # is_free_tier). A single file with many independent changed regions
+    # and more than 5 real bugs would recur the same undercount gap at
+    # file granularity, even though the PR-level version of the problem
+    # was already fixed. Each file's own hunk count, not the whole PR's,
+    # should drive its own cap.
+    from scan_worker import flash_review
+
+    busy_patch = "\n".join(f"@@ -{i},1 +{i},1 @@\nchange {i}" for i in range(20))  # 20 hunks > 15
+    quiet_patch = "@@ -1,1 +1,1 @@\nchange 0"  # 1 hunk, stays at the default cap
+
+    diff_patches = (("busy.py", busy_patch), ("quiet.py", quiet_patch))
+    captured = {}
+
+    def fake_completion(system_prompt, user_prompt, cwd="."):
+        filename = "busy.py" if "--- busy.py ---" in user_prompt else "quiet.py"
+        captured[filename] = system_prompt
+        return "review:\n  key_issues_to_review: []\n"
+
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.side_effect = fake_completion
+
+    flash_review._generate_findings_per_file(diff_patches, "some PR", mock_adapter)
+
+    assert "(0-8 issues)" in captured["busy.py"]
+    assert captured["quiet.py"] == FLASH_REVIEW_SYSTEM_PROMPT
 
 
 _TWO_FINDINGS_SAME_LOCATION = [
@@ -4648,6 +4645,33 @@ def test_review_diff_drops_a_contradicted_finding_when_the_check_is_enabled(mock
 
     findings = review_diff(diff_text, cache_lookup=lambda diff: None, cross_file_check_runs=1)
 
+    assert [f["line"] for f in findings] == [42]
+
+
+@patch("scan_worker.model_tiers.cross_file_check_adapter")
+@patch("scan_worker.flash_review.flash_review_generation_adapter")
+def test_review_diff_drops_a_contradicted_finding_on_a_cache_hit_too(mock_generation, mock_check_factory):
+    # Real gap found via audit: the cache-hit branch returned straight
+    # after grounding, never reaching cross_file_check_runs at all - only
+    # the fresh-generation path below it did. The packet cache is
+    # similarity-based, not exact-match, so a finding cached against one
+    # push could replay unchecked on a later, similar push whose CURRENT
+    # diff would otherwise get it dropped as contradicted. The generation
+    # adapter must never be called here (this is a cache hit).
+    cached_findings = [
+        {"file": "app.py", "line": 42, "issue": "Hardcoded secret"},
+        {"file": "app.py", "line": 43, "issue": "Unclosed handle"},
+    ]
+    _xfile_adapter(mock_check_factory, _xfile_verdicts(
+        (2, "CONTRADICTED", "app.py", "f = open('x')"),
+    ))
+    diff_text = "--- app.py ---\n@@ -40,2 +42,2 @@\n+key = \"sk-abc123\"\n+f = open('x')"
+
+    findings = review_diff(
+        diff_text, cache_lookup=lambda diff: cached_findings, cross_file_check_runs=1
+    )
+
+    mock_generation.assert_not_called()
     assert [f["line"] for f in findings] == [42]
 
 

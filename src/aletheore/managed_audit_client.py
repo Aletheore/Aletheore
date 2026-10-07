@@ -34,7 +34,12 @@ def run_managed_audit_request(
     # of a freshly created one, while owns_client still says "not owned",
     # so that new client is never closed. Both checks now use the same
     # None comparison.
-    client = http_client if http_client is not None else httpx.Client(base_url=api_base_url)
+    # httpx's 5s default read timeout is too short for posting a large evidence blob.
+    client = (
+        http_client
+        if http_client is not None
+        else httpx.Client(base_url=api_base_url, timeout=httpx.Timeout(60.0, connect=10.0))
+    )
     headers = {"Authorization": f"Bearer {token}"}
 
     try:

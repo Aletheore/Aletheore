@@ -1351,3 +1351,22 @@ def test_load_evidence_file_recovers_from_a_transient_windows_permission_error(t
     ):
         loaded = load_evidence_file(path)
     assert loaded["aletheore_version"] == EVIDENCE_VERSION
+
+
+def test_rails_association_read_skips_oversized_files_and_respects_total_budget(tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    from aletheore import evidence
+
+    (tmp_path / "small.rb").write_text("x" * 10)
+    (tmp_path / "big.rb").write_text("x" * 5000)
+    (tmp_path / "also_small.rb").write_text("x" * 10)
+    graph = {"nodes": ["small.rb", "big.rb", "also_small.rb"], "edges": []}
+
+    monkeypatch.setattr(evidence, "MAX_RAILS_MODEL_FILE_BYTES", 100)
+    monkeypatch.setattr(evidence, "MAX_RAILS_MODEL_TOTAL_BYTES", 15)
+    with patch.object(evidence, "rails_model_association_edges", return_value=[]) as mock_edges:
+        evidence._rails_model_association_edges(tmp_path, graph)
+
+    # big.rb exceeds the per-file cap; also_small.rb would exceed the total budget.
+    assert set(mock_edges.call_args.args[0]) == {"small.rb"}
