@@ -5352,6 +5352,7 @@ def test_post_flash_review_finding_comments_records_a_real_url_for_a_new_post(mo
         settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
         repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
         findings_to_post=[finding],
+        reviewed_scope={},
     )
 
     assert failed == 0
@@ -5384,6 +5385,7 @@ def test_post_flash_review_finding_comments_renders_the_rank_suffix_on_the_real_
         settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
         repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
         findings_to_post=findings,
+        reviewed_scope={},
     )
 
     assert "High · #1 of 2" in posted_bodies[0]
@@ -5428,6 +5430,7 @@ def test_post_flash_review_finding_comments_rank_total_is_not_undercounted_by_an
         settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
         repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
         findings_to_post=findings,
+        reviewed_scope={},
     )
 
     assert "Critical · #1 of 3" in posted_bodies[0]
@@ -5452,6 +5455,7 @@ def test_post_flash_review_finding_comments_omits_url_when_the_post_fails(monkey
         settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
         repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
         findings_to_post=[finding],
+        reviewed_scope={},
     )
 
     assert failed == 1
@@ -5482,6 +5486,7 @@ def test_post_flash_review_finding_comments_records_url_for_an_untouched_existin
         settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
         repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
         findings_to_post=[finding],
+        reviewed_scope={},
     )
 
     assert finding["comment_url"] == "https://github.com/octocat/hello-world/pull/42#discussion_r777001"
@@ -12999,3 +13004,292 @@ def test_incremental_spend_budget_persists_one_reservation_row_per_thread(monkey
 
     assert len({key for key, _ in upserts}) == 4
     assert [reserve for _, reserve in upserts] == [pytest.approx(0.10)] * 4
+
+
+# --- incremental reviews: anchors and "no longer detected" -------------------
+#
+# Seen live on PR #961: a push that only merged the base branch into the PR
+# branch (1) produced findings on code the base brought in, which GitHub
+# rejects inline comments for (422), reported as "none could be posted", and
+# (2) marked every earlier finding "no longer detected" even though none of
+# the PR's own files were part of that push's diff.
+
+_OWN_PATCH = "@@ -10,3 +10,4 @@\n ctx\n+added\n ctx\n ctx\n"  # new-file lines 10-13
+
+
+def test_split_findings_by_pr_diff_drops_findings_on_code_the_pr_does_not_own():
+    from scan_worker.flash_review import _diff_valid_lines
+    from scan_worker.jobs import _split_findings_by_pr_diff
+
+    scope = _diff_valid_lines("", (("src/own.py", _OWN_PATCH),))
+    own = {"file": "src/own.py", "line": 11, "issue": "real"}
+    own_but_off_the_diff = {"file": "src/own.py", "line": 99, "issue": "elsewhere in the file"}
+    merged_in = {"file": "src/from_base_branch.py", "line": 5, "issue": "not this PR's code"}
+    unreadable = {"file": "src/huge.py", "line": 7, "issue": "cannot judge"}
+
+    postable, outside = _split_findings_by_pr_diff(
+        [own, own_but_off_the_diff, merged_in, unreadable], scope, frozenset({"src/huge.py"})
+    )
+
+    assert postable == [own, unreadable]
+    assert outside == [own_but_off_the_diff, merged_in]
+
+
+def _run_resolution(monkeypatch, *, comment, reviewed_scope, get_raises=False):
+    """Runs _post_flash_review_finding_comments with one tracked, unresolved
+    finding that this review did not re-find. Returns (marked, edits, gets)."""
+    from types import SimpleNamespace
+
+    from scan_worker.jobs import _post_flash_review_finding_comments
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_flash_review_finding_comments",
+        lambda *a, **k: {
+            ("flash_review_llm", "tracked-key"): {"id": 7, "github_comment_id": 555, "resolved_at": None}
+        },
+    )
+    marked: list[int] = []
+    edits: list[str] = []
+    gets: list[str] = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved",
+        lambda dsn, row_id: marked.append(row_id) or True,
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.edit_pr_review_comment",
+        lambda client, token, repo, comment_id, body: edits.append(body),
+    )
+
+    class _Client:
+        def get(self, url, headers=None):
+            gets.append(url)
+            if get_raises:
+                raise RuntimeError("GitHub is down")
+            return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"body": "original", **comment})
+
+    _post_flash_review_finding_comments(
+        settings=SimpleNamespace(database_url="postgresql://unused"), client=_Client(), token="t",
+        installation_id=1, repo_full_name="octocat/hello-world", pr_number=42, head_sha="abcdef1234567890",
+        findings_to_post=[], reviewed_scope=reviewed_scope,
+    )
+    return marked, edits, gets
+
+
+def test_a_tracked_finding_in_a_file_this_push_never_touched_is_not_marked_resolved(monkeypatch):
+    # The #961 case: the push only changed other files, so nothing was
+    # re-reviewed where this finding lives and "not found" proves nothing.
+    marked, edits, _ = _run_resolution(
+        monkeypatch,
+        comment={"path": "src/preferences.py", "line": 88},
+        reviewed_scope={"src/from_base_branch.py": {5, 6}},
+    )
+
+    assert marked == []
+    assert edits == []
+
+
+def test_a_tracked_finding_is_resolved_when_this_review_covered_its_spot(monkeypatch):
+    marked, edits, _ = _run_resolution(
+        monkeypatch,
+        comment={"path": "src/own.py", "line": 11},
+        reviewed_scope={"src/own.py": {10, 11, 12, 13}},
+    )
+
+    assert marked == [7]
+    assert len(edits) == 1
+    assert edits[0].startswith("✅ _No longer detected as of `abcdef123456`._")
+    assert edits[0].endswith("original")
+
+
+def test_a_tracked_finding_far_from_everything_this_review_covered_is_not_resolved(monkeypatch):
+    # Same file, but the push only changed lines 10-13 and the finding is
+    # hundreds of lines away: the review never looked at it.
+    marked, _, _ = _run_resolution(
+        monkeypatch,
+        comment={"path": "src/own.py", "line": 400},
+        reviewed_scope={"src/own.py": {10, 11, 12, 13}},
+    )
+
+    assert marked == []
+
+
+def test_an_outdated_comment_in_a_reviewed_file_is_resolved(monkeypatch):
+    # GitHub reports a comment as outdated (line null) once the code it is
+    # anchored to changed - the usual way a real fix shows up. The file being
+    # in this review's diff means that change is part of what was reviewed.
+    marked, edits, _ = _run_resolution(
+        monkeypatch,
+        comment={"path": "src/own.py", "line": None},
+        reviewed_scope={"src/own.py": {10, 11, 12, 13}},
+    )
+
+    assert marked == [7]
+    assert len(edits) == 1
+
+
+def test_an_outdated_comment_in_a_file_this_push_did_not_touch_is_not_resolved(monkeypatch):
+    marked, _, _ = _run_resolution(
+        monkeypatch,
+        comment={"path": "src/untouched.py", "line": None},
+        reviewed_scope={"src/own.py": {10, 11}},
+    )
+
+    assert marked == []
+
+
+def test_nothing_is_resolved_without_coverage_information(monkeypatch):
+    marked, edits, gets = _run_resolution(
+        monkeypatch, comment={"path": "src/own.py", "line": 11}, reviewed_scope=None
+    )
+
+    assert (marked, edits, gets) == ([], [], [])
+
+
+def test_a_comment_that_cannot_be_read_is_left_unresolved_to_retry_next_push(monkeypatch):
+    marked, edits, gets = _run_resolution(
+        monkeypatch,
+        comment={},
+        reviewed_scope={"src/own.py": {10, 11}},
+        get_raises=True,
+    )
+
+    assert len(gets) == 1
+    assert marked == []
+    assert edits == []
+
+
+def test_reviewed_scope_excludes_files_the_review_never_read():
+    from scan_worker.jobs import _reviewed_scope
+
+    scope = _reviewed_scope(
+        "",
+        (("a.py", _OWN_PATCH), ("b.py", _OWN_PATCH), ("c.py", _OWN_PATCH)),
+        ["b.py", "c.py"],
+    )
+
+    assert list(scope) == ["a.py"]
+
+
+def test_incremental_review_does_not_post_findings_on_code_a_merge_brought_in(monkeypatch):
+    # PR #961, live: the push merged the base branch into the PR branch, so the
+    # incremental diff (last reviewed commit..head) contained code that is not
+    # part of the PR. A finding there was posted, GitHub answered 422, and the
+    # summary said "none could be posted". Now it is dropped before posting and
+    # the summary says why.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"}
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
+    )
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0
+    )
+    # Mock the free-tier adapter chain to have one working adapter. A
+    # well-formed PR-Agent-shaped YAML response with zero issues - not a
+    # bare "[]" - since _call_adapter_and_validate now checks the response
+    # follows PR-Agent's real YAML schema (review.key_issues_to_review),
+    # not that it's a JSON array; "[]" is valid YAML but not that shape, so
+    # it would be treated as this adapter failing validation.
+    from unittest.mock import MagicMock
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.return_value = "review:\n  key_issues_to_review: []\n"
+    monkeypatch.setattr(
+        "scan_worker.model_tiers.writing_adapter_chain_for_free_tier",
+        lambda *a, **k: [mock_adapter],
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: _FakeRedis())
+    monkeypatch.setattr("scan_worker.jobs.resolve_model", lambda *a: "gpt-5.6-luna")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: "lastreviewed")
+    class _Diff(str):
+        patches = ()
+
+    def _fake_fetch_pr_diff(client, token, repo, base, head, **kwargs):
+        if base == "lastreviewed":  # incremental: own file plus what the merge brought in
+            diff = _Diff("incremental")
+            diff.patches = (("a.py", "@@ -1,1 +1,2 @@\n x\n+own change\n"),
+                            ("from_base_branch.py", "@@ -40,1 +40,2 @@\n y\n+merged in\n"))
+        else:  # the PR's own diff against its base: only a.py
+            diff = _Diff("full")
+            diff.patches = (("a.py", "@@ -1,1 +1,2 @@\n x\n+own change\n"),)
+        return diff
+
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", _fake_fetch_pr_diff)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["a.py", "from_base_branch.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_title", lambda *a, **k: "")
+    # Deliberately False (not the True this test used to hardcode) - True
+    # short-circuits _run_flash_review before it ever builds the adapter
+    # chain or calls review_diff, which would silently pass this test
+    # while exercising none of the free-tier code it's named for.
+    monkeypatch.setattr("scan_worker.jobs.is_non_substantive_diff", lambda *a: False)
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
+    monkeypatch.setattr("scan_worker.jobs.files_missing_from_review_context", lambda *a: [])
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a: None)
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.build_referenced_symbol_context", lambda *a: "")
+
+    cost_for_usage_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.cost_for_usage",
+        lambda *a: cost_for_usage_calls.append(a) or 999.0,  # loud, obviously-wrong value if ever called
+    )
+    cache_lookup_calls = []
+    cache_write_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.lookup_cached_flash_review_result",
+        lambda *a: cache_lookup_calls.append(a) or None,
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.store_flash_review_result",
+        lambda *a, **k: cache_write_calls.append(a),
+    )
+    record_llm_spend_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.record_llm_spend",
+        lambda *a, **k: record_llm_spend_calls.append(a),
+    )
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    summary = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.upsert_pr_comment",
+        lambda client, token, repo, pr, body, **k: summary.update(body=body),
+    )
+    # One finding, on a line the incremental diff has but the PR's own diff does not.
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda *a, **k: [{"file": "from_base_branch.py", "line": 41, "issue": "bug in merged-in code", "source": "llm"}],
+    )
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.installation_spend_lock", _noop_spend_lock
+    )
+
+    from scan_worker.jobs import run_flash_review_job
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    posted_inline = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: posted_inline.append(a) or {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert posted_inline == []
+    assert "brought in from the base branch" in summary["body"]
+    assert "none could be posted" not in summary["body"]
+    assert "already dismissed" not in summary["body"]
