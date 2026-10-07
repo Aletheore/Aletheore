@@ -1100,9 +1100,13 @@ function lockedFeature(title, description, previewHtml) {{
 # re-render whichever page's seat UI actually called them.
 BILLING_ACTIONS_JS = """
 function _newIdempotencyKey() {
-  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+  // Bare `crypto`, not `window.crypto` - identical in a browser (window's
+  // own properties are accessible unqualified) but also resolves against
+  // Node's global Web Crypto API with no `window` involved at all, unlike
+  // `window.crypto` which threw ReferenceError there.
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     try {
-      return window.crypto.randomUUID();
+      return crypto.randomUUID();
     } catch (e) {
       // randomUUID throws outside a secure context (plain HTTP on a
       // non-localhost host) - real gap found via Flash Review. Falls
@@ -1113,7 +1117,7 @@ function _newIdempotencyKey() {
   // getRandomValues has no secure-context restriction (unlike randomUUID),
   // so build a UUID v4 by hand from it.
   var bytes = new Uint8Array(16);
-  window.crypto.getRandomValues(bytes);
+  crypto.getRandomValues(bytes);
   bytes[6] = (bytes[6] & 0x0f) | 0x40;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   var hex = Array.prototype.map.call(bytes, function (b) { return b.toString(16).padStart(2, '0'); }).join('');
@@ -1145,18 +1149,26 @@ async function buySeat(btn) {
   const status = document.getElementById('seat-billing-status');
   status.textContent = 'Updating billing...';
   status.style.color = 'var(--slate-600)';
-  // Idempotency-Key: the server-side half of the gap above, closed in
-  // admin.py's buy_extra_seat (real audit finding - the lock there
-  // serializes concurrent requests but doesn't collapse them into one
-  // purchase). Generated once per attempt sequence, not once per click -
-  // kept on btn.dataset so a retry after fetch() itself throws (an
-  // ambiguous outcome: the request may have already reached and mutated
-  // Paddle before the client ever saw a response) replays the SAME key and
-  // gets the first attempt's cached result instead of a second real charge.
-  if (!btn.dataset.idempotencyKey) {
-    btn.dataset.idempotencyKey = _newIdempotencyKey();
-  }
   try {
+    // Idempotency-Key: the server-side half of the gap above, closed in
+    // admin.py's buy_extra_seat (real audit finding - the lock there
+    // serializes concurrent requests but doesn't collapse them into one
+    // purchase). Generated once per attempt sequence, not once per click -
+    // kept on btn.dataset so a retry after fetch() itself throws (an
+    // ambiguous outcome: the request may have already reached and mutated
+    // Paddle before the client ever saw a response) replays the SAME key
+    // and gets the first attempt's cached result instead of a second real
+    // charge. Inside the try, not before it: a plain object btn (this
+    // file's own test harness, tests/test_frontend_js_syntax.py) has no
+    // .dataset, and reading it outside the try would throw before
+    // finally's re-enable ever runs - real regression this fixes, caught
+    // by that same test suite.
+    if (!btn.dataset) {
+      btn.dataset = {};
+    }
+    if (!btn.dataset.idempotencyKey) {
+      btn.dataset.idempotencyKey = _newIdempotencyKey();
+    }
     const res = await fetch(adminBase + '/seats/buy', {
       method: 'POST',
       headers: { 'Idempotency-Key': btn.dataset.idempotencyKey },
@@ -1195,10 +1207,16 @@ async function removeSeat(btn) {
   const status = document.getElementById('seat-billing-status');
   status.textContent = 'Updating billing...';
   status.style.color = 'var(--slate-600)';
-  if (!btn.dataset.idempotencyKey) {
-    btn.dataset.idempotencyKey = _newIdempotencyKey();
-  }
   try {
+    // See buySeat's comment - same Idempotency-Key generation, inside the
+    // try for the same reason (a plain-object btn with no .dataset must
+    // not throw before finally's re-enable can run).
+    if (!btn.dataset) {
+      btn.dataset = {};
+    }
+    if (!btn.dataset.idempotencyKey) {
+      btn.dataset.idempotencyKey = _newIdempotencyKey();
+    }
     const res = await fetch(adminBase + '/seats/remove', {
       method: 'POST',
       headers: { 'Idempotency-Key': btn.dataset.idempotencyKey },
