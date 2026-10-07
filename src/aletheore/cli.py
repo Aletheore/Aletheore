@@ -2004,6 +2004,33 @@ def healthcheck(
     raise typer.Exit(code=_healthcheck(path, base_url))
 
 
+config_app = typer.Typer(help="manage local CLI preferences")
+app.add_typer(config_app, name="config")
+
+
+@config_app.command(
+    "crash-reporting",
+    help="show or change whether unhandled CLI errors are reported to Aletheore",
+)
+def config_crash_reporting(
+    state: Optional[str] = typer.Argument(
+        None, help="'on' or 'off' - omit to show the current state"
+    ),
+) -> None:
+    if state is None:
+        current = "on" if is_crash_reporting_enabled() else "off"
+        console.print(f"Crash reporting: {current}")
+        raise typer.Exit(code=0)
+
+    normalized = state.strip().lower()
+    if normalized not in ("on", "off"):
+        console.print(f"[bold red]error:[/bold red] expected 'on' or 'off', got '{state}'")
+        raise typer.Exit(code=1)
+
+    set_crash_reporting_enabled(normalized == "on")
+    console.print(f"[bold green]Crash reporting turned {normalized}.[/bold green]")
+
+
 @app.command(help="authenticate with GitHub via device flow and save a personal API token")
 def login() -> None:
     from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, has_api_key, save_api_token
@@ -2085,6 +2112,13 @@ def status() -> None:
     installed_version = importlib.metadata.version("aletheore")
     version_note = _check_for_update(installed_version)
     console.print(f"Aletheore v{installed_version} ({version_note})")
+
+    crash_reporting_state = (
+        "on"
+        if is_crash_reporting_enabled()
+        else "off (run 'aletheore config crash-reporting on' to enable)"
+    )
+    console.print(f"Crash reporting: {crash_reporting_state}")
 
     if not credentials.has_api_key(
         "ALETHEORE_API_TOKEN",

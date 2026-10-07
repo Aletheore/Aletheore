@@ -31,6 +31,7 @@ from aletheore.cli import (
     app,
 )
 from aletheore.device_auth import DeviceFlowError
+from aletheore.preferences import is_crash_reporting_enabled, set_crash_reporting_enabled
 from aletheore.evidence import EVIDENCE_VERSION
 from aletheore.query import QUERY_FUNCTIONS
 from aletheore.git_intel.analyzer import GIT_ANALYSIS_RESOURCE_EXIT_CODE, GitAnalysisError
@@ -2982,3 +2983,69 @@ def test_the_mcp_command_documents_no_watch():
 
     assert option.is_flag
     assert "ALETHEORE_MCP_WATCH" in option.help
+
+
+def test_config_crash_reporting_shows_current_state_when_enabled(monkeypatch):
+    monkeypatch.setenv("ALETHEORE_CRASH_REPORTING", "1")
+
+    result = runner.invoke(app, ["config", "crash-reporting"])
+
+    assert result.exit_code == 0
+    assert "Crash reporting: on" in result.output
+
+
+def test_config_crash_reporting_shows_current_state_when_disabled(monkeypatch):
+    monkeypatch.setenv("ALETHEORE_CRASH_REPORTING", "0")
+
+    result = runner.invoke(app, ["config", "crash-reporting"])
+
+    assert result.exit_code == 0
+    assert "Crash reporting: off" in result.output
+
+
+def test_config_crash_reporting_off_persists_the_preference(monkeypatch):
+    monkeypatch.delenv("ALETHEORE_CRASH_REPORTING", raising=False)
+
+    result = runner.invoke(app, ["config", "crash-reporting", "off"])
+
+    assert result.exit_code == 0
+    assert "turned off" in result.output
+    assert is_crash_reporting_enabled() is False
+
+
+def test_config_crash_reporting_on_persists_the_preference(monkeypatch):
+    monkeypatch.delenv("ALETHEORE_CRASH_REPORTING", raising=False)
+    set_crash_reporting_enabled(False)
+
+    result = runner.invoke(app, ["config", "crash-reporting", "on"])
+
+    assert result.exit_code == 0
+    assert "turned on" in result.output
+    assert is_crash_reporting_enabled() is True
+
+
+def test_config_crash_reporting_rejects_an_invalid_value(monkeypatch):
+    monkeypatch.delenv("ALETHEORE_CRASH_REPORTING", raising=False)
+
+    result = runner.invoke(app, ["config", "crash-reporting", "maybe"])
+
+    assert result.exit_code == 1
+    assert "expected 'on' or 'off'" in result.output
+
+
+def test_status_shows_crash_reporting_on(monkeypatch):
+    monkeypatch.setenv("ALETHEORE_CRASH_REPORTING", "1")
+    monkeypatch.delenv("ALETHEORE_API_TOKEN", raising=False)
+
+    result = runner.invoke(app, ["status"])
+
+    assert "Crash reporting: on" in result.output
+
+
+def test_status_shows_crash_reporting_off(monkeypatch):
+    monkeypatch.setenv("ALETHEORE_CRASH_REPORTING", "0")
+    monkeypatch.delenv("ALETHEORE_API_TOKEN", raising=False)
+
+    result = runner.invoke(app, ["status"])
+
+    assert "Crash reporting: off" in result.output
