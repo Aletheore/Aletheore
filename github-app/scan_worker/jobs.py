@@ -43,6 +43,7 @@ from app_server.db import MAX_SCANNED_REPOS_PER_MONTH
 from app_server.dismissed_findings import filter_dismissed, finding_identity_key
 from app_server.error_alerts import send_error_alert
 from app_server.github_auth import generate_app_jwt, get_installation_token
+from app_server.github_pagination import fetch_paginated_github_collection
 from app_server.http_client import get_github_api_client
 from app_server.llm_cost import (
     base_cap_for_plan,
@@ -1759,6 +1760,52 @@ def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
         raise
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
+
+
+@log_job
+def run_installation_repo_enumeration_retry_job(installation_id: int) -> None:
+    """One-shot retry for handle_installation_event's own GitHub repo
+    enumeration on a fresh "installation"/"created" webhook
+    (webhooks/installation.py), enqueued only when that first attempt's
+    enumeration call itself raised. Before this job existed, a transient
+    GitHub API failure at install time was logged and swallowed with
+    nothing enqueued at all - every repo in the installation sat
+    "Initialization required" on the dashboard forever, with no retry
+    and no alert, recoverable only by coincidence if unrelated future
+    push/PR activity happened to trigger a scan. upsert_installation
+    already ran before the failed enumeration, so this job only needs to
+    redo the enumeration-and-enqueue step, not re-register the
+    installation itself.
+
+    Deliberately not best-effort like run_initial_scan_job above: a
+    second enumeration failure here means whatever caused the first one
+    (a GitHub outage, a token problem) is still happening, and that is
+    exactly when a real alert is more useful than another silent retry -
+    @log_job's own failure handling (email alert, plus Sentry via the
+    shared LoggingIntegration) is this job's only further escalation, by
+    design, not an oversight.
+    """
+    settings = get_settings()
+    app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+    token = _token_sync(installation_id, app_jwt)
+    repositories = fetch_paginated_github_collection(
+        get_github_api_client(),
+        "/installation/repositories",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        },
+        collection_key="repositories",
+        require_total_count_match=True,
+    )
+    queue = _scans_queue(settings.redis_url)
+    for repo in repositories:
+        queue.enqueue(
+            "scan_worker.jobs.run_initial_scan_job",
+            job_timeout=300,
+            installation_id=installation_id,
+            repo_full_name=repo["full_name"],
+        )
 
 
 @log_job

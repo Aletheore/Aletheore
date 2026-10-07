@@ -48,6 +48,28 @@ def _enqueue_repo_checkout_purge(
     )
 
 
+def _enqueue_installation_enumeration_retry(
+    installation_id: int, redis_url: str, queue=None
+) -> None:
+    """One-shot retry when the live GitHub repo enumeration below fails
+    right after a fresh install - see the call site's own comment for
+    why this exists. Runs in scan_worker (run_installation_repo_
+    enumeration_retry_job, scan_worker/jobs.py), not here: it's the same
+    cross-process split as _enqueue_checkout_purge above, chosen for
+    consistency with every other GitHub-API-plus-enqueue job in this
+    codebase, all of which already live in scan_worker."""
+    if queue is None:
+        from redis import Redis
+        from rq import Queue
+
+        queue = Queue("scans", connection=Redis.from_url(redis_url))
+    queue.enqueue(
+        "scan_worker.jobs.run_installation_repo_enumeration_retry_job",
+        job_timeout=120,
+        installation_id=installation_id,
+    )
+
+
 def _fetch_installation_repos_sync(installation_id: int, app_jwt: str) -> list[str]:
     token = get_installation_token(installation_id, app_jwt)
     repositories = fetch_paginated_github_collection(
@@ -161,6 +183,18 @@ async def handle_installation_event(
             logger.warning(
                 "failed to enumerate repos for new installation %s", installation_id, exc_info=True
             )
+            # Real finding (overnight audit, seventh pass): this used to
+            # return here with nothing enqueued at all - every repo in
+            # the installation sat "Initialization required" forever,
+            # recoverable only by coincidence if unrelated future
+            # push/PR activity happened to trigger a scan. upsert_
+            # installation already ran above, so the retry only needs to
+            # redo enumeration-and-enqueue, not re-register the
+            # installation. One-shot, not a loop: run_installation_repo_
+            # enumeration_retry_job's own @log_job wrapper alerts for
+            # real (email + Sentry) if this also fails, which is the
+            # actual fix - a real signal instead of none.
+            _enqueue_installation_enumeration_retry(installation_id, redis_url, queue)
     elif event_name == "installation_repositories" and action == "added":
         repo_full_names = [
             repo["full_name"] for repo in payload.get("repositories_added", [])

@@ -10672,6 +10672,61 @@ def test_run_live_wiki_full_build_for_installation_job_enqueues_per_repo(monkeyp
     assert repo_names == {"octocat/repo1", "octocat/repo2"}
 
 
+def test_run_installation_repo_enumeration_retry_job_enqueues_initial_scan_per_repo(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from scan_worker.jobs import run_installation_repo_enumeration_retry_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_github_api_client", lambda *a, **k: object())
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_paginated_github_collection",
+        lambda *a, **k: [{"full_name": "octocat/repo1"}, {"full_name": "octocat/repo2"}],
+    )
+    fake_queue = MagicMock()
+    monkeypatch.setattr("scan_worker.jobs._scans_queue", lambda redis_url: fake_queue)
+
+    run_installation_repo_enumeration_retry_job(558)
+
+    assert fake_queue.enqueue.call_count == 2
+    calls = {
+        (call.kwargs["installation_id"], call.kwargs["repo_full_name"])
+        for call in fake_queue.enqueue.call_args_list
+    }
+    assert calls == {(558, "octocat/repo1"), (558, "octocat/repo2")}
+    assert all(
+        call.args[0] == "scan_worker.jobs.run_initial_scan_job"
+        for call in fake_queue.enqueue.call_args_list
+    )
+
+
+def test_run_installation_repo_enumeration_retry_job_does_not_swallow_a_second_failure(
+    monkeypatch, caplog
+):
+    # The whole point of this job: unlike the original silent
+    # logger.warning-and-return in webhooks/installation.py, a second
+    # enumeration failure here must be visible (propagate to @log_job's
+    # own alerting), not swallowed again.
+    from scan_worker.jobs import run_installation_repo_enumeration_retry_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_github_api_client", lambda *a, **k: object())
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_paginated_github_collection",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("GitHub API unavailable")),
+    )
+
+    with caplog.at_level("ERROR", logger="scan_worker.jobs"):
+        with pytest.raises(RuntimeError, match="GitHub API unavailable"):
+            run_installation_repo_enumeration_retry_job(558)
+
+    assert any(record.message == "job failed" for record in caplog.records)
+
+
 def test_full_build_writing_adapter_uses_indierouter_when_configured(monkeypatch):
     # AIRview's primary provider as of 2026-10-04 - see
     # writing_adapter_for_airview's docstring for the measured settings.
