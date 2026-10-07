@@ -814,6 +814,48 @@ def _seat_adjustment_lock(installation_id: int) -> asyncio.Lock:
     return lock
 
 
+# The lock above closes the clobbering race (#307) but, by its own comment,
+# does not collapse two genuinely separate requests carrying the same client
+# intent (a network-level retry after a dropped response, in particular)
+# into one purchase - each still reaches Paddle and succeeds. This is the
+# server-side half of that gap: an optional Idempotency-Key header, keyed
+# per (installation, action, key) so a retried request with the same key
+# returns the first attempt's already-computed response instead of mutating
+# Paddle a second time. Deliberately NOT a behavior change for a caller that
+# sends no key (or a malformed one) - same single-worker, in-process-dict
+# reasoning as _SEAT_ADJUSTMENT_LOCKS above, not a cross-process store.
+_SEAT_IDEMPOTENCY_TTL_SECONDS = 300
+_SEAT_IDEMPOTENCY_RESULTS: dict[tuple[int, str, str], tuple[float, dict]] = {}
+
+
+def _seat_idempotency_key_from_request(request: Request) -> str | None:
+    key = request.headers.get("idempotency-key")
+    if not isinstance(key, str) or not key:
+        return None
+    return key
+
+
+def _prune_seat_idempotency_results() -> None:
+    cutoff = time.monotonic() - _SEAT_IDEMPOTENCY_TTL_SECONDS
+    stale = [cache_key for cache_key, (stored_at, _) in _SEAT_IDEMPOTENCY_RESULTS.items() if stored_at < cutoff]
+    for cache_key in stale:
+        del _SEAT_IDEMPOTENCY_RESULTS[cache_key]
+
+
+def _seat_idempotent_result(installation_id: int, action: str, key: str | None) -> dict | None:
+    if key is None:
+        return None
+    _prune_seat_idempotency_results()
+    entry = _SEAT_IDEMPOTENCY_RESULTS.get((installation_id, action, key))
+    return entry[1] if entry is not None else None
+
+
+def _store_seat_idempotent_result(installation_id: int, action: str, key: str | None, result: dict) -> None:
+    if key is None:
+        return
+    _SEAT_IDEMPOTENCY_RESULTS[(installation_id, action, key)] = (time.monotonic(), result)
+
+
 def _build_updated_seat_items(subscription_items: list[dict], delta: int) -> list[dict] | None:
     # Paddle requires the complete item list on every subscription update -
     # this rebuilds it with the extra-seat item's quantity adjusted by
@@ -862,12 +904,18 @@ async def buy_extra_seat(org: str, repo: str, request: Request):
     if not subscription_id:
         raise HTTPException(status_code=400, detail="no active subscription to add a seat to")
 
+    idempotency_key = _seat_idempotency_key_from_request(request)
     settings = get_settings()
     try:
         async with _seat_adjustment_lock(installation["installation_id"]):
+            cached = _seat_idempotent_result(installation["installation_id"], "buy", idempotency_key)
+            if cached is not None:
+                return cached
             await asyncio.to_thread(
                 _adjust_extra_seat_sync, settings.paddle_api_key, subscription_id, 1
             )
+            result = {"ok": True}
+            _store_seat_idempotent_result(installation["installation_id"], "buy", idempotency_key, result)
     except PaddleAPIError as exc:
         # exc's message includes the raw Paddle response (URL, status code,
         # docs link) - useful in a log, not something to hand an end user
@@ -892,7 +940,7 @@ async def buy_extra_seat(org: str, repo: str, request: Request):
     # extra_seats itself is reconciled from the resulting subscription.updated
     # webhook, not set optimistically here - same pattern installations.plan
     # already follows for the base subscription price.
-    return {"ok": True}
+    return result
 
 
 @admin_router.post("/admin/{org}/{repo}/seats/remove")
@@ -902,14 +950,23 @@ async def remove_extra_seat(org: str, repo: str, request: Request):
     if not subscription_id:
         raise HTTPException(status_code=400, detail="no active subscription to remove a seat from")
 
+    idempotency_key = _seat_idempotency_key_from_request(request)
     settings = get_settings()
     try:
         async with _seat_adjustment_lock(installation["installation_id"]):
+            cached = _seat_idempotent_result(installation["installation_id"], "remove", idempotency_key)
+            if cached is not None:
+                return cached
             items = await asyncio.to_thread(
                 _adjust_extra_seat_sync, settings.paddle_api_key, subscription_id, -1
             )
-        if items is None:
-            raise HTTPException(status_code=409, detail="no extra seats to remove")
+            if items is None:
+                # Naturally idempotent already - a retry of "nothing to
+                # remove" is still "nothing to remove," nothing was mutated,
+                # so there's no result worth caching here.
+                raise HTTPException(status_code=409, detail="no extra seats to remove")
+            result = {"ok": True}
+            _store_seat_idempotent_result(installation["installation_id"], "remove", idempotency_key, result)
     except PaddleAPIError as exc:
         logger.error(
             "seat removal failed for installation %s (subscription %s): %s",
@@ -927,7 +984,7 @@ async def remove_extra_seat(org: str, repo: str, request: Request):
         request.app.state.db_pool, installation["installation_id"], session["github_login"],
         "extra_seat_removal_requested",
     )
-    return {"ok": True}
+    return result
 
 
 @admin_router.get("/admin/{org}/{repo}/billing-portal")

@@ -1124,8 +1124,26 @@ async function buySeat(btn) {
   const status = document.getElementById('seat-billing-status');
   status.textContent = 'Updating billing...';
   status.style.color = 'var(--slate-600)';
+  // Idempotency-Key: the server-side half of the gap above, closed in
+  // admin.py's buy_extra_seat (real audit finding - the lock there
+  // serializes concurrent requests but doesn't collapse them into one
+  // purchase). Generated once per attempt sequence, not once per click -
+  // kept on btn.dataset so a retry after fetch() itself throws (an
+  // ambiguous outcome: the request may have already reached and mutated
+  // Paddle before the client ever saw a response) replays the SAME key and
+  // gets the first attempt's cached result instead of a second real charge.
+  // Cleared on any definitive HTTP response (success or a real error body),
+  // so the next distinct click still gets its own fresh key and its own
+  // real purchase, same as today.
+  if (!btn.dataset.idempotencyKey) {
+    btn.dataset.idempotencyKey = crypto.randomUUID();
+  }
   try {
-    const res = await fetch(adminBase + '/seats/buy', { method: 'POST' });
+    const res = await fetch(adminBase + '/seats/buy', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': btn.dataset.idempotencyKey },
+    });
+    delete btn.dataset.idempotencyKey;
     const data = await res.json().catch(function () { return {}; });
     if (res.ok) {
       status.textContent = 'Seat added - billing updated. Refreshing...';
@@ -1141,14 +1159,21 @@ async function buySeat(btn) {
 }
 
 async function removeSeat(btn) {
-  // See buySeat's comment - same double-click gap and same network-failure
-  // stuck-button gap, same fix for both.
+  // See buySeat's comment - same double-click gap, same network-failure
+  // stuck-button gap, same Idempotency-Key fix, for both.
   btn.disabled = true;
   const status = document.getElementById('seat-billing-status');
   status.textContent = 'Updating billing...';
   status.style.color = 'var(--slate-600)';
+  if (!btn.dataset.idempotencyKey) {
+    btn.dataset.idempotencyKey = crypto.randomUUID();
+  }
   try {
-    const res = await fetch(adminBase + '/seats/remove', { method: 'POST' });
+    const res = await fetch(adminBase + '/seats/remove', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': btn.dataset.idempotencyKey },
+    });
+    delete btn.dataset.idempotencyKey;
     const data = await res.json().catch(function () { return {}; });
     if (res.ok) {
       status.textContent = 'Seat removed - billing updated. Refreshing...';
