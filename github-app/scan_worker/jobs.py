@@ -135,6 +135,9 @@ from scan_worker.db import (
 from scan_worker.docs_repo_commit import sync_docs_to_repo
 from scan_worker.flash_review import (
     FLASH_REVIEW_FALLBACK_MODEL,
+    _diff_valid_lines,
+    _line_is_near_diff,
+    _lookup_valid_lines,
     build_referenced_symbol_context,
     fetch_review_file_context,
     files_missing_from_review_context,
@@ -2606,6 +2609,87 @@ def _pr_review_comment_url(repo_full_name: str, pr_number: int, comment_id: int)
     return f"https://github.com/{repo_full_name}/pull/{pr_number}#discussion_r{comment_id}"
 
 
+def _fetch_pr_diff_scope(
+    client, token: str, repo_full_name: str, base_sha: str, head_sha: str, ignored_paths
+) -> tuple[dict[str, set[int]] | None, frozenset[str]]:
+    """The PR's real diff against its base, as {file: new-file lines}, plus
+    the files whose diff could not be read in full.
+
+    An incremental review diffs from the last reviewed commit, which is not
+    what GitHub accepts an inline comment against: GitHub anchors a review
+    comment to the PR's full diff versus its base. When the push being
+    reviewed merged the base branch into the PR branch, the incremental
+    diff also contains everything the base brought in - code that is not
+    part of this PR at all. A finding on those lines is rejected with a 422
+    and reported as "none could be posted" (seen live on PR #961).
+
+    (None, empty) means the full diff could not be fetched: callers treat
+    that as "no information" and fall back to the old behavior rather than
+    block the review.
+    """
+    try:
+        full = fetch_pr_diff(client, token, repo_full_name, base_sha, head_sha, ignored_paths=ignored_paths)
+    except Exception:  # noqa: BLE001 - fail open, this is a precision filter, not a gate
+        logging.getLogger("scan_worker.jobs").warning(
+            "could not fetch the PR's full diff for %s@%s; incremental findings will not be "
+            "checked against it", repo_full_name, head_sha[:12], exc_info=True,
+        )
+        return None, frozenset()
+    scope = _diff_valid_lines(str(full), getattr(full, "patches", None))
+    unreadable = frozenset(getattr(full, "omitted_files", ())) | frozenset(
+        getattr(full, "budget_omitted_files", ())
+    )
+    return scope, unreadable
+
+
+def _split_findings_by_pr_diff(
+    findings: list[dict], pr_scope: dict[str, set[int]], unreadable: frozenset[str]
+) -> tuple[list[dict], list[dict]]:
+    """(postable, outside_pr_diff). A finding is postable only if its exact
+    line is in the PR's full diff. A file whose full diff could not be read
+    can't be judged either way, so its findings are kept and left to the
+    posting step's own error handling, as before."""
+    postable: list[dict] = []
+    outside: list[dict] = []
+    for finding in findings:
+        if finding["file"] in unreadable or finding["line"] in _lookup_valid_lines(finding["file"], pr_scope):
+            postable.append(finding)
+        else:
+            outside.append(finding)
+    return postable, outside
+
+
+def _reviewed_scope(diff_text: str, diff_patches, unreviewed_files) -> dict[str, set[int]]:
+    """What this review actually looked at: the lines of the diff it was
+    given, minus every file whose content never made it into the review
+    (not read, no reviewable diff, or cut by the size budget). A tracked
+    finding may only be called "no longer detected" if its spot is in here
+    - otherwise nobody looked."""
+    skip = set(unreviewed_files)
+    return {
+        file: lines
+        for file, lines in _diff_valid_lines(diff_text, diff_patches).items()
+        if file not in skip
+    }
+
+
+def _comment_was_rereviewed(comment: dict, reviewed_scope: dict[str, set[int]]) -> bool:
+    """True if this review's diff covers the spot a tracked comment is
+    anchored to, so a finding not being re-found there is real evidence it
+    was fixed. A comment GitHub reports as outdated (line is null) is one
+    whose anchored code changed since it was posted; the file being in this
+    review's scope means that change is part of what was just reviewed (an
+    earlier push's change would already have been resolved by that push's
+    own review)."""
+    valid = _lookup_valid_lines(comment.get("path") or "", reviewed_scope)
+    if not valid:
+        return False
+    line = comment.get("line")
+    if line is None:
+        return True
+    return _line_is_near_diff(line, valid)
+
+
 def _post_flash_review_finding_comments(
     settings,
     client,
@@ -2615,6 +2699,7 @@ def _post_flash_review_finding_comments(
     pr_number: int,
     head_sha: str,
     findings_to_post: list[dict],
+    reviewed_scope: dict[str, set[int]] | None = None,
 ) -> int:
     """Posts one inline PR review comment per finding (anchored to its real
     file:line via create_pr_review_comment) instead of the old single
@@ -2628,7 +2713,14 @@ def _post_flash_review_finding_comments(
     marked resolved and has now reappeared (a revert, or the same bug
     reintroduced), the comment is edited back to its normal body and
     resolved_at is cleared. A tracked finding NOT present in
-    findings_to_post is presumed fixed: its comment is edited (not
+    findings_to_post is presumed fixed - but only if this review actually
+    looked where it was anchored (reviewed_scope: the diff lines this
+    review covered, see _reviewed_scope). A review of a push that never
+    touched that file (a merge of the base branch, a docs-only commit, a
+    file the review could not read) cannot re-find anything there, so
+    "not found" says nothing and the finding is left alone. reviewed_scope
+    None means no coverage information, which is treated the same way:
+    nothing is resolved. When resolved, its comment is edited (not
     deleted - see migration 059's docstring on why a human's existing
     reply thread must survive) to note it's no longer detected, and only
     on the first push that doesn't detect it (resolved_at is a one-time
@@ -2728,20 +2820,34 @@ def _post_flash_review_finding_comments(
     for (finding_type, identity_key), row in existing.items():
         if (finding_type, identity_key) in seen_keys or row["resolved_at"] is not None:
             continue
-        if not mark_flash_review_finding_comment_resolved(dsn, row["id"]):
-            continue  # lost a race with another concurrent transition - do not double-edit
+        if reviewed_scope is None:
+            continue
+        # The tracking row has no copy of the finding's own text or anchor
+        # (only its identity_key, a one-way hash - see dismissed_findings.py),
+        # so the live comment is read first: its path and line say whether
+        # this review looked at that spot, and its body is what the
+        # "no longer detected" prefix gets prepended to.
         try:
-            # The tracking row has no copy of the finding's own text (only
-            # its identity_key, a one-way hash - see dismissed_findings.py)
-            # so the original comment body can't be reconstructed here.
-            # Prepending is enough: it doesn't need to restate the finding,
-            # just mark the thread resolved above whatever's already there.
             current = client.get(
                 f"/repos/{repo_full_name}/pulls/comments/{row['github_comment_id']}",
                 headers={"Authorization": f"token {token}", "Accept": "application/vnd.github+json"},
             )
             current.raise_for_status()
-            original_body = current.json()["body"]
+            live_comment = current.json()
+            original_body = live_comment["body"]
+        except Exception:
+            logging.getLogger("scan_worker.jobs").warning(
+                "could not read flash review comment %s on %s#%s to decide whether it is resolved",
+                row["github_comment_id"], repo_full_name, pr_number, exc_info=True,
+            )
+            continue
+        if not _comment_was_rereviewed(live_comment, reviewed_scope):
+            continue
+        if not mark_flash_review_finding_comment_resolved(dsn, row["id"]):
+            continue  # lost a race with another concurrent transition - do not double-edit
+        try:
+            # Prepending is enough: it doesn't need to restate the finding,
+            # just mark the thread resolved above whatever's already there.
             edit_pr_review_comment(
                 client, token, repo_full_name, row["github_comment_id"],
                 _RESOLVED_PREFIX.format(sha=head_sha[:12]) + original_body,
@@ -2890,6 +2996,16 @@ def _run_flash_review(
     # changes first instead of covering an arbitrary prefix of GitHub's own
     # order. See order_changed_files_by_diff_size's docstring.
     changed_files = order_changed_files_by_diff_size(changed_files, diff_patches)
+    # An incremental review's diff (last reviewed commit..head) is not the
+    # diff GitHub anchors inline comments to (base..head). They only differ
+    # when the push brought in code that is not part of this PR (a merge of
+    # the base branch), so there is nothing to fetch on a first review.
+    pr_diff_scope: dict[str, set[int]] | None = None
+    pr_diff_unreadable: frozenset[str] = frozenset()
+    if last_reviewed_sha:
+        pr_diff_scope, pr_diff_unreadable = _fetch_pr_diff_scope(
+            client, token, repo_full_name, base_sha, head_sha, ignored_paths
+        )
     try:
         pr_title = fetch_pr_title(client, token, repo_full_name, pr_number)
     except Exception:  # noqa: BLE001
@@ -2909,6 +3025,10 @@ def _run_flash_review(
     free_tier_exhausted = {"value": False}
 
     skipped_files: list[str] = []
+    # What this review actually looked at, for deciding which tracked
+    # findings it is entitled to call "no longer detected". Empty until a
+    # real review reads files: a non-substantive diff reviews nothing.
+    reviewed_scope: dict[str, set[int]] = {}
 
     if is_non_substantive_diff(changed_files):
         findings: list[dict] = []
@@ -2929,6 +3049,10 @@ def _run_flash_review(
             client, token, repo_full_name, changed_files, head_sha, diff_patches=diff_patches
         )
         skipped_files = files_missing_from_review_context(changed_files, file_contents)
+        reviewed_scope = _reviewed_scope(
+            diff_text, diff_patches,
+            [*skipped_files, *diff_omitted_files, *diff_budget_omitted_files],
+        )
         if skipped_files:
             logging.getLogger("scan_worker.jobs").info(
                 "flash review context incomplete for %s#%s: %d/%d changed file(s) not read (%s)",
@@ -3226,6 +3350,19 @@ def _run_flash_review(
     # a user already said "not helpful" on this exact bug. A dismissed
     # finding still counts toward those stats - dismissal is a posting
     # decision, not a re-judgment of the pipeline's own accuracy.
+    # Findings on lines GitHub will not accept an inline comment for (code a
+    # merge brought in from the base branch, not part of this PR): dropped
+    # here, so they are not counted as failed posts or mistaken for dismissed
+    # ones, and the summary can say what happened.
+    outside_pr_diff: list[dict] = []
+    if pr_diff_scope is not None:
+        findings, outside_pr_diff = _split_findings_by_pr_diff(findings, pr_diff_scope, pr_diff_unreadable)
+        if outside_pr_diff:
+            logging.getLogger("scan_worker.jobs").info(
+                "flash review dropped %d finding(s) on lines outside %s#%s's own diff (%s)",
+                len(outside_pr_diff), repo_full_name, pr_number,
+                ", ".join(f"{f['file']}:{f['line']}" for f in outside_pr_diff[:10]),
+            )
     dismissed = get_dismissed_identity_keys(settings.database_url, installation_id, repo_full_name)
     llm_findings = filter_dismissed(
         [f for f in findings if f.get("source") == "llm"], "flash_review_llm", dismissed["flash_review_llm"]
@@ -3249,6 +3386,7 @@ def _run_flash_review(
 
     failed_new_posts = _post_flash_review_finding_comments(
         settings, client, token, installation_id, repo_full_name, pr_number, head_sha, findings_to_post,
+        reviewed_scope=reviewed_scope,
     )
     posted_count = len(findings_to_post) - failed_new_posts
 
@@ -3295,6 +3433,17 @@ def _run_flash_review(
         body = (
             f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\n"
             f"{len(findings)} finding(s) held up but were already dismissed on a previous review."
+        )
+    elif outside_pr_diff:
+        # Distinct from every branch below: findings did hold up, they just
+        # sit in code this push merged in from the base branch, which is
+        # not part of this PR's own diff, so GitHub cannot take an inline
+        # comment on them. Falling through to "No issues held up" would
+        # read as the review having found nothing.
+        body = (
+            f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\n"
+            f"{len(outside_pr_diff)} finding(s) held up but were in code this push brought in from "
+            "the base branch, which is not part of this PR's own diff, so they were not posted."
         )
     elif kept:
         # Grounding accepted findings (kept > 0), but the independent
