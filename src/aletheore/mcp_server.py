@@ -286,7 +286,6 @@ _SEARCH_MATCH_CAP = 200
 # gets its own much longer limit.
 _SEARCH_TIMEOUT_SECONDS = 5.0
 _SEARCH_STARTUP_TIMEOUT_SECONDS = 60.0
-_SEARCH_READY = "__aletheore_search_ready__"
 
 # _SEARCH_MATCH_CAP alone doesn't bound the result's total size - 200
 # matches of long lines (a minified bundle, a generated file, a single huge
@@ -351,30 +350,39 @@ def _search_files(repo_path: Path, pattern: str, regex: bool, path_glob: str | N
 
 
 def _run_search(
-    repo_path: Path, pattern: str, regex: bool, path_glob: str | None, result_queue: "multiprocessing.Queue"
+    repo_path: Path,
+    pattern: str,
+    regex: bool,
+    path_glob: str | None,
+    result_queue: "multiprocessing.Queue",
+    ready: "multiprocessing.synchronize.Event",
 ) -> None:
     """Runs in a child process - must stay a top-level function so the
-    spawn start method can pickle and import it."""
-    result_queue.put(_SEARCH_READY)
+    spawn start method can pickle and import it.
+
+    `ready` is an Event, deliberately not a message on result_queue: a
+    Queue.put only hands the item to a background feeder thread, which needs
+    the GIL to actually write it. A catastrophic regex holds the GIL inside
+    C for the whole match, so a "ready" sent through the queue right before
+    the search can sit unsent while the parent times out waiting for it
+    (measured: never delivered in 30 of 30 trials, against 0 of 30 missed
+    for an Event). Event.set() is synchronous and needs no other thread."""
+    ready.set()
     result_queue.put(_search_files(repo_path, pattern, regex, path_glob))
 
 
-def _queue_get(result_queue: "multiprocessing.Queue", process, timeout: float):
-    """result_queue.get(timeout) that also gives up as soon as the child has
-    died without producing anything, instead of waiting out the full timeout.
-    Raises queue.Empty either way."""
+def _wait_until_ready(ready, process, timeout: float) -> bool:
+    """True once the child has signalled it is about to search. Gives up
+    early, with False, if the child died without ever signalling."""
     deadline = time.monotonic() + timeout
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise queue.Empty
-        try:
-            return result_queue.get(timeout=min(0.25, remaining))
-        except queue.Empty:
-            if not process.is_alive():
-                # One last look: the child may have put its message and
-                # exited between the get above and this liveness check.
-                return result_queue.get(timeout=0.5)
+            return False
+        if ready.wait(min(0.25, remaining)):
+            return True
+        if not process.is_alive():
+            return ready.is_set()
 
 
 def _stop_search_process(process) -> None:
@@ -679,24 +687,18 @@ def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
 
         ctx = multiprocessing.get_context("spawn")
         result_queue: multiprocessing.Queue = ctx.Queue()
+        ready = ctx.Event()
         process = ctx.Process(
-            target=_run_search, args=(repo_path, pattern, regex, path_glob, result_queue)
+            target=_run_search, args=(repo_path, pattern, regex, path_glob, result_queue, ready)
         )
         process.start()
-        try:
-            ready = _queue_get(result_queue, process, _SEARCH_STARTUP_TIMEOUT_SECONDS)
-        except queue.Empty:
+        if not _wait_until_ready(ready, process, _SEARCH_STARTUP_TIMEOUT_SECONDS):
             _stop_search_process(process)
             return _toon_result(
                 {"error": "the regex search worker failed to start; try a literal (non-regex) search"}
             )
-        if ready != _SEARCH_READY:
-            # Not reachable today (the child always signals first), but a
-            # result is a result - never drop it.
-            process.join()
-            return _toon_result(ready)
         try:
-            result = _queue_get(result_queue, process, _SEARCH_TIMEOUT_SECONDS)
+            result = result_queue.get(timeout=_SEARCH_TIMEOUT_SECONDS)
         except queue.Empty:
             _stop_search_process(process)
             return _toon_result(
