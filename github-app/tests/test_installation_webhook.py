@@ -115,7 +115,14 @@ def test_fetch_installation_repos_collects_paginated_results(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_installation_created_does_not_crash_when_repo_enumeration_fails(pool, monkeypatch):
+async def test_installation_created_enqueues_a_retry_when_repo_enumeration_fails(pool, monkeypatch):
+    # Real finding (overnight audit, seventh pass): this used to log a
+    # warning and return with nothing enqueued at all - every repo in
+    # the installation sat "Initialization required" forever, with no
+    # retry and no alert. Owner decision 2026-10-07: enqueue a one-shot
+    # scan_worker retry job instead (run_installation_repo_enumeration_
+    # retry_job), whose own @log_job wrapper alerts for real if the
+    # retry also fails.
     async def _raise(installation_id):
         raise RuntimeError("GitHub API unavailable")
 
@@ -131,7 +138,11 @@ async def test_installation_created_does_not_crash_when_repo_enumeration_fails(p
 
     row = await get_installation(pool, 558)
     assert row["account_login"] == "octocat"
-    fake_queue.enqueue.assert_not_called()
+    fake_queue.enqueue.assert_called_once_with(
+        "scan_worker.jobs.run_installation_repo_enumeration_retry_job",
+        job_timeout=120,
+        installation_id=558,
+    )
 
 
 @pytest.mark.asyncio
