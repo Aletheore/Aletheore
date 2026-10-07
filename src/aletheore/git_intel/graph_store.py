@@ -67,7 +67,21 @@ class CommitTouch:
     """One commit's worth of what the graph cares about - built while
     streaming `git log`, never held as part of a larger in-memory list of
     every commit. `files` is every path this commit touched, already
-    normalized relative to the scan root."""
+    normalized relative to the scan root; a rename line in this commit
+    contributes its *new* path to `files` (the old path is not credited a
+    separate touch), plus an (old, new) pair in `renames` - fold() uses that
+    pair to carry the old path's already-accumulated churn/recent-commits/
+    ownership forward onto the new path, rather than starting it over at
+    zero (the real audit gap: without this, a just-renamed hot file's
+    pre-rename history stayed stranded under a name nothing queries anymore,
+    making it look artificially cold).
+
+    `departures` is the narrower, scan-root-crossing sibling of `renames`:
+    a rename whose OLD path was in scope but whose NEW path isn't (the file
+    moved out of a monorepo subdirectory scan) has nowhere in-scope to
+    merge onto, so there's no (old, new) pair to record - but old_path's
+    already-accumulated entry would otherwise sit stale in file_churn
+    forever, never updated again. fold() drops it outright instead."""
 
     sha: str
     author_name: str
@@ -75,6 +89,8 @@ class CommitTouch:
     committed_at: datetime
     files: tuple[str, ...]
     subject: str = ""
+    renames: tuple[tuple[str, str], ...] = ()
+    departures: tuple[str, ...] = ()
 
 
 @dataclass

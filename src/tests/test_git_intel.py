@@ -477,6 +477,38 @@ def test_compute_hotspots_ranks_by_churn(tmp_path):
     assert hotspots[0]["path"] == "a.py"
 
 
+def test_compute_hotspots_ranks_a_renamed_file_by_its_full_history_not_just_post_rename(tmp_path):
+    # Real audit finding, end-to-end: a file with a long pre-rename history,
+    # renamed once, must still rank by its FULL churn - not just the
+    # touches since the rename - or a genuinely hot file looks artificially
+    # cold under its current name right after being renamed.
+    repo = tmp_path / "rename_repo"
+    repo.mkdir()
+    run(repo, "init", "-q")
+    run(repo, "config", "user.email", "a@example.com")
+    run(repo, "config", "user.name", "A")
+
+    (repo / "old_name.py").write_text("x" * 50)
+    run(repo, "add", "-A")
+    commit(repo, "add old_name.py", "2026-01-01T00:00:00")
+    for i in range(4):
+        (repo / "old_name.py").write_text("x" * 50 + str(i))
+        run(repo, "add", "-A")
+        commit(repo, f"edit old_name.py {i}", f"2026-01-0{i + 2}T00:00:00")
+    # 5 touches total so far, well under the file - stays well above the
+    # -M default 50% similarity threshold.
+    run(repo, "mv", "old_name.py", "new_name.py")
+    run(repo, "add", "-A")
+    commit(repo, "rename old_name.py to new_name.py", "2026-01-06T00:00:00")
+
+    hotspots = compute_hotspots(repo, [{"path": "new_name.py", "imported_by": []}])
+    by_path = {hotspot["path"]: hotspot for hotspot in hotspots}
+    assert "old_name.py" not in by_path
+    # 5 pre-rename touches + the rename commit itself = 6, not 1 (what it
+    # would be if only the rename commit counted toward new_name.py).
+    assert by_path["new_name.py"]["churn_count"] == 6
+
+
 def test_compute_recently_updated_ranks_by_recency_not_churn(tmp_path):
     # a.py and b.py tie on churn_count (both touched twice), but b.py's
     # last touch is explicitly later - recently_updated must rank on that,

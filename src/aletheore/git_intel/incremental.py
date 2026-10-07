@@ -125,6 +125,17 @@ def parse_commit_date(date_str: str) -> datetime:
         return _EPOCH_UTC
 
 
+def _relativize(path: str, prefix: str) -> str:
+    path = path.strip()
+    if not path:
+        return ""
+    if prefix:
+        if not path.startswith(prefix):
+            return ""
+        path = path[len(prefix) :]
+    return path
+
+
 def stream_commit_touches(
     repo_path: Path, rev_range: str, *, max_commits: int | None = None
 ) -> Iterator[CommitTouch]:
@@ -134,7 +145,14 @@ def stream_commit_touches(
         f"--format={_RECORD_SEP_FORMAT}%H{_RECORD_SEP_FORMAT}%an{_RECORD_SEP_FORMAT}%ae"
         f"{_RECORD_SEP_FORMAT}%ad{_RECORD_SEP_FORMAT}%s",
         "--date=iso-strict",
-        "--name-only",
+        # -M turns a delete+add pair into an explicit "R<score>\told\tnew"
+        # line (git's default 50% similarity threshold) instead of two
+        # unrelated-looking touched paths - see CommitTouch.renames and
+        # fold() for why: without this, a rename silently stranded a file's
+        # pre-rename churn/ownership history under a name nothing queries
+        # anymore (real audit finding, confirmed by direct reproduction).
+        "--name-status",
+        "-M",
     ]
     if max_commits is not None:
         args += ["-n", str(max_commits)]
@@ -161,12 +179,20 @@ def stream_commit_touches(
     pending_header: tuple[str, str, str, datetime] | None = None
     pending_subject: str = ""
     pending_files: list[str] = []
+    pending_renames: list[tuple[str, str]] = []
+    pending_departures: list[str] = []
     try:
         for raw_line in proc.stdout:
             line = raw_line.rstrip("\n")
             if line.startswith(_RECORD_SEP):
                 if pending_header is not None:
-                    yield CommitTouch(*pending_header, files=tuple(pending_files), subject=pending_subject)
+                    yield CommitTouch(
+                        *pending_header,
+                        files=tuple(pending_files),
+                        subject=pending_subject,
+                        renames=tuple(pending_renames),
+                        departures=tuple(pending_departures),
+                    )
                 # maxsplit=4 defensively, though `\x00` cannot occur inside
                 # any of these fields (see the module-level comment on
                 # _RECORD_SEP) - a fifth split point would only ever come
@@ -174,16 +200,40 @@ def stream_commit_touches(
                 sha, name, email, date_str, pending_subject = line[1:].split(_RECORD_SEP, 4)
                 pending_header = (sha, name, email, parse_commit_date(date_str))
                 pending_files = []
+                pending_renames = []
+                pending_departures = []
             elif line.strip():
-                path = line.strip()
-                if prefix:
-                    if not path.startswith(prefix):
-                        continue
-                    path = path[len(prefix) :]
-                if path:
-                    pending_files.append(path)
+                # --name-status's per-file lines are "<STATUS>\t<path>", or
+                # for a rename, "R<score>\t<old>\t<new>" - tab-separated,
+                # unlike the bare paths --name-only used to emit.
+                status, _, rest = line.partition("\t")
+                if status.startswith("R"):
+                    old_raw, _, new_raw = rest.partition("\t")
+                    new_path = _relativize(new_raw, prefix)
+                    old_path = _relativize(old_raw, prefix)
+                    if new_path:
+                        pending_files.append(new_path)
+                        if old_path:
+                            pending_renames.append((old_path, new_path))
+                    elif old_path:
+                        # Renamed OUT of the scan root (new_path isn't in
+                        # scope) - nothing in-scope to merge onto, but
+                        # old_path's already-accumulated entry must not be
+                        # left stale in file_churn forever either. Real gap
+                        # found by Flash Review on this same change.
+                        pending_departures.append(old_path)
+                else:
+                    path = _relativize(rest, prefix)
+                    if path:
+                        pending_files.append(path)
         if pending_header is not None:
-            yield CommitTouch(*pending_header, files=tuple(pending_files), subject=pending_subject)
+            yield CommitTouch(
+                *pending_header,
+                files=tuple(pending_files),
+                subject=pending_subject,
+                renames=tuple(pending_renames),
+                departures=tuple(pending_departures),
+            )
     finally:
         proc.stdout.close()
         returncode = proc.wait()
@@ -256,6 +306,39 @@ def _bump_co_change(counts: dict[str, int], partner: str) -> None:
     counts[partner] = 1
 
 
+def _merge_renamed_file_churn(file_churn: dict[str, FileChurnTotal], old_path: str, new_path: str) -> None:
+    """Carries old_path's already-accumulated churn/recent-commits/ownership
+    forward onto new_path, so a renamed file's pre-rename history keeps
+    counting under its current name instead of staying stranded under a
+    name nothing queries anymore (the real audit gap this closes).
+    Deliberately does NOT chase old_path through other files'
+    co_change_counts - that's a separate, lower-value staleness (a
+    co-change partner shown under a retired name) the audit itself flagged
+    as a lesser, pre-existing limitation, not the churn/hotspot-ranking
+    defect this fix targets.
+    """
+    old_entry = file_churn.pop(old_path, None)
+    if old_entry is None:
+        return  # old_path never touched within this fold's view - nothing to carry forward
+    new_entry = file_churn.get(new_path)
+    if new_entry is None:
+        new_entry = FileChurnTotal(path=new_path, churn_count=0, recent_commits=[], co_change_counts={}, owners={})
+        file_churn[new_path] = new_entry
+    new_entry.churn_count += old_entry.churn_count
+    new_entry.recent_commits = sorted(
+        new_entry.recent_commits + old_entry.recent_commits, key=lambda rc: rc.committed_at, reverse=True
+    )[:RECENT_COMMITS_PER_FILE]
+    for email, old_owner in old_entry.owners.items():
+        owner = new_entry.owners.get(email)
+        if owner is None:
+            new_entry.owners[email] = OwnershipTotal(
+                email=email, names=set(old_owner.names), commit_count=old_owner.commit_count
+            )
+        else:
+            owner.names |= old_owner.names
+            owner.commit_count += old_owner.commit_count
+
+
 def fold(snapshot: GraphSnapshot, commits: list[CommitTouch]) -> GraphSnapshot:
     """Pure aggregation: merges `commits` into `snapshot`, returning a new
     snapshot. Both store backends call this internally so the aggregation
@@ -295,6 +378,17 @@ def fold(snapshot: GraphSnapshot, commits: list[CommitTouch]) -> GraphSnapshot:
     # which treat it as "the latest commit" for health-check-failure
     # correlation and likely-owner inference).
     for commit in reversed(commits):
+        # Processed oldest-of-this-batch-first, same as everything else in
+        # this loop - a rename's old path can only ever have accumulated
+        # history from commits already folded in by the time we reach it.
+        for old_path, new_path in commit.renames:
+            _merge_renamed_file_churn(file_churn, old_path, new_path)
+        # departures: the old path left the scan root (see CommitTouch's
+        # docstring) - nothing in-scope to merge onto, so drop its entry
+        # outright rather than leaving it stale forever.
+        for departed_path in commit.departures:
+            file_churn.pop(departed_path, None)
+
         email_key = commit.author_email.lower()
         total = ownership.get(email_key)
         if total is None:
