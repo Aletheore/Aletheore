@@ -22,12 +22,28 @@ _CLI_SENTRY_DSN = (
     "o4512209917444096.ingest.de.sentry.io/4512209960173648"
 )
 
-_HOME = str(Path.home())
+def _default_home() -> str:
+    try:
+        return str(Path.home())
+    except RuntimeError:
+        # Path.home() itself can raise - not just resolve to something
+        # unwritable - when there is no HOME env var and no passwd entry
+        # (e.g. a process running as an arbitrary UID with neither, a
+        # real scenario this repo's own CI smoke suite exercises). This
+        # runs at *module import time* (_HOME below), so an unguarded
+        # call here would crash `import aletheore.cli` itself. An empty
+        # _HOME makes _redact_home a safe no-op (guarded below) - there
+        # is no meaningful home path to redact when one can't be
+        # determined in the first place.
+        return ""
+
+
+_HOME = _default_home()
 # Anchored on a real path separator so a bare prefix match can never land
 # mid-name - /Users/ari must never match inside /Users/arijit/... (a real
 # finding from final review: a plain str.startswith/.replace on _HOME
 # alone has exactly this false-positive).
-_HOME_PREFIX = _HOME + os.sep
+_HOME_PREFIX = _HOME + os.sep if _HOME else ""
 
 
 def _redact_home(text: object) -> object:
@@ -45,7 +61,12 @@ def _redact_home(text: object) -> object:
     casing, and a plain case-sensitive match would silently fail to
     redact it there.
     """
-    if not isinstance(text, str) or not text:
+    if not isinstance(text, str) or not text or not _HOME:
+        # not _HOME: no home directory could be determined at all (see
+        # _default_home) - there's nothing to redact, and critically, an
+        # empty _HOME_PREFIX would make `needle` below an empty string,
+        # which is a substring of everything and would corrupt every
+        # string this function touches.
         return text
 
     haystack = os.path.normcase(text)

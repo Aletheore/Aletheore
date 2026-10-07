@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import sentry_sdk
 
-from aletheore.sentry_reporting import _scrub_event, init_cli_sentry
+from aletheore.sentry_reporting import _default_home, _scrub_event, init_cli_sentry
 
 # A syntactically valid but fake DSN - same pattern the backend's own
 # tests/test_sentry_config.py uses. Patched into every test below that
@@ -121,7 +121,7 @@ def test_init_cli_sentry_strips_argv_and_redacts_home_from_a_real_captured_event
     sentry_sdk.get_client().transport.capture_envelope = captured.append
 
     try:
-        open(fake_home + "/secret-project/missing.txt")
+        open(os.path.join(fake_home, "secret-project", "missing.txt"))
     except OSError as exc:
         sentry_sdk.capture_exception(exc)
     sentry_sdk.get_client().flush()
@@ -176,30 +176,26 @@ def test_scrub_event_keeps_os_and_runtime_context():
 
 
 def test_scrub_event_redacts_home_directory_segment_of_stack_frame_paths(monkeypatch):
-    monkeypatch.setattr("aletheore.sentry_reporting._HOME", str(Path("/Users/johnsmith")))
-    monkeypatch.setattr("aletheore.sentry_reporting._HOME_PREFIX", str(Path("/Users/johnsmith")) + "/")
+    # Built from os.sep throughout (not hardcoded "/") so this pins the
+    # real behavior on whichever OS the suite runs on, including Windows
+    # (os.sep == "\\") - final-review follow-up: a prior version of this
+    # test hardcoded "/" and only ever passed on POSIX.
+    home = os.path.join(os.sep, "Users", "johnsmith")
+    monkeypatch.setattr("aletheore.sentry_reporting._HOME", home)
+    monkeypatch.setattr("aletheore.sentry_reporting._HOME_PREFIX", home + os.sep)
+    filename = os.path.join(home, "project", "cli.py")
     event = {
         "exception": {
-            "values": [
-                {
-                    "stacktrace": {
-                        "frames": [
-                            {
-                                "filename": "/Users/johnsmith/project/cli.py",
-                                "abs_path": "/Users/johnsmith/project/cli.py",
-                            }
-                        ]
-                    }
-                }
-            ]
+            "values": [{"stacktrace": {"frames": [{"filename": filename, "abs_path": filename}]}}]
         }
     }
 
     scrubbed = _scrub_event(event, {})
 
+    expected = "~" + os.sep + os.path.join("project", "cli.py")
     frame = scrubbed["exception"]["values"][0]["stacktrace"]["frames"][0]
-    assert frame["filename"] == "~/project/cli.py"
-    assert frame["abs_path"] == "~/project/cli.py"
+    assert frame["filename"] == expected
+    assert frame["abs_path"] == expected
 
 
 def test_scrub_event_strips_local_variables_from_every_frame_of_every_exception():
@@ -247,17 +243,18 @@ def test_scrub_event_strips_argv_from_extra():
 
 
 def test_scrub_event_redacts_home_directory_from_exception_message(monkeypatch):
-    monkeypatch.setattr("aletheore.sentry_reporting._HOME", "/Users/johnsmith")
-    monkeypatch.setattr("aletheore.sentry_reporting._HOME_PREFIX", "/Users/johnsmith/")
+    # Built from os.sep (not hardcoded "/") - see the sibling frame-path
+    # test above for why.
+    home = os.path.join(os.sep, "Users", "johnsmith")
+    monkeypatch.setattr("aletheore.sentry_reporting._HOME", home)
+    monkeypatch.setattr("aletheore.sentry_reporting._HOME_PREFIX", home + os.sep)
+    missing = os.path.join(home, "secret-project", "missing.txt")
     event = {
         "exception": {
             "values": [
                 {
                     "type": "FileNotFoundError",
-                    "value": (
-                        "[Errno 2] No such file or directory: "
-                        "'/Users/johnsmith/secret-project/missing.txt'"
-                    ),
+                    "value": f"[Errno 2] No such file or directory: '{missing}'",
                     "stacktrace": {"frames": []},
                 }
             ]
@@ -267,8 +264,9 @@ def test_scrub_event_redacts_home_directory_from_exception_message(monkeypatch):
     scrubbed = _scrub_event(event, {})
 
     value = scrubbed["exception"]["values"][0]["value"]
+    expected = "~" + os.sep + os.path.join("secret-project", "missing.txt")
     assert "johnsmith" not in value
-    assert "~/secret-project/missing.txt" in value
+    assert expected in value
 
 
 def test_scrub_event_redacts_home_directory_from_top_level_message(monkeypatch):
@@ -377,3 +375,35 @@ def test_scrub_event_redacts_an_exact_home_directory_match_with_no_trailing_sepa
 
     frame = scrubbed["exception"]["values"][0]["stacktrace"]["frames"][0]
     assert frame["filename"] == "~"
+
+
+def test_default_home_returns_empty_string_when_path_home_raises(monkeypatch):
+    # Real, tested scenario in this repo's own CI (smoke "linux edge
+    # cases": an arbitrary UID with no HOME env var and no passwd entry) -
+    # Path.home() itself raises RuntimeError. This runs at *module import
+    # time* (_HOME below is a module-level constant), so an unguarded
+    # call there crashes `import aletheore.cli` before any later
+    # try/except in this module ever runs.
+    def _raise(*args, **kwargs):
+        raise RuntimeError("Could not determine home directory.")
+
+    monkeypatch.setattr(Path, "home", _raise)
+
+    assert _default_home() == ""
+
+
+def test_scrub_event_does_not_corrupt_strings_when_home_is_undeterminable(monkeypatch):
+    # An empty _HOME (see test above) must make _redact_home a no-op -
+    # not match an empty needle against everything, which would corrupt
+    # every string this function touches.
+    monkeypatch.setattr("aletheore.sentry_reporting._HOME", "")
+    monkeypatch.setattr("aletheore.sentry_reporting._HOME_PREFIX", "")
+    event = {
+        "message": "some ordinary message",
+        "exception": {"values": [{"value": "boom", "stacktrace": {"frames": []}}]},
+    }
+
+    scrubbed = _scrub_event(event, {})
+
+    assert scrubbed["message"] == "some ordinary message"
+    assert scrubbed["exception"]["values"][0]["value"] == "boom"

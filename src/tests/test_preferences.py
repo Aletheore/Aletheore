@@ -1,8 +1,10 @@
 import sys
+from pathlib import Path
 
 import pytest
 
 from aletheore.preferences import (
+    _default_home_dir,
     has_shown_crash_reporting_notice,
     is_crash_reporting_enabled,
     mark_crash_reporting_notice_shown,
@@ -121,3 +123,38 @@ def test_set_crash_reporting_enabled_does_not_crash_when_home_is_unwritable(tmp_
         set_crash_reporting_enabled(False, prefs_path)  # must not raise
     finally:
         readonly_dir.chmod(0o700)
+
+
+def test_default_home_dir_returns_none_when_path_home_raises(monkeypatch):
+    # Real, tested scenario in this repo's own CI (smoke "linux edge
+    # cases": an arbitrary UID with no HOME env var and no passwd entry) -
+    # Path.home() itself raises RuntimeError, not just resolves to
+    # something unwritable. This runs at *module import time*
+    # (DEFAULT_PREFERENCES_PATH is a module-level constant), so an
+    # unguarded Path.home() call there crashes `import aletheore.cli`
+    # before any of this module's own try/except logic ever runs.
+    def _raise(*args, **kwargs):
+        raise RuntimeError("Could not determine home directory.")
+
+    monkeypatch.setattr(Path, "home", _raise)
+
+    assert _default_home_dir() is None
+
+
+def test_is_crash_reporting_enabled_defaults_to_enabled_when_preferences_path_is_none(
+    monkeypatch,
+):
+    monkeypatch.delenv("ALETHEORE_CRASH_REPORTING", raising=False)
+    assert is_crash_reporting_enabled(None) is True
+
+
+def test_set_crash_reporting_enabled_does_not_crash_when_preferences_path_is_none():
+    set_crash_reporting_enabled(False, None)  # nowhere to persist - must not raise
+
+
+def test_has_shown_crash_reporting_notice_defaults_to_false_when_preferences_path_is_none():
+    assert has_shown_crash_reporting_notice(None) is False
+
+
+def test_mark_crash_reporting_notice_shown_does_not_crash_when_preferences_path_is_none():
+    mark_crash_reporting_notice_shown(None)  # must not raise
