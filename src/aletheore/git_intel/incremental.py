@@ -180,6 +180,7 @@ def stream_commit_touches(
     pending_subject: str = ""
     pending_files: list[str] = []
     pending_renames: list[tuple[str, str]] = []
+    pending_departures: list[str] = []
     try:
         for raw_line in proc.stdout:
             line = raw_line.rstrip("\n")
@@ -190,6 +191,7 @@ def stream_commit_touches(
                         files=tuple(pending_files),
                         subject=pending_subject,
                         renames=tuple(pending_renames),
+                        departures=tuple(pending_departures),
                     )
                 # maxsplit=4 defensively, though `\x00` cannot occur inside
                 # any of these fields (see the module-level comment on
@@ -199,6 +201,7 @@ def stream_commit_touches(
                 pending_header = (sha, name, email, parse_commit_date(date_str))
                 pending_files = []
                 pending_renames = []
+                pending_departures = []
             elif line.strip():
                 # --name-status's per-file lines are "<STATUS>\t<path>", or
                 # for a rename, "R<score>\t<old>\t<new>" - tab-separated,
@@ -207,11 +210,18 @@ def stream_commit_touches(
                 if status.startswith("R"):
                     old_raw, _, new_raw = rest.partition("\t")
                     new_path = _relativize(new_raw, prefix)
+                    old_path = _relativize(old_raw, prefix)
                     if new_path:
                         pending_files.append(new_path)
-                        old_path = _relativize(old_raw, prefix)
                         if old_path:
                             pending_renames.append((old_path, new_path))
+                    elif old_path:
+                        # Renamed OUT of the scan root (new_path isn't in
+                        # scope) - nothing in-scope to merge onto, but
+                        # old_path's already-accumulated entry must not be
+                        # left stale in file_churn forever either. Real gap
+                        # found by Flash Review on this same change.
+                        pending_departures.append(old_path)
                 else:
                     path = _relativize(rest, prefix)
                     if path:
@@ -222,6 +232,7 @@ def stream_commit_touches(
                 files=tuple(pending_files),
                 subject=pending_subject,
                 renames=tuple(pending_renames),
+                departures=tuple(pending_departures),
             )
     finally:
         proc.stdout.close()
@@ -372,6 +383,11 @@ def fold(snapshot: GraphSnapshot, commits: list[CommitTouch]) -> GraphSnapshot:
         # history from commits already folded in by the time we reach it.
         for old_path, new_path in commit.renames:
             _merge_renamed_file_churn(file_churn, old_path, new_path)
+        # departures: the old path left the scan root (see CommitTouch's
+        # docstring) - nothing in-scope to merge onto, so drop its entry
+        # outright rather than leaving it stale forever.
+        for departed_path in commit.departures:
+            file_churn.pop(departed_path, None)
 
         email_key = commit.author_email.lower()
         total = ownership.get(email_key)

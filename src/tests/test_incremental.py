@@ -43,8 +43,10 @@ def init_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _touch(sha, name, email, date_str, files, renames=()):
-    return CommitTouch(sha, name, email, datetime.fromisoformat(date_str), files, renames=renames)
+def _touch(sha, name, email, date_str, files, renames=(), departures=()):
+    return CommitTouch(
+        sha, name, email, datetime.fromisoformat(date_str), files, renames=renames, departures=departures
+    )
 
 
 # --- parse_commit_date: real git history has commits with genuinely
@@ -488,6 +490,18 @@ def test_fold_rename_of_a_path_never_touched_in_this_view_is_a_no_op():
     assert result.file_churn["new.txt"].churn_count == 1
 
 
+def test_fold_drops_a_departed_path_entirely():
+    # A rename out of the scan root (see CommitTouch.departures) has no
+    # in-scope new path to merge onto - old_path's already-accumulated
+    # entry must be dropped outright, not left stale in file_churn forever.
+    commits = list(reversed([
+        _touch("s1", "Alice", "a@example.com", "2026-06-01T00:00:00+00:00", ("old.txt",)),
+        _touch("s2", "Alice", "a@example.com", "2026-06-02T00:00:00+00:00", (), departures=("old.txt",)),
+    ]))
+    result = fold(GraphSnapshot.empty(), commits)
+    assert "old.txt" not in result.file_churn
+
+
 def test_fold_rename_chain_ends_up_entirely_under_the_final_name():
     # a.txt -> b.txt -> c.txt, processed oldest-first (as fold() always
     # does) - the full history must end up entirely under c.txt, the one
@@ -550,6 +564,57 @@ def test_compute_repo_key_uses_remote_when_present(tmp_path):
 
     assert key_without_remote != key_with_remote
     assert "https://github.com/example/repo.git" in key_with_remote
+
+
+def test_stream_commit_touches_rename_out_of_the_scan_root_is_a_departure_not_a_rename(tmp_path):
+    # Real gap found by Flash Review: a rename whose OLD path is in scope
+    # but whose NEW path isn't (the file moved out of a monorepo
+    # subdirectory scan) has no in-scope new_path to merge onto - but
+    # old_path's already-accumulated churn/ownership must not be left
+    # stale in file_churn forever either. Recorded as a departure, not a
+    # rename pair, so fold() can drop it outright.
+    repo = tmp_path / "repo"
+    subdir = repo / "component"
+    subdir.mkdir(parents=True)
+    run(repo, "init", "-b", "main")
+    run(repo, "config", "user.email", "a@example.com")
+    run(repo, "config", "user.name", "Alice")
+    (subdir / "a.py").write_text("content\n" * 5)
+    run(repo, "add", "-A")
+    commit(repo, "add a.py inside the scan root", "2026-06-01T00:00:00+00:00")
+    run(repo, "mv", "component/a.py", "outside.py")
+    run(repo, "add", "-A")
+    commit(repo, "move a.py out of the scan root", "2026-06-02T00:00:00+00:00")
+
+    touches = list(stream_commit_touches(subdir, "HEAD"))
+    departure_touch = touches[0]  # newest-first
+    assert departure_touch.files == ()
+    assert departure_touch.renames == ()
+    assert departure_touch.departures == ("a.py",)
+
+
+def test_stream_commit_touches_rename_into_the_scan_root_starts_fresh(tmp_path):
+    # The reverse direction: old_path was never in scope (outside the
+    # scanned subdirectory), so there's genuinely nothing to carry forward
+    # - new_path correctly starts at zero, same as before -M existed.
+    repo = tmp_path / "repo"
+    subdir = repo / "component"
+    subdir.mkdir(parents=True)
+    run(repo, "init", "-b", "main")
+    run(repo, "config", "user.email", "a@example.com")
+    run(repo, "config", "user.name", "Alice")
+    (repo / "outside.py").write_text("content\n" * 5)
+    run(repo, "add", "-A")
+    commit(repo, "add outside.py outside the scan root", "2026-06-01T00:00:00+00:00")
+    run(repo, "mv", "outside.py", "component/a.py")
+    run(repo, "add", "-A")
+    commit(repo, "move outside.py into the scan root", "2026-06-02T00:00:00+00:00")
+
+    touches = list(stream_commit_touches(subdir, "HEAD"))
+    entry_touch = touches[0]  # newest-first
+    assert entry_touch.files == ("a.py",)
+    assert entry_touch.renames == ()
+    assert entry_touch.departures == ()
 
 
 def test_stream_commit_touches_normalizes_paths_when_scan_root_is_subdirectory(tmp_path):
