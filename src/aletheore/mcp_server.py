@@ -3,6 +3,7 @@ import json
 import multiprocessing
 import os
 import queue
+import time
 import re
 import sys
 import threading
@@ -274,7 +275,18 @@ _SEARCH_MATCH_CAP = 200
 # line - that overhead would dominate for any real search) under a single
 # overall deadline; on timeout the process is killed and the tool reports
 # what happened rather than returning results.
+#
+# The deadline covers the search only, not the child's startup. A spawned
+# child re-imports this module (and everything it pulls in) before it can
+# search at all, which on a loaded machine (a busy CI runner, a laptop under
+# memory pressure) can take longer than the whole 5s budget - and a plain
+# deadline from process.start() then reports an ordinary, fast regex as
+# "likely catastrophic backtracking". The child signals once it is imported
+# and about to search; the search clock starts from that signal, and startup
+# gets its own much longer limit.
 _SEARCH_TIMEOUT_SECONDS = 5.0
+_SEARCH_STARTUP_TIMEOUT_SECONDS = 60.0
+_SEARCH_READY = "__aletheore_search_ready__"
 
 # _SEARCH_MATCH_CAP alone doesn't bound the result's total size - 200
 # matches of long lines (a minified bundle, a generated file, a single huge
@@ -343,7 +355,33 @@ def _run_search(
 ) -> None:
     """Runs in a child process - must stay a top-level function so the
     spawn start method can pickle and import it."""
+    result_queue.put(_SEARCH_READY)
     result_queue.put(_search_files(repo_path, pattern, regex, path_glob))
+
+
+def _queue_get(result_queue: "multiprocessing.Queue", process, timeout: float):
+    """result_queue.get(timeout) that also gives up as soon as the child has
+    died without producing anything, instead of waiting out the full timeout.
+    Raises queue.Empty either way."""
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise queue.Empty
+        try:
+            return result_queue.get(timeout=min(0.25, remaining))
+        except queue.Empty:
+            if not process.is_alive():
+                # One last look: the child may have put its message and
+                # exited between the get above and this liveness check.
+                return result_queue.get(timeout=0.5)
+
+
+def _stop_search_process(process) -> None:
+    process.terminate()
+    process.join(timeout=1.0)
+    if process.is_alive():
+        process.kill()
 
 
 # ---------------------------------------------------------------------------
@@ -491,13 +529,15 @@ def _register_changes_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
         snapshots = list_snapshots(repo_path)
         if len(snapshots) < 2:
             return _toon_result({"message": "no prior snapshot to compare against"})
-        try:
-            old = load_evidence_file(snapshots[-2])
-            new = load_evidence_file(snapshots[-1])
-        except json.JSONDecodeError:
-            return _toon_result({"message": f"most recent snapshot is unreadable ({snapshots[-2]})"})
-        except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
-            return _toon_result({"error": str(exc)})
+        loaded = []
+        for snapshot_path, label in ((snapshots[-2], "previous"), (snapshots[-1], "most recent")):
+            try:
+                loaded.append(load_evidence_file(snapshot_path))
+            except json.JSONDecodeError:
+                return _toon_result({"message": f"{label} snapshot is unreadable ({snapshot_path})"})
+            except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
+                return _toon_result({"error": str(exc)})
+        old, new = loaded
         return _toon_result(compute_diff(old, new, full=full))
 
 
@@ -627,6 +667,8 @@ def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_search", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_search(pattern: str, regex: bool = False, path_glob: str | None = None) -> str:
         """Deterministic literal or regex search over the repository's source files."""
+        if path_glob is not None and not path_glob.strip():
+            return _toon_result({"error": "path_glob must not be empty"})
         if not regex:
             return _toon_result(_search_files(repo_path, pattern, regex, path_glob))
 
@@ -642,12 +684,21 @@ def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
         )
         process.start()
         try:
-            result = result_queue.get(timeout=_SEARCH_TIMEOUT_SECONDS)
+            ready = _queue_get(result_queue, process, _SEARCH_STARTUP_TIMEOUT_SECONDS)
         except queue.Empty:
-            process.terminate()
-            process.join(timeout=1.0)
-            if process.is_alive():
-                process.kill()
+            _stop_search_process(process)
+            return _toon_result(
+                {"error": "the regex search worker failed to start; try a literal (non-regex) search"}
+            )
+        if ready != _SEARCH_READY:
+            # Not reachable today (the child always signals first), but a
+            # result is a result - never drop it.
+            process.join()
+            return _toon_result(ready)
+        try:
+            result = _queue_get(result_queue, process, _SEARCH_TIMEOUT_SECONDS)
+        except queue.Empty:
+            _stop_search_process(process)
             return _toon_result(
                 {
                     "error": (

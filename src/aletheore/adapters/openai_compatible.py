@@ -377,6 +377,10 @@ class OpenAICompatibleAdapter(AgentAdapter):
         if self._needs_key:
             api_key = get_api_key(self._api_key_env_var, self.name, self._credentials_path)
             if not api_key:
+                # The reservation above is real; nothing will true it up or
+                # release it once we raise before the try block below.
+                if self._on_call_failed is not None:
+                    self._on_call_failed()
                 raise AdapterInvocationError(f"no API key available for {self.name}")
 
         client = OpenAI(base_url=self._base_url, api_key=api_key or "not-needed")
@@ -427,6 +431,8 @@ class OpenAICompatibleAdapter(AgentAdapter):
             # reached by a different failure shape its regression tests
             # never simulated.
             self._on_call_failed()
+        if not response.choices:
+            raise AdapterInvocationError(f"{self.name} returned a response with no choices")
         return response.choices[0].message.content or ""
 
     def _local_server_reachable(self) -> bool:
@@ -541,6 +547,8 @@ class OpenAICompatibleAdapter(AgentAdapter):
                 # documents: a 200 with no usage field, which the except
                 # block above never sees since nothing raised.
                 self._on_call_failed()
+            if not response.choices:
+                raise AdapterInvocationError(f"{self.name} returned a response with no choices")
             message = response.choices[0].message
             messages.append(message.model_dump(exclude_none=True))
 

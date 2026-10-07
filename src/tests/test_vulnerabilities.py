@@ -1230,3 +1230,100 @@ def test_check_vulnerabilities_includes_gradle_pins(tmp_path, monkeypatch):
     vulnerabilities.check_vulnerabilities(repo, cache_path=tmp_path / "cache.json")
 
     assert ("com.example:foo", "1.0.0", "Maven") in captured["pins"]
+
+
+def test_parse_npm_pins_extracts_real_name_for_nested_nonhoisted_dependency(tmp_path):
+    from aletheore.vulnerabilities import _parse_npm_pins
+
+    repo = tmp_path
+    (repo / "package-lock.json").write_text(
+        json.dumps(
+            {
+                "lockfileVersion": 3,
+                "packages": {
+                    "": {"name": "app"},
+                    "node_modules/lodash": {"version": "4.17.21"},
+                    "node_modules/some-plugin/node_modules/lodash": {"version": "4.17.4"},
+                    "node_modules/some-plugin/node_modules/@scope/pkg": {"version": "1.0.0"},
+                },
+            }
+        )
+    )
+    pins = _parse_npm_pins(repo)
+    assert ("lodash", "4.17.4", "npm") in pins
+    assert ("lodash", "4.17.21", "npm") in pins
+    assert ("@scope/pkg", "1.0.0", "npm") in pins
+    assert not any("node_modules" in name for name, _, _ in pins)
+
+
+def test_parse_npm_pins_reads_legacy_lockfile_version_1_tree(tmp_path):
+    from aletheore.vulnerabilities import _parse_npm_pins
+
+    (tmp_path / "package-lock.json").write_text(
+        json.dumps(
+            {
+                "lockfileVersion": 1,
+                "dependencies": {
+                    "express": {
+                        "version": "4.17.1",
+                        "dependencies": {"qs": {"version": "6.7.0"}},
+                    },
+                    "lodash": {"version": "4.17.21"},
+                },
+            }
+        )
+    )
+    pins = _parse_npm_pins(tmp_path)
+    assert sorted(pins) == [
+        ("express", "4.17.1", "npm"),
+        ("lodash", "4.17.21", "npm"),
+        ("qs", "6.7.0", "npm"),
+    ]
+
+
+def test_parse_maven_pins_resolves_property_defined_via_another_property(tmp_path):
+    from aletheore.vulnerabilities import _parse_maven_pins
+
+    (tmp_path / "pom.xml").write_text(
+        '<project xmlns="http://maven.apache.org/POM/4.0.0">\n'
+        "  <properties><a>4.0.0</a><b>${a}</b><x>${y}</x><y>${x}</y></properties>\n"
+        "  <dependencies>\n"
+        "    <dependency><groupId>g</groupId><artifactId>chained</artifactId>"
+        "<version>${b}</version></dependency>\n"
+        "    <dependency><groupId>g</groupId><artifactId>cyclic</artifactId>"
+        "<version>${x}</version></dependency>\n"
+        "  </dependencies>\n"
+        "</project>\n"
+    )
+
+    pins = _parse_maven_pins(tmp_path)
+
+    assert ("g:chained", "4.0.0", "Maven") in pins
+    assert not any(p[0] == "g:cyclic" for p in pins)
+
+
+def test_parse_composer_pins_includes_dev_dependencies(tmp_path):
+    from aletheore.vulnerabilities import _parse_composer_pins
+
+    (tmp_path / "composer.lock").write_text(
+        json.dumps(
+            {
+                "packages": [{"name": "a/prod", "version": "v1.0.0"}],
+                "packages-dev": [{"name": "a/dev", "version": "2.0.0"}],
+            }
+        )
+    )
+    assert sorted(_parse_composer_pins(tmp_path)) == [
+        ("a/dev", "2.0.0", "Packagist"),
+        ("a/prod", "1.0.0", "Packagist"),
+    ]
+
+
+def test_parse_composer_pins_json_fallback_includes_require_dev(tmp_path):
+    from aletheore.vulnerabilities import _parse_composer_pins
+
+    (tmp_path / "composer.json").write_text(
+        json.dumps({"require": {"php": "^8.1", "a/prod": "1.2.3"}, "require-dev": {"a/dev": "4.5.6"}})
+    )
+    names = {name for name, _, _ in _parse_composer_pins(tmp_path)}
+    assert names == {"a/prod", "a/dev"}

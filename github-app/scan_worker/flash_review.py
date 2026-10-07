@@ -730,7 +730,14 @@ def fetch_review_file_context(
                 for path in paths
             }
             for future, path in futures.items():
-                content = future.result()
+                try:
+                    content = future.result()
+                except Exception as exc:  # noqa: BLE001 - fail open, one file's fetch must not abort the whole review
+                    logger.warning(
+                        "flash review file fetch failed for %s (%s); skipping",
+                        path, type(exc).__name__,
+                    )
+                    continue
                 if content is not None:
                     raw_contents[path] = content
 
@@ -2280,9 +2287,9 @@ def _rank_findings_with_severity(
     (Critical/High/Medium/Low) - the triage step none of per_file_completeness's
     isolated per-file generation calls could do on their own, since each of
     those runs blind to what every other file's call found. Deliberately one
-    call over the whole set, not N parallel calls like
-    _verify_findings_with_second_model - ranking is inherently relative, so
-    it needs to see everything at once to be coherent.
+    call over the whole set, not one call per finding - ranking is
+    inherently relative, so it needs to see everything at once to be
+    coherent.
 
     Built because per_file_completeness (PR #762) working as intended - Aletheore
     surfacing far more real findings per PR than before, and more than any
@@ -2576,8 +2583,16 @@ def _generate_findings_per_file(
         filename, patch = item
         other_files_context = _build_other_files_context(filename, diff_patches) if share_pr_context else ""
         user_prompt = _build_per_file_user_prompt(pr_title, filename, patch, other_files_context)
+        # Scaled to this file's own hunk count, not the whole PR's - a
+        # single file with many independent changed regions hits the same
+        # "(0-5 issues)" undercount review_diff's own hunk-scaled prompt
+        # was built to fix at the PR level (real gap found via audit:
+        # this used to always pass the raw, unscaled module constant).
+        system_prompt = _flash_review_system_prompt_for_cap(
+            _max_findings_for_diff(((filename, patch),))
+        )
         try:
-            raw = adapter.simple_completion(FLASH_REVIEW_SYSTEM_PROMPT, user_prompt, cwd=".")
+            raw = adapter.simple_completion(system_prompt, user_prompt, cwd=".")
         except Exception as exc:
             logger.warning(
                 "flash review per-file generation failed for %s (%s); skipping this file",
@@ -2668,6 +2683,24 @@ def review_diff(
 
             if on_grounding_result is not None:
                 on_grounding_result({"proposed": len(combined), "kept": len(kept)})
+            if cross_file_check_runs > 0:
+                # Real gap found via audit: a cache hit used to return here
+                # without ever reaching this check, even though the cache
+                # match is similarity-based, not exact - a finding cached
+                # against one push could replay on a later, similar push
+                # whose current diff would otherwise get it dropped as
+                # contradicted. Same logic as the fresh-generation path
+                # below, against the CURRENT diff_text, not whatever was
+                # cached - same reasoning _validate_findings above already
+                # re-runs for.
+                llm_findings = [f for f in kept if f.get("source") == "llm"]
+                surviving_ids = {
+                    id(f) for f in _check_findings_against_whole_diff(
+                        llm_findings, diff_text, agreeing_checks=cross_file_check_runs,
+                        on_usage=on_cross_file_check_usage,
+                    )
+                }
+                kept = [f for f in kept if f.get("source") != "llm" or id(f) in surviving_ids]
             return kept
 
     # PR-Agent user prompt (title/date/diff) plus, when non-empty,

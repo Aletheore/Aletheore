@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from rq.exceptions import DuplicateJobError
 
 from app_server import paddle_ip_allowlist
 from app_server.affiliates import (
@@ -24,11 +25,13 @@ from app_server.auth import sign_checkout_installation_id
 from app_server.db import (
     add_installation_member,
     claim_free_to_paid_plan,
+    claim_paid_setup,
     claim_webhook_delivery,
     credit_extra_seat_purchase,
     credit_topup_purchase,
     get_extra_seats,
     get_installation,
+    release_paid_setup,
     reset_billing_period_credit,
     upsert_github_user_email,
     upsert_installation,
@@ -2316,6 +2319,47 @@ async def test_transaction_completed_skips_topup_credit_when_bundled_with_anothe
 
 
 @pytest.mark.asyncio
+async def test_transaction_completed_skips_topup_credit_when_bundled_with_malformed_item(pool, caplog):
+    # Same bundling guard as
+    # test_transaction_completed_skips_topup_credit_when_bundled_with_another_item
+    # above, but the second line item is malformed (None) rather than a
+    # well-formed dict. _line_items() drops malformed entries before the
+    # "exactly one item" count is taken, so a naive post-filter count would
+    # see len(items) == 1 and over-credit the full transaction total even
+    # though the payload actually carried 2 raw items and the dropped one
+    # could have carried real cost. Proves the guard is judged against the
+    # raw, pre-filter item count instead.
+    installation_id = 1916
+    await upsert_installation(pool, installation_id, "acme")
+    payload = {
+        "event_id": "evt_topup_1916",
+        "event_type": "transaction.completed",
+        "data": {
+            "id": "txn_topup_wire_1916",
+            "customer_id": "ctm_test_1916",
+            "custom_data": {"installation_token": _installation_token(installation_id)},
+            "items": [
+                {"price": {"id": CREDIT_TOPUP_PRICE_ID}, "quantity": 5},
+                None,
+            ],
+            "details": {"totals": {"total": "500"}},
+            "billed_at": "2026-09-01T12:00:00Z",
+        },
+    }
+
+    with caplog.at_level(logging.WARNING):
+        await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    row = await pool.fetchrow(
+        "SELECT topup_credit_balance_usd, balance_epoch FROM installations WHERE installation_id = $1",
+        installation_id,
+    )
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(0.00)
+    assert row["balance_epoch"] == 0
+    assert "bundled with other line items" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_transaction_completed_topup_is_independent_of_referral_commission(pool):
     # Proves the topup branch isn't skipped by the referral early-return
     # for unreferred transactions (the common case), since this
@@ -3010,3 +3054,136 @@ async def test_a_refund_never_adds_credit_even_if_the_balance_is_already_negativ
 
     assert await _topup_balance(pool, 1980) == pytest.approx(-0.50)
     assert len(alerts) == 1 and "shortfall_usd=5.00" in str(alerts[0])
+
+
+@pytest.mark.asyncio
+async def test_paid_setup_claim_is_released_when_the_gated_enqueue_fails(pool):
+    """The paid-setup claim commits before the build enqueue runs. If the
+    enqueue then fails, the retry must still run the one-time setup instead
+    of finding the claim consumed and silently skipping it forever."""
+    failing_queue = MagicMock()
+    failing_queue.enqueue.side_effect = ConnectionError("redis down")
+    await upsert_installation(pool, 210, "acme")
+    payload = _subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", 210)
+
+    with pytest.raises(ConnectionError):
+        await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=failing_queue)
+
+    retry_queue = MagicMock()
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=retry_queue)
+
+    assert retry_queue.enqueue.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_release_paid_setup_does_not_clear_a_claim_retaken_after_it(pool):
+    """Flash Review HIGH finding: release_paid_setup used to unconditionally
+    NULL paid_setup_completed_at, with nothing tying the release to the
+    specific claim that caller made. If a second claim is retaken (e.g. by
+    a Paddle retry) in the window before the first (slow/failing) caller's
+    own release_paid_setup call actually runs, an unconditional release
+    would wipe out that NEWER claim's completion marker too - letting yet
+    another webhook delivery re-run the one-time build/attribution a second
+    time. The fix makes release_paid_setup a compare-and-set keyed on the
+    exact timestamp its own claim produced, so a release only ever clears
+    the claim it actually owns."""
+    await upsert_installation(pool, 213, "acme")  # defaults to plan='free'
+    # paid_setup_completed_at defaults to now() ("nothing pending") for a
+    # fresh row - only a genuine free->paid transition resets it to NULL,
+    # which is what makes claim_paid_setup claimable below.
+    assert await claim_free_to_paid_plan(pool, 213, "air") is True
+
+    first_claimed_at = await claim_paid_setup(pool, 213)
+    assert first_claimed_at is not None
+
+    # The first claim is released (as if its own gated work already failed
+    # and this ran), and a second call re-takes the claim before the first
+    # caller's own release call executes.
+    await release_paid_setup(pool, 213, first_claimed_at)
+    second_claimed_at = await claim_paid_setup(pool, 213)
+    assert second_claimed_at is not None
+    assert second_claimed_at != first_claimed_at
+
+    # The first caller's release call finally runs now, holding only its
+    # OWN (now-stale) timestamp. It must not clear the second claim.
+    await release_paid_setup(pool, 213, first_claimed_at)
+
+    row = await pool.fetchrow(
+        "SELECT paid_setup_completed_at FROM installations WHERE installation_id = $1", 213
+    )
+    assert row["paid_setup_completed_at"] == second_claimed_at
+
+
+class _DedupingFakeQueue:
+    """Mimics rq's real unique=True/job_id enqueue behavior (save_unique_job)
+    closely enough to test the dedup fix: raises DuplicateJobError when a
+    job with the given id has already been created and not removed,
+    otherwise records the enqueue and succeeds. `fail` is an optional
+    predicate used to simulate a transient failure (e.g. a Redis blip) on
+    one specific call without disturbing the dedup bookkeeping."""
+
+    def __init__(self, fail=None):
+        self._created_job_ids = []
+        self._fail = fail or (lambda *a, **k: False)
+        self.enqueue = MagicMock(side_effect=self._enqueue)
+
+    def _enqueue(self, name, job_timeout=None, installation_id=None, job_id=None, unique=False, **kwargs):
+        if self._fail(name, job_id):
+            raise ConnectionError("redis down")
+        if unique and job_id in self._created_job_ids:
+            raise DuplicateJobError(f"Job with ID '{job_id}' already exists")
+        if job_id is not None:
+            self._created_job_ids.append(job_id)
+
+
+@pytest.mark.asyncio
+async def test_retry_after_partial_enqueue_failure_does_not_duplicate_the_wiki_job(pool):
+    """Flash Review MEDIUM finding: the Live Wiki and Docs enqueues aren't
+    atomic. If the wiki enqueue succeeds and the docs enqueue then fails (a
+    Redis blip), the claim is released and the handler re-raises so Paddle
+    retries - and that retry used to call BOTH enqueues again from scratch,
+    including the wiki build that had already succeeded: a duplicate full
+    AIRview build with real LLM spend. The fix gives each enqueue a stable,
+    installation-scoped job_id with unique=True, so the retry's re-enqueue
+    of the already-succeeded wiki job is a safe no-op instead of a second
+    job."""
+    installation_id = 214
+    await upsert_installation(pool, installation_id, "acme")
+    payload = _subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", installation_id)
+
+    # First delivery: wiki enqueue succeeds, docs enqueue fails once.
+    queue = _DedupingFakeQueue(fail=lambda name, job_id: "docs_full_build" in name)
+    with pytest.raises(ConnectionError):
+        await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=queue)
+
+    assert queue._created_job_ids == [f"paid-setup-wiki-{installation_id}"]
+
+    # Paddle retries the same event against the same queue (the docs
+    # failure above released the claim, so this retry re-runs the gated
+    # block). The wiki enqueue is attempted again with the same job_id, but
+    # must not create a second job; the docs enqueue, which never actually
+    # succeeded, must now go through for real.
+    queue._fail = lambda *a, **k: False
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=queue)
+
+    wiki_job_id = f"paid-setup-wiki-{installation_id}"
+    docs_job_id = f"paid-setup-docs-{installation_id}"
+    assert queue._created_job_ids.count(wiki_job_id) == 1, "wiki build was duplicated on retry"
+    assert queue._created_job_ids.count(docs_job_id) == 1
+    # Four enqueue() calls total (wiki+docs on the first delivery, wiki+docs
+    # on the retry) - the wiki call on the retry raises DuplicateJobError
+    # and is caught as a no-op, which is exactly what the job_id assertions
+    # above confirm.
+    assert queue.enqueue.call_count == 4
+
+
+@pytest.mark.asyncio
+async def test_subscription_event_with_malformed_items_does_not_crash(pool):
+    await upsert_installation(pool, 211, "acme")
+    payload = _subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", 211)
+    payload["data"]["items"] = "not-a-list"
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=MagicMock())
+
+    payload["data"]["items"] = [None, "x", 3]
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=MagicMock())
