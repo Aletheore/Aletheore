@@ -5352,6 +5352,7 @@ def test_post_flash_review_finding_comments_records_a_real_url_for_a_new_post(mo
         settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
         repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
         findings_to_post=[finding],
+        reviewed_scope={},
     )
 
     assert failed == 0
@@ -5384,6 +5385,7 @@ def test_post_flash_review_finding_comments_renders_the_rank_suffix_on_the_real_
         settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
         repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
         findings_to_post=findings,
+        reviewed_scope={},
     )
 
     assert "High · #1 of 2" in posted_bodies[0]
@@ -5428,6 +5430,7 @@ def test_post_flash_review_finding_comments_rank_total_is_not_undercounted_by_an
         settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
         repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
         findings_to_post=findings,
+        reviewed_scope={},
     )
 
     assert "Critical · #1 of 3" in posted_bodies[0]
@@ -5452,6 +5455,7 @@ def test_post_flash_review_finding_comments_omits_url_when_the_post_fails(monkey
         settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
         repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
         findings_to_post=[finding],
+        reviewed_scope={},
     )
 
     assert failed == 1
@@ -5482,6 +5486,7 @@ def test_post_flash_review_finding_comments_records_url_for_an_untouched_existin
         settings=SimpleNamespace(database_url="postgresql://unused"), client=None, token="t", installation_id=1,
         repo_full_name="octocat/hello-world", pr_number=42, head_sha="bbb",
         findings_to_post=[finding],
+        reviewed_scope={},
     )
 
     assert finding["comment_url"] == "https://github.com/octocat/hello-world/pull/42#discussion_r777001"

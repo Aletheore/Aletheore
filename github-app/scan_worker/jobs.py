@@ -2680,7 +2680,16 @@ def _comment_was_rereviewed(comment: dict, reviewed_scope: dict[str, set[int]]) 
     whose anchored code changed since it was posted; the file being in this
     review's scope means that change is part of what was just reviewed (an
     earlier push's change would already have been resolved by that push's
-    own review)."""
+    own review).
+
+    Known limit, kept on purpose: that parenthesis assumes every earlier
+    push was reviewed with resolution on. If one was not (its review
+    failed, or ran before this check existed), a comment outdated by that
+    earlier push can be resolved here though this diff never covered its
+    original line. GitHub gives no per-push record of when a comment went
+    outdated, so a stricter rule is not available; this is still narrower
+    than before, when every un-re-found finding was resolved
+    unconditionally."""
     valid = _lookup_valid_lines(comment.get("path") or "", reviewed_scope)
     if not valid:
         return False
@@ -2699,7 +2708,8 @@ def _post_flash_review_finding_comments(
     pr_number: int,
     head_sha: str,
     findings_to_post: list[dict],
-    reviewed_scope: dict[str, set[int]] | None = None,
+    *,
+    reviewed_scope: dict[str, set[int]] | None,
 ) -> int:
     """Posts one inline PR review comment per finding (anchored to its real
     file:line via create_pr_review_comment) instead of the old single
@@ -2720,7 +2730,8 @@ def _post_flash_review_finding_comments(
     file the review could not read) cannot re-find anything there, so
     "not found" says nothing and the finding is left alone. reviewed_scope
     None means no coverage information, which is treated the same way:
-    nothing is resolved. When resolved, its comment is edited (not
+    nothing is resolved. It has no default on purpose: a caller that did
+    not pass it would otherwise silently lose resolve-on-fix. When resolved, its comment is edited (not
     deleted - see migration 059's docstring on why a human's existing
     reply thread must survive) to note it's no longer detected, and only
     on the first push that doesn't detect it (resolved_at is a one-time
