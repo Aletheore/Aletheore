@@ -824,7 +824,18 @@ def _seat_adjustment_lock(installation_id: int) -> asyncio.Lock:
 # Paddle a second time. Deliberately NOT a behavior change for a caller that
 # sends no key (or a malformed one) - same single-worker, in-process-dict
 # reasoning as _SEAT_ADJUSTMENT_LOCKS above, not a cross-process store.
-_SEAT_IDEMPOTENCY_TTL_SECONDS = 300
+#
+# Real residual gap flagged by Flash Review: this is still a TTL, not an
+# unlimited dedup window - a retry carrying the same key more than
+# _SEAT_IDEMPOTENCY_TTL_SECONDS after the original attempt (a long network
+# outage, a queued retry) misses the cache and can still double-charge.
+# frontend.py's buySeat/removeSeat keep the key on btn.dataset with no
+# expiry of their own, so this mismatch is reachable in practice, not just
+# theoretical. 30 minutes comfortably covers any realistic browser-level
+# retry/outage window at negligible memory cost (one small dict entry per
+# distinct key until it's pruned), while still bounding the in-process
+# dict rather than keeping entries forever.
+_SEAT_IDEMPOTENCY_TTL_SECONDS = 1800
 _SEAT_IDEMPOTENCY_RESULTS: dict[tuple[int, str, str], tuple[float, dict]] = {}
 
 
@@ -906,10 +917,20 @@ async def buy_extra_seat(org: str, repo: str, request: Request):
 
     idempotency_key = _seat_idempotency_key_from_request(request)
     settings = get_settings()
+    # Fetched before the lock, not after like the non-cached path used to -
+    # needed either way now, since a cache hit (a retried request, exactly
+    # the case this header exists for) also writes an audit-log entry
+    # below, real gap found by Flash Review: that early return used to skip
+    # record_admin_action entirely, so a retry left no audit trail at all.
+    session = await get_current_session(request)
     try:
         async with _seat_adjustment_lock(installation["installation_id"]):
             cached = _seat_idempotent_result(installation["installation_id"], "buy", idempotency_key)
             if cached is not None:
+                await record_admin_action(
+                    request.app.state.db_pool, installation["installation_id"], session["github_login"],
+                    "extra_seat_purchase_replayed",
+                )
                 return cached
             await asyncio.to_thread(
                 _adjust_extra_seat_sync, settings.paddle_api_key, subscription_id, 1
@@ -932,7 +953,6 @@ async def buy_extra_seat(org: str, repo: str, request: Request):
             detail="Could not update billing right now - please try again, or contact support if this keeps happening.",
         ) from exc
 
-    session = await get_current_session(request)
     await record_admin_action(
         request.app.state.db_pool, installation["installation_id"], session["github_login"],
         "extra_seat_purchase_requested",
@@ -952,10 +972,17 @@ async def remove_extra_seat(org: str, repo: str, request: Request):
 
     idempotency_key = _seat_idempotency_key_from_request(request)
     settings = get_settings()
+    # See buy_extra_seat's comment - fetched early so the cache-hit (replay)
+    # branch below can also write an audit-log entry.
+    session = await get_current_session(request)
     try:
         async with _seat_adjustment_lock(installation["installation_id"]):
             cached = _seat_idempotent_result(installation["installation_id"], "remove", idempotency_key)
             if cached is not None:
+                await record_admin_action(
+                    request.app.state.db_pool, installation["installation_id"], session["github_login"],
+                    "extra_seat_removal_replayed",
+                )
                 return cached
             items = await asyncio.to_thread(
                 _adjust_extra_seat_sync, settings.paddle_api_key, subscription_id, -1
@@ -979,7 +1006,6 @@ async def remove_extra_seat(org: str, repo: str, request: Request):
             detail="Could not update billing right now - please try again, or contact support if this keeps happening.",
         ) from exc
 
-    session = await get_current_session(request)
     await record_admin_action(
         request.app.state.db_pool, installation["installation_id"], session["github_login"],
         "extra_seat_removal_requested",

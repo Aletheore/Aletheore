@@ -1099,6 +1099,27 @@ function lockedFeature(title, description, previewHtml) {{
 # file hardcoding one page's refresh call - buySeat/removeSeat need to
 # re-render whichever page's seat UI actually called them.
 BILLING_ACTIONS_JS = """
+function _newIdempotencyKey() {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+    try {
+      return window.crypto.randomUUID();
+    } catch (e) {
+      // randomUUID throws outside a secure context (plain HTTP on a
+      // non-localhost host) - real gap found via Flash Review. Falls
+      // through to the manual build below instead of leaving buySeat/
+      // removeSeat permanently stuck disabled on that deployment shape.
+    }
+  }
+  // getRandomValues has no secure-context restriction (unlike randomUUID),
+  // so build a UUID v4 by hand from it.
+  var bytes = new Uint8Array(16);
+  window.crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  var hex = Array.prototype.map.call(bytes, function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+  return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' + hex.slice(16, 20) + '-' + hex.slice(20);
+}
+
 async function buySeat(btn) {
   // Disabled for the whole round trip, not just re-enabled on failure like
   // most other buttons on this page: real gap found via audit - buySeat/
@@ -1132,18 +1153,27 @@ async function buySeat(btn) {
   // ambiguous outcome: the request may have already reached and mutated
   // Paddle before the client ever saw a response) replays the SAME key and
   // gets the first attempt's cached result instead of a second real charge.
-  // Cleared on any definitive HTTP response (success or a real error body),
-  // so the next distinct click still gets its own fresh key and its own
-  // real purchase, same as today.
   if (!btn.dataset.idempotencyKey) {
-    btn.dataset.idempotencyKey = crypto.randomUUID();
+    btn.dataset.idempotencyKey = _newIdempotencyKey();
   }
   try {
     const res = await fetch(adminBase + '/seats/buy', {
       method: 'POST',
       headers: { 'Idempotency-Key': btn.dataset.idempotencyKey },
     });
-    delete btn.dataset.idempotencyKey;
+    // Real gap found by Flash Review: clearing the key on EVERY response
+    // (as this used to do) included a 502/504, which is exactly the
+    // ambiguous case the key exists for - a reverse proxy can return that
+    // to the browser after the real request already reached and mutated
+    // Paddle server-side, and a fresh key on the next click would then
+    // double-charge. Only clear it on a response we can be sure changed
+    // nothing new: a real success, or one of admin.py's own documented,
+    // side-effect-free error bodies (400 "no active subscription", 409 is
+    // removeSeat-only - see below). Anything else, including a plain
+    // network failure below, keeps the key so a retry can still replay.
+    if (res.ok || res.status === 400) {
+      delete btn.dataset.idempotencyKey;
+    }
     const data = await res.json().catch(function () { return {}; });
     if (res.ok) {
       status.textContent = 'Seat added - billing updated. Refreshing...';
@@ -1166,14 +1196,19 @@ async function removeSeat(btn) {
   status.textContent = 'Updating billing...';
   status.style.color = 'var(--slate-600)';
   if (!btn.dataset.idempotencyKey) {
-    btn.dataset.idempotencyKey = crypto.randomUUID();
+    btn.dataset.idempotencyKey = _newIdempotencyKey();
   }
   try {
     const res = await fetch(adminBase + '/seats/remove', {
       method: 'POST',
       headers: { 'Idempotency-Key': btn.dataset.idempotencyKey },
     });
-    delete btn.dataset.idempotencyKey;
+    // See buySeat's comment - 400 "no active subscription" and 409 "no
+    // extra seats to remove" are this route's own side-effect-free error
+    // bodies; anything else (502, a network failure) keeps the key.
+    if (res.ok || res.status === 400 || res.status === 409) {
+      delete btn.dataset.idempotencyKey;
+    }
     const data = await res.json().catch(function () { return {}; });
     if (res.ok) {
       status.textContent = 'Seat removed - billing updated. Refreshing...';
