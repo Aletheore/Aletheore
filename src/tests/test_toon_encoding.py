@@ -105,20 +105,32 @@ def test_to_toon_raises_toon_encoding_error_on_failure(monkeypatch):
         to_toon({"x": 1})
 
 
-def test_to_toon_catches_encode_success_decode_failure_asymmetry():
-    # Real, reproducible bug in the underlying library (not hypothetical):
-    # toon.encode({"nested": [[1, [2, 3]], [4, 5]]}) succeeds and returns
-    # output that toon.decode() then rejects with
-    # ToonDecodeError("Expected 2 items, but got 0") - a heterogeneous
-    # nested-list shape where encode() itself never raises. Without a
-    # self-verifying round trip inside to_toon(), this class of corruption
-    # would slip past every try/except in the codebase (they all catch
-    # ToonEncodingError, which encode() alone never produces here) and sit
-    # silently in a written air.toon/MCP result until something else
-    # eventually calls decode() on it.
-    data = {"nested": [[1, [2, 3]], [4, 5]]}
-    with pytest.raises(ToonEncodingError):
-        to_toon(data)
+# to_toon() verifies every encode with a decode round trip, because
+# toon.encode() can succeed while producing output toon.decode() rejects or
+# reads back differently. python-toon 0.1.x really did that on
+# {"nested": [[1, [2, 3]], [4, 5]]} (encode ok, decode raised "Expected 2
+# items, but got 0"); python-toon 0.2.x fixed that shape, so a test that
+# relied on it started failing the moment the library improved. The guard is
+# still needed for whatever the next such bug is, so these tests simulate
+# each failure mode directly instead of depending on a particular library
+# version having a particular bug.
+
+
+def test_to_toon_catches_an_encode_that_decode_then_rejects(monkeypatch):
+    def failing_decode(encoded):
+        raise ValueError("Expected 2 items, but got 0")
+
+    monkeypatch.setattr(toon, "decode", failing_decode)
+
+    with pytest.raises(ToonEncodingError, match="Expected 2 items"):
+        to_toon({"nested": [[1, [2, 3]], [4, 5]]})
+
+
+def test_to_toon_catches_an_encode_that_decode_reads_back_differently(monkeypatch):
+    monkeypatch.setattr(toon, "decode", lambda encoded: {"nested": "something else"})
+
+    with pytest.raises(ToonEncodingError, match="does not round-trip"):
+        to_toon({"nested": [1, 2, 3]})
 
 
 def _sanitize_reference(data):
