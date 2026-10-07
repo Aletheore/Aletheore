@@ -152,7 +152,10 @@ def test_seat_billing_button_disabled_for_the_whole_request_and_reenabled_on_fai
     # actually matters) and that a failed request re-enables it rather than
     # leaving the button permanently stuck.
     js = frontend._settings_html()
-    fn = _extract_js_function(js, name)
+    # buySeat/removeSeat now call _newIdempotencyKey (real audit finding:
+    # server-side idempotency guard for seat buy/remove) - must be defined
+    # in this standalone harness too, or calling it throws ReferenceError.
+    fn = _extract_js_function(js, "_newIdempotencyKey") + "\n" + _extract_js_function(js, name)
     harness = (
         fn
         + f"""
@@ -199,7 +202,9 @@ def test_seat_billing_button_reenables_after_a_network_failure_not_just_an_http_
     # every exit, not just the two branches reachable when fetch() itself
     # succeeds.
     js = frontend._settings_html()
-    fn = _extract_js_function(js, name)
+    # See the other seat-billing test's comment - _newIdempotencyKey must
+    # be defined in this standalone harness too.
+    fn = _extract_js_function(js, "_newIdempotencyKey") + "\n" + _extract_js_function(js, name)
     harness = (
         fn
         + f"""

@@ -1820,6 +1820,206 @@ async def test_remove_extra_seat_updates_paddle_subscription(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_buy_extra_seat_with_a_repeated_idempotency_key_does_not_purchase_twice(pool, monkeypatch):
+    # The real audit gap: a retry carrying the same Idempotency-Key (e.g.
+    # the client genuinely doesn't know whether its first attempt reached
+    # Paddle before the response was lost) must replay the first attempt's
+    # result instead of mutating the real subscription a second time.
+    await upsert_installation(pool, 100, "octocat")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test_seat", "ctm_test_seat")
+    client = await _logged_in_client(pool, monkeypatch)
+
+    calls = []
+    monkeypatch.setattr(
+        "app_server.admin.get_paddle_subscription",
+        lambda api_key, sub_id: {"items": [{"price": {"id": "pri_base"}, "quantity": 1}]},
+    )
+    monkeypatch.setattr(
+        "app_server.admin.update_paddle_subscription_items",
+        lambda api_key, sub_id, items, proration_billing_mode: calls.append(items),
+    )
+
+    async with client:
+        first = await client.post(
+            "/admin/octocat/hello-world/seats/buy", headers={"Idempotency-Key": "retry-key-1"}
+        )
+        second = await client.post(
+            "/admin/octocat/hello-world/seats/buy", headers={"Idempotency-Key": "retry-key-1"}
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json() == {"ok": True}
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_buy_extra_seat_replay_still_writes_an_audit_log_entry(pool, monkeypatch):
+    # Real gap found by Flash Review: the cache-hit path used to return
+    # early before record_admin_action ever ran, so a retry (exactly the
+    # case the Idempotency-Key header exists for) left no audit trail at
+    # all. The replay gets its own distinct action string rather than
+    # reusing "extra_seat_purchase_requested" - it didn't request a new
+    # purchase, it replayed an already-recorded one.
+    await upsert_installation(pool, 100, "octocat")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test_seat", "ctm_test_seat")
+    client = await _logged_in_client(pool, monkeypatch)
+
+    monkeypatch.setattr(
+        "app_server.admin.get_paddle_subscription",
+        lambda api_key, sub_id: {"items": [{"price": {"id": "pri_base"}, "quantity": 1}]},
+    )
+    monkeypatch.setattr("app_server.admin.update_paddle_subscription_items", lambda *a, **k: None)
+
+    recorded_actions = []
+
+    async def fake_record_admin_action(pool, installation_id, github_login, action, detail=None):
+        recorded_actions.append(action)
+
+    monkeypatch.setattr("app_server.admin.record_admin_action", fake_record_admin_action)
+
+    async with client:
+        # A key distinct from the other idempotency tests' "retry-key-1" -
+        # _SEAT_IDEMPOTENCY_RESULTS is module-level, process-wide state with
+        # no per-test reset, so reusing the same (installation, action, key)
+        # another test already populated would hit a stale cache entry from
+        # that earlier test instead of exercising this one's own call.
+        await client.post("/admin/octocat/hello-world/seats/buy", headers={"Idempotency-Key": "replay-audit-log-buy"})
+        await client.post("/admin/octocat/hello-world/seats/buy", headers={"Idempotency-Key": "replay-audit-log-buy"})
+
+    assert recorded_actions == ["extra_seat_purchase_requested", "extra_seat_purchase_replayed"]
+
+
+@pytest.mark.asyncio
+async def test_buy_extra_seat_with_distinct_idempotency_keys_purchases_twice(pool, monkeypatch):
+    # Two genuinely separate attempts (different keys) are two genuinely
+    # separate purchases, not something this guard should collapse.
+    await upsert_installation(pool, 100, "octocat")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test_seat", "ctm_test_seat")
+    client = await _logged_in_client(pool, monkeypatch)
+
+    calls = []
+    monkeypatch.setattr(
+        "app_server.admin.get_paddle_subscription",
+        lambda api_key, sub_id: {"items": [{"price": {"id": "pri_base"}, "quantity": 1}]},
+    )
+    monkeypatch.setattr(
+        "app_server.admin.update_paddle_subscription_items",
+        lambda api_key, sub_id, items, proration_billing_mode: calls.append(items),
+    )
+
+    async with client:
+        first = await client.post(
+            "/admin/octocat/hello-world/seats/buy", headers={"Idempotency-Key": "key-a"}
+        )
+        second = await client.post(
+            "/admin/octocat/hello-world/seats/buy", headers={"Idempotency-Key": "key-b"}
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_buy_extra_seat_without_an_idempotency_key_still_purchases_twice(pool, monkeypatch):
+    # No key supplied at all (today's real-world case until every caller
+    # sends one) must keep behaving exactly as before this change - no
+    # dedup, since there's nothing to dedup against.
+    await upsert_installation(pool, 100, "octocat")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test_seat", "ctm_test_seat")
+    client = await _logged_in_client(pool, monkeypatch)
+
+    calls = []
+    monkeypatch.setattr(
+        "app_server.admin.get_paddle_subscription",
+        lambda api_key, sub_id: {"items": [{"price": {"id": "pri_base"}, "quantity": 1}]},
+    )
+    monkeypatch.setattr(
+        "app_server.admin.update_paddle_subscription_items",
+        lambda api_key, sub_id, items, proration_billing_mode: calls.append(items),
+    )
+
+    async with client:
+        first = await client.post("/admin/octocat/hello-world/seats/buy")
+        second = await client.post("/admin/octocat/hello-world/seats/buy")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_remove_extra_seat_with_a_repeated_idempotency_key_does_not_remove_twice(pool, monkeypatch):
+    await upsert_installation(pool, 100, "octocat")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test_seat", "ctm_test_seat")
+    client = await _logged_in_client(pool, monkeypatch)
+
+    calls = []
+    monkeypatch.setattr(
+        "app_server.admin.get_paddle_subscription",
+        lambda api_key, sub_id: {
+            "items": [
+                {"price": {"id": "pri_base"}, "quantity": 1},
+                {"price": {"id": EXTRA_SEAT_PRICE_ID}, "quantity": 2},
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        "app_server.admin.update_paddle_subscription_items",
+        lambda api_key, sub_id, items, proration_billing_mode: calls.append(items),
+    )
+
+    async with client:
+        first = await client.post(
+            "/admin/octocat/hello-world/seats/remove", headers={"Idempotency-Key": "retry-key-1"}
+        )
+        second = await client.post(
+            "/admin/octocat/hello-world/seats/remove", headers={"Idempotency-Key": "retry-key-1"}
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json() == {"ok": True}
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_remove_extra_seat_replay_still_writes_an_audit_log_entry(pool, monkeypatch):
+    # See buy_extra_seat's equivalent test - same gap, same fix, for remove.
+    await upsert_installation(pool, 100, "octocat")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test_seat", "ctm_test_seat")
+    client = await _logged_in_client(pool, monkeypatch)
+
+    monkeypatch.setattr(
+        "app_server.admin.get_paddle_subscription",
+        lambda api_key, sub_id: {
+            "items": [
+                {"price": {"id": "pri_base"}, "quantity": 1},
+                {"price": {"id": EXTRA_SEAT_PRICE_ID}, "quantity": 2},
+            ]
+        },
+    )
+    monkeypatch.setattr("app_server.admin.update_paddle_subscription_items", lambda *a, **k: None)
+
+    recorded_actions = []
+
+    async def fake_record_admin_action(pool, installation_id, github_login, action, detail=None):
+        recorded_actions.append(action)
+
+    monkeypatch.setattr("app_server.admin.record_admin_action", fake_record_admin_action)
+
+    async with client:
+        # See the buy test's comment - a key distinct from the other
+        # idempotency tests to avoid colliding with their own cache entries
+        # in the shared, process-wide _SEAT_IDEMPOTENCY_RESULTS dict.
+        await client.post("/admin/octocat/hello-world/seats/remove", headers={"Idempotency-Key": "replay-audit-log-remove"})
+        await client.post("/admin/octocat/hello-world/seats/remove", headers={"Idempotency-Key": "replay-audit-log-remove"})
+
+    assert recorded_actions == ["extra_seat_removal_requested", "extra_seat_removal_replayed"]
+
+
+@pytest.mark.asyncio
 async def test_billing_portal_requires_billing_account_on_file(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch)
     monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
