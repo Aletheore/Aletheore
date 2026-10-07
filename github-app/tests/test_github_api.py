@@ -1254,3 +1254,105 @@ def test_reconstruct_missing_patch_returns_none_when_a_fetch_raises():
     client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
 
     assert _reconstruct_missing_patch(client, "t", "o/r", "a.py", "base", "head") is None
+
+
+# --- only_files: an incremental review limited to the PR's own files ----------
+#
+# An incremental review diffs last-reviewed-commit..head. When that push merged
+# the base branch in, the compare also lists everything the base brought with
+# it (65 of 70 files on PR #961's merge push). only_files lets the caller leave
+# those out at the source.
+
+
+def _compare_handler(files):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"files": files})
+
+    return httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+
+
+def test_fetch_pr_diff_only_files_leaves_every_other_file_out_entirely():
+    client = _compare_handler(
+        [
+            {"filename": "src/own.py", "patch": "@@ -1 +1 @@\n-old\n+new"},
+            {"filename": "src/from_base_branch.py", "patch": "@@ -1 +1 @@\n-old\n+merged in"},
+        ]
+    )
+
+    diff = fetch_pr_diff(client, "tok", "octocat/hello-world", "aaa", "bbb", only_files={"src/own.py"})
+
+    assert "src/from_base_branch.py" not in diff
+    assert [name for name, _ in diff.patches] == ["src/own.py"]
+    # A deliberate exclusion, not a file that failed to load.
+    assert diff.omitted_files == ()
+    assert diff.budget_omitted_files == ()
+
+
+def test_fetch_pr_diff_without_only_files_includes_every_file():
+    client = _compare_handler(
+        [
+            {"filename": "src/own.py", "patch": "@@ -1 +1 @@\n-old\n+new"},
+            {"filename": "src/from_base_branch.py", "patch": "@@ -1 +1 @@\n-old\n+merged in"},
+        ]
+    )
+
+    diff = fetch_pr_diff(client, "tok", "octocat/hello-world", "aaa", "bbb")
+
+    assert [name for name, _ in diff.patches] == ["src/own.py", "src/from_base_branch.py"]
+
+
+def test_fetch_pr_diff_only_files_stops_merged_in_code_eating_the_size_budget():
+    # Patches are packed smallest first under MAX_DIFF_TOTAL_BYTES (400,000).
+    # A merged-in file that is a little smaller than the PR's own file gets
+    # packed first and leaves no room for it: the PR's real change silently
+    # drops out of the review.
+    merged_in = {"filename": "src/from_base_branch.py", "patch": "@@ -1 +1 @@\n+" + "a" * 300_000}
+    own = {"filename": "src/own.py", "patch": "@@ -1 +1 @@\n+" + "b" * 350_000}
+
+    crowded = fetch_pr_diff(_compare_handler([merged_in, own]), "tok", "o/r", "aaa", "bbb")
+    assert crowded.budget_omitted_files == ("src/own.py",)
+
+    restricted = fetch_pr_diff(
+        _compare_handler([merged_in, own]), "tok", "o/r", "aaa", "bbb", only_files={"src/own.py"}
+    )
+    assert [name for name, _ in restricted.patches] == ["src/own.py"]
+    assert restricted.budget_omitted_files == ()
+
+
+def test_fetch_pr_diff_only_files_does_not_reconstruct_patches_for_excluded_files():
+    # GitHub gives no patch for a large text file; recovering it costs two
+    # extra content fetches. That must not be spent on a file we are skipping.
+    requests_seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request.url.path)
+        return httpx.Response(200, json={"files": [{"filename": "src/from_base_branch.py"}]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+
+    diff = fetch_pr_diff(client, "tok", "o/r", "aaa", "bbb", only_files={"src/own.py"})
+
+    assert diff.patches == ()
+    assert diff.omitted_files == ()
+    assert len(requests_seen) == 1  # the compare call only
+
+
+def test_fetch_pr_changed_files_only_files_limits_the_list():
+    client = _compare_handler([{"filename": "src/own.py"}, {"filename": "src/from_base_branch.py"}])
+
+    result = fetch_pr_changed_files(client, "tok", "o/r", "aaa", "bbb", only_files=frozenset({"src/own.py"}))
+
+    assert result == ["src/own.py"]
+
+
+def test_fetch_pr_changed_files_only_files_composes_with_ignored_paths():
+    client = _compare_handler(
+        [{"filename": "vendor/lib.js"}, {"filename": "src/own.py"}, {"filename": "src/other.py"}]
+    )
+
+    result = fetch_pr_changed_files(
+        client, "tok", "o/r", "aaa", "bbb",
+        ignored_paths=["vendor/**"], only_files={"vendor/lib.js", "src/own.py"},
+    )
+
+    assert result == ["src/own.py"]

@@ -2,6 +2,7 @@ import base64
 import difflib
 import logging
 import re
+from collections.abc import Collection
 
 import httpx
 
@@ -465,6 +466,7 @@ def fetch_pr_diff(
     base_ref: str,
     head_ref: str,
     ignored_paths: list[str] = (),
+    only_files: Collection[str] | None = None,
 ) -> PRDiff:
     headers = {
         "Authorization": f"token {token}",
@@ -499,6 +501,15 @@ def fetch_pr_diff(
         # the repo's own config, not a genuinely missing/unreviewable
         # file, so it belongs in neither patches nor omitted_files.
         if ignored_paths and is_ignored(file["filename"], ignored_paths):
+            continue
+        # only_files: the caller already knows which files are part of the
+        # PR (see _run_flash_review's incremental reviews) and wants no
+        # others. Skipped here, before any patch reconstruction and before
+        # the size-budget packing below, for the same reason as ignored
+        # paths: it is a deliberate exclusion, not a file that failed to
+        # load, so it belongs in neither patches nor omitted_files - and a
+        # skipped file's patch must not eat budget a real PR file needs.
+        if only_files is not None and file["filename"] not in only_files:
             continue
         patch = file.get("patch")
         if not patch:
@@ -561,6 +572,7 @@ def fetch_pr_changed_files(
     base_ref: str,
     head_ref: str,
     ignored_paths: list[str] = (),
+    only_files: Collection[str] | None = None,
 ) -> list[str]:
     headers = {
         "Authorization": f"token {token}",
@@ -587,6 +599,8 @@ def fetch_pr_changed_files(
     # the diff text itself was correctly scrubbed.
     if ignored_paths:
         filenames = [f for f in filenames if not is_ignored(f, ignored_paths)]
+    if only_files is not None:
+        filenames = [f for f in filenames if f in only_files]
     return filenames
 
 

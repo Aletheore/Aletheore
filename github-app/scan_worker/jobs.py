@@ -2639,6 +2639,16 @@ def _fetch_pr_diff_scope(
     unreadable = frozenset(getattr(full, "omitted_files", ())) | frozenset(
         getattr(full, "budget_omitted_files", ())
     )
+    if len(scope) + len(unreadable) >= GITHUB_COMPARE_FILES_HARD_CAP:
+        # GitHub's compare API stops listing at its file cap, so a PR this
+        # large has files this scope cannot see. Using it to exclude files
+        # would silently drop real PR files; no information is safer.
+        # (Approximate: files skipped as ignored are not counted here.)
+        logging.getLogger("scan_worker.jobs").warning(
+            "PR diff for %s@%s reached the compare API's %d-file cap; not restricting the "
+            "incremental review to it", repo_full_name, head_sha[:12], GITHUB_COMPARE_FILES_HARD_CAP,
+        )
+        return None, frozenset()
     return scope, unreadable
 
 
@@ -2974,7 +2984,28 @@ def _run_flash_review(
     except Exception:  # noqa: BLE001
         repo_config_text = None
     ignored_paths = parse_repo_config(repo_config_text)["ignored_paths"]
-    diff_result = fetch_pr_diff(client, token, repo_full_name, diff_base, head_sha, ignored_paths=ignored_paths)
+    # An incremental review's diff (last reviewed commit..head) is not the
+    # diff GitHub anchors inline comments to (base..head), and it is not the
+    # PR's own work whenever the push merged the base branch in: it then
+    # also contains everything the base brought with it (65 of 70 files on
+    # PR #961's merge push, 75% of the patch text). Fetch the PR's real diff
+    # first, so the incremental fetches below can leave those files out
+    # entirely instead of reading, reviewing and size-budgeting code that is
+    # not part of this PR, and so findings can be checked against it before
+    # posting. Nothing to fetch on a first review, whose diff is base..head
+    # already.
+    pr_diff_scope: dict[str, set[int]] | None = None
+    pr_diff_unreadable: frozenset[str] = frozenset()
+    if last_reviewed_sha:
+        pr_diff_scope, pr_diff_unreadable = _fetch_pr_diff_scope(
+            client, token, repo_full_name, base_sha, head_sha, ignored_paths
+        )
+    pr_files: frozenset[str] | None = (
+        None if pr_diff_scope is None else frozenset(pr_diff_scope) | pr_diff_unreadable
+    )
+    diff_result = fetch_pr_diff(
+        client, token, repo_full_name, diff_base, head_sha, ignored_paths=ignored_paths, only_files=pr_files
+    )
     diff_text = str(diff_result)
     diff_patches = getattr(diff_result, "patches", None)
     diff_omitted_files = getattr(diff_result, "omitted_files", ())
@@ -2999,7 +3030,7 @@ def _run_flash_review(
             ", ".join(diff_budget_omitted_files[:10]),
         )
     changed_files = fetch_pr_changed_files(
-        client, token, repo_full_name, diff_base, head_sha, ignored_paths=ignored_paths
+        client, token, repo_full_name, diff_base, head_sha, ignored_paths=ignored_paths, only_files=pr_files
     )
     # GitHub's changed-files listing carries no relevance ordering - sorted
     # once here so every downstream context builder (evidence, dependency
@@ -3007,16 +3038,6 @@ def _run_flash_review(
     # changes first instead of covering an arbitrary prefix of GitHub's own
     # order. See order_changed_files_by_diff_size's docstring.
     changed_files = order_changed_files_by_diff_size(changed_files, diff_patches)
-    # An incremental review's diff (last reviewed commit..head) is not the
-    # diff GitHub anchors inline comments to (base..head). They only differ
-    # when the push brought in code that is not part of this PR (a merge of
-    # the base branch), so there is nothing to fetch on a first review.
-    pr_diff_scope: dict[str, set[int]] | None = None
-    pr_diff_unreadable: frozenset[str] = frozenset()
-    if last_reviewed_sha:
-        pr_diff_scope, pr_diff_unreadable = _fetch_pr_diff_scope(
-            client, token, repo_full_name, base_sha, head_sha, ignored_paths
-        )
     try:
         pr_title = fetch_pr_title(client, token, repo_full_name, pr_number)
     except Exception:  # noqa: BLE001
