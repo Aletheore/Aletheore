@@ -12,6 +12,7 @@ from aletheore.watch import (
     _current_mtimes,
     _DebouncedHandler,
     _is_relevant,
+    _reconcile_watches,
     rebuild,
     start_background_watch,
     watch,
@@ -842,3 +843,56 @@ def test_stopping_during_a_rebuild_keeps_the_repository_lock_until_the_thread_en
     again = start_background_watch(repo, [].append, debounce_seconds=0.2)
     assert again is not None
     again.stop()
+
+
+def test_reconcile_watches_adds_new_dirs_and_calls_schedule(tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    watched: set[Path] = set()
+    scheduled: list[Path] = []
+    _reconcile_watches({a, b}, watched, scheduled.append)
+    assert watched == {a, b}
+    assert sorted(scheduled) == sorted([a, b])
+
+
+def test_reconcile_watches_prunes_a_dir_that_disappeared(tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    watched = {a, b}
+    _reconcile_watches({a}, watched, lambda path: None)
+    assert watched == {a}
+
+
+def test_reconcile_watches_treats_a_recreated_dir_as_new_again(tmp_path):
+    # The real bug this guards against: a top-level dir is deleted (pruned
+    # out of `watched` by a prior reconcile call) and later recreated under
+    # the same name - it must be scheduled again, not silently skipped
+    # because `watched` was never told it disappeared in between.
+    a = tmp_path / "a"
+    watched = {a}
+    _reconcile_watches(set(), watched, lambda path: None)
+    assert watched == set()
+    scheduled: list[Path] = []
+    _reconcile_watches({a}, watched, scheduled.append)
+    assert scheduled == [a]
+    assert watched == {a}
+
+
+def test_reconcile_watches_does_not_mark_watched_if_schedule_fails(tmp_path):
+    a = tmp_path / "a"
+    watched: set[Path] = set()
+
+    def failing_schedule(_path):
+        raise OSError("vanished again")
+
+    _reconcile_watches({a}, watched, failing_schedule)
+    assert watched == set(), "a dir whose schedule() call raised must not be recorded as watched"
+
+
+def test_reconcile_watches_retries_a_previously_failed_dir_on_the_next_call(tmp_path):
+    a = tmp_path / "a"
+    watched: set[Path] = set()
+    _reconcile_watches({a}, watched, lambda path: (_ for _ in ()).throw(OSError("gone")))
+    assert watched == set()
+    scheduled: list[Path] = []
+    _reconcile_watches({a}, watched, scheduled.append)
+    assert scheduled == [a]
+    assert watched == {a}

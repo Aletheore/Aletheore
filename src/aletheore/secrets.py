@@ -142,6 +142,12 @@ _SYNTHETIC_REPETITION_MAX_LENGTH = 48
 # alphabet.
 _HEX_ALPHABET_MAX_LENGTH = 36
 _HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+# Pure-decimal values are a subset of the hex alphabet but narrower (10 vs 16
+# symbols, ~3.32 vs 4 bits/char), so they hit zlib's compression floor sooner:
+# measured over 5,000 random trials per length, 0% false placeholders through
+# 30 digits, 1.6% at 31, 7.5% at 32, 39% at 33, 96.8% at 36. The hex cap of 36
+# therefore misclassified random 31+ digit credentials as placeholders.
+_DECIMAL_MAX_LENGTH = 30
 
 # Each entry's third element is the regex group index holding the actual secret value to
 # redact. Most patterns match the credential directly, so group 0 (the whole match) IS the
@@ -304,6 +310,8 @@ def _value_looks_synthetically_repeated(value: str) -> bool:
     # digests, many session tokens and API keys) that the general
     # measurement never covered.
     if len(value) > _HEX_ALPHABET_MAX_LENGTH and all(c in _HEX_DIGITS for c in value):
+        return False
+    if len(value) > _DECIMAL_MAX_LENGTH and value.isascii() and value.isdigit():
         return False
     compressed_length = len(zlib.compress(value.encode("utf-8"), level=9))
     return (compressed_length / len(value)) < _SYNTHETIC_REPETITION_RATIO_THRESHOLD

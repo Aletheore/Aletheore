@@ -187,6 +187,18 @@ def _sha_exists(repo_path: Path, sha: str) -> bool:
     return _run_git(repo_path, "cat-file", "-e", sha).returncode == 0
 
 
+def _is_ancestor_of_head(repo_path: Path, sha: str) -> bool:
+    """True only if `sha` is still reachable from HEAD.
+
+    Existence alone is not enough: git keeps orphaned objects (amend, rebase,
+    force-push) until gc, so a rewritten-away sync pointer still "exists" and
+    an `old..HEAD` range against it re-returns the whole rewritten branch.
+    """
+    return _sha_exists(repo_path, sha) and (
+        _run_git(repo_path, "merge-base", "--is-ancestor", sha, "HEAD").returncode == 0
+    )
+
+
 def default_store(repo_path: Path) -> RepoGraphStore:
     return SQLiteRepoGraphStore(default_graph_db_path(repo_path))
 
@@ -214,9 +226,12 @@ def _sync_graph(
     branch = branch if branch is not None else _current_branch(repo_path)
     snapshot = store.load(repo_key, branch)
 
-    if snapshot.last_synced_sha is None or not _sha_exists(repo_path, snapshot.last_synced_sha):
+    if snapshot.last_synced_sha is None or not _is_ancestor_of_head(
+        repo_path, snapshot.last_synced_sha
+    ):
         # No prior state, or the sync pointer no longer exists in this repo
-        # (history was rewritten out from under it, e.g. a force-push) -
+        # or is no longer an ancestor of HEAD (history was rewritten, e.g. a
+        # rebase/amend/force-push) -
         # either way, prior aggregates can't be trusted to merge into.
         rev_range = "HEAD"
         reset = True
@@ -308,10 +323,14 @@ def _last_commit_at(churn: FileChurnTotal) -> datetime | None:
     return churn.recent_commits[0].committed_at if churn.recent_commits else None
 
 
-def _hotspots_summary(snapshot: GraphSnapshot, modules: list[dict]) -> list[dict]:
+def _hotspots_summary(
+    snapshot: GraphSnapshot, modules: list[dict], repo_path: Path | None = None
+) -> list[dict]:
     dependents_by_path = {module["path"]: len(module.get("imported_by", [])) for module in modules}
     hotspots = []
     for path, churn in snapshot.file_churn.items():
+        if repo_path is not None and not (repo_path / path).exists():
+            continue  # deleted/renamed away: churn history for a file no longer in the tree
         partners = sorted(
             churn.co_change_counts.items(), key=lambda item: (-item[1], item[0])
         )[:CO_CHANGE_PARTNERS_RETURNED]
@@ -330,7 +349,7 @@ def _hotspots_summary(snapshot: GraphSnapshot, modules: list[dict]) -> list[dict
     return sorted(hotspots, key=lambda item: (-item["churn_count"], item["path"]))[:HOTSPOT_LIMIT]
 
 
-def _recently_updated_summary(snapshot: GraphSnapshot) -> list[dict]:
+def _recently_updated_summary(snapshot: GraphSnapshot, repo_path: Path | None = None) -> list[dict]:
     """The most recently touched files repo-wide, ranked by recency rather
     than churn - a high-churn hotspot and a file edited five minutes ago are
     different questions, and HOTSPOT_LIMIT's churn-ranked top 30 can easily
@@ -350,6 +369,10 @@ def _recently_updated_summary(snapshot: GraphSnapshot) -> list[dict]:
     # passing tests because the existing tests' commits all share one
     # local timezone offset and never exercise a cross-offset comparison.
     dated.sort(key=lambda item: item[0], reverse=True)
+    if repo_path is not None:
+        # Filter after ranking and before the cut, so deleted files don't
+        # occupy slots a real, existing file should have.
+        dated = [item for item in dated if (repo_path / item[1]).exists()]
     return [
         {"path": path, "last_commit_at": last_commit_at.isoformat()}
         for last_commit_at, path in dated[:RECENTLY_UPDATED_LIMIT]
@@ -371,7 +394,7 @@ def compute_hotspots(
     finally:
         if owns_store and isinstance(store, SQLiteRepoGraphStore):
             store.close()
-    return _hotspots_summary(snapshot, modules)
+    return _hotspots_summary(snapshot, modules, repo_path)
 
 
 def compute_recently_updated(
@@ -395,7 +418,7 @@ def compute_recently_updated(
     finally:
         if owns_store and isinstance(store, SQLiteRepoGraphStore):
             store.close()
-    return _recently_updated_summary(snapshot)
+    return _recently_updated_summary(snapshot, repo_path)
 
 
 def _first_commit_at(repo_path: Path) -> datetime:
@@ -458,6 +481,12 @@ def analyze_git(
             store.close()
 
     history_depth_limited = was_full_rebuild and depth_cap is not None and total_commits > depth_cap
+    # A shallow clone's boundary commit looks like a root commit, so repo age
+    # and total_commits describe the clone, not the project. There is no way
+    # to recover the real values locally; flag the history as partial so the
+    # fields are not read as authoritative.
+    if _run_git(repo_path, "rev-parse", "--is-shallow-repository").stdout.strip() == "true":
+        history_depth_limited = True
 
     return {
         "available": True,

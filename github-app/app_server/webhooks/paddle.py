@@ -13,6 +13,7 @@ from app_server.db import (
     claim_webhook_delivery,
     claim_free_to_paid_plan,
     claim_paid_setup,
+    release_paid_setup,
     credit_extra_seat_purchase,
     claw_back_topup_credit,
     credit_topup_purchase,
@@ -39,6 +40,15 @@ from app_server.paddle_pricing import (
 from app_server.paddle_webhook_verify import verify_paddle_signature
 
 paddle_webhook_router = APIRouter()
+
+
+def _line_items(data: dict) -> list[dict]:
+    """`items` as a list of dicts, tolerating a malformed payload (non-list,
+    non-dict entries) instead of crashing the handler into days of retries."""
+    items = data.get("items")
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
 logger = logging.getLogger(__name__)
 
 # Real gap found and fixed 2026-09-02, before this had ever been exercised
@@ -263,7 +273,7 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
         )
         return
 
-    items = data.get("items") or []
+    items = _line_items(data)
     if data.get("status") in _ACTIVE_SUBSCRIPTION_STATUSES:
         # The base plan price is whichever item resolves to a known plan -
         # not necessarily items[0], since the extra-seat add-on can be
@@ -426,66 +436,108 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
     # This claim is what actually decides whether to run it, so a
     # crash-then-retry still runs it exactly once instead of silently
     # skipping it forever.
-    should_run_paid_setup = plan != "free" and await claim_paid_setup(pool, installation_id)
+    paid_setup_claimed_at = (
+        await claim_paid_setup(pool, installation_id) if plan != "free" else None
+    )
+    should_run_paid_setup = paid_setup_claimed_at is not None
 
     if should_run_paid_setup:
-        # Attribution: first time this installation goes free -> paid, on
-        # the AIR plan only (affiliates are AIR-only: Flash's margin cannot
-        # carry a recurring 15% commission) - if it was checked out with a
-        # known affiliate's discount code, credit that affiliate. Gated on
-        # the same paid-setup claim as the AIRview/Docs build below, so a
-        # later subscription.updated for the same installation (e.g.
-        # switching monthly <-> annual) can't re-attribute or steal credit
-        # - record_referral is also itself a database-enforced no-op past
-        # the first row (installation_id is that table's primary key).
-        discount_id = (data.get("discount") or {}).get("id")
-        if discount_id and plan == "air":
-            affiliate = await get_affiliate_by_discount_id(pool, discount_id)
-            if affiliate is not None:
-                await record_referral(pool, installation_id, affiliate["id"])
+        try:
+            # Attribution: first time this installation goes free -> paid, on
+            # the AIR plan only (affiliates are AIR-only: Flash's margin cannot
+            # carry a recurring 15% commission) - if it was checked out with a
+            # known affiliate's discount code, credit that affiliate. Gated on
+            # the same paid-setup claim as the AIRview/Docs build below, so a
+            # later subscription.updated for the same installation (e.g.
+            # switching monthly <-> annual) can't re-attribute or steal credit
+            # - record_referral is also itself a database-enforced no-op past
+            # the first row (installation_id is that table's primary key).
+            discount_id = (data.get("discount") or {}).get("id")
+            if discount_id and plan == "air":
+                affiliate = await get_affiliate_by_discount_id(pool, discount_id)
+                if affiliate is not None:
+                    await record_referral(pool, installation_id, affiliate["id"])
 
-        # One-time Live Wiki + Docs build - fires exactly once, on the
-        # free -> paid transition. Without this, installations upgraded
-        # through Paddle (the only real payment path this app has - see
-        # claim_paid_setup) never get an initial AIRview build at all, and
-        # the wiki would stay limited to whatever clusters an incremental
-        # push happened to touch after the fact.
-        #
-        # AIR-exclusive (plan == "air"), unlike the affiliate credit above
-        # - AIRview and Docs are not part of the flash tier. Real bug this
-        # closes: should_run_paid_setup predates the flash tier and used
-        # to mean "is air" by construction (air was the only paid plan),
-        # so a flash signup would have silently kicked off a full
-        # AIRview + Docs build - real LLM spend against a $6/mo plan whose
-        # own $4 cap override (llm_cost.py's PLAN_CAP_OVERRIDE_USD) a
-        # single full build could plausibly exhaust before the customer's
-        # first PR review ever ran.
-        #
-        # A flash -> air upgrade doesn't get this instant build (this
-        # claim was already consumed on that installation's original
-        # free -> flash transition), but self-heals within one scheduler
-        # tick: scan_worker/db.py's list_paid_repos_due_for_wiki_catchup/
-        # list_paid_repos_due_for_docs_catchup are also AIR-exclusive, so
-        # an installation that was never eligible while on flash has no
-        # wiki_catchup_sweeps/docs_catchup_sweeps row yet - the moment it
-        # becomes "air", the sweep's own "never swept" branch picks it up
-        # without needing any special-cased upgrade handling here.
-        if plan == "air":
-            if queue is None:
-                from redis import Redis
-                from rq import Queue
+            # One-time Live Wiki + Docs build - fires exactly once, on the
+            # free -> paid transition. Without this, installations upgraded
+            # through Paddle (the only real payment path this app has - see
+            # claim_paid_setup) never get an initial AIRview build at all, and
+            # the wiki would stay limited to whatever clusters an incremental
+            # push happened to touch after the fact.
+            #
+            # AIR-exclusive (plan == "air"), unlike the affiliate credit above
+            # - AIRview and Docs are not part of the flash tier. Real bug this
+            # closes: should_run_paid_setup predates the flash tier and used
+            # to mean "is air" by construction (air was the only paid plan),
+            # so a flash signup would have silently kicked off a full
+            # AIRview + Docs build - real LLM spend against a $6/mo plan whose
+            # own $4 cap override (llm_cost.py's PLAN_CAP_OVERRIDE_USD) a
+            # single full build could plausibly exhaust before the customer's
+            # first PR review ever ran.
+            #
+            # A flash -> air upgrade doesn't get this instant build (this
+            # claim was already consumed on that installation's original
+            # free -> flash transition), but self-heals within one scheduler
+            # tick: scan_worker/db.py's list_paid_repos_due_for_wiki_catchup/
+            # list_paid_repos_due_for_docs_catchup are also AIR-exclusive, so
+            # an installation that was never eligible while on flash has no
+            # wiki_catchup_sweeps/docs_catchup_sweeps row yet - the moment it
+            # becomes "air", the sweep's own "never swept" branch picks it up
+            # without needing any special-cased upgrade handling here.
+            if plan == "air":
+                if queue is None:
+                    from redis import Redis
+                    from rq import Queue
 
-                queue = Queue("scans", connection=Redis.from_url(redis_url))
-            queue.enqueue(
-                "scan_worker.jobs.run_live_wiki_full_build_for_installation_job",
-                job_timeout=60,
-                installation_id=installation_id,
-            )
-            queue.enqueue(
-                "scan_worker.jobs.run_live_docs_full_build_for_installation_job",
-                job_timeout=60,
-                installation_id=installation_id,
-            )
+                    queue = Queue("scans", connection=Redis.from_url(redis_url))
+
+                # Deterministic, installation-scoped job_id + unique=True:
+                # real bug this closes - the two enqueues below aren't
+                # atomic, so if the wiki enqueue succeeds and the docs
+                # enqueue then fails (a Redis blip), the except block below
+                # releases the claim and re-raises so Paddle retries. That
+                # retry used to call BOTH enqueues again from scratch,
+                # including the wiki build that had already succeeded -
+                # a duplicate full AIRview build with real LLM spend. With a
+                # stable job_id and unique=True, rq's atomic check-and-push
+                # (save_unique_job) raises DuplicateJobError instead of
+                # re-queueing a second job under the same id, so the retry's
+                # re-enqueue of the already-succeeded wiki build is a safe
+                # no-op and only the docs build (which never actually
+                # queued) runs for real.
+                from rq.exceptions import DuplicateJobError
+
+                try:
+                    queue.enqueue(
+                        "scan_worker.jobs.run_live_wiki_full_build_for_installation_job",
+                        job_timeout=60,
+                        installation_id=installation_id,
+                        job_id=f"paid-setup-wiki-{installation_id}",
+                        unique=True,
+                    )
+                except DuplicateJobError:
+                    pass
+                try:
+                    queue.enqueue(
+                        "scan_worker.jobs.run_live_docs_full_build_for_installation_job",
+                        job_timeout=60,
+                        installation_id=installation_id,
+                        job_id=f"paid-setup-docs-{installation_id}",
+                        unique=True,
+                    )
+                except DuplicateJobError:
+                    pass
+        except Exception:
+            # The claim above is already committed. If the work it gates
+            # fails (Redis/DB blip), a Paddle retry would find the claim
+            # consumed and "succeed" without ever running the one-time
+            # build/attribution. Hand the claim back so the retry reruns
+            # it - compare-and-set on the exact timestamp this call's own
+            # claim set, so a newer claim that raced past this failure
+            # isn't the one that gets released (see release_paid_setup's
+            # docstring).
+            await release_paid_setup(pool, installation_id, paid_setup_claimed_at)
+            raise
 
     # payment_failed and subscription_canceled emails, gated on an actual
     # paid -> free transition (not "was already free") so a webhook for an
@@ -543,7 +595,18 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
     themselves name a different, referred installation and misattribute the
     resulting commission to that installation's affiliate.
     """
-    items = data.get("items") or []
+    items = _line_items(data)
+    # Raw (pre-filter) count of whatever `items` the payload actually carried,
+    # malformed entries included. The "exactly one item" bundling guard below
+    # must be judged against this, not against `items` (which _line_items has
+    # already dropped malformed entries from) - otherwise a payload shaped
+    # like [{a real topup item}, None] (2 raw items, 1 malformed) collapses to
+    # len(items) == 1, passes the guard, and gets auto-credited for the full
+    # transaction total even though a second, unparseable line item could have
+    # carried real cost. Falls back to len(items) when `items` itself isn't a
+    # list, matching _line_items' own "non-list -> []" handling.
+    raw_items = data.get("items")
+    raw_item_count = len(raw_items) if isinstance(raw_items, list) else len(items)
     topup_item = next(
         (item for item in items if (item.get("price") or {}).get("id") in ACCEPTED_CREDIT_TOPUP_PRICE_IDS),
         None,
@@ -600,7 +663,7 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
         # against - skip and log instead of guessing.
         transaction_id = data.get("id")
         totals = (data.get("details") or {}).get("totals") or {}
-        if len(items) != 1:
+        if raw_item_count != 1:
             logger.warning(
                 "credit topup transaction.completed bundled with other line items, "
                 "skipping to avoid over-crediting: %s",
