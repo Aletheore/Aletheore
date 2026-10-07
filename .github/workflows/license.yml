@@ -32,5 +32,6 @@ jobs:
         run: |
           pip install ../src
           pip install --require-hashes -r requirements.lock.txt
+          pip install --require-hashes -r requirements-semgrep.lock.txt
           pip install --require-hashes -r ../requirements-ci-license-check.lock.txt
           pip-licenses --fail-on "GPL;AGPL" --format=plain-vertical
