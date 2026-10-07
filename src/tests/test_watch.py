@@ -535,10 +535,30 @@ def _repo_with_evidence(tmp_path: Path) -> Path:
     return repo
 
 
-def _function_names(repo: Path) -> set[str]:
+def _read_air_json(repo: Path) -> dict:
+    """Reads air.json while a background rebuild may be replacing it.
+
+    Evidence writes are atomic (os.replace), but on Windows a reader that
+    opens the file in the instant MoveFileEx is swapping it in gets
+    PermissionError - the same transient the writer itself retries (see
+    aletheore.evidence). A test polling the file while the watcher rebuilds
+    is exactly such a reader, so give it the same short retry instead of
+    letting a harmless race fail the test."""
     import json
 
-    evidence = json.loads((repo / ".aletheore" / "air.json").read_text(encoding="utf-8"))
+    path = repo / ".aletheore" / "air.json"
+    deadline = time.monotonic() + 5.0
+    while True:
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.02)
+
+
+def _function_names(repo: Path) -> set[str]:
+    evidence = _read_air_json(repo)
     return {
         function["name"]
         for module in evidence["repository"]["modules"]
