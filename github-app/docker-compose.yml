@@ -373,6 +373,13 @@ services:
       # thrift-scale request past the 60s embeddings_api timeout at the old
       # HOSTED_EMBED_MAX_CHARS (see search_index.py's comment on that cap).
       - JINA_EMBED_INSTANCES=2
+      # Unlike the other services, jina-embed has no env_file - it never
+      # needed one until now. Passed through explicitly rather than adding
+      # an env_file (which would also pull in every other service's secret)
+      # so this container's env surface stays minimal. Defaulting to empty
+      # keeps init_sentry()'s no-op path intact when unset.
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-production}
     # Bumped from 1.0. This service is the only CPU-bound one in the stack -
     # everything else is I/O-bound on Postgres, Redis or the GitHub API -
     # and at 1.0 it was the hard ceiling on hosted indexing: measured at a

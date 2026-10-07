@@ -64,12 +64,55 @@ import math
 import os
 import threading
 
-from fastapi import FastAPI
+import sentry_sdk
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from llama_cpp import Llama
 from pydantic import BaseModel
+from sentry_sdk.integrations.logging import LoggingIntegration
+from starlette.requests import ClientDisconnect
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _scrub_event(event: dict, hint: dict) -> dict:
+    """Strip request data, stack-frame local variables, and breadcrumbs -
+    same policy as app_server/sentry_config.py's _scrub_event (see that
+    module's docstring for why breadcrumbs matter as much as the
+    exception), duplicated here rather than imported since this module is
+    built into a separate Docker image that never has app_server on its
+    path (see Dockerfile.jina-embed).
+    """
+    event.pop("request", None)
+    event.pop("breadcrumbs", None)
+    for exc_value in event.get("exception", {}).get("values", []):
+        for frame in exc_value.get("stacktrace", {}).get("frames", []):
+            frame.pop("vars", None)
+    return event
+
+
+_SENTRY_DSN = os.environ.get("SENTRY_DSN", "").strip()
+if _SENTRY_DSN:
+    try:
+        sentry_sdk.init(
+            dsn=_SENTRY_DSN,
+            environment=os.environ.get("SENTRY_ENVIRONMENT", "production").strip()
+            or "production",
+            send_default_pii=False,
+            include_local_variables=False,
+            before_send=_scrub_event,
+            traces_sample_rate=0,
+            ignore_errors=[ClientDisconnect],
+            integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+        )
+    except Exception:  # noqa: BLE001
+        # A malformed SENTRY_DSN must not prevent this process from
+        # starting - this is the service that loads a real model at
+        # import time, so a crash here is the whole service going down.
+        logger.warning("Sentry initialization failed; continuing without it", exc_info=True)
+    else:
+        sentry_sdk.get_global_scope().set_tag("service", "jina_embed")
 
 _THREADS = int(os.environ.get("JINA_EMBED_THREADS", "1"))
 _MODEL_PATH = os.environ.get("JINA_EMBED_MODEL_PATH", "/app/model.gguf")
@@ -87,6 +130,25 @@ _NUM_INSTANCES = int(os.environ.get("JINA_EMBED_INSTANCES", "1"))
 _THREADS_PER_INSTANCE = max(1, _THREADS // _NUM_INSTANCES)
 
 app = FastAPI()
+
+
+@app.exception_handler(Exception)
+async def handle_unexpected_exception(request: Request, exc: Exception) -> JSONResponse:
+    if isinstance(exc, ClientDisconnect):
+        # Same reasoning as app_server/main.py's handler: the caller (app_server
+        # or scan_worker) hung up mid-request - realistic here given /embed_batch
+        # can take 24-38+ minutes per this module's own docstring. Nothing on
+        # our side failed, so this isn't a bug alert or a 5xx; it was previously
+        # logged as a full ERROR-level traceback indistinguishable from a crash.
+        logger.warning(
+            "client disconnected before the request finished", extra={"path": request.url.path}
+        )
+        return JSONResponse(status_code=499, content={"detail": "client closed request"})
+    # No alerting at all before this - a crash here was invisible beyond
+    # stdout logs no one was watching.
+    logger.exception("unhandled exception in request", extra={"path": request.url.path})
+    sentry_sdk.capture_exception(exc)
+    return JSONResponse(status_code=500, content={"detail": "internal error"})
 
 
 class _Instance:

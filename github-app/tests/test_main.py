@@ -1,10 +1,12 @@
 import hashlib
 import hmac
+import importlib
 import json
 import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import sentry_sdk
 from httpx import ASGITransport, AsyncClient
 
 from app_server.main import app, settings
@@ -439,3 +441,27 @@ async def test_other_webhook_exceptions_still_alert_and_count(monkeypatch):
     assert len(alerts) == 1
     assert counted == [1]
     assert response.status_code == 500
+
+
+def test_main_module_initializes_sentry_when_dsn_is_configured(monkeypatch):
+    # sentry_sdk's _Client.is_active() returns True unconditionally once any
+    # real client has ever been constructed in this process - it is not a
+    # live read of whether a DSN is currently configured - so this spies on
+    # sentry_sdk.init directly rather than inspecting client state
+    # afterward, which would pass even if main.py never called init_sentry.
+    monkeypatch.setenv("SENTRY_DSN", "https://examplePublicKey@o0.ingest.sentry.io/0")
+    calls = []
+    monkeypatch.setattr(sentry_sdk, "init", lambda *a, **k: calls.append(k))
+    from app_server.config import get_settings
+
+    get_settings.cache_clear()
+    import app_server.main as main_module
+
+    try:
+        importlib.reload(main_module)
+        assert len(calls) == 1
+        assert calls[0]["dsn"] == "https://examplePublicKey@o0.ingest.sentry.io/0"
+    finally:
+        monkeypatch.delenv("SENTRY_DSN", raising=False)
+        get_settings.cache_clear()
+        importlib.reload(main_module)

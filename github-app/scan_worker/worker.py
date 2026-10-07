@@ -6,10 +6,12 @@ from rq import Worker
 from app_server.config import get_settings
 from app_server.heartbeat import start_heartbeat_thread
 from app_server.logging_config import configure_json_logging
+from app_server.sentry_config import init_sentry
 
 
 if __name__ == "__main__":
     configure_json_logging()
+    init_sentry("scan_worker")
     settings = get_settings()
     redis_conn = Redis.from_url(os.environ.get("REDIS_URL", settings.redis_url))
     # See health_worker.py's comment - background thread, proves the

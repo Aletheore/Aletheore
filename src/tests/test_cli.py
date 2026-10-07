@@ -31,6 +31,7 @@ from aletheore.cli import (
     app,
 )
 from aletheore.device_auth import DeviceFlowError
+from aletheore.preferences import is_crash_reporting_enabled, set_crash_reporting_enabled
 from aletheore.evidence import EVIDENCE_VERSION
 from aletheore.query import QUERY_FUNCTIONS
 from aletheore.git_intel.analyzer import GIT_ANALYSIS_RESOURCE_EXIT_CODE, GitAnalysisError
@@ -248,6 +249,10 @@ def test_main_pins_stdout_and_stderr_to_utf8_before_running_the_cli(monkeypatch)
     monkeypatch.setattr("aletheore.cli.sys.stdout", _FakeStream())
     monkeypatch.setattr("aletheore.cli.sys.stderr", _FakeStream())
     monkeypatch.setattr("aletheore.cli.app", lambda: None)
+    # Unrelated to this test's concern (stream encoding) - without this,
+    # main()'s new first-run crash-reporting notice tries to console.print
+    # to the fake stream above, which has no .write().
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: True)
 
     main()
 
@@ -271,8 +276,165 @@ def test_main_tolerates_a_stdout_stream_with_no_reconfigure_method(monkeypatch):
     monkeypatch.setattr("aletheore.cli.sys.stdout", _StreamWithNoReconfigure())
     monkeypatch.setattr("aletheore.cli.sys.stderr", _StreamWithNoReconfigure())
     monkeypatch.setattr("aletheore.cli.app", lambda: None)
+    # Unrelated to this test's concern (stream encoding) - without this,
+    # main()'s new first-run crash-reporting notice tries to console.print
+    # to the fake stream above, which has no .write().
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: True)
 
     main()  # must not raise
+
+
+def test_main_initializes_cli_sentry_before_running_the_cli(monkeypatch):
+    from aletheore.cli import main
+
+    calls = []
+    monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: calls.append("init"))
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: True)
+    monkeypatch.setattr("aletheore.cli.app", lambda: calls.append("app"))
+
+    main()
+
+    assert calls == ["init", "app"]
+
+
+def test_main_prints_first_run_notice_once(monkeypatch):
+    from aletheore.cli import main
+
+    monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: None)
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: False)
+    marked = []
+    monkeypatch.setattr(
+        "aletheore.cli.mark_crash_reporting_notice_shown", lambda: marked.append(True)
+    )
+    monkeypatch.setattr("aletheore.cli.app", lambda: None)
+
+    main()
+
+    assert marked == [True]
+
+
+def test_main_omits_first_run_notice_when_already_shown(monkeypatch, capsys):
+    from aletheore.cli import main
+
+    monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: None)
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: True)
+    monkeypatch.setattr("aletheore.cli.app", lambda: None)
+
+    main()
+
+    output = capsys.readouterr()
+    assert "crashes" not in output.out
+    assert "crashes" not in output.err
+
+
+def test_main_first_run_notice_goes_to_stderr_not_stdout(monkeypatch, capsys):
+    from aletheore.cli import main
+
+    monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: None)
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: False)
+    monkeypatch.setattr("aletheore.cli.mark_crash_reporting_notice_shown", lambda: None)
+    monkeypatch.setattr("aletheore.cli.app", lambda: None)
+
+    main()
+
+    output = capsys.readouterr()
+    assert "crashes" not in output.out
+    assert "crashes" in output.err
+
+
+def test_main_reports_an_unhandled_exception_to_sentry_and_reraises(monkeypatch, capsys):
+    from aletheore.cli import main
+
+    monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: None)
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: True)
+    monkeypatch.setattr("aletheore.cli.is_crash_reporting_enabled", lambda: True)
+
+    def _boom():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("aletheore.cli.app", _boom)
+    captured = []
+    monkeypatch.setattr(
+        "aletheore.cli.sentry_sdk.capture_exception", lambda exc: captured.append(exc)
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        main()
+
+    assert len(captured) == 1
+    output = capsys.readouterr()
+    # Final-review finding: `aletheore mcp` uses stdout as a JSON-RPC
+    # protocol channel, and `diff`/`--format sarif` output is often
+    # redirected or piped - an unrelated crash-reporting line on stdout
+    # would corrupt either. Must go to stderr.
+    assert "This error was reported" not in output.out
+    assert "This error was reported" in output.err
+
+
+def test_main_does_not_report_when_crash_reporting_is_disabled(monkeypatch):
+    from aletheore.cli import main
+
+    monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: None)
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: True)
+    monkeypatch.setattr("aletheore.cli.is_crash_reporting_enabled", lambda: False)
+    monkeypatch.setattr(
+        "aletheore.cli.app", lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+    captured = []
+    monkeypatch.setattr(
+        "aletheore.cli.sentry_sdk.capture_exception", lambda exc: captured.append(exc)
+    )
+
+    with pytest.raises(RuntimeError):
+        main()
+
+    assert captured == []
+
+
+def test_main_does_not_report_keyboard_interrupt(monkeypatch):
+    from aletheore.cli import main
+
+    monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: None)
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: True)
+    monkeypatch.setattr(
+        "aletheore.cli.app", lambda: (_ for _ in ()).throw(KeyboardInterrupt())
+    )
+    captured = []
+    monkeypatch.setattr(
+        "aletheore.cli.sentry_sdk.capture_exception", lambda exc: captured.append(exc)
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        main()
+
+    assert captured == []
+
+
+def test_main_does_not_crash_when_sentry_capture_itself_raises(monkeypatch, capsys):
+    from aletheore.cli import main
+
+    monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: None)
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: True)
+    monkeypatch.setattr("aletheore.cli.is_crash_reporting_enabled", lambda: True)
+    monkeypatch.setattr(
+        "aletheore.cli.app", lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+
+    def _broken_capture(exc):
+        raise OSError("sentry transport unavailable")
+
+    monkeypatch.setattr("aletheore.cli.sentry_sdk.capture_exception", _broken_capture)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        main()
+
+    # Aletheore's own Deterministic Scan flagged the prior bare
+    # `except Exception: pass` here (cli.py's real self-dogfooding catch,
+    # same class of finding ast_pattern.py already fixed once for this
+    # exact pattern) - a failure in the capture path itself must be
+    # visible, not silently invisible, even though it's diagnostic-only
+    # and the real exception still propagates unchanged.
+    assert "could not report this crash" in capsys.readouterr().err
 
 
 def test_main_with_no_command_prints_update_notice_when_available():
@@ -2859,6 +3021,72 @@ def test_the_mcp_command_documents_no_watch():
 
     assert option.is_flag
     assert "ALETHEORE_MCP_WATCH" in option.help
+
+
+def test_config_crash_reporting_shows_current_state_when_enabled(monkeypatch):
+    monkeypatch.setenv("ALETHEORE_CRASH_REPORTING", "1")
+
+    result = runner.invoke(app, ["config", "crash-reporting"])
+
+    assert result.exit_code == 0
+    assert "Crash reporting: on" in result.output
+
+
+def test_config_crash_reporting_shows_current_state_when_disabled(monkeypatch):
+    monkeypatch.setenv("ALETHEORE_CRASH_REPORTING", "0")
+
+    result = runner.invoke(app, ["config", "crash-reporting"])
+
+    assert result.exit_code == 0
+    assert "Crash reporting: off" in result.output
+
+
+def test_config_crash_reporting_off_persists_the_preference(monkeypatch):
+    monkeypatch.delenv("ALETHEORE_CRASH_REPORTING", raising=False)
+
+    result = runner.invoke(app, ["config", "crash-reporting", "off"])
+
+    assert result.exit_code == 0
+    assert "turned off" in result.output
+    assert is_crash_reporting_enabled() is False
+
+
+def test_config_crash_reporting_on_persists_the_preference(monkeypatch):
+    monkeypatch.delenv("ALETHEORE_CRASH_REPORTING", raising=False)
+    set_crash_reporting_enabled(False)
+
+    result = runner.invoke(app, ["config", "crash-reporting", "on"])
+
+    assert result.exit_code == 0
+    assert "turned on" in result.output
+    assert is_crash_reporting_enabled() is True
+
+
+def test_config_crash_reporting_rejects_an_invalid_value(monkeypatch):
+    monkeypatch.delenv("ALETHEORE_CRASH_REPORTING", raising=False)
+
+    result = runner.invoke(app, ["config", "crash-reporting", "maybe"])
+
+    assert result.exit_code == 1
+    assert "expected 'on' or 'off'" in result.output
+
+
+def test_status_shows_crash_reporting_on(monkeypatch):
+    monkeypatch.setenv("ALETHEORE_CRASH_REPORTING", "1")
+    monkeypatch.delenv("ALETHEORE_API_TOKEN", raising=False)
+
+    result = runner.invoke(app, ["status"])
+
+    assert "Crash reporting: on" in result.output
+
+
+def test_status_shows_crash_reporting_off(monkeypatch):
+    monkeypatch.setenv("ALETHEORE_CRASH_REPORTING", "0")
+    monkeypatch.delenv("ALETHEORE_API_TOKEN", raising=False)
+
+    result = runner.invoke(app, ["status"])
+
+    assert "Crash reporting: off" in result.output
 
 
 def test_audit_exits_cleanly_when_consent_prompt_has_no_stdin(tmp_path):

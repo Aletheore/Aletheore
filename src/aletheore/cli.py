@@ -14,7 +14,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
+import click
 import httpx
+import sentry_sdk
 import tomli_w
 import typer
 import uvicorn
@@ -39,6 +41,13 @@ from aletheore.citation_verifier import (
 )
 from aletheore.credentials import get_api_key
 from aletheore.device_auth import infer_repo_full_name_from_cwd_git_remote
+from aletheore.preferences import (
+    has_shown_crash_reporting_notice,
+    is_crash_reporting_enabled,
+    mark_crash_reporting_notice_shown,
+    set_crash_reporting_enabled,
+)
+from aletheore.sentry_reporting import init_cli_sentry
 from aletheore.evidence import (
     IncompatibleEvidenceVersionError,
     MalformedEvidenceError,
@@ -129,6 +138,12 @@ KNOWN_ADAPTERS = [
 MANUAL_DIR = str(Path(__file__).resolve().parent / "manual")
 
 console = Console()
+# Crash-reporting notices only (main()'s first-run notice and "this was
+# reported" line) - never for command output. Final-review finding:
+# `aletheore mcp` uses stdout as a JSON-RPC protocol channel (see its own
+# comment below), and `diff`/`--format sarif` output is routinely
+# redirected or piped - an unrelated line on stdout would corrupt either.
+_stderr_console = Console(stderr=True)
 
 # Grouped rather than flat because this list is the CLI's only map of what
 # `query` can actually do - every kind printed as one comma-separated run is
@@ -2160,6 +2175,33 @@ def healthcheck(
     raise typer.Exit(code=_healthcheck(path, base_url))
 
 
+config_app = typer.Typer(help="manage local CLI preferences")
+app.add_typer(config_app, name="config")
+
+
+@config_app.command(
+    "crash-reporting",
+    help="show or change whether unhandled CLI errors are reported to Aletheore",
+)
+def config_crash_reporting(
+    state: Optional[str] = typer.Argument(
+        None, help="'on' or 'off' - omit to show the current state"
+    ),
+) -> None:
+    if state is None:
+        current = "on" if is_crash_reporting_enabled() else "off"
+        console.print(f"Crash reporting: {current}")
+        raise typer.Exit(code=0)
+
+    normalized = state.strip().lower()
+    if normalized not in ("on", "off"):
+        console.print(f"[bold red]error:[/bold red] expected 'on' or 'off', got '{state}'")
+        raise typer.Exit(code=1)
+
+    set_crash_reporting_enabled(normalized == "on")
+    console.print(f"[bold green]Crash reporting turned {normalized}.[/bold green]")
+
+
 @app.command(help="authenticate with GitHub via device flow and save a personal API token")
 def login() -> None:
     from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, has_api_key, save_api_token
@@ -2251,6 +2293,13 @@ def status() -> None:
     )
     console.print(f"Aletheore v{installed_version} ({version_note})")
 
+    crash_reporting_state = (
+        "on"
+        if is_crash_reporting_enabled()
+        else "off (run 'aletheore config crash-reporting on' to enable)"
+    )
+    console.print(f"Crash reporting: {crash_reporting_state}")
+
     if not credentials.has_api_key(
         "ALETHEORE_API_TOKEN",
         "aletheore-managed-audit",
@@ -2294,7 +2343,48 @@ def main() -> None:
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
             reconfigure(encoding="utf-8", errors="backslashreplace")
-    app()
+
+    init_cli_sentry()
+    if not has_shown_crash_reporting_notice():
+        _stderr_console.print(
+            "[dim]Aletheore reports crashes to help fix bugs across "
+            "environments we can't all test. Disable with "
+            "`aletheore config crash-reporting off`.[/dim]"
+        )
+        mark_crash_reporting_notice_shown()
+
+    try:
+        app()
+    except (typer.Exit, click.exceptions.Exit, SystemExit, KeyboardInterrupt):
+        raise
+    except Exception as exc:
+        if is_crash_reporting_enabled():
+            # A broken Sentry SDK environment (no network, a bad DSN after
+            # a future rotation, etc.) must never replace or mask the
+            # user's real crash with a second, unrelated one - reporting
+            # is a side effect, not a precondition for the exception
+            # continuing to propagate normally.
+            try:
+                sentry_sdk.capture_exception(exc)
+            except Exception:
+                # A broken Sentry SDK environment (no network, a bad DSN
+                # after a future rotation, etc.) must never replace or
+                # mask the user's real crash - but silently swallowing it
+                # entirely gave no way to notice the capture path itself
+                # is broken (ast_pattern.py already fixed this exact
+                # "except: pass" pattern once, for the same reason - see
+                # its own comment on the convention). Diagnostic only, to
+                # stderr; the user's real exception still propagates
+                # unchanged below.
+                _stderr_console.print(
+                    "[dim]Note: could not report this crash to Aletheore.[/dim]"
+                )
+            else:
+                _stderr_console.print(
+                    "\n[dim]This error was reported to help fix it. "
+                    "Disable with `aletheore config crash-reporting off`.[/dim]"
+                )
+        raise
 
 
 if __name__ == "__main__":

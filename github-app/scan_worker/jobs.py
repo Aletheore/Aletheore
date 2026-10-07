@@ -4723,15 +4723,18 @@ def run_health_sweep_staleness_check_job() -> None:
     # install, downgraded to flash on purpose).
     if not list_health_check_targets_all(dsn):
         return
-    send_error_alert(
-        "health_sweep",
-        HealthSweepStaleError(
+    # Raise-and-catch rather than just constructing the exception: Sentry's
+    # capture_exception reports __traceback__, which a never-raised
+    # exception object doesn't have - without this, this alert showed up
+    # in Sentry with no stack frames.
+    try:
+        raise HealthSweepStaleError(
             f"no endpoint_health row in {seconds_since_last_check:.0f}s "
             f"(threshold {HEALTH_SWEEP_STALENESS_THRESHOLD_SECONDS}s) - "
             "the health-check sweep may have stopped running"
-        ),
-        "run_health_sweep_staleness_check_job",
-    )
+        )
+    except HealthSweepStaleError as exc:
+        send_error_alert("health_sweep", exc, "run_health_sweep_staleness_check_job")
 
 
 OPS_APP_HEALTH_URL_ENV = "ALETHEORE_APP_HEALTH_URL"
@@ -4894,7 +4897,15 @@ def _send_ops_alert(redis_conn, source: str, message: str, context: str) -> None
     if redis_conn.get(cooldown_key) is not None:
         return
     _set_with_expiry(redis_conn, cooldown_key, "1", OPS_ALERT_COOLDOWN_SECONDS)
-    send_error_alert(source, OpsMonitorError(message), context)
+    # Raise-and-catch rather than just constructing the exception: Sentry's
+    # capture_exception reports __traceback__, which a never-raised
+    # exception object doesn't have - without this, these alerts (the ones
+    # most likely to need investigating, since they're already past the
+    # no-retry escalation point) showed up in Sentry with no stack frames.
+    try:
+        raise OpsMonitorError(message)
+    except OpsMonitorError as exc:
+        send_error_alert(source, exc, context)
 
 
 def _check_app_health(redis_conn, health_url: str) -> None:

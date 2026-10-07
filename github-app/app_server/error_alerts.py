@@ -8,10 +8,14 @@ freeze bug, found reactively).
 Reuses the existing Resend transactional-email infra rather than
 standing up a separate error-tracking service - sends to
 email_reply_to_address (support@aletheore.com), a real inbox someone
-already checks.
+already checks. Also reports to Sentry (sentry_config.py) as a second,
+independent channel - see send_error_alert's own comment for why that
+call lives here rather than relying solely on LoggingIntegration.
 """
 
 import logging
+
+import sentry_sdk
 
 from app_server.config import get_settings
 from app_server.email_client import send_transactional_email
@@ -70,6 +74,20 @@ def send_error_alert(source: str, error: BaseException, context: str = "") -> No
     bug into two. Call this from an except block, not instead of logging;
     it's a notification, not a substitute for the structured log entry.
     """
+    # Independent of email, and NOT gated by the cooldown below - still
+    # fires even when RESEND_API_KEY is unset or an identical error is
+    # still within email's cooldown window, since this is a second,
+    # separate alert channel, not a fallback for it. Needed alongside
+    # sentry_config.py's LoggingIntegration because some callers here
+    # (webhooks/paddle.py, jobs.py's ops monitor) log only a plain
+    # logger.warning() with no exc_info before calling this -
+    # LoggingIntegration can't build an exception event from that alone.
+    # Gating this behind the email cooldown would throw away Sentry's own
+    # server-side occurrence/frequency tracking per Issue - collapsing
+    # "this happened 40 times in the last hour" into "this happened once"
+    # from Sentry's point of view, exactly the signal Sentry exists to show.
+    sentry_sdk.capture_exception(error)
+
     key = f"{source}:{type(error).__name__}"
     if not _should_alert(key):
         return

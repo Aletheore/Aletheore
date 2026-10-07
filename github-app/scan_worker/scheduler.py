@@ -6,6 +6,7 @@ from rq import Queue
 from app_server.config import get_settings
 from app_server.heartbeat import touch_heartbeat
 from app_server.logging_config import configure_json_logging
+from app_server.sentry_config import init_sentry
 
 HEALTH_SWEEP_INTERVAL_SECONDS = 180
 # The sweep pings every endpoint for every repo for every monitored
@@ -173,4 +174,5 @@ def run_forever(
 
 if __name__ == "__main__":
     configure_json_logging()
+    init_sentry("scan_worker-scheduler")
     run_forever()
