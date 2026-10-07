@@ -103,6 +103,29 @@ def _ahead_behind(repo_path: Path, ref: str, branch: str) -> tuple[int, int]:
     return ahead, behind
 
 
+def _ahead_behind_all(repo_path: Path, default_ref: str) -> dict[str, tuple[int, int]] | None:
+    """Every branch's (ahead, behind) vs default_ref in one subprocess, via
+    for-each-ref's %(ahead-behind:) atom (git >= 2.41). None if unsupported,
+    so the caller falls back to one rev-list per branch."""
+    result = _run_git(
+        repo_path,
+        "for-each-ref",
+        f"--format=%(refname:short)\t%(ahead-behind:{default_ref})",
+        "refs/heads",
+        "refs/remotes",
+    )
+    if result.returncode != 0:
+        return None
+    counts: dict[str, tuple[int, int]] = {}
+    for line in result.stdout.splitlines():
+        name, _, pair = line.partition("\t")
+        parts = pair.split()
+        if len(parts) != 2:
+            return None
+        counts[name] = (int(parts[0]), int(parts[1]))
+    return counts
+
+
 def _parse_branches(repo_path: Path, now: datetime) -> list[dict]:
     result = _run_git(
         repo_path,
@@ -113,6 +136,7 @@ def _parse_branches(repo_path: Path, now: datetime) -> list[dict]:
     )
     remotes = _remote_names(repo_path)
     default_ref = _default_branch_ref(repo_path)
+    batched = _ahead_behind_all(repo_path, default_ref) if default_ref is not None else None
     branches = []
     for line in result.stdout.strip().splitlines():
         if not line.strip():
@@ -128,7 +152,10 @@ def _parse_branches(repo_path: Path, now: datetime) -> list[dict]:
 
         ahead, behind = 0, 0
         if default_ref is not None and name != default_ref:
-            ahead, behind = _ahead_behind(repo_path, default_ref, name)
+            if batched is not None and name in batched:
+                ahead, behind = batched[name]
+            else:
+                ahead, behind = _ahead_behind(repo_path, default_ref, name)
 
         branches.append(
             {
