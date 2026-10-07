@@ -67,7 +67,14 @@ class CommitTouch:
     """One commit's worth of what the graph cares about - built while
     streaming `git log`, never held as part of a larger in-memory list of
     every commit. `files` is every path this commit touched, already
-    normalized relative to the scan root."""
+    normalized relative to the scan root; a rename line in this commit
+    contributes its *new* path to `files` (the old path is not credited a
+    separate touch), plus an (old, new) pair in `renames` - fold() uses that
+    pair to carry the old path's already-accumulated churn/recent-commits/
+    ownership forward onto the new path, rather than starting it over at
+    zero (the real audit gap: without this, a just-renamed hot file's
+    pre-rename history stayed stranded under a name nothing queries anymore,
+    making it look artificially cold)."""
 
     sha: str
     author_name: str
@@ -75,6 +82,7 @@ class CommitTouch:
     committed_at: datetime
     files: tuple[str, ...]
     subject: str = ""
+    renames: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass

@@ -43,8 +43,8 @@ def init_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _touch(sha, name, email, date_str, files):
-    return CommitTouch(sha, name, email, datetime.fromisoformat(date_str), files)
+def _touch(sha, name, email, date_str, files, renames=()):
+    return CommitTouch(sha, name, email, datetime.fromisoformat(date_str), files, renames=renames)
 
 
 # --- parse_commit_date: real git history has commits with genuinely
@@ -202,6 +202,49 @@ def test_stream_commit_touches_survives_a_control_character_in_the_author_name(t
     assert touch.files == ("a.txt",)
 
 
+def test_stream_commit_touches_detects_a_rename(tmp_path):
+    # Real audit finding: a plain `git mv` is, by default (no -M), reported
+    # by `git log --name-only` as an unrelated delete-of-old plus add-of-new
+    # - nothing ties the two together, so fold() had no way to carry the old
+    # path's churn/ownership history forward. -M turns this into a single
+    # explicit "R100\told\tnew" line instead.
+    repo = init_repo(tmp_path)
+    (repo / "old.txt").write_text("content\n" * 5)
+    run(repo, "add", "old.txt")
+    commit(repo, "add old.txt", "2026-06-01T00:00:00+00:00")
+    run(repo, "mv", "old.txt", "new.txt")
+    run(repo, "add", "-A")
+    commit(repo, "rename old.txt to new.txt", "2026-06-02T00:00:00+00:00")
+
+    touches = list(stream_commit_touches(repo, "HEAD"))
+    assert len(touches) == 2
+    rename_touch = touches[0]  # newest-first
+    assert rename_touch.files == ("new.txt",)
+    assert rename_touch.renames == (("old.txt", "new.txt"),)
+
+
+def test_stream_commit_touches_does_not_report_a_rename_below_the_similarity_threshold(tmp_path):
+    # A "rename" so heavily rewritten it no longer resembles the old content
+    # is correctly reported as an unrelated delete+add, not a rename -
+    # -M's default similarity threshold (50%) is git's own judgment call,
+    # not something this module overrides.
+    repo = init_repo(tmp_path)
+    (repo / "old.txt").write_text("alpha\n")
+    run(repo, "add", "old.txt")
+    commit(repo, "add old.txt", "2026-06-01T00:00:00+00:00")
+    run(repo, "rm", "old.txt")
+    (repo / "new.txt").write_text("completely different content, nothing shared\n" * 10)
+    run(repo, "add", "-A")
+    commit(repo, "unrelated delete+add", "2026-06-02T00:00:00+00:00")
+
+    touches = list(stream_commit_touches(repo, "HEAD"))
+    second_touch = touches[0]
+    assert second_touch.renames == ()
+    # Below the similarity threshold, git reports an unrelated delete + add
+    # - both paths are genuinely touched by this commit, same as before -M.
+    assert set(second_touch.files) == {"old.txt", "new.txt"}
+
+
 # --- fold: pure aggregation, must be additive for incremental correctness ---
 
 
@@ -355,6 +398,116 @@ def test_fold_does_not_mutate_the_input_snapshot():
 
     assert original.ownership.keys() == {"a@example.com"}
     assert original.file_churn.keys() == {"a.txt"}
+
+
+# --- fold: rename handling - the real audit gap this fix closes. Without
+# the merge, a renamed file's pre-rename churn/ownership stayed stranded
+# under its old path, so a just-renamed hot file looked artificially cold
+# under its current name. ---
+
+
+def test_fold_carries_pre_rename_churn_and_ownership_forward_onto_the_new_path():
+    # fold()'s own documented contract: commits are fed newest-first,
+    # matching real git log output - listed here oldest-to-newest for
+    # readability, then reversed, same as test_fold_caps_recent_commits_per_file_newest_first does.
+    commits = list(reversed([
+        _touch("s1", "Alice", "a@example.com", "2026-06-01T00:00:00+00:00", ("old.txt",)),
+        _touch("s2", "Alice", "a@example.com", "2026-06-02T00:00:00+00:00", ("old.txt",)),
+        _touch(
+            "s3", "Bob", "b@example.com", "2026-06-03T00:00:00+00:00", ("new.txt",),
+            renames=(("old.txt", "new.txt"),),
+        ),
+        _touch("s4", "Bob", "b@example.com", "2026-06-04T00:00:00+00:00", ("new.txt",)),
+    ]))
+    result = fold(GraphSnapshot.empty(), commits)
+
+    assert "old.txt" not in result.file_churn
+    churn = result.file_churn["new.txt"]
+    # 2 pre-rename (old.txt) + 1 rename commit itself + 1 post-rename = 4,
+    # not 2 (what it would be if only post-rename touches counted - the
+    # exact "looks artificially cold" failure mode the audit reproduced).
+    assert churn.churn_count == 4
+    assert churn.owners["a@example.com"].commit_count == 2
+    assert churn.owners["b@example.com"].commit_count == 2
+    assert [rc.sha for rc in churn.recent_commits] == ["s4", "s3", "s2", "s1"]
+
+
+def test_fold_carries_pre_rename_history_forward_across_separate_batches():
+    # The realistic incremental case: old.txt's entire history was folded in
+    # a prior sync (now sitting in the persisted snapshot), and the only new
+    # commit in this batch is the rename itself - the merge must still find
+    # old.txt's totals in the snapshot, not just within one batch's commits.
+    baseline = fold(
+        GraphSnapshot.empty(),
+        [_touch("s1", "Alice", "a@example.com", "2026-06-01T00:00:00+00:00", ("old.txt",))],
+    )
+    result = fold(
+        baseline,
+        [
+            _touch(
+                "s2", "Bob", "b@example.com", "2026-06-02T00:00:00+00:00", ("new.txt",),
+                renames=(("old.txt", "new.txt"),),
+            )
+        ],
+    )
+
+    assert "old.txt" not in result.file_churn
+    assert result.file_churn["new.txt"].churn_count == 2
+    assert result.file_churn["new.txt"].owners.keys() == {"a@example.com", "b@example.com"}
+
+
+def test_fold_rename_onto_an_already_populated_new_path_sums_both_histories():
+    # new_path already has its own independent history (e.g. a second,
+    # unrelated rename chain landed on the same final name) - merging must
+    # add to it, not overwrite it.
+    commits = list(reversed([
+        _touch("s1", "Alice", "a@example.com", "2026-06-01T00:00:00+00:00", ("old.txt",)),
+        _touch("s2", "Bob", "b@example.com", "2026-06-02T00:00:00+00:00", ("new.txt",)),
+        _touch(
+            "s3", "Carol", "c@example.com", "2026-06-03T00:00:00+00:00", ("new.txt",),
+            renames=(("old.txt", "new.txt"),),
+        ),
+    ]))
+    result = fold(GraphSnapshot.empty(), commits)
+    assert result.file_churn["new.txt"].churn_count == 3
+    assert result.file_churn["new.txt"].owners.keys() == {"a@example.com", "b@example.com", "c@example.com"}
+
+
+def test_fold_rename_of_a_path_never_touched_in_this_view_is_a_no_op():
+    # old_path has no prior entry (e.g. it existed before the window this
+    # fold() call's commits/snapshot cover) - nothing to carry forward, and
+    # this must not create a spurious old_path entry either.
+    commits = [
+        _touch(
+            "s1", "Alice", "a@example.com", "2026-06-01T00:00:00+00:00", ("new.txt",),
+            renames=(("old.txt", "new.txt"),),
+        ),
+    ]
+    result = fold(GraphSnapshot.empty(), commits)
+    assert "old.txt" not in result.file_churn
+    assert result.file_churn["new.txt"].churn_count == 1
+
+
+def test_fold_rename_chain_ends_up_entirely_under_the_final_name():
+    # a.txt -> b.txt -> c.txt, processed oldest-first (as fold() always
+    # does) - the full history must end up entirely under c.txt, the one
+    # name any current query would actually use.
+    commits = list(reversed([
+        _touch("s1", "Alice", "a@example.com", "2026-06-01T00:00:00+00:00", ("a.txt",)),
+        _touch(
+            "s2", "Alice", "a@example.com", "2026-06-02T00:00:00+00:00", ("b.txt",),
+            renames=(("a.txt", "b.txt"),),
+        ),
+        _touch("s3", "Alice", "a@example.com", "2026-06-03T00:00:00+00:00", ("b.txt",)),
+        _touch(
+            "s4", "Alice", "a@example.com", "2026-06-04T00:00:00+00:00", ("c.txt",),
+            renames=(("b.txt", "c.txt"),),
+        ),
+    ]))
+    result = fold(GraphSnapshot.empty(), commits)
+    assert "a.txt" not in result.file_churn
+    assert "b.txt" not in result.file_churn
+    assert result.file_churn["c.txt"].churn_count == 4
 
 
 # --- compute_repo_key: stable identity, independent of clone directory ---
