@@ -665,3 +665,19 @@ def test_analyze_git_resets_when_sync_pointer_was_rewritten_out_of_history(tmp_p
     result = analyze_git(repo, now=now)
     counts = {o["email"]: o["commit_count"] for o in result["ownership"]}
     assert counts == {"a@example.com": 2, "b@example.com": 1}
+
+
+def test_analyze_git_flags_a_shallow_clone_as_partial_history(tmp_path):
+    source = make_git_repo(tmp_path)
+    clone = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth=2", f"file://{source}", str(clone)],
+        check=True, capture_output=True,
+    )
+
+    result = analyze_git(clone, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
+
+    assert result["history_depth_limited"] is True
+    assert analyze_git(source, now=datetime(2026, 7, 14, tzinfo=timezone.utc))[
+        "history_depth_limited"
+    ] is False

@@ -454,6 +454,12 @@ def analyze_git(
             store.close()
 
     history_depth_limited = was_full_rebuild and depth_cap is not None and total_commits > depth_cap
+    # A shallow clone's boundary commit looks like a root commit, so repo age
+    # and total_commits describe the clone, not the project. There is no way
+    # to recover the real values locally; flag the history as partial so the
+    # fields are not read as authoritative.
+    if _run_git(repo_path, "rev-parse", "--is-shallow-repository").stdout.strip() == "true":
+        history_depth_limited = True
 
     return {
         "available": True,
