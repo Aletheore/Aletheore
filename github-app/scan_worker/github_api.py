@@ -332,6 +332,34 @@ def create_check_run(
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github+json",
     }
+
+    # Idempotency: a webhook redelivery (app_server/main.py's
+    # claim/release-on-exception pattern - a real, confirmed reachable
+    # path: handle_pull_request_event enqueues run_pr_scan_job then
+    # run_flash_review_job sequentially, and a failure in the second
+    # enqueue releases the delivery claim and re-raises, so GitHub's
+    # retry re-runs the whole handler and re-enqueues run_pr_scan_job a
+    # second time for the same head_sha) can run the same job for the
+    # same head_sha more than once. Without this lookup, each run posts
+    # its own check run, duplicating entries on the PR's Checks tab. The
+    # same head_sha always means the same diff, so the content would be
+    # identical either way - skip creating a second one rather than
+    # trying to update the first (GitHub's update endpoint only ever
+    # APPENDS annotations, never replaces them, so "update" would double
+    # up every annotation on a retry instead of producing a clean skip).
+    lookup = client.get(
+        f"/repos/{repo_full_name}/commits/{head_sha}/check-runs",
+        headers=headers,
+        params={"check_name": name},
+    )
+    lookup.raise_for_status()
+    if lookup.json().get("total_count", 0) > 0:
+        logger.info(
+            "check run %r already exists for %s@%s, skipping duplicate create",
+            name, repo_full_name, head_sha,
+        )
+        return
+
     annotations = annotations or []
     first_batch = annotations[:_MAX_ANNOTATIONS_PER_REQUEST]
     remaining = annotations[_MAX_ANNOTATIONS_PER_REQUEST:]

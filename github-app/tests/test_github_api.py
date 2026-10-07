@@ -79,6 +79,8 @@ def test_create_check_run_posts_expected_payload():
     calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"total_count": 0, "check_runs": []})
         calls.append(request)
         return httpx.Response(201, json={"id": 1})
 
@@ -102,6 +104,8 @@ def test_create_check_run_includes_annotations_in_the_initial_request():
     calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"total_count": 0, "check_runs": []})
         calls.append(request)
         return httpx.Response(201, json={"id": 1})
 
@@ -129,6 +133,8 @@ def test_create_check_run_batches_more_than_fifty_annotations():
     calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"total_count": 0, "check_runs": []})
         calls.append(request)
         if request.method == "POST":
             return httpx.Response(201, json={"id": 42})
@@ -162,6 +168,8 @@ def test_create_check_run_omits_annotations_key_when_none_given():
     calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"total_count": 0, "check_runs": []})
         calls.append(request)
         return httpx.Response(201, json={"id": 1})
 
@@ -174,10 +182,65 @@ def test_create_check_run_omits_annotations_key_when_none_given():
     assert "annotations" not in body["output"]
 
 
+def test_create_check_run_skips_when_one_already_exists_for_the_same_head_sha_and_name():
+    # Real finding (overnight audit, fifth pass): a webhook redelivery
+    # (app_server/main.py's claim/release-on-exception pattern) can
+    # re-run the same job for the same head_sha more than once - without
+    # this, each run posted its own check run, duplicating entries on
+    # the PR's Checks tab. Same head_sha always means the same diff, so
+    # the content would be identical either way - skip rather than
+    # create a second one.
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "total_count": 1,
+                    "check_runs": [{"id": 99, "name": "Aletheore secrets check"}],
+                },
+            )
+        return httpx.Response(201, json={"id": 1})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    create_check_run(client, "token", "octocat/hello-world", "abc123", "failure", "New secret found")
+
+    assert [c.method for c in calls] == ["GET"]
+    assert calls[0].url.path == "/repos/octocat/hello-world/commits/abc123/check-runs"
+    assert dict(calls[0].url.params) == {"check_name": "Aletheore secrets check"}
+
+
+def test_create_check_run_looks_up_by_the_given_custom_name():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json={"total_count": 0, "check_runs": []})
+        return httpx.Response(201, json={"id": 1})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    create_check_run(
+        client,
+        "token",
+        "octocat/hello-world",
+        "abc123",
+        "neutral",
+        "summary",
+        name="Aletheore regression risk",
+    )
+
+    assert dict(calls[0].url.params) == {"check_name": "Aletheore regression risk"}
+
+
 def test_create_check_run_uses_custom_name_when_given():
     calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"total_count": 0, "check_runs": []})
         calls.append(request.content)
         return httpx.Response(201, json={"id": 1})
 
