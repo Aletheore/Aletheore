@@ -5131,12 +5131,16 @@ def test_flash_review_job_excludes_aletheore_json_ignored_paths_from_the_diff(mo
     diff_calls = []
     changed_files_calls = []
 
-    def fake_fetch_pr_diff(client, token, repo, base, head, ignored_paths=()):
+    only_files_seen = []
+
+    def fake_fetch_pr_diff(client, token, repo, base, head, ignored_paths=(), only_files=None):
         diff_calls.append(list(ignored_paths))
+        only_files_seen.append(only_files)
         return "--- app.py ---\n+bug"
 
-    def fake_fetch_pr_changed_files(client, token, repo, base, head, ignored_paths=()):
+    def fake_fetch_pr_changed_files(client, token, repo, base, head, ignored_paths=(), only_files=None):
         changed_files_calls.append(list(ignored_paths))
+        only_files_seen.append(only_files)
         return ["app.py"]
 
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", fake_fetch_pr_diff)
@@ -5165,6 +5169,9 @@ def test_flash_review_job_excludes_aletheore_json_ignored_paths_from_the_diff(mo
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert diff_calls == [["vendor/**"]]
+    # A first review (no last_reviewed_sha) already diffs base..head, so
+    # nothing is restricted to a file set.
+    assert only_files_seen == [None, None]
     # Real bug found via audit: an earlier version of this fix only
     # threaded ignored_paths into fetch_pr_diff, not fetch_pr_changed_files -
     # an ignored file's raw diff text was scrubbed from the prompt, but
@@ -13301,3 +13308,148 @@ def test_incremental_review_does_not_post_findings_on_code_a_merge_brought_in(mo
     assert "brought in from the base branch" in summary["body"]
     assert "none could be posted" not in summary["body"]
     assert "already dismissed" not in summary["body"]
+
+
+def test_incremental_review_after_a_merge_is_limited_to_the_prs_own_files(monkeypatch):
+    # Same push as the test above (a merge of the base branch), but looking at
+    # the input side: the review must be handed only the PR's own files, not
+    # the 65-of-70 files the merge brought in. Fakes honor only_files exactly
+    # as the real fetch_pr_diff / fetch_pr_changed_files do.
+    # PR #961, live: the push merged the base branch into the PR branch, so the
+    # incremental diff (last reviewed commit..head) contained code that is not
+    # part of the PR. A finding there was posted, GitHub answered 422, and the
+    # summary said "none could be posted". Now it is dropped before posting and
+    # the summary says why.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"}
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
+    )
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0
+    )
+    # Mock the free-tier adapter chain to have one working adapter. A
+    # well-formed PR-Agent-shaped YAML response with zero issues - not a
+    # bare "[]" - since _call_adapter_and_validate now checks the response
+    # follows PR-Agent's real YAML schema (review.key_issues_to_review),
+    # not that it's a JSON array; "[]" is valid YAML but not that shape, so
+    # it would be treated as this adapter failing validation.
+    from unittest.mock import MagicMock
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.return_value = "review:\n  key_issues_to_review: []\n"
+    monkeypatch.setattr(
+        "scan_worker.model_tiers.writing_adapter_chain_for_free_tier",
+        lambda *a, **k: [mock_adapter],
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: _FakeRedis())
+    monkeypatch.setattr("scan_worker.jobs.resolve_model", lambda *a: "gpt-5.6-luna")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: "lastreviewed")
+    class _Diff(str):
+        patches = ()
+
+    own_patch = "@@ -1,1 +1,2 @@\n x\n+own change\n"
+    merged_patch = "@@ -40,1 +40,2 @@\n y\n+merged in\n"
+    fetch_calls = []
+
+    def _fake_fetch_pr_diff(client, token, repo, base, head, ignored_paths=(), only_files=None):
+        fetch_calls.append(("diff", base, None if only_files is None else set(only_files)))
+        if base == "lastreviewed":  # incremental: own file plus what the merge brought in
+            patches = (("a.py", own_patch), ("from_base_branch.py", merged_patch))
+        else:  # the PR's own diff against its base: only a.py
+            patches = (("a.py", own_patch),)
+        if only_files is not None:
+            patches = tuple((f, p) for f, p in patches if f in only_files)
+        diff = _Diff("\n\n".join(f"--- {f} ---\n{p}" for f, p in patches))
+        diff.patches = patches
+        return diff
+
+    def _fake_fetch_pr_changed_files(client, token, repo, base, head, ignored_paths=(), only_files=None):
+        fetch_calls.append(("files", base, None if only_files is None else set(only_files)))
+        files = ["a.py", "from_base_branch.py"] if base == "lastreviewed" else ["a.py"]
+        return files if only_files is None else [f for f in files if f in only_files]
+
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", _fake_fetch_pr_diff)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", _fake_fetch_pr_changed_files)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_title", lambda *a, **k: "")
+    # Deliberately False (not the True this test used to hardcode) - True
+    # short-circuits _run_flash_review before it ever builds the adapter
+    # chain or calls review_diff, which would silently pass this test
+    # while exercising none of the free-tier code it's named for.
+    monkeypatch.setattr("scan_worker.jobs.is_non_substantive_diff", lambda *a: False)
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
+    monkeypatch.setattr("scan_worker.jobs.files_missing_from_review_context", lambda *a: [])
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a: None)
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.build_referenced_symbol_context", lambda *a: "")
+
+    cost_for_usage_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.cost_for_usage",
+        lambda *a: cost_for_usage_calls.append(a) or 999.0,  # loud, obviously-wrong value if ever called
+    )
+    cache_lookup_calls = []
+    cache_write_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.lookup_cached_flash_review_result",
+        lambda *a: cache_lookup_calls.append(a) or None,
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.store_flash_review_result",
+        lambda *a, **k: cache_write_calls.append(a),
+    )
+    record_llm_spend_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.record_llm_spend",
+        lambda *a, **k: record_llm_spend_calls.append(a),
+    )
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    summary = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.upsert_pr_comment",
+        lambda client, token, repo, pr, body, **k: summary.update(body=body),
+    )
+    handed_to_review = {}
+
+    def _spy_review_diff(diff_text, *args, **kwargs):
+        handed_to_review["diff_text"] = str(diff_text)
+        return []
+
+    monkeypatch.setattr("scan_worker.jobs.review_diff", _spy_review_diff)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.installation_spend_lock", _noop_spend_lock
+    )
+
+    from scan_worker.jobs import run_flash_review_job
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    posted_inline = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: posted_inline.append(a) or {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    # The incremental fetches were restricted to the PR's own file set.
+    incremental = [c for c in fetch_calls if c[1] == "lastreviewed"]
+    assert incremental == [("diff", "lastreviewed", {"a.py"}), ("files", "lastreviewed", {"a.py"})]
+    # The model saw the PR's change and none of what the merge brought in.
+    assert "own change" in handed_to_review["diff_text"]
+    assert "from_base_branch.py" not in handed_to_review["diff_text"]
+    assert "merged in" not in handed_to_review["diff_text"]
