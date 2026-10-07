@@ -370,6 +370,10 @@ def _license_progress_reporter(
     return on_progress
 
 
+MAX_RAILS_MODEL_FILE_BYTES = 1_000_000
+MAX_RAILS_MODEL_TOTAL_BYTES = 50_000_000
+
+
 def _rails_model_association_edges(repo_path: Path, dependency_graph: dict) -> list[tuple[str, str]]:
     """Supplementary clustering edges for Rails model files - see
     architecture.build_clusters' own docstring for why these are needed.
@@ -381,9 +385,18 @@ def _rails_model_association_edges(repo_path: Path, dependency_graph: dict) -> l
     if not rb_paths:
         return []
     sources: dict[str, bytes] = {}
+    total_bytes = 0
     for rel_path in rb_paths:
         try:
+            size = (repo_path / rel_path).stat().st_size
+            # Bounded like every other expensive step here: the association
+            # pass needs all candidate bytes up front, and a monorepo of
+            # large generated .rb files must not exhaust a shared container.
+            # Real model files are far below the per-file cap.
+            if size > MAX_RAILS_MODEL_FILE_BYTES or total_bytes + size > MAX_RAILS_MODEL_TOTAL_BYTES:
+                continue
             sources[rel_path] = (repo_path / rel_path).read_bytes()
+            total_bytes += size
         except OSError:
             continue
     return rails_model_association_edges(sources)

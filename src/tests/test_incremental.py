@@ -414,3 +414,46 @@ def test_stream_commit_touches_normalizes_paths_when_scan_root_is_subdirectory(t
     touches = list(stream_commit_touches(subdir, "HEAD"))
     assert len(touches) == 1
     assert touches[0].files == ("a.py",)
+
+
+def test_stream_commit_touches_does_not_deadlock_on_large_stderr(tmp_path, monkeypatch):
+    # stdout is drained before stderr is read; with stderr on a PIPE, git
+    # writing more than the pipe buffer to stderr blocked forever.
+    import shutil
+    import stat
+    import threading
+
+    from aletheore.git_intel.incremental import stream_commit_touches
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run(repo, "init", "-q")
+    run(repo, "config", "user.email", "a@example.com")
+    run(repo, "config", "user.name", "A")
+    (repo / "a.txt").write_text("1")
+    run(repo, "add", "-A")
+    commit(repo, "first", "2026-06-01T00:00:00+00:00")
+
+    real_git = shutil.which("git")
+    shim_dir = tmp_path / "shim"
+    shim_dir.mkdir()
+    shim = shim_dir / "git"
+    shim.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        f'  *"log "*|log*) head -c 300000 /dev/zero | tr "\\0" "x" >&2; exec {real_git} "$@" ;;\n'
+        f'  *) exec {real_git} "$@" ;;\n'
+        "esac\n"
+    )
+    shim.chmod(shim.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{shim_dir}{os.pathsep}{os.environ['PATH']}")
+
+    result: list = []
+    thread = threading.Thread(
+        target=lambda: result.extend(stream_commit_touches(repo, "HEAD")), daemon=True
+    )
+    thread.start()
+    thread.join(timeout=20)
+
+    assert not thread.is_alive(), "stream_commit_touches deadlocked on large stderr"
+    assert len(result) == 1

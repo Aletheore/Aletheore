@@ -540,3 +540,17 @@ def test_save_healthcheck_rotates_at_21st_save_keeping_20_newest(tmp_path):
     healthchecks_dir = repo / ".aletheore" / "healthchecks"
     files = sorted(healthchecks_dir.glob("*.json"))
     assert len(files) == 20
+
+
+def test_response_shape_is_none_when_the_body_read_is_truncated():
+    import http.client
+
+    from aletheore.healthcheck import _response_shape
+
+    class _Truncated:
+        headers = {"Content-Type": "application/json"}
+
+        def read(self, n):
+            raise http.client.IncompleteRead(b"{\"a\"", 100)
+
+    assert _response_shape(_Truncated()) is None

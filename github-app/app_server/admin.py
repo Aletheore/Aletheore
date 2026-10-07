@@ -79,6 +79,7 @@ from app_server.db import (
 from app_server.llm_cost import EXTRA_SEAT_PRICE_USD, base_credit_for_plan
 from app_server.paddle_client import PaddleAPIError, PaddleAPINotConfigured
 from app_server.paddle_client import cancel_subscription as cancel_paddle_subscription
+from app_server.paddle_client import archive_discount as archive_paddle_discount
 from app_server.paddle_client import create_discount as create_paddle_discount
 from app_server.paddle_client import create_portal_session
 from app_server.paddle_client import get_subscription as get_paddle_subscription
@@ -1814,8 +1815,22 @@ async def create_affiliate_route(request: Request, body: CreateAffiliateRequest)
     pool = request.app.state.db_pool
     try:
         affiliate = await create_affiliate(pool, body.code, discount["id"], body.name)
-    except asyncpg.UniqueViolationError as exc:
-        raise HTTPException(status_code=409, detail="an affiliate with that code already exists") from exc
+    except BaseException as exc:
+        # The Paddle discount already exists and is usable at checkout; with
+        # no local row it would be a discount nobody is credited for. Archive
+        # it (best effort - if that fails too, the id is logged for manual
+        # cleanup) before reporting the original failure.
+        try:
+            await asyncio.to_thread(archive_paddle_discount, settings.paddle_api_key, discount["id"])
+        except Exception:  # noqa: BLE001
+            logger.error(
+                "orphaned Paddle discount %s (code %s): local affiliate insert failed and "
+                "archiving also failed - archive it manually in the Paddle dashboard",
+                discount["id"], body.code, exc_info=True,
+            )
+        if isinstance(exc, asyncpg.UniqueViolationError):
+            raise HTTPException(status_code=409, detail="an affiliate with that code already exists") from exc
+        raise
     return jsonable_encoder(affiliate)
 
 

@@ -241,3 +241,26 @@ async def test_installation_repositories_added_unhides_a_previously_removed_repo
 
     assert await is_repo_hidden(pool, 563, "someorg/back-again") is False
     fake_queue.enqueue.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_initial_scan_enqueues_run_off_the_event_loop(pool, monkeypatch):
+    import asyncio
+    import threading
+
+    loop_thread = threading.get_ident()
+    enqueue_threads = []
+    fake_queue = MagicMock()
+    fake_queue.enqueue.side_effect = lambda *a, **k: enqueue_threads.append(threading.get_ident())
+    payload = {
+        "action": "added",
+        "installation": {"id": 559, "account": {"login": "octocat"}},
+        "repositories_added": [{"full_name": "octocat/a"}, {"full_name": "octocat/b"}],
+    }
+
+    await handle_installation_event(
+        "installation_repositories", payload, pool, "redis://unused", queue=fake_queue
+    )
+
+    assert len(enqueue_threads) == 2
+    assert all(t != loop_thread for t in enqueue_threads)

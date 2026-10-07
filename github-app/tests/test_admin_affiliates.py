@@ -201,3 +201,51 @@ async def test_mark_paid_marks_commissions_and_reflects_in_report(pool, monkeypa
     rows = {row["id"]: row for row in list_response.json()["affiliates"]}
     assert rows[affiliate["id"]]["total_owed_usd"] == 0
     assert rows[affiliate["id"]]["total_paid_usd"] == 4.05
+
+
+@pytest.mark.asyncio
+async def test_create_affiliate_archives_the_paddle_discount_when_the_local_insert_fails(pool, monkeypatch):
+    monkeypatch.setenv("AFFILIATE_ADMIN_TOKEN", ADMIN_TOKEN)
+    app.state.db_pool = pool
+    _mock_create_discount(monkeypatch, discount_id="dsc_orphan")
+    archived = []
+    monkeypatch.setattr(
+        "app_server.admin.archive_paddle_discount", lambda api_key, discount_id: archived.append(discount_id)
+    )
+
+    async def _boom(*args, **kwargs):
+        raise ConnectionError("db dropped")
+
+    monkeypatch.setattr("app_server.admin.create_affiliate", _boom)
+
+    async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test") as client:
+        response = await client.post(
+            "/admin/affiliates",
+            json={"code": "ORPHAN10", "name": "Orphan"},
+            headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+        )
+
+    assert response.status_code == 500
+    assert archived == ["dsc_orphan"]
+
+
+@pytest.mark.asyncio
+async def test_create_affiliate_duplicate_code_also_archives_the_new_discount(pool, monkeypatch):
+    monkeypatch.setenv("AFFILIATE_ADMIN_TOKEN", ADMIN_TOKEN)
+    app.state.db_pool = pool
+    await create_affiliate(pool, "DUP10", "dsc_dup_existing", "Dup")
+    _mock_create_discount(monkeypatch, discount_id="dsc_dup_new")
+    archived = []
+    monkeypatch.setattr(
+        "app_server.admin.archive_paddle_discount", lambda api_key, discount_id: archived.append(discount_id)
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/admin/affiliates",
+            json={"code": "DUP10", "name": "Dup Again"},
+            headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+        )
+
+    assert response.status_code == 409
+    assert archived == ["dsc_dup_new"]
