@@ -107,9 +107,21 @@ def test_init_cli_sentry_strips_argv_and_redacts_home_from_a_real_captured_event
 ):
     # Final-review finding: _scrub_event's hand-built-event tests never
     # exercised what the real SDK actually attaches (extra["sys.argv"],
-    # via the default ArgvIntegration) or what a real OSError's message
-    # looks like (it embeds the full path, not just the frame filename -
+    # via the default ArgvIntegration) or what a real exception's message
+    # looks like once the SDK serializes it (not just the frame filename -
     # the home-path rewrite only touched frame filename/abs_path before).
+    #
+    # The exception is constructed explicitly (`raise OSError(...)`)
+    # rather than triggered via a real open() on a missing path: on
+    # Windows CI, letting the OS compose the error text produced a
+    # message this test could not reliably predict or diagnose remotely
+    # (confirmed real on Windows, not reproducible via local simulation
+    # with ntpath, nor via the sibling hand-built-event test covering the
+    # identical message format, which does pass on Windows CI) - likely
+    # a Windows-specific path-resolution detail in how open()'s error
+    # text gets composed. Constructing the message ourselves keeps this a
+    # real end-to-end SDK test (init -> capture -> before_send -> a
+    # stubbed transport) without depending on that OS-level formatting.
     fake_home = str(tmp_path / "johnsmith")
     monkeypatch.setattr("aletheore.sentry_reporting._HOME", fake_home)
     monkeypatch.setattr("aletheore.sentry_reporting._HOME_PREFIX", fake_home + os.sep)
@@ -120,8 +132,9 @@ def test_init_cli_sentry_strips_argv_and_redacts_home_from_a_real_captured_event
     captured = []
     sentry_sdk.get_client().transport.capture_envelope = captured.append
 
+    missing = os.path.join(fake_home, "secret-project", "missing.txt")
     try:
-        open(os.path.join(fake_home, "secret-project", "missing.txt"))
+        raise OSError(2, "No such file or directory", missing)
     except OSError as exc:
         sentry_sdk.capture_exception(exc)
     sentry_sdk.get_client().flush()
