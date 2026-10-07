@@ -192,7 +192,6 @@ from scan_worker.model_tiers import (
     writing_adapter_for_airview,
     writing_adapter_for_docs,
     writing_adapter_for_health_fix_suggestion,
-    writing_adapter_for_plan,
 )
 from scan_worker.packet_cache import lookup_cached_result, store_result
 from scan_worker.code_graph_store import CodeGraphStore

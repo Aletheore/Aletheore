@@ -18,7 +18,6 @@ from scan_worker.model_tiers import (
     docs_model_used,
     health_fix_suggestion_model_used,
     managed_audit_model_used,
-    model_for_plan,
     resolve_model,
     run_with_free_tier_fallback,
     writing_adapter_chain_for_free_tier,
@@ -27,7 +26,6 @@ from scan_worker.model_tiers import (
     writing_adapter_for_docs,
     writing_adapter_for_health_fix_suggestion,
     writing_adapter_for_managed_audit,
-    writing_adapter_for_plan,
 )
 
 
@@ -115,12 +113,6 @@ def test_writing_adapter_for_json_output_leaves_the_deepseek_path_alone(monkeypa
     assert writing_adapter_for_airview("some-fallback", json_output=True)._json_mode is False
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(indierouter=True))
     assert writing_adapter_for_airview("some-fallback", json_output=True)._json_mode is False
-
-
-def test_writing_adapter_for_plan_threads_json_output(monkeypatch):
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
-    assert writing_adapter_for_plan("air", json_output=True)._json_mode is True
-    assert writing_adapter_for_plan("air")._json_mode is False
 
 
 def test_docs_builders_ask_for_json(monkeypatch):
@@ -281,8 +273,8 @@ def test_writing_adapter_for_managed_audit_never_uses_luna_when_indierouter_not_
     # cost $0.15 (6 rounds) and missed a real circular import;
     # deepseek-v4-pro cost $1.15 (14 rounds) and caught it; deepseek-v4-flash
     # cost $0.40 (16 rounds) and also caught it - same accuracy as Pro for a
-    # third of the cost. Unlike writing_adapter_for_plan, this must not
-    # switch to Luna just because OPENAI_API_KEY is configured.
+    # third of the cost. Unlike the Pro-plan writing-adapter builders, this
+    # must not switch to Luna just because OPENAI_API_KEY is configured.
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(openai=True))
     adapter = writing_adapter_for_managed_audit()
     assert adapter.name == "DeepSeek"
@@ -318,16 +310,20 @@ def test_only_managed_audit_raises_max_tool_rounds_above_the_plain_default(monke
     assert writing_adapter_for_health_fix_suggestion()._max_tool_rounds == MAX_TOOL_ROUNDS
 
 
-def test_only_airview_and_managed_audit_raise_the_request_timeout_above_the_plain_default(monkeypatch):
-    # Same scoping pin as the max_tool_rounds test above, for the request
-    # timeout: Docs and health-fix suggestions never saw a hang like
-    # AIRview's or managed audit's, so they stay at the plain default (120)
-    # rather than being bumped speculatively.
+def test_only_health_fix_suggestion_stays_on_the_plain_default_request_timeout(monkeypatch):
+    # Health-fix suggestions never saw a hang like AIRview's/managed
+    # audit's/Docs', so it stays at the plain default (120) rather than
+    # being bumped speculatively. Docs moved to the 300s mitigation
+    # (owner decision, 2026-10-07, "open decision 1" from the overnight
+    # audit's open-decisions list - the IndieRouter move changed the
+    # premise the original 120s pin was reasoned from: same provider,
+    # same shape of work as AIRview/managed audits, which both already
+    # needed the bump).
     from aletheore.adapters.openai_compatible import REQUEST_TIMEOUT_SECONDS
 
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", _fake_has_api_key(indierouter=True))
-    assert writing_adapter_for_docs(PRO_MODEL)._request_timeout_seconds == REQUEST_TIMEOUT_SECONDS == 120
     assert writing_adapter_for_health_fix_suggestion()._request_timeout_seconds == REQUEST_TIMEOUT_SECONDS == 120
+    assert writing_adapter_for_docs(PRO_MODEL)._request_timeout_seconds == 300
     assert writing_adapter_for_airview("deepseek-v4-flash")._request_timeout_seconds == 300
     assert writing_adapter_for_managed_audit()._request_timeout_seconds == 300
 
@@ -369,49 +365,6 @@ def test_managed_audit_model_used_tracks_which_branch_will_run(monkeypatch):
     assert managed_audit_model_used() == INDIEROUTER_DEEPSEEK_MODEL
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
     assert managed_audit_model_used() == MANAGED_AUDIT_MODEL
-
-
-
-
-
-
-
-
-def test_pro_uses_luna_when_openai_key_configured(monkeypatch):
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
-    adapter = writing_adapter_for_plan("pro")
-    assert adapter.name == "OpenAI"
-    assert adapter._model == LUNA_MODEL
-
-
-def test_pro_falls_back_to_deepseek_pro_when_openai_key_not_configured(monkeypatch):
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
-    adapter = writing_adapter_for_plan("pro")
-    assert isinstance(adapter, OpenAICompatibleAdapter)
-    assert adapter.name == "DeepSeek"
-    assert adapter._model == PRO_MODEL
-    assert adapter._supports_tool_choice is False
-
-
-def test_non_pro_plan_resolves_the_same_as_pro(monkeypatch):
-    # free (or any other non-"pro" value) resolves identically - there is
-    # only one plan's worth of routing left, this path shouldn't be
-    # reachable in practice (managed audits already reject free plan
-    # earlier), but the behavior must be safe regardless.
-    for key_configured in (True, False):
-        monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: key_configured)
-        assert writing_adapter_for_plan("free")._model == writing_adapter_for_plan("pro")._model
-
-
-def test_model_for_plan_never_drifts_from_writing_adapter_for_plan(monkeypatch):
-    # cost_for_usage() prices tokens by whatever model_for_plan() reports -
-    # if it ever disagreed with the adapter writing_adapter_for_plan()
-    # actually built, Pro's spend would be silently mispriced.
-    for key_configured in (True, False):
-        monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: key_configured)
-        for plan in ["pro", "free"]:
-            adapter = writing_adapter_for_plan(plan)
-            assert model_for_plan(plan) == adapter._model, (key_configured, plan)
 
 
 # ── writing_adapter_for_docs tests ───────────────────────────────────────
