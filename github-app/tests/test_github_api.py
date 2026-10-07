@@ -1,4 +1,5 @@
 import base64
+import os
 
 import httpx
 
@@ -23,6 +24,16 @@ from scan_worker.github_api import (
     upsert_pr_comment,
     upsert_repo_file,
     _trim_patch_context,
+)
+
+# create_check_run now acquires a real Postgres advisory lock
+# (check_run_creation_lock, scan_worker/db.py) around its lookup-then-create
+# - real race found by Flash Review: the lookup alone only closed a
+# SEQUENTIAL webhook redelivery, not two genuinely concurrent callers. Same
+# TEST_DATABASE_URL default as test_scan_worker_db.py's own lock tests.
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql://postgres:test@localhost:55433/aletheore_test",
 )
 
 
@@ -85,7 +96,9 @@ def test_create_check_run_posts_expected_payload():
         return httpx.Response(201, json={"id": 1})
 
     client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
-    create_check_run(client, "token", "octocat/hello-world", "abc123", "failure", "New secret found")
+    create_check_run(
+        client, "token", "octocat/hello-world", "abc123", "failure", "New secret found", TEST_DATABASE_URL
+    )
 
     assert len(calls) == 1
     request = calls[0]
@@ -115,7 +128,8 @@ def test_create_check_run_includes_annotations_in_the_initial_request():
         {"path": "b.py", "start_line": 2, "end_line": 2, "annotation_level": "warning", "message": "m2"},
     ]
     create_check_run(
-        client, "token", "octocat/hello-world", "abc123", "failure", "summary", annotations=annotations
+        client, "token", "octocat/hello-world", "abc123", "failure", "summary", TEST_DATABASE_URL,
+        annotations=annotations,
     )
 
     assert len(calls) == 1
@@ -146,7 +160,8 @@ def test_create_check_run_batches_more_than_fifty_annotations():
         for i in range(120)
     ]
     create_check_run(
-        client, "token", "octocat/hello-world", "abc123", "failure", "summary", annotations=annotations
+        client, "token", "octocat/hello-world", "abc123", "failure", "summary", TEST_DATABASE_URL,
+        annotations=annotations,
     )
 
     import json as _json
@@ -174,12 +189,61 @@ def test_create_check_run_omits_annotations_key_when_none_given():
         return httpx.Response(201, json={"id": 1})
 
     client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
-    create_check_run(client, "token", "octocat/hello-world", "abc123", "success", "summary")
+    create_check_run(client, "token", "octocat/hello-world", "abc123", "success", "summary", TEST_DATABASE_URL)
 
     import json as _json
 
     body = _json.loads(calls[0].content)
     assert "annotations" not in body["output"]
+
+
+def test_create_check_run_lock_prevents_a_concurrent_duplicate_create():
+    # Real race found by Flash Review on the lookup-then-create idempotency
+    # guard above: that lookup alone only closes a SEQUENTIAL webhook
+    # redelivery (one run fully finishes, then a later run re-checks and
+    # sees it), not two genuinely CONCURRENT callers - both can pass the
+    # lookup before either has created anything. check_run_creation_lock
+    # (scan_worker/db.py) closes the concurrent case: the loser blocks
+    # until the winner's create completes, then re-runs this same
+    # lookup-then-create under the lock and correctly finds the winner's
+    # check run already exists. Asserts peak concurrent GET entry rather
+    # than only the final created-run count, same reasoning as
+    # test_admin.py's test_concurrent_buy_extra_seat_calls_do_not_lose_an_update
+    # - a direct, deterministic measurement of serialization rather than
+    # something that depends on exact timing to go wrong in a specific way.
+    import threading
+    import time
+
+    store_lock = threading.Lock()
+    existing_runs = []
+    concurrency = {"current": 0, "peak": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            with store_lock:
+                concurrency["current"] += 1
+                concurrency["peak"] = max(concurrency["peak"], concurrency["current"])
+            time.sleep(0.2)
+            with store_lock:
+                concurrency["current"] -= 1
+                total = len(existing_runs)
+            return httpx.Response(200, json={"total_count": total, "check_runs": []})
+        with store_lock:
+            existing_runs.append(1)
+        return httpx.Response(201, json={"id": 1})
+
+    def run():
+        client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+        create_check_run(client, "token", "octocat/hello-world", "abc123", "success", "summary", TEST_DATABASE_URL)
+
+    threads = [threading.Thread(target=run), threading.Thread(target=run)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert concurrency["peak"] == 1
+    assert len(existing_runs) == 1
 
 
 def test_create_check_run_skips_when_one_already_exists_for_the_same_head_sha_and_name():
@@ -205,7 +269,9 @@ def test_create_check_run_skips_when_one_already_exists_for_the_same_head_sha_an
         return httpx.Response(201, json={"id": 1})
 
     client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
-    create_check_run(client, "token", "octocat/hello-world", "abc123", "failure", "New secret found")
+    create_check_run(
+        client, "token", "octocat/hello-world", "abc123", "failure", "New secret found", TEST_DATABASE_URL
+    )
 
     assert [c.method for c in calls] == ["GET"]
     assert calls[0].url.path == "/repos/octocat/hello-world/commits/abc123/check-runs"
@@ -229,6 +295,7 @@ def test_create_check_run_looks_up_by_the_given_custom_name():
         "abc123",
         "neutral",
         "summary",
+        TEST_DATABASE_URL,
         name="Aletheore regression risk",
     )
 
@@ -255,6 +322,7 @@ def test_create_check_run_uses_custom_name_when_given():
         "abc123",
         "neutral",
         "summary text",
+        TEST_DATABASE_URL,
         name="Aletheore regression risk",
     )
 

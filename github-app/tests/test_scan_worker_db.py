@@ -14,6 +14,8 @@ from scan_worker.db import (
     apply_monthly_credit_reset,
     list_installations_due_for_monthly_credit_reset,
     check_and_reserve_flash_review_attempt,
+    check_run_creation_lock,
+    CHECK_RUN_CREATION_LOCK_NAMESPACE,
     check_and_reserve_managed_audit,
     managed_audit_definitely_still_cooling_down,
     check_and_reserve_monthly_repo_scan_slot,
@@ -1894,6 +1896,71 @@ async def test_wiki_write_lock_does_not_collide_with_repo_checkout_lock(pool):
 
 
 @pytest.mark.asyncio
+async def test_check_run_creation_lock_blocks_concurrent_acquisition_for_same_key(pool):
+    import psycopg
+
+    with check_run_creation_lock(TEST_DATABASE_URL, "a/repo1", "abc123", "Aletheore secrets check"):
+        with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_try_advisory_lock(%s, hashtext(%s))",
+                    (CHECK_RUN_CREATION_LOCK_NAMESPACE, "a/repo1:abc123:Aletheore secrets check"),
+                )
+                acquired = cur.fetchone()[0]
+        assert acquired is False
+
+
+@pytest.mark.asyncio
+async def test_check_run_creation_lock_releases_after_context_exits(pool):
+    import psycopg
+
+    with check_run_creation_lock(TEST_DATABASE_URL, "a/repo1", "abc123", "Aletheore secrets check"):
+        pass
+
+    with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_try_advisory_lock(%s, hashtext(%s))",
+                (CHECK_RUN_CREATION_LOCK_NAMESPACE, "a/repo1:abc123:Aletheore secrets check"),
+            )
+            acquired = cur.fetchone()[0]
+            cur.execute(
+                "SELECT pg_advisory_unlock(%s, hashtext(%s))",
+                (CHECK_RUN_CREATION_LOCK_NAMESPACE, "a/repo1:abc123:Aletheore secrets check"),
+            )
+    assert acquired is True
+
+
+@pytest.mark.asyncio
+async def test_check_run_creation_lock_does_not_block_a_different_check_name(pool):
+    # The key includes the check name, not just (repo, head_sha) - two
+    # different check runs for the same commit (e.g. "secrets check" and
+    # "dependency vulnerability check") must never wait on each other.
+    import psycopg
+
+    with check_run_creation_lock(TEST_DATABASE_URL, "a/repo1", "abc123", "Aletheore secrets check"):
+        with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_try_advisory_lock(%s, hashtext(%s))",
+                    (CHECK_RUN_CREATION_LOCK_NAMESPACE, "a/repo1:abc123:Aletheore dependency vulnerability check"),
+                )
+                acquired = cur.fetchone()[0]
+                cur.execute(
+                    "SELECT pg_advisory_unlock(%s, hashtext(%s))",
+                    (CHECK_RUN_CREATION_LOCK_NAMESPACE, "a/repo1:abc123:Aletheore dependency vulnerability check"),
+                )
+    assert acquired is True
+
+
+@pytest.mark.asyncio
+async def test_check_run_creation_lock_does_not_collide_with_repo_checkout_lock(pool):
+    with repo_checkout_lock(TEST_DATABASE_URL, 301, "a/repo1"):
+        with check_run_creation_lock(TEST_DATABASE_URL, "a/repo1", "abc123", "Aletheore secrets check"):
+            pass
+
+
+@pytest.mark.asyncio
 async def test_scan_slot_lock_does_not_collide_with_spend_lock(pool):
     await _insert_installation(pool, 307, "a")
     with installation_spend_lock(TEST_DATABASE_URL, 307):
@@ -1931,13 +1998,18 @@ def test_every_advisory_lock_namespace_is_disjoint_across_both_files():
     )
 
     app_server_only = {API_TOKEN_LOCK_NAMESPACE, HEALTH_CHECK_TARGET_LOCK_NAMESPACE, SEAT_LOCK_NAMESPACE}
-    scan_worker_only = {SPEND_LOCK_NAMESPACE, REPO_CHECKOUT_LOCK_NAMESPACE, WIKI_WRITE_LOCK_NAMESPACE}
+    scan_worker_only = {
+        SPEND_LOCK_NAMESPACE,
+        REPO_CHECKOUT_LOCK_NAMESPACE,
+        WIKI_WRITE_LOCK_NAMESPACE,
+        CHECK_RUN_CREATION_LOCK_NAMESPACE,
+    }
 
     assert app_server_only.isdisjoint(scan_worker_only)
     # Internally disjoint too - isdisjoint above only checks across files;
     # a namespace value repeated within this one file would collide just
     # as badly and slip past that check entirely.
-    assert len(scan_worker_only) == 3
+    assert len(scan_worker_only) == 4
 
 
 @pytest.mark.asyncio

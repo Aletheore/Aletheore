@@ -29,8 +29,9 @@ logger = logging.getLogger(__name__)
 # (docs/audits/Claude_Audit.md finding 30, confirmed live: a held checkout
 # lock made a concurrent seat-admission call block for its full
 # lock_timeout and then fail), fixed by moving SEAT_LOCK_NAMESPACE to 6.
-# 7 is claimed below for the wiki-write lock - keep this registry comment
-# in sync with any new namespace either file adds.
+# 7 is claimed below for the wiki-write lock, 8 for the check-run creation
+# lock - keep this registry comment in sync with any new namespace either
+# file adds.
 SCAN_SLOT_LOCK_NAMESPACE = 1
 SPEND_LOCK_NAMESPACE = 2
 # Real gap found via audit: insert_repo_history's retention trim (below)
@@ -63,6 +64,17 @@ REPO_CHECKOUT_LOCK_NAMESPACE = 3
 # versa) would be needless coupling between two genuinely independent
 # resources for the same repo.
 WIKI_WRITE_LOCK_NAMESPACE = 7
+# Namespace 8 is reserved for the per-(repo, head_sha, check name) check-run
+# creation lock (see check_run_creation_lock) - closes a real race Flash
+# Review found in github_api.py's own lookup-then-create idempotency guard:
+# that guard alone only collapses a SEQUENTIAL webhook redelivery (the
+# original audit finding this whole mechanism exists for), not two
+# genuinely CONCURRENT scan-worker runs for the same head_sha (a webhook
+# redelivery racing the still-in-flight original job, or two workers
+# picking up duplicate enqueues at the same moment) - both can pass the
+# lookup before either has created anything, and both then create a
+# duplicate check run anyway.
+CHECK_RUN_CREATION_LOCK_NAMESPACE = 8
 ADVISORY_LOCK_TIMEOUT = "5s"
 INSTALLATION_SPEND_LOCK_MAX_ATTEMPTS = 4
 INSTALLATION_SPEND_LOCK_RETRY_DELAY_SECONDS = 3
@@ -908,6 +920,42 @@ def wiki_write_lock(dsn: str, installation_id: int, repo_full_name: str):
             cur.execute(
                 "SELECT pg_advisory_unlock(%s, hashtext(%s))",
                 (WIKI_WRITE_LOCK_NAMESPACE, key),
+            )
+        conn.close()
+
+
+@contextmanager
+def check_run_creation_lock(dsn: str, repo_full_name: str, head_sha: str, name: str):
+    """Serializes github_api.create_check_run's lookup-then-create for one
+    (repo, head_sha, check name) triple, closing the real concurrent race
+    its own lookup alone can't (see CHECK_RUN_CREATION_LOCK_NAMESPACE):
+    two truly simultaneous callers can both see zero existing check runs
+    before either has created one, and both then create a duplicate.
+
+    Deliberately blocking, same reasoning as repo_checkout_lock/
+    wiki_write_lock: the loser of the race should wait its turn and then
+    see the winner's check run already exists (the lookup it performs
+    right after acquiring this lock), not fail fast or skip its own
+    attempt at creating one. The held window is small - one GET plus, at
+    most, one POST to GitHub's API - not a slow AI-writing job like
+    wiki_write_lock, so this never meaningfully delays an unrelated job
+    for the same repo waiting on a DIFFERENT check name or head_sha (the
+    key includes both, unlike repo_checkout_lock's repo-wide scope).
+    """
+    key = f"{repo_full_name}:{head_sha}:{name}"
+    conn = psycopg.connect(dsn, autocommit=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_lock(%s, hashtext(%s))",
+                (CHECK_RUN_CREATION_LOCK_NAMESPACE, key),
+            )
+        yield
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_unlock(%s, hashtext(%s))",
+                (CHECK_RUN_CREATION_LOCK_NAMESPACE, key),
             )
         conn.close()
 

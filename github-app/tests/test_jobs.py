@@ -1253,7 +1253,7 @@ def test_run_pr_scan_job_excludes_a_dismissed_static_analysis_finding_from_the_c
     )
     monkeypatch.setattr(
         "scan_worker.jobs.create_check_run",
-        lambda client, token, repo, sha, conclusion, summary, name="", annotations=None: created.append(
+        lambda client, token, repo, sha, conclusion, summary, dsn=None, name="", annotations=None: created.append(
             (conclusion, name)
         ),
     )
@@ -2069,7 +2069,7 @@ def test_check_run_failure_on_new_secret(bare_repo_with_two_commits, monkeypatch
     created = {}
     monkeypatch.setattr(
         "scan_worker.jobs.create_check_run",
-        lambda client, token, repo_full_name, head_sha, conclusion, summary: created.update(
+        lambda client, token, repo_full_name, head_sha, conclusion, summary, dsn=None: created.update(
             conclusion=conclusion, head_sha=head_sha
         ),
     )
@@ -2125,7 +2125,7 @@ def test_vulnerability_check_run_fails_on_real_known_cve_bump(
     created_runs = []
     monkeypatch.setattr(
         "scan_worker.jobs.create_check_run",
-        lambda client, token, repo_full_name, head_sha, conclusion, summary, name="": created_runs.append(
+        lambda client, token, repo_full_name, head_sha, conclusion, summary, dsn=None, name="": created_runs.append(
             {"name": name, "conclusion": conclusion, "summary": summary}
         ),
     )
@@ -2165,7 +2165,7 @@ def test_vulnerability_check_run_succeeds_when_no_new_vulnerability(
     created_runs = []
     monkeypatch.setattr(
         "scan_worker.jobs.create_check_run",
-        lambda client, token, repo_full_name, head_sha, conclusion, summary, name="": created_runs.append(
+        lambda client, token, repo_full_name, head_sha, conclusion, summary, dsn=None, name="": created_runs.append(
             {"name": name, "conclusion": conclusion, "summary": summary}
         ),
     )
@@ -2183,7 +2183,7 @@ def test_maybe_create_static_analysis_check_run_fails_with_new_findings(monkeypa
     created = []
     monkeypatch.setattr(
         "scan_worker.jobs.create_check_run",
-        lambda client, token, repo, sha, conclusion, summary, name="", annotations=None: created.append(
+        lambda client, token, repo, sha, conclusion, summary, dsn=None, name="", annotations=None: created.append(
             (conclusion, name, summary, annotations)
         ),
     )
@@ -2246,7 +2246,7 @@ def test_maybe_create_static_analysis_check_run_succeeds_with_no_new_findings(mo
     created = []
     monkeypatch.setattr(
         "scan_worker.jobs.create_check_run",
-        lambda client, token, repo, sha, conclusion, summary, name="", annotations=None: created.append(
+        lambda client, token, repo, sha, conclusion, summary, dsn=None, name="", annotations=None: created.append(
             (conclusion, name, summary)
         ),
     )
@@ -2282,7 +2282,7 @@ def test_maybe_create_static_analysis_check_run_reports_neutral_when_a_default_o
     created = []
     monkeypatch.setattr(
         "scan_worker.jobs.create_check_run",
-        lambda client, token, repo, sha, conclusion, summary, name="", annotations=None: created.append(
+        lambda client, token, repo, sha, conclusion, summary, dsn=None, name="", annotations=None: created.append(
             (conclusion, name, summary)
         ),
     )
@@ -2326,7 +2326,7 @@ def test_maybe_create_static_analysis_check_run_fails_with_new_findings_even_whe
     created = []
     monkeypatch.setattr(
         "scan_worker.jobs.create_check_run",
-        lambda client, token, repo, sha, conclusion, summary, name="", annotations=None: created.append(
+        lambda client, token, repo, sha, conclusion, summary, dsn=None, name="", annotations=None: created.append(
             (conclusion, name, summary)
         ),
     )
@@ -2379,7 +2379,7 @@ def test_maybe_create_static_analysis_check_run_runs_on_free_plan(monkeypatch):
     created = []
     monkeypatch.setattr(
         "scan_worker.jobs.create_check_run",
-        lambda client, token, repo, sha, conclusion, summary, name="", annotations=None: created.append(
+        lambda client, token, repo, sha, conclusion, summary, dsn=None, name="", annotations=None: created.append(
             (conclusion, name, summary)
         ),
     )
@@ -2511,7 +2511,7 @@ def test_maybe_create_regression_risk_check_run_creates_neutral_check_run(monkey
     created = []
     monkeypatch.setattr(
         "scan_worker.jobs.create_check_run",
-        lambda client, token, repo, sha, conclusion, summary, name="Aletheore secrets check": created.append(
+        lambda client, token, repo, sha, conclusion, summary, dsn=None, name="Aletheore secrets check": created.append(
             (conclusion, name, summary)
         ),
     )
@@ -2610,7 +2610,7 @@ def test_maybe_create_regression_risk_check_run_does_not_claim_production_uncond
     created = []
     monkeypatch.setattr(
         "scan_worker.jobs.create_check_run",
-        lambda client, token, repo, sha, conclusion, summary, name="Aletheore secrets check": created.append(
+        lambda client, token, repo, sha, conclusion, summary, dsn=None, name="Aletheore secrets check": created.append(
             summary
         ),
     )
@@ -2684,7 +2684,7 @@ def test_maybe_create_regression_fence_check_run_creates_neutral_check_run(monke
     created = []
     monkeypatch.setattr(
         "scan_worker.jobs.create_check_run",
-        lambda client, token, repo, sha, conclusion, summary, name="Aletheore secrets check": created.append(
+        lambda client, token, repo, sha, conclusion, summary, dsn=None, name="Aletheore secrets check": created.append(
             (conclusion, name, summary)
         ),
     )
@@ -4021,7 +4021,7 @@ def test_managed_audit_pr_job_persists_and_signs_the_report(monkeypatch, tmp_pat
     check_runs = []
     monkeypatch.setattr(
         "scan_worker.jobs.create_check_run",
-        lambda client, token, repo, sha, conclusion, summary, name="Aletheore secrets check": check_runs.append(
+        lambda client, token, repo, sha, conclusion, summary, dsn=None, name="Aletheore secrets check": check_runs.append(
             {"repo": repo, "sha": sha, "conclusion": conclusion, "summary": summary, "name": name}
         ),
     )

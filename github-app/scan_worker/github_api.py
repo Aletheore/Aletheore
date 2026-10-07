@@ -8,6 +8,7 @@ import httpx
 
 from aletheore.pr_comment import COMMENT_MARKER
 from aletheore.repo_config import is_ignored
+from scan_worker.db import check_run_creation_lock
 
 logger = logging.getLogger(__name__)
 
@@ -325,6 +326,7 @@ def create_check_run(
     head_sha: str,
     conclusion: str,
     summary: str,
+    dsn: str,
     name: str = "Aletheore secrets check",
     annotations: list[dict] | None = None,
 ) -> None:
@@ -347,39 +349,52 @@ def create_check_run(
     # trying to update the first (GitHub's update endpoint only ever
     # APPENDS annotations, never replaces them, so "update" would double
     # up every annotation on a retry instead of producing a clean skip).
-    lookup = client.get(
-        f"/repos/{repo_full_name}/commits/{head_sha}/check-runs",
-        headers=headers,
-        params={"check_name": name},
-    )
-    lookup.raise_for_status()
-    if lookup.json().get("total_count", 0) > 0:
-        logger.info(
-            "check run %r already exists for %s@%s, skipping duplicate create",
-            name, repo_full_name, head_sha,
+    #
+    # The lookup-then-create pair itself is a classic TOCTOU - real race
+    # found by Flash Review: two genuinely CONCURRENT callers (the
+    # redelivery above racing the still-in-flight original job, or two
+    # workers picking up duplicate enqueues at the same moment) can both
+    # pass this lookup before either has created anything. The lookup
+    # alone only ever closed the SEQUENTIAL case (one run fully finishes,
+    # then a later run re-checks). check_run_creation_lock closes the
+    # concurrent case too: the loser blocks until the winner's create (or
+    # no-op) completes, then re-runs this same lookup-then-create under
+    # the lock and correctly finds the winner's check run already exists.
+    with check_run_creation_lock(dsn, repo_full_name, head_sha, name):
+        lookup = client.get(
+            f"/repos/{repo_full_name}/commits/{head_sha}/check-runs",
+            headers=headers,
+            params={"check_name": name},
         )
-        return
+        lookup.raise_for_status()
+        if lookup.json().get("total_count", 0) > 0:
+            logger.info(
+                "check run %r already exists for %s@%s, skipping duplicate create",
+                name, repo_full_name, head_sha,
+            )
+            return
 
-    annotations = annotations or []
-    first_batch = annotations[:_MAX_ANNOTATIONS_PER_REQUEST]
-    remaining = annotations[_MAX_ANNOTATIONS_PER_REQUEST:]
+        annotations = annotations or []
+        first_batch = annotations[:_MAX_ANNOTATIONS_PER_REQUEST]
+        remaining = annotations[_MAX_ANNOTATIONS_PER_REQUEST:]
 
-    output: dict = {"title": name, "summary": summary}
-    if first_batch:
-        output["annotations"] = first_batch
+        output: dict = {"title": name, "summary": summary}
+        if first_batch:
+            output["annotations"] = first_batch
 
-    response = client.post(
-        f"/repos/{repo_full_name}/check-runs",
-        headers=headers,
-        json={
-            "name": name,
-            "head_sha": head_sha,
-            "status": "completed",
-            "conclusion": conclusion,
-            "output": output,
-        },
-    )
-    response.raise_for_status()
+        response = client.post(
+            f"/repos/{repo_full_name}/check-runs",
+            headers=headers,
+            json={
+                "name": name,
+                "head_sha": head_sha,
+                "status": "completed",
+                "conclusion": conclusion,
+                "output": output,
+            },
+        )
+        response.raise_for_status()
+        check_run_id = response.json()["id"] if remaining else None
 
     if not remaining:
         return
@@ -387,7 +402,9 @@ def create_check_run(
     # update call's annotations append to what the check run already has,
     # they don't replace it - so this loop is correct to keep issuing
     # 50-at-a-time batches rather than resending everything each time.
-    check_run_id = response.json()["id"]
+    # Deliberately outside the lock above: these updates only ever target
+    # the check run THIS call just created (never a concurrent caller's),
+    # so nothing about this loop needs serializing against another caller.
     for start in range(0, len(remaining), _MAX_ANNOTATIONS_PER_REQUEST):
         batch = remaining[start : start + _MAX_ANNOTATIONS_PER_REQUEST]
         update_response = client.patch(
