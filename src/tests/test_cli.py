@@ -410,7 +410,7 @@ def test_main_does_not_report_keyboard_interrupt(monkeypatch):
     assert captured == []
 
 
-def test_main_does_not_crash_when_sentry_capture_itself_raises(monkeypatch):
+def test_main_does_not_crash_when_sentry_capture_itself_raises(monkeypatch, capsys):
     from aletheore.cli import main
 
     monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: None)
@@ -427,6 +427,14 @@ def test_main_does_not_crash_when_sentry_capture_itself_raises(monkeypatch):
 
     with pytest.raises(RuntimeError, match="boom"):
         main()
+
+    # Aletheore's own Deterministic Scan flagged the prior bare
+    # `except Exception: pass` here (cli.py's real self-dogfooding catch,
+    # same class of finding ast_pattern.py already fixed once for this
+    # exact pattern) - a failure in the capture path itself must be
+    # visible, not silently invisible, even though it's diagnostic-only
+    # and the real exception still propagates unchanged.
+    assert "could not report this crash" in capsys.readouterr().err
 
 
 def test_main_with_no_command_prints_update_notice_when_available():

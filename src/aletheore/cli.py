@@ -2367,7 +2367,18 @@ def main() -> None:
             try:
                 sentry_sdk.capture_exception(exc)
             except Exception:
-                pass
+                # A broken Sentry SDK environment (no network, a bad DSN
+                # after a future rotation, etc.) must never replace or
+                # mask the user's real crash - but silently swallowing it
+                # entirely gave no way to notice the capture path itself
+                # is broken (ast_pattern.py already fixed this exact
+                # "except: pass" pattern once, for the same reason - see
+                # its own comment on the convention). Diagnostic only, to
+                # stderr; the user's real exception still propagates
+                # unchanged below.
+                _stderr_console.print(
+                    "[dim]Note: could not report this crash to Aletheore.[/dim]"
+                )
             else:
                 _stderr_console.print(
                     "\n[dim]This error was reported to help fix it. "
