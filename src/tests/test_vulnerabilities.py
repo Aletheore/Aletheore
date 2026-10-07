@@ -1300,3 +1300,30 @@ def test_parse_maven_pins_resolves_property_defined_via_another_property(tmp_pat
 
     assert ("g:chained", "4.0.0", "Maven") in pins
     assert not any(p[0] == "g:cyclic" for p in pins)
+
+
+def test_parse_composer_pins_includes_dev_dependencies(tmp_path):
+    from aletheore.vulnerabilities import _parse_composer_pins
+
+    (tmp_path / "composer.lock").write_text(
+        json.dumps(
+            {
+                "packages": [{"name": "a/prod", "version": "v1.0.0"}],
+                "packages-dev": [{"name": "a/dev", "version": "2.0.0"}],
+            }
+        )
+    )
+    assert sorted(_parse_composer_pins(tmp_path)) == [
+        ("a/dev", "2.0.0", "Packagist"),
+        ("a/prod", "1.0.0", "Packagist"),
+    ]
+
+
+def test_parse_composer_pins_json_fallback_includes_require_dev(tmp_path):
+    from aletheore.vulnerabilities import _parse_composer_pins
+
+    (tmp_path / "composer.json").write_text(
+        json.dumps({"require": {"php": "^8.1", "a/prod": "1.2.3"}, "require-dev": {"a/dev": "4.5.6"}})
+    )
+    names = {name for name, _, _ in _parse_composer_pins(tmp_path)}
+    assert names == {"a/prod", "a/dev"}

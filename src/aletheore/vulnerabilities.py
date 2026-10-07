@@ -542,7 +542,9 @@ def _parse_composer_pins(repo_path: Path) -> list[tuple[str, str, str]]:
             data = {}
         pins = [
             (pkg["name"], pkg["version"].lstrip("v"), "Packagist")
-            for pkg in data.get("packages", [])
+            # packages-dev holds the dev-only locked tree (phpunit & co.); a
+            # vulnerable dev dependency is still a real finding.
+            for pkg in [*data.get("packages", []), *data.get("packages-dev", [])]
             if "name" in pkg and "version" in pkg
         ]
         if pins:
@@ -556,7 +558,7 @@ def _parse_composer_pins(repo_path: Path) -> list[tuple[str, str, str]]:
     except json.JSONDecodeError:
         return []
     pins = []
-    for name, version in data.get("require", {}).items():
+    for name, version in {**data.get("require", {}), **data.get("require-dev", {})}.items():
         if name.lower() == "php":
             continue
         cleaned = _clean_range_version(version)
