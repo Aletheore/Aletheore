@@ -1015,9 +1015,11 @@ def _maybe_create_check_run(
             f"- `{finding.get('path')}:{finding.get('line')}` ({finding.get('pattern')})"
             for finding in new_secrets
         )
-        create_check_run(client, token, repo_full_name, head_sha, "failure", summary)
+        create_check_run(client, token, repo_full_name, head_sha, "failure", summary, settings.database_url)
     else:
-        create_check_run(client, token, repo_full_name, head_sha, "success", "No new secrets found.")
+        create_check_run(
+            client, token, repo_full_name, head_sha, "success", "No new secrets found.", settings.database_url
+        )
 
 
 def _maybe_create_vulnerability_check_run(
@@ -1051,12 +1053,13 @@ def _maybe_create_vulnerability_check_run(
             for finding in new_vulnerabilities
         )
         create_check_run(
-            client, token, repo_full_name, head_sha, "failure", summary,
+            client, token, repo_full_name, head_sha, "failure", summary, settings.database_url,
             name="Aletheore dependency vulnerability check",
         )
     else:
         create_check_run(
             client, token, repo_full_name, head_sha, "success", "No new dependency vulnerabilities found.",
+            settings.database_url,
             name="Aletheore dependency vulnerability check",
         )
 
@@ -1180,7 +1183,7 @@ def _maybe_create_static_analysis_check_run(
             for finding in new_findings
         ) + skip_note
         create_check_run(
-            client, token, repo_full_name, head_sha, "failure", summary,
+            client, token, repo_full_name, head_sha, "failure", summary, settings.database_url,
             name="Aletheore Deterministic Scan",
             annotations=_static_analysis_annotations(new_findings),
         )
@@ -1191,11 +1194,13 @@ def _maybe_create_static_analysis_check_run(
         create_check_run(
             client, token, repo_full_name, head_sha, "neutral",
             "No new static analysis findings, but not every scanner ran." + skip_note,
+            settings.database_url,
             name="Aletheore Deterministic Scan",
         )
     else:
         create_check_run(
             client, token, repo_full_name, head_sha, "success", "No new static analysis findings.",
+            settings.database_url,
             name="Aletheore Deterministic Scan",
         )
 
@@ -1257,6 +1262,7 @@ def _maybe_create_regression_risk_check_run(
         head_sha,
         "neutral",
         summary,
+        settings.database_url,
         name="Aletheore regression risk",
     )
 
@@ -1298,6 +1304,7 @@ def _maybe_create_regression_fence_check_run(
         head_sha,
         "neutral",
         summary,
+        settings.database_url,
         name="Aletheore Regression Fence",
     )
 
@@ -2013,6 +2020,7 @@ def _maybe_create_audit_certificate_check_run(
             "Verification section.\n\n"
             "Require this check in branch protection to block merges that carry no valid, "
             "freshly-signed Aletheore audit certificate.",
+            get_settings().database_url,
             name="Aletheore Audit Certificate",
         )
     except Exception as exc:  # noqa: BLE001
