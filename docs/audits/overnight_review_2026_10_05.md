@@ -4,6 +4,8 @@
 **Scope:** real bugs, correctness gaps, and performance/scalability issues ("not optimized for load") — not style nits. Each finding below was verified against the actual current source before being recorded, not assumed from a pattern match.
 **Order:** starting with this repo's own documented hottest/highest-defect-risk files (per CLAUDE.md's own dogfooded health metrics), then expanding to directly-related/surrounding files.
 
+**Status update (2026-10-07):** the pass sections below were written as the audit ran, so several say "None fixed yet". That is no longer true. Every fixable finding was fixed and merged; see [Fix status](#fix-status-updated-2026-10-07-every-pr-below-is-merged-to-master) at the end for the PR for each, and the open decisions listed there for what was deliberately left alone.
+
 ## Progress tracker
 
 | File | Lines | Status | Findings |
@@ -376,12 +378,20 @@ Full read plus cross-file verification against every caller (`jobs.py`, `admin.p
 
 Eighth-pass files reviewed: `src/aletheore/evidence_resolution.py`, `src/aletheore/healthcheck.py`, `github-app/app_server/webhooks/marketplace.py` (no longer exists, feature removed - second such result), `github-app/scan_worker/slack.py` (zero findings, genuinely clean). 3 real, verified findings (2 in evidence_resolution.py including one HIGH severity - real CVE misattribution reaching a live customer-facing alert - plus 1 in healthcheck.py). None fixed yet - audit only, per this pass's own brief.
 
-## Fix status (2026-10-05, updated as PRs open; none merged, all left open on request)
+## Fix status (updated 2026-10-07: every PR below is merged to master)
 
-One PR per finding, branched fresh off master, each with a regression test that was watched failing on master first.
+One PR per finding, branched fresh off master, each with a regression test that was watched failing on master first. All of the PRs listed here were merged on 2026-10-06 and 2026-10-07 in dependency order. Where two PRs touched the same code, the later one was reconciled with the earlier one before merging (see the notes under the table).
 
 | PR | Finding |
 |---|---|
+| #918 | First pass: stale `_IncrementalSpendBudget` docstring, `evidence_packet_cache` retention sweep, credit-reservation hard-kill leak |
+| #919 | live_wiki.py: AIRview incremental updates dropped file-page detail on a cache hit |
+| #920 | endpoints.py: Rails routes inside `namespace`/`scope` got the wrong URL path |
+| #921 | flash_review.py: a transient GitHub fetch error aborted the whole review |
+| #922 | scanner/graph.py: `build_module_graph` walked the repo tree four times |
+| #923 | flash_review.py: per-file generation now scales its own findings cap |
+| #924 | flash_review.py: cache-hit findings now get the cross-file re-check |
+| #925 | flash_review.py and tests: stale references to a removed function, two dead test blocks |
 | #934 | vulnerabilities.py: nested npm lockfile entries scanned under a mangled name |
 | #935 | citation_verifier.py: `host:port` parsed as a citation |
 | #936 | secrets.py: random 31+ digit numeric tokens classed as placeholders |
@@ -391,7 +401,7 @@ One PR per finding, branched fresh off master, each with a regression test that 
 | #940 | vulnerabilities.py: Composer dev dependencies never scanned |
 | #941 | openai_compatible.py: reservation leak on missing key, empty `choices` |
 | #942 | mcp_server.py: wrong snapshot blamed, empty `path_glob` crash |
-| #943 | cli.py: closed-stdin `input()` crashes, network errors in login/managed audit |
+| #943 | cli.py: closed-stdin `input()` crashes, network errors in login/managed audit (the fix itself landed in #914; #943 kept the regression tests) |
 | #944 | evidence_resolution.py: every CVE attached to unresolved lookups, bare-string dependency |
 | #945 | auth.py: login 500 on GitHub outage, `BadPayload` cookies |
 | #946 | github_api.py: patch reconstruction fail-open, comment upsert pagination |
@@ -409,6 +419,20 @@ One PR per finding, branched fresh off master, each with a regression test that 
 | #958 | admin.py: archive the Paddle discount when the local affiliate insert fails |
 | #959 | analyzer.py: branch ahead/behind in one git call (with fallback) |
 
+Related PRs merged in the same run, not audit findings:
+
+| PR | What |
+|---|---|
+| #914 | CLI gaps from a separate cross-platform audit, including the closed-stdin handling that #943 overlapped |
+| #917 | AIRview's shared spend-reservation scalar leaked money across worker threads (found in the backward PR sweep) |
+| #964 | PMD 7.27.0 to 7.28.0 in the scan-worker image, closing CVE-2026-75140 (jsoup) that started failing the required image scan on every PR |
+| #965 | Regex search budget no longer counts the child process's startup (a real bug behind an intermittent macOS `KeyError: 'matches'`), plus a Windows `air.json` read race in a watch test |
+
+Reconciliation notes:
+
+- #917 made `_IncrementalSpendBudget`'s pending reservation thread-local, while #918 persists the pending amount for the crash sweep under a single `_reservation_key`. With both, 16 worker threads would overwrite one row, so the key is now thread-local too and each thread owns its own persisted row.
+- #943 overlapped #914 (both fixed the closed-stdin crashes). After merging master it dropped its own helper and kept only the tests, with the consent test asserting #914's behavior (exit 0, nothing sent).
+
 ### Open decisions (deliberately not fixed, for the owner to settle)
 
 1. **`writing_adapter_for_docs` request timeout (model_tiers.py, sixth pass finding 1).** The audit reads the missing 300s override as an oversight, but `test_only_airview_and_managed_audit_raise_the_request_timeout_above_the_plain_default` pins Docs at 120s on purpose ("never saw a hang ... rather than being bumped speculatively"), and no Docs-specific incident is cited. Decide whether the IndieRouter move changes that premise.
@@ -418,4 +442,4 @@ One PR per finding, branched fresh off master, each with a regression test that 
 5. **Seat buy/remove server-side idempotency (admin.py, third pass finding 2).** Closing it needs an idempotency key from the client (frontend plus API change) so a double-click, retry or second tab collapses to one Paddle mutation. Currently only the button-disable mitigates it. Admin-only exposure.
 6. **Rails rename history split (analyzer.py, fifth pass finding 2, secondary observation).** Pre-rename commits stay attributed to the old path. The audit itself flagged this as possibly an accepted limitation; not touched.
 
-Note: the first-pass findings (stale `_IncrementalSpendBudget` docstring, `evidence_packet_cache` retention sweep, credit-reservation hard-kill leak) are already closed by #918 and were not duplicated. A docstring-only PR (#960) was opened by mistake and closed as redundant.
+Note: the first-pass findings (stale `_IncrementalSpendBudget` docstring, `evidence_packet_cache` retention sweep, credit-reservation hard-kill leak) were closed by #918 and not duplicated. A docstring-only PR (#960) was opened by mistake and closed as redundant.
