@@ -322,7 +322,24 @@ def test_main_omits_first_run_notice_when_already_shown(monkeypatch, capsys):
 
     main()
 
-    assert "crashes" not in capsys.readouterr().out
+    output = capsys.readouterr()
+    assert "crashes" not in output.out
+    assert "crashes" not in output.err
+
+
+def test_main_first_run_notice_goes_to_stderr_not_stdout(monkeypatch, capsys):
+    from aletheore.cli import main
+
+    monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: None)
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: False)
+    monkeypatch.setattr("aletheore.cli.mark_crash_reporting_notice_shown", lambda: None)
+    monkeypatch.setattr("aletheore.cli.app", lambda: None)
+
+    main()
+
+    output = capsys.readouterr()
+    assert "crashes" not in output.out
+    assert "crashes" in output.err
 
 
 def test_main_reports_an_unhandled_exception_to_sentry_and_reraises(monkeypatch, capsys):
@@ -345,7 +362,13 @@ def test_main_reports_an_unhandled_exception_to_sentry_and_reraises(monkeypatch,
         main()
 
     assert len(captured) == 1
-    assert "This error was reported" in capsys.readouterr().out
+    output = capsys.readouterr()
+    # Final-review finding: `aletheore mcp` uses stdout as a JSON-RPC
+    # protocol channel, and `diff`/`--format sarif` output is often
+    # redirected or piped - an unrelated crash-reporting line on stdout
+    # would corrupt either. Must go to stderr.
+    assert "This error was reported" not in output.out
+    assert "This error was reported" in output.err
 
 
 def test_main_does_not_report_when_crash_reporting_is_disabled(monkeypatch):

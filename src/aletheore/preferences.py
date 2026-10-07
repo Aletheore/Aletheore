@@ -22,7 +22,9 @@ _NOTICE_SHOWN_KEY = "crash_reporting_notice_shown"
 # case-insensitively. Any other non-empty value - including "" - is
 # treated as enabled: an env var merely being *set* must not silently
 # disable reporting, only an explicit, recognized "off" value should.
-_DISABLE_VALUES = {"0", "false", "no"}
+# Matches this repo's existing ALETHEORE_MCP_WATCH convention
+# (watch.py's _FALSE_VALUES) so the same vocabulary works everywhere.
+_DISABLE_VALUES = {"0", "false", "no", "off"}
 
 
 def is_crash_reporting_enabled(preferences_path: Path = DEFAULT_PREFERENCES_PATH) -> bool:
@@ -54,14 +56,26 @@ def _load_preferences(preferences_path: Path) -> dict:
     if not preferences_path.exists():
         return {}
     try:
+        # ValueError covers json.JSONDecodeError (a subclass) and also
+        # UnicodeDecodeError raised by read_text() on non-UTF-8 bytes -
+        # both are "this file is unreadable", not a reason to crash.
         data = json.loads(preferences_path.read_text())
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
 
 
 def _save_preference(preferences_path: Path, key: str, value: bool) -> None:
-    preferences_path.parent.mkdir(parents=True, exist_ok=True)
-    data = _load_preferences(preferences_path)
-    data[key] = value
-    preferences_path.write_text(json.dumps(data, indent=2))
+    try:
+        preferences_path.parent.mkdir(parents=True, exist_ok=True)
+        data = _load_preferences(preferences_path)
+        data[key] = value
+        preferences_path.write_text(json.dumps(data, indent=2))
+    except OSError:
+        # Best-effort: a read-only/unwritable HOME (sandboxed builds, some
+        # CI, read-only containers) must never crash the CLI over a
+        # preference write - every command, including --help, goes
+        # through this path via the first-run notice in main(). Silently
+        # not persisting (the notice reprints next run; an explicit
+        # toggle doesn't stick) is strictly better than bricking the tool.
+        pass

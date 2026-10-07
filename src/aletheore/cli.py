@@ -135,6 +135,12 @@ KNOWN_ADAPTERS = [
 MANUAL_DIR = str(Path(__file__).resolve().parent / "manual")
 
 console = Console()
+# Crash-reporting notices only (main()'s first-run notice and "this was
+# reported" line) - never for command output. Final-review finding:
+# `aletheore mcp` uses stdout as a JSON-RPC protocol channel (see its own
+# comment below), and `diff`/`--format sarif` output is routinely
+# redirected or piped - an unrelated line on stdout would corrupt either.
+_stderr_console = Console(stderr=True)
 
 # Grouped rather than flat because this list is the CLI's only map of what
 # `query` can actually do - every kind printed as one comma-separated run is
@@ -2164,7 +2170,7 @@ def main() -> None:
 
     init_cli_sentry()
     if not has_shown_crash_reporting_notice():
-        console.print(
+        _stderr_console.print(
             "[dim]Aletheore reports crashes to help fix bugs across "
             "environments we can't all test. Disable with "
             "`aletheore config crash-reporting off`.[/dim]"
@@ -2187,7 +2193,7 @@ def main() -> None:
             except Exception:
                 pass
             else:
-                console.print(
+                _stderr_console.print(
                     "\n[dim]This error was reported to help fix it. "
                     "Disable with `aletheore config crash-reporting off`.[/dim]"
                 )
