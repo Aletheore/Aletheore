@@ -57,7 +57,7 @@ dependencies = [
     # ImportError at import time.
     "mcp>=2.0,<3.0",
     "openai>=2.0,<4.0",
-    "python-toon>=0.1.3,<0.2",
+    "python-toon>=0.1.3,<0.3",
     "pyyaml>=6.0,<7.0",
     "typer>=0.24,<0.28",
     # click only ever arrives transitively via typer, but pinned explicitly
