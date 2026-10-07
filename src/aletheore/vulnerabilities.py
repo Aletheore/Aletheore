@@ -365,10 +365,20 @@ def _strip_xml_namespace_prefixes(root: ElementTree.Element) -> ElementTree.Elem
 def _maven_resolve_property(version: str | None, properties: dict[str, str]) -> str | None:
     if not version:
         return None
-    match = re.fullmatch(r"\$\{([^}]+)\}", version.strip())
-    if match:
-        return properties.get(match.group(1))
-    return version.strip()
+    value: str | None = version.strip()
+    # A property may itself be defined as another property (<b>${a}</b>);
+    # follow the chain, cycle-safe, instead of stopping after one hop.
+    seen: set[str] = set()
+    while value:
+        match = re.fullmatch(r"\$\{([^}]+)\}", value)
+        if not match:
+            return value
+        key = match.group(1)
+        if key in seen:
+            return None
+        seen.add(key)
+        value = properties.get(key)
+    return None
 
 
 def _swift_package_url_to_osv_name(location: str) -> str | None:
