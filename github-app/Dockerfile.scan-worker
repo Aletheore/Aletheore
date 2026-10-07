@@ -9,6 +9,16 @@ RUN pip install --no-cache-dir ./src
 COPY github-app/requirements.lock.txt .
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock.txt
 
+# Semgrep lives in its own venv: every semgrep release that allows
+# protobuf>=5 (CVE-2026-0994 fix) pins mcp==1.x, but aletheore requires
+# mcp>=2, so they cannot share an environment. semgrep is only ever run as
+# a subprocess CLI (static_analysis/semgrep_scanner.py via shutil.which),
+# so a symlink onto PATH is all the scanner needs.
+COPY github-app/requirements-semgrep.lock.txt .
+RUN python -m venv /opt/semgrep \
+    && /opt/semgrep/bin/pip install --no-cache-dir --require-hashes -r requirements-semgrep.lock.txt \
+    && ln -s /opt/semgrep/bin/semgrep /usr/local/bin/semgrep
+
 COPY github-app/app_server ./app_server
 COPY github-app/scan_worker ./scan_worker
 

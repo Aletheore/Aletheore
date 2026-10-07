@@ -1207,12 +1207,19 @@ def test_progress_printer_finish_is_a_no_op_when_nothing_was_in_place(capsys):
 
 
 def test_elapsed_ticker_updates_in_place_on_a_tty(capsys):
+    # Wait for the ticker thread to actually print a frame instead of
+    # sleeping a fixed ~2 intervals: on a loaded CI runner the thread can
+    # miss that short window, leaving only the final newline in the output.
+    seen = ""
     with _ElapsedTicker("Waiting", interval=0.05, is_tty=True):
-        time.sleep(0.12)
+        deadline = time.monotonic() + 10.0
+        while "elapsed" not in seen and time.monotonic() < deadline:
+            time.sleep(0.02)
+            seen += capsys.readouterr().out
 
-    captured = capsys.readouterr()
-    assert "Waiting" in captured.out
-    assert "elapsed" in captured.out
+    seen += capsys.readouterr().out
+    assert "Waiting" in seen
+    assert "elapsed" in seen
 
 
 def test_elapsed_ticker_prints_start_and_done_once_when_not_a_tty(capsys):

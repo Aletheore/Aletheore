@@ -12,12 +12,12 @@
     "lint:licenses": "cd src && pip-licenses --fail-on \"GPL;AGPL\" --format=plain-vertical && cd ../github-app && pip-licenses --fail-on \"GPL;AGPL\" --format=plain-vertical"
   },
   "devDependencies": {
-    "cspell": "10.3.4",
+    "cspell": "10.3.6",
     "markdownlint-cli2": "^0.23.3",
     "prettier": "3.9.9"
   },
   "overrides": {
-    "js-yaml": "^5.2.2",
+    "js-yaml": "^5.4.2",
     "smol-toml": "^1.7.1"
   }
 }

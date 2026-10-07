@@ -1151,10 +1151,42 @@ def _patch_spawn(monkeypatch, startup_delay, send_ready=True):
         def Queue(self):
             return queue_module.Queue()
 
+        def Event(self):
+            import threading
+
+            return threading.Event()
+
         def Process(self, target, args):
             return _FakeSpawnProcess(target, args, startup_delay, send_ready)
 
     monkeypatch.setattr(mcp_server.multiprocessing, "get_context", lambda method: FakeContext())
+
+
+def test_regex_search_worker_signals_ready_before_it_starts_searching(monkeypatch):
+    # The ready signal must already be set when the (possibly GIL-hogging)
+    # search begins. Sent through the result Queue instead, its background
+    # feeder thread can be starved by a catastrophic regex and the parent
+    # never sees it - the CI failure of the catastrophic-backtracking test
+    # on a slow runner, reported as "failed to start" after the full wait.
+    import queue as queue_module
+    import threading
+
+    from aletheore import mcp_server
+
+    ready = threading.Event()
+    results = queue_module.Queue()
+    seen = {}
+
+    def fake_search(*args):
+        seen["ready_when_search_started"] = ready.is_set()
+        return {"matches": []}
+
+    monkeypatch.setattr(mcp_server, "_search_files", fake_search)
+
+    mcp_server._run_search(Path("."), "x", True, None, results, ready)
+
+    assert seen["ready_when_search_started"] is True
+    assert results.get_nowait() == {"matches": []}
 
 
 @pytest.mark.asyncio
