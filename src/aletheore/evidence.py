@@ -816,6 +816,32 @@ def _atomic_write_text(path: Path, text: str) -> None:
         temp_path.unlink(missing_ok=True)
 
 
+# air.toon is written with every scan up to this much compact air.json (well
+# under a second of TOON encoding); above it, ensure_air_toon builds it on
+# first use by `aletheore audit` instead of slowing down every scan.
+TOON_INLINE_MAX_JSON_CHARS = 50_000_000
+
+
+def ensure_air_toon(repo_path: Path) -> Path:
+    """Return .aletheore/air.toon, building it from air.json first if it is
+    missing or older than air.json (large repos skip it during scan)."""
+    aletheore_dir = Path(repo_path) / ".aletheore"
+    json_path = aletheore_dir / "air.json"
+    toon_path = aletheore_dir / "air.toon"
+    if not json_path.exists():
+        return toon_path
+    if toon_path.exists() and toon_path.stat().st_mtime >= json_path.stat().st_mtime:
+        return toon_path
+    evidence = json.loads(json_path.read_text(encoding="utf-8"))
+    try:
+        _atomic_write_text(toon_path, to_toon(evidence))
+    except ToonEncodingError:
+        # Same contract as write_evidence: no TOON copy, and the adapter that
+        # needs it reports a clean "could not read evidence" error.
+        pass
+    return toon_path
+
+
 def write_evidence(evidence: dict, repo_path: Path) -> Path:
     # Usually already a no-op by the time evidence written via
     # scan_repository() gets here - see the call at the top of
@@ -837,7 +863,10 @@ def write_evidence(evidence: dict, repo_path: Path) -> Path:
     # that a UTF-8 reader (this MCP server, CI, a different OS) then can't
     # decode correctly - the same class of bug already handled with an
     # explicit encoding a few lines up in _ensure_aletheore_dir_gitignored.
-    _atomic_write_text(output_path, json.dumps(evidence, indent=2))
+    # Compact, not indent=2: on the Linux kernel the indented form was 1.3GB
+    # and 42s to encode, compact is 720MB and 6s. Every reader parses it.
+    evidence_text = json.dumps(evidence, separators=(",", ":"))
+    _atomic_write_text(output_path, evidence_text)
 
     # A second, TOON-encoded copy exists specifically for the audit command's
     # coding-agent adapter to read instead of the JSON one - the agent's own
@@ -848,8 +877,15 @@ def write_evidence(evidence: dict, repo_path: Path) -> Path:
     # JSON), so this is additive, not a replacement - a TOON encoding
     # failure must never take scan down with it, since air.json (the file
     # that actually matters) is already written by this point.
+    toon_path = aletheore_dir / "air.toon"
+    if len(evidence_text) > TOON_INLINE_MAX_JSON_CHARS:
+        # Too big to encode on every scan (199s on the Linux kernel's evidence
+        # for a file only `audit` reads): drop any copy from an earlier scan so
+        # it can't go stale, and let ensure_air_toon build it when audit runs.
+        toon_path.unlink(missing_ok=True)
+        return output_path
     try:
-        _atomic_write_text(aletheore_dir / "air.toon", to_toon(evidence))
+        _atomic_write_text(toon_path, to_toon(evidence))
     except ToonEncodingError as exc:
         warnings.warn(
             f"could not write .aletheore/air.toon ({exc}) - air.json (the canonical "

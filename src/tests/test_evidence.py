@@ -723,6 +723,57 @@ def test_write_evidence_also_writes_a_toon_copy(tmp_path):
     assert toon.decode(toon_path.read_text()) == evidence
 
 
+def test_write_evidence_writes_compact_json(tmp_path):
+    repo = make_repo(tmp_path)
+    evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
+    text = write_evidence(evidence, repo).read_text()
+    assert "\n" not in text and ": " not in text.split('"repo_path"')[0]
+    assert json.loads(text) == json.loads(json.dumps(evidence))
+
+
+def test_large_evidence_defers_air_toon_until_audit_needs_it(tmp_path, monkeypatch):
+    # Huge repos (the Linux kernel: 199s of TOON encoding) skip air.toon during
+    # scan, drop any stale copy, and ensure_air_toon builds it on first use.
+    import toon
+
+    import aletheore.evidence as ev
+
+    repo = make_repo(tmp_path)
+    evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
+    toon_path = repo / ".aletheore" / "air.toon"
+    toon_path.parent.mkdir(parents=True, exist_ok=True)
+    toon_path.write_text("stale copy from an earlier scan")
+
+    monkeypatch.setattr(ev, "TOON_INLINE_MAX_JSON_CHARS", 10)
+    write_evidence(evidence, repo)
+    assert not toon_path.exists()
+
+    assert ev.ensure_air_toon(repo) == toon_path
+    assert toon.decode(toon_path.read_text()) == json.loads(json.dumps(evidence))
+
+    built_at = toon_path.stat().st_mtime_ns
+    ev.ensure_air_toon(repo)
+    assert toon_path.stat().st_mtime_ns == built_at
+
+
+def test_ensure_air_toon_rebuilds_when_air_json_is_newer(tmp_path):
+    import os
+
+    import toon
+
+    from aletheore.evidence import ensure_air_toon
+
+    repo = make_repo(tmp_path)
+    evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
+    write_evidence(evidence, repo)
+    json_path = repo / ".aletheore" / "air.json"
+    toon_path = repo / ".aletheore" / "air.toon"
+    toon_path.write_text("outdated")
+    os.utime(toon_path, (1, 1))
+    ensure_air_toon(repo)
+    assert toon.decode(toon_path.read_text()) == json.loads(json_path.read_text())
+
+
 def test_write_evidence_pins_utf8_encoding_for_both_air_json_and_air_toon(tmp_path, monkeypatch):
     # Real bug: both write_text() calls in write_evidence() used to omit
     # encoding entirely, falling back to Path.write_text()'s
