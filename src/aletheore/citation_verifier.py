@@ -48,10 +48,18 @@ _CITATION_PATTERN = re.compile(r"`?([\w./-]+\.[A-Za-z0-9]+):(\d+)`?")
 # _CITATION_PATTERN's "name.ext:digits" shape, with the TLD read as a file
 # extension. They are infrastructure addresses, not citations, and treating
 # them as unverifiable citations flips a whole report to "not all verified".
-_HOST_TLDS = frozenset(
-    "com org net io dev app ai co us uk de fr eu in cloud local internal lan "
-    "localhost test example edu gov info biz xyz".split()
-)
+#
+# Deliberately excludes TLDs that are also real, common single-file
+# extensions in the kind of repos this product scans - "in" (pip-tools'
+# requirements.in, autotools' configure.in/Makefile.in), "test", "info",
+# "app", "dev", "local" (".env.local"-style per-environment dotfiles),
+# "co", "biz", "xyz" - a genuine citation to one of those files, not
+# already in known_paths because it isn't a parseable source extension,
+# would otherwise be silently dropped as a "host" instead of extracted:
+# the exact failure mode this set exists to fix, just for a different
+# input shape. _looks_like_host's own known_paths check still wins for
+# any of these that *is* in the scan's own inventory.
+_HOST_TLDS = frozenset("com org net io ai us uk de fr eu cloud internal lan localhost example edu gov".split())
 _IPV4 = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
 
 
