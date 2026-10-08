@@ -1469,6 +1469,43 @@ def test_semantic_checker_finds_shared_state_called_concurrently():
     assert "shared mutable instance state" in findings[0]["issue"]
 
 
+def test_semantic_checker_finds_shared_state_submitted_to_a_pool():
+    findings = find_semantic_regressions(
+        "--- caller.py ---\n@@ -1,1 +1,3 @@\n+with ThreadPoolExecutor() as pool:\n+    futures = [pool.submit(worker, v) for v in values]\n",
+        {"caller.py": "worker(value)"},
+        "--- referenced definition (not part of this diff): worker.py:worker ---\nself.cache = {}",
+    )
+
+    assert len(findings) == 1
+    assert "shared mutable instance state" in findings[0]["issue"]
+
+
+def test_semantic_checker_ignores_a_constructor_near_concurrency():
+    # Seen on PR #985: every __init__ assigns self.x, and constructing an object
+    # makes a fresh instance; a concurrent import elsewhere in the hunk is not
+    # the object being shared across workers.
+    for name, dependency in (("__init__", "self._conn = connect(path)"), ("FileCache", "class FileCache:\n    def __init__(self, path):\n        self._conn = connect(path)")):
+        findings = find_semantic_regressions(
+            f"--- caller.py ---\n@@ -1,1 +1,4 @@\n+from concurrent.futures import ProcessPoolExecutor\n+cache = {name}(path)\n+with ProcessPoolExecutor() as pool:\n+    pool.map(extract, jobs)\n",
+            {"caller.py": f"cache = {name}(path)"},
+            f"--- referenced definition (not part of this diff): cache.py:{name} ---\n{dependency}",
+        )
+
+        assert findings == [], name
+
+
+def test_semantic_checker_ignores_state_mutation_not_called_concurrently():
+    # The executor runs a different function; the mutating one is only called
+    # sequentially, so nothing is shared across workers.
+    findings = find_semantic_regressions(
+        "--- caller.py ---\n@@ -1,1 +1,4 @@\n+with ThreadPoolExecutor() as pool:\n+    results = list(pool.map(fetch, urls))\n+store.record(results)\n",
+        {"caller.py": "store.record(results)"},
+        "--- referenced definition (not part of this diff): store.py:record ---\nself.rows += results",
+    )
+
+    assert findings == []
+
+
 def test_semantic_checker_finds_double_scaling():
     findings = find_semantic_regressions(
         "--- caller.py ---\n@@ -1,1 +1,1 @@\n+score = ratio(value) * 100\n",
@@ -4353,3 +4390,14 @@ def test_per_file_generation_without_shared_context_behaves_exactly_as_before():
     # Unchanged legacy behavior: with no other files visible, the echoed name is ignored and the
     # real filename is force-set (findings are NOT dropped for a mismatched echo).
     assert {f["file"] for f in findings} == {"schema.prisma", "migration.sql"}
+
+
+def test_semantic_checker_finds_shared_state_run_on_threads():
+    findings = find_semantic_regressions(
+        "--- caller.py ---\n@@ -1,1 +1,3 @@\n+threads = [Thread(target=worker, args=(v,)) for v in values]\n+for t in threads: t.start()\n",
+        {"caller.py": "worker(value)"},
+        "--- referenced definition (not part of this diff): worker.py:worker ---\nself.count += 1",
+    )
+
+    assert len(findings) == 1
+    assert "shared mutable instance state" in findings[0]["issue"]

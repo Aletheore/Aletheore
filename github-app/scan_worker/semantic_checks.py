@@ -332,8 +332,24 @@ def _check_reference_at_call(
                 "Pass the unscaled ratio or remove one of the two percent conversions.",
             )
 
-    if re.search(r"self\.[A-Za-z_]\w*\s*(?:\+=|=)", dependency) and re.search(
-        r"(?:ThreadPoolExecutor|pool\.map|Executor|concurrent)", "\n".join(added_lines)
+    # Only when this callable is itself handed to the concurrency on the same
+    # changed line (pool.map(name, ...), .submit(name, ...), Thread(target=name)),
+    # not when a concurrent import or an unrelated pool.map elsewhere in the
+    # hunk merely appears near a call. And never for a constructor: every
+    # __init__ assigns self.x, and constructing makes a fresh instance, the
+    # opposite of shared state (both false positives seen on PR #985).
+    is_constructor = name in ("__init__", "__new__", "__post_init__") or re.search(
+        rf"^\s*class\s+{re.escape(name)}\b", dependency, re.MULTILINE
+    )
+    called_concurrently = any(
+        re.search(r"(?:\.map|\.submit|\.apply_async|\.starmap|Thread)\s*\(", line)
+        and re.search(rf"(?:\(|,|=)\s*{re.escape(name)}\b", line)
+        for line in added_lines
+    )
+    if (
+        not is_constructor
+        and called_concurrently
+        and re.search(r"self\.[A-Za-z_]\w*\s*(?:\+=|=)", dependency)
     ):
         return _finding(
             file,
