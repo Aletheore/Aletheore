@@ -970,3 +970,23 @@ def test_six_detectors_identical_output_with_shared_walk(tmp_path):
     assert _detect_terraform_files(repo, shared_tree) == _detect_terraform_files(repo)
     assert _detect_helm_charts(repo, shared_tree) == _detect_helm_charts(repo)
     assert _detect_declared_env_vars(repo, shared_tree) == _detect_declared_env_vars(repo)
+
+
+def test_count_lines_matches_text_mode_iteration(tmp_path):
+    from aletheore.scanner.detect import _count_lines
+
+    samples = [b"", b"a", b"a\n", b"a\nb", b"a\r\nb\r\n", b"a\rb\rc", b"\n\n\n", b"x\r\n\ry\n\rz", "é\nü".encode()]
+    for i, data in enumerate(samples):
+        path = tmp_path / f"s{i}.txt"
+        path.write_bytes(data)
+        expected = sum(1 for _ in path.open("r", encoding="utf-8", errors="ignore"))
+        assert _count_lines(data) == expected, data
+
+
+def test_kubernetes_detection_skips_yaml_that_cannot_be_a_manifest(tmp_path):
+    from aletheore.scanner.detect import detect_infrastructure
+
+    (tmp_path / "deploy.yaml").write_text("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n")
+    (tmp_path / "binding.yaml").write_text("title: Some devicetree binding\nproperties:\n  compatible: {}\n")
+    (tmp_path / "broken.yaml").write_text("this: [is not: valid yaml\n")
+    assert detect_infrastructure(tmp_path)["kubernetes_manifests"] == ["deploy.yaml"]

@@ -15,11 +15,19 @@ Everything is read from the syntax tree, never inferred, so each entry is a real
 summary counts every site, and `truncated` says when a list was cut.
 """
 import re
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from tree_sitter import Node, Parser
 
-from aletheore.scanner.graph import LANGUAGE_BY_EXTENSION, _iter_source_files, _rel
+from aletheore.scanner.graph import (
+    LANGUAGE_BY_EXTENSION,
+    PARALLEL_PARSE_MIN_FILES,
+    _available_parallelism,
+    _iter_source_files,
+    _parallel_parse_disabled,
+    _rel,
+)
 
 MAX_ERROR_TYPES = 200
 MAX_RAISE_SITES = 500
@@ -496,34 +504,66 @@ def _error_type_names(classes: list[dict]) -> set[str]:
     return known
 
 
+# Per-process parser cache: one Parser per language, reused across every file
+# this process handles (the main process when sequential, each worker when
+# parallel).
+_parsers: dict[str, Parser] = {}
+
+
+def _extract_one(job: tuple[Path, str]) -> tuple[list, list, list]:
+    path, rel = job
+    language_name, language = LANGUAGE_BY_EXTENSION[path.suffix]
+    parser = _parsers.get(language_name)
+    if parser is None:
+        parser = Parser()
+        parser.language = language
+        _parsers[language_name] = parser
+    classes: list[dict] = []
+    raises: list[dict] = []
+    handlers: list[dict] = []
+    try:
+        source = path.read_bytes()
+    except OSError:
+        return classes, raises, handlers
+    root = parser.parse(source).root_node
+    if language_name == "cpp":
+        _cpp(root, rel, classes, raises, handlers, source.decode(errors="replace"))
+    else:
+        _EXTRACTORS[language_name](root, rel, classes, raises, handlers)
+    return classes, raises, handlers
+
+
 def map_error_handling(repo_path: Path, ignored_paths: list[str] | None = None) -> dict:
-    parsers: dict[str, Parser] = {}
     classes: list[dict] = []
     raises: list[dict] = []
     handlers: list[dict] = []
 
+    # Plain C (.c) is skipped: it has no classes, throw or catch, so walking
+    # every node of every .c file found nothing while costing ~half of this
+    # stage on C-heavy repos (the Linux kernel has ~37k .c files). C++ in
+    # .cpp/.cc/.h/.hpp still goes through _cpp.
+    jobs: list[tuple[Path, str]] = []
     for path in _iter_source_files(repo_path, ignored_paths):
         entry = LANGUAGE_BY_EXTENSION.get(path.suffix)
-        if entry is None or (entry[0] not in _EXTRACTORS and entry[0] not in ("c", "cpp")):
+        if entry is None or (entry[0] not in _EXTRACTORS and entry[0] != "cpp"):
             continue
         rel = _rel(repo_path, path)
-        if rel is None:
-            continue
-        language_name, language = entry
-        parser = parsers.get(language_name)
-        if parser is None:
-            parser = Parser()
-            parser.language = language
-            parsers[language_name] = parser
-        try:
-            source = path.read_bytes()
-        except OSError:
-            continue
-        root = parser.parse(source).root_node
-        if language_name in ("c", "cpp"):
-            _cpp(root, rel, classes, raises, handlers, source.decode(errors="replace"))
-        else:
-            _EXTRACTORS[language_name](root, rel, classes, raises, handlers)
+        if rel is not None:
+            jobs.append((path, rel))
+
+    # Each file is independent, so large repos fan out across cores with the
+    # same threshold, opt-out and core-count logic as build_module_graph's
+    # parallel parse. Classes are merged in input order, so output is identical
+    # either way.
+    if len(jobs) >= PARALLEL_PARSE_MIN_FILES and not _parallel_parse_disabled():
+        with ProcessPoolExecutor(max_workers=_available_parallelism()) as executor:
+            results = list(executor.map(_extract_one, jobs, chunksize=32))
+    else:
+        results = [_extract_one(job) for job in jobs]
+    for file_classes, file_raises, file_handlers in results:
+        classes.extend(file_classes)
+        raises.extend(file_raises)
+        handlers.extend(file_handlers)
 
     error_names = _error_type_names(classes)
     error_types = [

@@ -332,8 +332,8 @@ def test_scan_repository_honors_git_history_depth_cap_env_var(tmp_path, monkeypa
     # var (set before invoking `aletheore scan` as a subprocess, see
     # scan_worker/jobs.py's _run_scan) actually reaches analyze_git - this
     # is what keeps a cold sync of an oversized repo from OOMing before any
-    # persistence-layer code even runs. Unset by default for a developer
-    # scanning their own repo directly.
+    # persistence-layer code even runs. Local scans default to the same
+    # 50k cap (test below); the env var overrides it.
     repo = make_repo(tmp_path)
     for i in range(4):
         (repo / "main.py").write_text(f"def hello():\n    return {i}\n")
@@ -353,7 +353,7 @@ def test_scan_repository_honors_secrets_history_depth_cap_env_var(tmp_path, monk
     # Separate env var from the git-graph cap above - `git log -p` (full
     # diffs, used for secrets-in-history) is far more expensive per commit
     # than the graph engine's --name-only walk, so it's tunable
-    # independently. Unset by default for a developer scanning locally.
+    # independently. Local scans default to the same 20k cap as hosted.
     repo = make_repo(tmp_path)
     monkeypatch.setenv("ALETHEORE_SECRETS_HISTORY_DEPTH_CAP", "7")
     with (
@@ -1370,3 +1370,24 @@ def test_rails_association_read_skips_oversized_files_and_respects_total_budget(
 
     # big.rb exceeds the per-file cap; also_small.rb would exceed the total budget.
     assert set(mock_edges.call_args.args[0]) == {"small.rb"}
+
+
+def test_local_scans_default_to_the_hosted_history_caps(monkeypatch):
+    # A first local scan of a huge repo (the Linux kernel, ~1.46M commits)
+    # stops at the same depths the hosted worker uses instead of walking
+    # all of history; 0 or "none" opts back into full history.
+    from aletheore.evidence import _git_history_depth_cap, _secrets_history_depth_cap
+
+    monkeypatch.delenv("ALETHEORE_GIT_HISTORY_DEPTH_CAP", raising=False)
+    monkeypatch.delenv("ALETHEORE_SECRETS_HISTORY_DEPTH_CAP", raising=False)
+    assert _git_history_depth_cap() == 50_000
+    assert _secrets_history_depth_cap() == 20_000
+
+    for full in ("0", "none", "None", "off"):
+        monkeypatch.setenv("ALETHEORE_GIT_HISTORY_DEPTH_CAP", full)
+        monkeypatch.setenv("ALETHEORE_SECRETS_HISTORY_DEPTH_CAP", full)
+        assert _git_history_depth_cap() is None
+        assert _secrets_history_depth_cap() is None
+
+    monkeypatch.setenv("ALETHEORE_GIT_HISTORY_DEPTH_CAP", "not-a-number")
+    assert _git_history_depth_cap() == 50_000

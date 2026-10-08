@@ -149,14 +149,31 @@ def load_evidence(repo_path: Path) -> dict:
 _GIT_HISTORY_DEPTH_CAP_ENV = "ALETHEORE_GIT_HISTORY_DEPTH_CAP"
 
 
-def _git_history_depth_cap() -> int | None:
-    raw = os.environ.get(_GIT_HISTORY_DEPTH_CAP_ENV)
+# Local scans default to the same caps the hosted scan worker sets
+# (scan_worker/jobs.py), so a very large repo's first local scan stops at the
+# latest 50k commits for hotspots/ownership and 20k for the secrets-history
+# sweep instead of walking all of it (the Linux kernel has ~1.46M commits).
+# The output flags history_depth_limited when a cap applies. Set either env
+# var to 0 or "none" for full history.
+DEFAULT_GIT_HISTORY_DEPTH_CAP = 50_000
+DEFAULT_SECRETS_HISTORY_DEPTH_CAP = 20_000
+
+
+def _depth_cap_from_env(name: str, default: int) -> int | None:
+    raw = os.environ.get(name)
     if not raw:
+        return default
+    if raw.strip().lower() in ("0", "none", "off", "unlimited"):
         return None
     try:
-        return int(raw)
+        value = int(raw)
     except ValueError:
-        return None
+        return default
+    return value if value > 0 else None
+
+
+def _git_history_depth_cap() -> int | None:
+    return _depth_cap_from_env(_GIT_HISTORY_DEPTH_CAP_ENV, DEFAULT_GIT_HISTORY_DEPTH_CAP)
 
 
 # Separate env var from the git-graph cap above: `git log -p` (full unified
@@ -348,13 +365,7 @@ def _write_local_scan_cache(
 
 
 def _secrets_history_depth_cap() -> int | None:
-    raw = os.environ.get(_SECRETS_HISTORY_DEPTH_CAP_ENV)
-    if not raw:
-        return None
-    try:
-        return int(raw)
-    except ValueError:
-        return None
+    return _depth_cap_from_env(_SECRETS_HISTORY_DEPTH_CAP_ENV, DEFAULT_SECRETS_HISTORY_DEPTH_CAP)
 
 
 def _noop_progress(_message: str) -> None:

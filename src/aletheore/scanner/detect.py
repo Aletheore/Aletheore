@@ -8,6 +8,10 @@ import yaml
 
 from aletheore.repo_config import is_ignored
 
+# libyaml's C loader when PyYAML was built with it (same safe constructors,
+# several times faster on big YAML), pure-Python SafeLoader otherwise.
+_YAML_SAFE_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
 IGNORED_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".aletheore",
     ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".cache",
@@ -311,6 +315,17 @@ def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
             yield path
 
 
+def _count_lines(data: bytes) -> int:
+    """Same count as iterating the file in text mode (universal newlines:
+    \n, \r\n and a lone \r each end a line; a final unterminated line counts),
+    without decoding it - decoding every source file line by line was most of
+    detect_languages' time on large repos (~25s on the Linux kernel)."""
+    lines = data.count(b"\n") + data.count(b"\r") - data.count(b"\r\n")
+    if data and data[-1:] not in (b"\n", b"\r"):
+        lines += 1
+    return lines
+
+
 def detect_languages(repo_path: Path, ignored_paths: list[str] | None = None) -> list[dict]:
     # Local import: graph.py already imports IGNORED_DIRS from this module, so a
     # module-level import here would be circular. LANGUAGE_BY_EXTENSION is the
@@ -330,7 +345,7 @@ def detect_languages(repo_path: Path, ignored_paths: list[str] | None = None) ->
         entry = counts.setdefault(language, {"name": language, "file_count": 0, "loc": 0})
         entry["file_count"] += 1
         try:
-            entry["loc"] += sum(1 for _ in path.open("r", encoding="utf-8", errors="ignore"))
+            entry["loc"] += _count_lines(path.read_bytes())
         except OSError:
             continue
     # counts preserves _iter_source_files' filesystem-walk order, which is
@@ -561,10 +576,14 @@ def _detect_kubernetes_manifests(repo_path: Path, pruned_tree=None) -> list[str]
             continue
         if path.suffix not in YAML_EXTENSIONS:
             continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        # A manifest needs both keys, so skip parsing any YAML that can't be
+        # one: on the Linux kernel this skipped thousands of devicetree
+        # bindings that were each fully parsed for nothing.
+        if "apiVersion" not in text or "kind" not in text:
+            continue
         try:
-            docs = list(
-                yaml.safe_load_all(path.read_text(encoding="utf-8", errors="ignore"))
-            )
+            docs = list(yaml.load_all(text, Loader=_YAML_SAFE_LOADER))
         except yaml.YAMLError:
             continue
         for doc in docs:
