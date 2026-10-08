@@ -334,6 +334,7 @@ def _check_reference_at_call(
 
     # Only when this callable is itself handed to the concurrency on the same
     # changed line (pool.map(name, ...), .submit(name, ...), Thread(target=name)),
+    # bound or not (self.name, obj.name),
     # not when a concurrent import or an unrelated pool.map elsewhere in the
     # hunk merely appears near a call. And never for a constructor: every
     # __init__ assigns self.x, and constructing makes a fresh instance, the
@@ -343,7 +344,7 @@ def _check_reference_at_call(
     )
     called_concurrently = any(
         re.search(r"(?:\.map|\.submit|\.apply_async|\.starmap|Thread)\s*\(", line)
-        and re.search(rf"(?:\(|,|=)\s*{re.escape(name)}\b", line)
+        and re.search(rf"(?:\(|,|=)\s*(?:\w+\.)*{re.escape(name)}\b", line)
         for line in added_lines
     )
     if (

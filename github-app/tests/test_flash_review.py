@@ -4392,6 +4392,25 @@ def test_per_file_generation_without_shared_context_behaves_exactly_as_before():
     assert {f["file"] for f in findings} == {"schema.prisma", "migration.sql"}
 
 
+def test_semantic_checker_finds_shared_state_for_a_bound_method_handed_to_a_pool():
+    # pool.map(self.worker, ...) / Thread(target=self.run): the callable is
+    # preceded by an attribute prefix, which the first version of the
+    # called_concurrently pattern missed (Flash Review finding on PR #987).
+    for line in (
+        "futures = list(pool.map(self.worker, values))",
+        "t = Thread(target=self.worker, args=(v,))",
+        "pool.submit(obj.worker, v)",
+    ):
+        findings = find_semantic_regressions(
+            f"--- caller.py ---\n@@ -1,1 +1,2 @@\n+with ThreadPoolExecutor() as pool:\n+    {line}\n",
+            {"caller.py": "worker(value)"},
+            "--- referenced definition (not part of this diff): worker.py:worker ---\nself.count += 1",
+        )
+
+        assert len(findings) == 1, line
+        assert "shared mutable instance state" in findings[0]["issue"]
+
+
 def test_semantic_checker_finds_shared_state_run_on_threads():
     findings = find_semantic_regressions(
         "--- caller.py ---\n@@ -1,1 +1,3 @@\n+threads = [Thread(target=worker, args=(v,)) for v in values]\n+for t in threads: t.start()\n",
