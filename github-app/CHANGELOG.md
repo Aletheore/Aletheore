@@ -18,6 +18,17 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-10-08
+
+Commit `e3182a9f` (#987), tagged `github-app-deploy-2026-10-08`: 238 commits and 70 merged PRs since
+`6e921475` (2026-10-04). One migration, `072_llm_spend_reservations.sql`. All six app services rebuilt
+and recreated, including `jina-embed`, with `app-server` rolled first so the migration applied before
+the workers ran the new code. Sentry error tracking is live (`SENTRY_DSN` in `.env`). Headlines: the
+spend-reservation leak fixes and crash sweep (#917, #918), Flash Review's incremental-mode and
+transient-error fixes (#921, #968, #971), a long list of scanner correctness fixes and the large-repo
+scan performance work (#985), PMD 7.28.0 for CVE-2026-75140 (#964), and Sentry (#961). See the
+snapshot in `docs/operations/DEPLOYMENT-VERIFICATION.md` for the grouped list and what was verified live.
+
 ## 2026-10-02
 
 Commit `efa1f0e` (#898), no migrations. `app-server`, `scan-worker`, `scan-worker-2`,
