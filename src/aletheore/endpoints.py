@@ -1912,8 +1912,14 @@ def map_api_endpoints(
         parsers[name] = parser
 
     python_source_roots = _python_source_roots(repo_path)
+    # Walked once, not once per pass below - the FastAPI router-prefix
+    # prescan and the main extraction loop each used to call
+    # _iter_source_files independently, two full os.walk + ignore-pattern
+    # + sort passes over the same tree per scan (same fix as
+    # build_module_graph's own four-call version of this).
+    source_paths = list(_iter_source_files(repo_path, ignored_paths))
     cross_file_router_mounts: dict[tuple[str, str], list[str]] = {}
-    for path in _iter_source_files(repo_path, ignored_paths):
+    for path in source_paths:
         if path.suffix != ".py":
             continue
         source = path.read_bytes()
@@ -1939,7 +1945,7 @@ def map_api_endpoints(
     # changed - see docs/audits/Claude_Audit.md finding 20.
     cross_file_mount_defining_files = {defining_file for defining_file, _router in cross_file_router_mounts}
 
-    for path in _iter_source_files(repo_path, ignored_paths):
+    for path in source_paths:
         rel_path = _rel(repo_path, path)
 
         if (
