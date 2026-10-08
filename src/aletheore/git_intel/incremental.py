@@ -253,15 +253,20 @@ def stream_commit_touches(
         raise GitLogStreamError(f"git log {rev_range} failed with exit code {returncode}: {stderr}")
 
 
-def compute_repo_key(repo_path: Path) -> str:
-    """Stable identity for a repo across scans, independent of which local
-    directory it happens to be cloned into or which installation is
-    scanning it. Root commit SHA (see analyzer._first_commit_at for why a
-    repo can have more than one - lexicographically smallest is used here
-    to stay deterministic without needing commit dates) plus the origin
-    remote URL where one exists; falls back to the absolute local path for
-    a repo with no remote (e.g. `git init`, never pushed anywhere).
-    """
+# `git rev-list --max-parents=0 HEAD` walks all of history (16s on the Linux
+# kernel's 1.46M commits) and a scan asks for the repo key several times, so
+# the root commit is memoized per (repo, HEAD): it can't change without HEAD
+# changing. The remote URL below is cheap and read fresh every time.
+_root_commit_cache: dict[tuple[str, str], str] = {}
+
+
+def _root_commit_key(repo_path: Path) -> str:
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo_path, capture_output=True, text=True, errors="ignore"
+    ).stdout.strip()
+    cache_key = (str(Path(repo_path).resolve()), head)
+    if head and cache_key in _root_commit_cache:
+        return _root_commit_cache[cache_key]
     roots_result = subprocess.run(
         ["git", "rev-list", "--max-parents=0", "HEAD"],
         cwd=repo_path,
@@ -271,6 +276,21 @@ def compute_repo_key(repo_path: Path) -> str:
     )
     root_shas = sorted(line for line in roots_result.stdout.strip().splitlines() if line)
     root_key = root_shas[0] if root_shas else "no-commits"
+    if head:
+        _root_commit_cache[cache_key] = root_key
+    return root_key
+
+
+def compute_repo_key(repo_path: Path) -> str:
+    """Stable identity for a repo across scans, independent of which local
+    directory it happens to be cloned into or which installation is
+    scanning it. Root commit SHA (see analyzer._first_commit_at for why a
+    repo can have more than one - lexicographically smallest is used here
+    to stay deterministic without needing commit dates) plus the origin
+    remote URL where one exists; falls back to the absolute local path for
+    a repo with no remote (e.g. `git init`, never pushed anywhere).
+    """
+    root_key = _root_commit_key(repo_path)
 
     remote_result = subprocess.run(
         ["git", "remote", "get-url", "origin"],

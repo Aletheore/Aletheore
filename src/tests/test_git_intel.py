@@ -733,3 +733,29 @@ def test_parse_branches_computes_ahead_behind_without_a_subprocess_per_branch(tm
     assert by_name["feature/old"]["behind_main"] == 1
     assert by_name["extra0"]["ahead_of_main"] == 0
     assert per_branch.call_count == 0
+
+
+def test_repo_key_root_commit_lookup_is_memoized_per_head(tmp_path):
+    # The root-commit walk covers all of history (16s on the Linux kernel) and
+    # a scan asks for the key several times; it reruns only when HEAD moves.
+    from aletheore.git_intel import incremental
+
+    repo = make_git_repo(tmp_path)
+    incremental._root_commit_cache.clear()
+    real_run = incremental.subprocess.run
+    walks = []
+
+    def counting_run(args, *a, **k):
+        if args[:2] == ["git", "rev-list"]:
+            walks.append(args)
+        return real_run(args, *a, **k)
+
+    with patch.object(incremental.subprocess, "run", side_effect=counting_run):
+        first = incremental.compute_repo_key(repo)
+        assert incremental.compute_repo_key(repo) == first
+        assert len(walks) == 1
+        (repo / "memo.txt").write_text("head moves")
+        run(repo, "add", "memo.txt")
+        commit(repo, "memo test", "2026-07-01T00:00:00+00:00")
+        assert incremental.compute_repo_key(repo) == first
+        assert len(walks) == 2
