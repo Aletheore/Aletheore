@@ -169,11 +169,16 @@ async def handle_unexpected_exception(request: Request, exc: Exception) -> JSONR
     # on the scope (defensive - every path that reaches this handler by
     # raising from within an endpoint has already matched one).
     route_path = getattr(request.scope.get("route"), "path", None) or request.url.path
+    # already_captured=True: the .exception() call above already logged
+    # this with exc_info, which LoggingIntegration auto-captures as a
+    # Sentry event on its own - without the flag, send_error_alert's own
+    # capture_exception() would report this same failure twice.
     await asyncio.to_thread(
         send_error_alert,
         f"app_server:{route_path}",
         exc,
         f"{request.method} {request.url.path}",
+        already_captured=True,
     )
     if request.url.path == "/webhook":
         # /webhook never returns a 5xx any other way - it either succeeds,

@@ -65,10 +65,21 @@ def _should_alert(key: str) -> bool:
         return True
 
 
-def send_error_alert(source: str, error: BaseException, context: str = "") -> None:
+def send_error_alert(
+    source: str, error: BaseException, context: str = "", *, already_captured: bool = False
+) -> None:
     """source identifies where this came from (e.g. "app_server" or a job
     name like "run_flash_review_job"), context is a short human-readable
     line (e.g. the request path, or the installation/repo being processed).
+
+    already_captured: pass True when the caller already logged this same
+    exception with exc_info (logger.exception()/logger.error(exc_info=True))
+    - sentry_config.py's LoggingIntegration auto-captures that as a Sentry
+    event with zero extra code, so calling capture_exception() again here
+    would report the identical failure twice. Leave it False (the default)
+    for callers that only log a plain message with no exc_info, or that
+    never log at all before calling this - LoggingIntegration can't build
+    an exception event from either of those, so this is the only capture.
 
     Never raises - a failure to send the alert itself must not turn one
     bug into two. Call this from an except block, not instead of logging;
@@ -86,7 +97,13 @@ def send_error_alert(source: str, error: BaseException, context: str = "") -> No
     # server-side occurrence/frequency tracking per Issue - collapsing
     # "this happened 40 times in the last hour" into "this happened once"
     # from Sentry's point of view, exactly the signal Sentry exists to show.
-    sentry_sdk.capture_exception(error)
+    #
+    # Skipped when already_captured is True: that means the caller already
+    # logged this exact exception with exc_info, which LoggingIntegration
+    # already turned into a Sentry event on its own - calling this too
+    # would report one real failure as two separate Sentry events.
+    if not already_captured:
+        sentry_sdk.capture_exception(error)
 
     key = f"{source}:{type(error).__name__}"
     if not _should_alert(key):
