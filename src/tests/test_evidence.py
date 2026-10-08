@@ -349,6 +349,27 @@ def test_scan_repository_honors_git_history_depth_cap_env_var(tmp_path, monkeypa
     assert evidence["git"]["history_depth_limited"] is True
 
 
+def test_history_stays_flagged_as_depth_limited_on_a_warm_rescan(tmp_path, monkeypatch):
+    # The capped baseline is never backfilled by later incremental syncs, so a
+    # second scan of the same repo must still say its history is partial.
+    repo = make_repo(tmp_path)
+    for i in range(4):
+        (repo / "main.py").write_text(f"def hello():\n    return {i}\n")
+        run(repo, "add", "-A")
+        run(repo, "commit", "-q", "-m", f"change {i}")
+    monkeypatch.setenv("ALETHEORE_GIT_HISTORY_DEPTH_CAP", "2")
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        first = scan_repository(repo, check_licenses=False)
+        write_evidence(first, repo)
+        (repo / "main.py").write_text("def hello():\n    return 99\n")
+        run(repo, "add", "-A")
+        run(repo, "commit", "-q", "-m", "one more")
+        second = scan_repository(repo, check_licenses=False)
+    assert first["git"]["history_depth_limited"] is True
+    assert second["git"]["history_depth_limited"] is True
+
+
 def test_scan_repository_honors_secrets_history_depth_cap_env_var(tmp_path, monkeypatch):
     # Separate env var from the git-graph cap above - `git log -p` (full
     # diffs, used for secrets-in-history) is far more expensive per commit

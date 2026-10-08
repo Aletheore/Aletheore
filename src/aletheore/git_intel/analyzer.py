@@ -493,7 +493,11 @@ def analyze_git(
         if owns_store and isinstance(store, SQLiteRepoGraphStore):
             store.close()
 
-    history_depth_limited = was_full_rebuild and depth_cap is not None and total_commits > depth_cap
+    # Not just on the rebuild that applied the cap: incremental syncs never
+    # backfill older history, so a store built under a cap stays capped. Only
+    # checking the rebuild made every later (warm) scan of a repo over the cap
+    # report its history as complete.
+    history_depth_limited = depth_cap is not None and total_commits > depth_cap
     # A shallow clone's boundary commit looks like a root commit, so repo age
     # and total_commits describe the clone, not the project. There is no way
     # to recover the real values locally; flag the history as partial so the
