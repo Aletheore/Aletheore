@@ -2346,10 +2346,16 @@ def main() -> None:
 
     init_cli_sentry()
     if not has_shown_crash_reporting_notice():
+        # Product decision (2026-10-08, closing the privacy-stance tension
+        # the backward PR audit of #915-977 flagged on PR #961): stays
+        # opt-out (on by default), but both disclosure points - this one
+        # and the per-crash one below - must say explicitly that ONLY
+        # crash data is ever reported, not general usage/telemetry, so
+        # "on by default" is never mistaken for broader tracking.
         _stderr_console.print(
-            "[dim]Aletheore reports crashes to help fix bugs across "
-            "environments we can't all test. Disable with "
-            "`aletheore config crash-reporting off`.[/dim]"
+            "[dim]Aletheore monitors for crashes only - never general "
+            "usage - to help fix bugs across environments we can't all "
+            "test. Disable with `aletheore config crash-reporting off`.[/dim]"
         )
         mark_crash_reporting_notice_shown()
 
@@ -2381,8 +2387,9 @@ def main() -> None:
                 )
             else:
                 _stderr_console.print(
-                    "\n[dim]This error was reported to help fix it. "
-                    "Disable with `aletheore config crash-reporting off`.[/dim]"
+                    "\n[dim]This crash - and only this crash, no other "
+                    "data - was reported to help fix it. Disable with "
+                    "`aletheore config crash-reporting off`.[/dim]"
                 )
         raise
 

@@ -24,6 +24,14 @@ actual point of this feature (telling us *which* environments a bug is
 specific to). On by default, with an explicit, discoverable way to turn it
 off, and a one-time disclosure so "on by default" is never silent.
 
+**Decision (2026-10-08, closing the privacy-stance tension the backward
+PR audit of #915-977 flagged on this PR):** stays on by default/opt-out,
+not opt-in - but both disclosure points (the one-time first-run notice
+and the per-crash notice below) must say explicitly that ONLY crash data
+is ever reported, never general usage/telemetry, so "on by default" is
+never mistaken for broader tracking. No third disclosure point - just
+these two, each shown as described below.
+
 ## Non-goals
 
 - Performance tracing (`traces_sample_rate=0`, same as the backend).
@@ -124,8 +132,9 @@ except Exception as exc:
     if is_crash_reporting_enabled():
         sentry_sdk.capture_exception(exc)
         console.print(
-            "\n[dim]This error was reported to help fix it. "
-            "Disable with `aletheore config crash-reporting off`.[/dim]"
+            "\n[dim]This crash - and only this crash, no other data - "
+            "was reported to help fix it. Disable with "
+            "`aletheore config crash-reporting off`.[/dim]"
         )
     raise
 ```
@@ -136,11 +145,12 @@ except Exception as exc:
   replacement for however `typer`/Python already surfaces an unhandled
   error.
 - First-run notice: immediately after `init_cli_sentry()`, if
-  `not has_shown_crash_reporting_notice()`, print a one-time line ("crash
-  reports help fix bugs across environments we can't all test; disable
-  with `aletheore config crash-reporting off`") and call
-  `mark_crash_reporting_notice_shown()`. Shown once ever, regardless of
-  which command was invoked.
+  `not has_shown_crash_reporting_notice()`, print a one-time line
+  explicitly scoping this to crashes ONLY, not general usage ("Aletheore
+  monitors for crashes only - never general usage - to help fix bugs
+  across environments we can't all test. Disable with `aletheore config
+  crash-reporting off`") and call `mark_crash_reporting_notice_shown()`.
+  Shown once ever, regardless of which command was invoked.
 - New command group: `aletheore config crash-reporting [on|off]`. Bare
   `aletheore config crash-reporting` (no argument) prints the current
   state instead of changing it.

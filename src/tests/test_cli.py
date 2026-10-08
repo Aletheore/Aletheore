@@ -340,6 +340,11 @@ def test_main_first_run_notice_goes_to_stderr_not_stdout(monkeypatch, capsys):
     output = capsys.readouterr()
     assert "crashes" not in output.out
     assert "crashes" in output.err
+    # Product decision (2026-10-08): the first-run disclosure must say
+    # explicitly that only crashes - not general usage - are ever
+    # monitored, closing the privacy-stance tension the backward PR audit
+    # of #915-977 flagged on PR #961.
+    assert "crashes only" in output.err
 
 
 def test_main_reports_an_unhandled_exception_to_sentry_and_reraises(monkeypatch, capsys):
@@ -367,8 +372,11 @@ def test_main_reports_an_unhandled_exception_to_sentry_and_reraises(monkeypatch,
     # protocol channel, and `diff`/`--format sarif` output is often
     # redirected or piped - an unrelated crash-reporting line on stdout
     # would corrupt either. Must go to stderr.
-    assert "This error was reported" not in output.out
-    assert "This error was reported" in output.err
+    assert "This crash" not in output.out
+    assert "This crash" in output.err
+    # Product decision (2026-10-08): the per-crash disclosure must say
+    # explicitly that only this crash - not general usage - was sent.
+    assert "only this crash" in output.err
 
 
 def test_main_does_not_report_when_crash_reporting_is_disabled(monkeypatch):
