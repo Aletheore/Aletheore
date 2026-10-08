@@ -118,20 +118,20 @@ def test_build_module_graph_records_symbol_line_bounds(tmp_path):
     assert auth_error_cls["end_line"] == 9
     # Classes have no parameter list - unlike functions, params is always
     # None for them, not an empty string.
-    assert auth_error_cls["params"] is None
+    assert auth_error_cls.get("params") is None
 
 
-def test_symbol_entry_always_includes_docstring_return_type_and_is_public_keys(tmp_path):
-    (tmp_path / "a.py").write_text("def f():\n    pass\n")
+def test_symbol_entry_omits_empty_fields_and_keeps_the_rest(tmp_path):
+    # EVIDENCE_VERSION 0.8.1 (docs/AIR-SCHEMA.md): docstring, return_type and
+    # params are left out when null and is_pure_declaration when false;
+    # name, line bounds and is_public are always present.
+    (tmp_path / "a.py").write_text("def f():\n    pass\n\ndef g(x: int) -> str:\n    \"\"\"Doc.\"\"\"\n    return ''\n")
     modules, _, _ = build_module_graph(tmp_path)
-    func = modules[0]["symbols"]["functions"][0]
-    assert set(func) == {
-        "name", "start_line", "end_line", "params", "docstring", "return_type", "is_public",
-        "is_pure_declaration",
-    }
-    assert func["docstring"] is None
-    assert func["return_type"] is None
-    assert func["is_public"] is True
+    f, g = modules[0]["symbols"]["functions"]
+    assert set(f) == {"name", "start_line", "end_line", "params", "is_public"}
+    assert f["params"] == "()" and f["is_public"] is True
+    assert set(g) == {"name", "start_line", "end_line", "params", "docstring", "return_type", "is_public"}
+    assert (g["docstring"], g["return_type"]) == ("Doc.", "str")
 
 
 def test_python_extracts_docstring_and_return_type(tmp_path):
@@ -148,8 +148,8 @@ def test_python_function_with_no_docstring_or_annotation_gets_none(tmp_path):
     (tmp_path / "a.py").write_text("def f(x):\n    return x\n")
     modules, _, _ = build_module_graph(tmp_path)
     func = modules[0]["symbols"]["functions"][0]
-    assert func["docstring"] is None
-    assert func["return_type"] is None
+    assert func.get("docstring") is None
+    assert func.get("return_type") is None
 
 
 def test_python_class_docstring_is_extracted(tmp_path):
@@ -165,7 +165,7 @@ def test_python_first_statement_not_a_string_is_not_treated_as_docstring(tmp_pat
     (tmp_path / "a.py").write_text("def f():\n    x = 1\n    return x\n")
     modules, _, _ = build_module_graph(tmp_path)
     func = modules[0]["symbols"]["functions"][0]
-    assert func["docstring"] is None
+    assert func.get("docstring") is None
 
 
 @pytest.mark.parametrize("name,language,expected", [
@@ -403,7 +403,7 @@ def test_javascript_function_with_no_leading_comment_gets_none(tmp_path):
     repo.mkdir()
     (repo / "a.js").write_text("function add(a, b) {\n  return a + b;\n}\n")
     modules, _, _ = build_module_graph(repo)
-    assert modules[0]["symbols"]["functions"][0]["docstring"] is None
+    assert modules[0]["symbols"]["functions"][0].get("docstring") is None
 
 
 def test_javascript_plain_line_comment_is_not_treated_as_jsdoc(tmp_path):
@@ -411,7 +411,7 @@ def test_javascript_plain_line_comment_is_not_treated_as_jsdoc(tmp_path):
     repo.mkdir()
     (repo / "a.js").write_text("// just a note\nfunction add(a, b) {\n  return a + b;\n}\n")
     modules, _, _ = build_module_graph(repo)
-    assert modules[0]["symbols"]["functions"][0]["docstring"] is None
+    assert modules[0]["symbols"]["functions"][0].get("docstring") is None
 
 
 def test_typescript_extracts_return_type(tmp_path):
@@ -1122,8 +1122,8 @@ def test_build_module_graph_java_interface_symbol_is_pure_declaration_but_class_
 
     symbols = _java_symbols(repo)
 
-    assert symbols["IMapper"]["is_pure_declaration"] is True
-    assert symbols["Mapper"]["is_pure_declaration"] is False
+    assert symbols["IMapper"].get("is_pure_declaration", False) is True
+    assert symbols["Mapper"].get("is_pure_declaration", False) is False
 
 
 def test_build_module_graph_java_package_private_class_is_not_public(tmp_path):

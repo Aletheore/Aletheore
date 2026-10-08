@@ -56,7 +56,7 @@ def test_build_module_graph_extracts_go_imports_and_symbols(tmp_path):
     hello_fn = next(f for f in service["symbols"]["functions"] if f["name"] == "Hello")
     assert hello_fn["params"] == "()"
     greeter_cls = next(c for c in service["symbols"]["classes"] if c["name"] == "Greeter")
-    assert greeter_cls["params"] is None
+    assert greeter_cls.get("params") is None
 
     assert unparseable == []
 
@@ -204,7 +204,7 @@ def test_go_function_with_blank_line_before_comment_gets_no_docstring(tmp_path):
     )
     modules, _, _ = build_module_graph(repo)
     func = modules[0]["symbols"]["functions"][0]
-    assert func["docstring"] is None
+    assert func.get("docstring") is None
 
 
 def test_go_type_declaration_doc_comment_is_extracted_through_the_wrapper(tmp_path):

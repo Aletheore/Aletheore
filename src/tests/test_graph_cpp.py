@@ -220,7 +220,7 @@ def test_c_function_with_no_doc_comment_gets_none(tmp_path):
     (repo / "a.c").write_text("int add(int a, int b) {\n  return a + b;\n}\n")
     modules, _, _ = build_module_graph(repo)
     func = modules[0]["symbols"]["functions"][0]
-    assert func["docstring"] is None
+    assert func.get("docstring") is None
     assert func["is_public"] is True
 
 

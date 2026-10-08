@@ -104,7 +104,7 @@ def test_build_module_graph_extracts_swift_symbols(tmp_path):
     assert internal_fn["is_public"] is False
 
     handler_cls = next(c for c in handler["symbols"]["classes"] if c["name"] == "Handler")
-    assert handler_cls["params"] is None
+    assert handler_cls.get("params") is None
 
     logger = by_path["Sources/Logging/Logger.swift"]
     info_fn = next(f for f in logger["symbols"]["functions"] if f["name"] == "info")

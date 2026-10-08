@@ -23,7 +23,7 @@ from tests.air_fixtures import minimal_air_evidence
 # shape - which is exactly the silent drift the version field exists to
 # prevent. See docs/AIR-SCHEMA.md for the migration rules.
 EXPECTED_SCHEMA_FINGERPRINT = "42bb5d22dc30c5a8"
-EXPECTED_EVIDENCE_VERSION = "0.8.0"
+EXPECTED_EVIDENCE_VERSION = "0.8.1"
 
 
 def test_schema_changes_require_an_evidence_version_bump():

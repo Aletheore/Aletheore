@@ -122,7 +122,7 @@ def _build_request_items(symbols: list[dict], source_lines: list[str], polish_ex
             "source": snippet,
         }
         if polish_existing:
-            item["existing_docstring"] = symbol["docstring"]
+            item["existing_docstring"] = symbol.get("docstring")
         items.append(item)
     return items
 

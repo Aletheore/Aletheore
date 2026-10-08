@@ -317,6 +317,18 @@ def _is_nested_in_function(node: Node) -> bool:
     return False
 
 
+# Fields a symbol entry only carries when they say something: params,
+# docstring and return_type when set, is_pure_declaration when True. On the
+# Linux kernel's 2.9M #define constants these were always null/False and made
+# up ~45% of every entry (most of air.json). Every reader uses .get() with the
+# same default, so leaving them out reads the same (EVIDENCE_VERSION 0.8.1).
+_OMIT_WHEN_EMPTY = {"params": None, "docstring": None, "return_type": None, "is_pure_declaration": False}
+
+
+def _compact_symbol(entry: dict) -> dict:
+    return {key: value for key, value in entry.items() if key not in _OMIT_WHEN_EMPTY or value != _OMIT_WHEN_EMPTY[key]}
+
+
 def _symbol_entry(
     source: bytes,
     name_node: Node,
@@ -326,7 +338,7 @@ def _symbol_entry(
     is_public: bool = True,
     is_pure_declaration: bool = False,
 ) -> dict:
-    return {
+    return _compact_symbol({
         "name": source[name_node.start_byte:name_node.end_byte].decode(errors="ignore"),
         "start_line": enclosing_node.start_point[0] + 1,
         "end_line": enclosing_node.end_point[0] + 1,
@@ -345,7 +357,7 @@ def _symbol_entry(
         # same way a dedicated declaration-only file does (AutoMapper cs02/
         # cs09/cs10, gson java06 - see build_chunks for the per-chunk use).
         "is_pure_declaration": is_pure_declaration,
-    }
+    })
 
 
 _DOCSTRING_QUOTE_PREFIXES = ('"""', "'''", '"', "'")
@@ -2688,7 +2700,7 @@ def _extract_c_family(node: Node, source: bytes) -> tuple[list[str], list[dict],
                         raw_doc = _leading_block_comment(n, source)
                         type_node = n.child_by_field_name("type")
                         functions.append(
-                            {
+                            _compact_symbol({
                                 "name": name,
                                 "start_line": n.start_point[0] + 1,
                                 "end_line": n.end_point[0] + 1,
@@ -2698,7 +2710,7 @@ def _extract_c_family(node: Node, source: bytes) -> tuple[list[str], list[dict],
                                     text(type_node) if type_node is not None else None
                                 ),
                                 "is_public": not _is_nested_in_function(n),
-                            }
+                            })
                         )
             elif n.type in ("struct_specifier", "class_specifier", "union_specifier", "enum_specifier"):
                 # A forward declaration ("struct Foo;") or a plain type reference

@@ -44,7 +44,7 @@ def test_evidence_version_is_0_8_0():
     # section - see docs/AIR-SCHEMA.md's migration rules (any schema change requires a
     # MINOR bump). This test asserts the exact pin deliberately, so it must move in
     # lockstep with the next schema change too.
-    assert EVIDENCE_VERSION == "0.8.0"
+    assert EVIDENCE_VERSION == "0.8.1"
 
 
 def make_repo(tmp_path: Path) -> Path:
