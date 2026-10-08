@@ -321,3 +321,20 @@ def test_extract_citations_keeps_known_file_that_looks_like_a_host():
     from aletheore.citation_verifier import extract_citations
 
     assert extract_citations("see site.dev:7", {"site.dev"}) == [{"file": "site.dev", "line": 7}]
+
+
+def test_extract_citations_does_not_drop_a_real_file_with_a_host_like_extension():
+    # Regression: _HOST_TLDS used to include "in", so a genuine citation to
+    # a real file like pip-tools' requirements.in (never in known_paths,
+    # since ".in" isn't a parseable source extension) was silently dropped
+    # as a "host" instead of extracted - the exact failure mode this set
+    # exists to fix, just for a different input shape. Not in known_paths
+    # here on purpose: that's the realistic case (an unrecognized-extension
+    # file the scanner never added to its inventory).
+    from aletheore.citation_verifier import extract_citations
+
+    text = "pinned in `requirements.in:5` and `configure.in:12`"
+    assert extract_citations(text) == [
+        {"file": "requirements.in", "line": 5},
+        {"file": "configure.in", "line": 12},
+    ]
