@@ -148,15 +148,7 @@ def _cpp_type_name(node: Node | None) -> str:
 
 
 def _cpp(root: Node, rel: str, classes: list, raises: list, handlers: list, text: str = "") -> None:
-    if root.has_error and text:
-        parsed = {(c["file"], c["name"]) for c in classes}
-        for number, line in enumerate(text.splitlines(), 1):
-            if line.lstrip().startswith(("//", "*", "/*")):
-                continue
-            match = _CPP_CLASS_TEXT.match(line)
-            if match and (rel, match.group(1)) not in parsed:
-                classes.append({"name": match.group(1), "file": rel, "line": number,
-                                "bases": [match.group(2)], "seeds": _CPP_ERROR_SEEDS})
+    first_class = len(classes)
     for node in _walk(root):
         if node.type in ("class_specifier", "struct_specifier"):
             name = node.child_by_field_name("name")
@@ -196,6 +188,20 @@ def _cpp(root: Node, rel: str, classes: list, raises: list, handlers: list, text
                 names = [_cpp_type_name(kind)]
             handlers.append({"file": rel, "line": node.start_point[0] + 1, "catches": names,
                              "function": _enclosing_function(node)})
+
+    if root.has_error and text:
+        # Text fallback for classes the grammar couldn't parse (a C++ header read
+        # as C, macro-heavy code). Dedupe against this file's own parsed classes
+        # only: building the set from every file's classes made this quadratic,
+        # and on the Linux kernel's ~64k C/H files it ran for hours.
+        parsed = {c["name"] for c in classes[first_class:]}
+        for number, line in enumerate(text.splitlines(), 1):
+            if line.lstrip().startswith(("//", "*", "/*")):
+                continue
+            match = _CPP_CLASS_TEXT.match(line)
+            if match and match.group(1) not in parsed:
+                classes.append({"name": match.group(1), "file": rel, "line": number,
+                                "bases": [match.group(2)], "seeds": _CPP_ERROR_SEEDS})
 
 
 def _text(node: Node | None) -> str:
