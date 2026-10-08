@@ -472,6 +472,12 @@ def scan_repository(
     # the very first one - already reflect whatever .gitignore state results,
     # so counts are stable and reproducible from the first call onward.
     _ensure_aletheore_dir_gitignored(repo_path)
+    # Created up front (it's gitignored by now) so the per-file cache in
+    # file_cache.py can fill on the very first scan rather than the second.
+    try:
+        (repo_path / ".aletheore").mkdir(exist_ok=True)
+    except OSError:
+        pass
 
     report("Detecting languages, frameworks, and build tools")
     languages = detect_languages(repo_path, ignored_paths)

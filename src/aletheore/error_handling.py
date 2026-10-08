@@ -530,7 +530,22 @@ def _extract_one(job: tuple[Path, str]) -> tuple[list, list, list]:
         _cpp(root, rel, classes, raises, handlers, source.decode(errors="replace"))
     else:
         _EXTRACTORS[language_name](root, rel, classes, raises, handlers)
+    # Seeds as a sorted list, not a set, so the result is the same whether it
+    # was just computed or read back from the per-file cache (JSON has no
+    # sets); _is_errorish only does membership tests on it.
+    for cls in classes:
+        cls["seeds"] = sorted(cls["seeds"])
     return classes, raises, handlers
+
+
+def _extract_many(jobs: list[tuple[Path, str]]) -> list[tuple[list, list, list]]:
+    # Each file is independent, so large repos fan out across cores with the
+    # same threshold, opt-out and core-count logic as build_module_graph's
+    # parallel parse. Results come back in input order either way.
+    if len(jobs) >= PARALLEL_PARSE_MIN_FILES and not _parallel_parse_disabled():
+        with ProcessPoolExecutor(max_workers=_available_parallelism()) as executor:
+            return list(executor.map(_extract_one, jobs, chunksize=32))
+    return [_extract_one(job) for job in jobs]
 
 
 def map_error_handling(repo_path: Path, ignored_paths: list[str] | None = None) -> dict:
@@ -551,15 +566,13 @@ def map_error_handling(repo_path: Path, ignored_paths: list[str] | None = None) 
         if rel is not None:
             jobs.append((path, rel))
 
-    # Each file is independent, so large repos fan out across cores with the
-    # same threshold, opt-out and core-count logic as build_module_graph's
-    # parallel parse. Classes are merged in input order, so output is identical
-    # either way.
-    if len(jobs) >= PARALLEL_PARSE_MIN_FILES and not _parallel_parse_disabled():
-        with ProcessPoolExecutor(max_workers=_available_parallelism()) as executor:
-            results = list(executor.map(_extract_one, jobs, chunksize=32))
-    else:
-        results = [_extract_one(job) for job in jobs]
+    # Unchanged files reuse their extraction from the last scan (file_cache.py).
+    from aletheore.file_cache import cached_per_file, code_version
+
+    from aletheore.scanner import graph as _graph
+
+    version = code_version(__file__, _graph.__file__, parses=True)
+    results = cached_per_file(repo_path, "error_handling", version, jobs, _extract_many)
     for file_classes, file_raises, file_handlers in results:
         classes.extend(file_classes)
         raises.extend(file_raises)

@@ -544,19 +544,56 @@ def _is_accepted(accepted_keys: set[tuple], path: str | None, pattern_name: str,
     return (path, pattern_name, _legacy_redact(value)) in accepted_keys
 
 
-# accepted_keys for the current find_secrets call, set once per worker process
-# by _init_secrets_worker (or directly when sequential) instead of being
-# pickled with every file.
-_scan_state: dict = {}
+# A working-tree finding carries this (stripped before it's returned) so the
+# legacy first4...last4 baseline format can still be matched after caching:
+# a digest of that preview, never the preview itself, since the preview is
+# eight raw characters of the secret and the cache is a file on disk.
+_LEGACY_DIGEST_KEY = "_legacy_preview_digest"
 
 
-def _init_secrets_worker(accepted_keys) -> None:
-    _scan_state["accepted_keys"] = accepted_keys
+def _legacy_digest(value: str) -> str:
+    return hashlib.sha256(_legacy_redact(value).encode("utf-8")).hexdigest()
+
+
+def _apply_baseline(findings: list[dict], baseline: list[dict] | None) -> list[dict]:
+    """Same result as _is_accepted on the raw value: match_preview *is* the
+    current-format redaction, and the legacy format is compared by digest."""
+    accepted_keys = _baseline_keys(baseline)
+    legacy_keys = {
+        (path, pattern, hashlib.sha256(preview.encode("utf-8")).hexdigest())
+        for path, pattern, preview in accepted_keys
+        if isinstance(preview, str)
+    }
+    out = []
+    for finding in findings:
+        finding = dict(finding)
+        digest = finding.pop(_LEGACY_DIGEST_KEY, None)
+        key = (finding["path"], finding["pattern"])
+        finding["accepted"] = (*key, finding["match_preview"]) in accepted_keys or (*key, digest) in legacy_keys
+        out.append(finding)
+    return out
+
+
+def _scan_many_for_secrets(jobs: list[tuple[Path, str]]) -> list[list[dict]]:
+    from concurrent.futures import ProcessPoolExecutor
+
+    from aletheore.scanner.graph import (
+        PARALLEL_PARSE_MIN_FILES,
+        _available_parallelism,
+        _parallel_parse_disabled,
+    )
+
+    # Every file is independent, so large repos fan out across cores (same
+    # threshold and opt-out as the parallel module-graph parse). map keeps
+    # input order, so findings come back in the same order either way.
+    if len(jobs) >= PARALLEL_PARSE_MIN_FILES and not _parallel_parse_disabled():
+        with ProcessPoolExecutor(max_workers=_available_parallelism()) as executor:
+            return list(executor.map(_scan_file_for_secrets, jobs, chunksize=64))
+    return [_scan_file_for_secrets(job) for job in jobs]
 
 
 def _scan_file_for_secrets(job: tuple[Path, str]) -> list[dict]:
     path, rel_path = job
-    accepted_keys = _scan_state["accepted_keys"]
     findings: list[dict] = []
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
@@ -609,7 +646,10 @@ def _scan_file_for_secrets(job: tuple[Path, str]) -> list[dict]:
                         "pattern": pattern_name,
                         "match_preview": match_preview,
                         "likely_placeholder": likely_placeholder,
-                        "accepted": _is_accepted(accepted_keys, rel_path, pattern_name, value),
+                        # Filled in by find_secrets from the baseline, so this per-file
+                        # result can be cached independent of it.
+                        "accepted": False,
+                        _LEGACY_DIGEST_KEY: _legacy_digest(value),
                     }
                 )
 
@@ -617,35 +657,13 @@ def _scan_file_for_secrets(job: tuple[Path, str]) -> list[dict]:
 
 
 def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
-    # Local import: graph.py imports from detect.py, which this module also
-    # imports, so keep the parallel helpers out of module import time.
-    from concurrent.futures import ProcessPoolExecutor
+    from aletheore.file_cache import cached_per_file, code_version
 
-    from aletheore.scanner.graph import (
-        PARALLEL_PARSE_MIN_FILES,
-        _available_parallelism,
-        _parallel_parse_disabled,
-    )
-
-    accepted_keys = _baseline_keys(baseline)
     ignored_paths = load_repo_config(repo_path)["ignored_paths"]
     jobs = [(path, path.relative_to(repo_path).as_posix()) for path in iter_all_files(repo_path, ignored_paths)]
-
-    # Every file is independent, so large repos fan out across cores (same
-    # threshold and opt-out as the parallel module-graph parse). map keeps
-    # input order, so findings come back in the same order either way.
-    if len(jobs) >= PARALLEL_PARSE_MIN_FILES and not _parallel_parse_disabled():
-        with ProcessPoolExecutor(
-            max_workers=_available_parallelism(),
-            initializer=_init_secrets_worker,
-            initargs=(accepted_keys,),
-        ) as executor:
-            per_file = list(executor.map(_scan_file_for_secrets, jobs, chunksize=64))
-    else:
-        _init_secrets_worker(accepted_keys)
-        per_file = [_scan_file_for_secrets(job) for job in jobs]
-
-    findings = [finding for file_findings in per_file for finding in file_findings]
+    # Unchanged files reuse their findings from the last scan (file_cache.py).
+    per_file = cached_per_file(repo_path, "secrets", code_version(__file__), jobs, _scan_many_for_secrets)
+    findings = _apply_baseline([finding for file_findings in per_file for finding in file_findings], baseline)
     return {"scanned_files": len(jobs), "findings": findings}
 
 

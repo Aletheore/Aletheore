@@ -326,6 +326,16 @@ def _count_lines(data: bytes) -> int:
     return lines
 
 
+def _count_lines_many(jobs: list[tuple[Path, str]]) -> list[int | None]:
+    out: list[int | None] = []
+    for path, _rel in jobs:
+        try:
+            out.append(_count_lines(path.read_bytes()))
+        except OSError:
+            out.append(None)
+    return out
+
+
 def detect_languages(repo_path: Path, ignored_paths: list[str] | None = None) -> list[dict]:
     # Local import: graph.py already imports IGNORED_DIRS from this module, so a
     # module-level import here would be circular. LANGUAGE_BY_EXTENSION is the
@@ -336,18 +346,22 @@ def detect_languages(repo_path: Path, ignored_paths: list[str] | None = None) ->
     # both being fully parsed into the module graph).
     from aletheore.scanner.graph import LANGUAGE_BY_EXTENSION
 
+    from aletheore.file_cache import cached_per_file, code_version
+
     counts: dict[str, dict] = {}
-    for path in _iter_source_files(repo_path, ignored_paths):
-        entry_spec = LANGUAGE_BY_EXTENSION.get(path.suffix)
-        if entry_spec is None:
-            continue
-        language = entry_spec[0]
+    jobs = [
+        (path, path.relative_to(repo_path).as_posix())
+        for path in _iter_source_files(repo_path, ignored_paths)
+        if path.suffix in LANGUAGE_BY_EXTENSION
+    ]
+    # Unchanged files reuse their line count from the last scan (file_cache.py).
+    line_counts = cached_per_file(repo_path, "loc", code_version(__file__), jobs, _count_lines_many)
+    for (path, _rel), lines in zip(jobs, line_counts):
+        language = LANGUAGE_BY_EXTENSION[path.suffix][0]
         entry = counts.setdefault(language, {"name": language, "file_count": 0, "loc": 0})
         entry["file_count"] += 1
-        try:
-            entry["loc"] += _count_lines(path.read_bytes())
-        except OSError:
-            continue
+        if lines is not None:
+            entry["loc"] += lines
     # counts preserves _iter_source_files' filesystem-walk order, which is
     # filesystem-dependent (APFS vs ext4 give different orders for the same
     # repo) - sorted here for the same reason the other detectors below are.
