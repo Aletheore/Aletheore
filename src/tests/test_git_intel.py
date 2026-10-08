@@ -735,27 +735,100 @@ def test_parse_branches_computes_ahead_behind_without_a_subprocess_per_branch(tm
     assert per_branch.call_count == 0
 
 
-def test_repo_key_root_commit_lookup_is_memoized_per_head(tmp_path):
-    # The root-commit walk covers all of history (16s on the Linux kernel) and
-    # a scan asks for the key several times; it reruns only when HEAD moves.
-    from aletheore.git_intel import incremental
+def _full_facts(repo):
+    count = int(subprocess.run(["git", "rev-list", "--count", "HEAD"], cwd=repo, capture_output=True, text=True).stdout)
+    roots = sorted(subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.split())
+    return count, roots
 
+
+def _fresh_facts(repo):
+    from aletheore.git_intel import history_meta
+
+    history_meta._memo.clear()
+    facts = history_meta.history_facts(repo)
+    return facts.total_commits, list(facts.root_shas)
+
+
+def test_history_facts_stay_exact_across_incremental_updates(tmp_path, monkeypatch):
+    # Total commits and root commits are updated from the last scan's values
+    # plus only the new commits; every step must equal a full recomputation,
+    # including a merge of an unrelated history (a new root commit) and a
+    # rewritten history (the cached HEAD is no longer an ancestor).
+    from aletheore.git_intel import history_meta
+
+    monkeypatch.delenv("ALETHEORE_DISABLE_LOCAL_SCAN_CACHE", raising=False)
     repo = make_git_repo(tmp_path)
-    incremental._root_commit_cache.clear()
-    real_run = incremental.subprocess.run
-    walks = []
+    assert _fresh_facts(repo) == _full_facts(repo)
+    assert (repo / ".aletheore" / "git-meta.json").exists()
 
-    def counting_run(args, *a, **k):
+    (repo / "b.txt").write_text("b")
+    run(repo, "add", "b.txt")
+    commit(repo, "third", "2026-07-01T00:00:00+00:00")
+    walks = []
+    real_run = history_meta.subprocess.run
+
+    def spy(args, *a, **k):
         if args[:2] == ["git", "rev-list"]:
-            walks.append(args)
+            walks.append(args[-1])
         return real_run(args, *a, **k)
 
-    with patch.object(incremental.subprocess, "run", side_effect=counting_run):
-        first = incremental.compute_repo_key(repo)
-        assert incremental.compute_repo_key(repo) == first
-        assert len(walks) == 1
-        (repo / "memo.txt").write_text("head moves")
-        run(repo, "add", "memo.txt")
-        commit(repo, "memo test", "2026-07-01T00:00:00+00:00")
-        assert incremental.compute_repo_key(repo) == first
-        assert len(walks) == 2
+    expected = _full_facts(repo)
+    with patch.object(history_meta.subprocess, "run", side_effect=spy):
+        assert _fresh_facts(repo) == expected
+    assert walks and all(".." in w for w in walks)  # only the delta was walked
+
+    other = tmp_path / "other"
+    other.mkdir()
+    run(other, "init", "-b", "main")
+    run(other, "config", "user.email", "b@example.com")
+    run(other, "config", "user.name", "Bob")
+    (other / "z.txt").write_text("z")
+    run(other, "add", "z.txt")
+    commit(other, "unrelated root", "2025-01-01T00:00:00+00:00")
+    run(repo, "fetch", "-q", str(other), "main:unrelated")
+    run(repo, "merge", "-q", "--allow-unrelated-histories", "-m", "merge unrelated", "unrelated")
+    count, roots = _fresh_facts(repo)
+    assert (count, roots) == _full_facts(repo) and len(roots) == 2
+
+    run(repo, "reset", "-q", "--hard", "HEAD~1")
+    (repo / "c.txt").write_text("c")
+    run(repo, "add", "c.txt")
+    commit(repo, "rewritten", "2026-08-01T00:00:00+00:00")
+    assert _fresh_facts(repo) == _full_facts(repo)
+
+
+def test_history_facts_write_nothing_when_local_cache_is_disabled(tmp_path, monkeypatch):
+    # The hosted worker sets this: a checkout is someone else's repo, so no
+    # file from it is trusted and none is written.
+    monkeypatch.setenv("ALETHEORE_DISABLE_LOCAL_SCAN_CACHE", "1")
+    repo = make_git_repo(tmp_path)
+    (repo / ".aletheore").mkdir()
+    (repo / ".aletheore" / "git-meta.json").write_text(
+        '{"version": 1, "history": {"head": "x", "shallow": "full", "total_commits": 999, "root_shas": ["fake"]}}'
+    )
+    assert _fresh_facts(repo) == _full_facts(repo)
+    # The planted file was neither trusted nor overwritten.
+    assert '"total_commits": 999' in (repo / ".aletheore" / "git-meta.json").read_text()
+
+
+def test_ahead_behind_counts_are_reused_until_a_tip_moves(tmp_path, monkeypatch):
+    from aletheore.git_intel import history_meta
+
+    monkeypatch.delenv("ALETHEORE_DISABLE_LOCAL_SCAN_CACHE", raising=False)
+    repo = make_git_repo(tmp_path)
+    run(repo, "branch", "ahead-behind-topic")
+    calls = []
+
+    def compute():
+        calls.append(1)
+        return {"main": (0, 0), "ahead-behind-topic": (0, 0)}
+
+    assert history_meta.cached_ahead_behind(repo, "main", compute) == {"main": (0, 0), "ahead-behind-topic": (0, 0)}
+    history_meta.cached_ahead_behind(repo, "main", compute)
+    assert len(calls) == 1
+    run(repo, "checkout", "-q", "ahead-behind-topic")
+    (repo / "f.txt").write_text("f")
+    run(repo, "add", "f.txt")
+    commit(repo, "feature work", "2026-07-02T00:00:00+00:00")
+    history_meta.cached_ahead_behind(repo, "main", compute)
+    assert len(calls) == 2

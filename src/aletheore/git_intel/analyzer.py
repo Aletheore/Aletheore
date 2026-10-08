@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from aletheore.git_intel.graph_store import FileChurnTotal, GraphSnapshot, RepoGraphStore
+from aletheore.git_intel.history_meta import cached_ahead_behind, history_facts
 from aletheore.git_intel.incremental import (
     CO_CHANGE_PARTNERS_RETURNED,
     GitLogStreamError,
@@ -136,7 +137,11 @@ def _parse_branches(repo_path: Path, now: datetime) -> list[dict]:
     )
     remotes = _remote_names(repo_path)
     default_ref = _default_branch_ref(repo_path)
-    batched = _ahead_behind_all(repo_path, default_ref) if default_ref is not None else None
+    batched = (
+        cached_ahead_behind(repo_path, default_ref, lambda: _ahead_behind_all(repo_path, default_ref))
+        if default_ref is not None
+        else None
+    )
     branches = []
     for line in result.stdout.strip().splitlines():
         if not line.strip():
@@ -429,8 +434,12 @@ def _first_commit_at(repo_path: Path) -> datetime:
     # there's exactly one, but a repo with merged unrelated histories can
     # have several, so take the oldest of whichever `--max-parents=0` finds -
     # still O(root commits), never O(total commits).
-    roots_result = _run_git_or_raise(repo_path, "rev-list", "--max-parents=0", "HEAD")
-    root_shas = [line for line in roots_result.stdout.strip().splitlines() if line]
+    facts = history_facts(repo_path)
+    if facts is not None:
+        root_shas = list(facts.root_shas)
+    else:
+        roots_result = _run_git_or_raise(repo_path, "rev-list", "--max-parents=0", "HEAD")
+        root_shas = [line for line in roots_result.stdout.strip().splitlines() if line]
     dates = []
     for sha in root_shas:
         date_result = _run_git_or_raise(repo_path, "log", "-1", "--format=%ad", "--date=iso-strict", sha)
@@ -467,8 +476,12 @@ def analyze_git(
     if not _has_commits(repo_path):
         return {"available": False}
 
-    total_commits_result = _run_git_or_raise(repo_path, "rev-list", "--count", "HEAD")
-    total_commits = int(total_commits_result.stdout.strip())
+    facts = history_facts(repo_path)
+    if facts is not None:
+        total_commits = facts.total_commits
+    else:
+        total_commits_result = _run_git_or_raise(repo_path, "rev-list", "--count", "HEAD")
+        total_commits = int(total_commits_result.stdout.strip())
 
     repo_age_days = (now - _first_commit_at(repo_path)).days
 
