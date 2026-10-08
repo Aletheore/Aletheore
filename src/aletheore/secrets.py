@@ -226,6 +226,7 @@ SECRET_PATTERNS = [
         2,
     ),
 ]
+_PATTERNS_BY_NAME = {name: (pattern, value_group) for name, pattern, value_group in SECRET_PATTERNS}
 
 
 def _overlaps_a_specific_pattern_match(
@@ -554,32 +555,46 @@ def _is_accepted(accepted_keys: set[tuple], path: str | None, pattern_name: str,
     return (path, pattern_name, _legacy_redact(value)) in accepted_keys
 
 
-# A working-tree finding carries this (stripped before it's returned) so the
-# legacy first4...last4 baseline format can still be matched after caching:
-# a digest of that preview, never the preview itself, since the preview is
-# eight raw characters of the secret and the cache is a file on disk.
-_LEGACY_DIGEST_KEY = "_legacy_preview_digest"
-
-
-def _legacy_digest(value: str) -> str:
-    return hashlib.sha256(_legacy_redact(value).encode("utf-8")).hexdigest()
-
-
-def _apply_baseline(findings: list[dict], baseline: list[dict] | None) -> list[dict]:
-    """Same result as _is_accepted on the raw value: match_preview *is* the
-    current-format redaction, and the legacy format is compared by digest."""
-    accepted_keys = _baseline_keys(baseline)
-    legacy_keys = {
-        (path, pattern, hashlib.sha256(preview.encode("utf-8")).hexdigest())
-        for path, pattern, preview in accepted_keys
-        if isinstance(preview, str)
+def _legacy_previews_at(repo_path: Path, finding: dict) -> set[str]:
+    """Legacy first4...last4 previews of the value behind one working-tree
+    finding, re-read from its line in the file. Only called when the baseline
+    holds a legacy-format entry for the finding's (path, pattern), so nothing
+    derived from the raw value is ever stored in the per-file cache."""
+    pattern_and_group = _PATTERNS_BY_NAME.get(finding["pattern"])
+    if pattern_and_group is None:
+        return set()
+    pattern, value_group = pattern_and_group
+    try:
+        text = (repo_path / finding["path"]).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return set()
+    lines = text.split("\n")  # same line numbering as _scan_file_for_secrets
+    if not 1 <= finding["line"] <= len(lines):
+        return set()
+    salt = f"{finding['path']}:{finding['pattern']}"
+    return {
+        _legacy_redact(match.group(value_group))
+        for match in pattern.finditer(lines[finding["line"] - 1])
+        if _redact(match.group(value_group), salt) == finding["match_preview"]
     }
+
+
+def _apply_baseline(findings: list[dict], baseline: list[dict] | None, repo_path: Path) -> list[dict]:
+    """Same result as _is_accepted on the raw value: match_preview *is* the
+    current-format redaction, and a legacy-format entry is checked against
+    the value re-read from the file (see _legacy_previews_at)."""
+    accepted_keys = _baseline_keys(baseline)
+    legacy: dict[tuple, set[str]] = {}
+    for path, pattern, preview in accepted_keys:
+        if isinstance(preview, str) and not preview.startswith("sha256:"):
+            legacy.setdefault((path, pattern), set()).add(preview)
     out = []
     for finding in findings:
         finding = dict(finding)
-        digest = finding.pop(_LEGACY_DIGEST_KEY, None)
         key = (finding["path"], finding["pattern"])
-        finding["accepted"] = (*key, finding["match_preview"]) in accepted_keys or (*key, digest) in legacy_keys
+        finding["accepted"] = (*key, finding["match_preview"]) in accepted_keys or (
+            key in legacy and bool(_legacy_previews_at(repo_path, finding) & legacy[key])
+        )
         out.append(finding)
     return out
 
@@ -659,7 +674,6 @@ def _scan_file_for_secrets(job: tuple[Path, str]) -> list[dict]:
                         # Filled in by find_secrets from the baseline, so this per-file
                         # result can be cached independent of it.
                         "accepted": False,
-                        _LEGACY_DIGEST_KEY: _legacy_digest(value),
                     }
                 )
 
@@ -674,7 +688,7 @@ def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
     jobs = [(path, str(path)[root_len:].replace(os.sep, "/")) for path in iter_all_files(repo_path, ignored_paths)]
     # Unchanged files reuse their findings from the last scan (file_cache.py).
     per_file = cached_per_file(repo_path, "secrets", code_version(__file__), jobs, _scan_many_for_secrets)
-    findings = _apply_baseline([finding for file_findings in per_file for finding in file_findings], baseline)
+    findings = _apply_baseline([finding for file_findings in per_file for finding in file_findings], baseline, repo_path)
     return {"scanned_files": len(jobs), "findings": findings}
 
 

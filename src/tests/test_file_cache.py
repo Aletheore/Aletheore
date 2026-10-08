@@ -79,6 +79,33 @@ def test_baseline_is_applied_after_the_cache_in_both_formats(repo):
     assert "_legacy_preview_digest" not in find_secrets(repo)["findings"][0]
 
 
+def test_a_legacy_baseline_entry_accepts_only_its_own_value_on_a_shared_line(repo):
+    other = "AKIAZYXWVUTSRQPONMLK"
+    (repo / "a.py").write_text(f'KEYS = ["{AWS}", "{other}"]\n')
+    findings = find_secrets(repo)["findings"]
+    pattern = findings[0]["pattern"]
+    legacy = [{"path": "a.py", "pattern": pattern, "match_preview": _legacy_redact(other)}]
+    accepted = {f["match_preview"]: f["accepted"] for f in find_secrets(repo, baseline=legacy)["findings"] if f["pattern"] == pattern}
+    assert sorted(accepted.values()) == [False, True]
+
+
+def test_the_cache_file_holds_nothing_derived_from_the_raw_secret(repo):
+    # Only the salted match_preview may reach disk. The legacy first4...last4
+    # preview (or any unsalted hash of it) is 8 raw characters of the secret,
+    # brute-forceable from a hash when the prefix is known (AKIA...).
+    import hashlib
+    import sqlite3
+
+    find_secrets(repo)
+    legacy = _legacy_redact(AWS)
+    db = sqlite3.connect(repo / ".aletheore" / "file-cache.db")
+    payloads = [row[0] for row in db.execute("SELECT payload FROM entries WHERE kind = 'secrets'")]
+    db.close()
+    assert payloads and any("match_preview" in p for p in payloads)
+    for forbidden in (AWS, AWS[:4], legacy, hashlib.sha256(legacy.encode()).hexdigest(), "_legacy"):
+        assert not any(forbidden in p for p in payloads), forbidden
+
+
 def test_nothing_is_read_or_written_under_the_hosted_opt_out(repo, monkeypatch):
     monkeypatch.setenv("ALETHEORE_DISABLE_LOCAL_SCAN_CACHE", "1")
     find_secrets(repo)
