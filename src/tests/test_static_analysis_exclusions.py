@@ -1,6 +1,6 @@
 import json
 
-from aletheore.static_analysis._exclusions import excluded_dir_names, filter_findings, has_real_file
+from aletheore.static_analysis._exclusions import excluded_dir_names, file_census, filter_findings, has_real_file
 
 
 def test_excluded_dir_names_includes_the_shared_ignored_dirs_and_worktrees(tmp_path):
@@ -61,3 +61,30 @@ def test_has_real_file_ignores_matches_under_excluded_directories(tmp_path):
     (tmp_path / "main.go").write_text("package main\n")
 
     assert has_real_file(tmp_path, "*.go") is True
+
+
+def test_file_census_matches_has_real_file_and_count_real_files_in_one_walk(tmp_path):
+    # file_census replaces gosec/pmd's old has_real_file + count_real_files
+    # pair (two full-tree walks) with one - must agree with what those two
+    # functions would have reported separately.
+    (tmp_path / ".claude" / "worktrees").mkdir(parents=True)
+    (tmp_path / ".claude" / "worktrees" / "dup.go").write_text("package main\n")
+    (tmp_path / "main.go").write_text("package main\n")
+    (tmp_path / "README.md").write_text("docs\n")
+
+    has_go, file_count = file_census(tmp_path, "*.go")
+
+    assert has_go is True
+    # Only main.go and README.md are real (not excluded) - dup.go sits
+    # under the excluded .claude/worktrees directory.
+    assert file_count == 2
+
+
+def test_file_census_no_match_reports_false_with_correct_total(tmp_path):
+    (tmp_path / "README.md").write_text("docs\n")
+    (tmp_path / "notes.txt").write_text("notes\n")
+
+    has_go, file_count = file_census(tmp_path, "*.go")
+
+    assert has_go is False
+    assert file_count == 2

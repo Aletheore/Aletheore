@@ -4,7 +4,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from aletheore.static_analysis._exclusions import count_real_files, excluded_dir_names, filter_findings, has_real_file
+from aletheore.static_analysis._exclusions import excluded_dir_names, file_census, filter_findings
 
 # Real bug found by an independent benchmark run the same night: a flat
 # 180s (this package's original default) timed out on every real
@@ -35,13 +35,16 @@ def _first_line_number(raw: str) -> int:
     return int(match.group()) if match else 0
 
 
-def _scaled_timeout(repo_path: Path) -> int:
-    file_count = count_real_files(repo_path)
+def _scaled_timeout(file_count: int) -> int:
     return min(GOSEC_MAX_TIMEOUT_SECONDS, int(GOSEC_BASE_TIMEOUT_SECONDS + file_count * GOSEC_PER_FILE_SECONDS))
 
 
 def check_gosec(repo_path: Path, timeout: int | None = None) -> dict:
-    if not has_real_file(repo_path, "*.go"):
+    # One walk answering both "is there any .go source" and "how many real
+    # files total" (for the timeout below) - has_real_file + count_real_files
+    # used to be two separate full-tree walks here.
+    has_go, file_count = file_census(repo_path, "*.go")
+    if not has_go:
         return {"checked": True, "reason": None, "findings": []}
 
     binary = shutil.which("gosec")
@@ -49,7 +52,7 @@ def check_gosec(repo_path: Path, timeout: int | None = None) -> dict:
         return {"checked": False, "reason": "gosec not installed", "findings": []}
 
     if timeout is None:
-        timeout = _scaled_timeout(repo_path)
+        timeout = _scaled_timeout(file_count)
 
     cmd = [binary, "-fmt=json", "-quiet"]
     # Real-verified live: repeated -exclude-dir=<bare name> flags correctly

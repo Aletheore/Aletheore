@@ -70,6 +70,24 @@ def has_real_file(repo_path: Path, pattern: str) -> bool:
     return False
 
 
+def file_census(repo_path: Path, pattern: str) -> tuple[bool, int]:
+    """(has a real file matching pattern, total real file count) from a
+    single walk - gosec and pmd each used to answer these as two separate
+    questions (has_real_file then count_real_files for their scaled
+    timeout), walking this same tree twice in one check_* call before
+    even deciding whether to invoke their external tool."""
+    excluded = set(excluded_dir_names(repo_path))
+    has_match = False
+    total = 0
+    for path in repo_path.rglob("*"):
+        if not path.is_file() or excluded.intersection(path.relative_to(repo_path).parts):
+            continue
+        total += 1
+        if not has_match and path.match(pattern):
+            has_match = True
+    return has_match, total
+
+
 def filter_findings(findings: list[dict], repo_path: Path) -> list[dict]:
     """Authoritative correctness backstop, independent of whether a given
     tool's own native exclude flag actually honored excluded_dir_names -
