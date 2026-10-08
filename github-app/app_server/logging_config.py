@@ -75,7 +75,12 @@ def log_job(func):
             # later.
             from app_server.error_alerts import send_error_alert
 
-            send_error_alert(func.__name__, exc, f"job_id={job_id}")
+            # already_captured=True: the .exception() call above already
+            # logged this with exc_info, which sentry_config.py's
+            # LoggingIntegration auto-captures as a Sentry event on its
+            # own - without the flag, send_error_alert's own
+            # capture_exception() would report this same failure twice.
+            send_error_alert(func.__name__, exc, f"job_id={job_id}", already_captured=True)
             raise
         duration_ms = round((time.monotonic() - start) * 1000, 2)
         _job_logger.info(

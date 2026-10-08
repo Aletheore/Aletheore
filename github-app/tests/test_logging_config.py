@@ -128,6 +128,11 @@ def test_log_job_alerts_on_failure(monkeypatch):
     args, kwargs = calls[0]
     assert args[0] == "failing_job"
     assert isinstance(args[1], RuntimeError)
+    # The .exception() call just above already logged this with exc_info,
+    # which LoggingIntegration auto-captures - send_error_alert must not
+    # also run its own capture_exception(), or this failure gets reported
+    # to Sentry twice.
+    assert kwargs.get("already_captured") is True
 
 
 def test_log_job_does_not_alert_on_success(monkeypatch):

@@ -142,6 +142,23 @@ def test_captures_exception_in_sentry_even_when_resend_api_key_is_not_configured
     assert captured == [error]
 
 
+def test_already_captured_skips_the_explicit_sentry_capture(monkeypatch):
+    # Real bug: callers that already logged this exact exception with
+    # exc_info (log_job, main.py's global exception handler) get it
+    # auto-captured by sentry_config.py's LoggingIntegration - calling
+    # capture_exception() here too would report one failure as two
+    # separate Sentry events.
+    monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
+    _clear_cooldown("app_server:KeyError")
+    monkeypatch.setattr(error_alerts, "send_transactional_email", lambda *a, **k: None)
+    captured = []
+    monkeypatch.setattr(sentry_sdk, "capture_exception", lambda exc: captured.append(exc))
+
+    send_error_alert("app_server", KeyError("already logged"), already_captured=True)
+
+    assert captured == []
+
+
 def test_sentry_capture_is_not_gated_by_the_email_cooldown(monkeypatch):
     # Sentry has its own server-side occurrence/frequency tracking per
     # Issue - gating it behind the same 6-hour cooldown email uses would

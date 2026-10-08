@@ -187,7 +187,6 @@ from scan_worker.model_tiers import (
     flash_review_model_used,
     health_fix_suggestion_model_used,
     managed_audit_model_used,
-    model_for_plan,
     resolve_model,
     writing_adapter_for,
     writing_adapter_for_airview,

@@ -86,12 +86,14 @@ class AnthropicAdapter(AgentAdapter):
         on_usage: Callable[[int, int], None] | None = None,
         before_llm_call: Callable[[], bool] | None = None,
         allow_partial_report: bool = False,
+        on_call_failed: Callable[[], None] | None = None,
     ) -> None:
         self._model = model
         self._credentials_path = credentials_path or DEFAULT_CREDENTIALS_PATH
         self._on_usage = on_usage
         self._before_llm_call = before_llm_call
         self._allow_partial_report = allow_partial_report
+        self._on_call_failed = on_call_failed
 
     def is_available(self) -> bool:
         return has_api_key("ANTHROPIC_API_KEY", self.name, self._credentials_path)
@@ -100,6 +102,12 @@ class AnthropicAdapter(AgentAdapter):
         self._ensure_budget_for_next_call()
         api_key = get_api_key("ANTHROPIC_API_KEY", self.name, self._credentials_path)
         if not api_key:
+            # The reservation above is real; nothing will true it up or
+            # release it once we raise before the try block below - same
+            # fix openai_compatible.py's adapter already has for the
+            # identical shape.
+            if self._on_call_failed is not None:
+                self._on_call_failed()
             raise AdapterInvocationError("no API key available for anthropic")
 
         client = Anthropic(api_key=api_key)
@@ -114,11 +122,25 @@ class AnthropicAdapter(AgentAdapter):
                 _RETRYABLE_EXCEPTIONS,
             )
         except Exception as exc:
+            # _ensure_budget_for_next_call above already reserved real
+            # budget for this attempt - a failed call still needs that
+            # reservation released, or a run of failures silently
+            # exhausts the budget against zero real usage.
+            if self._on_call_failed is not None:
+                self._on_call_failed()
             raise AdapterInvocationError(
                 f"anthropic invocation failed: {type(exc).__name__}"
             ) from exc
-        if self._on_usage is not None and response.usage is not None:
-            self._on_usage(response.usage.input_tokens, response.usage.output_tokens)
+        if response.usage is not None:
+            if self._on_usage is not None:
+                self._on_usage(response.usage.input_tokens, response.usage.output_tokens)
+        elif self._on_call_failed is not None:
+            # A response with no usage field would otherwise never true up
+            # or release the reservation above (nothing raised, so the
+            # except block never runs) - same real, observed gap
+            # openai_compatible.py's adapter closed for its own "200 with
+            # no usage" shape.
+            self._on_call_failed()
         return "\n".join(block.text for block in response.content if block.type == "text")
 
     def invoke(self, instruction: str, cwd: str) -> str:
@@ -179,9 +201,21 @@ class AnthropicAdapter(AgentAdapter):
                     _RETRYABLE_EXCEPTIONS,
                 )
             except Exception as exc:
+                # _has_budget_for_next_call above already reserved real
+                # budget for this round - a failed call still needs that
+                # reservation released, same fix simple_completion's own
+                # except block has, once per round instead of once per
+                # call (mirrors openai_compatible.py's adapter).
+                if self._on_call_failed is not None:
+                    self._on_call_failed()
                 raise AdapterInvocationError(
                     f"anthropic invocation failed: {type(exc).__name__}"
                 ) from exc
+            if response.usage is None and self._on_call_failed is not None:
+                # Same real, observed shape simple_completion's own comment
+                # documents: a response with no usage field, which the
+                # except block above never sees since nothing raised.
+                self._on_call_failed()
 
             messages.append({"role": "assistant", "content": response.content})
             tool_use_blocks = [block for block in response.content if block.type == "tool_use"]

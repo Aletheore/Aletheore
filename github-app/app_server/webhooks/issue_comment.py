@@ -4,80 +4,18 @@ import logging
 from app_server.config import get_settings
 from app_server.db import get_installation, is_repo_hidden
 from app_server.github_auth import generate_app_jwt, get_installation_token, get_repo_permission_for_user
+from app_server.webhooks.comment_commands import command_candidate_lines, matches_command
 
 logger = logging.getLogger(__name__)
 
 AUDIT_COMMAND = "/aletheore audit"
 
-
-def _matches_command(line: str, command: str) -> bool:
-    """True if `line` (already stripped) IS `command`, or starts with
-    `command` followed by whitespace - not a bare string-prefix check.
-
-    Real bug this closes: `line.startswith(command)` also matches an
-    ordinary English word sharing the same stem - "/aletheore auditing
-    this PR now" or "/aletheore auditorium" both satisfied the old
-    check, on a GitHub PR thread whose entire subject is reviewing/
-    auditing code, exactly the conversational context where a commenter
-    typing a sentence starting with "audit..." is a real, not
-    hypothetical, risk. Confirmed directly: both fired the real, billed,
-    AIR-tier-gated managed-audit job with no intent to trigger it.
-    """
-    if line == command:
-        return True
-    return line.startswith(command) and line[len(command) : len(command) + 1].isspace()
-
-
-def _fence_marker(stripped: str) -> tuple[str, int] | None:
-    """Return (fence_char, run_length) if `stripped` is a fence marker line
-    (a run of 3+ backticks or tildes), else None."""
-    if not stripped:
-        return None
-    char = stripped[0]
-    if char not in ("`", "~"):
-        return None
-    length = len(stripped) - len(stripped.lstrip(char))
-    if length < 3:
-        return None
-    return char, length
-
-
-def _command_candidate_lines(body: str):
-    """Lines of a comment that could be a real command invocation: not inside
-    a fenced code block and not an indented (4 spaces / tab) code block, so a
-    maintainer documenting the command doesn't fire a real billed audit.
-
-    Real bug this closes: comparing only the first 3 characters of a line
-    to decide whether it closes a fence let a closing marker SHORTER than
-    the opening one (e.g. a literal ``` line documented inside a ````-fenced
-    block) end tracking early, exposing a command still inside the real
-    fence per GitHub's own CommonMark/GFM rendering (a closing fence must
-    be >= the opening fence's length). Confirmed directly: this previously
-    let a billed audit fire from a comment whose command was, visually and
-    per GitHub's rendering, inside a code block.
-    """
-    fence_char: str | None = None
-    fence_len = 0
-    for raw in body.splitlines():
-        stripped = raw.strip()
-        marker = _fence_marker(stripped)
-        if marker is not None:
-            char, length = marker
-            if fence_char is None:
-                fence_char, fence_len = char, length
-                continue
-            if char == fence_char and length >= fence_len and stripped[length:].strip() == "":
-                fence_char = None
-                fence_len = 0
-                continue
-            # A fence-shaped line that doesn't close the open fence (too
-            # short, wrong character, or has trailing content) is literal
-            # content inside the fence - fall through to the check below.
-        if fence_char is not None:
-            continue
-        if raw.startswith(("    ", "\t")):
-            continue
-        yield stripped
+# Re-exported under their old private names: comment_commands.py now holds
+# the real implementation (shared with pull_request_review_comment.py's
+# /dismiss gate, see that module's own history for why), but this module
+# keeps these names since tests and call sites below already use them.
+_matches_command = matches_command
+_command_candidate_lines = command_candidate_lines
 
 
 # Anyone who can push to the repo can already do everything a managed audit

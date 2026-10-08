@@ -437,3 +437,99 @@ def test_simple_completion_reports_usage_to_callback(mock_anthropic_class, tmp_p
         adapter.simple_completion("system text", "user text", cwd="/repo")
 
     assert usage_calls == [(123, 45)]
+
+
+def test_simple_completion_releases_reservation_when_api_key_is_missing(tmp_path):
+    # Real bug found via the backward PR audit of #915-977: openai_
+    # compatible.py's adapter got this exact fix (#941) - a missing key
+    # raises before the try block, so nothing ever trues up or releases
+    # the reservation _ensure_budget_for_next_call already took unless
+    # the caller is told to release it itself.
+    released = []
+    adapter = _adapter(tmp_path, on_call_failed=lambda: released.append(1))
+    with patch("aletheore.adapters.anthropic_native.get_api_key", return_value=None):
+        with pytest.raises(AdapterInvocationError, match="no API key"):
+            adapter.simple_completion("system text", "user text", cwd="/repo")
+
+    assert released == [1]
+
+
+@patch("aletheore.adapters.anthropic_native.Anthropic")
+def test_simple_completion_releases_reservation_when_the_call_fails(mock_anthropic_class, tmp_path):
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    mock_client.messages.create.side_effect = RuntimeError("boom")
+
+    released = []
+    adapter = _adapter(tmp_path, on_call_failed=lambda: released.append(1))
+    with patch("aletheore.adapters.anthropic_native.get_api_key", return_value="sk-ant-test"):
+        with pytest.raises(AdapterInvocationError):
+            adapter.simple_completion("system text", "user text", cwd="/repo")
+
+    assert released == [1]
+
+
+@patch("aletheore.adapters.anthropic_native.Anthropic")
+def test_simple_completion_releases_reservation_when_response_has_no_usage(mock_anthropic_class, tmp_path):
+    # A response with no usage field never raises, so the except block's
+    # release never runs either - the same gap openai_compatible.py's
+    # adapter closed for its own "200 with no usage" shape.
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    text_block = MagicMock()
+    text_block.type = "text"
+    text_block.text = "answer"
+    mock_response = MagicMock()
+    mock_response.content = [text_block]
+    mock_response.usage = None
+    mock_client.messages.create.return_value = mock_response
+
+    released = []
+    usage_calls = []
+    adapter = _adapter(
+        tmp_path,
+        on_usage=lambda p, c: usage_calls.append((p, c)),
+        on_call_failed=lambda: released.append(1),
+    )
+    with patch("aletheore.adapters.anthropic_native.get_api_key", return_value="sk-ant-test"):
+        adapter.simple_completion("system text", "user text", cwd="/repo")
+
+    assert released == [1]
+    assert usage_calls == []
+
+
+@patch("aletheore.adapters.anthropic_native.Anthropic")
+def test_invoke_releases_reservation_when_a_round_fails(mock_anthropic_class, tmp_path):
+    # Same fix as simple_completion's, once per round instead of once per
+    # call: _has_budget_for_next_call already reserved real budget for
+    # this round before the failing call.
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    mock_client.messages.create.side_effect = RuntimeError("boom")
+
+    released = []
+    adapter = _adapter(tmp_path, on_call_failed=lambda: released.append(1))
+    with patch("aletheore.adapters.anthropic_native.get_api_key", return_value="sk-ant-test"):
+        with pytest.raises(AdapterInvocationError):
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+    assert released == [1]
+
+
+@patch("aletheore.adapters.anthropic_native.Anthropic")
+def test_invoke_releases_reservation_when_a_round_has_no_usage(mock_anthropic_class, tmp_path):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    responses = _write_all_sections_then_finish_responses()
+    for response in responses:
+        response.usage = None
+    mock_client.messages.create.side_effect = responses
+
+    released = []
+    adapter = _adapter(tmp_path, on_call_failed=lambda: released.append(1))
+    with patch("aletheore.adapters.anthropic_native.get_api_key", return_value="sk-ant-test"):
+        adapter.invoke("audit this repo", cwd=str(repo))
+
+    assert len(released) == len(responses)
