@@ -11,6 +11,6 @@ describe("homepage metadata", () => {
   });
   it("keeps the three published offers with their prices", () => {
     const prices = Object.fromEntries((ld.offers as { name: string; price: string }[]).map((o) => [o.name, o.price]));
-    expect(prices).toMatchObject({ "Aletheore Community": "0", "Aletheore Flash": "8", "Aletheore AIR": "29.99" });
+    expect(prices).toMatchObject({ "Aletheore Community": "0", "Aletheore Flash": "10", "Aletheore AIR": "29.99" });
   });
 });

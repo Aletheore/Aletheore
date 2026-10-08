@@ -8,13 +8,13 @@ const h2 = (html: string) => (html.match(/<h2>/g) ?? []).length;
 describe("ported policy pages", () => {
   it("keep every section of the published pages", () => {
     expect(h2(legal.privacy.html)).toBe(5);
-    expect(h2(legal.terms.html)).toBe(5);
-    expect(h2(legal.refund.html)).toBe(3);
+    expect(h2(legal.terms.html)).toBe(6);
+    expect(h2(legal.refund.html)).toBe(4);
     expect(h2(legal.security.html)).toBe(7);
   });
   it("keep the dated headers and the 14-day refund window", () => {
-    expect(legal.privacy.updated).toBe("Last updated: August 2026");
-    expect(legal.terms.updated).toBe("Last updated: July 2026");
+    expect(legal.privacy.updated).toBe("Last updated: October 2026");
+    expect(legal.terms.updated).toBe("Last updated: October 2026");
     expect(legal.refund.html).toContain("14 days");
   });
   it("state the GitHub App permissions the App actually holds (checked against GitHub's public apps API on 2026-09-27)", () => {
@@ -26,7 +26,7 @@ describe("ported policy pages", () => {
     expect(h).not.toContain("repository contents (read),");
   });
   it("state the current prices in the terms", () => {
-    expect(legal.terms.html).toContain("$8/month");
+    expect(legal.terms.html).toContain("$10/month");
     expect(legal.terms.html).toContain("$29.99/month or $299.90/year");
     expect(legal.terms.html).toContain("$6.99/month");
   });
