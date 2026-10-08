@@ -4,8 +4,73 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-10-04
-**Snapshot Freshness:** CURRENT as of 2026-10-04 - production was redeployed to `master` (commit
+**Last Updated:** 2026-10-08
+**Snapshot Freshness:** CURRENT as of 2026-10-08 - production was redeployed to `master` (commit
+`e3182a9f`, tagged `github-app-deploy-2026-10-08`) and re-verified live via SSH the same session.
+238 commits (70 merged PRs) since the previous deploy (`6e921475`, 2026-10-04). All six app services
+were rebuilt and recreated, including `jina-embed`, which had not been rebuilt since 2026-09-26.
+
+What changed in production, grouped (PR numbers are the merged ones; `git log 6e921475..e3182a9f`
+is the exact range):
+
+- **Money and billing:** AIRview's shared spend-reservation scalar leaked money across worker threads
+  (#917), the overnight audit's three bugs including a crash-leak sweep for held reservations (#918),
+  a Paddle paid-setup claim consumed even when setup failed (#947), affiliate creation orphaning a live
+  Paddle discount (#958), seat buy and remove idempotency (#975).
+- **Flash Review:** a transient GitHub error no longer aborts the whole review (#921), per-file findings
+  cap scales (#923), cache-hit findings get the cross-file re-check (#924), patch reconstruction no
+  longer fails open (#946), incremental reviews no longer post on merged-in code, falsely resolve
+  untouched findings, or review files outside the PR (#968, #971), and the shared-state semantic check
+  stopped firing on constructors and imports (#987).
+- **Webhooks and platform:** login no longer 500s during a GitHub outage (#945), `/aletheore audit` and
+  `/dismiss` inside a code block no longer fire (#949, #980), org-wide install no longer blocks the event
+  loop (#948) and retries a failed repo enumeration (#974), check-run idempotency and rate-limit backoff
+  (#976), embedding provider switch and embeddings-token usage fixes (#953, #954).
+- **Scanners (the code the workers run):** CVE scanning now sees nested npm lockfile dependencies, legacy
+  lockfile v1, Maven property chains and Composer dev dependencies (#934, #938, #939, #940); git
+  analysis fixes for rewritten history, deleted files, shallow clones and renames (#937, #950, #951,
+  #977); and the large-repo scan performance work (#985), which also adds the per-file cache and the
+  default 50k and 20k history caps to local scans (hosted already used them).
+- **Security and infrastructure:** PMD 7.28.0 closes CVE-2026-75140 (jsoup) in the scan-worker image
+  (#964), semgrep now lives in its own venv with a patched protobuf (#962), plus the Dependabot bumps
+  that merged in the window.
+- **Observability:** Sentry error tracking across `app_server`, `scan_worker` and `jina_embed` (#961), with
+  a fix so a logged exception that also alerts is reported once, not twice (#978).
+
+One new migration, `072_llm_spend_reservations.sql` (additive and idempotent: `CREATE TABLE IF NOT
+EXISTS` plus an index), which the new reservation sweep job needs. Order of operations, chosen for that
+dependency: a fresh Postgres backup first (`backups/aletheore_app_2026-10-08T18-32-15Z.dump`, taken with
+`scripts/backup-postgres.sh`), `git reset --hard origin/master`, build all six images (exit 0, no errors),
+then `app-server` alone first so the migration was applied before any worker ran the new code, then the
+two scan workers, `health-worker`, `scheduler` and `jina-embed`, using `up -d --no-deps` and no `--scale`.
+
+Verified live the same session: `docker ps` shows exactly `github-app-scan-worker-1` and
+`github-app-scan-worker-2-1`, with `app-server`, both workers, `health-worker`, `scheduler` and
+`jina-embed` all `healthy` within about 25 seconds of recreation; zero lines matching
+`error|traceback|exception` in any of the six services' logs since restart; `/healthz` returns
+`200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`; `schema_migrations` shows `072` as the newest row and
+`to_regclass('public.llm_spend_reservations')` resolves; and the new code is in the *running* containers,
+not just the checkout (`reviewed_scope` in `scan_worker/jobs.py` x12, `_callable_handed_to_concurrency`
+in `semantic_checks.py`, `already_captured` in `error_alerts.py`, `webhooks/comment_commands.py`
+present, `aletheore.git_intel.history_meta`, `file_cache` and `sentry_reporting` import cleanly,
+semgrep 1.179.0 and PMD 7.28.0 on `PATH`).
+
+**Sentry is live.** `SENTRY_DSN` and `SENTRY_ENVIRONMENT=production` were added to the server's
+`github-app/.env` (the backend project, separate from the CLI's own project) before the services were
+recreated, so one restart picked them up; `jina-embed` receives them through compose interpolation of the
+same file. All six containers have `SENTRY_DSN` set. A logged test exception from inside the running
+`app-server` container (`init_sentry("deploy-smoke")`, SDK active, environment `production`,
+`send_default_pii` false) and a direct ingest request from the same container (HTTP 200) confirm the
+path to Sentry works from production. The server keeps `github-app/.env.bak-pre-sentry-<timestamp>`
+(mode 600, the file as it was before this edit); delete it when it is no longer needed, since it holds
+secrets. Rollback is `git reset --hard 6e921475`, rebuild and recreate; migration `072` is additive
+and needs no undo.
+
+Not re-verified this pass (no relevant Dockerfile or host changes beyond the scan-worker tool
+versions above): Docker socket mount absence, non-root users, CPU and memory limits, backup cron
+execution, base-image digest pinning, restore-drill target availability.
+
+**Previous:** CURRENT as of 2026-10-04 - production was redeployed to `master` (commit
 `6e921475`, tagged `github-app-deploy-2026-10-04`) and re-verified live via SSH the same session.
 This file's own tracking had drifted from reality before this deploy: the previous header entry
 below (tag `github-app-deploy-2026-09-30-2`, commit `f11d1bbe`) was stale, and the "Current Server

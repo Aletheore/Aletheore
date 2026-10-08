@@ -22,6 +22,8 @@
     "docs/**/*.md"
   ],
   "words": [
+    "jsoup",
+    "regclass",
     "Aletheore",
     "AIRview",
     "IndieRouter",
