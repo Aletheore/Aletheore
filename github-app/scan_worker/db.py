@@ -936,11 +936,19 @@ def check_run_creation_lock(dsn: str, repo_full_name: str, head_sha: str, name: 
     wiki_write_lock: the loser of the race should wait its turn and then
     see the winner's check run already exists (the lookup it performs
     right after acquiring this lock), not fail fast or skip its own
-    attempt at creating one. The held window is small - one GET plus, at
-    most, one POST to GitHub's API - not a slow AI-writing job like
-    wiki_write_lock, so this never meaningfully delays an unrelated job
-    for the same repo waiting on a DIFFERENT check name or head_sha (the
-    key includes both, unlike repo_checkout_lock's repo-wide scope).
+    attempt at creating one. The held window is normally small - one GET
+    plus, at most, one POST to GitHub's API - not a slow AI-writing job
+    like wiki_write_lock, so this usually doesn't meaningfully delay an
+    unrelated job for the same repo waiting on a DIFFERENT check name or
+    head_sha (the key includes both, unlike repo_checkout_lock's
+    repo-wide scope). Not guaranteed small, though: the client passed in
+    is get_github_api_client()'s, wrapped in _RateLimitRetryTransport
+    (app_server/http_client.py), so a 403/429 on either call can sleep
+    synchronously for up to _MAX_RATE_LIMIT_BACKOFF_SECONDS (60s) while
+    this lock is still held - worth knowing if that ever needs
+    shortening (e.g. release the lock before the GET/POST and re-acquire
+    only around the actual create), not yet done since it requires
+    accepting a narrower residual TOCTOU.
     """
     key = f"{repo_full_name}:{head_sha}:{name}"
     conn = psycopg.connect(dsn, autocommit=True)

@@ -7889,7 +7889,6 @@ def test_sweep_burns_the_cooldown_when_llm_call_completes_with_unknown_verdict(m
     monkeypatch.setattr(
         "scan_worker.jobs.fetch_file_content", lambda *a, **k: "def handler():\n    pass\n"
     )
-    monkeypatch.setattr("scan_worker.jobs.model_for_plan", lambda *a, **k: "gpt-5.6-luna")
 
     class _UnknownAdapter:
         def simple_completion(self, *a, **k):
@@ -11579,7 +11578,6 @@ def test_fix_suggestion_attachment_reserves_spend_atomically_against_concurrent_
     monkeypatch.setattr(
         "scan_worker.jobs.fetch_file_content", lambda *a, **k: "def handler():\n    pass\n"
     )
-    monkeypatch.setattr("scan_worker.jobs.model_for_plan", lambda *a, **k: "gpt-5.6-luna")
 
     # Only one reservation of HEALTH_FIX_SUGGESTION_LLM_RESERVE_USD fits
     # under this cap - the second concurrent call must be rejected.
