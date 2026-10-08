@@ -5,30 +5,24 @@ from app_server.config import get_settings
 from app_server.db import get_flash_review_finding_comment_by_github_id, is_repo_hidden
 from app_server.dismissed_findings import dismiss_finding_by_identity_key
 from app_server.github_auth import generate_app_jwt, get_installation_token, get_repo_permission_for_user
+from app_server.webhooks.comment_commands import command_candidate_lines, matches_command
 
 logger = logging.getLogger(__name__)
 
 DISMISS_COMMAND = "/dismiss"
 
-
-def _matches_command(line: str, command: str) -> bool:
-    """True if `line` (already stripped) IS `command`, or starts with
-    `command` followed by whitespace - not a bare string-prefix check.
-
-    Real bug this closes: `line.startswith(command)` also matches an
-    ordinary English word sharing the same stem - "/dismissed this
-    already" or "/dismissing for now" both satisfied the old check, on a
-    thread whose entire subject is dismissing/discussing findings,
-    exactly the conversational context where this is a real risk.
-    Confirmed directly: both silently dismissed a real finding with no
-    intent to trigger it, and (via the identical bug in _dismiss_reason
-    below) recorded a garbled reason - "/dismissed this already"[8:]
-    slices into the middle of the word itself, producing "ed this
-    already" as the stored dismissal reason.
-    """
-    if line == command:
-        return True
-    return line.startswith(command) and line[len(command) : len(command) + 1].isspace()
+# Re-exported under its old private name: comment_commands.py now holds the
+# real implementation, shared with issue_comment.py's /aletheore audit
+# gate. Kept separate from that module's own real bug (`_matches_command`
+# alone, with no fence-awareness) found by the backward PR audit of
+# #915-977: this file's /dismiss gate and _dismiss_reason both used to
+# iterate body.splitlines() directly with no fence or indent awareness at
+# all, never receiving the fence-awareness fix #949 gave the audit
+# command - a maintainer replying with a fenced or indented example of
+# "/dismiss" (quoting the command while discussing it, exactly the kind of
+# thread this feature lives in) could silently dismiss a real finding with
+# no intent to trigger it.
+_matches_command = matches_command
 
 
 # Same reasoning as issue_comment.py's AUDIT_COMMAND gate: anyone who can
@@ -48,11 +42,15 @@ def _verify_commenter_permission_sync(
 def _dismiss_reason(body: str) -> str | None:
     """Whatever follows /dismiss on its own line, trimmed - None if the
     command is bare (no reason given). Only the first matching line is
-    used; a reply is one short comment, not a document."""
-    for line in body.splitlines():
-        stripped = line.strip()
-        if _matches_command(stripped, DISMISS_COMMAND):
-            reason = stripped[len(DISMISS_COMMAND):].strip()
+    used; a reply is one short comment, not a document.
+
+    Uses command_candidate_lines, not a bare body.splitlines(), so a
+    fenced or indented example of "/dismiss" in the same reply (e.g.
+    quoting the real command above it while explaining why) isn't read
+    as the reason for a dismissal that line didn't actually trigger."""
+    for line in command_candidate_lines(body):
+        if _matches_command(line, DISMISS_COMMAND):
+            reason = line[len(DISMISS_COMMAND):].strip()
             return reason or None
     return None
 
@@ -82,7 +80,7 @@ async def handle_pull_request_review_comment_event(payload: dict, pool, redis_ur
     if comment.get("user", {}).get("type") == "Bot":
         return  # never act on our own resolution-edit comments or any other bot's reply
     body = comment.get("body", "")
-    if not any(_matches_command(line.strip(), DISMISS_COMMAND) for line in body.splitlines()):
+    if not any(_matches_command(line, DISMISS_COMMAND) for line in command_candidate_lines(body)):
         return
 
     installation_id = payload["installation"]["id"]
