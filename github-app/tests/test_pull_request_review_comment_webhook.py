@@ -318,3 +318,84 @@ async def test_dismiss_reply_only_affects_the_specific_finding_type_replied_to(p
     dismissed = await get_dismissed_identity_keys(pool, 111, "octocat/hello-world")
     assert "shared\x1fkey" in dismissed["flash_review_llm"]
     assert "shared\x1fkey" not in dismissed["flash_review_semantic"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        "To dismiss, reply:\n```\n/dismiss\n```",
+        "To dismiss, reply:\n~~~\n/dismiss\n~~~",
+        "Example:\n\n    /dismiss\n",
+    ],
+)
+async def test_dismiss_command_inside_a_code_block_does_not_record(pool, monkeypatch, body):
+    # Real sibling gap found by the backward PR audit of #915-977: this
+    # gate used to iterate body.splitlines() directly with no fence or
+    # indent awareness at all, unlike issue_comment.py's /aletheore audit
+    # gate (fixed by #949) - a maintainer quoting "/dismiss" while
+    # discussing it, in exactly the kind of thread this feature lives in,
+    # would silently dismiss a real finding with no intent to trigger it.
+    await _seed_installation(pool)
+    await _seed_tracked_comment(pool)
+    _mock_permission_check(monkeypatch, "write")
+
+    await handle_pull_request_review_comment_event(_payload(body), pool, "redis://unused")
+
+    dismissed = await get_dismissed_identity_keys(pool, 111, "octocat/hello-world")
+    assert dismissed["flash_review_llm"] == set()
+
+
+@pytest.mark.asyncio
+async def test_dismiss_command_inside_a_shorter_nested_fence_does_not_record(pool, monkeypatch):
+    # Same CommonMark/GFM nested-fence edge case #949 covered for the
+    # audit command: a closing fence must be the same character and >=
+    # the opening fence's length, so a literal ``` line inside a
+    # ````-opened block does not close it.
+    await _seed_installation(pool)
+    await _seed_tracked_comment(pool)
+    _mock_permission_check(monkeypatch, "write")
+
+    await handle_pull_request_review_comment_event(
+        _payload("````\n```\n/dismiss\n````"), pool, "redis://unused"
+    )
+
+    dismissed = await get_dismissed_identity_keys(pool, 111, "octocat/hello-world")
+    assert dismissed["flash_review_llm"] == set()
+
+
+@pytest.mark.asyncio
+async def test_dismiss_command_after_a_closed_code_block_still_records(pool, monkeypatch):
+    await _seed_installation(pool)
+    await _seed_tracked_comment(pool)
+    _mock_permission_check(monkeypatch, "write")
+
+    await handle_pull_request_review_comment_event(
+        _payload("```\nfoo\n```\n/dismiss"), pool, "redis://unused"
+    )
+
+    dismissed = await get_dismissed_identity_keys(pool, 111, "octocat/hello-world")
+    assert "app.py\x1f10\x1fabc123" in dismissed["flash_review_llm"]
+
+
+@pytest.mark.asyncio
+async def test_dismiss_reason_ignores_a_fenced_example_of_the_command(pool, monkeypatch):
+    # _dismiss_reason also used to read body.splitlines() directly - a
+    # fenced example above the real command must not be read as (part of)
+    # the stored reason.
+    await _seed_installation(pool)
+    await _seed_tracked_comment(pool)
+    _mock_permission_check(monkeypatch, "write")
+
+    await handle_pull_request_review_comment_event(
+        _payload("```\n/dismiss not this one\n```\n/dismiss false positive, retried"),
+        pool,
+        "redis://unused",
+    )
+
+    row = await pool.fetchrow(
+        "SELECT reason FROM dismissed_findings WHERE installation_id = $1 AND identity_key = $2",
+        111,
+        "app.py\x1f10\x1fabc123",
+    )
+    assert row["reason"] == "false positive, retried"
