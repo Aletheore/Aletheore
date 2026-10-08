@@ -697,6 +697,14 @@ def _extract_module_constants(node: Node, source: bytes, language: str) -> list[
                         target = child.child_by_field_name("declarator") or child
                     if target.type == "identifier":
                         add(target, n)
+            if t == "compound_statement" and b"define" not in source[n.start_byte:n.end_byte]:
+                # A function body can't hold a top-level declaration
+                # (is_top_level fails on its children), so the only thing worth
+                # finding in one is a #define. Skipping bodies without one keeps
+                # the output identical and skips most of the tree: this pass was
+                # ~37% of module-graph time on the Linux kernel. Matches
+                # "define", not "#define": `#  define X` is valid C (fmt uses it).
+                continue
 
         stack.extend(reversed(n.children))
 
