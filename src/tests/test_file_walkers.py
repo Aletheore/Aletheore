@@ -55,10 +55,16 @@ def tree(tmp_path):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("x\n")
     (repo / "big.py").write_bytes(b"x" * (MAX_SCANNED_FILE_BYTES + 1))
-    os.symlink(repo / "a" / "b.py", repo / "link_to_file.py")
-    os.symlink(repo / "a", repo / "link_to_dir")
-    os.symlink(repo / "missing.py", repo / "dangling.py")
-    os.mkfifo(repo / "fifo.py")
+    # Symlinks need Developer Mode or admin rights on Windows, and FIFOs don't
+    # exist there: add what the platform allows, so the walkers are still
+    # compared against the reference on every OS.
+    for target, link, is_dir in (("a/b.py", "link_to_file.py", False), ("a", "link_to_dir", True), ("missing.py", "dangling.py", False)):
+        try:
+            os.symlink(repo / target, repo / link, target_is_directory=is_dir)
+        except OSError:
+            pass
+    if hasattr(os, "mkfifo"):
+        os.mkfifo(repo / "fifo.py")
     return repo
 
 

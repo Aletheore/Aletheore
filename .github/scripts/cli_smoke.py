@@ -18,6 +18,10 @@ import urllib.request
 from pathlib import Path
 
 WIN = sys.platform == "win32"
+# A FAIL's detail is the CLI's own output, which can hold characters the
+# runner's console codepage (cp1252 on Windows) can't encode, e.g. Rich's box
+# drawing. Escape them rather than crash before the failure is printed.
+sys.stdout.reconfigure(errors="backslashreplace")
 EXE = shutil.which("aletheore")
 ROOT = Path(tempfile.mkdtemp(prefix="aletheore-smoke-"))
 HOME = ROOT / "home"
