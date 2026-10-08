@@ -208,6 +208,9 @@
     "lancedb",
     "DOTALL",
     "executemany",
-    "rescanned"
+    "rescanned",
+    "getpass",
+    "inotify",
+    "MSIX"
   ]
 }

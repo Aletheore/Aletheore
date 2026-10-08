@@ -389,6 +389,22 @@ Clears the locally saved managed-audit token. Safe to run even if not currently 
 Prints the installed version, whether a newer one is available on PyPI, and - if a
 managed-audit token is saved - who it's logged in as and which plan that installation is on.
 
+### Crash reporting
+
+If the CLI itself crashes with an unhandled exception, it sends a crash report so bugs that only show up
+on some operating systems or Python versions can be found. It is on by default.
+
+- **Sent:** the exception details and stack trace, the Aletheore, OS and Python versions, and recent log
+  lines. Your home directory is replaced with `~`. Command-line arguments, the machine name, local
+  variables and request data are removed first. An exception message can still name a file or path from
+  the project you were scanning.
+- **Never sent:** usage events, timing, performance traces or repository contents. Nothing is sent unless
+  the CLI crashes.
+- **Turn it off:** `aletheore config crash-reporting off`, or set `ALETHEORE_CRASH_REPORTING=0` (also
+  `false`, `no`, `off`). `aletheore config crash-reporting on` turns it back on, and
+  `aletheore config crash-reporting` with no argument, like `aletheore status`, shows the current state.
+- You see a one-time notice on first run and a line after any crash that was reported, both on stderr.
+
 ### `aletheore query <kind> [target]`
 
 Answers one targeted question from an existing `air.json`, without re-scanning or an LLM
