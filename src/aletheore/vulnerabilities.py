@@ -6,6 +6,7 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from pathlib import Path
 
 from xml.etree import ElementTree
@@ -17,6 +18,16 @@ from aletheore.user_paths import user_home
 OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 OSV_VULN_URL_TEMPLATE = "https://api.osv.dev/v1/vulns/{vuln_id}"
 DEFAULT_TIMEOUT_SECONDS = 10
+
+# Each advisory detail is its own blocking HTTP call, one per vuln found -
+# same shape as licenses.py's per-package registry lookup, which hit the
+# same 3+ minute serial wall on a repo with hundreds of pins. Bounded, not
+# unbounded, so a repo with many findings stays polite to OSV.dev.
+VULN_DETAIL_FETCH_CONCURRENCY = 20
+# Same reasoning as LICENSE_FETCH_WALL_CLOCK_TIMEOUT_SECONDS: bounds total
+# wait for one advisory fetch, not just a single blocking socket op, so one
+# slow-drip response can never hang the whole check.
+VULN_DETAIL_FETCH_WALL_CLOCK_TIMEOUT_SECONDS = 30
 
 # Unlike a package's license (effectively invariant once published), new
 # vulnerabilities get disclosed against already-published old versions all
@@ -878,8 +889,15 @@ def _query_batch(pins: list[tuple[str, str, str]], timeout: int) -> list[dict]:
 
 def _fetch_vuln_detail(vuln_id: str, timeout: int) -> dict:
     request = urllib.request.Request(OSV_VULN_URL_TEMPLATE.format(vuln_id=vuln_id))
-    with urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT) as response:
-        return json.loads(response.read())
+    try:
+        with urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT) as response:
+            return json.loads(response.read())
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+        # One advisory's detail lookup failing isn't the same as the whole
+        # check being unreachable - same reasoning as _fetch_one_license in
+        # licenses.py. The caller still reports the finding, just without
+        # a summary/severity.
+        return {}
 
 
 def _vulnerability_cache_key(ecosystem: str, name: str, version: str) -> str:
@@ -982,24 +1000,45 @@ def check_vulnerabilities(
             }
         _save_vulnerability_cache(cache_path, cache)
 
-    findings = []
-    for (name, version, ecosystem), result in zip(pins, results):
-        for vuln in result.get("vulns", []):
+    vuln_entries: list[tuple[str, str, str, dict]] = [
+        (name, version, ecosystem, vuln)
+        for (name, version, ecosystem), result in zip(pins, results)
+        for vuln in result.get("vulns", [])
+    ]
+    if not vuln_entries:
+        return {"checked": True, "reason": None, "findings": []}
+
+    # Each advisory detail is an independent blocking HTTP call - a thread
+    # pool overlaps their network wait instead of paying it serially, same
+    # fix as check_dependency_licenses' per-package lookups in licenses.py.
+    # Submitted individually (not executor.map, which blocks later results
+    # behind an earlier stuck one) with a per-future wall-clock timeout, for
+    # the same reasons as LICENSE_FETCH_WALL_CLOCK_TIMEOUT_SECONDS.
+    executor = ThreadPoolExecutor(max_workers=VULN_DETAIL_FETCH_CONCURRENCY)
+    try:
+        futures = [executor.submit(_fetch_vuln_detail, vuln["id"], timeout) for *_, vuln in vuln_entries]
+        details = []
+        for future in futures:
             try:
-                detail = _fetch_vuln_detail(vuln["id"], timeout)
-            except (urllib.error.URLError, TimeoutError, OSError):
-                detail = {}
-            summary = detail.get("summary") or (detail.get("details") or "")[:200]
-            findings.append(
-                {
-                    "ecosystem": ecosystem,
-                    "package": name,
-                    "installed_version": version,
-                    "advisory_id": vuln["id"],
-                    "summary": summary,
-                    "severity": detail.get("severity", []),
-                }
-            )
+                details.append(future.result(timeout=VULN_DETAIL_FETCH_WALL_CLOCK_TIMEOUT_SECONDS))
+            except FutureTimeoutError:
+                details.append({})
+    finally:
+        executor.shutdown(wait=False)
+
+    findings = []
+    for (name, version, ecosystem, vuln), detail in zip(vuln_entries, details):
+        summary = detail.get("summary") or (detail.get("details") or "")[:200]
+        findings.append(
+            {
+                "ecosystem": ecosystem,
+                "package": name,
+                "installed_version": version,
+                "advisory_id": vuln["id"],
+                "summary": summary,
+                "severity": detail.get("severity", []),
+            }
+        )
 
     return {"checked": True, "reason": None, "findings": findings}
 

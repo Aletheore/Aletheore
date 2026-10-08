@@ -21,8 +21,8 @@ describe("home content", () => {
   });
   it("states the Linux stress test numbers exactly", () => {
     const linux = Object.fromEntries(home.proof.linux.stats.map((s) => [s.label, s.value]));
-    expect(linux["Files parsed"]).toBe("64,634");
-    expect(linux["Commits analyzed"]).toBe("1,463,552");
-    expect(linux["Scan time"]).toBe("4m 20s");
+    expect(linux["Files parsed"]).toBe("64,554");
+    expect(linux["Commits analyzed"]).toBe("50,000");
+    expect(linux["Scan time"]).toBe("5m 6s");
   });
 });

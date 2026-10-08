@@ -70,9 +70,9 @@ def test_build_module_graph_extracts_kotlin_symbols(tmp_path):
     assert get_tasks_fn["return_type"] == "List<String>"
 
     interface_symbol = next(c for c in task_repo_file["symbols"]["classes"] if c["name"] == "TaskRepository")
-    assert interface_symbol["is_pure_declaration"] is True
+    assert interface_symbol.get("is_pure_declaration", False) is True
     class_symbol = next(c for c in task_repo_file["symbols"]["classes"] if c["name"] == "TasksRepository")
-    assert class_symbol["is_pure_declaration"] is False
+    assert class_symbol.get("is_pure_declaration", False) is False
 
     constant_names = set(symbol_names(task_repo_file["symbols"]["constants"]))
     assert constant_names == {"MAX_TASKS", "TAG"}

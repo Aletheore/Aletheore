@@ -911,3 +911,19 @@ def test_find_secrets_does_not_mark_random_long_decimal_token_as_placeholder(tmp
 
     assert len(result["findings"]) == 3
     assert all(f["likely_placeholder"] is False for f in result["findings"])
+
+
+def test_find_secrets_parallel_and_sequential_paths_give_identical_output(tmp_path, monkeypatch):
+    import aletheore.scanner.graph as graph
+
+    for i in range(8):
+        (tmp_path / f"cfg{i}.py").write_text(
+            f'AWS_KEY = "AKIA{"ABCDEFGHIJKLMNO" + str(i % 10)}"\nname = "service-{i}"\n'
+        )
+    monkeypatch.setattr(graph, "PARALLEL_PARSE_MIN_FILES", 10**9)
+    sequential = find_secrets(tmp_path)
+    monkeypatch.setattr(graph, "PARALLEL_PARSE_MIN_FILES", 1)
+    monkeypatch.setenv("ALETHEORE_PARALLEL_PARSE_JOBS", "2")
+    parallel = find_secrets(tmp_path)
+    assert parallel == sequential
+    assert sequential["scanned_files"] == 8 and len(sequential["findings"]) == 8

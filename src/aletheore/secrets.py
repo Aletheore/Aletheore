@@ -2,6 +2,7 @@ import hashlib
 import math
 import os
 import re
+import stat
 import subprocess
 import threading
 import zlib
@@ -225,6 +226,7 @@ SECRET_PATTERNS = [
         2,
     ),
 ]
+_PATTERNS_BY_NAME = {name: (pattern, value_group) for name, pattern, value_group in SECRET_PATTERNS}
 
 
 def _overlaps_a_specific_pattern_match(
@@ -247,10 +249,17 @@ def iter_all_files(repo_path: Path, ignored_paths: list[str] | None = None):
     # have its contents walked and reported on as if they were part of this
     # repo. followlinks only stops descent into symlinked *directories* -
     # a symlinked file sitting directly in a real directory still needs its
-    # own explicit is_symlink() check below.
+    # own explicit symlink check below.
+    #
+    # One lstat per file answers "regular file, not a symlink" and the size
+    # check together (lstat == stat once symlinks are excluded), and rel paths
+    # come from the walk rather than Path.relative_to. Same files, same order.
+    from aletheore.scanner.detect import _rel_dir
+
     patterns = ignored_paths or []
+    root_str = str(repo_path)
     for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
-        rel_dir = Path(dirpath).relative_to(repo_path).as_posix()
+        rel_dir = _rel_dir(repo_path, root_str, dirpath)
         dirnames[:] = [
             d
             for d in dirnames
@@ -258,17 +267,19 @@ def iter_all_files(repo_path: Path, ignored_paths: list[str] | None = None):
             and not is_ignored(f"{rel_dir}/{d}" if rel_dir != "." else d, patterns)
         ]
         for filename in filenames:
-            path = Path(dirpath) / filename
-            if path.is_symlink() or not path.is_file():
-                continue
-            if path.suffix in BINARY_EXTENSIONS:
-                continue
+            full = os.path.join(dirpath, filename)
             try:
-                if path.stat().st_size > MAX_SCANNED_FILE_BYTES:
-                    continue
+                st = os.lstat(full)
             except OSError:
                 continue
-            rel_path = path.relative_to(repo_path).as_posix()
+            if not stat.S_ISREG(st.st_mode):
+                continue
+            path = Path(full)
+            if path.suffix in BINARY_EXTENSIONS:
+                continue
+            if st.st_size > MAX_SCANNED_FILE_BYTES:
+                continue
+            rel_path = f"{rel_dir}/{filename}" if rel_dir != "." else filename
             if is_ignored(rel_path, patterns):
                 continue
             yield path
@@ -544,71 +555,141 @@ def _is_accepted(accepted_keys: set[tuple], path: str | None, pattern_name: str,
     return (path, pattern_name, _legacy_redact(value)) in accepted_keys
 
 
-def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
-    findings: list[dict] = []
-    scanned_files = 0
+def _legacy_previews_at(repo_path: Path, finding: dict) -> set[str]:
+    """Legacy first4...last4 previews of the value behind one working-tree
+    finding, re-read from its line in the file. Only called when the baseline
+    holds a legacy-format entry for the finding's (path, pattern), so nothing
+    derived from the raw value is ever stored in the per-file cache."""
+    pattern_and_group = _PATTERNS_BY_NAME.get(finding["pattern"])
+    if pattern_and_group is None:
+        return set()
+    pattern, value_group = pattern_and_group
+    try:
+        text = (repo_path / finding["path"]).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return set()
+    lines = text.split("\n")  # same line numbering as _scan_file_for_secrets
+    if not 1 <= finding["line"] <= len(lines):
+        return set()
+    salt = f"{finding['path']}:{finding['pattern']}"
+    return {
+        _legacy_redact(match.group(value_group))
+        for match in pattern.finditer(lines[finding["line"] - 1])
+        if _redact(match.group(value_group), salt) == finding["match_preview"]
+    }
+
+
+def _apply_baseline(findings: list[dict], baseline: list[dict] | None, repo_path: Path) -> list[dict]:
+    """Same result as _is_accepted on the raw value: match_preview *is* the
+    current-format redaction, and a legacy-format entry is checked against
+    the value re-read from the file (see _legacy_previews_at)."""
     accepted_keys = _baseline_keys(baseline)
+    legacy: dict[tuple, set[str]] = {}
+    for path, pattern, preview in accepted_keys:
+        if isinstance(preview, str) and not preview.startswith("sha256:"):
+            legacy.setdefault((path, pattern), set()).add(preview)
+    out = []
+    for finding in findings:
+        finding = dict(finding)
+        key = (finding["path"], finding["pattern"])
+        finding["accepted"] = (*key, finding["match_preview"]) in accepted_keys or (
+            key in legacy and bool(_legacy_previews_at(repo_path, finding) & legacy[key])
+        )
+        out.append(finding)
+    return out
+
+
+def _scan_many_for_secrets(jobs: list[tuple[Path, str]]) -> list[list[dict]]:
+    from concurrent.futures import ProcessPoolExecutor
+
+    from aletheore.scanner.graph import (
+        PARALLEL_PARSE_MIN_FILES,
+        _available_parallelism,
+        _parallel_parse_disabled,
+    )
+
+    # Every file is independent, so large repos fan out across cores (same
+    # threshold and opt-out as the parallel module-graph parse). map keeps
+    # input order, so findings come back in the same order either way.
+    if len(jobs) >= PARALLEL_PARSE_MIN_FILES and not _parallel_parse_disabled():
+        with ProcessPoolExecutor(max_workers=_available_parallelism()) as executor:
+            return list(executor.map(_scan_file_for_secrets, jobs, chunksize=64))
+    return [_scan_file_for_secrets(job) for job in jobs]
+
+
+def _scan_file_for_secrets(job: tuple[Path, str]) -> list[dict]:
+    path, rel_path = job
+    findings: list[dict] = []
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return findings
+
+    # split("\n"), never splitlines() - same bug class already fixed elsewhere in
+    # this codebase (see query.py's find_symbol_source): splitlines() also breaks
+    # on \v, \f, \x1c-\x1e, NEL, LS, and PS, none of which count as a line boundary
+    # here, so a file containing one earlier would shift every subsequent match's
+    # reported "line" off from its real \n-based line number.
+    lines = text.split("\n")
+    for line_no, line in enumerate(lines, start=1):
+        claimed_spans: list[tuple[int, int]] = []
+        for pattern_name, pattern, value_group in SECRET_PATTERNS:
+            for match in pattern.finditer(line):
+                value_span = match.span(value_group)
+                if pattern_name == "generic_credential_assignment" and _overlaps_a_specific_pattern_match(
+                    value_span, claimed_spans
+                ):
+                    # A dedicated pattern (github_token, aws_access_key_id, ...)
+                    # already matched this exact value on this line - e.g.
+                    # "token: ghs_..." matches both github_token AND, now that
+                    # TOKEN is a generic keyword, generic_credential_assignment
+                    # too. Without this, one real secret produced two findings
+                    # for the same value under two different pattern names,
+                    # which reads as the scanner double-counting rather than as
+                    # two real, independent secrets.
+                    continue
+                claimed_spans.append(value_span)
+                value = match.group(value_group)
+                match_preview = _redact(value, f"{rel_path}:{pattern_name}")
+                likely_placeholder = _is_likely_placeholder(rel_path, value, pattern_name)
+                # Only find_secrets (a full-file, current-tree scan) has
+                # convenient access to the lines following a match -
+                # find_secrets_in_history streams individual diff-added
+                # lines and doesn't have this context, so this check is
+                # scoped to here rather than folded into
+                # _is_likely_placeholder itself.
+                if (
+                    not likely_placeholder
+                    and pattern_name == "private_key_header"
+                    and _private_key_header_has_no_body(lines, line_no)
+                ):
+                    likely_placeholder = True
+                findings.append(
+                    {
+                        "path": rel_path,
+                        "line": line_no,
+                        "pattern": pattern_name,
+                        "match_preview": match_preview,
+                        "likely_placeholder": likely_placeholder,
+                        # Filled in by find_secrets from the baseline, so this per-file
+                        # result can be cached independent of it.
+                        "accepted": False,
+                    }
+                )
+
+    return findings
+
+
+def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
+    from aletheore.file_cache import cached_per_file, code_version
+
     ignored_paths = load_repo_config(repo_path)["ignored_paths"]
-
-    for path in iter_all_files(repo_path, ignored_paths):
-        scanned_files += 1
-        try:
-            text = path.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            continue
-
-        rel_path = path.relative_to(repo_path).as_posix()
-        # split("\n"), never splitlines() - same bug class already fixed elsewhere in
-        # this codebase (see query.py's find_symbol_source): splitlines() also breaks
-        # on \v, \f, \x1c-\x1e, NEL, LS, and PS, none of which count as a line boundary
-        # here, so a file containing one earlier would shift every subsequent match's
-        # reported "line" off from its real \n-based line number.
-        lines = text.split("\n")
-        for line_no, line in enumerate(lines, start=1):
-            claimed_spans: list[tuple[int, int]] = []
-            for pattern_name, pattern, value_group in SECRET_PATTERNS:
-                for match in pattern.finditer(line):
-                    value_span = match.span(value_group)
-                    if pattern_name == "generic_credential_assignment" and _overlaps_a_specific_pattern_match(
-                        value_span, claimed_spans
-                    ):
-                        # A dedicated pattern (github_token, aws_access_key_id, ...)
-                        # already matched this exact value on this line - e.g.
-                        # "token: ghs_..." matches both github_token AND, now that
-                        # TOKEN is a generic keyword, generic_credential_assignment
-                        # too. Without this, one real secret produced two findings
-                        # for the same value under two different pattern names,
-                        # which reads as the scanner double-counting rather than as
-                        # two real, independent secrets.
-                        continue
-                    claimed_spans.append(value_span)
-                    value = match.group(value_group)
-                    match_preview = _redact(value, f"{rel_path}:{pattern_name}")
-                    likely_placeholder = _is_likely_placeholder(rel_path, value, pattern_name)
-                    # Only find_secrets (a full-file, current-tree scan) has
-                    # convenient access to the lines following a match -
-                    # find_secrets_in_history streams individual diff-added
-                    # lines and doesn't have this context, so this check is
-                    # scoped to here rather than folded into
-                    # _is_likely_placeholder itself.
-                    if (
-                        not likely_placeholder
-                        and pattern_name == "private_key_header"
-                        and _private_key_header_has_no_body(lines, line_no)
-                    ):
-                        likely_placeholder = True
-                    findings.append(
-                        {
-                            "path": rel_path,
-                            "line": line_no,
-                            "pattern": pattern_name,
-                            "match_preview": match_preview,
-                            "likely_placeholder": likely_placeholder,
-                            "accepted": _is_accepted(accepted_keys, rel_path, pattern_name, value),
-                        }
-                    )
-
-    return {"scanned_files": scanned_files, "findings": findings}
+    root_len = len(str(repo_path)) + 1
+    jobs = [(path, str(path)[root_len:].replace(os.sep, "/")) for path in iter_all_files(repo_path, ignored_paths)]
+    # Unchanged files reuse their findings from the last scan (file_cache.py).
+    per_file = cached_per_file(repo_path, "secrets", code_version(__file__), jobs, _scan_many_for_secrets)
+    findings = _apply_baseline([finding for file_findings in per_file for finding in file_findings], baseline, repo_path)
+    return {"scanned_files": len(jobs), "findings": findings}
 
 
 DEFAULT_SECRETS_HISTORY_TIMEOUT_SECONDS = 300.0

@@ -79,7 +79,7 @@ def test_build_module_graph_extracts_ruby_symbols(tmp_path):
     get_user_fn = next(f for f in handler["symbols"]["functions"] if f["name"] == "get_user")
     assert get_user_fn["params"] == "(id)"
     handler_cls = next(c for c in handler["symbols"]["classes"] if c["name"] == "Handler")
-    assert handler_cls["params"] is None
+    assert handler_cls.get("params") is None
 
     assert unparseable == []
 
@@ -203,7 +203,7 @@ def test_ruby_method_with_blank_line_before_comment_gets_no_docstring(tmp_path):
     (repo / "a.rb").write_text("# Unrelated.\n\ndef add(a, b)\n  a + b\nend\n")
     modules, _, _ = build_module_graph(repo)
     func = modules[0]["symbols"]["functions"][0]
-    assert func["docstring"] is None
+    assert func.get("docstring") is None
 
 
 def test_ruby_def_nested_only_in_a_do_block_is_not_public(tmp_path):

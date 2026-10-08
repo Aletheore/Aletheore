@@ -44,7 +44,7 @@ def test_evidence_version_is_0_8_0():
     # section - see docs/AIR-SCHEMA.md's migration rules (any schema change requires a
     # MINOR bump). This test asserts the exact pin deliberately, so it must move in
     # lockstep with the next schema change too.
-    assert EVIDENCE_VERSION == "0.8.0"
+    assert EVIDENCE_VERSION == "0.8.1"
 
 
 def make_repo(tmp_path: Path) -> Path:
@@ -332,8 +332,8 @@ def test_scan_repository_honors_git_history_depth_cap_env_var(tmp_path, monkeypa
     # var (set before invoking `aletheore scan` as a subprocess, see
     # scan_worker/jobs.py's _run_scan) actually reaches analyze_git - this
     # is what keeps a cold sync of an oversized repo from OOMing before any
-    # persistence-layer code even runs. Unset by default for a developer
-    # scanning their own repo directly.
+    # persistence-layer code even runs. Local scans default to the same
+    # 50k cap (test below); the env var overrides it.
     repo = make_repo(tmp_path)
     for i in range(4):
         (repo / "main.py").write_text(f"def hello():\n    return {i}\n")
@@ -349,11 +349,32 @@ def test_scan_repository_honors_git_history_depth_cap_env_var(tmp_path, monkeypa
     assert evidence["git"]["history_depth_limited"] is True
 
 
+def test_history_stays_flagged_as_depth_limited_on_a_warm_rescan(tmp_path, monkeypatch):
+    # The capped baseline is never backfilled by later incremental syncs, so a
+    # second scan of the same repo must still say its history is partial.
+    repo = make_repo(tmp_path)
+    for i in range(4):
+        (repo / "main.py").write_text(f"def hello():\n    return {i}\n")
+        run(repo, "add", "-A")
+        run(repo, "commit", "-q", "-m", f"change {i}")
+    monkeypatch.setenv("ALETHEORE_GIT_HISTORY_DEPTH_CAP", "2")
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        first = scan_repository(repo, check_licenses=False)
+        write_evidence(first, repo)
+        (repo / "main.py").write_text("def hello():\n    return 99\n")
+        run(repo, "add", "-A")
+        run(repo, "commit", "-q", "-m", "one more")
+        second = scan_repository(repo, check_licenses=False)
+    assert first["git"]["history_depth_limited"] is True
+    assert second["git"]["history_depth_limited"] is True
+
+
 def test_scan_repository_honors_secrets_history_depth_cap_env_var(tmp_path, monkeypatch):
     # Separate env var from the git-graph cap above - `git log -p` (full
     # diffs, used for secrets-in-history) is far more expensive per commit
     # than the graph engine's --name-only walk, so it's tunable
-    # independently. Unset by default for a developer scanning locally.
+    # independently. Local scans default to the same 20k cap as hosted.
     repo = make_repo(tmp_path)
     monkeypatch.setenv("ALETHEORE_SECRETS_HISTORY_DEPTH_CAP", "7")
     with (
@@ -721,6 +742,57 @@ def test_write_evidence_also_writes_a_toon_copy(tmp_path):
     toon_path = repo / ".aletheore" / "air.toon"
     assert toon_path.exists()
     assert toon.decode(toon_path.read_text()) == evidence
+
+
+def test_write_evidence_writes_compact_json(tmp_path):
+    repo = make_repo(tmp_path)
+    evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
+    text = write_evidence(evidence, repo).read_text()
+    assert "\n" not in text and ": " not in text.split('"repo_path"')[0]
+    assert json.loads(text) == json.loads(json.dumps(evidence))
+
+
+def test_large_evidence_defers_air_toon_until_audit_needs_it(tmp_path, monkeypatch):
+    # Huge repos (the Linux kernel: 199s of TOON encoding) skip air.toon during
+    # scan, drop any stale copy, and ensure_air_toon builds it on first use.
+    import toon
+
+    import aletheore.evidence as ev
+
+    repo = make_repo(tmp_path)
+    evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
+    toon_path = repo / ".aletheore" / "air.toon"
+    toon_path.parent.mkdir(parents=True, exist_ok=True)
+    toon_path.write_text("stale copy from an earlier scan")
+
+    monkeypatch.setattr(ev, "TOON_INLINE_MAX_JSON_CHARS", 10)
+    write_evidence(evidence, repo)
+    assert not toon_path.exists()
+
+    assert ev.ensure_air_toon(repo) == toon_path
+    assert toon.decode(toon_path.read_text()) == json.loads(json.dumps(evidence))
+
+    built_at = toon_path.stat().st_mtime_ns
+    ev.ensure_air_toon(repo)
+    assert toon_path.stat().st_mtime_ns == built_at
+
+
+def test_ensure_air_toon_rebuilds_when_air_json_is_newer(tmp_path):
+    import os
+
+    import toon
+
+    from aletheore.evidence import ensure_air_toon
+
+    repo = make_repo(tmp_path)
+    evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
+    write_evidence(evidence, repo)
+    json_path = repo / ".aletheore" / "air.json"
+    toon_path = repo / ".aletheore" / "air.toon"
+    toon_path.write_text("outdated")
+    os.utime(toon_path, (1, 1))
+    ensure_air_toon(repo)
+    assert toon.decode(toon_path.read_text()) == json.loads(json_path.read_text())
 
 
 def test_write_evidence_pins_utf8_encoding_for_both_air_json_and_air_toon(tmp_path, monkeypatch):
@@ -1370,3 +1442,94 @@ def test_rails_association_read_skips_oversized_files_and_respects_total_budget(
 
     # big.rb exceeds the per-file cap; also_small.rb would exceed the total budget.
     assert set(mock_edges.call_args.args[0]) == {"small.rb"}
+
+
+def test_local_scans_default_to_the_hosted_history_caps(monkeypatch):
+    # A first local scan of a huge repo (the Linux kernel, ~1.46M commits)
+    # stops at the same depths the hosted worker uses instead of walking
+    # all of history; 0 or "none" opts back into full history.
+    from aletheore.evidence import _git_history_depth_cap, _secrets_history_depth_cap
+
+    monkeypatch.delenv("ALETHEORE_GIT_HISTORY_DEPTH_CAP", raising=False)
+    monkeypatch.delenv("ALETHEORE_SECRETS_HISTORY_DEPTH_CAP", raising=False)
+    assert _git_history_depth_cap() == 50_000
+    assert _secrets_history_depth_cap() == 20_000
+
+    for full in ("0", "none", "None", "off"):
+        monkeypatch.setenv("ALETHEORE_GIT_HISTORY_DEPTH_CAP", full)
+        monkeypatch.setenv("ALETHEORE_SECRETS_HISTORY_DEPTH_CAP", full)
+        assert _git_history_depth_cap() is None
+        assert _secrets_history_depth_cap() is None
+
+    monkeypatch.setenv("ALETHEORE_GIT_HISTORY_DEPTH_CAP", "not-a-number")
+    assert _git_history_depth_cap() == 50_000
+
+
+def _scan_with_overlap(repo, monkeypatch, enabled, **kwargs):
+    if enabled:
+        monkeypatch.delenv("ALETHEORE_DISABLE_PARALLEL_PARSE", raising=False)
+    else:
+        monkeypatch.setenv("ALETHEORE_DISABLE_PARALLEL_PARSE", "1")
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        return scan_repository(repo, check_licenses=False, **kwargs)
+
+
+def test_overlapped_and_sequential_scans_give_identical_evidence(tmp_path, monkeypatch):
+    # Background stages hand their results back at their original place, so
+    # turning the overlap on or off must not change the evidence at all.
+    repo = make_repo(tmp_path)
+    for i in range(3):
+        (repo / "main.py").write_text(f'def hello():\n    return {i}\nTOKEN = "ghp_{"a" * 36}"\n')
+        run(repo, "add", "-A")
+        run(repo, "commit", "-q", "-m", f"change {i}")
+    overlapped = _scan_with_overlap(repo, monkeypatch, True)
+    sequential = _scan_with_overlap(repo, monkeypatch, False)
+    for evidence in (overlapped, sequential):
+        evidence.pop("scanned_at")
+    assert overlapped == sequential
+    assert overlapped["git"]["available"] is True
+
+
+def test_a_background_stage_error_surfaces_from_the_scan(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    monkeypatch.delenv("ALETHEORE_DISABLE_PARALLEL_PARSE", raising=False)
+    with patch("aletheore.evidence.check_dependency_vulnerabilities", side_effect=RuntimeError("osv down")):
+        with pytest.raises(RuntimeError, match="osv down"):
+            scan_repository(repo, check_licenses=False)
+
+
+def test_background_license_progress_is_reported_after_its_stage_header(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    monkeypatch.delenv("ALETHEORE_DISABLE_PARALLEL_PARSE", raising=False)
+    messages = []
+
+    def fake_licenses(repo_path, on_progress=None):
+        on_progress(1, 1, "flask")
+        return {"checked": True, "reason": None, "repo_license": {"category": "unknown", "detected_from": None}, "findings": []}
+
+    with (
+        patch("aletheore.evidence.check_dependency_licenses", side_effect=fake_licenses),
+        patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check,
+    ):
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        scan_repository(repo, progress=messages.append)
+    header = next(i for i, m in enumerate(messages) if m.startswith("Checking dependency licenses ("))
+    progress = next(i for i, m in enumerate(messages) if m.startswith("Checking dependency licenses: 1/1"))
+    assert progress > header
+
+
+def test_hosted_opt_out_starts_no_background_threads(tmp_path, monkeypatch):
+    import threading
+
+    repo = make_repo(tmp_path)
+    started = []
+    real_start = threading.Thread.start
+
+    def spy(self):
+        started.append(self.name)
+        return real_start(self)
+
+    monkeypatch.setattr(threading.Thread, "start", spy)
+    _scan_with_overlap(repo, monkeypatch, False)
+    assert not [name for name in started if name.startswith("aletheore-scan-")]

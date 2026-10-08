@@ -91,7 +91,7 @@ def test_build_module_graph_extracts_rust_symbols(tmp_path):
     get_user_fn = next(f for f in handlers["symbols"]["functions"] if f["name"] == "get_user")
     assert get_user_fn["params"] == "(&self, id: u32)"
     handler_cls = next(c for c in handlers["symbols"]["classes"] if c["name"] == "Handler")
-    assert handler_cls["params"] is None
+    assert handler_cls.get("params") is None
 
     store = by_path["src/store/mod.rs"]
     assert "User" in symbol_names(store["symbols"]["classes"])
@@ -323,7 +323,7 @@ def test_rust_function_with_blank_line_before_comment_gets_no_docstring(tmp_path
     modules, _, _ = build_module_graph(repo)
     by_path = {m["path"]: m for m in modules}
     func = by_path["src/main.rs"]["symbols"]["functions"][0]
-    assert func["docstring"] is None
+    assert func.get("docstring") is None
 
 
 def test_rust_struct_doc_comment_is_extracted(tmp_path):

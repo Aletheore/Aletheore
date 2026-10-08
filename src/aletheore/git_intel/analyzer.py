@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from aletheore.git_intel.graph_store import FileChurnTotal, GraphSnapshot, RepoGraphStore
+from aletheore.git_intel.history_meta import cached_ahead_behind, history_facts
 from aletheore.git_intel.incremental import (
     CO_CHANGE_PARTNERS_RETURNED,
     GitLogStreamError,
@@ -136,7 +137,11 @@ def _parse_branches(repo_path: Path, now: datetime) -> list[dict]:
     )
     remotes = _remote_names(repo_path)
     default_ref = _default_branch_ref(repo_path)
-    batched = _ahead_behind_all(repo_path, default_ref) if default_ref is not None else None
+    batched = (
+        cached_ahead_behind(repo_path, default_ref, lambda: _ahead_behind_all(repo_path, default_ref))
+        if default_ref is not None
+        else None
+    )
     branches = []
     for line in result.stdout.strip().splitlines():
         if not line.strip():
@@ -397,6 +402,16 @@ def compute_hotspots(
     return _hotspots_summary(snapshot, modules, repo_path)
 
 
+def hotspots_from_snapshot(snapshot: GraphSnapshot, modules: list[dict], repo_path: Path) -> list[dict]:
+    """compute_hotspots for a snapshot the caller already synced to HEAD."""
+    return _hotspots_summary(snapshot, modules, repo_path)
+
+
+def recently_updated_from_snapshot(snapshot: GraphSnapshot, repo_path: Path) -> list[dict]:
+    """compute_recently_updated for a snapshot the caller already synced."""
+    return _recently_updated_summary(snapshot, repo_path)
+
+
 def compute_recently_updated(
     repo_path: Path,
     *,
@@ -429,8 +444,12 @@ def _first_commit_at(repo_path: Path) -> datetime:
     # there's exactly one, but a repo with merged unrelated histories can
     # have several, so take the oldest of whichever `--max-parents=0` finds -
     # still O(root commits), never O(total commits).
-    roots_result = _run_git_or_raise(repo_path, "rev-list", "--max-parents=0", "HEAD")
-    root_shas = [line for line in roots_result.stdout.strip().splitlines() if line]
+    facts = history_facts(repo_path)
+    if facts is not None:
+        root_shas = list(facts.root_shas)
+    else:
+        roots_result = _run_git_or_raise(repo_path, "rev-list", "--max-parents=0", "HEAD")
+        root_shas = [line for line in roots_result.stdout.strip().splitlines() if line]
     dates = []
     for sha in root_shas:
         date_result = _run_git_or_raise(repo_path, "log", "-1", "--format=%ad", "--date=iso-strict", sha)
@@ -460,27 +479,49 @@ def analyze_git(
     depth_cap: int | None = None,
     branch: str | None = None,
 ) -> dict:
+    prepared = prepare_git_analysis(repo_path, now, store=store, depth_cap=depth_cap, branch=branch)
+    return finish_git_analysis(prepared, modules)
+
+
+def prepare_git_analysis(
+    repo_path: Path,
+    now: datetime | None = None,
+    *,
+    store: RepoGraphStore | None = None,
+    depth_cap: int | None = None,
+    branch: str | None = None,
+) -> dict:
+    """Everything in analyze_git except the per-module ownership summary, so
+    the slow part (walking history into the graph store) can run while the
+    module graph is still being built. Pair with finish_git_analysis."""
     if now is None:
         now = datetime.now(timezone.utc)
-    modules = modules or []
 
     if not _has_commits(repo_path):
         return {"available": False}
 
-    total_commits_result = _run_git_or_raise(repo_path, "rev-list", "--count", "HEAD")
-    total_commits = int(total_commits_result.stdout.strip())
+    facts = history_facts(repo_path)
+    if facts is not None:
+        total_commits = facts.total_commits
+    else:
+        total_commits_result = _run_git_or_raise(repo_path, "rev-list", "--count", "HEAD")
+        total_commits = int(total_commits_result.stdout.strip())
 
     repo_age_days = (now - _first_commit_at(repo_path)).days
 
     owns_store = store is None
     store = store or default_store(repo_path)
     try:
-        snapshot, was_full_rebuild = _sync_graph(repo_path, store, now, depth_cap, branch)
+        snapshot, _was_full_rebuild = _sync_graph(repo_path, store, now, depth_cap, branch)
     finally:
         if owns_store and isinstance(store, SQLiteRepoGraphStore):
             store.close()
 
-    history_depth_limited = was_full_rebuild and depth_cap is not None and total_commits > depth_cap
+    # Not just on the rebuild that applied the cap: incremental syncs never
+    # backfill older history, so a store built under a cap stays capped. Only
+    # checking the rebuild made every later (warm) scan of a repo over the cap
+    # report its history as complete.
+    history_depth_limited = depth_cap is not None and total_commits > depth_cap
     # A shallow clone's boundary commit looks like a root commit, so repo age
     # and total_commits describe the clone, not the project. There is no way
     # to recover the real values locally; flag the history as partial so the
@@ -490,11 +531,26 @@ def analyze_git(
 
     return {
         "available": True,
+        "_snapshot": snapshot,
         "branches": _parse_branches(repo_path, now),
         "commit_cadence": _cadence_summary(snapshot, now),
         "ownership": _ownership_summary(snapshot),
-        "file_ownership": _file_ownership_summary(snapshot, modules),
         "repo_age_days": repo_age_days,
         "total_commits": total_commits,
         "history_depth_limited": history_depth_limited,
+    }
+
+
+def finish_git_analysis(prepared: dict, modules: list[dict] | None) -> dict:
+    if not prepared.get("available"):
+        return {"available": False}
+    return {
+        "available": True,
+        "branches": prepared["branches"],
+        "commit_cadence": prepared["commit_cadence"],
+        "ownership": prepared["ownership"],
+        "file_ownership": _file_ownership_summary(prepared["_snapshot"], modules or []),
+        "repo_age_days": prepared["repo_age_days"],
+        "total_commits": prepared["total_commits"],
+        "history_depth_limited": prepared["history_depth_limited"],
     }

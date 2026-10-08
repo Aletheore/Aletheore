@@ -3,7 +3,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from aletheore.static_analysis._exclusions import count_real_files, excluded_dir_names, filter_findings, has_real_file
+from aletheore.static_analysis._exclusions import excluded_dir_names, file_census, filter_findings
 
 # Real noise found live testing this against gson (264 real Java files,
 # 2026-09-21): the unfiltered bestpractices+errorprone+security combo
@@ -51,8 +51,7 @@ PMD_MAX_TIMEOUT_SECONDS = 1800
 _SEVERITY_MAP = {1: "critical", 2: "major", 3: "major", 4: "minor", 5: "info"}
 
 
-def _scaled_timeout(repo_path: Path) -> int:
-    file_count = count_real_files(repo_path)
+def _scaled_timeout(file_count: int) -> int:
     scaled = PMD_BASE_TIMEOUT_SECONDS + int(file_count * PMD_PER_FILE_SECONDS)
     return min(scaled, PMD_MAX_TIMEOUT_SECONDS)
 
@@ -72,14 +71,18 @@ def _exclude_args(repo_path: Path) -> list[str]:
 
 
 def check_pmd(repo_path: Path, timeout: int | None = None) -> dict:
-    if not has_real_file(repo_path, "*.java"):
+    # One walk answering both "is there any .java source" and "how many
+    # real files total" (for the timeout below) - has_real_file +
+    # count_real_files used to be two separate full-tree walks here.
+    has_java, file_count = file_census(repo_path, "*.java")
+    if not has_java:
         return {"checked": True, "reason": None, "findings": []}
 
     binary = shutil.which("pmd")
     if binary is None:
         return {"checked": False, "reason": "pmd not installed", "findings": []}
 
-    resolved_timeout = timeout if timeout is not None else _scaled_timeout(repo_path)
+    resolved_timeout = timeout if timeout is not None else _scaled_timeout(file_count)
     cmd = [
         binary, "check",
         "-d", str(repo_path),

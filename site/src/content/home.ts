@@ -78,11 +78,11 @@ export const home = {
     linux: {
       title: "The Linux kernel.",
       eyebrow: "Real stress test",
-      body: "Not a curated sample: the actual torvalds/linux repository, cloned in full and scanned end to end: 94,849 files, 8.2GB, 1.46 million commits.",
+      body: "Not a curated sample: the actual torvalds/linux repository, cloned in full and scanned end to end: 94,849 files, 8.2GB, 1.46 million commits, the latest 50,000 of them analyzed. A re-scan takes 2m 29s.",
       stats: [
-        { label: "Files parsed", value: "64,634" }, { label: "C files", value: "36,851" }, { label: "C++ / header files", value: "26,887" },
-        { label: "Dependency edges", value: "71,929" }, { label: "Architecture clusters", value: "29,428" }, { label: "Commits analyzed", value: "1,463,552" },
-        { label: "License issues found", value: "0" }, { label: "Known vulnerabilities", value: "0" }, { label: "Scan time", value: "4m 20s" },
+        { label: "Files parsed", value: "64,554" }, { label: "C files", value: "36,846" }, { label: "C++ / header files", value: "26,867" },
+        { label: "Dependency edges", value: "71,923" }, { label: "Architecture clusters", value: "27,266" }, { label: "Commits analyzed", value: "50,000" },
+        { label: "License issues found", value: "0" }, { label: "Known vulnerabilities", value: "0" }, { label: "Scan time", value: "5m 6s" },
       ],
     },
     toon: {

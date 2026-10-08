@@ -286,3 +286,49 @@ def test_check_static_analysis_no_fingerprint_when_file_is_unreadable(tmp_path, 
         result = check_static_analysis(tmp_path)
 
     assert result["findings"][0].get("content_fingerprint") is None
+
+
+def test_default_scanners_run_concurrently_but_report_in_fixed_order(tmp_path, monkeypatch):
+    # They overlap (stage time ~ the slowest tool) yet tools_run and
+    # findings keep _SCANNERS order, so output matches the sequential path.
+    import threading
+    import time
+
+    monkeypatch.delenv("ALETHEORE_DISABLE_PARALLEL_PARSE", raising=False)
+    started = threading.Barrier(5, timeout=5)
+
+    def scanner(name, delay):
+        def run(repo_path):
+            started.wait()  # only passes if all five are running at once
+            time.sleep(delay)
+            return _checked([{"tool": name, "path": "x.py", "line": 1}])
+        return run
+
+    _patch_required_scanners(
+        monkeypatch,
+        semgrep=scanner("semgrep", 0.05), gosec=scanner("gosec", 0.0), bandit=scanner("bandit", 0.03),
+        trivy=scanner("trivy", 0.01), pmd=scanner("pmd", 0.02),
+    )
+    _patch_optional_scanners(monkeypatch)
+    result = static_analysis_module.check_static_analysis(tmp_path)
+    assert result["tools_run"][:5] == ["semgrep", "gosec", "bandit", "trivy", "pmd"]
+    assert [f["tool"] for f in result["findings"]] == ["semgrep", "gosec", "bandit", "trivy", "pmd"]
+
+
+def test_default_scanners_stay_sequential_when_parallelism_is_disabled(tmp_path, monkeypatch):
+    # The hosted worker's memory-limit opt-out also keeps the external tools
+    # from running side by side.
+    monkeypatch.setenv("ALETHEORE_DISABLE_PARALLEL_PARSE", "1")
+    active = []
+    peak = []
+
+    def scanner(repo_path):
+        active.append(1)
+        peak.append(len(active))
+        active.pop()
+        return _checked([])
+
+    _patch_required_scanners(monkeypatch, semgrep=scanner, gosec=scanner, bandit=scanner, trivy=scanner, pmd=scanner)
+    _patch_optional_scanners(monkeypatch)
+    static_analysis_module.check_static_analysis(tmp_path)
+    assert max(peak) == 1

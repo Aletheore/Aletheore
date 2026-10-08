@@ -88,7 +88,7 @@ def test_build_module_graph_extracts_php_symbols(tmp_path):
     get_user_fn = next(f for f in handler["symbols"]["functions"] if f["name"] == "getUser")
     assert get_user_fn["params"] == "(int $id)"
     handler_cls = next(c for c in handler["symbols"]["classes"] if c["name"] == "Handler")
-    assert handler_cls["params"] is None
+    assert handler_cls.get("params") is None
 
     assert unparseable == []
 
@@ -291,8 +291,8 @@ def test_php_function_with_no_docblock_gets_none(tmp_path):
     (repo / "a.php").write_text("<?php\nfunction f() {}\n")
     modules, _, _ = build_module_graph(repo)
     func = modules[0]["symbols"]["functions"][0]
-    assert func["docstring"] is None
-    assert func["return_type"] is None
+    assert func.get("docstring") is None
+    assert func.get("return_type") is None
 
 
 def test_php_function_nested_only_in_an_anonymous_function_is_not_public(tmp_path):

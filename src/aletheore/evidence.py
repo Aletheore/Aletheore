@@ -15,7 +15,12 @@ from aletheore.dead_code import find_dead_code
 from aletheore.endpoints import map_api_endpoints
 from aletheore.error_handling import map_error_handling
 from aletheore.evidence_resolution import find_symbol_at_location
-from aletheore.git_intel.analyzer import analyze_git, compute_hotspots, compute_recently_updated
+from aletheore.git_intel.analyzer import (
+    finish_git_analysis,
+    hotspots_from_snapshot,
+    prepare_git_analysis,
+    recently_updated_from_snapshot,
+)
 from aletheore.licenses import check_dependency_licenses
 from aletheore.model_associations import rails_model_association_edges
 from aletheore.repo_config import load_repo_config
@@ -32,7 +37,7 @@ from aletheore.scanner.detect import (
     detect_monorepo,
     detect_policy_docs,
 )
-from aletheore.scanner.graph import build_module_graph
+from aletheore.scanner.graph import _parallel_parse_disabled, build_module_graph
 from aletheore.secrets import (
     DEFAULT_SECRETS_HISTORY_TIMEOUT_SECONDS,
     find_secrets,
@@ -43,7 +48,7 @@ from aletheore.static_analysis import check_static_analysis as run_static_analys
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.vulnerabilities import check_vulnerabilities as check_dependency_vulnerabilities
 
-EVIDENCE_VERSION = "0.8.0"
+EVIDENCE_VERSION = "0.8.1"
 
 
 def _version_compatibility_key(version: str) -> tuple[int, int] | None:
@@ -149,14 +154,31 @@ def load_evidence(repo_path: Path) -> dict:
 _GIT_HISTORY_DEPTH_CAP_ENV = "ALETHEORE_GIT_HISTORY_DEPTH_CAP"
 
 
-def _git_history_depth_cap() -> int | None:
-    raw = os.environ.get(_GIT_HISTORY_DEPTH_CAP_ENV)
+# Local scans default to the same caps the hosted scan worker sets
+# (scan_worker/jobs.py), so a very large repo's first local scan stops at the
+# latest 50k commits for hotspots/ownership and 20k for the secrets-history
+# sweep instead of walking all of it (the Linux kernel has ~1.46M commits).
+# The output flags history_depth_limited when a cap applies. Set either env
+# var to 0 or "none" for full history.
+DEFAULT_GIT_HISTORY_DEPTH_CAP = 50_000
+DEFAULT_SECRETS_HISTORY_DEPTH_CAP = 20_000
+
+
+def _depth_cap_from_env(name: str, default: int) -> int | None:
+    raw = os.environ.get(name)
     if not raw:
+        return default
+    if raw.strip().lower() in ("0", "none", "off", "unlimited"):
         return None
     try:
-        return int(raw)
+        value = int(raw)
     except ValueError:
-        return None
+        return default
+    return value if value > 0 else None
+
+
+def _git_history_depth_cap() -> int | None:
+    return _depth_cap_from_env(_GIT_HISTORY_DEPTH_CAP_ENV, DEFAULT_GIT_HISTORY_DEPTH_CAP)
 
 
 # Separate env var from the git-graph cap above: `git log -p` (full unified
@@ -348,13 +370,7 @@ def _write_local_scan_cache(
 
 
 def _secrets_history_depth_cap() -> int | None:
-    raw = os.environ.get(_SECRETS_HISTORY_DEPTH_CAP_ENV)
-    if not raw:
-        return None
-    try:
-        return int(raw)
-    except ValueError:
-        return None
+    return _depth_cap_from_env(_SECRETS_HISTORY_DEPTH_CAP_ENV, DEFAULT_SECRETS_HISTORY_DEPTH_CAP)
 
 
 def _noop_progress(_message: str) -> None:
@@ -400,6 +416,49 @@ def _rails_model_association_edges(repo_path: Path, dependency_graph: dict) -> l
         except OSError:
             continue
     return rails_model_association_edges(sources)
+
+
+class _Overlap:
+    """Runs a scan stage on a background thread so it overlaps the module-graph
+    parse, then hands its result back at the stage's original place in the
+    scan - so evidence content, the order stages report in and where an error
+    surfaces are all unchanged. One visible difference: a stage's own
+    per-item progress (the licenses check's "n/total" lines) is buffered while
+    it runs in the background and replayed in one burst at its place, rather
+    than streaming live. The stages put here wait on git, the network or
+    external tools, not on the parse. Daemon threads, not a ThreadPoolExecutor,
+    so a scan that fails elsewhere exits without waiting for them. Disabled
+    (fully sequential) under ALETHEORE_DISABLE_PARALLEL_PARSE, which the
+    hosted worker sets for its memory limit."""
+
+    def __init__(self, enabled: bool):
+        self.enabled = enabled
+        self._jobs: dict[str, tuple[threading.Thread, dict]] = {}
+
+    def start(self, name: str, fn: Callable, *args, **kwargs) -> None:
+        if not self.enabled:
+            return
+        box: dict = {}
+
+        def run() -> None:
+            try:
+                box["value"] = fn(*args, **kwargs)
+            except BaseException as exc:  # noqa: BLE001 - re-raised in result()
+                box["error"] = exc
+
+        thread = threading.Thread(target=run, name=f"aletheore-scan-{name}", daemon=True)
+        thread.start()
+        self._jobs[name] = (thread, box)
+
+    def started(self, name: str) -> bool:
+        return name in self._jobs
+
+    def result(self, name: str):
+        thread, box = self._jobs.pop(name)
+        thread.join()
+        if "error" in box:
+            raise box["error"]
+        return box["value"]
 
 
 def scan_repository(
@@ -461,6 +520,12 @@ def scan_repository(
     # the very first one - already reflect whatever .gitignore state results,
     # so counts are stable and reproducible from the first call onward.
     _ensure_aletheore_dir_gitignored(repo_path)
+    # Created up front (it's gitignored by now) so the per-file cache in
+    # file_cache.py can fill on the very first scan rather than the second.
+    try:
+        (repo_path / ".aletheore").mkdir(exist_ok=True)
+    except OSError:
+        pass
 
     report("Detecting languages, frameworks, and build tools")
     languages = detect_languages(repo_path, ignored_paths)
@@ -498,16 +563,57 @@ def scan_repository(
                 "scans only re-parse files that actually changed."
             )
 
+    overlap = _Overlap(enabled=not _parallel_parse_disabled())
+    secrets_baseline = load_secrets_baseline(repo_path)
+    overlap.start("git", prepare_git_analysis, repo_path, depth_cap=_git_history_depth_cap())
+    if scan_git_history:
+        overlap.start(
+            "secrets_history",
+            find_secrets_in_history,
+            repo_path,
+            baseline=secrets_baseline,
+            max_commits=_secrets_history_depth_cap(),
+            timeout_seconds=_secrets_history_timeout_seconds(),
+        )
+    if check_vulnerabilities:
+        overlap.start("vulnerabilities", check_dependency_vulnerabilities, repo_path)
+    license_progress: list[str] = []
+    if check_licenses:
+        overlap.start(
+            "licenses",
+            check_dependency_licenses,
+            repo_path,
+            on_progress=_license_progress_reporter(license_progress.append),
+        )
+    schema_dirs = [entry["path"] for entry in database["migration_directories"] if "path" in entry]
+    if map_schema:
+        overlap.start("schema", extract_schema, repo_path, schema_dirs)
+
     report("Building module dependency graph (parsing source with tree-sitter)")
     modules, dependency_graph, unparseable_files = build_module_graph(
         repo_path, unchanged_modules=unchanged_modules, ignored_paths=ignored_paths
     )
 
+    # CPU-heavy (Trivy alone uses several cores), so it starts after the parse
+    # rather than competing with it, and overlaps the lighter stages below.
+    if check_static_analysis:
+        overlap.start(
+            "static_analysis",
+            run_static_analysis,
+            repo_path,
+            run_bearer=run_bearer,
+            run_joern=run_joern,
+            sonarqube_host_url=sonarqube_host_url,
+        )
+
     report("Analyzing git history and ownership")
-    git_data = analyze_git(repo_path, modules, depth_cap=_git_history_depth_cap())
+    if overlap.started("git"):
+        git_prepared = overlap.result("git")
+    else:
+        git_prepared = prepare_git_analysis(repo_path, depth_cap=_git_history_depth_cap())
+    git_data = finish_git_analysis(git_prepared, modules)
 
     report("Scanning working tree for secrets")
-    secrets_baseline = load_secrets_baseline(repo_path)
     secrets_data = find_secrets(repo_path, baseline=secrets_baseline)
     # Symbol attribution only applies to the working-tree findings above, not
     # the history_findings merged in below: those have no line number (a
@@ -520,12 +626,15 @@ def scan_repository(
         finding["symbol"] = find_symbol_at_location(_symbol_evidence, finding["path"], finding["line"])
     if scan_git_history:
         report("Scanning git history for secrets (can be slow on large histories)")
-        history_data = find_secrets_in_history(
-            repo_path,
-            baseline=secrets_baseline,
-            max_commits=_secrets_history_depth_cap(),
-            timeout_seconds=_secrets_history_timeout_seconds(),
-        )
+        if overlap.started("secrets_history"):
+            history_data = overlap.result("secrets_history")
+        else:
+            history_data = find_secrets_in_history(
+                repo_path,
+                baseline=secrets_baseline,
+                max_commits=_secrets_history_depth_cap(),
+                timeout_seconds=_secrets_history_timeout_seconds(),
+            )
         if history_data.get("history_scan_timed_out"):
             report(
                 "Secrets history scan timed out before finishing - findings above "
@@ -599,12 +708,17 @@ def scan_repository(
 
     if check_hotspots and git_data.get("available"):
         report("Computing git hotspots")
-        git_data["hotspots"] = compute_hotspots(repo_path, modules)
-        git_data["recently_updated"] = compute_recently_updated(repo_path)
+        # From the snapshot prepare_git_analysis already synced to HEAD, rather
+        # than syncing and loading the graph store twice more.
+        git_data["hotspots"] = hotspots_from_snapshot(git_prepared["_snapshot"], modules, repo_path)
+        git_data["recently_updated"] = recently_updated_from_snapshot(git_prepared["_snapshot"], repo_path)
 
     if check_vulnerabilities:
         report("Checking dependencies for known vulnerabilities (OSV.dev)")
-        vulnerabilities_data = check_dependency_vulnerabilities(repo_path)
+        if overlap.started("vulnerabilities"):
+            vulnerabilities_data = overlap.result("vulnerabilities")
+        else:
+            vulnerabilities_data = check_dependency_vulnerabilities(repo_path)
     else:
         vulnerabilities_data = {
             "checked": False,
@@ -614,9 +728,14 @@ def scan_repository(
 
     if check_licenses:
         report("Checking dependency licenses (one registry lookup per pinned dependency)")
-        licenses_data = check_dependency_licenses(
-            repo_path, on_progress=_license_progress_reporter(report)
-        )
+        if overlap.started("licenses"):
+            licenses_data = overlap.result("licenses")
+            for message in license_progress:
+                report(message)
+        else:
+            licenses_data = check_dependency_licenses(
+                repo_path, on_progress=_license_progress_reporter(report)
+            )
     else:
         licenses_data = {
             "checked": False,
@@ -633,9 +752,12 @@ def scan_repository(
         # message naming the underlying tools would be the one place that
         # convention didn't hold.
         report("Running static analysis scanners")
-        static_analysis_data = run_static_analysis(
-            repo_path, run_bearer=run_bearer, run_joern=run_joern, sonarqube_host_url=sonarqube_host_url
-        )
+        if overlap.started("static_analysis"):
+            static_analysis_data = overlap.result("static_analysis")
+        else:
+            static_analysis_data = run_static_analysis(
+                repo_path, run_bearer=run_bearer, run_joern=run_joern, sonarqube_host_url=sonarqube_host_url
+            )
     else:
         static_analysis_data = {
             "checked": False,
@@ -647,9 +769,10 @@ def scan_repository(
 
     if map_schema:
         report("Mapping database schema from migrations")
-        schema_data = extract_schema(repo_path, [
-            entry["path"] for entry in database["migration_directories"] if "path" in entry
-        ])
+        if overlap.started("schema"):
+            schema_data = overlap.result("schema")
+        else:
+            schema_data = extract_schema(repo_path, schema_dirs)
     else:
         schema_data = skipped_schema(map_schema_skip_reason)
 
@@ -805,6 +928,32 @@ def _atomic_write_text(path: Path, text: str) -> None:
         temp_path.unlink(missing_ok=True)
 
 
+# air.toon is written with every scan up to this much compact air.json (well
+# under a second of TOON encoding); above it, ensure_air_toon builds it on
+# first use by `aletheore audit` instead of slowing down every scan.
+TOON_INLINE_MAX_JSON_CHARS = 50_000_000
+
+
+def ensure_air_toon(repo_path: Path) -> Path:
+    """Return .aletheore/air.toon, building it from air.json first if it is
+    missing or older than air.json (large repos skip it during scan)."""
+    aletheore_dir = Path(repo_path) / ".aletheore"
+    json_path = aletheore_dir / "air.json"
+    toon_path = aletheore_dir / "air.toon"
+    if not json_path.exists():
+        return toon_path
+    if toon_path.exists() and toon_path.stat().st_mtime >= json_path.stat().st_mtime:
+        return toon_path
+    evidence = json.loads(json_path.read_text(encoding="utf-8"))
+    try:
+        _atomic_write_text(toon_path, to_toon(evidence))
+    except ToonEncodingError:
+        # Same contract as write_evidence: no TOON copy, and the adapter that
+        # needs it reports a clean "could not read evidence" error.
+        pass
+    return toon_path
+
+
 def write_evidence(evidence: dict, repo_path: Path) -> Path:
     # Usually already a no-op by the time evidence written via
     # scan_repository() gets here - see the call at the top of
@@ -826,7 +975,10 @@ def write_evidence(evidence: dict, repo_path: Path) -> Path:
     # that a UTF-8 reader (this MCP server, CI, a different OS) then can't
     # decode correctly - the same class of bug already handled with an
     # explicit encoding a few lines up in _ensure_aletheore_dir_gitignored.
-    _atomic_write_text(output_path, json.dumps(evidence, indent=2))
+    # Compact, not indent=2: on the Linux kernel the indented form was 1.3GB
+    # and 42s to encode, compact is 720MB and 6s. Every reader parses it.
+    evidence_text = json.dumps(evidence, separators=(",", ":"))
+    _atomic_write_text(output_path, evidence_text)
 
     # A second, TOON-encoded copy exists specifically for the audit command's
     # coding-agent adapter to read instead of the JSON one - the agent's own
@@ -837,8 +989,15 @@ def write_evidence(evidence: dict, repo_path: Path) -> Path:
     # JSON), so this is additive, not a replacement - a TOON encoding
     # failure must never take scan down with it, since air.json (the file
     # that actually matters) is already written by this point.
+    toon_path = aletheore_dir / "air.toon"
+    if len(evidence_text) > TOON_INLINE_MAX_JSON_CHARS:
+        # Too big to encode on every scan (199s on the Linux kernel's evidence
+        # for a file only `audit` reads): drop any copy from an earlier scan so
+        # it can't go stale, and let ensure_air_toon build it when audit runs.
+        toon_path.unlink(missing_ok=True)
+        return output_path
     try:
-        _atomic_write_text(aletheore_dir / "air.toon", to_toon(evidence))
+        _atomic_write_text(toon_path, to_toon(evidence))
     except ToonEncodingError as exc:
         warnings.warn(
             f"could not write .aletheore/air.toon ({exc}) - air.json (the canonical "

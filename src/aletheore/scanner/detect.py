@@ -1,5 +1,6 @@
 import json
 import os
+import stat
 import tomllib
 from functools import lru_cache
 from pathlib import Path
@@ -7,6 +8,10 @@ from pathlib import Path
 import yaml
 
 from aletheore.repo_config import is_ignored
+
+# libyaml's C loader when PyYAML was built with it (same safe constructors,
+# several times faster on big YAML), pure-Python SafeLoader otherwise.
+_YAML_SAFE_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 IGNORED_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".aletheore",
@@ -286,29 +291,68 @@ def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
     # directory would otherwise have its contents walked and reported on as
     # if they were part of this repo. followlinks only stops descent into
     # symlinked *directories* - a symlinked file sitting directly in a real
-    # directory still needs its own is_symlink() check below.
-    nested_git_roots = _nested_git_roots(repo_path)
+    # directory still needs its own symlink check below.
+    #
+    # String operations instead of pathlib, as in scanner/graph.py's copy:
+    # one lstat per file, rel paths built from the walk, a prefix test for
+    # nested repos. Same files, same (walk) order.
+    nested_git_roots = [str(root) for root in _nested_git_roots(repo_path)]
     patterns = ignored_paths or []
+    root_str = str(repo_path)
+    sep = os.sep
     for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
-        current_dir = Path(dirpath)
-        rel_dir = current_dir.relative_to(repo_path).as_posix()
+        rel_dir = _rel_dir(repo_path, root_str, dirpath)
         dirnames[:] = [
             d
             for d in dirnames
             if d not in IGNORED_DIRS
             and not is_ignored(f"{rel_dir}/{d}" if rel_dir != "." else d, patterns)
         ]
-        if any(root in current_dir.parents or root == current_dir for root in nested_git_roots):
+        if any(dirpath == root or dirpath.startswith(root + sep) for root in nested_git_roots):
             dirnames[:] = []
             continue
         for filename in filenames:
-            path = current_dir / filename
-            if path.is_symlink() or not path.is_file():
+            full = os.path.join(dirpath, filename)
+            try:
+                if not stat.S_ISREG(os.lstat(full).st_mode):
+                    continue  # symlinks, dirs, sockets, fifos
+            except OSError:
                 continue
-            rel_path = path.relative_to(repo_path).as_posix()
+            rel_path = f"{rel_dir}/{filename}" if rel_dir != "." else filename
             if is_ignored(rel_path, patterns):
                 continue
-            yield path
+            yield Path(full)
+
+
+def _rel_dir(repo_path: Path, root_str: str, dirpath: str) -> str:
+    """os.walk dirpath -> repo-relative posix dir ("." for the root),
+    matching Path(dirpath).relative_to(repo_path).as_posix()."""
+    if dirpath == root_str:
+        return "."
+    if dirpath.startswith(root_str + os.sep):
+        return dirpath[len(root_str) + 1:].replace(os.sep, "/")
+    return Path(dirpath).relative_to(repo_path).as_posix()
+
+
+def _count_lines(data: bytes) -> int:
+    """Same count as iterating the file in text mode (universal newlines:
+    \n, \r\n and a lone \r each end a line; a final unterminated line counts),
+    without decoding it - decoding every source file line by line was most of
+    detect_languages' time on large repos (~25s on the Linux kernel)."""
+    lines = data.count(b"\n") + data.count(b"\r") - data.count(b"\r\n")
+    if data and data[-1:] not in (b"\n", b"\r"):
+        lines += 1
+    return lines
+
+
+def _count_lines_many(jobs: list[tuple[Path, str]]) -> list[int | None]:
+    out: list[int | None] = []
+    for path, _rel in jobs:
+        try:
+            out.append(_count_lines(path.read_bytes()))
+        except OSError:
+            out.append(None)
+    return out
 
 
 def detect_languages(repo_path: Path, ignored_paths: list[str] | None = None) -> list[dict]:
@@ -321,18 +365,27 @@ def detect_languages(repo_path: Path, ignored_paths: list[str] | None = None) ->
     # both being fully parsed into the module graph).
     from aletheore.scanner.graph import LANGUAGE_BY_EXTENSION
 
+    from aletheore.file_cache import cached_per_file, code_version
+
     counts: dict[str, dict] = {}
-    for path in _iter_source_files(repo_path, ignored_paths):
-        entry_spec = LANGUAGE_BY_EXTENSION.get(path.suffix)
-        if entry_spec is None:
-            continue
-        language = entry_spec[0]
+    # Absolute, so every walked path starts with this exact string: with a
+    # relative "." the walk yields "sub/f" (pathlib drops the "./"), and slicing
+    # off len(".") + 1 would cut real characters and collide cache keys.
+    repo_path = Path(os.path.abspath(repo_path))
+    root_len = len(str(repo_path)) + 1
+    jobs = [
+        (path, str(path)[root_len:].replace(os.sep, "/"))
+        for path in _iter_source_files(repo_path, ignored_paths)
+        if path.suffix in LANGUAGE_BY_EXTENSION
+    ]
+    # Unchanged files reuse their line count from the last scan (file_cache.py).
+    line_counts = cached_per_file(repo_path, "loc", code_version(__file__), jobs, _count_lines_many)
+    for (path, _rel), lines in zip(jobs, line_counts):
+        language = LANGUAGE_BY_EXTENSION[path.suffix][0]
         entry = counts.setdefault(language, {"name": language, "file_count": 0, "loc": 0})
         entry["file_count"] += 1
-        try:
-            entry["loc"] += sum(1 for _ in path.open("r", encoding="utf-8", errors="ignore"))
-        except OSError:
-            continue
+        if lines is not None:
+            entry["loc"] += lines
     # counts preserves _iter_source_files' filesystem-walk order, which is
     # filesystem-dependent (APFS vs ext4 give different orders for the same
     # repo) - sorted here for the same reason the other detectors below are.
@@ -561,10 +614,14 @@ def _detect_kubernetes_manifests(repo_path: Path, pruned_tree=None) -> list[str]
             continue
         if path.suffix not in YAML_EXTENSIONS:
             continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        # A manifest needs both keys, so skip parsing any YAML that can't be
+        # one: on the Linux kernel this skipped thousands of devicetree
+        # bindings that were each fully parsed for nothing.
+        if "apiVersion" not in text or "kind" not in text:
+            continue
         try:
-            docs = list(
-                yaml.safe_load_all(path.read_text(encoding="utf-8", errors="ignore"))
-            )
+            docs = list(yaml.load_all(text, Loader=_YAML_SAFE_LOADER))
         except yaml.YAMLError:
             continue
         for doc in docs:

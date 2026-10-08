@@ -293,3 +293,58 @@ def test_rust_errors(tmp_path):
     assert _names(r["error_types"]) == {"AppError", "E2"}
     types = {t for _, t, _ in _sites(r)}
     assert "AppError" in types and "panic!" in types
+
+
+def test_plain_c_files_are_skipped(tmp_path):
+    # C has no classes, throw or catch; walking every .c file found nothing
+    # and was most of this stage's cost on C-heavy repos like the kernel.
+    _write(tmp_path, "src/driver.c", "struct dev { int x; };\nint probe(void) { return 0; }\n")
+    result = map_error_handling(tmp_path)
+    assert result["error_types"] == [] and result["raise_sites"] == [] and result["handlers"] == []
+
+
+def test_parallel_and_sequential_paths_give_identical_output(tmp_path, monkeypatch):
+    import aletheore.error_handling as eh
+
+    for i in range(6):
+        _write(tmp_path, f"pkg/m{i}.py", (
+            f"class E{i}(Exception):\n    pass\n\n"
+            f"def f{i}():\n    try:\n        raise E{i}()\n    except E{i}:\n        pass\n"
+        ))
+        _write(tmp_path, f"cpp/m{i}.hpp", (
+            f"class Err{i} : public std::runtime_error {{}};\n"
+            f"void g{i}() {{ try {{ throw Err{i}(); }} catch (const Err{i}& e) {{}} }}\n"
+        ))
+    monkeypatch.setattr(eh, "PARALLEL_PARSE_MIN_FILES", 10**9)
+    sequential = map_error_handling(tmp_path)
+    monkeypatch.setattr(eh, "PARALLEL_PARSE_MIN_FILES", 1)
+    monkeypatch.setenv("ALETHEORE_PARALLEL_PARSE_JOBS", "2")
+    parallel = map_error_handling(tmp_path)
+    assert parallel == sequential
+    assert len(sequential["error_types"]) == 12
+
+
+def test_cpp_text_fallback_dedupes_within_a_file_only(tmp_path):
+    # A header the grammar can't fully parse still gets its error classes from
+    # the text fallback, and two files can each define a same-named class.
+    broken = "MACRO_THAT_BREAKS_PARSING(\nclass ParseError : public std::exception {};\n"
+    _write(tmp_path, "a/errors.h", broken)
+    _write(tmp_path, "b/errors.h", broken)
+    result = map_error_handling(tmp_path)
+    files = sorted(t["file"] for t in result["error_types"] if t["name"] == "ParseError")
+    assert files == ["a/errors.h", "b/errors.h"]
+
+
+def test_ts_and_tsx_each_parse_with_their_own_grammar(tmp_path):
+    # .ts and .tsx share the language name "typescript" but not the grammar. A
+    # parser cached by that name parsed whichever came second with the wrong
+    # grammar: JSX under the plain TypeScript grammar loses the arrow
+    # function's name (found on prometheus's web UI).
+    _write(tmp_path, "a.ts", "export function plain(): void {\n  try {} catch (e) {}\n}\n")
+    _write(tmp_path, "b.tsx", (
+        "const EndpointLink = () => {\n  try {\n    f();\n  } catch (err) {\n    g();\n  }\n"
+        "  return (\n    <>\n      {xs.map((x) => {\n        return <Badge key={x}>{x}</Badge>;\n"
+        "      })}\n    </>\n  );\n};\n"
+    ))
+    handlers = map_error_handling(tmp_path)["handlers"]
+    assert {(h["file"], h["function"]) for h in handlers} == {("a.ts", "plain"), ("b.tsx", "EndpointLink")}

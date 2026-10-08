@@ -733,3 +733,140 @@ def test_parse_branches_computes_ahead_behind_without_a_subprocess_per_branch(tm
     assert by_name["feature/old"]["behind_main"] == 1
     assert by_name["extra0"]["ahead_of_main"] == 0
     assert per_branch.call_count == 0
+
+
+def _full_facts(repo):
+    count = int(subprocess.run(["git", "rev-list", "--count", "HEAD"], cwd=repo, capture_output=True, text=True).stdout)
+    roots = sorted(subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.split())
+    return count, roots
+
+
+def _fresh_facts(repo):
+    from aletheore.git_intel import history_meta
+
+    history_meta._memo.clear()
+    facts = history_meta.history_facts(repo)
+    return facts.total_commits, list(facts.root_shas)
+
+
+def test_history_facts_stay_exact_across_incremental_updates(tmp_path, monkeypatch):
+    # Total commits and root commits are updated from the last scan's values
+    # plus only the new commits; every step must equal a full recomputation,
+    # including a merge of an unrelated history (a new root commit) and a
+    # rewritten history (the cached HEAD is no longer an ancestor).
+    from aletheore.git_intel import history_meta
+
+    monkeypatch.delenv("ALETHEORE_DISABLE_LOCAL_SCAN_CACHE", raising=False)
+    repo = make_git_repo(tmp_path)
+    assert _fresh_facts(repo) == _full_facts(repo)
+    assert (repo / ".aletheore" / "git-meta.json").exists()
+
+    (repo / "b.txt").write_text("b")
+    run(repo, "add", "b.txt")
+    commit(repo, "third", "2026-07-01T00:00:00+00:00")
+    walks = []
+    real_run = history_meta.subprocess.run
+
+    def spy(args, *a, **k):
+        if args[:2] == ["git", "rev-list"]:
+            walks.append(args[-1])
+        return real_run(args, *a, **k)
+
+    expected = _full_facts(repo)
+    with patch.object(history_meta.subprocess, "run", side_effect=spy):
+        assert _fresh_facts(repo) == expected
+    assert walks and all(".." in w for w in walks)  # only the delta was walked
+
+    other = tmp_path / "other"
+    other.mkdir()
+    run(other, "init", "-b", "main")
+    run(other, "config", "user.email", "b@example.com")
+    run(other, "config", "user.name", "Bob")
+    (other / "z.txt").write_text("z")
+    run(other, "add", "z.txt")
+    commit(other, "unrelated root", "2025-01-01T00:00:00+00:00")
+    run(repo, "fetch", "-q", str(other), "main:unrelated")
+    run(repo, "merge", "-q", "--allow-unrelated-histories", "-m", "merge unrelated", "unrelated")
+    count, roots = _fresh_facts(repo)
+    assert (count, roots) == _full_facts(repo) and len(roots) == 2
+
+    run(repo, "reset", "-q", "--hard", "HEAD~1")
+    (repo / "c.txt").write_text("c")
+    run(repo, "add", "c.txt")
+    commit(repo, "rewritten", "2026-08-01T00:00:00+00:00")
+    assert _fresh_facts(repo) == _full_facts(repo)
+
+
+def test_history_facts_write_nothing_when_local_cache_is_disabled(tmp_path, monkeypatch):
+    # The hosted worker sets this: a checkout is someone else's repo, so no
+    # file from it is trusted and none is written.
+    monkeypatch.setenv("ALETHEORE_DISABLE_LOCAL_SCAN_CACHE", "1")
+    repo = make_git_repo(tmp_path)
+    (repo / ".aletheore").mkdir()
+    (repo / ".aletheore" / "git-meta.json").write_text(
+        '{"version": 1, "history": {"head": "x", "shallow": "full", "total_commits": 999, "root_shas": ["fake"]}}'
+    )
+    assert _fresh_facts(repo) == _full_facts(repo)
+    # The planted file was neither trusted nor overwritten.
+    assert '"total_commits": 999' in (repo / ".aletheore" / "git-meta.json").read_text()
+
+
+def test_ahead_behind_counts_are_reused_until_a_tip_moves(tmp_path, monkeypatch):
+    from aletheore.git_intel import history_meta
+
+    monkeypatch.delenv("ALETHEORE_DISABLE_LOCAL_SCAN_CACHE", raising=False)
+    repo = make_git_repo(tmp_path)
+    run(repo, "branch", "ahead-behind-topic")
+    calls = []
+
+    def compute():
+        calls.append(1)
+        return {"main": (0, 0), "ahead-behind-topic": (0, 0)}
+
+    assert history_meta.cached_ahead_behind(repo, "main", compute) == {"main": (0, 0), "ahead-behind-topic": (0, 0)}
+    history_meta.cached_ahead_behind(repo, "main", compute)
+    assert len(calls) == 1
+    run(repo, "checkout", "-q", "ahead-behind-topic")
+    (repo / "f.txt").write_text("f")
+    run(repo, "add", "f.txt")
+    commit(repo, "feature work", "2026-07-02T00:00:00+00:00")
+    history_meta.cached_ahead_behind(repo, "main", compute)
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("corrupt", [
+    {"total_commits": "12"}, {"total_commits": None}, {"root_shas": "abc"}, {"root_shas": [1, 2]},
+    {"head": 7}, "drop:total_commits", "drop:root_shas",
+])
+def test_history_facts_recompute_from_a_malformed_cache(tmp_path, monkeypatch, corrupt):
+    # A truncated, hand-edited or foreign git-meta.json must not crash the scan
+    # or be trusted: the facts are recomputed from git.
+    import json
+
+    monkeypatch.delenv("ALETHEORE_DISABLE_LOCAL_SCAN_CACHE", raising=False)
+    repo = make_git_repo(tmp_path)
+    _fresh_facts(repo)  # writes a valid file for the current HEAD
+    meta_path = repo / ".aletheore" / "git-meta.json"
+    meta = json.loads(meta_path.read_text())
+    if isinstance(corrupt, str):
+        del meta["history"][corrupt.split(":", 1)[1]]
+    else:
+        meta["history"].update(corrupt)
+    meta_path.write_text(json.dumps(meta))
+    assert _fresh_facts(repo) == _full_facts(repo)
+
+
+def test_ahead_behind_recomputes_from_malformed_cached_counts(tmp_path, monkeypatch):
+    import json
+
+    from aletheore.git_intel import history_meta
+
+    monkeypatch.delenv("ALETHEORE_DISABLE_LOCAL_SCAN_CACHE", raising=False)
+    repo = make_git_repo(tmp_path)
+    (repo / ".aletheore").mkdir(exist_ok=True)
+    history_meta.cached_ahead_behind(repo, "main", lambda: {"main": (0, 0)})
+    meta_path = repo / ".aletheore" / "git-meta.json"
+    meta = json.loads(meta_path.read_text())
+    meta["ahead_behind"]["counts"] = {"main": ["x"]}
+    meta_path.write_text(json.dumps(meta))
+    assert history_meta.cached_ahead_behind(repo, "main", lambda: {"main": (3, 4)}) == {"main": (3, 4)}

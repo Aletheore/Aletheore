@@ -969,6 +969,25 @@ def _android_manifest_entry_points(repo_path: Path, ignored_paths: list[str] | N
     """
     entry_points: set[str] = set()
     patterns = ignored_paths or []
+
+    # Built once, not once per manifest entry: a basename search used to
+    # mean a fresh rglob(f"{simple_name}.kt") (then .java) for every single
+    # <application>/<activity>/<service>/... tag found - O(entries x repo
+    # size). A real manifest easily names dozens of components, each
+    # re-walking the whole tree just to answer "is there a file with this
+    # stem". One walk per extension, indexed by stem, turns that into O(repo
+    # size + entries).
+    def _stem_index(pattern: str) -> dict[str, list[Path]]:
+        index: dict[str, list[Path]] = {}
+        for p in repo_path.rglob(pattern):
+            if is_ignored(p.relative_to(repo_path).as_posix(), patterns):
+                continue
+            index.setdefault(p.stem, []).append(p)
+        return index
+
+    kt_index = _stem_index("*.kt")
+    java_index = _stem_index("*.java")
+
     for manifest_path in repo_path.rglob("AndroidManifest.xml"):
         rel_manifest = manifest_path.relative_to(repo_path).as_posix()
         if is_ignored(rel_manifest, patterns):
@@ -987,13 +1006,7 @@ def _android_manifest_entry_points(repo_path: Path, ignored_paths: list[str] | N
             simple_name = qualified_name.rsplit(".", 1)[-1]
             if not simple_name:
                 continue
-            candidates = [
-                p for p in repo_path.rglob(f"{simple_name}.kt")
-                if not is_ignored(p.relative_to(repo_path).as_posix(), patterns)
-            ] or [
-                p for p in repo_path.rglob(f"{simple_name}.java")
-                if not is_ignored(p.relative_to(repo_path).as_posix(), patterns)
-            ]
+            candidates = kt_index.get(simple_name) or java_index.get(simple_name) or []
             if len(candidates) == 1:
                 entry_points.add(candidates[0].relative_to(repo_path).as_posix())
     return entry_points

@@ -2,6 +2,7 @@ import json
 import math
 import os
 import re
+import stat
 import xml.etree.ElementTree as ET
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -82,31 +83,57 @@ def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
     # directory in the tree would otherwise have its contents walked and
     # parsed as if they were part of this repo. followlinks only stops
     # descent into symlinked *directories* - a symlinked file sitting
-    # directly in a real directory still needs its own is_symlink() check.
-    nested_git_roots = _nested_git_roots(repo_path)
+    # directly in a real directory still needs its own symlink check.
+    #
+    # Every scan stage calls this, so it works on strings rather than Path
+    # objects (pathlib's relative_to/parents/is_file were most of
+    # map_api_endpoints' time on the Linux kernel): one lstat per file instead
+    # of is_symlink + is_file, rel paths built from the walk instead of
+    # relative_to, and a string prefix test for nested repos instead of
+    # Path.parents. Same files, same order.
+    nested_git_roots = [str(root) for root in _nested_git_roots(repo_path)]
     patterns = ignored_paths or []
-    paths = []
+    root_str = str(repo_path)
+    root_prefix_len = len(root_str) + 1
+    sep = os.sep
+    found: list[tuple[str, str]] = []
     for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
-        current_dir = Path(dirpath)
-        rel_dir = current_dir.relative_to(repo_path).as_posix()
+        if dirpath == root_str:
+            rel_dir = "."
+        else:
+            rel_dir = dirpath[root_prefix_len:].replace(sep, "/") if dirpath.startswith(root_str + sep) else (
+                Path(dirpath).relative_to(repo_path).as_posix()
+            )
         dirnames[:] = [
             d
             for d in dirnames
             if d not in IGNORED_DIRS
             and not is_ignored(f"{rel_dir}/{d}" if rel_dir != "." else d, patterns)
         ]
-        if any(root in current_dir.parents or root == current_dir for root in nested_git_roots):
+        if any(dirpath == root or dirpath.startswith(root + sep) for root in nested_git_roots):
             dirnames[:] = []
             continue
         for filename in filenames:
-            path = current_dir / filename
-            if path.is_symlink() or not path.is_file():
+            full = os.path.join(dirpath, filename)
+            try:
+                mode = os.lstat(full).st_mode
+            except OSError:
                 continue
-            rel_path = path.relative_to(repo_path).as_posix()
+            if not stat.S_ISREG(mode):
+                continue  # symlinks (to files or dirs), dirs, sockets, fifos
+            rel_path = f"{rel_dir}/{filename}" if rel_dir != "." else filename
             if is_ignored(rel_path, patterns):
                 continue
-            paths.append(path)
-    yield from sorted(paths)
+            found.append((rel_path, full))
+    if os.name == "nt":
+        # Windows paths compare case-insensitively; keep pathlib's own order.
+        yield from sorted(Path(full) for _rel_path, full in found)
+        return
+    # Same order as sorting the Path objects: pathlib compares part by part,
+    # not as one string ("a/b" sorts before "a-b/x").
+    found.sort(key=lambda item: item[0].split("/"))
+    for _rel_path, full in found:
+        yield Path(full)
 
 
 def _rel(repo_path: Path, path: Path) -> str | None:
@@ -117,6 +144,10 @@ def _rel(repo_path: Path, path: Path) -> str | None:
     Treated the same as an unresolved/external import rather than letting
     path.relative_to()'s ValueError crash the whole scan.
     """
+    path_str = str(path)
+    root_str = str(repo_path)
+    if path_str.startswith(root_str + os.sep):
+        return path_str[len(root_str) + 1:].replace(os.sep, "/")
     try:
         return path.relative_to(repo_path).as_posix()
     except ValueError:
@@ -286,6 +317,18 @@ def _is_nested_in_function(node: Node) -> bool:
     return False
 
 
+# Fields a symbol entry only carries when they say something: params,
+# docstring and return_type when set, is_pure_declaration when True. On the
+# Linux kernel's 2.9M #define constants these were always null/False and made
+# up ~45% of every entry (most of air.json). Every reader uses .get() with the
+# same default, so leaving them out reads the same (EVIDENCE_VERSION 0.8.1).
+_OMIT_WHEN_EMPTY = {"params": None, "docstring": None, "return_type": None, "is_pure_declaration": False}
+
+
+def _compact_symbol(entry: dict) -> dict:
+    return {key: value for key, value in entry.items() if key not in _OMIT_WHEN_EMPTY or value != _OMIT_WHEN_EMPTY[key]}
+
+
 def _symbol_entry(
     source: bytes,
     name_node: Node,
@@ -295,7 +338,7 @@ def _symbol_entry(
     is_public: bool = True,
     is_pure_declaration: bool = False,
 ) -> dict:
-    return {
+    return _compact_symbol({
         "name": source[name_node.start_byte:name_node.end_byte].decode(errors="ignore"),
         "start_line": enclosing_node.start_point[0] + 1,
         "end_line": enclosing_node.end_point[0] + 1,
@@ -314,7 +357,7 @@ def _symbol_entry(
         # same way a dedicated declaration-only file does (AutoMapper cs02/
         # cs09/cs10, gson java06 - see build_chunks for the per-chunk use).
         "is_pure_declaration": is_pure_declaration,
-    }
+    })
 
 
 _DOCSTRING_QUOTE_PREFIXES = ('"""', "'''", '"', "'")
@@ -697,6 +740,14 @@ def _extract_module_constants(node: Node, source: bytes, language: str) -> list[
                         target = child.child_by_field_name("declarator") or child
                     if target.type == "identifier":
                         add(target, n)
+            if t == "compound_statement" and b"define" not in source[n.start_byte:n.end_byte]:
+                # A function body can't hold a top-level declaration
+                # (is_top_level fails on its children), so the only thing worth
+                # finding in one is a #define. Skipping bodies without one keeps
+                # the output identical and skips most of the tree: this pass was
+                # ~37% of module-graph time on the Linux kernel. Matches
+                # "define", not "#define": `#  define X` is valid C (fmt uses it).
+                continue
 
         stack.extend(reversed(n.children))
 
@@ -2168,6 +2219,18 @@ def _infer_xcodeproj_swift_targets(
             continue
         project_root = xcodeproj.parent
 
+        # Built once per xcodeproj, not once per PBXBuildFile entry: the
+        # classic mechanism names one Swift file per build-phase entry, and
+        # a project still using it (not yet on Xcode 16+'s synchronized
+        # groups) can have one entry per source file in the target - a
+        # fresh project_root.rglob(name) for every single one is an
+        # O(files x repo size) walk. One walk, indexed by basename, turns
+        # that into O(repo size + files).
+        swift_basename_index: dict[str, list[Path]] = {}
+        for p in project_root.rglob("*.swift"):
+            if not is_ignored(_rel(repo_path, p), ignored_paths or []):
+                swift_basename_index.setdefault(p.name, []).append(p)
+
         def resolve_classic(phase_uuid: object) -> list[Path]:
             phase = objects.get(phase_uuid)
             if not isinstance(phase, dict) or phase.get("isa") != "PBXSourcesBuildPhase":
@@ -2179,10 +2242,7 @@ def _infer_xcodeproj_swift_targets(
                 path_str = file_ref.get("path") if isinstance(file_ref, dict) else None
                 if not path_str or not path_str.endswith(".swift"):
                     continue
-                candidates = [
-                    p for p in project_root.rglob(Path(path_str).name)
-                    if not is_ignored(_rel(repo_path, p), ignored_paths or [])
-                ]
+                candidates = swift_basename_index.get(Path(path_str).name, [])
                 if len(candidates) == 1:
                     found.append(candidates[0])
             return found
@@ -2640,7 +2700,7 @@ def _extract_c_family(node: Node, source: bytes) -> tuple[list[str], list[dict],
                         raw_doc = _leading_block_comment(n, source)
                         type_node = n.child_by_field_name("type")
                         functions.append(
-                            {
+                            _compact_symbol({
                                 "name": name,
                                 "start_line": n.start_point[0] + 1,
                                 "end_line": n.end_point[0] + 1,
@@ -2650,7 +2710,7 @@ def _extract_c_family(node: Node, source: bytes) -> tuple[list[str], list[dict],
                                     text(type_node) if type_node is not None else None
                                 ),
                                 "is_public": not _is_nested_in_function(n),
-                            }
+                            })
                         )
             elif n.type in ("struct_specifier", "class_specifier", "union_specifier", "enum_specifier"):
                 # A forward declaration ("struct Foo;") or a plain type reference
@@ -2983,7 +3043,12 @@ def _load_csharp_implicit_usings(repo_path: Path, source_paths: list[Path]) -> d
 
     result: dict[Path, list[str]] = {}
     for source_path in source_paths:
-        ancestors = [source_path.parent, *source_path.parent.parents]
+        # A set, not a list: `config.parent in ancestors` below is checked
+        # once per config_path for every source_path, so a repo with many
+        # .cs files and many csproj/Directory.Build.props configs pays this
+        # membership test O(source_paths x config_paths) times - a list scan
+        # for each one adds a further O(depth) factor a set lookup avoids.
+        ancestors = {source_path.parent, *source_path.parent.parents}
         applicable_props = [
             config for config in config_paths
             if config.parent in ancestors

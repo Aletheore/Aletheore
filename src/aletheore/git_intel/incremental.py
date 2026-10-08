@@ -253,6 +253,25 @@ def stream_commit_touches(
         raise GitLogStreamError(f"git log {rev_range} failed with exit code {returncode}: {stderr}")
 
 
+def _root_commit_key(repo_path: Path) -> str:
+    # history_meta walks all of history only on a first scan; after that it
+    # adds just the commits since the last one (16s -> ~0 on the Linux kernel).
+    from aletheore.git_intel.history_meta import history_facts
+
+    facts = history_facts(repo_path)
+    if facts is not None:
+        return facts.root_shas[0] if facts.root_shas else "no-commits"
+    roots_result = subprocess.run(
+        ["git", "rev-list", "--max-parents=0", "HEAD"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        errors="ignore",
+    )
+    root_shas = sorted(line for line in roots_result.stdout.strip().splitlines() if line)
+    return root_shas[0] if root_shas else "no-commits"
+
+
 def compute_repo_key(repo_path: Path) -> str:
     """Stable identity for a repo across scans, independent of which local
     directory it happens to be cloned into or which installation is
@@ -262,15 +281,7 @@ def compute_repo_key(repo_path: Path) -> str:
     remote URL where one exists; falls back to the absolute local path for
     a repo with no remote (e.g. `git init`, never pushed anywhere).
     """
-    roots_result = subprocess.run(
-        ["git", "rev-list", "--max-parents=0", "HEAD"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        errors="ignore",
-    )
-    root_shas = sorted(line for line in roots_result.stdout.strip().splitlines() if line)
-    root_key = root_shas[0] if root_shas else "no-commits"
+    root_key = _root_commit_key(repo_path)
 
     remote_result = subprocess.run(
         ["git", "remote", "get-url", "origin"],

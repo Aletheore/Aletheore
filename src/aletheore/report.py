@@ -84,6 +84,11 @@ RAW_OUTPUT_FALLBACK_NOTICE = (
 
 
 def run_reasoning_phase(adapter: AgentAdapter, repo_path: str, manual_dir: str) -> str:
+    # Every adapter (and the agent CLIs it launches) reads air.toon, which large
+    # repos only get on demand - see evidence.ensure_air_toon.
+    from aletheore.evidence import ensure_air_toon
+
+    ensure_air_toon(Path(repo_path))
     instruction = build_instruction(manual_dir)
     report_path = Path(repo_path) / ".aletheore" / "audit-report.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)

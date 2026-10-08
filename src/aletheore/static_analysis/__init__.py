@@ -160,8 +160,23 @@ def check_static_analysis(
     tools_skipped: list[dict] = []
     opted_in = {"bearer": run_bearer, "joern": run_joern}
 
-    for name, scanner in _SCANNERS:
-        result = _run_scanner_safely(name, scanner, repo_path)
+    # The default scanners are independent external processes, so they run
+    # side by side (stage time ~ the slowest tool, not the sum). Results are
+    # collected in _SCANNERS order, so output is identical to the sequential
+    # path. The hosted worker sets ALETHEORE_DISABLE_PARALLEL_PARSE for its
+    # tight memory limit, which keeps them one at a time there.
+    from concurrent.futures import ThreadPoolExecutor
+
+    from aletheore.scanner.graph import _parallel_parse_disabled
+
+    if _parallel_parse_disabled():
+        results = [_run_scanner_safely(name, scanner, repo_path) for name, scanner in _SCANNERS]
+    else:
+        with ThreadPoolExecutor(max_workers=len(_SCANNERS)) as executor:
+            futures = [executor.submit(_run_scanner_safely, name, scanner, repo_path) for name, scanner in _SCANNERS]
+            results = [future.result() for future in futures]
+
+    for (name, _scanner), result in zip(_SCANNERS, results):
         if result["checked"]:
             tools_run.append(name)
             findings.extend(result["findings"])
