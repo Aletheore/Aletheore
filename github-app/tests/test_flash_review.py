@@ -4420,3 +4420,56 @@ def test_semantic_checker_finds_shared_state_run_on_threads():
 
     assert len(findings) == 1
     assert "shared mutable instance state" in findings[0]["issue"]
+
+
+def test_semantic_checker_finds_shared_state_called_concurrently_across_wrapped_lines():
+    # Black-style multi-line call: pool.map's callable and the hunk's trigger
+    # keyword end up on different added lines (real regression found on
+    # PR #987 - line-by-line matching missed this entirely).
+    findings = find_semantic_regressions(
+        "--- caller.py ---\n@@ -1,1 +1,5 @@\n+with ThreadPoolExecutor() as pool:\n+    pool.map(\n+        worker,\n+        values,\n+    )\n",
+        {"caller.py": "worker(value)"},
+        "--- referenced definition (not part of this diff): worker.py:worker ---\nself.cache = {}",
+    )
+
+    assert len(findings) == 1
+    assert "shared mutable instance state" in findings[0]["issue"]
+
+
+def test_semantic_checker_ignores_name_nested_inside_an_unrelated_argument():
+    # name is get_values' argument, never pool.map's - pool.map only ever
+    # sees callback. The pre-fix pattern matched name anywhere on the same
+    # line, reintroducing the false positive this PR was meant to remove.
+    findings = find_semantic_regressions(
+        "--- caller.py ---\n@@ -1,1 +1,3 @@\n+with ThreadPoolExecutor() as pool:\n+    pool.map(callback, [v for v in get_values(name)])\n",
+        {"caller.py": "name(value)"},
+        "--- referenced definition (not part of this diff): mod.py:name ---\nself.cache = {}",
+    )
+
+    assert findings == []
+
+
+def test_semantic_checker_ignores_thread_suffixed_class_name():
+    # EventThread is a class name that happens to end in "Thread" - not
+    # threading.Thread, and not concurrent at all. Missing word-boundary on
+    # the Thread trigger matched this (real false positive, PR #987).
+    findings = find_semantic_regressions(
+        "--- caller.py ---\n@@ -1,1 +1,2 @@\n+handler = EventThread(callback=worker)\n",
+        {"caller.py": "worker(value)"},
+        "--- referenced definition (not part of this diff): worker.py:worker ---\nself.cache = {}",
+    )
+
+    assert findings == []
+
+
+def test_semantic_checker_ignores_non_concurrent_dot_map():
+    # series.map is pandas' per-element transform, not a concurrency
+    # primitive - a bare ".map(" trigger with no receiver scoping matched
+    # any object's .map() (real false positive, PR #987).
+    findings = find_semantic_regressions(
+        "--- caller.py ---\n@@ -1,1 +1,2 @@\n+result = series.map(worker)\n",
+        {"caller.py": "worker(value)"},
+        "--- referenced definition (not part of this diff): worker.py:worker ---\nself.cache = {}",
+    )
+
+    assert findings == []
