@@ -544,71 +544,109 @@ def _is_accepted(accepted_keys: set[tuple], path: str | None, pattern_name: str,
     return (path, pattern_name, _legacy_redact(value)) in accepted_keys
 
 
-def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
+# accepted_keys for the current find_secrets call, set once per worker process
+# by _init_secrets_worker (or directly when sequential) instead of being
+# pickled with every file.
+_scan_state: dict = {}
+
+
+def _init_secrets_worker(accepted_keys) -> None:
+    _scan_state["accepted_keys"] = accepted_keys
+
+
+def _scan_file_for_secrets(job: tuple[Path, str]) -> list[dict]:
+    path, rel_path = job
+    accepted_keys = _scan_state["accepted_keys"]
     findings: list[dict] = []
-    scanned_files = 0
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return findings
+
+    # split("\n"), never splitlines() - same bug class already fixed elsewhere in
+    # this codebase (see query.py's find_symbol_source): splitlines() also breaks
+    # on \v, \f, \x1c-\x1e, NEL, LS, and PS, none of which count as a line boundary
+    # here, so a file containing one earlier would shift every subsequent match's
+    # reported "line" off from its real \n-based line number.
+    lines = text.split("\n")
+    for line_no, line in enumerate(lines, start=1):
+        claimed_spans: list[tuple[int, int]] = []
+        for pattern_name, pattern, value_group in SECRET_PATTERNS:
+            for match in pattern.finditer(line):
+                value_span = match.span(value_group)
+                if pattern_name == "generic_credential_assignment" and _overlaps_a_specific_pattern_match(
+                    value_span, claimed_spans
+                ):
+                    # A dedicated pattern (github_token, aws_access_key_id, ...)
+                    # already matched this exact value on this line - e.g.
+                    # "token: ghs_..." matches both github_token AND, now that
+                    # TOKEN is a generic keyword, generic_credential_assignment
+                    # too. Without this, one real secret produced two findings
+                    # for the same value under two different pattern names,
+                    # which reads as the scanner double-counting rather than as
+                    # two real, independent secrets.
+                    continue
+                claimed_spans.append(value_span)
+                value = match.group(value_group)
+                match_preview = _redact(value, f"{rel_path}:{pattern_name}")
+                likely_placeholder = _is_likely_placeholder(rel_path, value, pattern_name)
+                # Only find_secrets (a full-file, current-tree scan) has
+                # convenient access to the lines following a match -
+                # find_secrets_in_history streams individual diff-added
+                # lines and doesn't have this context, so this check is
+                # scoped to here rather than folded into
+                # _is_likely_placeholder itself.
+                if (
+                    not likely_placeholder
+                    and pattern_name == "private_key_header"
+                    and _private_key_header_has_no_body(lines, line_no)
+                ):
+                    likely_placeholder = True
+                findings.append(
+                    {
+                        "path": rel_path,
+                        "line": line_no,
+                        "pattern": pattern_name,
+                        "match_preview": match_preview,
+                        "likely_placeholder": likely_placeholder,
+                        "accepted": _is_accepted(accepted_keys, rel_path, pattern_name, value),
+                    }
+                )
+
+    return findings
+
+
+def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
+    # Local import: graph.py imports from detect.py, which this module also
+    # imports, so keep the parallel helpers out of module import time.
+    from concurrent.futures import ProcessPoolExecutor
+
+    from aletheore.scanner.graph import (
+        PARALLEL_PARSE_MIN_FILES,
+        _available_parallelism,
+        _parallel_parse_disabled,
+    )
+
     accepted_keys = _baseline_keys(baseline)
     ignored_paths = load_repo_config(repo_path)["ignored_paths"]
+    jobs = [(path, path.relative_to(repo_path).as_posix()) for path in iter_all_files(repo_path, ignored_paths)]
 
-    for path in iter_all_files(repo_path, ignored_paths):
-        scanned_files += 1
-        try:
-            text = path.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            continue
+    # Every file is independent, so large repos fan out across cores (same
+    # threshold and opt-out as the parallel module-graph parse). map keeps
+    # input order, so findings come back in the same order either way.
+    if len(jobs) >= PARALLEL_PARSE_MIN_FILES and not _parallel_parse_disabled():
+        with ProcessPoolExecutor(
+            max_workers=_available_parallelism(),
+            initializer=_init_secrets_worker,
+            initargs=(accepted_keys,),
+        ) as executor:
+            per_file = list(executor.map(_scan_file_for_secrets, jobs, chunksize=64))
+    else:
+        _init_secrets_worker(accepted_keys)
+        per_file = [_scan_file_for_secrets(job) for job in jobs]
 
-        rel_path = path.relative_to(repo_path).as_posix()
-        # split("\n"), never splitlines() - same bug class already fixed elsewhere in
-        # this codebase (see query.py's find_symbol_source): splitlines() also breaks
-        # on \v, \f, \x1c-\x1e, NEL, LS, and PS, none of which count as a line boundary
-        # here, so a file containing one earlier would shift every subsequent match's
-        # reported "line" off from its real \n-based line number.
-        lines = text.split("\n")
-        for line_no, line in enumerate(lines, start=1):
-            claimed_spans: list[tuple[int, int]] = []
-            for pattern_name, pattern, value_group in SECRET_PATTERNS:
-                for match in pattern.finditer(line):
-                    value_span = match.span(value_group)
-                    if pattern_name == "generic_credential_assignment" and _overlaps_a_specific_pattern_match(
-                        value_span, claimed_spans
-                    ):
-                        # A dedicated pattern (github_token, aws_access_key_id, ...)
-                        # already matched this exact value on this line - e.g.
-                        # "token: ghs_..." matches both github_token AND, now that
-                        # TOKEN is a generic keyword, generic_credential_assignment
-                        # too. Without this, one real secret produced two findings
-                        # for the same value under two different pattern names,
-                        # which reads as the scanner double-counting rather than as
-                        # two real, independent secrets.
-                        continue
-                    claimed_spans.append(value_span)
-                    value = match.group(value_group)
-                    match_preview = _redact(value, f"{rel_path}:{pattern_name}")
-                    likely_placeholder = _is_likely_placeholder(rel_path, value, pattern_name)
-                    # Only find_secrets (a full-file, current-tree scan) has
-                    # convenient access to the lines following a match -
-                    # find_secrets_in_history streams individual diff-added
-                    # lines and doesn't have this context, so this check is
-                    # scoped to here rather than folded into
-                    # _is_likely_placeholder itself.
-                    if (
-                        not likely_placeholder
-                        and pattern_name == "private_key_header"
-                        and _private_key_header_has_no_body(lines, line_no)
-                    ):
-                        likely_placeholder = True
-                    findings.append(
-                        {
-                            "path": rel_path,
-                            "line": line_no,
-                            "pattern": pattern_name,
-                            "match_preview": match_preview,
-                            "likely_placeholder": likely_placeholder,
-                            "accepted": _is_accepted(accepted_keys, rel_path, pattern_name, value),
-                        }
-                    )
-
-    return {"scanned_files": scanned_files, "findings": findings}
+    findings = [finding for file_findings in per_file for finding in file_findings]
+    return {"scanned_files": len(jobs), "findings": findings}
 
 
 DEFAULT_SECRETS_HISTORY_TIMEOUT_SECONDS = 300.0
