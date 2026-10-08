@@ -333,3 +333,18 @@ def test_cpp_text_fallback_dedupes_within_a_file_only(tmp_path):
     result = map_error_handling(tmp_path)
     files = sorted(t["file"] for t in result["error_types"] if t["name"] == "ParseError")
     assert files == ["a/errors.h", "b/errors.h"]
+
+
+def test_ts_and_tsx_each_parse_with_their_own_grammar(tmp_path):
+    # .ts and .tsx share the language name "typescript" but not the grammar. A
+    # parser cached by that name parsed whichever came second with the wrong
+    # grammar: JSX under the plain TypeScript grammar loses the arrow
+    # function's name (found on prometheus's web UI).
+    _write(tmp_path, "a.ts", "export function plain(): void {\n  try {} catch (e) {}\n}\n")
+    _write(tmp_path, "b.tsx", (
+        "const EndpointLink = () => {\n  try {\n    f();\n  } catch (err) {\n    g();\n  }\n"
+        "  return (\n    <>\n      {xs.map((x) => {\n        return <Badge key={x}>{x}</Badge>;\n"
+        "      })}\n    </>\n  );\n};\n"
+    ))
+    handlers = map_error_handling(tmp_path)["handlers"]
+    assert {(h["file"], h["function"]) for h in handlers} == {("a.ts", "plain"), ("b.tsx", "EndpointLink")}

@@ -504,20 +504,21 @@ def _error_type_names(classes: list[dict]) -> set[str]:
     return known
 
 
-# Per-process parser cache: one Parser per language, reused across every file
-# this process handles (the main process when sequential, each worker when
-# parallel).
+# Per-process parser cache, reused across every file this process handles (the
+# main process when sequential, each worker when parallel). Keyed by extension,
+# not language name: .ts and .tsx share the name "typescript" but not the
+# grammar, and a name-keyed cache parsed whichever came second with the wrong one.
 _parsers: dict[str, Parser] = {}
 
 
 def _extract_one(job: tuple[Path, str]) -> tuple[list, list, list]:
     path, rel = job
     language_name, language = LANGUAGE_BY_EXTENSION[path.suffix]
-    parser = _parsers.get(language_name)
+    parser = _parsers.get(path.suffix)
     if parser is None:
         parser = Parser()
         parser.language = language
-        _parsers[language_name] = parser
+        _parsers[path.suffix] = parser
     classes: list[dict] = []
     raises: list[dict] = []
     handlers: list[dict] = []
