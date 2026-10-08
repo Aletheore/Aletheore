@@ -2983,7 +2983,12 @@ def _load_csharp_implicit_usings(repo_path: Path, source_paths: list[Path]) -> d
 
     result: dict[Path, list[str]] = {}
     for source_path in source_paths:
-        ancestors = [source_path.parent, *source_path.parent.parents]
+        # A set, not a list: `config.parent in ancestors` below is checked
+        # once per config_path for every source_path, so a repo with many
+        # .cs files and many csproj/Directory.Build.props configs pays this
+        # membership test O(source_paths x config_paths) times - a list scan
+        # for each one adds a further O(depth) factor a set lookup avoids.
+        ancestors = {source_path.parent, *source_path.parent.parents}
         applicable_props = [
             config for config in config_paths
             if config.parent in ancestors
