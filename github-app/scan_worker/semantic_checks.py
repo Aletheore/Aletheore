@@ -237,6 +237,74 @@ def _finding(file: str, line: int, issue: str, suggestion: str) -> dict:
     return {"file": file, "line": line, "issue": issue, "suggestion": suggestion}
 
 
+# Receiver-scoped: concurrency primitives, not pandas Series.map/DataFrame.map
+# or any other unrelated .map()/.submit() on some other object (false
+# positive seen on PR #987's own fix). Thread needs its own \b-equivalent
+# (handled by the negative lookbehind in _CONCURRENCY_TRIGGER_RE below) so it
+# doesn't match inside an unrelated identifier like EventThread(...).
+_CONCURRENCY_TRIGGER_RE = re.compile(
+    r"(?:(?i:\w*(?:pool|executor)\w*)\s*\.\s*(?:map|submit|apply_async|starmap)|(?<![\w.])Thread)\s*\(",
+)
+
+
+def _matching_close_paren(text: str, open_paren_index: int) -> int:
+    """Index of the ')' matching the '(' at open_paren_index, tracking
+    nested (), [], {} so a comma or name inside a nested call/list doesn't
+    get mistaken for one of this call's own top-level arguments. Returns
+    len(text) if the diff hunk was truncated mid-call."""
+    depth = 0
+    for i in range(open_paren_index, len(text)):
+        if text[i] in "([{":
+            depth += 1
+        elif text[i] in ")]}":
+            depth -= 1
+            if depth == 0:
+                return i
+    return len(text)
+
+
+def _callable_handed_to_concurrency(added_lines: list[str], name: str) -> bool:
+    """Whether `name` (bound or not: self.name, obj.name) is itself one of
+    the top-level arguments passed to a concurrency primitive in the added
+    lines - pool.map(name, ...), .submit(name, ...), Thread(target=name) -
+    not merely present somewhere on the same line or nested deeper inside
+    another call in the same argument list (pool.map(cb, get(name)) must
+    not count: name is get's argument, never handed to pool.map itself).
+
+    Joining the hunk's added lines into one string (rather than checking
+    line-by-line) is what lets a call wrapped across multiple lines - the
+    common Black style, pool.map(\\n    worker,\\n    values,\\n) - still
+    match; the paren-depth scan below works the same either way since
+    str.strip() already discards the newlines inside each argument.
+    """
+    text = "\n".join(added_lines)
+    name_re = re.compile(rf"^(?:\w+\.)*{re.escape(name)}$")
+    for trigger in _CONCURRENCY_TRIGGER_RE.finditer(text):
+        open_paren = trigger.end() - 1
+        close_paren = _matching_close_paren(text, open_paren)
+        args_text = text[open_paren + 1 : close_paren]
+        depth = 0
+        arg_start = 0
+        # Top-level comma split: a comma inside a nested (), [], or {} in an
+        # argument - e.g. args=(v,) or [v for v in get(name)] - belongs to
+        # that nested expression, not to this call's own argument list.
+        for i, ch in enumerate(args_text + ","):
+            if ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                depth -= 1
+            elif ch == "," and depth == 0:
+                arg = args_text[arg_start:i].strip()
+                # A keyword argument's value is what's actually handed over;
+                # target=self.worker must match on self.worker, not on the
+                # literal text "target=self.worker".
+                arg = re.sub(r"^\w+\s*=\s*", "", arg)
+                if name_re.match(arg):
+                    return True
+                arg_start = i + 1
+    return False
+
+
 def _check_reference_at_call(
     file: str,
     source: str,
@@ -332,8 +400,20 @@ def _check_reference_at_call(
                 "Pass the unscaled ratio or remove one of the two percent conversions.",
             )
 
-    if re.search(r"self\.[A-Za-z_]\w*\s*(?:\+=|=)", dependency) and re.search(
-        r"(?:ThreadPoolExecutor|pool\.map|Executor|concurrent)", "\n".join(added_lines)
+    # Only when this callable is itself handed to the concurrency on the same
+    # changed line (pool.map(name, ...), .submit(name, ...), Thread(target=name)),
+    # bound or not (self.name, obj.name),
+    # not when a concurrent import or an unrelated pool.map elsewhere in the
+    # hunk merely appears near a call. And never for a constructor: every
+    # __init__ assigns self.x, and constructing makes a fresh instance, the
+    # opposite of shared state (both false positives seen on PR #985).
+    is_constructor = name in ("__init__", "__new__", "__post_init__") or re.search(
+        rf"^\s*class\s+{re.escape(name)}\b", dependency, re.MULTILINE
+    )
+    if (
+        not is_constructor
+        and _callable_handed_to_concurrency(added_lines, name)
+        and re.search(r"self\.[A-Za-z_]\w*\s*(?:\+=|=)", dependency)
     ):
         return _finding(
             file,
