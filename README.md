@@ -55,7 +55,9 @@ Ruby, PHP, C, C++, C#, and Swift**.
   architecture wiki) is checked against the file:line it cites. A finding that can't be
   verified against real evidence gets dropped or flagged, not shipped silently.
 - **The free tier is actually free.** `scan`, `query`, `diff`, the MCP server, and the local
-  dashboard need no account and no API key. Nothing leaves your machine.
+  dashboard need no account and no API key. Nothing leaves your machine, apart from a crash report
+  if the CLI itself crashes (on by default, one command to turn off; see
+  [Crash reporting](src/README.md#crash-reporting)).
 - **Bring your own model, or don't use one at all.** `audit` works with six provider families
   (Claude, OpenAI, Google, Mistral, xAI, or a local Ollama model) — your key, your cost, your
   choice — or skip the LLM step entirely and just use the deterministic evidence.
@@ -144,5 +146,5 @@ work for — is a commercial use and requires a separate commercial license. Rea
 [Aletheore AIR](https://aletheore.com) for the hosted, paid tier.
 
 If it's useful to you personally, consider
-[sponsoring development](https://github.com/sponsors/ArihantK15) — no accounts, no tracking,
-nothing leaves your machine when you run it.
+[sponsoring development](https://github.com/sponsors/ArihantK15) — no accounts, no usage tracking,
+and nothing leaves your machine when you run it except an optional crash report (see above).

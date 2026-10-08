@@ -3,6 +3,133 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.23 - 2026-10-09
+
+**Crash reporting, on by default, easy to turn off (#961, #984)**
+
+When the CLI itself crashes with an unhandled exception, it now sends a crash report so bugs that only
+show up on some operating systems or Python versions can be found and fixed. This is the first time the
+CLI sends anything off the machine on its own, so, plainly:
+
+- **What is sent:** the exception details and stack trace, the Aletheore, OS and Python versions, and
+  recent log lines. Your home directory is replaced with `~`. Command-line arguments, the machine name,
+  local variables and request data are removed before anything leaves the process.
+- **When:** only on a crash. No usage events, no timing, no performance tracing, and no repository
+  contents are attached. An exception message can still name a file or path from the project you
+  were scanning, which is why it is easy to turn off.
+- **Turn it off:** `aletheore config crash-reporting off`, or set `ALETHEORE_CRASH_REPORTING=0` (also
+  `false`, `no`, `off`). `aletheore status` shows the current state, and `aletheore config
+  crash-reporting on` turns it back on.
+- **You are told:** a one-time notice on first run, and a line after every crash that was reported.
+  Both go to stderr, so piped or redirected output stays clean.
+
+**Faster scans on large repositories (#985, #922, #959)**
+
+`aletheore scan` finds the same things, in the same order, in much less time on big repos. Measured
+back to back on one machine with the same history caps on both sides:
+
+| Repository | Cold scan | Re-scan | `air.json` |
+| --- | --- | --- | --- |
+| Linux kernel | 738s to 306s | 740s to 149s | 1.32 GB to 467 MB |
+| vscode | 332s to 227s | 267s to 133s | 38% smaller |
+| django | 69s to 40s | 62s to 29s | 56% smaller |
+| thrift | about 50s to 25s | 38-53s to 12-17s | 50% smaller |
+| prometheus | 98s to 80s | 50s to 37s | 49% smaller |
+| spring-boot | 686s to 732s | 83s to 59s | 40% smaller |
+
+spring-boot's first scan is the one case that got slightly slower; every re-scan got faster.
+
+- **A per-file cache** (`.aletheore/file-cache.db`, keyed by content hash and code version) lets
+  unchanged files reuse their secrets, error-handling and line-count results. Whole-history git facts
+  are kept up to date incrementally in `.aletheore/git-meta.json`. Both are local-only: they are off in
+  the hosted worker and whenever `ALETHEORE_DISABLE_LOCAL_SCAN_CACHE` is set.
+- **Stages overlap**: git analysis, secrets history, vulnerability and license lookups now run alongside
+  the parse, error handling and working-tree secrets run across cores, and the default static analyzers
+  run side by side. Set `ALETHEORE_DISABLE_PARALLEL_PARSE` to keep everything sequential.
+- **Smaller evidence**: `air.json` is written as compact JSON and symbol entries leave out empty
+  fields (evidence 0.8.1, documented in `docs/AIR-SCHEMA.md`). Every reader checked gives the same
+  output from both shapes.
+
+**Changed: local scans now cap history by default (#985)**
+
+A local scan used to walk the entire git history. It now stops at the latest 50,000 commits for
+hotspots and ownership, and the latest 20,000 for the secrets-history sweep, the same caps the hosted
+scanner already used. The Linux kernel has about 1.46 million commits, so this is what makes a first
+scan finish. Evidence says so with `history_depth_limited` when a cap applied. **If you rely on finding
+a secret committed long ago in a very large repository, remove the cap:** set
+`ALETHEORE_GIT_HISTORY_DEPTH_CAP` and `ALETHEORE_SECRETS_HISTORY_DEPTH_CAP` to `0` or `none`.
+
+**Added: error-handling evidence (#911)**
+
+The scan now records how a codebase fails: the error types it defines, where they are raised or thrown,
+and what catches them, each with a `file:line`, for Python, C/C++, JavaScript/TypeScript, Java, C#, PHP,
+Kotlin, Ruby, Swift, Go and Rust (`repository.error_handling`, evidence 0.8.0, optional so older
+`air.json` stays valid). It is available as the `aletheore_error_handling` MCP tool (35 tools by
+default now) and as `aletheore query error-handling`.
+
+**Cheaper `audit` runs (#909)**
+
+A single read of a large evidence section could return about a million characters, and the model
+re-sent the whole conversation every round, so one audit used 4.5 to 4.9 million input tokens. Sections
+over 30,000 characters now come back as an outline or the first page of a list, with the exact path to
+read next, and nothing becomes unreachable. Measured on the same repository: input tokens 4.5-4.9M to
+0.8-0.9M, and about $0.50 to about $0.09 at list price per audit.
+
+**Fixed: scan correctness**
+
+- The C/C++ error-handling fallback rebuilt a set of every class once per file with a parse error. On
+  the kernel it was projected at about 4.8 hours; it is now linear (#985).
+- `history_depth_limited` was lost on warm and incremental scans, so a capped history looked complete
+  (#985). `.ts` and `.tsx` files shared one parser cache entry and could lose a handler's function name
+  or miscount throw sites (#985).
+- Dependency scanning: nested npm lockfile dependencies were invisible (#934), a legacy npm lockfile v1
+  was read as empty (#938), Maven property chains were resolved only one level deep (#939), and
+  Composer dev dependencies were never scanned (#940).
+- Git analysis: rewritten history no longer double-counts churn and ownership (#937), deleted files no
+  longer rank as hotspots (#950), shallow clones no longer report a wrong repository age (#951), a
+  renamed file keeps its history under its new name (#977), `stream_commit_touches` could deadlock when
+  git wrote a lot to stderr (#956), and an unbounded read of a huge `.rb` file during architecture
+  analysis is now bounded (#957).
+- Citation checking: `host:port` strings no longer break verification (#935), and a citation to a real
+  `.in`, `.test`, `.app` or `.dev` file is no longer dropped as a hostname (#979).
+- Long random numeric tokens were misclassified as placeholders by the secret scanner (#936), Rails
+  routes inside `namespace` and `scope` got the wrong URL path (#920), and unrelated CVEs were attached
+  as risk context to endpoints that could not be resolved (#944).
+- Regex search: the time budget no longer counts the worker's startup, and its ready signal can no
+  longer be starved by the regex it is about to run, which caused an intermittent `KeyError: 'matches'`
+  (#965, #970).
+- Two MCP tool error paths: the `changes` snapshot blamed the wrong snapshot, and an empty `path_glob`
+  crashed (#942). The OpenAI adapter leaked a spend reservation on a missing key and raised
+  `IndexError` on an empty `choices` list (#941, and the same latent gap closed in the Anthropic adapter
+  in #981).
+
+**Fixed: command-line robustness (#914)**
+
+A cross-platform audit of the CLI closed a long list of rough edges:
+
+- A bad `PATH`, a file given as `PATH`, or a directory given as evidence now gives a one-line error
+  instead of a traceback, across `scan`, `audit`, `init`, `watch`, `index`, `mcp`, `mcp-install`,
+  `dashboard`, `healthcheck`, `verify` and `diff`.
+- `dashboard` validates `--port`, binds exclusively on Windows and opens the browser only after the
+  server is up. `mcp-install` handles BOM and JSONC configs, `aletheore.exe`, the MSIX Claude Desktop
+  path and Windows symlinks, and warns that the files it writes hold machine-specific paths.
+- A closed stdin (CI, pipes) no longer crashes consent prompts, and login and managed audit handle
+  network errors (the managed-audit client timeout went from 5s to 60s).
+- Credentials use `getpass` for key entry, keep a `.bak` of an unparseable file, no longer fail at
+  import without a home directory, and honour `XDG_CONFIG_HOME`.
+- `watch` no longer sets inotify watches under `node_modules`, `.git` or virtual environments, and
+  says so clearly when the watch limit is hit.
+- The update check can be turned off with `ALETHEORE_NO_UPDATE_CHECK`, no longer reports an update to
+  a newer development build, and no longer crashes when run from source.
+
+**Also**
+
+- `aletheore verify` handles an unreadable or non-UTF-8 report file, evidence reads retry on a
+  transient Windows `PermissionError`, and the remaining MCP tools catch evidence and query errors
+  instead of crashing (#851, #852, #853, #847).
+- The local dashboard uses the Aletheore mark as its favicon (#916).
+- The `python-toon` requirement now allows `<0.3` (#926).
+
 ## 0.9.22 - 2026-09-27
 
 **Python 3.13 and 3.14 are supported (#840)**
