@@ -2387,8 +2387,9 @@ def main() -> None:
                 )
             else:
                 _stderr_console.print(
-                    "\n[dim]This crash - and only this crash, no other "
-                    "data - was reported to help fix it. Disable with "
+                    "\n[dim]This crash report (error details, stack trace, "
+                    "OS and Python version) was sent to help fix it. No "
+                    "usage data is collected. Disable with "
                     "`aletheore config crash-reporting off`.[/dim]"
                 )
         raise

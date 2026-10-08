@@ -29,7 +29,10 @@ PR audit of #915-977 flagged on this PR):** stays on by default/opt-out,
 not opt-in - but both disclosure points (the one-time first-run notice
 and the per-crash notice below) must say explicitly that ONLY crash data
 is ever reported, never general usage/telemetry, so "on by default" is
-never mistaken for broader tracking. No third disclosure point - just
+never mistaken for broader tracking. The per-crash notice names what a
+report contains (error details, stack trace, OS and Python version) and
+must not claim "no other data": the event also carries the exception
+message and breadcrumbs, with the home directory redacted. No third disclosure point - just
 these two, each shown as described below.
 
 ## Non-goals
@@ -132,8 +135,9 @@ except Exception as exc:
     if is_crash_reporting_enabled():
         sentry_sdk.capture_exception(exc)
         console.print(
-            "\n[dim]This crash - and only this crash, no other data - "
-            "was reported to help fix it. Disable with "
+            "\n[dim]This crash report (error details, stack trace, "
+            "OS and Python version) was sent to help fix it. No usage "
+            "data is collected. Disable with "
             "`aletheore config crash-reporting off`.[/dim]"
         )
     raise

@@ -372,11 +372,15 @@ def test_main_reports_an_unhandled_exception_to_sentry_and_reraises(monkeypatch,
     # protocol channel, and `diff`/`--format sarif` output is often
     # redirected or piped - an unrelated crash-reporting line on stdout
     # would corrupt either. Must go to stderr.
-    assert "This crash" not in output.out
-    assert "This crash" in output.err
-    # Product decision (2026-10-08): the per-crash disclosure must say
-    # explicitly that only this crash - not general usage - was sent.
-    assert "only this crash" in output.err
+    assert "This crash report" not in output.out
+    assert "This crash report" in output.err
+    # Product decision (2026-10-08): the per-crash disclosure must say what
+    # a report contains and that no usage data is collected. It must not
+    # claim "no other data": the event also carries the exception message
+    # and breadcrumbs (home directory redacted), not just the stack trace.
+    assert "stack trace" in output.err
+    assert "No usage data is collected" in output.err
+    assert "no other data" not in output.err
 
 
 def test_main_does_not_report_when_crash_reporting_is_disabled(monkeypatch):
