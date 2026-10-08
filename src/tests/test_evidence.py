@@ -1463,3 +1463,73 @@ def test_local_scans_default_to_the_hosted_history_caps(monkeypatch):
 
     monkeypatch.setenv("ALETHEORE_GIT_HISTORY_DEPTH_CAP", "not-a-number")
     assert _git_history_depth_cap() == 50_000
+
+
+def _scan_with_overlap(repo, monkeypatch, enabled, **kwargs):
+    if enabled:
+        monkeypatch.delenv("ALETHEORE_DISABLE_PARALLEL_PARSE", raising=False)
+    else:
+        monkeypatch.setenv("ALETHEORE_DISABLE_PARALLEL_PARSE", "1")
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        return scan_repository(repo, check_licenses=False, **kwargs)
+
+
+def test_overlapped_and_sequential_scans_give_identical_evidence(tmp_path, monkeypatch):
+    # Background stages hand their results back at their original place, so
+    # turning the overlap on or off must not change the evidence at all.
+    repo = make_repo(tmp_path)
+    for i in range(3):
+        (repo / "main.py").write_text(f'def hello():\n    return {i}\nTOKEN = "ghp_{"a" * 36}"\n')
+        run(repo, "add", "-A")
+        run(repo, "commit", "-q", "-m", f"change {i}")
+    overlapped = _scan_with_overlap(repo, monkeypatch, True)
+    sequential = _scan_with_overlap(repo, monkeypatch, False)
+    for evidence in (overlapped, sequential):
+        evidence.pop("scanned_at")
+    assert overlapped == sequential
+    assert overlapped["git"]["available"] is True
+
+
+def test_a_background_stage_error_surfaces_from_the_scan(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    monkeypatch.delenv("ALETHEORE_DISABLE_PARALLEL_PARSE", raising=False)
+    with patch("aletheore.evidence.check_dependency_vulnerabilities", side_effect=RuntimeError("osv down")):
+        with pytest.raises(RuntimeError, match="osv down"):
+            scan_repository(repo, check_licenses=False)
+
+
+def test_background_license_progress_is_reported_after_its_stage_header(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    monkeypatch.delenv("ALETHEORE_DISABLE_PARALLEL_PARSE", raising=False)
+    messages = []
+
+    def fake_licenses(repo_path, on_progress=None):
+        on_progress(1, 1, "flask")
+        return {"checked": True, "reason": None, "repo_license": {"category": "unknown", "detected_from": None}, "findings": []}
+
+    with (
+        patch("aletheore.evidence.check_dependency_licenses", side_effect=fake_licenses),
+        patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check,
+    ):
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        scan_repository(repo, progress=messages.append)
+    header = next(i for i, m in enumerate(messages) if m.startswith("Checking dependency licenses ("))
+    progress = next(i for i, m in enumerate(messages) if m.startswith("Checking dependency licenses: 1/1"))
+    assert progress > header
+
+
+def test_hosted_opt_out_starts_no_background_threads(tmp_path, monkeypatch):
+    import threading
+
+    repo = make_repo(tmp_path)
+    started = []
+    real_start = threading.Thread.start
+
+    def spy(self):
+        started.append(self.name)
+        return real_start(self)
+
+    monkeypatch.setattr(threading.Thread, "start", spy)
+    _scan_with_overlap(repo, monkeypatch, False)
+    assert not [name for name in started if name.startswith("aletheore-scan-")]

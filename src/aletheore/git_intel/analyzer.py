@@ -402,6 +402,16 @@ def compute_hotspots(
     return _hotspots_summary(snapshot, modules, repo_path)
 
 
+def hotspots_from_snapshot(snapshot: GraphSnapshot, modules: list[dict], repo_path: Path) -> list[dict]:
+    """compute_hotspots for a snapshot the caller already synced to HEAD."""
+    return _hotspots_summary(snapshot, modules, repo_path)
+
+
+def recently_updated_from_snapshot(snapshot: GraphSnapshot, repo_path: Path) -> list[dict]:
+    """compute_recently_updated for a snapshot the caller already synced."""
+    return _recently_updated_summary(snapshot, repo_path)
+
+
 def compute_recently_updated(
     repo_path: Path,
     *,
@@ -469,9 +479,23 @@ def analyze_git(
     depth_cap: int | None = None,
     branch: str | None = None,
 ) -> dict:
+    prepared = prepare_git_analysis(repo_path, now, store=store, depth_cap=depth_cap, branch=branch)
+    return finish_git_analysis(prepared, modules)
+
+
+def prepare_git_analysis(
+    repo_path: Path,
+    now: datetime | None = None,
+    *,
+    store: RepoGraphStore | None = None,
+    depth_cap: int | None = None,
+    branch: str | None = None,
+) -> dict:
+    """Everything in analyze_git except the per-module ownership summary, so
+    the slow part (walking history into the graph store) can run while the
+    module graph is still being built. Pair with finish_git_analysis."""
     if now is None:
         now = datetime.now(timezone.utc)
-    modules = modules or []
 
     if not _has_commits(repo_path):
         return {"available": False}
@@ -488,7 +512,7 @@ def analyze_git(
     owns_store = store is None
     store = store or default_store(repo_path)
     try:
-        snapshot, was_full_rebuild = _sync_graph(repo_path, store, now, depth_cap, branch)
+        snapshot, _was_full_rebuild = _sync_graph(repo_path, store, now, depth_cap, branch)
     finally:
         if owns_store and isinstance(store, SQLiteRepoGraphStore):
             store.close()
@@ -507,11 +531,26 @@ def analyze_git(
 
     return {
         "available": True,
+        "_snapshot": snapshot,
         "branches": _parse_branches(repo_path, now),
         "commit_cadence": _cadence_summary(snapshot, now),
         "ownership": _ownership_summary(snapshot),
-        "file_ownership": _file_ownership_summary(snapshot, modules),
         "repo_age_days": repo_age_days,
         "total_commits": total_commits,
         "history_depth_limited": history_depth_limited,
+    }
+
+
+def finish_git_analysis(prepared: dict, modules: list[dict] | None) -> dict:
+    if not prepared.get("available"):
+        return {"available": False}
+    return {
+        "available": True,
+        "branches": prepared["branches"],
+        "commit_cadence": prepared["commit_cadence"],
+        "ownership": prepared["ownership"],
+        "file_ownership": _file_ownership_summary(prepared["_snapshot"], modules or []),
+        "repo_age_days": prepared["repo_age_days"],
+        "total_commits": prepared["total_commits"],
+        "history_depth_limited": prepared["history_depth_limited"],
     }
