@@ -72,6 +72,41 @@ def test_check_vulnerabilities_reports_a_real_finding(tmp_path):
     assert finding["severity"] == [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"}]
 
 
+def test_check_vulnerabilities_fetches_advisory_details_concurrently_not_serially(tmp_path):
+    # Same real-world shape as licenses.py's own concurrency fix: one
+    # blocking HTTP call per advisory, fully serial, on a repo with many
+    # findings. 10 advisories here, each with a simulated 0.1s round-trip:
+    # serial would take >= 1.0s; with real concurrency this must complete
+    # in a small fraction of that.
+    import time
+
+    from aletheore import vulnerabilities
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    requirements = "\n".join(f"pkg{i}==1.0.{i}" for i in range(10))
+    (repo / "requirements.txt").write_text(requirements + "\n")
+
+    batch_response = _mock_response(
+        {"results": [{"vulns": [{"id": f"PYSEC-2024-{i}"}]} for i in range(10)]}
+    )
+
+    def slow_urlopen(request, timeout=None, context=None):
+        if request.full_url == vulnerabilities.OSV_BATCH_URL:
+            return batch_response
+        time.sleep(0.1)
+        return _mock_response({"summary": "x", "severity": []})
+
+    with patch("aletheore.vulnerabilities.urllib.request.urlopen", side_effect=slow_urlopen):
+        start = time.monotonic()
+        result = check_vulnerabilities(repo, cache_path=tmp_path / "cache.json")
+        elapsed = time.monotonic() - start
+
+    assert result["checked"] is True
+    assert len(result["findings"]) == 10
+    assert elapsed < 1.0, f"took {elapsed:.2f}s - advisory detail fetches are not running concurrently"
+
+
 def test_check_vulnerabilities_degrades_gracefully_on_network_failure(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
