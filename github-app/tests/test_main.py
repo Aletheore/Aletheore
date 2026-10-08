@@ -344,6 +344,11 @@ async def test_webhook_crash_records_durable_5xx_counter_and_scopes_alert_source
     assert len(recorded) == 1
     assert len(alerts) == 1
     assert alerts[0][0][0] == "app_server:/webhook"
+    # The .exception() call just above this already logged the failure with
+    # exc_info, which LoggingIntegration auto-captures - send_error_alert
+    # must not also run its own capture_exception(), or this gets reported
+    # to Sentry twice.
+    assert alerts[0][1].get("already_captured") is True
 
 
 @pytest.mark.asyncio
