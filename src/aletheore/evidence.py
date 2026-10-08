@@ -421,8 +421,11 @@ def _rails_model_association_edges(repo_path: Path, dependency_graph: dict) -> l
 class _Overlap:
     """Runs a scan stage on a background thread so it overlaps the module-graph
     parse, then hands its result back at the stage's original place in the
-    scan - so evidence content, progress order and where an error surfaces
-    are all unchanged. The stages put here wait on git, the network or
+    scan - so evidence content, the order stages report in and where an error
+    surfaces are all unchanged. One visible difference: a stage's own
+    per-item progress (the licenses check's "n/total" lines) is buffered while
+    it runs in the background and replayed in one burst at its place, rather
+    than streaming live. The stages put here wait on git, the network or
     external tools, not on the parse. Daemon threads, not a ThreadPoolExecutor,
     so a scan that fails elsewhere exits without waiting for them. Disabled
     (fully sequential) under ALETHEORE_DISABLE_PARALLEL_PARSE, which the

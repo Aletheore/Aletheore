@@ -368,6 +368,10 @@ def detect_languages(repo_path: Path, ignored_paths: list[str] | None = None) ->
     from aletheore.file_cache import cached_per_file, code_version
 
     counts: dict[str, dict] = {}
+    # Absolute, so every walked path starts with this exact string: with a
+    # relative "." the walk yields "sub/f" (pathlib drops the "./"), and slicing
+    # off len(".") + 1 would cut real characters and collide cache keys.
+    repo_path = Path(os.path.abspath(repo_path))
     root_len = len(str(repo_path)) + 1
     jobs = [
         (path, str(path)[root_len:].replace(os.sep, "/"))

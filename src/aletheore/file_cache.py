@@ -15,7 +15,11 @@ Safety rules, the same ones scan-cache.json follows:
 - Off under ALETHEORE_DISABLE_LOCAL_SCAN_CACHE (the hosted worker): a hosted
   checkout is someone else's repo, and they could commit a cache file that
   hides their own findings. ALETHEORE_FILE_CACHE_PATH can point a trusted
-  caller (one that owns the file, outside the checkout) at its own database.
+  caller (one that owns the file, outside the checkout) at its own database,
+  one per repo: entries are keyed by repo-relative path, and each scan drops
+  the rows for paths it didn't see, so two repos sharing a database would
+  keep evicting each other (never wrong results, since hits need a matching
+  content hash, just no reuse).
 """
 
 import hashlib
@@ -76,10 +80,12 @@ def _hash_one(path: Path) -> str | None:
         return None
 
 
-# (resolved path, size, mtime_ns) -> content hash, so the several stages of
-# one scan hash each file once. Size and mtime only gate this in-process
-# reuse; what gets compared against stored entries is always the content hash.
-_hash_memo: dict[tuple[str, int, int], str | None] = {}
+# path -> ((size, mtime_ns), content hash), so the several stages of one scan
+# hash each file once. Size and mtime only gate this in-process reuse; what gets
+# compared against stored entries is always the content hash. Keyed by path, so
+# a long-lived process (MCP server, hosted worker) holds one entry per file, not
+# one per version of it.
+_hash_memo: dict[str, tuple[tuple[int, int], str | None]] = {}
 
 
 def content_hashes(paths: list[Path]) -> dict[Path, str | None]:
@@ -91,17 +97,18 @@ def content_hashes(paths: list[Path]) -> dict[Path, str | None]:
         except OSError:
             out[path] = None
             continue
-        key = (str(path), st.st_size, st.st_mtime_ns)
-        if key in _hash_memo:
-            out[path] = _hash_memo[key]
+        stamp = (st.st_size, st.st_mtime_ns)
+        memo = _hash_memo.get(str(path))
+        if memo is not None and memo[0] == stamp:
+            out[path] = memo[1]
         else:
-            todo.append((path, key))
+            todo.append((path, stamp))
     if todo:
         # hashlib releases the GIL on large buffers, so threads overlap the reads.
         with ThreadPoolExecutor(max_workers=min(16, (os.cpu_count() or 1) * 2)) as executor:
             hashes = list(executor.map(lambda item: _hash_one(item[0]), todo))
-        for (path, key), digest in zip(todo, hashes):
-            _hash_memo[key] = digest
+        for (path, stamp), digest in zip(todo, hashes):
+            _hash_memo[str(path)] = (stamp, digest)
             out[path] = digest
     return out
 

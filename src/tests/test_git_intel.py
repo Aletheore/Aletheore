@@ -832,3 +832,41 @@ def test_ahead_behind_counts_are_reused_until_a_tip_moves(tmp_path, monkeypatch)
     commit(repo, "feature work", "2026-07-02T00:00:00+00:00")
     history_meta.cached_ahead_behind(repo, "main", compute)
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize("corrupt", [
+    {"total_commits": "12"}, {"total_commits": None}, {"root_shas": "abc"}, {"root_shas": [1, 2]},
+    {"head": 7}, "drop:total_commits", "drop:root_shas",
+])
+def test_history_facts_recompute_from_a_malformed_cache(tmp_path, monkeypatch, corrupt):
+    # A truncated, hand-edited or foreign git-meta.json must not crash the scan
+    # or be trusted: the facts are recomputed from git.
+    import json
+
+    monkeypatch.delenv("ALETHEORE_DISABLE_LOCAL_SCAN_CACHE", raising=False)
+    repo = make_git_repo(tmp_path)
+    _fresh_facts(repo)  # writes a valid file for the current HEAD
+    meta_path = repo / ".aletheore" / "git-meta.json"
+    meta = json.loads(meta_path.read_text())
+    if isinstance(corrupt, str):
+        del meta["history"][corrupt.split(":", 1)[1]]
+    else:
+        meta["history"].update(corrupt)
+    meta_path.write_text(json.dumps(meta))
+    assert _fresh_facts(repo) == _full_facts(repo)
+
+
+def test_ahead_behind_recomputes_from_malformed_cached_counts(tmp_path, monkeypatch):
+    import json
+
+    from aletheore.git_intel import history_meta
+
+    monkeypatch.delenv("ALETHEORE_DISABLE_LOCAL_SCAN_CACHE", raising=False)
+    repo = make_git_repo(tmp_path)
+    (repo / ".aletheore").mkdir(exist_ok=True)
+    history_meta.cached_ahead_behind(repo, "main", lambda: {"main": (0, 0)})
+    meta_path = repo / ".aletheore" / "git-meta.json"
+    meta = json.loads(meta_path.read_text())
+    meta["ahead_behind"]["counts"] = {"main": ["x"]}
+    meta_path.write_text(json.dumps(meta))
+    assert history_meta.cached_ahead_behind(repo, "main", lambda: {"main": (3, 4)}) == {"main": (3, 4)}

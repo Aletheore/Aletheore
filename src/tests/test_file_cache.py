@@ -138,3 +138,28 @@ def test_a_result_is_not_stored_if_the_file_changed_while_it_was_computed(repo, 
     monkeypatch.setattr(secrets, "_scan_many_for_secrets", real)
     file_cache._hash_memo.clear()
     assert find_secrets(repo)["findings"] == []
+
+
+def test_line_counts_are_right_for_a_relative_repo_path(repo, monkeypatch):
+    # With a relative "." the walk yields "ab/f.py" (no "./"); the cache keys
+    # must still be the real relative paths, or two files collide on one key.
+    (repo / "ab").mkdir()
+    (repo / "cb").mkdir()
+    (repo / "ab" / "f.py").write_text("x = 1\n")
+    (repo / "cb" / "f.py").write_text("x = 1\ny = 2\nz = 3\n")
+    expected = detect_languages(repo)
+    monkeypatch.chdir(repo)
+    assert detect_languages(Path(".")) == expected
+    assert detect_languages(Path(".")) == expected  # and again from the cache
+
+
+def test_hash_memo_holds_one_entry_per_file(repo):
+    import os
+
+    target = repo / "a.py"
+    for i in range(5):
+        target.write_text(f"v = {i}\n")
+        os.utime(target, ns=(1_000_000_000 * (i + 1), 1_000_000_000 * (i + 1)))
+        digest = file_cache.content_hashes([target])[target]
+        assert digest == file_cache._hash_one(target)
+    assert list(file_cache._hash_memo) == [str(target)]

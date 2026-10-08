@@ -118,19 +118,27 @@ def history_facts(repo_path: Path) -> HistoryFacts | None:
     if memo_key in _memo:
         return _memo[memo_key]
 
-    cached = _load(repo_path).get("history") or {}
+    cached = _load(repo_path).get("history")
     facts = None
-    if cached.get("shallow") == shallow and isinstance(cached.get("head"), str):
+    # A truncated, hand-edited or foreign file is treated as no cache: recompute.
+    valid = (
+        isinstance(cached, dict)
+        and isinstance(cached.get("head"), str)
+        and type(cached.get("total_commits")) is int
+        and isinstance(cached.get("root_shas"), list)
+        and all(isinstance(sha, str) for sha in cached["root_shas"])
+    )
+    if valid and cached.get("shallow") == shallow:
         old = cached["head"]
         if old == head:
-            facts = HistoryFacts(head, int(cached["total_commits"]), tuple(cached["root_shas"]))
+            facts = HistoryFacts(head, cached["total_commits"], tuple(cached["root_shas"]))
         elif _git(repo_path, "merge-base", "--is-ancestor", old, head).returncode == 0:
             added = _count(repo_path, f"{old}..{head}")
             new_roots = _roots(repo_path, f"{old}..{head}")
             if added is not None and new_roots is not None:
                 facts = HistoryFacts(
                     head,
-                    int(cached["total_commits"]) + added,
+                    cached["total_commits"] + added,
                     tuple(sorted(set(cached["root_shas"]) | set(new_roots))),
                 )
     if facts is None:
@@ -167,9 +175,12 @@ def cached_ahead_behind(repo_path: Path, default_ref: str, compute) -> dict[str,
         "tips": dict(line.split("\t", 1) for line in tips.stdout.splitlines() if "\t" in line),
     }
     meta = _load(repo_path)
-    cached = meta.get("ahead_behind") or {}
-    if cached.get("signature") == signature:
-        return {name: (int(pair[0]), int(pair[1])) for name, pair in cached["counts"].items()}
+    cached = meta.get("ahead_behind")
+    if isinstance(cached, dict) and cached.get("signature") == signature:
+        try:
+            return {name: (int(pair[0]), int(pair[1])) for name, pair in cached["counts"].items()}
+        except (KeyError, TypeError, ValueError, IndexError, AttributeError):
+            pass  # malformed: recompute below
     counts = compute()
     if counts is not None:
         meta["ahead_behind"] = {"signature": signature, "counts": {k: list(v) for k, v in counts.items()}}
