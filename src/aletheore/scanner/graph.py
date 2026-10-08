@@ -2,6 +2,7 @@ import json
 import math
 import os
 import re
+import stat
 import xml.etree.ElementTree as ET
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -82,31 +83,57 @@ def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
     # directory in the tree would otherwise have its contents walked and
     # parsed as if they were part of this repo. followlinks only stops
     # descent into symlinked *directories* - a symlinked file sitting
-    # directly in a real directory still needs its own is_symlink() check.
-    nested_git_roots = _nested_git_roots(repo_path)
+    # directly in a real directory still needs its own symlink check.
+    #
+    # Every scan stage calls this, so it works on strings rather than Path
+    # objects (pathlib's relative_to/parents/is_file were most of
+    # map_api_endpoints' time on the Linux kernel): one lstat per file instead
+    # of is_symlink + is_file, rel paths built from the walk instead of
+    # relative_to, and a string prefix test for nested repos instead of
+    # Path.parents. Same files, same order.
+    nested_git_roots = [str(root) for root in _nested_git_roots(repo_path)]
     patterns = ignored_paths or []
-    paths = []
+    root_str = str(repo_path)
+    root_prefix_len = len(root_str) + 1
+    sep = os.sep
+    found: list[tuple[str, str]] = []
     for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
-        current_dir = Path(dirpath)
-        rel_dir = current_dir.relative_to(repo_path).as_posix()
+        if dirpath == root_str:
+            rel_dir = "."
+        else:
+            rel_dir = dirpath[root_prefix_len:].replace(sep, "/") if dirpath.startswith(root_str + sep) else (
+                Path(dirpath).relative_to(repo_path).as_posix()
+            )
         dirnames[:] = [
             d
             for d in dirnames
             if d not in IGNORED_DIRS
             and not is_ignored(f"{rel_dir}/{d}" if rel_dir != "." else d, patterns)
         ]
-        if any(root in current_dir.parents or root == current_dir for root in nested_git_roots):
+        if any(dirpath == root or dirpath.startswith(root + sep) for root in nested_git_roots):
             dirnames[:] = []
             continue
         for filename in filenames:
-            path = current_dir / filename
-            if path.is_symlink() or not path.is_file():
+            full = os.path.join(dirpath, filename)
+            try:
+                mode = os.lstat(full).st_mode
+            except OSError:
                 continue
-            rel_path = path.relative_to(repo_path).as_posix()
+            if not stat.S_ISREG(mode):
+                continue  # symlinks (to files or dirs), dirs, sockets, fifos
+            rel_path = f"{rel_dir}/{filename}" if rel_dir != "." else filename
             if is_ignored(rel_path, patterns):
                 continue
-            paths.append(path)
-    yield from sorted(paths)
+            found.append((rel_path, full))
+    if os.name == "nt":
+        # Windows paths compare case-insensitively; keep pathlib's own order.
+        yield from sorted(Path(full) for _rel_path, full in found)
+        return
+    # Same order as sorting the Path objects: pathlib compares part by part,
+    # not as one string ("a/b" sorts before "a-b/x").
+    found.sort(key=lambda item: item[0].split("/"))
+    for _rel_path, full in found:
+        yield Path(full)
 
 
 def _rel(repo_path: Path, path: Path) -> str | None:
@@ -117,6 +144,10 @@ def _rel(repo_path: Path, path: Path) -> str | None:
     Treated the same as an unresolved/external import rather than letting
     path.relative_to()'s ValueError crash the whole scan.
     """
+    path_str = str(path)
+    root_str = str(repo_path)
+    if path_str.startswith(root_str + os.sep):
+        return path_str[len(root_str) + 1:].replace(os.sep, "/")
     try:
         return path.relative_to(repo_path).as_posix()
     except ValueError:

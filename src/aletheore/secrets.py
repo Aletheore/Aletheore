@@ -2,6 +2,7 @@ import hashlib
 import math
 import os
 import re
+import stat
 import subprocess
 import threading
 import zlib
@@ -247,10 +248,17 @@ def iter_all_files(repo_path: Path, ignored_paths: list[str] | None = None):
     # have its contents walked and reported on as if they were part of this
     # repo. followlinks only stops descent into symlinked *directories* -
     # a symlinked file sitting directly in a real directory still needs its
-    # own explicit is_symlink() check below.
+    # own explicit symlink check below.
+    #
+    # One lstat per file answers "regular file, not a symlink" and the size
+    # check together (lstat == stat once symlinks are excluded), and rel paths
+    # come from the walk rather than Path.relative_to. Same files, same order.
+    from aletheore.scanner.detect import _rel_dir
+
     patterns = ignored_paths or []
+    root_str = str(repo_path)
     for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
-        rel_dir = Path(dirpath).relative_to(repo_path).as_posix()
+        rel_dir = _rel_dir(repo_path, root_str, dirpath)
         dirnames[:] = [
             d
             for d in dirnames
@@ -258,17 +266,19 @@ def iter_all_files(repo_path: Path, ignored_paths: list[str] | None = None):
             and not is_ignored(f"{rel_dir}/{d}" if rel_dir != "." else d, patterns)
         ]
         for filename in filenames:
-            path = Path(dirpath) / filename
-            if path.is_symlink() or not path.is_file():
-                continue
-            if path.suffix in BINARY_EXTENSIONS:
-                continue
+            full = os.path.join(dirpath, filename)
             try:
-                if path.stat().st_size > MAX_SCANNED_FILE_BYTES:
-                    continue
+                st = os.lstat(full)
             except OSError:
                 continue
-            rel_path = path.relative_to(repo_path).as_posix()
+            if not stat.S_ISREG(st.st_mode):
+                continue
+            path = Path(full)
+            if path.suffix in BINARY_EXTENSIONS:
+                continue
+            if st.st_size > MAX_SCANNED_FILE_BYTES:
+                continue
+            rel_path = f"{rel_dir}/{filename}" if rel_dir != "." else filename
             if is_ignored(rel_path, patterns):
                 continue
             yield path
@@ -660,7 +670,8 @@ def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
     from aletheore.file_cache import cached_per_file, code_version
 
     ignored_paths = load_repo_config(repo_path)["ignored_paths"]
-    jobs = [(path, path.relative_to(repo_path).as_posix()) for path in iter_all_files(repo_path, ignored_paths)]
+    root_len = len(str(repo_path)) + 1
+    jobs = [(path, str(path)[root_len:].replace(os.sep, "/")) for path in iter_all_files(repo_path, ignored_paths)]
     # Unchanged files reuse their findings from the last scan (file_cache.py).
     per_file = cached_per_file(repo_path, "secrets", code_version(__file__), jobs, _scan_many_for_secrets)
     findings = _apply_baseline([finding for file_findings in per_file for finding in file_findings], baseline)

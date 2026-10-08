@@ -1,5 +1,6 @@
 import json
 import os
+import stat
 import tomllib
 from functools import lru_cache
 from pathlib import Path
@@ -290,29 +291,47 @@ def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
     # directory would otherwise have its contents walked and reported on as
     # if they were part of this repo. followlinks only stops descent into
     # symlinked *directories* - a symlinked file sitting directly in a real
-    # directory still needs its own is_symlink() check below.
-    nested_git_roots = _nested_git_roots(repo_path)
+    # directory still needs its own symlink check below.
+    #
+    # String operations instead of pathlib, as in scanner/graph.py's copy:
+    # one lstat per file, rel paths built from the walk, a prefix test for
+    # nested repos. Same files, same (walk) order.
+    nested_git_roots = [str(root) for root in _nested_git_roots(repo_path)]
     patterns = ignored_paths or []
+    root_str = str(repo_path)
+    sep = os.sep
     for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
-        current_dir = Path(dirpath)
-        rel_dir = current_dir.relative_to(repo_path).as_posix()
+        rel_dir = _rel_dir(repo_path, root_str, dirpath)
         dirnames[:] = [
             d
             for d in dirnames
             if d not in IGNORED_DIRS
             and not is_ignored(f"{rel_dir}/{d}" if rel_dir != "." else d, patterns)
         ]
-        if any(root in current_dir.parents or root == current_dir for root in nested_git_roots):
+        if any(dirpath == root or dirpath.startswith(root + sep) for root in nested_git_roots):
             dirnames[:] = []
             continue
         for filename in filenames:
-            path = current_dir / filename
-            if path.is_symlink() or not path.is_file():
+            full = os.path.join(dirpath, filename)
+            try:
+                if not stat.S_ISREG(os.lstat(full).st_mode):
+                    continue  # symlinks, dirs, sockets, fifos
+            except OSError:
                 continue
-            rel_path = path.relative_to(repo_path).as_posix()
+            rel_path = f"{rel_dir}/{filename}" if rel_dir != "." else filename
             if is_ignored(rel_path, patterns):
                 continue
-            yield path
+            yield Path(full)
+
+
+def _rel_dir(repo_path: Path, root_str: str, dirpath: str) -> str:
+    """os.walk dirpath -> repo-relative posix dir ("." for the root),
+    matching Path(dirpath).relative_to(repo_path).as_posix()."""
+    if dirpath == root_str:
+        return "."
+    if dirpath.startswith(root_str + os.sep):
+        return dirpath[len(root_str) + 1:].replace(os.sep, "/")
+    return Path(dirpath).relative_to(repo_path).as_posix()
 
 
 def _count_lines(data: bytes) -> int:
@@ -349,8 +368,9 @@ def detect_languages(repo_path: Path, ignored_paths: list[str] | None = None) ->
     from aletheore.file_cache import cached_per_file, code_version
 
     counts: dict[str, dict] = {}
+    root_len = len(str(repo_path)) + 1
     jobs = [
-        (path, path.relative_to(repo_path).as_posix())
+        (path, str(path)[root_len:].replace(os.sep, "/"))
         for path in _iter_source_files(repo_path, ignored_paths)
         if path.suffix in LANGUAGE_BY_EXTENSION
     ]
