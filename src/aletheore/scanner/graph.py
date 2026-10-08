@@ -2176,6 +2176,18 @@ def _infer_xcodeproj_swift_targets(
             continue
         project_root = xcodeproj.parent
 
+        # Built once per xcodeproj, not once per PBXBuildFile entry: the
+        # classic mechanism names one Swift file per build-phase entry, and
+        # a project still using it (not yet on Xcode 16+'s synchronized
+        # groups) can have one entry per source file in the target - a
+        # fresh project_root.rglob(name) for every single one is an
+        # O(files x repo size) walk. One walk, indexed by basename, turns
+        # that into O(repo size + files).
+        swift_basename_index: dict[str, list[Path]] = {}
+        for p in project_root.rglob("*.swift"):
+            if not is_ignored(_rel(repo_path, p), ignored_paths or []):
+                swift_basename_index.setdefault(p.name, []).append(p)
+
         def resolve_classic(phase_uuid: object) -> list[Path]:
             phase = objects.get(phase_uuid)
             if not isinstance(phase, dict) or phase.get("isa") != "PBXSourcesBuildPhase":
@@ -2187,10 +2199,7 @@ def _infer_xcodeproj_swift_targets(
                 path_str = file_ref.get("path") if isinstance(file_ref, dict) else None
                 if not path_str or not path_str.endswith(".swift"):
                     continue
-                candidates = [
-                    p for p in project_root.rglob(Path(path_str).name)
-                    if not is_ignored(_rel(repo_path, p), ignored_paths or [])
-                ]
+                candidates = swift_basename_index.get(Path(path_str).name, [])
                 if len(candidates) == 1:
                     found.append(candidates[0])
             return found
