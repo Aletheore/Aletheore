@@ -795,6 +795,32 @@ def test_ensure_air_toon_rebuilds_when_air_json_is_newer(tmp_path):
     assert toon.decode(toon_path.read_text()) == json.loads(json_path.read_text())
 
 
+def test_ensure_air_toon_preserves_pre_encoded_evidence_written_after_the_json_placeholder(tmp_path):
+    # Real bug (PR #985): run_managed_audit_api_job's string-evidence path
+    # used to write air.toon (the real, pre-encoded evidence) before
+    # air.json (a {"managed_evidence": true} placeholder) - air.json's
+    # mtime ended up newer, so this function's own staleness check treated
+    # air.toon as stale and rebuilt it FROM air.json, clobbering the real
+    # evidence with an encoding of the placeholder right before
+    # run_reasoning_phase's LLM adapter read it. The fix writes air.json
+    # first and air.toon second (same order write_evidence already uses),
+    # so air.toon's mtime is never older and never gets rebuilt from it.
+    from aletheore.evidence import ensure_air_toon
+
+    repo = make_repo(tmp_path)
+    aletheore_dir = repo / ".aletheore"
+    aletheore_dir.mkdir(parents=True, exist_ok=True)
+    json_path = aletheore_dir / "air.json"
+    toon_path = aletheore_dir / "air.toon"
+
+    json_path.write_text(json.dumps({"managed_evidence": True}))
+    toon_path.write_text("real pre-encoded evidence")
+
+    ensure_air_toon(repo)
+
+    assert toon_path.read_text() == "real pre-encoded evidence"
+
+
 def test_write_evidence_pins_utf8_encoding_for_both_air_json_and_air_toon(tmp_path, monkeypatch):
     # Real bug: both write_text() calls in write_evidence() used to omit
     # encoding entirely, falling back to Path.write_text()'s

@@ -2236,10 +2236,18 @@ def run_managed_audit_api_job(
         else:
             aletheore_dir = job_dir / ".aletheore"
             aletheore_dir.mkdir(parents=True, exist_ok=True)
-            (aletheore_dir / "air.toon").write_text(evidence, encoding="utf-8")
+            # air.json must land first: ensure_air_toon (called by
+            # run_reasoning_phase just below, via run_managed_audit) treats
+            # air.toon as stale whenever its mtime is older than air.json's,
+            # and rebuilds it FROM air.json - writing the real toon evidence
+            # before this placeholder json let that rebuild clobber the real
+            # evidence with an encoding of {"managed_evidence": true} right
+            # before the LLM adapter reads it, producing a report from
+            # essentially empty evidence.
             (aletheore_dir / "air.json").write_text(
                 json.dumps({"managed_evidence": True}), encoding="utf-8"
             )
+            (aletheore_dir / "air.toon").write_text(evidence, encoding="utf-8")
         spend_budget = _IncrementalSpendBudget(
             settings.database_url,
             installation_id,
