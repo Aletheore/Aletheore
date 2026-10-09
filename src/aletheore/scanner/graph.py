@@ -5,6 +5,7 @@ import re
 import stat
 import xml.etree.ElementTree as ET
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
 import tree_sitter_c as tsc
@@ -3650,6 +3651,39 @@ def _available_parallelism() -> int:
     return max(1, min(candidates))
 
 
+def _map_in_pool_with_recovery(func, items: list, *, chunksize: int = 1, **executor_kwargs) -> tuple[list, bool]:
+    """executor.map over a process pool, with results in input order, that
+    survives a worker dying outright (OOM-killer, SIGKILL, segfault).
+
+    A per-file try/except inside `func` only covers an exception a LIVE worker
+    raises; a worker that is gone raises BrokenProcessPool out of the whole
+    map(), which used to abort the entire scan and discard every result already
+    collected. So: keep what was already yielded, and retry only the remaining
+    items in a fresh pool with half as many workers. That recovers the common
+    case (memory pressure from too many workers) with real results for every
+    file. If a single worker still dies, return what was collected and
+    complete=False: the caller must either fail loudly or mark the rest as
+    unprocessed. It must never invent a per-file result, because a stage that
+    caches per file (secrets, error handling) would then store a fabricated
+    "nothing found" under that file's content hash and report it clean on every
+    later scan without ever having scanned it.
+
+    Returns (results, complete). results is always an in-order prefix of the
+    inputs; complete is True only when every item has a real result.
+    """
+    results: list = []
+    workers = _available_parallelism()
+    while True:
+        try:
+            with ProcessPoolExecutor(max_workers=workers, **executor_kwargs) as executor:
+                results.extend(executor.map(func, items[len(results):], chunksize=chunksize))
+            return results, True
+        except BrokenProcessPool:
+            if workers <= 1:
+                return results, False
+            workers = max(1, workers // 2)
+
+
 def _parse_many_in_parallel(
     paths: list[Path],
     repo_path: Path,
@@ -3658,17 +3692,27 @@ def _parse_many_in_parallel(
     has_rust_crate_root: bool,
     php_psr4_map: dict[str, Path],
 ) -> tuple[list[dict], list[dict]]:
-    with ProcessPoolExecutor(
-        max_workers=_available_parallelism(),
+    # map (not submit+as_completed) so results come back in input order - not
+    # load-bearing for correctness (module/edge order was already unasserted
+    # anywhere - see the design doc), just keeps output deterministic across
+    # runs rather than depending on which worker happens to finish first.
+    results, complete = _map_in_pool_with_recovery(
+        _worker_parse_and_extract_one,
+        paths,
         initializer=_init_worker,
         initargs=(repo_path, python_source_roots, go_module_prefix, has_rust_crate_root, php_psr4_map),
-    ) as executor:
-        # map (not submit+as_completed) so results come back in input order -
-        # not load-bearing for correctness (module/edge order was already
-        # unasserted anywhere - see the design doc), just keeps output
-        # deterministic across runs rather than depending on which worker
-        # happens to finish first.
-        results = list(executor.map(_worker_parse_and_extract_one, paths))
+    )
+    if not complete:
+        # Workers kept dying even one at a time, so these files were never
+        # parsed. Report them as unparseable (the same contract
+        # _worker_parse_and_extract_one's own OSError catch gives a single
+        # unreadable file), which the output already surfaces, instead of
+        # losing the whole scan. Not cached anywhere, so the next scan retries.
+        for path in paths[len(results):]:
+            results.append((False, {
+                "path": _rel(repo_path, path),
+                "reason": "worker process died while parsing (BrokenProcessPool)",
+            }))
     modules = []
     failures = []
     for ok, payload in results:

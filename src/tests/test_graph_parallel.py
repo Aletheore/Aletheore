@@ -399,3 +399,92 @@ def test_available_parallelism_never_returns_less_than_one(monkeypatch):
     monkeypatch.setattr(graph_module, "_cgroup_v2_cpu_quota", lambda: None)
     monkeypatch.setattr(graph_module, "_cgroup_v1_cpu_quota", lambda: None)
     assert _available_parallelism() >= 1
+
+
+def _fake_pool_factory(plan, workers_seen, items_seen):
+    """A stand-in for ProcessPoolExecutor. plan[i] is how many items the i-th pool
+    yields before raising BrokenProcessPool (None means it completes). Raising
+    from inside the map() generator mirrors the real thing: results yielded
+    before the worker died are already in the caller's list."""
+    from concurrent.futures.process import BrokenProcessPool
+
+    plan = list(plan)
+
+    class _FakePool:
+        def __init__(self, max_workers=None, **kwargs):
+            workers_seen.append(max_workers)
+            self._limit = plan.pop(0) if plan else None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def map(self, fn, items, **kwargs):
+            items = list(items)
+            items_seen.append(len(items))
+            for index, item in enumerate(items):
+                if self._limit is not None and index >= self._limit:
+                    raise BrokenProcessPool("simulated dead worker")
+                yield fn(item)
+
+    return _FakePool
+
+
+def test_map_in_pool_with_recovery_retries_only_the_remaining_items_with_fewer_workers(monkeypatch):
+    # A worker killed outright (OOM-killer, SIGKILL, segfault) raises
+    # BrokenProcessPool out of the whole map(). Already-yielded results are kept
+    # and only the rest is retried in a fresh pool with half the workers, so a
+    # memory-pressure kill recovers with a real result for every item.
+    workers, seen = [], []
+    monkeypatch.setattr(graph_module, "_available_parallelism", lambda: 4)
+    monkeypatch.setattr(graph_module, "ProcessPoolExecutor", _fake_pool_factory([2, None], workers, seen))
+
+    results, complete = graph_module._map_in_pool_with_recovery(lambda n: n * 10, list(range(6)))
+
+    assert complete is True
+    assert results == [0, 10, 20, 30, 40, 50]
+    assert workers == [4, 2]
+    assert seen == [6, 4]  # the retry got only the 4 items that had no result yet
+
+
+def test_map_in_pool_with_recovery_reports_incomplete_when_one_worker_keeps_dying(monkeypatch):
+    workers, seen = [], []
+    monkeypatch.setattr(graph_module, "_available_parallelism", lambda: 4)
+    monkeypatch.setattr(graph_module, "ProcessPoolExecutor", _fake_pool_factory([1, 0, 0, 0, 0], workers, seen))
+
+    results, complete = graph_module._map_in_pool_with_recovery(lambda n: n * 10, list(range(5)))
+
+    assert complete is False
+    assert results == [0]  # the in-order prefix that really completed, nothing invented
+    assert workers == [4, 2, 1]  # halves down to one worker, then gives up
+
+
+def test_parse_many_in_parallel_marks_files_unparseable_when_workers_keep_dying(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    paths = []
+    for i in range(4):
+        path = repo / f"mod{i}.py"
+        path.write_text(f"VALUE_{i} = {i}\n")
+        paths.append(path)
+
+    def fake_parse(path):
+        return True, {"path": path.name, "language": "python", "imports": [], "imported_by": [],
+                      "symbols": {"functions": [], "classes": [], "constants": []}}
+
+    workers, seen = [], []
+    monkeypatch.setattr(graph_module, "_worker_parse_and_extract_one", fake_parse)
+    monkeypatch.setattr(graph_module, "_available_parallelism", lambda: 2)
+    # first pool completes 2 files then dies; every later pool dies at once
+    monkeypatch.setattr(graph_module, "ProcessPoolExecutor", _fake_pool_factory([2, 0, 0], workers, seen))
+
+    modules, failures = graph_module._parse_many_in_parallel(
+        paths=paths, repo_path=repo, python_source_roots=[repo],
+        go_module_prefix=None, has_rust_crate_root=False, php_psr4_map={},
+    )
+
+    assert {m["path"] for m in modules} == {"mod0.py", "mod1.py"}
+    assert {f["path"] for f in failures} == {"mod2.py", "mod3.py"}
+    assert all("BrokenProcessPool" in f["reason"] for f in failures)

@@ -600,11 +600,11 @@ def _apply_baseline(findings: list[dict], baseline: list[dict] | None, repo_path
 
 
 def _scan_many_for_secrets(jobs: list[tuple[Path, str]]) -> list[list[dict]]:
-    from concurrent.futures import ProcessPoolExecutor
+    from concurrent.futures.process import BrokenProcessPool
 
     from aletheore.scanner.graph import (
         PARALLEL_PARSE_MIN_FILES,
-        _available_parallelism,
+        _map_in_pool_with_recovery,
         _parallel_parse_disabled,
     )
 
@@ -612,8 +612,17 @@ def _scan_many_for_secrets(jobs: list[tuple[Path, str]]) -> list[list[dict]]:
     # threshold and opt-out as the parallel module-graph parse). map keeps
     # input order, so findings come back in the same order either way.
     if len(jobs) >= PARALLEL_PARSE_MIN_FILES and not _parallel_parse_disabled():
-        with ProcessPoolExecutor(max_workers=_available_parallelism()) as executor:
-            return list(executor.map(_scan_file_for_secrets, jobs, chunksize=64))
+        results, complete = _map_in_pool_with_recovery(_scan_file_for_secrets, jobs, chunksize=64)
+        if not complete:
+            # Deliberately NOT degraded to "no findings": a file whose worker
+            # died was never scanned, and this stage is cached per file, so a
+            # fabricated empty result would be stored under the file's content
+            # hash and report it clean on every later scan. A secrets scan that
+            # cannot finish must fail, not pass.
+            raise BrokenProcessPool(
+                f"secret scan worker kept dying: {len(jobs) - len(results)} of {len(jobs)} files were not scanned"
+            )
+        return results
     return [_scan_file_for_secrets(job) for job in jobs]
 
 
