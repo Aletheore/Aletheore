@@ -951,3 +951,100 @@ def test_find_secrets_parallel_and_sequential_paths_give_identical_output(tmp_pa
     parallel = find_secrets(tmp_path)
     assert parallel == sequential
     assert sequential["scanned_files"] == 8 and len(sequential["findings"]) == 8
+
+
+def _fake_pool_factory(plan, workers_seen, items_seen):
+    """A stand-in for ProcessPoolExecutor. plan[i] is how many items the i-th pool
+    yields before raising BrokenProcessPool (None means it completes). Raising
+    from inside the map() generator mirrors the real thing: results yielded
+    before the worker died are already in the caller's list."""
+    from concurrent.futures.process import BrokenProcessPool
+
+    plan = list(plan)
+
+    class _FakePool:
+        def __init__(self, max_workers=None, **kwargs):
+            workers_seen.append(max_workers)
+            self._limit = plan.pop(0) if plan else None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def map(self, fn, items, **kwargs):
+            items = list(items)
+            items_seen.append(len(items))
+            for index, item in enumerate(items):
+                if self._limit is not None and index >= self._limit:
+                    raise BrokenProcessPool("simulated dead worker")
+                yield fn(item)
+
+    return _FakePool
+
+
+def test_scan_many_for_secrets_recovers_real_results_when_a_worker_dies(monkeypatch):
+    import aletheore.scanner.graph as graph
+
+    monkeypatch.setattr(graph, "PARALLEL_PARSE_MIN_FILES", 0)
+    monkeypatch.setattr(graph, "_available_parallelism", lambda: 4)
+    monkeypatch.setattr(secrets_module, "_scan_file_for_secrets", lambda job: [{"path": job[1]}])
+    workers, seen = [], []
+    monkeypatch.setattr(graph, "ProcessPoolExecutor", _fake_pool_factory([1, None], workers, seen))
+
+    from pathlib import Path
+
+    results = secrets_module._scan_many_for_secrets([(Path(n), n) for n in ("a.py", "b.py", "c.py")])
+
+    assert results == [[{"path": "a.py"}], [{"path": "b.py"}], [{"path": "c.py"}]]
+
+
+def test_scan_many_for_secrets_fails_instead_of_reporting_unscanned_files_clean(monkeypatch):
+    # A file whose worker keeps dying was never scanned. Reporting it as "no
+    # findings" would be a false green, and because this stage is cached per
+    # file it would be stored as clean too.
+    import pytest
+    from concurrent.futures.process import BrokenProcessPool
+    import aletheore.scanner.graph as graph
+
+    monkeypatch.setattr(graph, "PARALLEL_PARSE_MIN_FILES", 0)
+    monkeypatch.setattr(graph, "_available_parallelism", lambda: 2)
+    monkeypatch.setattr(secrets_module, "_scan_file_for_secrets", lambda job: [{"path": job[1]}])
+    monkeypatch.setattr(graph, "ProcessPoolExecutor", _fake_pool_factory([1, 0, 0], [], []))
+
+    from pathlib import Path
+
+    with pytest.raises(BrokenProcessPool, match="2 of 3 files were not scanned"):
+        secrets_module._scan_many_for_secrets([(Path(n), n) for n in ("a.py", "b.py", "c.py")])
+
+
+def test_a_failed_secrets_scan_does_not_cache_the_unscanned_file_as_clean(tmp_path, monkeypatch):
+    # The regression that matters: after a scan aborts because workers died, the
+    # next normal scan must still find the secret. Nothing may have been written
+    # to the per-file cache for a file that was never scanned.
+    import pytest
+    from concurrent.futures.process import BrokenProcessPool
+    import aletheore.scanner.graph as graph
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    # The per-file cache only exists once a previous scan created .aletheore/,
+    # i.e. on a re-scan. Without this the test would never touch the cache.
+    (repo / ".aletheore").mkdir()
+    (repo / "config.py").write_text('AWS_KEY = "AKIAABCDEFGHIJKLMNOP"\n')
+    monkeypatch.delenv("ALETHEORE_DISABLE_LOCAL_SCAN_CACHE", raising=False)
+    monkeypatch.delenv("ALETHEORE_FILE_CACHE_PATH", raising=False)
+
+    with monkeypatch.context() as broken:
+        broken.setattr(graph, "PARALLEL_PARSE_MIN_FILES", 0)
+        broken.setattr(graph, "_available_parallelism", lambda: 2)
+        broken.setattr(graph, "ProcessPoolExecutor", _fake_pool_factory([0, 0, 0], [], []))
+        with pytest.raises(BrokenProcessPool):
+            find_secrets(repo)
+
+    result = find_secrets(repo)
+
+    assert len(result["findings"]) == 1
+    assert result["findings"][0]["path"] == "config.py"
+    assert (tmp_path / "repo" / ".aletheore" / "file-cache.db").exists()  # the cache really was in play

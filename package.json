@@ -18,6 +18,7 @@
   },
   "overrides": {
     "js-yaml": "^5.4.2",
-    "smol-toml": "^1.7.1"
+    "smol-toml": "^1.9.0",
+    "katex": "^0.18.2"
   }
 }
