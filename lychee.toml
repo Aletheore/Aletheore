@@ -5,6 +5,16 @@ exclude = [
   "^https://www.aletheore.com",
   "^https://aletheore.com"
 ]
-accept = [200, 204, 206, 301, 302, 307, 308, 429]
-max_retries = 2
+# 5xx is accepted everywhere a link is checked, not scoped to github.com:
+# lychee has no per-domain accept-status config (`hosts` only overrides
+# concurrency/interval/headers per host, confirmed against `lychee --help`),
+# and a server error isn't something editing the link can fix anyway. Real
+# incident (2026-10-09): github.com returned 503/504 for plain README links
+# and failed 7 PRs in one day, including one that nearly got merged past a
+# red check it shouldn't have needed to pass. max_retries/retry_wait_time
+# give a transient blip a real chance to clear before falling back to this
+# as the backstop for a longer outage.
+accept = [200, 204, 206, 301, 302, 307, 308, 429, 500, 502, 503, 504]
+max_retries = 5
+retry_wait_time = 5
 timeout = 20
