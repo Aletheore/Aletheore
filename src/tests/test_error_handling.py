@@ -324,45 +324,6 @@ def test_parallel_and_sequential_paths_give_identical_output(tmp_path, monkeypat
     assert len(sequential["error_types"]) == 12
 
 
-def test_worker_pool_degrades_remaining_files_when_a_worker_dies(tmp_path, monkeypatch):
-    # Real bug found via audit (issue #996): BrokenProcessPool (a worker
-    # killed outright - OOM-killer, SIGKILL, segfault - rather than
-    # raising inside _extract_one's own try/except, which only covers a
-    # live worker's exception) used to propagate straight through
-    # ProcessPoolExecutor.map() uncaught, crashing the whole scan and
-    # losing every file's error-handling evidence for the repo. Simulated
-    # with a fake executor whose .map() yields a real result for the
-    # first job then raises BrokenProcessPool, the same shape
-    # test_graph_parallel.py's sibling test and ast_pattern.py's own
-    # BrokenProcessPool test already use.
-    import aletheore.error_handling as eh
-    from concurrent.futures.process import BrokenProcessPool
-
-    real_result = ([{"name": "Boom", "file": "a.py", "line": 1, "bases": [], "seeds": []}], [], [])
-
-    class _FakeExecutor:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc_info):
-            return False
-
-        def map(self, fn, jobs, **kwargs):
-            for i, _job in enumerate(jobs):
-                if i >= 1:
-                    raise BrokenProcessPool("simulated dead worker")
-                yield real_result
-
-    monkeypatch.setattr(eh, "PARALLEL_PARSE_MIN_FILES", 0)
-    monkeypatch.setattr(eh, "ProcessPoolExecutor", lambda *a, **k: _FakeExecutor())
-
-    results = eh._extract_many([(Path("a.py"), "a.py"), (Path("b.py"), "b.py"), (Path("c.py"), "c.py")])
-
-    assert results[0] == real_result
-    assert results[1] == ([], [], [])
-    assert results[2] == ([], [], [])
-
-
 def test_cpp_text_fallback_dedupes_within_a_file_only(tmp_path):
     # A header the grammar can't fully parse still gets its error classes from
     # the text fallback, and two files can each define a same-named class.
@@ -387,3 +348,63 @@ def test_ts_and_tsx_each_parse_with_their_own_grammar(tmp_path):
     ))
     handlers = map_error_handling(tmp_path)["handlers"]
     assert {(h["file"], h["function"]) for h in handlers} == {("a.ts", "plain"), ("b.tsx", "EndpointLink")}
+
+
+def _fake_pool_factory(plan, workers_seen, items_seen):
+    """A stand-in for ProcessPoolExecutor. plan[i] is how many items the i-th pool
+    yields before raising BrokenProcessPool (None means it completes). Raising
+    from inside the map() generator mirrors the real thing: results yielded
+    before the worker died are already in the caller's list."""
+    from concurrent.futures.process import BrokenProcessPool
+
+    plan = list(plan)
+
+    class _FakePool:
+        def __init__(self, max_workers=None, **kwargs):
+            workers_seen.append(max_workers)
+            self._limit = plan.pop(0) if plan else None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def map(self, fn, items, **kwargs):
+            items = list(items)
+            items_seen.append(len(items))
+            for index, item in enumerate(items):
+                if self._limit is not None and index >= self._limit:
+                    raise BrokenProcessPool("simulated dead worker")
+                yield fn(item)
+
+    return _FakePool
+
+
+def test_extract_many_recovers_real_results_when_a_worker_dies(monkeypatch):
+    import aletheore.error_handling as eh
+    import aletheore.scanner.graph as graph
+
+    monkeypatch.setattr(eh, "PARALLEL_PARSE_MIN_FILES", 0)
+    monkeypatch.setattr(graph, "_available_parallelism", lambda: 4)
+    monkeypatch.setattr(eh, "_extract_one", lambda job: ([{"file": job[1]}], [], []))
+    monkeypatch.setattr(graph, "ProcessPoolExecutor", _fake_pool_factory([1, None], [], []))
+
+    results = eh._extract_many([(Path(n), n) for n in ("a.py", "b.py", "c.py")])
+
+    assert [r[0][0]["file"] for r in results] == ["a.py", "b.py", "c.py"]
+
+
+def test_extract_many_fails_instead_of_caching_empty_extractions_for_unparsed_files(monkeypatch):
+    import pytest
+    from concurrent.futures.process import BrokenProcessPool
+    import aletheore.error_handling as eh
+    import aletheore.scanner.graph as graph
+
+    monkeypatch.setattr(eh, "PARALLEL_PARSE_MIN_FILES", 0)
+    monkeypatch.setattr(graph, "_available_parallelism", lambda: 2)
+    monkeypatch.setattr(eh, "_extract_one", lambda job: ([{"file": job[1]}], [], []))
+    monkeypatch.setattr(graph, "ProcessPoolExecutor", _fake_pool_factory([1, 0, 0], [], []))
+
+    with pytest.raises(BrokenProcessPool, match="2 of 3 files were not parsed"):
+        eh._extract_many([(Path(n), n) for n in ("a.py", "b.py", "c.py")])

@@ -15,7 +15,6 @@ Everything is read from the syntax tree, never inferred, so each entry is a real
 summary counts every site, and `truncated` says when a list was cut.
 """
 import re
-from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
@@ -24,7 +23,7 @@ from tree_sitter import Node, Parser
 from aletheore.scanner.graph import (
     LANGUAGE_BY_EXTENSION,
     PARALLEL_PARSE_MIN_FILES,
-    _available_parallelism,
+    _map_in_pool_with_recovery,
     _iter_source_files,
     _parallel_parse_disabled,
     _rel,
@@ -545,21 +544,15 @@ def _extract_many(jobs: list[tuple[Path, str]]) -> list[tuple[list, list, list]]
     # same threshold, opt-out and core-count logic as build_module_graph's
     # parallel parse. Results come back in input order either way.
     if len(jobs) >= PARALLEL_PARSE_MIN_FILES and not _parallel_parse_disabled():
-        with ProcessPoolExecutor(max_workers=_available_parallelism()) as executor:
-            results: list[tuple[list, list, list]] = []
-            try:
-                results.extend(executor.map(_extract_one, jobs, chunksize=32))
-            except BrokenProcessPool:
-                # A worker died outright (OOM-killer, SIGKILL, segfault)
-                # rather than raising inside _extract_one's own try/except -
-                # that guard only covers an exception a live worker raises,
-                # not a worker that's gone. Already-yielded results are
-                # kept; every job still pending degrades to the same empty
-                # extraction _extract_one's own OSError catch already
-                # returns for one unreadable file, instead of losing every
-                # file's error-handling evidence for the whole repo.
-                results.extend([([], [], [])] * (len(jobs) - len(results)))
-            return results
+        results, complete = _map_in_pool_with_recovery(_extract_one, jobs, chunksize=32)
+        if not complete:
+            # Not degraded to an empty extraction: this stage is cached per
+            # file, so that would store "no error handling here" under the
+            # file's content hash for a file that was never parsed.
+            raise BrokenProcessPool(
+                f"error-handling worker kept dying: {len(jobs) - len(results)} of {len(jobs)} files were not parsed"
+            )
+        return results
     return [_extract_one(job) for job in jobs]
 
 
