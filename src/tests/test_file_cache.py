@@ -190,3 +190,40 @@ def test_hash_memo_holds_one_entry_per_file(repo):
         digest = file_cache.content_hashes([target])[target]
         assert digest == file_cache._hash_one(target)
     assert list(file_cache._hash_memo) == [str(target)]
+
+
+def test_hash_memo_is_bounded_and_evicts_oldest_first(repo, monkeypatch):
+    # Real bug found via audit of PR #985 (#1004): _hash_memo was a plain,
+    # never-cleared dict. The hosted scan-worker checks out every job into a
+    # freshly generated temp dir (unique absolute paths every time), so none
+    # of its entries are ever a future hit - a long-lived worker handling
+    # thousands of jobs over its uptime grew this dict without bound. Caps it
+    # at a small size here to prove eviction actually happens, rather than
+    # creating _HASH_MEMO_MAX_ENTRIES real files to hit the real cap.
+    monkeypatch.setattr(file_cache, "_HASH_MEMO_MAX_ENTRIES", 3)
+
+    paths = []
+    for i in range(5):
+        path = repo / f"f{i}.py"
+        path.write_text(f"v = {i}\n")
+        paths.append(path)
+        file_cache.content_hashes([path])
+
+    # Oldest-first eviction: f0 and f1 were inserted before the cap was first
+    # exceeded (at the 4th insert) and are gone; the 3 most recent remain.
+    assert set(file_cache._hash_memo) == {str(paths[2]), str(paths[3]), str(paths[4])}
+    assert len(file_cache._hash_memo) == 3
+
+
+def test_hash_memo_eviction_does_not_affect_correctness(repo, monkeypatch):
+    # An evicted entry just means a re-hash on next access (slower), never a
+    # wrong digest - re-stats and re-hashes exactly like a cold cache would.
+    monkeypatch.setattr(file_cache, "_HASH_MEMO_MAX_ENTRIES", 1)
+
+    a = repo / "a.py"
+    b = repo / "b.py"
+    expected_a = file_cache.content_hashes([a])[a]
+    file_cache.content_hashes([b])  # evicts a's entry under the cap of 1
+    assert str(a) not in file_cache._hash_memo
+
+    assert file_cache.content_hashes([a])[a] == expected_a

@@ -715,6 +715,74 @@ def test_analyze_git_flags_a_shallow_clone_as_partial_history(tmp_path):
     ] is False
 
 
+def _make_repo_with_n_commits(tmp_path: Path, n: int) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run(repo, "init", "-b", "main")
+    run(repo, "config", "user.email", "a@example.com")
+    run(repo, "config", "user.name", "Alice")
+    for i in range(n):
+        (repo / "a.txt").write_text(str(i))
+        run(repo, "add", "a.txt")
+        commit(repo, f"commit {i}", f"2026-06-{i + 1:02d}T00:00:00+00:00")
+    return repo
+
+
+def test_history_depth_limited_stays_true_after_a_later_call_raises_the_cap(tmp_path):
+    # Real bug found via audit of PR #985 (#1004): history_depth_limited used
+    # to be derived from depth_cap is not None and total_commits > depth_cap -
+    # the CURRENT call's own cap, not anything persisted about the store. A
+    # capped rebuild (depth_cap=3 here) correctly flagged True, but a LATER
+    # call against the same store with depth_cap raised or removed (e.g. via
+    # ALETHEORE_GIT_HISTORY_DEPTH_CAP changing between scans) would then
+    # evaluate against the NEW cap and flip back to False, even though the
+    # store was never backfilled past the original 3 commits - incremental
+    # syncs never backfill older history. Fixed by comparing the store's own
+    # folded commit count (sum of every owner's commit_count, exact because
+    # incremental.py increments it exactly once per commit) against the real
+    # total, which is independent of whatever cap any particular call used.
+    from aletheore.git_intel.sqlite_store import SQLiteRepoGraphStore
+
+    repo = _make_repo_with_n_commits(tmp_path, 5)
+    store = SQLiteRepoGraphStore(tmp_path / "graph.db")
+    now = datetime(2026, 7, 14, tzinfo=timezone.utc)
+    try:
+        capped = analyze_git(repo, store=store, depth_cap=3, now=now)
+        assert capped["history_depth_limited"] is True
+        assert capped["ownership"][0]["commit_count"] == 3
+
+        # Same cap, no new commits - last_synced_sha is already HEAD, so this
+        # takes the incremental (no-op) path. Must stay True: this is the
+        # regression the existing code comment already guards against.
+        warm_same_cap = analyze_git(repo, store=store, depth_cap=3, now=now)
+        assert warm_same_cap["history_depth_limited"] is True
+
+        # The cap is raised past total_commits on this later call - the store
+        # still only has the original 3 commits folded in, never backfilled.
+        warm_raised_cap = analyze_git(repo, store=store, depth_cap=100, now=now)
+        assert warm_raised_cap["history_depth_limited"] is True
+
+        # The cap is removed entirely on this later call - same story.
+        warm_no_cap = analyze_git(repo, store=store, depth_cap=None, now=now)
+        assert warm_no_cap["history_depth_limited"] is True
+    finally:
+        store.close()
+
+
+def test_history_depth_limited_is_false_once_the_store_holds_full_history(tmp_path):
+    from aletheore.git_intel.sqlite_store import SQLiteRepoGraphStore
+
+    repo = _make_repo_with_n_commits(tmp_path, 5)
+    store = SQLiteRepoGraphStore(tmp_path / "graph.db")
+    now = datetime(2026, 7, 14, tzinfo=timezone.utc)
+    try:
+        result = analyze_git(repo, store=store, depth_cap=None, now=now)
+        assert result["history_depth_limited"] is False
+        assert result["total_commits"] == 5
+    finally:
+        store.close()
+
+
 def test_parse_branches_computes_ahead_behind_without_a_subprocess_per_branch(tmp_path):
     from unittest.mock import patch
 

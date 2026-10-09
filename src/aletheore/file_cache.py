@@ -26,6 +26,7 @@ import hashlib
 import json
 import os
 import sqlite3
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -85,7 +86,17 @@ def _hash_one(path: Path) -> str | None:
 # compared against stored entries is always the content hash. Keyed by path, so
 # a long-lived process (MCP server, hosted worker) holds one entry per file, not
 # one per version of it.
-_hash_memo: dict[str, tuple[tuple[int, int], str | None]] = {}
+#
+# Bounded (LRU), not a plain dict: the hosted scan-worker checks out every job
+# into a freshly generated temp dir (scan_worker/jobs.py's _job_temp_dir()), so
+# its absolute paths are never reused across jobs - every entry a job adds has
+# zero future hit probability once that job's checkout is deleted, and a
+# long-lived worker handling thousands of jobs over its uptime would otherwise
+# grow this dict without bound. The MCP server's legitimate reuse case (one
+# repo, stable paths, re-stat'd across repeat scans) is unaffected as long as
+# that repo's file count stays under the cap, which any real repo's does.
+_HASH_MEMO_MAX_ENTRIES = 200_000
+_hash_memo: OrderedDict[str, tuple[tuple[int, int], str | None]] = OrderedDict()
 
 
 def content_hashes(paths: list[Path]) -> dict[Path, str | None]:
@@ -98,8 +109,10 @@ def content_hashes(paths: list[Path]) -> dict[Path, str | None]:
             out[path] = None
             continue
         stamp = (st.st_size, st.st_mtime_ns)
-        memo = _hash_memo.get(str(path))
+        key = str(path)
+        memo = _hash_memo.get(key)
         if memo is not None and memo[0] == stamp:
+            _hash_memo.move_to_end(key)
             out[path] = memo[1]
         else:
             todo.append((path, stamp))
@@ -109,6 +122,9 @@ def content_hashes(paths: list[Path]) -> dict[Path, str | None]:
             hashes = list(executor.map(lambda item: _hash_one(item[0]), todo))
         for (path, stamp), digest in zip(todo, hashes):
             _hash_memo[str(path)] = (stamp, digest)
+            _hash_memo.move_to_end(str(path))
+            if len(_hash_memo) > _HASH_MEMO_MAX_ENTRIES:
+                _hash_memo.popitem(last=False)
             out[path] = digest
     return out
 

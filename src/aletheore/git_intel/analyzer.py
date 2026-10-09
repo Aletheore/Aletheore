@@ -517,11 +517,22 @@ def prepare_git_analysis(
         if owns_store and isinstance(store, SQLiteRepoGraphStore):
             store.close()
 
-    # Not just on the rebuild that applied the cap: incremental syncs never
-    # backfill older history, so a store built under a cap stays capped. Only
-    # checking the rebuild made every later (warm) scan of a repo over the cap
-    # report its history as complete.
-    history_depth_limited = depth_cap is not None and total_commits > depth_cap
+    # Not derived from depth_cap at all, deliberately: that parameter only
+    # describes what THIS call asked for, not what the persisted store
+    # actually holds. A store rebuilt under an earlier, different cap (or
+    # whose cap was later raised/removed via
+    # ALETHEORE_GIT_HISTORY_DEPTH_CAP) stays capped - incremental syncs
+    # never backfill older history - so comparing against the current
+    # call's depth_cap could silently flip back to "complete" the moment a
+    # later call's cap no longer matches the one the store was actually
+    # built under. commit_count is incremented exactly once per commit per
+    # author while folding (incremental.py), so summing it across every
+    # owner is an exact count of how many distinct commits this store has
+    # actually folded in - comparing that against the real total directly
+    # answers "does the store hold full history", independent of any cap
+    # bookkeeping across calls.
+    stored_commit_count = sum(owner.commit_count for owner in snapshot.ownership.values())
+    history_depth_limited = stored_commit_count < total_commits
     # A shallow clone's boundary commit looks like a root commit, so repo age
     # and total_commits describe the clone, not the project. There is no way
     # to recover the real values locally; flag the history as partial so the
