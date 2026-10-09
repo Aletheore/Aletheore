@@ -4,8 +4,43 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-10-08
-**Snapshot Freshness:** CURRENT as of 2026-10-08 - production was redeployed to `master` (commit
+**Last Updated:** 2026-10-09
+**Snapshot Freshness:** CURRENT as of 2026-10-09 - the scan workers, `health-worker` and `scheduler` run
+`master` at commit `8ef4e232` (tag `github-app-deploy-2026-10-09-3`); `app-server` and `jina-embed` still run
+`e3182a9f` from the 2026-10-08 deploy below, because nothing under `github-app/app_server/` or
+`github-app/jina_embed/` changed after it, so a rebuild would have produced the same code. Re-verified live
+via SSH after each step. No migration, no Dockerfile or compose change, no lockfile change in any of these.
+
+Three worker-only deploys on 2026-10-09, each built from `master` and rolled one container at a time, waiting
+for that worker to be idle first so no running job was killed:
+
+1. `b3fc4796` (#991), tag `github-app-deploy-2026-10-09`: the managed-audit string-evidence path wrote
+   `air.toon` before `air.json`, so `ensure_air_toon` could rebuild the real evidence from the placeholder
+   JSON right before the LLM read it (a timestamp race, now pinned by a job-level test), plus `find_secrets`
+   with a relative repository path. Also brought the version string to 0.9.23.
+2. `b5292bb1` (#995), tag `github-app-deploy-2026-10-09-2`: an unused import in `cli.py`. No behaviour change.
+3. `8ef4e232` (#998), tag `github-app-deploy-2026-10-09-3`: a parse worker killed outright (OOM-killer,
+   SIGKILL, segfault) no longer aborts the scan. Finished results are kept, the unfinished files are retried in
+   a fresh pool with half the workers, and if a single worker still dies the secret and error-handling stages
+   fail with an error rather than reporting files that were never scanned as clean (they cache per file, so an invented
+   "no findings" would have been remembered). `health-worker` and `scheduler` were rolled onto this build too,
+   so no service runs older `scan_worker` or `aletheore` code than the workers do; their previous images
+   predated all three changes.
+
+Verified live: `docker ps` shows exactly `github-app-scan-worker-1` and `github-app-scan-worker-2-1`, all six
+app services `healthy`; zero lines matching `error|traceback|exception` in the logs of every recreated
+container since its restart; `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`;
+and the new code is in the *running* containers, not just the checkout (`air.json` is written before
+`air.toon` in the workers' `jobs.py`, `find_secrets` resolves the path first, `cli.py` has no `import re`,
+`_map_in_pool_with_recovery` is present in `scanner/graph.py` and used by the secrets and error-handling
+stages in the workers, `health-worker` and `scheduler`).
+
+The server's `github-app/.env.bak-pre-sentry-<timestamp>` that the 2026-10-08 entry below says to delete was
+deleted on 2026-10-09 at the operator's request; the live `.env` (mode 600, with the Sentry settings) is
+unchanged. Changes in this window that do not run on the server and were not deployed here: CI and dev-tooling
+(#992, #994, #997) and the marketing site (#990, which deploys itself on merge).
+
+**Previous:** CURRENT as of 2026-10-08 - production was redeployed to `master` (commit
 `e3182a9f`, tagged `github-app-deploy-2026-10-08`) and re-verified live via SSH the same session.
 238 commits (70 merged PRs) since the previous deploy (`6e921475`, 2026-10-04). All six app services
 were rebuilt and recreated, including `jina-embed`, which had not been rebuilt since 2026-09-26.
