@@ -2,7 +2,6 @@ import difflib
 import hashlib
 import json
 import os
-import re
 import shutil
 import socket
 import sys
