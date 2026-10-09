@@ -2824,6 +2824,62 @@ def test_managed_audit_api_job_returns_report_text(monkeypatch):
     assert "API Report" in result
 
 
+def test_managed_audit_api_job_string_evidence_survives_ensure_air_toon(monkeypatch):
+    # Real bug: the string-evidence path used to write air.toon (the real,
+    # pre-encoded evidence) BEFORE air.json (a {"managed_evidence": true}
+    # placeholder). ensure_air_toon, which run_managed_audit calls, rebuilds
+    # air.toon from air.json whenever the toon is older - so the real evidence
+    # was overwritten with an encoding of the placeholder right before the LLM
+    # read it. Whether that fires on real hardware depends on a filesystem
+    # timestamp tick, so this test pins the order deterministically: every
+    # .aletheore write gets a strictly later mtime than the one before it.
+    import os
+    from pathlib import Path
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
+    )
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._sign_and_persist_audit_report", lambda *a, **k: None)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+
+    real_write_text = Path.write_text
+    ticks = {"n": 0}
+
+    def _spaced_write_text(self, *args, **kwargs):
+        written = real_write_text(self, *args, **kwargs)
+        if self.parent.name == ".aletheore" and self.name in ("air.json", "air.toon"):
+            ticks["n"] += 1
+            stamp = 1_000_000 + ticks["n"] * 10
+            os.utime(self, (stamp, stamp))
+        return written
+
+    monkeypatch.setattr(Path, "write_text", _spaced_write_text)
+
+    seen = {}
+
+    def _fake_run_managed_audit(job_dir, *args, **kwargs):
+        from aletheore.evidence import ensure_air_toon
+
+        seen["toon"] = ensure_air_toon(job_dir).read_text(encoding="utf-8")
+        return "# API Report"
+
+    monkeypatch.setattr("scan_worker.jobs.run_managed_audit", _fake_run_managed_audit)
+    from scan_worker.jobs import run_managed_audit_api_job
+
+    run_managed_audit_api_job(
+        installation_id=100,
+        evidence="real: pre-encoded toon evidence",
+        repo_full_name="octocat/widgets",
+    )
+
+    assert seen["toon"] == "real: pre-encoded toon evidence"
+
+
 def test_managed_audit_api_job_releases_lock_during_audit(monkeypatch):
     lock_state = {"held": False, "observed_during_audit": None}
 
