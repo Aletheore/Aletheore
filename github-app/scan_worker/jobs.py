@@ -808,6 +808,15 @@ def _run_scan(repo_dir: Path, unchanged_scan_cache_path: Path | None = None) -> 
     # one (when present) supplies our own trusted, DB-backed incremental
     # cache instead.
     env["ALETHEORE_DISABLE_LOCAL_SCAN_CACHE"] = "1"
+    # Semgrep stays off for hosted scans unless an operator opts in with
+    # ALETHEORE_HOSTED_ENABLE_SEMGREP=1 in the worker's environment. It never actually ran
+    # here (the published wheel lacked its rules directory, so it exited 7 on every scan);
+    # once that was fixed, a measured run on this repo under this worker's real limits (1 CPU,
+    # 1 GB) hit its 270s timeout, and the timeout scales with repo size up to 1800s, which
+    # would tie up one of only two workers per scan. Turning it on needs that scoped first
+    # (for example to the PR's changed files) and measured, not a side effect of a rebuild.
+    if os.environ.get("ALETHEORE_HOSTED_ENABLE_SEMGREP") != "1":
+        env["ALETHEORE_DISABLE_SEMGREP"] = "1"
     if unchanged_scan_cache_path is not None:
         env["ALETHEORE_UNCHANGED_SCAN_CACHE"] = str(unchanged_scan_cache_path)
     # This container is memory-constrained (observed OOM kills on huge repos

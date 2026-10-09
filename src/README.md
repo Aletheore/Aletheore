@@ -208,7 +208,8 @@ should claim.
 
 The static analysis check runs Semgrep, gosec, and Bandit as subprocess scanners (self-skipping
 with a reason, not an error, for any binary not on `PATH`) and normalizes their findings into
-`security.static_analysis`. Bearer, Joern, and SonarQube are each opt-in, for different real
+`security.static_analysis`. Set `ALETHEORE_DISABLE_SEMGREP=1` to skip just Semgrep with a named reason
+(it is the slowest of the three on a large repository, and the hosted scan worker sets it). Bearer, Joern, and SonarQube are each opt-in, for different real
 reasons. Bearer finds real sensitive-data/PII-flow issues nothing else here does, but its
 full-repo runtime doesn't scale cleanly with repo size, so it's never on by default - pass
 `--check-bearer`/`--no-check-bearer` explicitly, or, with neither passed, `scan`/`audit` on a

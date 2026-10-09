@@ -214,3 +214,65 @@ def test_check_semgrep_reports_timeout(tmp_path):
 
     assert result["checked"] is False
     assert "timed out" in result["reason"]
+
+
+def _captured_cmd(tmp_path, rules_dir):
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return _mock_run(0, stdout="{}")
+
+    with patch("aletheore.static_analysis.semgrep_scanner.shutil.which", return_value="/usr/bin/semgrep"), \
+         patch("aletheore.static_analysis.semgrep_scanner._CUSTOM_RULES_DIR", rules_dir), \
+         patch("aletheore.static_analysis.semgrep_scanner.subprocess.run", side_effect=fake_run):
+        result = check_semgrep(tmp_path)
+    return seen["cmd"], result
+
+
+def test_check_semgrep_loads_the_custom_rules_when_the_directory_exists(tmp_path):
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "r.yaml").write_text("rules: []\n")
+
+    cmd, result = _captured_cmd(tmp_path, rules)
+
+    assert result["checked"] is True
+    assert cmd[cmd.index("--config") + 1] == str(rules)
+
+
+def test_check_semgrep_still_runs_registry_rules_when_the_custom_rules_directory_is_missing(tmp_path):
+    # Regression: the wheel did not package semgrep_rules/, and passing a path that does not
+    # exist makes semgrep exit 7 and fail the whole scan (registry rules included), so every
+    # pip-installed copy, including the hosted worker, reported "semgrep did not run".
+    cmd, result = _captured_cmd(tmp_path, tmp_path / "does-not-exist")
+
+    assert result["checked"] is True
+    assert "--config=auto" in cmd
+    assert "--config" not in cmd  # no second --config pointing at a missing directory
+
+
+def test_check_semgrep_is_skipped_with_a_named_reason_when_disabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALETHEORE_DISABLE_SEMGREP", "1")
+
+    with patch("aletheore.static_analysis.semgrep_scanner.shutil.which", return_value="/usr/bin/semgrep") as which, \
+         patch("aletheore.static_analysis.semgrep_scanner.subprocess.run") as run:
+        result = check_semgrep(tmp_path)
+
+    assert result == {
+        "checked": False,
+        "reason": "semgrep disabled (ALETHEORE_DISABLE_SEMGREP is set)",
+        "findings": [],
+    }
+    run.assert_not_called()  # it must not even start semgrep
+    which.assert_not_called()
+
+
+def test_check_semgrep_runs_when_the_disable_switch_is_set_to_a_false_value(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALETHEORE_DISABLE_SEMGREP", "0")
+
+    cmd, result = _captured_cmd(tmp_path, tmp_path / "does-not-exist")
+
+    assert result["checked"] is True
+    assert "--config=auto" in cmd
+

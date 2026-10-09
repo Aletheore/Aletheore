@@ -174,3 +174,27 @@ def test_sync_persistent_git_graph_skips_when_git_analysis_was_unavailable(tmp_p
     result = _sync_persistent_git_graph(703, "org/repo", repo, evidence)
 
     assert result == evidence
+
+
+def test_run_scan_keeps_semgrep_off_by_default(tmp_path, monkeypatch):
+    # Semgrep never ran in hosted scans (its rules were not packaged); the first measured run
+    # under this worker's real limits timed out. It must not switch on as a side effect of a
+    # rebuild, so hosted scans disable it unless an operator opts in.
+    monkeypatch.delenv("ALETHEORE_HOSTED_ENABLE_SEMGREP", raising=False)
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    with patch("scan_worker.jobs.subprocess.run") as mock_run:
+        _run_scan(repo_dir)
+    _, kwargs = mock_run.call_args
+    assert kwargs["env"]["ALETHEORE_DISABLE_SEMGREP"] == "1"
+
+
+def test_run_scan_lets_an_operator_opt_in_to_semgrep(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALETHEORE_HOSTED_ENABLE_SEMGREP", "1")
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    with patch("scan_worker.jobs.subprocess.run") as mock_run:
+        _run_scan(repo_dir)
+    _, kwargs = mock_run.call_args
+    assert "ALETHEORE_DISABLE_SEMGREP" not in kwargs["env"]
+

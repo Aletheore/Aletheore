@@ -1,4 +1,6 @@
 import json
+import logging
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -14,6 +16,8 @@ from aletheore.static_analysis._exclusions import count_real_files, excluded_dir
 # API key. Our own custom rules (oauth-state-not-random.yaml and anything
 # added alongside it) load from the sibling semgrep_rules/ dir via a second
 # --config, which Semgrep merges rather than replaces.
+logger = logging.getLogger(__name__)
+
 _CUSTOM_RULES_DIR = Path(__file__).parent / "semgrep_rules"
 
 # Real bug found by an independent benchmark run the same night: a flat
@@ -111,7 +115,21 @@ def _clean_rule_id(check_id: str, custom_rule_ids: set[str]) -> str:
     return last_segment if last_segment in custom_rule_ids else check_id
 
 
+_DISABLE_ENV = "ALETHEORE_DISABLE_SEMGREP"
+_FALSE_VALUES = {"", "0", "false", "no", "off"}
+
+
+def _semgrep_disabled() -> bool:
+    return os.environ.get(_DISABLE_ENV, "").strip().lower() not in _FALSE_VALUES
+
+
 def check_semgrep(repo_path: Path, timeout: int | None = None) -> dict:
+    # An explicit, named reason instead of a scan that fails or runs for minutes: the hosted
+    # scan worker sets this (see scan_worker/jobs.py), and so can anyone on a machine where
+    # semgrep is too slow.
+    if _semgrep_disabled():
+        return {"checked": False, "reason": f"semgrep disabled ({_DISABLE_ENV} is set)", "findings": []}
+
     binary = shutil.which("semgrep")
     if binary is None:
         return {"checked": False, "reason": "semgrep not installed", "findings": []}
@@ -119,14 +137,16 @@ def check_semgrep(repo_path: Path, timeout: int | None = None) -> dict:
     if timeout is None:
         timeout = _scaled_timeout(repo_path)
 
-    cmd = [
-        binary,
-        "--config=auto",
-        "--config", str(_CUSTOM_RULES_DIR),
-        "--json",
-        "--quiet",
-        str(repo_path),
-    ]
+    cmd = [binary, "--config=auto"]
+    # Our own rules ship as package data. If the directory is not there (an install that
+    # did not package it, which every pip-installed copy was from 2026-09-21 until the
+    # package data was fixed), passing it makes semgrep exit 7 ("invalid configuration")
+    # and the WHOLE scan fails, registry rules included. Skip only the custom rules.
+    if any(_CUSTOM_RULES_DIR.glob("*.yaml")):
+        cmd += ["--config", str(_CUSTOM_RULES_DIR)]
+    else:
+        logger.warning("semgrep custom rules not found at %s; running registry rules only", _CUSTOM_RULES_DIR)
+    cmd += ["--json", "--quiet", str(repo_path)]
     # Real bug found live wiring this up: passing --metrics=off alongside
     # --config=auto is a hard Semgrep error ("Cannot create auto config
     # when metrics are off"), exit code 2, empty stdout - json.loads("{}")

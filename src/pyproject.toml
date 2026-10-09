@@ -120,7 +120,15 @@ build-backend = "setuptools.build_meta"
 include = ["aletheore*"]
 
 [tool.setuptools.package-data]
-aletheore = ["static/*.png", "manual/*.md", "data/*.json"]
+# Every non-Python file the package reads at runtime must be listed here, or it is
+# silently left out of the wheel (tests/test_package_data.py checks this).
+aletheore = [
+    "static/*.png",
+    "manual/*.md",
+    "data/*.json",
+    "static_analysis/semgrep_rules/*.yaml",
+    "static_analysis/joern_queries/*.sc",
+]
 
 [tool.pytest.ini_options]
 addopts = ["-p", "no:randomly"]
