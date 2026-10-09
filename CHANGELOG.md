@@ -3,6 +3,33 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.24 - 2026-10-09
+
+**Fixed: a killed parse worker no longer loses the whole scan, or hides a secret (#998)**
+
+Large repositories are parsed by a pool of worker processes. If one of them was killed outright (the
+out-of-memory killer, `SIGKILL`, a segfault) the scan used to abort with `BrokenProcessPool` and throw away
+every result it had already collected. It now keeps what finished and retries only the unfinished files in a
+fresh pool with half as many workers, which recovers the usual memory-pressure kill with a real result for every
+file. If a single worker still keeps dying:
+
+- the module graph lists the affected files as unparseable, which the output already shows;
+- the secret scan and the error-handling scan stop with an error instead of carrying on.
+
+That last point is deliberate. A first version of this fix reported the unfinished files as having no findings.
+Those two stages cache their result per file, so a file whose worker died could be recorded as clean and stay
+clean on every later scan, with a real secret in it. A scan that cannot finish now says so instead.
+
+**Fixed: `find_secrets` with a relative repository path (#991)**
+
+`find_secrets(Path("."))` dropped the first characters of the first file's path, which corrupted that file's
+cache key and the `path` on its findings. It now resolves the path first. `aletheore scan` was not affected,
+since it already passes an absolute path; this matters to anyone calling `find_secrets` directly.
+
+**Also**
+
+- Removed an unused `import re` from `cli.py` (#995).
+
 ## 0.9.23 - 2026-10-09
 
 **Crash reporting, on by default, easy to turn off (#961, #984)**
