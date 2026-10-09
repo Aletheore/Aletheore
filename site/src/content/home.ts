@@ -93,7 +93,7 @@ export const home = {
   },
   cta: {
     title: "Humanist tools for a technical world.",
-    body: "Nothing leaves your machine when you run the deterministic local scan. Bring your own API key for AI-assisted audit reports, or skip them entirely: the evidence pipeline stands on its own.",
+    body: "The deterministic local scan does not upload your code. The CLI sends a small crash report only if it crashes, and one command turns that off. Bring your own API key for AI-assisted audit reports, or skip them entirely: the evidence pipeline stands on its own.",
     points: [
       "Source-available and local-first.",
       "Query, diff, dashboard, MCP, and reports all read the same evidence.",
