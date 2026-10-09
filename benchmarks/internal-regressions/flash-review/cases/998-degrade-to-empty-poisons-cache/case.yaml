@@ -1,0 +1,12 @@
+id: 998-degrade-to-empty-poisons-cache
+title: "fix: degrade to partial results instead of crashing when a parse worker dies"
+base_commit: b3fc4796c90f041f40156ea8f4426da88efeddb5
+head_commit: 60e6355b0b40899d0d0746fed4f46de69456d6bf
+# The finding must satisfy EVERY group (each group is satisfied by ANY of its words,
+# case-insensitive, against the finding's issue + suggestion text).
+must_mention:
+  - ["cache", "cached", "cached_per_file", "file_cache", "content hash", "persist"]
+  - ["empty", "no findings", "fabricat", "invent", "degrade", "false negative", "never scanned", "unscanned", "clean"]
+expected_files:
+  - src/aletheore/secrets.py
+  - src/aletheore/error_handling.py

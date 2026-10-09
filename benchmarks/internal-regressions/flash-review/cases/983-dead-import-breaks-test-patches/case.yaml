@@ -1,0 +1,11 @@
+id: 983-dead-import-breaks-test-patches
+title: "docs/chore: fix check_run_creation_lock's stale docstring, drop dead import"
+base_commit: b9bb9565ba623310d1505f5bbb84172a831a5495
+head_commit: 8bf8aea2f8b339a7e034c1cc7d23b23c5d54d5dc
+# The finding must satisfy EVERY group (each group is satisfied by ANY of its words,
+# case-insensitive, against the finding's issue + suggestion text).
+must_mention:
+  - ["model_for_plan"]
+  - ["test", "monkeypatch", "patch", "attributeerror"]
+# Any finding location counts as long as it is in the diff.
+expected_files: []

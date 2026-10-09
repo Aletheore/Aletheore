@@ -1,0 +1,289 @@
+diff --git a/src/aletheore/error_handling.py b/src/aletheore/error_handling.py
+index 094bd20d..9f57b8f0 100644
+--- a/src/aletheore/error_handling.py
++++ b/src/aletheore/error_handling.py
+@@ -16,6 +16,7 @@ summary counts every site, and `truncated` says when a list was cut.
+ """
+ import re
+ from concurrent.futures import ProcessPoolExecutor
++from concurrent.futures.process import BrokenProcessPool
+ from pathlib import Path
+ 
+ from tree_sitter import Node, Parser
+@@ -545,7 +546,20 @@ def _extract_many(jobs: list[tuple[Path, str]]) -> list[tuple[list, list, list]]
+     # parallel parse. Results come back in input order either way.
+     if len(jobs) >= PARALLEL_PARSE_MIN_FILES and not _parallel_parse_disabled():
+         with ProcessPoolExecutor(max_workers=_available_parallelism()) as executor:
+-            return list(executor.map(_extract_one, jobs, chunksize=32))
++            results: list[tuple[list, list, list]] = []
++            try:
++                results.extend(executor.map(_extract_one, jobs, chunksize=32))
++            except BrokenProcessPool:
++                # A worker died outright (OOM-killer, SIGKILL, segfault)
++                # rather than raising inside _extract_one's own try/except -
++                # that guard only covers an exception a live worker raises,
++                # not a worker that's gone. Already-yielded results are
++                # kept; every job still pending degrades to the same empty
++                # extraction _extract_one's own OSError catch already
++                # returns for one unreadable file, instead of losing every
++                # file's error-handling evidence for the whole repo.
++                results.extend([([], [], [])] * (len(jobs) - len(results)))
++            return results
+     return [_extract_one(job) for job in jobs]
+ 
+ 
+diff --git a/src/aletheore/scanner/graph.py b/src/aletheore/scanner/graph.py
+index 5c8e89a3..fadc8f02 100644
+--- a/src/aletheore/scanner/graph.py
++++ b/src/aletheore/scanner/graph.py
+@@ -5,6 +5,7 @@ import re
+ import stat
+ import xml.etree.ElementTree as ET
+ from concurrent.futures import ProcessPoolExecutor
++from concurrent.futures.process import BrokenProcessPool
+ from pathlib import Path
+ 
+ import tree_sitter_c as tsc
+@@ -3668,7 +3669,24 @@ def _parse_many_in_parallel(
+         # unasserted anywhere - see the design doc), just keeps output
+         # deterministic across runs rather than depending on which worker
+         # happens to finish first.
+-        results = list(executor.map(_worker_parse_and_extract_one, paths))
++        results: list[tuple[bool, dict]] = []
++        try:
++            results.extend(executor.map(_worker_parse_and_extract_one, paths))
++        except BrokenProcessPool:
++            # A worker died outright (OOM-killer, SIGKILL, segfault) rather
++            # than raising inside _worker_parse_and_extract_one's own
++            # try/except - that guard only covers an exception a live worker
++            # raises, not a worker that's gone. list.extend already kept
++            # every result yielded before the pool broke; every path still
++            # pending degrades to an unparseable-files entry (the same
++            # contract _worker_parse_and_extract_one's own OSError catch
++            # gives a single unreadable file) instead of losing the whole
++            # scan, including the results already collected above.
++            for path in paths[len(results):]:
++                results.append((False, {
++                    "path": _rel(repo_path, path),
++                    "reason": "worker process died while parsing (BrokenProcessPool)",
++                }))
+     modules = []
+     failures = []
+     for ok, payload in results:
+diff --git a/src/aletheore/secrets.py b/src/aletheore/secrets.py
+index 287a7eb6..b7b48bb0 100644
+--- a/src/aletheore/secrets.py
++++ b/src/aletheore/secrets.py
+@@ -601,6 +601,7 @@ def _apply_baseline(findings: list[dict], baseline: list[dict] | None, repo_path
+ 
+ def _scan_many_for_secrets(jobs: list[tuple[Path, str]]) -> list[list[dict]]:
+     from concurrent.futures import ProcessPoolExecutor
++    from concurrent.futures.process import BrokenProcessPool
+ 
+     from aletheore.scanner.graph import (
+         PARALLEL_PARSE_MIN_FILES,
+@@ -613,7 +614,20 @@ def _scan_many_for_secrets(jobs: list[tuple[Path, str]]) -> list[list[dict]]:
+     # input order, so findings come back in the same order either way.
+     if len(jobs) >= PARALLEL_PARSE_MIN_FILES and not _parallel_parse_disabled():
+         with ProcessPoolExecutor(max_workers=_available_parallelism()) as executor:
+-            return list(executor.map(_scan_file_for_secrets, jobs, chunksize=64))
++            results: list[list[dict]] = []
++            try:
++                results.extend(executor.map(_scan_file_for_secrets, jobs, chunksize=64))
++            except BrokenProcessPool:
++                # A worker died outright (OOM-killer, SIGKILL, segfault)
++                # rather than raising inside _scan_file_for_secrets' own
++                # try/except - that guard only covers an exception a live
++                # worker raises, not a worker that's gone. Already-yielded
++                # findings are kept; every job still pending degrades to no
++                # findings, the same convention _scan_file_for_secrets' own
++                # OSError catch already uses for one unreadable file,
++                # instead of losing every finding for the whole repo.
++                results.extend([[] for _ in range(len(jobs) - len(results))])
++            return results
+     return [_scan_file_for_secrets(job) for job in jobs]
+ 
+ 
+diff --git a/src/tests/test_error_handling.py b/src/tests/test_error_handling.py
+index 0d00625c..0b15d890 100644
+--- a/src/tests/test_error_handling.py
++++ b/src/tests/test_error_handling.py
+@@ -324,6 +324,45 @@ def test_parallel_and_sequential_paths_give_identical_output(tmp_path, monkeypat
+     assert len(sequential["error_types"]) == 12
+ 
+ 
++def test_worker_pool_degrades_remaining_files_when_a_worker_dies(tmp_path, monkeypatch):
++    # Real bug found via audit (issue #996): BrokenProcessPool (a worker
++    # killed outright - OOM-killer, SIGKILL, segfault - rather than
++    # raising inside _extract_one's own try/except, which only covers a
++    # live worker's exception) used to propagate straight through
++    # ProcessPoolExecutor.map() uncaught, crashing the whole scan and
++    # losing every file's error-handling evidence for the repo. Simulated
++    # with a fake executor whose .map() yields a real result for the
++    # first job then raises BrokenProcessPool, the same shape
++    # test_graph_parallel.py's sibling test and ast_pattern.py's own
++    # BrokenProcessPool test already use.
++    import aletheore.error_handling as eh
++    from concurrent.futures.process import BrokenProcessPool
++
++    real_result = ([{"name": "Boom", "file": "a.py", "line": 1, "bases": [], "seeds": []}], [], [])
++
++    class _FakeExecutor:
++        def __enter__(self):
++            return self
++
++        def __exit__(self, *exc_info):
++            return False
++
++        def map(self, fn, jobs, **kwargs):
++            for i, _job in enumerate(jobs):
++                if i >= 1:
++                    raise BrokenProcessPool("simulated dead worker")
++                yield real_result
++
++    monkeypatch.setattr(eh, "PARALLEL_PARSE_MIN_FILES", 0)
++    monkeypatch.setattr(eh, "ProcessPoolExecutor", lambda *a, **k: _FakeExecutor())
++
++    results = eh._extract_many([(Path("a.py"), "a.py"), (Path("b.py"), "b.py"), (Path("c.py"), "c.py")])
++
++    assert results[0] == real_result
++    assert results[1] == ([], [], [])
++    assert results[2] == ([], [], [])
++
++
+ def test_cpp_text_fallback_dedupes_within_a_file_only(tmp_path):
+     # A header the grammar can't fully parse still gets its error classes from
+     # the text fallback, and two files can each define a same-named class.
+diff --git a/src/tests/test_graph_parallel.py b/src/tests/test_graph_parallel.py
+index 61d83f8a..eba5c016 100644
+--- a/src/tests/test_graph_parallel.py
++++ b/src/tests/test_graph_parallel.py
+@@ -221,6 +221,70 @@ def test_worker_pool_reports_an_unreadable_file_as_a_failure_not_a_crash(tmp_pat
+     assert "could not read file" in failures[0]["reason"]
+ 
+ 
++def test_worker_pool_degrades_remaining_files_when_a_worker_dies(tmp_path, monkeypatch):
++    # Real bug found via audit (issue #996): BrokenProcessPool (a worker
++    # killed outright - OOM-killer, SIGKILL, segfault - rather than
++    # raising inside _worker_parse_and_extract_one's own try/except, which
++    # only covers a live worker's exception) used to propagate straight
++    # through ProcessPoolExecutor.map() uncaught, crashing the whole scan
++    # and losing every result including batches that had already
++    # completed. Simulated with a fake executor whose .map() yields real
++    # results for the first two paths, then raises BrokenProcessPool - the
++    # same shape ast_pattern.py's own BrokenProcessPool test already uses,
++    # since killing a real subprocess mid-test is unreliable.
++    from concurrent.futures.process import BrokenProcessPool
++
++    repo = tmp_path / "repo"
++    repo.mkdir()
++    paths = []
++    for i in range(4):
++        path = repo / f"mod{i}.py"
++        path.write_text(f"VALUE_{i} = {i}\n")
++        paths.append(path)
++
++    real_results = [
++        (
++            True,
++            {
++                "path": f"mod{i}.py",
++                "language": "python",
++                "imports": [],
++                "imported_by": [],
++                "symbols": {"functions": [], "classes": [], "constants": []},
++            },
++        )
++        for i in range(2)
++    ]
++
++    class _FakeExecutor:
++        def __enter__(self):
++            return self
++
++        def __exit__(self, *exc_info):
++            return False
++
++        def map(self, fn, jobs, **kwargs):
++            for i, _job in enumerate(jobs):
++                if i >= 2:
++                    raise BrokenProcessPool("simulated dead worker")
++                yield real_results[i]
++
++    monkeypatch.setattr(graph_module, "ProcessPoolExecutor", lambda *a, **k: _FakeExecutor())
++
++    modules, failures = graph_module._parse_many_in_parallel(
++        paths=paths,
++        repo_path=repo,
++        python_source_roots=[repo],
++        go_module_prefix=None,
++        has_rust_crate_root=False,
++        php_psr4_map={},
++    )
++
++    assert {m["path"] for m in modules} == {"mod0.py", "mod1.py"}
++    assert {f["path"] for f in failures} == {"mod2.py", "mod3.py"}
++    assert all("BrokenProcessPool" in f["reason"] for f in failures)
++
++
+ def test_build_module_graph_sequential_path_reports_an_unreadable_file_not_a_crash(
+     tmp_path, monkeypatch
+ ):
+diff --git a/src/tests/test_secrets.py b/src/tests/test_secrets.py
+index 00520675..cfac5b3f 100644
+--- a/src/tests/test_secrets.py
++++ b/src/tests/test_secrets.py
+@@ -937,6 +937,53 @@ def test_find_secrets_does_not_mark_random_long_decimal_token_as_placeholder(tmp
+     assert all(f["likely_placeholder"] is False for f in result["findings"])
+ 
+ 
++def test_scan_many_for_secrets_degrades_remaining_files_when_a_worker_dies(monkeypatch):
++    # Real bug found via audit (issue #996): BrokenProcessPool (a worker
++    # killed outright - OOM-killer, SIGKILL, segfault - rather than
++    # raising inside _scan_file_for_secrets' own try/except, which only
++    # covers a live worker's exception) used to propagate straight
++    # through ProcessPoolExecutor.map() uncaught, crashing the whole scan
++    # and losing every finding for the repo. Simulated with a fake
++    # executor whose .map() yields a real result for the first job then
++    # raises BrokenProcessPool, the same shape the sibling tests in
++    # test_graph_parallel.py and test_error_handling.py already use.
++    # ProcessPoolExecutor is imported locally inside _scan_many_for_secrets
++    # (from the real concurrent.futures module, not secrets_module's own
++    # namespace), so the fake has to be installed there instead.
++    import concurrent.futures
++    from concurrent.futures.process import BrokenProcessPool
++
++    real_result = [{"path": "a.py", "pattern": "aws_access_key_id"}]
++
++    class _FakeExecutor:
++        def __enter__(self):
++            return self
++
++        def __exit__(self, *exc_info):
++            return False
++
++        def map(self, fn, jobs, **kwargs):
++            for i, _job in enumerate(jobs):
++                if i >= 1:
++                    raise BrokenProcessPool("simulated dead worker")
++                yield real_result
++
++    monkeypatch.setattr(concurrent.futures, "ProcessPoolExecutor", lambda *a, **k: _FakeExecutor())
++    import aletheore.scanner.graph as graph
++
++    monkeypatch.setattr(graph, "PARALLEL_PARSE_MIN_FILES", 0)
++
++    from pathlib import Path
++
++    results = secrets_module._scan_many_for_secrets(
++        [(Path("a.py"), "a.py"), (Path("b.py"), "b.py"), (Path("c.py"), "c.py")]
++    )
++
++    assert results[0] == real_result
++    assert results[1] == []
++    assert results[2] == []
++
++
+ def test_find_secrets_parallel_and_sequential_paths_give_identical_output(tmp_path, monkeypatch):
+     import aletheore.scanner.graph as graph
+ 
