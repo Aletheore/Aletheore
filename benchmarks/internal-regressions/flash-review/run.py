@@ -108,17 +108,31 @@ def _with_temperature(create_fn, temperature: float):
     return create
 
 
-def _anthropic_adapter(model: str, on_usage):
+def _install_temperature_client() -> None:
+    """Make the shared AnthropicAdapter's client send production's temperature. Done once per
+    process: the adapter builds its client from the module-level `Anthropic` name, which this
+    script replaces with a subclass. Idempotent so repeated adapter construction (one per run)
+    does not stack subclasses. Scoped to this script's process; nothing else imports it."""
     import aletheore.adapters.anthropic_native as native
 
+    if getattr(native.Anthropic, "_flash_regression_temperature", False):
+        return
     real_client_cls = native.Anthropic
 
     class _TemperatureClient(real_client_cls):
+        _flash_regression_temperature = True
+
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self.messages.create = _with_temperature(self.messages.create, PRODUCTION_TEMPERATURE)
 
     native.Anthropic = _TemperatureClient
+
+
+def _anthropic_adapter(model: str, on_usage):
+    import aletheore.adapters.anthropic_native as native
+
+    _install_temperature_client()
     return native.AnthropicAdapter(model=model, on_usage=on_usage)
 
 
