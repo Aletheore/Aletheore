@@ -20,6 +20,30 @@ def test_find_secrets_detects_aws_key(tmp_path):
     assert finding["likely_placeholder"] is False
 
 
+def test_find_secrets_handles_a_relative_repo_path(tmp_path, monkeypatch):
+    # Real bug (PR #985): root_len was computed from str(repo_path) without
+    # resolving to absolute first. With a relative "." repo_path, pathlib's
+    # own walk drops the "./" prefix (str(path) == "config.py", not
+    # "./config.py"), so slicing off len(".") + 1 == 2 chars cut into the
+    # real filename and corrupted both the cache key and the finding's own
+    # "path" field. Not reachable via scan_repository today (every caller
+    # resolves repo_path to absolute first - see detect_languages' identical
+    # fix, applied in the same PR), but find_secrets is public with no such
+    # guard of its own.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "config.py").write_text('AWS_KEY = "AKIAABCDEFGHIJKLMNOP"\n')
+    monkeypatch.chdir(repo)
+
+    from pathlib import Path
+
+    result = find_secrets(Path("."))
+
+    assert result["scanned_files"] == 1
+    assert len(result["findings"]) == 1
+    assert result["findings"][0]["path"] == "config.py"
+
+
 def test_find_secrets_respects_ignored_paths_from_config(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
