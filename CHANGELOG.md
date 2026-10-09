@@ -22,7 +22,7 @@ added on 2026-09-21. Running from a source checkout was not affected.
 **Hosted scans are unchanged.** Semgrep measured about 270 seconds on a large repository and its timeout
 scales up to 30 minutes, so the hosted worker keeps it off and now says "semgrep disabled" instead of reporting
 an error. Operators can opt in with `ALETHEORE_HOSTED_ENABLE_SEMGREP` set to `1`, `true`, `yes` or `on`; any
-other unrecognised value logs a warning and leaves it off.
+other value logs a warning that it is not understood and leaves it off.
 
 ## 0.9.25 - 2026-10-09
 
