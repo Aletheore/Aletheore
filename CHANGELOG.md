@@ -3,6 +3,30 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.25 - 2026-10-09
+
+**Fixed: a capped git history could be reported as complete (#1002)**
+
+Local scans keep a graph of git history in `.aletheore/graph.db`. Since 0.9.23 that graph stops at the latest
+50,000 commits by default, and later scans never fill in older commits. But `history_depth_limited` was worked
+out from the cap the current scan asked for, not from what the graph actually held. So after a capped scan, a
+later scan with the cap raised or removed (`ALETHEORE_GIT_HISTORY_DEPTH_CAP=0`) reported the history as complete
+while hotspots and ownership were still computed from the capped part. Reproduced on a 1,559-commit repository:
+a graph built with a cap of 100 reported `history_depth_limited: false` on the next uncapped scan while holding
+100 of the 1,559 commits.
+
+It now compares the number of commits the graph really holds against the repository's total, so the flag stays
+true until the graph is complete. To get full history after a capped scan, delete `.aletheore/graph.db` and scan
+again with the cap removed. Repositories that were never capped, including ones with merge commits and bot
+authors, report exactly what they did before.
+
+**Changed: the in-memory file-hash cache has a size limit (#1002)**
+
+The cache that remembers file hashes for the per-file result cache kept an entry for every path a process ever
+scanned. A long-running process such as `aletheore mcp`, scanning changing checkouts, now keeps the most recent
+200,000 entries and drops the oldest first. A repository under that size behaves as before, and a lookup that
+races with another scan can no longer crash it.
+
 ## 0.9.24 - 2026-10-09
 
 **Fixed: a killed parse worker no longer loses the whole scan, or hides a secret (#998)**
