@@ -601,6 +601,7 @@ def _apply_baseline(findings: list[dict], baseline: list[dict] | None, repo_path
 
 def _scan_many_for_secrets(jobs: list[tuple[Path, str]]) -> list[list[dict]]:
     from concurrent.futures import ProcessPoolExecutor
+    from concurrent.futures.process import BrokenProcessPool
 
     from aletheore.scanner.graph import (
         PARALLEL_PARSE_MIN_FILES,
@@ -613,7 +614,20 @@ def _scan_many_for_secrets(jobs: list[tuple[Path, str]]) -> list[list[dict]]:
     # input order, so findings come back in the same order either way.
     if len(jobs) >= PARALLEL_PARSE_MIN_FILES and not _parallel_parse_disabled():
         with ProcessPoolExecutor(max_workers=_available_parallelism()) as executor:
-            return list(executor.map(_scan_file_for_secrets, jobs, chunksize=64))
+            results: list[list[dict]] = []
+            try:
+                results.extend(executor.map(_scan_file_for_secrets, jobs, chunksize=64))
+            except BrokenProcessPool:
+                # A worker died outright (OOM-killer, SIGKILL, segfault)
+                # rather than raising inside _scan_file_for_secrets' own
+                # try/except - that guard only covers an exception a live
+                # worker raises, not a worker that's gone. Already-yielded
+                # findings are kept; every job still pending degrades to no
+                # findings, the same convention _scan_file_for_secrets' own
+                # OSError catch already uses for one unreadable file,
+                # instead of losing every finding for the whole repo.
+                results.extend([[] for _ in range(len(jobs) - len(results))])
+            return results
     return [_scan_file_for_secrets(job) for job in jobs]
 
 

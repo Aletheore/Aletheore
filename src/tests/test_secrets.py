@@ -937,6 +937,53 @@ def test_find_secrets_does_not_mark_random_long_decimal_token_as_placeholder(tmp
     assert all(f["likely_placeholder"] is False for f in result["findings"])
 
 
+def test_scan_many_for_secrets_degrades_remaining_files_when_a_worker_dies(monkeypatch):
+    # Real bug found via audit (issue #996): BrokenProcessPool (a worker
+    # killed outright - OOM-killer, SIGKILL, segfault - rather than
+    # raising inside _scan_file_for_secrets' own try/except, which only
+    # covers a live worker's exception) used to propagate straight
+    # through ProcessPoolExecutor.map() uncaught, crashing the whole scan
+    # and losing every finding for the repo. Simulated with a fake
+    # executor whose .map() yields a real result for the first job then
+    # raises BrokenProcessPool, the same shape the sibling tests in
+    # test_graph_parallel.py and test_error_handling.py already use.
+    # ProcessPoolExecutor is imported locally inside _scan_many_for_secrets
+    # (from the real concurrent.futures module, not secrets_module's own
+    # namespace), so the fake has to be installed there instead.
+    import concurrent.futures
+    from concurrent.futures.process import BrokenProcessPool
+
+    real_result = [{"path": "a.py", "pattern": "aws_access_key_id"}]
+
+    class _FakeExecutor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def map(self, fn, jobs, **kwargs):
+            for i, _job in enumerate(jobs):
+                if i >= 1:
+                    raise BrokenProcessPool("simulated dead worker")
+                yield real_result
+
+    monkeypatch.setattr(concurrent.futures, "ProcessPoolExecutor", lambda *a, **k: _FakeExecutor())
+    import aletheore.scanner.graph as graph
+
+    monkeypatch.setattr(graph, "PARALLEL_PARSE_MIN_FILES", 0)
+
+    from pathlib import Path
+
+    results = secrets_module._scan_many_for_secrets(
+        [(Path("a.py"), "a.py"), (Path("b.py"), "b.py"), (Path("c.py"), "c.py")]
+    )
+
+    assert results[0] == real_result
+    assert results[1] == []
+    assert results[2] == []
+
+
 def test_find_secrets_parallel_and_sequential_paths_give_identical_output(tmp_path, monkeypatch):
     import aletheore.scanner.graph as graph
 

@@ -221,6 +221,70 @@ def test_worker_pool_reports_an_unreadable_file_as_a_failure_not_a_crash(tmp_pat
     assert "could not read file" in failures[0]["reason"]
 
 
+def test_worker_pool_degrades_remaining_files_when_a_worker_dies(tmp_path, monkeypatch):
+    # Real bug found via audit (issue #996): BrokenProcessPool (a worker
+    # killed outright - OOM-killer, SIGKILL, segfault - rather than
+    # raising inside _worker_parse_and_extract_one's own try/except, which
+    # only covers a live worker's exception) used to propagate straight
+    # through ProcessPoolExecutor.map() uncaught, crashing the whole scan
+    # and losing every result including batches that had already
+    # completed. Simulated with a fake executor whose .map() yields real
+    # results for the first two paths, then raises BrokenProcessPool - the
+    # same shape ast_pattern.py's own BrokenProcessPool test already uses,
+    # since killing a real subprocess mid-test is unreliable.
+    from concurrent.futures.process import BrokenProcessPool
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    paths = []
+    for i in range(4):
+        path = repo / f"mod{i}.py"
+        path.write_text(f"VALUE_{i} = {i}\n")
+        paths.append(path)
+
+    real_results = [
+        (
+            True,
+            {
+                "path": f"mod{i}.py",
+                "language": "python",
+                "imports": [],
+                "imported_by": [],
+                "symbols": {"functions": [], "classes": [], "constants": []},
+            },
+        )
+        for i in range(2)
+    ]
+
+    class _FakeExecutor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def map(self, fn, jobs, **kwargs):
+            for i, _job in enumerate(jobs):
+                if i >= 2:
+                    raise BrokenProcessPool("simulated dead worker")
+                yield real_results[i]
+
+    monkeypatch.setattr(graph_module, "ProcessPoolExecutor", lambda *a, **k: _FakeExecutor())
+
+    modules, failures = graph_module._parse_many_in_parallel(
+        paths=paths,
+        repo_path=repo,
+        python_source_roots=[repo],
+        go_module_prefix=None,
+        has_rust_crate_root=False,
+        php_psr4_map={},
+    )
+
+    assert {m["path"] for m in modules} == {"mod0.py", "mod1.py"}
+    assert {f["path"] for f in failures} == {"mod2.py", "mod3.py"}
+    assert all("BrokenProcessPool" in f["reason"] for f in failures)
+
+
 def test_build_module_graph_sequential_path_reports_an_unreadable_file_not_a_crash(
     tmp_path, monkeypatch
 ):

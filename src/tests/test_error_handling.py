@@ -324,6 +324,45 @@ def test_parallel_and_sequential_paths_give_identical_output(tmp_path, monkeypat
     assert len(sequential["error_types"]) == 12
 
 
+def test_worker_pool_degrades_remaining_files_when_a_worker_dies(tmp_path, monkeypatch):
+    # Real bug found via audit (issue #996): BrokenProcessPool (a worker
+    # killed outright - OOM-killer, SIGKILL, segfault - rather than
+    # raising inside _extract_one's own try/except, which only covers a
+    # live worker's exception) used to propagate straight through
+    # ProcessPoolExecutor.map() uncaught, crashing the whole scan and
+    # losing every file's error-handling evidence for the repo. Simulated
+    # with a fake executor whose .map() yields a real result for the
+    # first job then raises BrokenProcessPool, the same shape
+    # test_graph_parallel.py's sibling test and ast_pattern.py's own
+    # BrokenProcessPool test already use.
+    import aletheore.error_handling as eh
+    from concurrent.futures.process import BrokenProcessPool
+
+    real_result = ([{"name": "Boom", "file": "a.py", "line": 1, "bases": [], "seeds": []}], [], [])
+
+    class _FakeExecutor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def map(self, fn, jobs, **kwargs):
+            for i, _job in enumerate(jobs):
+                if i >= 1:
+                    raise BrokenProcessPool("simulated dead worker")
+                yield real_result
+
+    monkeypatch.setattr(eh, "PARALLEL_PARSE_MIN_FILES", 0)
+    monkeypatch.setattr(eh, "ProcessPoolExecutor", lambda *a, **k: _FakeExecutor())
+
+    results = eh._extract_many([(Path("a.py"), "a.py"), (Path("b.py"), "b.py"), (Path("c.py"), "c.py")])
+
+    assert results[0] == real_result
+    assert results[1] == ([], [], [])
+    assert results[2] == ([], [], [])
+
+
 def test_cpp_text_fallback_dedupes_within_a_file_only(tmp_path):
     # A header the grammar can't fully parse still gets its error classes from
     # the text fallback, and two files can each define a same-named class.

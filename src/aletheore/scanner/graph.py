@@ -5,6 +5,7 @@ import re
 import stat
 import xml.etree.ElementTree as ET
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
 import tree_sitter_c as tsc
@@ -3668,7 +3669,24 @@ def _parse_many_in_parallel(
         # unasserted anywhere - see the design doc), just keeps output
         # deterministic across runs rather than depending on which worker
         # happens to finish first.
-        results = list(executor.map(_worker_parse_and_extract_one, paths))
+        results: list[tuple[bool, dict]] = []
+        try:
+            results.extend(executor.map(_worker_parse_and_extract_one, paths))
+        except BrokenProcessPool:
+            # A worker died outright (OOM-killer, SIGKILL, segfault) rather
+            # than raising inside _worker_parse_and_extract_one's own
+            # try/except - that guard only covers an exception a live worker
+            # raises, not a worker that's gone. list.extend already kept
+            # every result yielded before the pool broke; every path still
+            # pending degrades to an unparseable-files entry (the same
+            # contract _worker_parse_and_extract_one's own OSError catch
+            # gives a single unreadable file) instead of losing the whole
+            # scan, including the results already collected above.
+            for path in paths[len(results):]:
+                results.append((False, {
+                    "path": _rel(repo_path, path),
+                    "reason": "worker process died while parsing (BrokenProcessPool)",
+                }))
     modules = []
     failures = []
     for ok, payload in results:

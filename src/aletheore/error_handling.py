@@ -16,6 +16,7 @@ summary counts every site, and `truncated` says when a list was cut.
 """
 import re
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
 from tree_sitter import Node, Parser
@@ -545,7 +546,20 @@ def _extract_many(jobs: list[tuple[Path, str]]) -> list[tuple[list, list, list]]
     # parallel parse. Results come back in input order either way.
     if len(jobs) >= PARALLEL_PARSE_MIN_FILES and not _parallel_parse_disabled():
         with ProcessPoolExecutor(max_workers=_available_parallelism()) as executor:
-            return list(executor.map(_extract_one, jobs, chunksize=32))
+            results: list[tuple[list, list, list]] = []
+            try:
+                results.extend(executor.map(_extract_one, jobs, chunksize=32))
+            except BrokenProcessPool:
+                # A worker died outright (OOM-killer, SIGKILL, segfault)
+                # rather than raising inside _extract_one's own try/except -
+                # that guard only covers an exception a live worker raises,
+                # not a worker that's gone. Already-yielded results are
+                # kept; every job still pending degrades to the same empty
+                # extraction _extract_one's own OSError catch already
+                # returns for one unreadable file, instead of losing every
+                # file's error-handling evidence for the whole repo.
+                results.extend([([], [], [])] * (len(jobs) - len(results)))
+            return results
     return [_extract_one(job) for job in jobs]
 
 
