@@ -1,10 +1,16 @@
+# Pass 1 of the link check (.github/workflows/linkcheck.yml): every link EXCEPT
+# github.com, with a strict accept list. github.com is checked in a second pass
+# (lychee-github.toml) because lychee has no per-domain accept-status setting.
 exclude = [
   "^mailto:",
-  "^https://github.com/marketplace$",
+  "^https://github.com",
   "^https://www.linkedin.com/company/aletheore$",
   "^https://www.aletheore.com",
   "^https://aletheore.com"
 ]
 accept = [200, 204, 206, 301, 302, 307, 308, 429]
-max_retries = 2
+# More patience for a transient blip on a third-party host: 5 retries at a 5s
+# wait is about 25s per failing link at worst.
+max_retries = 5
+retry_wait_time = 5
 timeout = 20

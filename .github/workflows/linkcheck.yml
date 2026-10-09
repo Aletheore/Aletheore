@@ -23,3 +23,10 @@ jobs:
           args: --config lychee.toml "README.md" "docs/**/*.md"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # github.com only, tolerating its own 5xx outages but still failing on 404.
+      - name: Link check (github.com)
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2
+        with:
+          args: --config lychee-github.toml "README.md" "docs/**/*.md"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
