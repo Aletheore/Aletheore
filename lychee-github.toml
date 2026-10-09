@@ -1,0 +1,18 @@
+# Pass 2 of the link check: ONLY github.com links. github.com itself returned
+# 503/504 for plain README links on 2026-10-09 and failed 7 PRs in a day, none of
+# which touched a link, so server errors are tolerated here. A 404 is still an
+# error: that is a real stale path or a renamed file, which is what this check is
+# for. Every other host stays strict in lychee.toml, where a permanent 5xx must
+# fail (accepting 5xx everywhere would let a dead third-party link pass forever).
+#
+# `exclude = [".*"]` plus `include` is the allow-list form, and it is deliberate.
+# lychee's `include` on its own does not restrict anything once any other
+# `exclude` entry exists (it only overrides matches), so a config that lists
+# `include` next to a narrower `exclude` quietly rechecks every link instead of
+# just github.com. Check the "Excluded" count in the log if you edit this.
+exclude = [".*"]
+include = ["^https://github.com"]
+accept = [200, 204, 206, 301, 302, 307, 308, 429, 500, 502, 503, 504]
+max_retries = 5
+retry_wait_time = 5
+timeout = 20
