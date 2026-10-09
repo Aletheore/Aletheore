@@ -227,3 +227,23 @@ def test_hash_memo_eviction_does_not_affect_correctness(repo, monkeypatch):
     assert str(a) not in file_cache._hash_memo
 
     assert file_cache.content_hashes([a])[a] == expected_a
+
+
+def test_hash_memo_survives_a_concurrent_eviction_between_lookup_and_recency_bump(repo, monkeypatch):
+    # content_hashes does get() then move_to_end(). If another thread's scan
+    # evicts that key in between, move_to_end raises KeyError; the hash already
+    # in hand must still be returned instead of crashing the scan.
+    from collections import OrderedDict
+
+    class _EvictingMemo(OrderedDict):
+        def move_to_end(self, key, last=True):
+            self.pop(key, None)  # simulate the other thread's eviction
+            raise KeyError(key)
+
+    path = next(iter(repo.rglob("*.py")), None) or next(p for p in repo.rglob("*") if p.is_file())
+    expected = file_cache.content_hashes([path])[path]
+    memo = _EvictingMemo(file_cache._hash_memo)
+    monkeypatch.setattr(file_cache, "_hash_memo", memo)
+
+    assert file_cache.content_hashes([path])[path] == expected
+

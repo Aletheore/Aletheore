@@ -87,14 +87,15 @@ def _hash_one(path: Path) -> str | None:
 # a long-lived process (MCP server, hosted worker) holds one entry per file, not
 # one per version of it.
 #
-# Bounded (LRU), not a plain dict: the hosted scan-worker checks out every job
-# into a freshly generated temp dir (scan_worker/jobs.py's _job_temp_dir()), so
-# its absolute paths are never reused across jobs - every entry a job adds has
-# zero future hit probability once that job's checkout is deleted, and a
-# long-lived worker handling thousands of jobs over its uptime would otherwise
-# grow this dict without bound. The MCP server's legitimate reuse case (one
-# repo, stable paths, re-stat'd across repeat scans) is unaffected as long as
-# that repo's file count stays under the cap, which any real repo's does.
+# Bounded (LRU), not a plain dict, so a long-lived process cannot grow it without
+# limit. This is only reachable where the per-file cache is active (the
+# content_hashes caller, cached_per_file, returns before it when open_cache()
+# is None). That excludes the hosted worker: its scans run in a subprocess with
+# ALETHEORE_DISABLE_LOCAL_SCAN_CACHE set (scan_worker/jobs.py). The real case is
+# a long-lived local process such as the MCP server, which would otherwise
+# accumulate an entry for every path it ever scans across changing checkouts. Its
+# legitimate reuse (one repo, stable paths, re-stat'd on repeat scans) is
+# unaffected while that repo's file count stays under the cap.
 _HASH_MEMO_MAX_ENTRIES = 200_000
 _hash_memo: OrderedDict[str, tuple[tuple[int, int], str | None]] = OrderedDict()
 
@@ -112,7 +113,14 @@ def content_hashes(paths: list[Path]) -> dict[Path, str | None]:
         key = str(path)
         memo = _hash_memo.get(key)
         if memo is not None and memo[0] == stamp:
-            _hash_memo.move_to_end(key)
+            try:
+                _hash_memo.move_to_end(key)
+            except KeyError:
+                # Evicted by a concurrent scan between the get above and now
+                # (the MCP server's background watcher and a tool call can both
+                # scan). The value in hand is still valid; only the recency
+                # bump is lost.
+                pass
             out[path] = memo[1]
         else:
             todo.append((path, stamp))
@@ -122,9 +130,12 @@ def content_hashes(paths: list[Path]) -> dict[Path, str | None]:
             hashes = list(executor.map(lambda item: _hash_one(item[0]), todo))
         for (path, stamp), digest in zip(todo, hashes):
             _hash_memo[str(path)] = (stamp, digest)
-            _hash_memo.move_to_end(str(path))
-            if len(_hash_memo) > _HASH_MEMO_MAX_ENTRIES:
-                _hash_memo.popitem(last=False)
+            try:
+                _hash_memo.move_to_end(str(path))
+                if len(_hash_memo) > _HASH_MEMO_MAX_ENTRIES:
+                    _hash_memo.popitem(last=False)
+            except KeyError:
+                pass  # a concurrent scan evicted or emptied it first; nothing to maintain
             out[path] = digest
     return out
 
