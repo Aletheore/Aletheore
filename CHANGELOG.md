@@ -3,6 +3,27 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.26 - 2026-10-09
+
+**Fixed: semgrep never ran from a pip install (#1007)**
+
+The published wheel left out `static_analysis/semgrep_rules/*.yaml` and the Joern query file, because the
+package-data list in `pyproject.toml` did not name them. `check_semgrep` still passed that missing folder to
+semgrep with `--config`, so semgrep exited with an error and the whole semgrep step was reported as "did not
+run", including the registry rules. This affected every `pip install` of the CLI since the custom rules were
+added on 2026-09-21. Running from a source checkout was not affected.
+
+- The rules and the Joern query now ship in the wheel, and a test fails if any data file under
+  `src/aletheore` is missing from the package-data list.
+- If the rules folder is ever missing or empty, semgrep now runs with the registry rules alone and logs a
+  warning, instead of failing.
+- New switch: `ALETHEORE_DISABLE_SEMGREP=1` skips semgrep and reports it as disabled.
+
+**Hosted scans are unchanged.** Semgrep measured about 270 seconds on a large repository and its timeout
+scales up to 30 minutes, so the hosted worker keeps it off and now says "semgrep disabled" instead of reporting
+an error. Operators can opt in with `ALETHEORE_HOSTED_ENABLE_SEMGREP` set to `1`, `true`, `yes` or `on`; any
+other unrecognised value logs a warning and leaves it off.
+
 ## 0.9.25 - 2026-10-09
 
 **Fixed: a capped git history could be reported as complete (#1002)**
