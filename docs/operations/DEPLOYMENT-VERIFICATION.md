@@ -6,12 +6,12 @@
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
 **Last Updated:** 2026-10-09
 **Snapshot Freshness:** CURRENT as of 2026-10-09 - the scan workers, `health-worker` and `scheduler` run
-`master` at commit `e79f3c73` (tag `github-app-deploy-2026-10-09-4`); `app-server` and `jina-embed` still run
+`master` at commit `9cf6f24e` (tag `github-app-deploy-2026-10-09-5`); `app-server` and `jina-embed` still run
 `e3182a9f` from the 2026-10-08 deploy below, because nothing under `github-app/app_server/` or
 `github-app/jina_embed/` changed after it, so a rebuild would have produced the same code. Re-verified live
 via SSH after each step. No migration, no Dockerfile or compose change, no lockfile change in any of these.
 
-Four worker-only deploys on 2026-10-09, each built from `master` and rolled one container at a time, waiting
+Five worker-only deploys on 2026-10-09, each built from `master` and rolled one container at a time, waiting
 for that worker to be idle first so no running job was killed:
 
 1. `b3fc4796` (#991), tag `github-app-deploy-2026-10-09`: the managed-audit string-evidence path wrote
@@ -34,11 +34,24 @@ for that worker to be idle first so no running job was killed:
    `health-worker` and `scheduler` were all rolled; the changes live in the `aletheore` package they all
    install. Brought `aletheore.__version__` to 0.9.24 in the running containers (the version string of the
    release published earlier that day).
+5. `9cf6f24e` (#1007), tag `github-app-deploy-2026-10-09-5`: the published wheel and the worker image left out
+   the semgrep rules and the Joern query, and `check_semgrep` passed the missing rules folder to semgrep, so
+   semgrep always exited with an error and was reported as "did not run". The files are now packaged (a test
+   fails if any data file is missing from the package-data list) and a missing folder no longer fails the run.
+   Hosted behaviour is deliberately unchanged: semgrep measured about 270 seconds on a large repository with a
+   timeout that scales to 30 minutes, so the worker sets `ALETHEORE_DISABLE_SEMGREP=1` and a hosted scan now
+   reports "semgrep disabled" instead of an error. `ALETHEORE_HOSTED_ENABLE_SEMGREP` (`1`, `true`, `yes`, `on`)
+   opts in. The scan workers, `health-worker` and `scheduler` were rolled idle-first (no busy RQ worker at any
+   step). Released to PyPI the same day as 0.9.26; a clean-venv install of 0.9.26 contains the rules and the
+   Joern query.
+
 
 Verified live: `docker ps` shows exactly `github-app-scan-worker-1` and `github-app-scan-worker-2-1`, all six
 app services `healthy`; zero lines matching `error|traceback|exception` in the logs of every recreated
 container since its restart; `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`;
-and the new code is in the *running* containers, not just the checkout (after the fourth deploy, in all four
+and the new code is in the *running* containers, not just the checkout (after the fifth deploy, in all four
+recreated containers: `jobs.py` has `_hosted_semgrep_enabled`, it returns false by default, and `check_semgrep` returns
+"semgrep disabled" under `ALETHEORE_DISABLE_SEMGREP`; after the fourth deploy, in all four
 recreated containers: the file-hash cache is an `OrderedDict` capped at 200,000 and `prepare_git_analysis`
 compares the stored commit count with the total; earlier: `air.json` is written before
 `air.toon` in the workers' `jobs.py`, `find_secrets` resolves the path first, `cli.py` has no `import re`,
