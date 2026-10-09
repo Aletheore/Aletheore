@@ -684,6 +684,11 @@ def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
     from aletheore.file_cache import cached_per_file, code_version
 
     ignored_paths = load_repo_config(repo_path)["ignored_paths"]
+    # Absolute, so every walked path starts with this exact string: with a
+    # relative "." the walk yields "sub/f" (pathlib drops the "./"), and
+    # slicing off len(".") + 1 would cut real characters and collide cache
+    # keys (same fix as detect_languages, scanner/detect.py).
+    repo_path = Path(os.path.abspath(repo_path))
     root_len = len(str(repo_path)) + 1
     jobs = [(path, str(path)[root_len:].replace(os.sep, "/")) for path in iter_all_files(repo_path, ignored_paths)]
     # Unchanged files reuse their findings from the last scan (file_cache.py).
