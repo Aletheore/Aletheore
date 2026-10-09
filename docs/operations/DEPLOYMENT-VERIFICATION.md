@@ -6,12 +6,12 @@
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
 **Last Updated:** 2026-10-09
 **Snapshot Freshness:** CURRENT as of 2026-10-09 - the scan workers, `health-worker` and `scheduler` run
-`master` at commit `8ef4e232` (tag `github-app-deploy-2026-10-09-3`); `app-server` and `jina-embed` still run
+`master` at commit `e79f3c73` (tag `github-app-deploy-2026-10-09-4`); `app-server` and `jina-embed` still run
 `e3182a9f` from the 2026-10-08 deploy below, because nothing under `github-app/app_server/` or
 `github-app/jina_embed/` changed after it, so a rebuild would have produced the same code. Re-verified live
 via SSH after each step. No migration, no Dockerfile or compose change, no lockfile change in any of these.
 
-Three worker-only deploys on 2026-10-09, each built from `master` and rolled one container at a time, waiting
+Four worker-only deploys on 2026-10-09, each built from `master` and rolled one container at a time, waiting
 for that worker to be idle first so no running job was killed:
 
 1. `b3fc4796` (#991), tag `github-app-deploy-2026-10-09`: the managed-audit string-evidence path wrote
@@ -26,11 +26,21 @@ for that worker to be idle first so no running job was killed:
    "no findings" would have been remembered). `health-worker` and `scheduler` were rolled onto this build too,
    so no service runs older `scan_worker` or `aletheore` code than the workers do; their previous images
    predated all three changes.
+4. `e79f3c73` (#1002), tag `github-app-deploy-2026-10-09-4`: `history_depth_limited` was derived from the cap
+   the current call asked for, so a later call with a different cap reported a capped graph as complete; it now
+   compares the commits the persisted graph holds with the repository's total (reproduced and checked on a
+   1,559-commit repository, including merge commits and a bot author). The in-memory file-hash cache is now
+   bounded (200,000 entries, oldest evicted first) and survives a concurrent eviction. The scan workers,
+   `health-worker` and `scheduler` were all rolled; the changes live in the `aletheore` package they all
+   install. Brought `aletheore.__version__` to 0.9.24 in the running containers (the version string of the
+   release published earlier that day).
 
 Verified live: `docker ps` shows exactly `github-app-scan-worker-1` and `github-app-scan-worker-2-1`, all six
 app services `healthy`; zero lines matching `error|traceback|exception` in the logs of every recreated
 container since its restart; `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`;
-and the new code is in the *running* containers, not just the checkout (`air.json` is written before
+and the new code is in the *running* containers, not just the checkout (after the fourth deploy, in all four
+recreated containers: the file-hash cache is an `OrderedDict` capped at 200,000 and `prepare_git_analysis`
+compares the stored commit count with the total; earlier: `air.json` is written before
 `air.toon` in the workers' `jobs.py`, `find_secrets` resolves the path first, `cli.py` has no `import re`,
 `_map_in_pool_with_recovery` is present in `scanner/graph.py` and used by the secrets and error-handling
 stages in the workers, `health-worker` and `scheduler`).
