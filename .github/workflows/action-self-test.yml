@@ -33,9 +33,20 @@ jobs:
       - name: Verify the action produced a real diff-json output
         shell: bash
         run: |
-          if [ -z "${{ steps.aletheore.outputs.diff-json }}" ]; then
+          # The output is JSON full of double quotes, apostrophes and parentheses
+          # (advisory titles, finding messages). Pasting it into a shell string,
+          # as this step used to, only works until the content happens to contain
+          # a character the quoting cannot absorb: a diff that resolved an
+          # advisory titled "...parse()..." failed with a bash syntax error that
+          # had nothing to do with the action. A quoted heredoc writes it to a
+          # file verbatim, with no shell interpretation and no size limit (an
+          # env var is capped at 128 KB, and this output already reaches ~80 KB).
+          cat > "$RUNNER_TEMP/diff-json-output.json" <<'ALETHEORE_SELFTEST_DIFF_JSON_EOF'
+          ${{ steps.aletheore.outputs.diff-json }}
+          ALETHEORE_SELFTEST_DIFF_JSON_EOF
+          if [ -z "$(tr -d '[:space:]' < "$RUNNER_TEMP/diff-json-output.json")" ]; then
             echo "::error::diff-json output was empty - the action did not run to completion"
             exit 1
           fi
-          echo '${{ steps.aletheore.outputs.diff-json }}' | python3 -m json.tool > /dev/null
+          python3 -m json.tool < "$RUNNER_TEMP/diff-json-output.json" > /dev/null
           echo "diff-json output is valid, non-empty JSON"
