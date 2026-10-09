@@ -198,3 +198,32 @@ def test_run_scan_lets_an_operator_opt_in_to_semgrep(tmp_path, monkeypatch):
     _, kwargs = mock_run.call_args
     assert "ALETHEORE_DISABLE_SEMGREP" not in kwargs["env"]
 
+
+
+
+def test_run_scan_accepts_the_usual_truthy_spellings_for_the_semgrep_opt_in(tmp_path, monkeypatch):
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    for value in ("1", "true", "TRUE", "yes", "on", " On "):
+        monkeypatch.setenv("ALETHEORE_HOSTED_ENABLE_SEMGREP", value)
+        with patch("scan_worker.jobs.subprocess.run") as mock_run:
+            _run_scan(repo_dir)
+        _, kwargs = mock_run.call_args
+        assert "ALETHEORE_DISABLE_SEMGREP" not in kwargs["env"], value
+
+
+def test_run_scan_keeps_semgrep_off_and_warns_on_an_unrecognised_opt_in_value(tmp_path, monkeypatch, caplog):
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    for value in ("0", "false", "off"):  # an explicit "no": off, and nothing to warn about
+        monkeypatch.setenv("ALETHEORE_HOSTED_ENABLE_SEMGREP", value)
+        with patch("scan_worker.jobs.subprocess.run") as mock_run:
+            _run_scan(repo_dir)
+        assert mock_run.call_args[1]["env"]["ALETHEORE_DISABLE_SEMGREP"] == "1"
+    assert "not a recognised value" not in caplog.text
+
+    monkeypatch.setenv("ALETHEORE_HOSTED_ENABLE_SEMGREP", "enabled")  # a plausible typo
+    with caplog.at_level("WARNING", logger="scan_worker.jobs"), patch("scan_worker.jobs.subprocess.run") as mock_run:
+        _run_scan(repo_dir)
+    assert mock_run.call_args[1]["env"]["ALETHEORE_DISABLE_SEMGREP"] == "1"
+    assert "ALETHEORE_HOSTED_ENABLE_SEMGREP" in caplog.text and "not a recognised value" in caplog.text

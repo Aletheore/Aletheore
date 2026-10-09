@@ -788,6 +788,29 @@ def _build_unchanged_scan_cache(
 _SCAN_SUBPROCESS_ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "LC_ALL")
 
 
+_HOSTED_SEMGREP_ENV = "ALETHEORE_HOSTED_ENABLE_SEMGREP"
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+_FALSE_VALUES = {"", "0", "false", "no", "off"}
+
+
+def _hosted_semgrep_enabled() -> bool:
+    """Operator opt-in for semgrep in hosted scans (off by default, see _run_scan).
+
+    Accepts the usual truthy spellings, and warns on a value it does not recognise: this is a
+    switch for a feature that was deliberately left off, so a typo must not silently keep it off
+    with the operator believing it is on.
+    """
+    raw = os.environ.get(_HOSTED_SEMGREP_ENV, "").strip().lower()
+    if raw in _TRUE_VALUES:
+        return True
+    if raw not in _FALSE_VALUES:
+        logging.getLogger("scan_worker.jobs").warning(
+            "%s=%r is not a recognised value (use 1/true/yes/on); semgrep stays disabled for hosted scans",
+            _HOSTED_SEMGREP_ENV, os.environ.get(_HOSTED_SEMGREP_ENV),
+        )
+    return False
+
+
 def _run_scan(repo_dir: Path, unchanged_scan_cache_path: Path | None = None) -> Path:
     # See GRAPH_COLD_SYNC_DEPTH_CAP and SECRETS_HISTORY_DEPTH_CAP - the
     # CLI's own analyze_git and find_secrets_in_history calls (inside this
@@ -815,7 +838,7 @@ def _run_scan(repo_dir: Path, unchanged_scan_cache_path: Path | None = None) -> 
     # 1 GB) hit its 270s timeout, and the timeout scales with repo size up to 1800s, which
     # would tie up one of only two workers per scan. Turning it on needs that scoped first
     # (for example to the PR's changed files) and measured, not a side effect of a rebuild.
-    if os.environ.get("ALETHEORE_HOSTED_ENABLE_SEMGREP") != "1":
+    if not _hosted_semgrep_enabled():
         env["ALETHEORE_DISABLE_SEMGREP"] = "1"
     if unchanged_scan_cache_path is not None:
         env["ALETHEORE_UNCHANGED_SCAN_CACHE"] = str(unchanged_scan_cache_path)
