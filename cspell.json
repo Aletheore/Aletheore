@@ -22,6 +22,9 @@
     "docs/**/*.md"
   ],
   "words": [
+    "hardlinked",
+    "monkeypatch",
+    "setattr",
     "jsoup",
     "regclass",
     "Aletheore",
