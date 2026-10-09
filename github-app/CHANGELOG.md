@@ -20,12 +20,13 @@ that gap until it is.
 
 ## 2026-10-09
 
-Three worker-only deploys, no migrations. `8ef4e232` (tag `github-app-deploy-2026-10-09-3`) is what the scan
+Four worker-only deploys, no migrations. `e79f3c73` (tag `github-app-deploy-2026-10-09-4`) is what the scan
 workers, `health-worker` and `scheduler` run now; `app-server` and `jina-embed` stay on `e3182a9f` (no code
 under `app_server/` or `jina_embed/` changed). Tags: `github-app-deploy-2026-10-09` (`b3fc4796`, #991:
-managed-audit evidence write order, `find_secrets` relative path), `-2` (`b5292bb1`, #995: unused import) and
+managed-audit evidence write order, `find_secrets` relative path), `-2` (`b5292bb1`, #995: unused import),
 `-3` (`8ef4e232`, #998: a killed parse worker no longer aborts the scan or lets the secret and error-handling
-stages report files that were never scanned as clean). See the snapshot in
+stages report files that were never scanned as clean) and `-4` (`e79f3c73`, #1002: `history_depth_limited`
+now reflects what the persisted graph holds, and the in-memory file-hash cache is bounded). See the snapshot in
 `docs/operations/DEPLOYMENT-VERIFICATION.md` for what was verified live.
 
 ## 2026-10-08
