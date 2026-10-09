@@ -3,18 +3,21 @@ exclude = [
   "^https://github.com/marketplace$",
   "^https://www.linkedin.com/company/aletheore$",
   "^https://www.aletheore.com",
-  "^https://aletheore.com"
+  "^https://aletheore.com",
+  # Our own GitHub URLs: the repo, the app's install page and the sponsors page.
+  # They are the links that failed CI on github.com's own 503/504 responses on
+  # 2026-10-09 (7 PRs in one day, none of them touching a link), and checking
+  # them adds nothing: they cannot go stale independently of this repo and
+  # account. Excluded by pattern rather than widening `accept` to 5xx, which
+  # would let a third-party link that is permanently down (a real 502/503)
+  # pass the check forever; the strict accept list below stays as it was.
+  "^https://github.com/Aletheore/",
+  "^https://github.com/apps/aletheore",
+  "^https://github.com/sponsors/ArihantK15"
 ]
-# 5xx is accepted everywhere a link is checked, not scoped to github.com:
-# lychee has no per-domain accept-status config (`hosts` only overrides
-# concurrency/interval/headers per host, confirmed against `lychee --help`),
-# and a server error isn't something editing the link can fix anyway. Real
-# incident (2026-10-09): github.com returned 503/504 for plain README links
-# and failed 7 PRs in one day, including one that nearly got merged past a
-# red check it shouldn't have needed to pass. max_retries/retry_wait_time
-# give a transient blip a real chance to clear before falling back to this
-# as the backstop for a longer outage.
-accept = [200, 204, 206, 301, 302, 307, 308, 429, 500, 502, 503, 504]
+accept = [200, 204, 206, 301, 302, 307, 308, 429]
+# More patience for a genuinely transient blip on a third-party host. 5 retries
+# with a 5s wait is about 25s per failing link at worst.
 max_retries = 5
 retry_wait_time = 5
 timeout = 20
