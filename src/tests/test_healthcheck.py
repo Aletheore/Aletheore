@@ -70,10 +70,8 @@ def test_run_healthcheck_checks_endpoints_concurrently():
             call_windows.append((call_start, call_end))
         return _mock_response(200)
 
-    start = time.monotonic()
     with patch("aletheore.healthcheck._NO_REDIRECT_OPENER.open", side_effect=slow_open):
         result = run_healthcheck(endpoints, "http://localhost:5000")
-    elapsed = time.monotonic() - start
 
     assert len(result["results"]) == len(endpoints)
     assert all(entry["reachable"] is True for entry in result["results"])
@@ -89,9 +87,11 @@ def test_run_healthcheck_checks_endpoints_concurrently():
         if a[0] < b[1] and b[0] < a[1]
     ]
     assert overlapping_pairs, f"no overlapping call windows found: {call_windows}"
-    # Loose backstop against genuine full serialization (~400ms) - not the
-    # primary assertion, just a sanity net with real margin over CI noise.
-    assert elapsed < 0.4
+    # No wall-clock assertion on purpose. This used to also assert
+    # elapsed < 0.4, but 8 calls x 50ms is exactly 400ms when fully serial,
+    # so that threshold had no margin: macOS CI runners landed at 0.402 and
+    # 0.44 and failed unrelated PRs. The overlap check above is the real
+    # proof - a serial implementation cannot produce it on any machine.
 
 
 def test_run_healthcheck_substitutes_path_params_and_notes_it():
