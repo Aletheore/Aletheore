@@ -25,6 +25,7 @@ from scan_worker.flash_review import (
     _rank_findings_with_severity,
     _ranking_user_prompt,
     _validate_findings,
+    _verify_or_reanchor_citation,
     build_change_impact_context,
     build_code_evidence_context,
     build_dependency_impact_context,
@@ -508,11 +509,13 @@ def test_validate_findings_logs_every_dropped_finding_with_its_reason(caplog):
     with caplog.at_level(logging.INFO, logger="scan_worker.flash_review"):
         kept = _validate_findings(findings, diff_text, {"a.py": "\n".join(lines)})
 
-    assert kept == [findings[0]]
+    # The out-of-diff finding is dropped; the one whose quoted text is really on line 2 is
+    # moved there instead of dropped (see _verify_or_reanchor_citation).
+    assert kept == [findings[0], {**findings[2], "line": 2}]
     message = caplog.text
-    assert "kept 1/3" in message
+    assert "kept 2/3" in message
     assert "a.py:999" in message
-    assert "a.py:18" in message
+    assert "a.py:18->2" in message
 
 
 def test_validate_findings_stays_quiet_when_nothing_is_dropped(caplog):
@@ -562,7 +565,7 @@ def test_line_citation_content_matches_ignores_suggestion_quoted_text():
     assert _line_citation_content_matches(finding, file_contents) is True
 
 
-def test_validate_findings_drops_finding_whose_quoted_content_is_at_the_wrong_line():
+def test_validate_findings_moves_a_finding_to_the_line_its_quoted_content_is_really_on():
     diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
     diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"
     findings = [
@@ -573,9 +576,89 @@ def test_validate_findings_drops_finding_whose_quoted_content_is_at_the_wrong_li
     file_lines[1] = "a specific buggy string here"  # real location: line 2
     file_contents = {"a.py": "\n".join(file_lines)}
 
-    assert _validate_findings(findings, diff_text, file_contents=file_contents) == [
-        {"file": "a.py", "line": 2, "issue": "right line: 'a specific buggy string here'"}
+    kept = _validate_findings(findings, diff_text, file_contents=file_contents)
+
+    assert [(f["line"], f["issue"]) for f in kept] == [
+        (2, "wrong line: 'a specific buggy string here'"),
+        (2, "right line: 'a specific buggy string here'"),
     ]
+    assert findings[0]["line"] == 15, "the caller's finding must not be mutated"
+
+
+def test_validate_findings_keeps_a_finding_whose_quoted_text_is_nowhere_in_the_file():
+    # The model uses quote marks for paraphrases, UI strings and messages defined in other code.
+    # That is a quote that cannot be checked, not a wrong line: kept exactly as it came.
+    diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
+    diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"
+    finding = {"file": "a.py", "line": 7, "issue": 'The handler "never throws" so errors are hidden'}
+    file_contents = {"a.py": "\n".join(["filler"] * 20)}
+
+    assert _validate_findings([finding], diff_text, file_contents=file_contents) == [finding]
+
+
+def test_validate_findings_moves_to_the_nearest_occurrence_of_the_quoted_text():
+    diff_lines = "\n".join(f" line{i}" for i in range(1, 41))
+    diff_text = f"--- a.py ---\n@@ -1,40 +1,40 @@\n{diff_lines}"
+    file_lines = ["filler"] * 40
+    file_lines[2] = "the buggy literal text"
+    file_lines[29] = "the buggy literal text"
+    # Cited line 20 is 17 lines from the occurrence on line 3 and 10 from the one on line 30,
+    # both outside the 8-line window, so it moves to the nearer one.
+    finding = {"file": "a.py", "line": 20, "issue": "wrong place: 'the buggy literal text'"}
+
+    kept = _validate_findings([finding], diff_text, file_contents={"a.py": "\n".join(file_lines)})
+
+    assert [f["line"] for f in kept] == [30]
+
+
+def test_validate_findings_still_grounds_the_identifiers_of_a_finding_it_moved():
+    # A finding moved to its quoted line is a copy; it must still go through the identifier check.
+    diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
+    diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"
+    file_lines = ["filler"] * 20
+    file_lines[1] = "a specific buggy string here"
+    file_contents = {"a.py": "\n".join(file_lines)}
+    real_symbol = {"file": "a.py", "line": 15, "issue": "moved: 'a specific buggy string here' in `filler`"}
+    invented_symbol = {"file": "a.py", "line": 15, "issue": "moved: 'a specific buggy string here' in `no_such_symbol`"}
+
+    kept = _validate_findings([real_symbol, invented_symbol], diff_text, file_contents=file_contents)
+
+    assert [f["issue"] for f in kept] == [real_symbol["issue"]]
+    assert kept[0]["line"] == 2
+
+
+def test_validate_findings_keeps_the_cited_line_when_the_quoted_text_only_exists_outside_the_diff():
+    # A corrected line has to be somewhere an inline comment can be posted.
+    diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
+    diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"
+    file_lines = ["filler"] * 100
+    file_lines[79] = "the buggy literal text"  # line 80, far from the 20-line hunk
+    finding = {"file": "a.py", "line": 15, "issue": "wrong place: 'the buggy literal text'"}
+
+    assert _validate_findings([finding], diff_text, file_contents={"a.py": "\n".join(file_lines)}) == [finding]
+
+
+def test_validate_findings_still_drops_a_line_past_the_end_of_the_file_with_nothing_to_anchor_it():
+    diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
+    diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"
+    # Cited line 22 is within the diff tolerance but past the real file's 20 lines.
+    nothing_quoted = {"file": "a.py", "line": 22, "issue": "no quote here"}
+    quote_not_in_file = {"file": "a.py", "line": 22, "issue": "absent: 'text that is not in the file'"}
+    file_contents = {"a.py": "\n".join(["filler"] * 20)}
+
+    assert _validate_findings([nothing_quoted, quote_not_in_file], diff_text, file_contents=file_contents) == []
+
+
+def test_verify_or_reanchor_citation_recovers_the_original_hallucinated_line_incident():
+    # case 001-flask-cli-key-quote: the model cited line 561 for text that is at line 798.
+    lines = ["filler"] * 1000
+    lines[797] = 'raise ValueError("when using --cert as SSLContext, --key is not used.")'
+    finding = {"file": "cli.py", "line": 561,
+               "issue": "message is malformed: 'when using --cert as SSLContext'"}
+
+    fixed = _verify_or_reanchor_citation(finding, {"cli.py": "\n".join(lines)})
+
+    assert fixed == {**finding, "line": 798}
 
 
 def test_is_non_substantive_diff_true_for_lockfile_only():
