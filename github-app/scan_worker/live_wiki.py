@@ -949,53 +949,56 @@ def _subsystem_payload_entry(
     return entry
 
 
-# Real chars-per-token for this repo's own subsystem-batch JSON payloads
-# held between 2.145 and 2.168 across real batch sizes 1/2/3/5, measured
-# via Anthropic's count_tokens against claude-haiku-5-5 - the tokenizer
-# that happened to be handy to measure with, NOT the tokenizer of the
-# model that actually processes this prompt (see below). 1.9 sits
-# deliberately BELOW that measured range: estimated_tokens = chars /
-# this constant, so a lower divisor yields a HIGHER (more conservative)
-# estimate for the same text - previously this was set to 2.2, ABOVE the
-# measured range, which silently produced a lower, more optimistic
-# estimate than the repo's own measured ground truth (the opposite of
-# the intended direction; found and fixed via code review before this
-# ever shipped).
-#
-# That measured range itself is a stand-in, not a direct calibration:
-# writing_adapter_for_airview (model_tiers.py) never calls Claude for
-# this call path - it's always deepseek-v4.1-flash via IndieRouter or
-# the direct deepseek-v4-flash fallback (FLASH_MODEL/UPDATE_MODEL above).
-# DeepSeek's own BPE vocabulary could tokenize this JSON-heavy payload
-# shape at a different density than Haiku's, and nothing here measures
-# that - this codebase has already paid for exactly this lesson once
-# (src/aletheore/search_index.py's HOSTED_EMBED_MAX_TOKENS history: eight
-# recalibrations of a guessed chars-per-token ratio before switching to
-# jina-embeddings-v2-base-code's real tokenizer) and this constant
-# reintroduces the guessed-ratio approach rather than reusing that fix,
-# because DeepSeek/IndieRouter expose no equivalent bundled tokenizer
-# here. The extra margin below (1.9 vs the measured 2.145-2.168) is a
-# deliberate hedge against that unmeasured gap, not a substitute for
-# eventually counting DeepSeek's real tokens the same way search_index.py
-# does for Jina's.
-_SUBSYSTEM_BATCH_CHARS_PER_TOKEN = 1.9
+# Real chars-per-token for deepseek-v4.1-flash via IndieRouter - the one
+# and only model this call path uses in production (writing_adapter_for_
+# airview routes here exclusively; the direct-DeepSeek-API branch in
+# model_tiers.py only fires if INDIEROUTER_API_KEY is ever unset, which
+# production treats as a config error, not a live alternate path).
+# Measured directly, not estimated: 4 real single-target batches against
+# this repo's own clusters (12/16/19/60 files), reading the real
+# `usage.prompt_tokens` IndieRouter's API actually reported back via
+# OpenAICompatibleAdapter's on_usage, then a linear fit of prompt_tokens
+# against user-prompt chars across those 4 points (isolates the
+# roughly-constant ~929-token system-prompt overhead from the per-char
+# rate) - not the single-tokenizer-count shortcut used elsewhere, because
+# there is no bundled DeepSeek tokenizer to call locally the way
+# jina-embeddings-v2-base-code's is bundled for search_index.py's
+# HOSTED_EMBED_MAX_TOKENS (see that constant's own history: eight
+# recalibrations of a guessed ratio before switching to real counting -
+# this measures the real model's real usage instead of guessing a ratio
+# at all, same end result by a different method). Fit predicted all 4
+# actual values within ~2%. Real ratio: 2.9561 chars/token - notably
+# less dense than an earlier, wrong-tokenizer draft of this constant
+# measured against claude-haiku-5-5 (2.145-2.168), which this call path
+# never actually runs on; that number was real for Haiku, just not for
+# the model that processes this prompt. 2.6 sits deliberately below the
+# measured 2.9561: estimated_tokens = chars / this constant, so a lower
+# divisor yields a higher, more conservative estimate for the same text -
+# the margin covers the 4-sample fit's own slack and real content this
+# repo's own clusters didn't happen to exercise.
+_SUBSYSTEM_BATCH_CHARS_PER_TOKEN = 2.6
 
-# The real, measured exposure that motivated this (not a hypothetical):
-# Veridion's own two biggest clusters (86 + 66 files) already produce a
-# 94,689-token batch (by the Haiku-tokenizer measurement above) at
-# today's IndieRouter batch size of 2, and the non-IndieRouter fixed
-# batch size of 5 lands at 109,430. Those numbers were originally framed
-# against Claude Haiku 5.5's 100,000-token pricing cliff ($0.10/$0.50 ->
-# $0.50/$2.50 per MTok above it) - a real boundary, but not one this call
-# path's actual model (DeepSeek, via IndieRouter or direct) is subject
-# to. The real, documented risk for DeepSeek is the silent-truncation
-# failure mode SUBSYSTEM_WRITE_BATCH_SIZE/_subsystem_write_batch_size
-# were originally tuned for (an oversized prompt silently stopped
-# finishing - see MAX_SYMBOLS_PER_FILE's docstring in wiki_mapping.py),
-# where DeepSeek's own real failure threshold has never been measured.
-# 80,000 is kept as a size-based proxy bound for that risk - comfortably
-# under the Haiku-measured numbers above with the fixed count caps kept
-# as a secondary limit (concurrency/latency, not the primary guard).
+# The real, measured exposure that motivated this batching change (not a
+# hypothetical): forcing 4 of this repo's real oversized clusters into
+# one combined call - reproducing the non-IndieRouter direct-fallback's
+# fixed batch-of-5 shape, not today's real IndieRouter batch-of-2 - sent
+# a real ~57,500-token request (by the measurement above) and silently
+# dropped one of the 4 subsystems entirely after both retries, live-
+# reproducing the historical Flask 83->14-file regression
+# SUBSYSTEM_WRITE_BATCH_SIZE/_subsystem_write_batch_size were originally
+# tuned for (see MAX_SYMBOLS_PER_FILE's docstring in wiki_mapping.py).
+# Today's real IndieRouter-only production path never actually combines
+# more than 2 subsystems per call regardless of this budget - max_count
+# already prevents the 4-item shape that failed from occurring at all -
+# so this budget's real job today is the oversized-single-cluster edge
+# case (logged, see _pack_subsystem_batches) and a safety margin against
+# this repo's clusters growing large enough that even 2 together cross
+# it (today's real 2 biggest clean clusters measure ~49,800 tokens
+# combined, comfortably under this). 80,000 is kept well above that
+# today, not pinned to any pricing cliff - DeepSeek has none at this
+# boundary - with the fixed count cap kept as the actual day-to-day
+# guard against the failure mode above, this budget as insurance against
+# repo growth eroding that margin silently.
 SUBSYSTEM_BATCH_TOKEN_BUDGET = 80_000
 
 
