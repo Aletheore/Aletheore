@@ -949,30 +949,53 @@ def _subsystem_payload_entry(
     return entry
 
 
-# Calibrated against this repo's own real subsystem-batch JSON payloads -
-# measured, not estimated: chars-per-token held between 2.145 and 2.168
-# across real batch sizes 1/2/3/5, via Anthropic's count_tokens against
-# claude-haiku-5-5. 2.2 sits deliberately above that measured range - a
-# LOWER chars-per-token means a HIGHER estimated token count for the same
-# text, which is the safe direction for a packer deciding whether a batch
-# is full.
-_SUBSYSTEM_BATCH_CHARS_PER_TOKEN = 2.2
+# Real chars-per-token for this repo's own subsystem-batch JSON payloads
+# held between 2.145 and 2.168 across real batch sizes 1/2/3/5, measured
+# via Anthropic's count_tokens against claude-haiku-5-5 - the tokenizer
+# that happened to be handy to measure with, NOT the tokenizer of the
+# model that actually processes this prompt (see below). 1.9 sits
+# deliberately BELOW that measured range: estimated_tokens = chars /
+# this constant, so a lower divisor yields a HIGHER (more conservative)
+# estimate for the same text - previously this was set to 2.2, ABOVE the
+# measured range, which silently produced a lower, more optimistic
+# estimate than the repo's own measured ground truth (the opposite of
+# the intended direction; found and fixed via code review before this
+# ever shipped).
+#
+# That measured range itself is a stand-in, not a direct calibration:
+# writing_adapter_for_airview (model_tiers.py) never calls Claude for
+# this call path - it's always deepseek-v4.1-flash via IndieRouter or
+# the direct deepseek-v4-flash fallback (FLASH_MODEL/UPDATE_MODEL above).
+# DeepSeek's own BPE vocabulary could tokenize this JSON-heavy payload
+# shape at a different density than Haiku's, and nothing here measures
+# that - this codebase has already paid for exactly this lesson once
+# (src/aletheore/search_index.py's HOSTED_EMBED_MAX_TOKENS history: eight
+# recalibrations of a guessed chars-per-token ratio before switching to
+# jina-embeddings-v2-base-code's real tokenizer) and this constant
+# reintroduces the guessed-ratio approach rather than reusing that fix,
+# because DeepSeek/IndieRouter expose no equivalent bundled tokenizer
+# here. The extra margin below (1.9 vs the measured 2.145-2.168) is a
+# deliberate hedge against that unmeasured gap, not a substitute for
+# eventually counting DeepSeek's real tokens the same way search_index.py
+# does for Jina's.
+_SUBSYSTEM_BATCH_CHARS_PER_TOKEN = 1.9
 
 # The real, measured exposure that motivated this (not a hypothetical):
 # Veridion's own two biggest clusters (86 + 66 files) already produce a
-# 94,689-token batch at today's IndieRouter batch size of 2 - within
-# ~5,000 tokens of Claude Haiku 5.5's 100,000-token cheap-tier boundary
-# ($0.10/$0.50 -> $0.50/$2.50 per MTok above it) - and the non-IndieRouter
-# fixed batch size of 5 lands at 109,430, already over it.
-# SUBSYSTEM_WRITE_BATCH_SIZE/_subsystem_write_batch_size above were tuned
-# for DeepSeek's own failure mode (an oversized prompt silently stopped
+# 94,689-token batch (by the Haiku-tokenizer measurement above) at
+# today's IndieRouter batch size of 2, and the non-IndieRouter fixed
+# batch size of 5 lands at 109,430. Those numbers were originally framed
+# against Claude Haiku 5.5's 100,000-token pricing cliff ($0.10/$0.50 ->
+# $0.50/$2.50 per MTok above it) - a real boundary, but not one this call
+# path's actual model (DeepSeek, via IndieRouter or direct) is subject
+# to. The real, documented risk for DeepSeek is the silent-truncation
+# failure mode SUBSYSTEM_WRITE_BATCH_SIZE/_subsystem_write_batch_size
+# were originally tuned for (an oversized prompt silently stopped
 # finishing - see MAX_SYMBOLS_PER_FILE's docstring in wiki_mapping.py),
-# never for a hard pricing cliff - a token budget bounds that risk
-# directly; the fixed count caps are kept only as a secondary limit (on
-# concurrency/latency), not the primary guard against this. The margin
-# below 100,000 covers the chars-per-token estimate's own slack and the
-# (small, measured roughly constant across batch sizes) system-prompt
-# overhead this budget doesn't separately account for.
+# where DeepSeek's own real failure threshold has never been measured.
+# 80,000 is kept as a size-based proxy bound for that risk - comfortably
+# under the Haiku-measured numbers above with the fixed count caps kept
+# as a secondary limit (concurrency/latency, not the primary guard).
 SUBSYSTEM_BATCH_TOKEN_BUDGET = 80_000
 
 
