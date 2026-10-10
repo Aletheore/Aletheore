@@ -1907,7 +1907,7 @@ def _validate_findings(
     if out_of_diff or content_mismatch or identifier_mismatch or reanchored:
         logger.info(
             "flash review grounding: kept %d/%d finding(s); dropped %d outside the diff (%s), "
-            "%d whose cited line is past the end of the file with nothing quoted to anchor it (%s), "
+            "%d whose cited line is past the end of the file and could not be re-anchored (%s), "
             "%d whose named symbol doesn't appear in the file (%s); "
             "moved %d to the line their quoted text is really on (%s)",
             len(kept),

@@ -611,6 +611,22 @@ def test_validate_findings_moves_to_the_nearest_occurrence_of_the_quoted_text():
     assert [f["line"] for f in kept] == [30]
 
 
+def test_validate_findings_still_grounds_the_identifiers_of_a_finding_it_moved():
+    # A finding moved to its quoted line is a copy; it must still go through the identifier check.
+    diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
+    diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"
+    file_lines = ["filler"] * 20
+    file_lines[1] = "a specific buggy string here"
+    file_contents = {"a.py": "\n".join(file_lines)}
+    real_symbol = {"file": "a.py", "line": 15, "issue": "moved: 'a specific buggy string here' in `filler`"}
+    invented_symbol = {"file": "a.py", "line": 15, "issue": "moved: 'a specific buggy string here' in `no_such_symbol`"}
+
+    kept = _validate_findings([real_symbol, invented_symbol], diff_text, file_contents=file_contents)
+
+    assert [f["issue"] for f in kept] == [real_symbol["issue"]]
+    assert kept[0]["line"] == 2
+
+
 def test_validate_findings_keeps_the_cited_line_when_the_quoted_text_only_exists_outside_the_diff():
     # A corrected line has to be somewhere an inline comment can be posted.
     diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
