@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import math
 from datetime import datetime
@@ -590,7 +591,12 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
             # isn't the one that gets released (see release_paid_setup's
             # docstring).
             try:
-                await release_paid_setup(pool, installation_id, paid_setup_claimed_at)
+                # Shielded: this is itself an await inside an except block, so a second cancellation
+                # (the same task's cancellation re-delivered, or a shutdown after a first one) would
+                # raise CancelledError right here and abandon the release half-done - the claim
+                # stuck non-NULL, the exact failure this handler exists to prevent. Shielded, the
+                # release runs to completion even if this task is cancelled again.
+                await asyncio.shield(release_paid_setup(pool, installation_id, paid_setup_claimed_at))
             except Exception as release_exc:
                 # Most plausible exactly when the original failure above
                 # was itself a DB outage - the same outage that broke the

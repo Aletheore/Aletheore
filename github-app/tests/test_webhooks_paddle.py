@@ -3135,6 +3135,42 @@ async def test_release_paid_setup_failure_during_cleanup_alerts_but_still_raises
 
 
 @pytest.mark.asyncio
+async def test_paid_setup_release_still_completes_if_the_task_is_cancelled_again_mid_release(pool, monkeypatch):
+    """Code-review finding: the compensating release_paid_setup is itself an
+    await inside the except block, so a second cancellation delivered while it
+    was in flight raised CancelledError at that await and abandoned the release
+    half-done - the claim stayed stuck non-NULL, the exact failure the
+    BaseException handling exists to prevent. The release is shielded, so it
+    runs to completion even though the task is cancelled again."""
+    from app_server.webhooks import paddle as paddle_module
+
+    started, proceed, finished = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def slow_release(*args, **kwargs):
+        started.set()
+        await proceed.wait()
+        finished.set()
+
+    monkeypatch.setattr(paddle_module, "release_paid_setup", slow_release)
+    cancelling_queue = MagicMock()
+    cancelling_queue.enqueue.side_effect = asyncio.CancelledError()
+    await upsert_installation(pool, 218, "acme")
+    payload = _subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", 218)
+
+    task = asyncio.ensure_future(
+        handle_paddle_webhook_event(payload, pool, "redis://unused", queue=cancelling_queue)
+    )
+    await asyncio.wait_for(started.wait(), 5)
+    task.cancel()  # a second cancellation, while the release is in flight
+    await asyncio.sleep(0)
+    proceed.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.wait_for(finished.wait(), 5)
+
+
+@pytest.mark.asyncio
 async def test_release_paid_setup_does_not_clear_a_claim_retaken_after_it(pool):
     """Flash Review HIGH finding: release_paid_setup used to unconditionally
     NULL paid_setup_completed_at, with nothing tying the release to the
