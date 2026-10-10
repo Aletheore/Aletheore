@@ -167,15 +167,49 @@ def stale_models(as_of: date | None = None, max_age_days: int = STALE_PRICE_MAX_
     reference = as_of or date.today()
     stale = []
     for model, rates in MODEL_RATES_PER_MILLION_USD.items():
-        verified_at = date.fromisoformat(rates["verified_at"])
+        # A malformed/missing verified_at on ANY entry (even one that's
+        # never actually billed) used to raise uncaught from date.fromisoformat
+        # and crash this whole scan - which cost_for_usage calls for every
+        # model until it's been warned once, so one bad entry broke cost
+        # accounting for every model, not just itself. Treat it as stale
+        # (the conservative direction this file's own rule already prefers)
+        # and keep scanning instead.
+        try:
+            verified_at = date.fromisoformat(rates["verified_at"])
+        except (KeyError, TypeError, ValueError):
+            logger.warning("model %s has a missing or malformed verified_at - treating as stale", model)
+            stale.append(model)
+            continue
         if (reference - verified_at).days > max_age_days:
             stale.append(model)
     return stale
 
 
 def cost_for_usage(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    rates = MODEL_RATES_PER_MILLION_USD[model]
-    if model not in _warned_stale_models and model in stale_models():
+    rates = MODEL_RATES_PER_MILLION_USD.get(model)
+    if rates is None:
+        # Real risk, not hypothetical: this codebase swaps LLM models/
+        # providers often (GLM/Haiku/DeepSeek/Luna, see model_tiers.py's
+        # own history), and none of this function's call sites catch an
+        # exception from it - a model added there without a matching entry
+        # here used to KeyError straight out of a usage-accounting
+        # callback mid-scan-job. Degrade instead: this file's own rule is
+        # "overestimating cost is the safe direction", so price an unknown
+        # model at the highest input/output rate of any model actually in
+        # the table, rather than crashing or silently costing $0 - a real
+        # spend cap still gets enforced conservatively either way.
+        if model not in _warned_stale_models:
+            logger.warning(
+                "model %s has no entry in MODEL_RATES_PER_MILLION_USD - pricing it at the "
+                "highest known rate as a conservative fallback; add a real entry",
+                model,
+            )
+            _warned_stale_models.add(model)
+        rates = {
+            "input": max(r["input"] for r in MODEL_RATES_PER_MILLION_USD.values()),
+            "output": max(r["output"] for r in MODEL_RATES_PER_MILLION_USD.values()),
+        }
+    elif model not in _warned_stale_models and model in stale_models():
         logger.warning(
             "price for %s was last verified on %s, more than %d days ago - "
             "confirm it's still accurate against the provider's pricing page",

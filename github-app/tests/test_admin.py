@@ -428,6 +428,32 @@ async def test_admin_page_surfaces_base_credit_allotment(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_admin_page_uses_the_annual_credit_figure_for_an_annual_subscriber(pool, monkeypatch):
+    # Code-review finding: this page never even fetched billing_interval
+    # (unlike dashboard.py's get_credits, which fetched it but didn't pass
+    # it through either) - base_credit_allotment_usd always used the
+    # monthly figure, overstating an annual AIR subscriber's real
+    # progress-bar denominator by $3 (plus any seat bonus).
+    from app_server.llm_cost import base_credit_for_plan
+
+    client = await _logged_in_client(pool, monkeypatch, plan="air")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test_annual", "ctm_test_annual")
+
+    def _annual_subscription(api_key, subscription_id):
+        return {"next_billed_at": "2027-10-10T00:00:00Z", "billing_cycle": {"interval": "year"}}
+
+    monkeypatch.setattr("app_server.admin.get_paddle_subscription", _annual_subscription)
+
+    async with client:
+        response = await client.get("/admin/octocat/hello-world")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["base_credit_allotment_usd"] == base_credit_for_plan("air", 0, is_annual=True)
+    assert body["base_credit_allotment_usd"] != pytest.approx(PLAN_BASE_CREDIT_USD["air"])
+
+
+@pytest.mark.asyncio
 async def test_admin_page_surfaces_subscription_renewal_date(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch, plan="air")
     await add_paddle_ids_to_installation(pool, 100, "sub_test_renewal", "ctm_test_renewal")

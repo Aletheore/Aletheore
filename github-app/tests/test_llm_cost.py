@@ -126,6 +126,50 @@ def test_cost_for_usage_does_not_warn_for_freshly_verified_model(monkeypatch, ca
     assert caplog.records == []
 
 
+def test_cost_for_usage_unknown_model_does_not_crash_and_prices_conservatively(monkeypatch, caplog):
+    """Code-review finding: a bare dict lookup used to KeyError straight out
+    of a usage-accounting callback the moment a model got added to
+    model_tiers.py without a matching MODEL_RATES_PER_MILLION_USD entry -
+    a real risk given how often this codebase swaps models/providers. An
+    unknown model must degrade to the highest known rate (this file's own
+    "overestimate is the safe direction" rule), not crash or cost $0."""
+    monkeypatch.setattr(llm_cost, "_warned_stale_models", set())
+    highest_input = max(r["input"] for r in llm_cost.MODEL_RATES_PER_MILLION_USD.values())
+    highest_output = max(r["output"] for r in llm_cost.MODEL_RATES_PER_MILLION_USD.values())
+
+    with caplog.at_level("WARNING"):
+        cost = cost_for_usage("some-brand-new-model-nobody-priced-yet", 1_000_000, 1_000_000)
+
+    assert cost == pytest.approx(highest_input + highest_output)
+    assert any("some-brand-new-model-nobody-priced-yet" in r.message for r in caplog.records)
+
+
+def test_cost_for_usage_unknown_model_warns_only_once(monkeypatch, caplog):
+    monkeypatch.setattr(llm_cost, "_warned_stale_models", set())
+
+    with caplog.at_level("WARNING"):
+        cost_for_usage("another-unpriced-model", 1000, 1000)
+        cost_for_usage("another-unpriced-model", 1000, 1000)
+
+    warnings = [r for r in caplog.records if "another-unpriced-model" in r.message]
+    assert len(warnings) == 1
+
+
+def test_stale_models_tolerates_a_malformed_verified_at_instead_of_crashing(monkeypatch):
+    """Code-review finding: date.fromisoformat used to raise uncaught on a
+    malformed verified_at on ANY entry - even one never actually billed -
+    which crashed cost accounting for every model, not just the broken
+    one. A malformed entry is now treated as stale (the conservative
+    direction) instead."""
+    monkeypatch.setitem(
+        llm_cost.MODEL_RATES_PER_MILLION_USD,
+        "some-model-with-a-bad-date",
+        {"input": 1.0, "output": 1.0, "verified_at": "not-a-real-date"},
+    )
+
+    assert "some-model-with-a-bad-date" in stale_models(as_of=date(2026, 7, 23))
+
+
 def test_crossed_spend_warning_threshold_fires_on_the_crossing_increment():
     """A $10 increment against a $15 cap crosses the 30% ($4.50) threshold
     partway through - previous total ($2) was under it, new total ($12) is

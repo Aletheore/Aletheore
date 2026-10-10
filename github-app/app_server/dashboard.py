@@ -355,7 +355,16 @@ async def get_credits(installation_id: int, request: Request):
         "plan": installation["plan"],
         "base_credit_remaining_usd": float(installation["base_credit_remaining_usd"]),
         "topup_credit_balance_usd": float(installation["topup_credit_balance_usd"]),
-        "base_credit_allotment_usd": base_credit_for_plan(installation["plan"], extra_seats),
+        # Code-review finding: billing_interval was computed above and
+        # returned in this same response, but never threaded into
+        # base_credit_for_plan's is_annual (default False) - an annual AIR
+        # subscriber saw the monthly credit figure here sitting directly
+        # next to "billing_interval": "year" in the same payload, $3+
+        # seat-bonus higher than the real stored balance
+        # reset_billing_period_credit(is_annual=True) actually uses.
+        "base_credit_allotment_usd": base_credit_for_plan(
+            installation["plan"], extra_seats, is_annual=(billing_interval == "year")
+        ),
         "paddle_customer_id": installation.get("paddle_customer_id"),
         "paddle_subscription_id": subscription_id,
         "subscription_renews_at": subscription_renews_at,

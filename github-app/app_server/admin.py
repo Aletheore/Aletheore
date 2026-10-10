@@ -725,6 +725,7 @@ async def admin_page(org: str, repo: str, request: Request):
     settings = get_settings()
     checkout_installation_token = sign_checkout_installation_id(installation_id, settings.session_secret)
     subscription_renews_at = None
+    billing_interval = None
     subscription_id = installation.get("paddle_subscription_id")
     if subscription_id:
         # Best-effort, matching _uninitialized_repos_for_installation's
@@ -733,8 +734,17 @@ async def admin_page(org: str, repo: str, request: Request):
         try:
             subscription = await asyncio.to_thread(get_paddle_subscription, settings.paddle_api_key, subscription_id)
             subscription_renews_at = subscription.get("next_billed_at")
+            # Code-review finding: base_credit_allotment_usd below used to
+            # always call base_credit_for_plan with is_annual defaulted to
+            # False - this page didn't even fetch billing_interval to
+            # notice the mismatch, unlike dashboard.py (same underlying
+            # bug there, which did have the data and just never passed it
+            # through). An annual AIR subscriber's progress-bar
+            # denominator here was $3+seat-bonus too high.
+            billing_interval = (subscription.get("billing_cycle") or {}).get("interval")
         except Exception:
             subscription_renews_at = None
+            billing_interval = None
     return {
         "installation": installation,
         "tokens": tokens,
@@ -755,7 +765,9 @@ async def admin_page(org: str, repo: str, request: Request):
         "flash_reviews_month_to_date": flash_reviews_month_to_date,
         "base_credit_remaining_usd": float(installation["base_credit_remaining_usd"]),
         "topup_credit_balance_usd": float(installation["topup_credit_balance_usd"]),
-        "base_credit_allotment_usd": base_credit_for_plan(installation["plan"], extra_seats),
+        "base_credit_allotment_usd": base_credit_for_plan(
+            installation["plan"], extra_seats, is_annual=(billing_interval == "year")
+        ),
         "checkout_installation_token": checkout_installation_token,
         "credit_topup_price_id": CREDIT_TOPUP_PRICE_ID,
         "subscription_renews_at": subscription_renews_at,
