@@ -20,7 +20,7 @@ What it brought live, since `9cf6f24e` (the 2026-10-09 worker deploy below):
 - #1013: the Python exception-mismatch rule no longer reads prose like "can raise an error" as an exception name,
   understands dotted and tuple handlers, and treats `Exception` as covering everything (4 of the rule's 8 findings
   in that run were false positives, none after).
-- #1012: the paid-setup job dedup holds for Paddle's three-day retry window (explicit `result_ttl`), the claim is
+- #1012: the paid-setup job deduplication holds for Paddle's three-day retry window (explicit `result_ttl`), the claim is
   released on request cancellation, and that release is shielded against a second cancellation.
 - #1015: Paddle webhook hardening (an oversized `ts` is rejected instead of crashing before verification, the HMAC
   hashes the header's own `ts` string, the IP allowlist no longer caches an empty list or trusts a stale one past
@@ -36,7 +36,7 @@ Verified live: all five recreated services `healthy`; zero lines matching `error
 recreated container's logs since its restart; `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`;
 three RQ workers registered; and the new code is in the running containers, not just the checkout
 (`asyncio.shield` in the app-server's `webhooks/paddle.py`, `_unwrap_ipv4_mapped` in its IP allowlist, `_median_rates`
-in `llm_cost.py` in every container, `_verify_or_reanchor_citation`, `_python_raised_types` and
+in `llm_cost.py` in every container, the citation re-anchoring helper, `_python_raised_types` and
 `_pack_subsystem_batches` in the workers, `scheduler` and `health-worker` included). A direct call inside the
 app-server container rejected an oversized `ts` without a crash, verified a correctly signed webhook, and priced an
 unmapped model at $1.43 per million tokens each way where the old fallback gave $90. The cross-file check

@@ -24,7 +24,7 @@ Commit `56c44a8c`, tagged `github-app-deploy-2026-10-10`, no migrations. `app-se
 `health-worker` and `scheduler` were rebuilt and rolled (workers one at a time while idle); `jina-embed` stays on
 `e3182a9f`. Headlines: Flash Review re-anchors a mis-cited finding to its quoted line instead of dropping it (#1011,
 recall on the 13-PR corpus about 50% to 59%), the Python exception-mismatch rule stops producing garbled false
-positives (#1013), the paid-setup job dedup now outlasts Paddle's retry window and its claim release survives a second
+positives (#1013), the paid-setup job deduplication now outlasts Paddle's retry window and its claim release survives a second
 cancellation (#1012), Paddle webhook and IP allowlist hardening plus an unknown-model cost fallback priced at the
 table median instead of the highest rate (#1015), AIRview batches capped by token budget (#1010). See the snapshot in
 `docs/operations/DEPLOYMENT-VERIFICATION.md` for what was verified live.
