@@ -56,3 +56,31 @@ def test_non_utf8_body_rejected_not_raised():
     ts = int(time.time())
     header = f"ts={ts};h1=deadbeef"
     assert verify_paddle_signature(body, header, SECRET) is False
+
+
+def test_oversized_timestamp_rejected_not_raised():
+    # Code-review finding: a ts with a few hundred digits parses fine as a
+    # Python int (ValueError only fires past CPython's ~4300-digit limit)
+    # but is far larger than a C double can hold - abs(time.time() - ts)
+    # used to raise OverflowError uncaught, crashing the handler on any
+    # unauthenticated request with an oversized ts, before signature
+    # verification ever ran.
+    body = b'{"event_type": "subscription.created"}'
+    oversized_ts = "9" * 400
+    header = f"ts={oversized_ts};h1=deadbeef"
+    assert verify_paddle_signature(body, header, SECRET) is False
+
+
+def test_ts_with_a_leading_zero_still_verifies():
+    # Code-review finding: the HMAC used to be recomputed over the
+    # parsed-and-re-stringified int (f"{ts}"), not the header's own ts
+    # string verbatim. int("0" + str(ts)) == ts, so a ts arriving with a
+    # leading zero would have hashed a byte string Paddle never actually
+    # signed, rejecting a genuinely valid, correctly-timed webhook.
+    body = b'{"event_type": "subscription.created"}'
+    ts = int(time.time())
+    padded_ts_str = f"0{ts}"
+    signed_payload = f"{padded_ts_str}:{body.decode()}"
+    digest = hmac.new(SECRET.encode(), signed_payload.encode(), hashlib.sha256).hexdigest()
+    header = f"ts={padded_ts_str};h1={digest}"
+    assert verify_paddle_signature(body, header, SECRET) is True

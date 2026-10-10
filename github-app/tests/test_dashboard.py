@@ -424,6 +424,40 @@ async def test_credits_keeps_the_real_subscription_id_when_the_paddle_lookup_fai
 
 
 @pytest.mark.asyncio
+async def test_credits_uses_the_annual_credit_figure_for_an_annual_subscriber(pool, monkeypatch):
+    # Code-review finding: billing_interval was already fetched and
+    # returned in this same response, but never threaded into
+    # base_credit_for_plan's is_annual (default False) - an annual AIR
+    # subscriber saw the monthly figure (18.00 + seat bonus) here sitting
+    # directly next to "billing_interval": "year" in the same payload,
+    # instead of the real, lower annual figure (15.00 + seat bonus) their
+    # stored balance actually resets to.
+    from app_server.llm_cost import base_credit_for_plan
+
+    await upsert_installation(pool, 738, "annual-org")
+    await set_installation_plan(pool, 738, "air")
+    await insert_repo_history(
+        pool, 738, "annual-org/app", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+    await add_paddle_ids_to_installation(pool, 738, "sub_test_annual", "ctm_test_annual")
+
+    def _annual_subscription(api_key, subscription_id):
+        return {"next_billed_at": "2027-10-10T00:00:00Z", "billing_cycle": {"interval": "year"}}
+
+    monkeypatch.setattr("app_server.dashboard.get_paddle_subscription", _annual_subscription)
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[738])
+    async with client:
+        response = await client.get("/app/installations/738/credits")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["billing_interval"] == "year"
+    assert body["base_credit_allotment_usd"] == base_credit_for_plan("air", 0, is_annual=True)
+    assert body["base_credit_allotment_usd"] != base_credit_for_plan("air", 0, is_annual=False)
+
+
+@pytest.mark.asyncio
 async def test_credits_reports_this_installations_own_real_repo_count(pool, monkeypatch):
     # Plan is set per installation, not per repo, so the mockup's own
     # "1 repo on Flash, 1 on the free tier" line (repo-level plan
