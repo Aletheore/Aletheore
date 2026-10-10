@@ -305,6 +305,42 @@ def _callable_handed_to_concurrency(added_lines: list[str], name: str) -> bool:
     return False
 
 
+# Python's exception-mismatch rule below used to read the dependency with
+# `\braise\s+(\w+)` and the caller with `\bexcept\s+(\w+)`. On the 13 real PRs of
+# Experiment 8 it produced 5 confirmed false positives in 8 findings, in three ways:
+#   * `\braise\s+(\w+)` matches prose in a docstring or comment ("can raise an error"),
+#     recording "an" as the exception: "submit raises an, but ...".
+#   * `except queue.Empty:` was read as `except queue`, a different type from the Empty the
+#     dependency raises.
+#   * any caught type not in `raised` was flagged, so `except Exception:` (which handles
+#     everything) and `except (A, B):` (which still handles A) were reported as mismatches.
+# The Java rule below was fixed for the last two when #725 landed; this brings Python level.
+_PY_RAISE_RE = re.compile(r"(?:^|[:;])[ \t]*raise[ \t]+([A-Za-z_][\w.]*)", re.M)
+_PY_EXCEPT_CLAUSE_RE = re.compile(r"\bexcept\*?[ \t]+([^:\n]+?)[ \t]*:")
+_PY_BROAD_EXCEPTIONS = ("Exception", "BaseException")
+
+
+def _python_raised_types(dependency: str) -> list[str]:
+    """Exception class names a Python dependency really raises: a `raise X` statement (at the start
+    of a line or after a `:`/`;`, never mid-sentence prose), by its last dotted component, and only
+    when that looks like a class (capitalised) - `raise exc` re-raises a variable of unknown type."""
+    names = {name.rsplit(".", 1)[-1] for name in _PY_RAISE_RE.findall(dependency)}
+    return sorted(name for name in names if name[:1].isupper())
+
+
+def _python_caught_types(text: str) -> list[str]:
+    """Exception class names caught by the `except` clauses in text, in order. Handles dotted names
+    (`queue.Empty` -> Empty), tuples (`(A, B)`), `as name` and `except*`."""
+    caught: list[str] = []
+    for clause in _PY_EXCEPT_CLAUSE_RE.findall(text):
+        clause = re.sub(r"[ \t]+as[ \t]+\w+$", "", clause.strip()).strip().strip("()")
+        for part in clause.split(","):
+            part = part.strip()
+            if re.fullmatch(r"[A-Za-z_][\w.]*", part):
+                caught.append(part.rsplit(".", 1)[-1])
+    return caught
+
+
 def _check_reference_at_call(
     file: str,
     source: str,
@@ -319,16 +355,17 @@ def _check_reference_at_call(
     removed_lines = hunk.removed
     added_lines = hunk.added
 
-    raised = sorted(set(re.findall(r"\braise\s+([A-Za-z_]\w*)", dependency)))
+    raised = _python_raised_types(dependency)
     if raised:
+        covers = set(raised) | set(_PY_BROAD_EXCEPTIONS)
         if any(
-            re.search(rf"\bexcept\s+{re.escape(error)}\b", line) for line in removed_lines for error in raised
+            error in _python_caught_types(line) for line in removed_lines for error in raised
         ) and not any(
-            re.search(rf"\bexcept\s+{re.escape(error)}\b", line)
+            caught in covers
             # split("\n"), never splitlines() - see _line_number_near_hunk's
             # docstring; same real \n-based hunk line numbers, same bug.
             for line in source.split("\n")[max(0, hunk.new_start - 1 - DIFF_HUNK_TOLERANCE) : hunk.new_end + DIFF_HUNK_TOLERANCE]
-            for error in raised
+            for caught in _python_caught_types(line)
         ):
             return _finding(
                 file,
@@ -337,13 +374,16 @@ def _check_reference_at_call(
                 f"Restore handling for {raised[0]} or handle the error at this boundary.",
             )
 
-        catches = re.findall(r"\bexcept\s+([A-Za-z_]\w*)", "\n".join(added_lines))
-        wrong = [caught for caught in catches if caught not in raised]
-        if wrong:
+        # Flagged only when NONE of the caught types handles what the dependency raises: a tuple that
+        # still includes it, or a broad Exception/BaseException, still handles it (same any(...)
+        # semantics as the Java rule). No attempt to recognise a custom exception hierarchy without
+        # real type information - that would be guessing.
+        caught = _python_caught_types("\n".join(added_lines))
+        if caught and not any(c in covers for c in caught):
             return _finding(
                 file,
-                _line_number_near_hunk(source, f"except {wrong[0]}", hunk) or call_line,
-                f"{name} raises {', '.join(raised)}, but the changed handler catches {wrong[0]} instead.",
+                _line_number_near_hunk(source, f"except {caught[0]}", hunk) or call_line,
+                f"{name} raises {', '.join(raised)}, but the changed handler catches {caught[0]} instead.",
                 f"Catch {raised[0]} or translate the dependency error before handling it.",
             )
 
