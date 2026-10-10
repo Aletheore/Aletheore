@@ -1223,6 +1223,94 @@ def test_generation_worker_count_and_batch_sizes_use_indierouter_values_when_con
     assert _file_page_write_batch_size() == FILE_PAGE_WRITE_BATCH_SIZE == 5
 
 
+def _subsystem_target(cluster_id: int, file_count: int, chars_per_file: int):
+    from scan_worker.live_wiki import _SubsystemWriteTarget
+
+    files = [
+        {
+            "path": f"c{cluster_id}/f{i}.py",
+            "language": "python",
+            "key_symbols": [{"name": "x" * chars_per_file, "line": 1}],
+        }
+        for i in range(file_count)
+    ]
+    brief = {"cluster_id": cluster_id, "files": files, "fallback_name": f"Cluster{cluster_id}"}
+    return _SubsystemWriteTarget(cluster={"id": cluster_id}, brief=brief, name=f"Cluster{cluster_id}")
+
+
+def test_pack_subsystem_batches_splits_on_token_budget_not_just_count():
+    # The real bug this fixes: Veridion's own two biggest AIRview clusters
+    # (86 + 66 files) each fit comfortably under Haiku 5.5's 100K-token
+    # cheap tier alone, but the fixed count cap (max_count=2) forced them
+    # into the SAME batch anyway, producing a 94,689-token request - and
+    # max_count=5 (the non-IndieRouter default) landed at 109,430, already
+    # over. A token budget, not just a count, has to be what closes a
+    # batch.
+    from scan_worker.live_wiki import _pack_subsystem_batches, _subsystem_payload_entry, _SUBSYSTEM_BATCH_CHARS_PER_TOKEN
+
+    evidence = {"repository": {"modules": []}}
+    big_a = _subsystem_target(0, file_count=5, chars_per_file=2000)
+    big_b = _subsystem_target(1, file_count=5, chars_per_file=2000)
+    small = _subsystem_target(2, file_count=1, chars_per_file=10)
+
+    def _entry_tokens(target) -> float:
+        return len(json.dumps(_subsystem_payload_entry(evidence, target))) / _SUBSYSTEM_BATCH_CHARS_PER_TOKEN
+
+    # Room for one big target plus the small one, not two big targets.
+    budget = int(_entry_tokens(big_a) * 1.5)
+
+    batches = _pack_subsystem_batches(evidence, [big_a, big_b, small], token_budget=budget, max_count=5)
+
+    batch_of = {id(t): i for i, batch in enumerate(batches) for t in batch}
+    assert batch_of[id(big_a)] != batch_of[id(big_b)], "max_count=5 alone would have merged these - budget must split them"
+    for batch in batches:
+        assert len(batch) == 1 or sum(_entry_tokens(t) for t in batch) <= budget
+
+
+def test_pack_subsystem_batches_never_drops_a_target_too_big_for_the_budget_alone():
+    # A single cluster whose own brief already exceeds the token budget
+    # must still get its own batch - the alternative (skipping it) would
+    # silently drop a whole subsystem from the wiki.
+    from scan_worker.live_wiki import _pack_subsystem_batches
+
+    huge = _subsystem_target(0, file_count=1, chars_per_file=100_000)
+    small = _subsystem_target(1, file_count=1, chars_per_file=10)
+    evidence = {"repository": {"modules": []}}
+
+    batches = _pack_subsystem_batches(evidence, [huge, small], token_budget=1, max_count=5)
+
+    all_targets = [t for batch in batches for t in batch]
+    assert len(all_targets) == 2
+    assert huge in all_targets and small in all_targets
+    assert len(batches[0]) == 1
+
+
+def test_generate_subsystems_uses_token_budget_packing_end_to_end(monkeypatch):
+    # generate_subsystems (the real call site) must actually use the
+    # token-budget packer, not silently keep the old fixed-count chunking
+    # - two clusters that fit under max_count but not under a tiny token
+    # budget must land in separate LLM calls.
+    import scan_worker.live_wiki as live_wiki
+
+    monkeypatch.setattr(live_wiki, "SUBSYSTEM_BATCH_TOKEN_BUDGET", 50)
+    evidence = _two_cluster_evidence()
+    naming_adapter = _adapter(json.dumps({"0": "Auth", "1": "Billing"}))
+
+    calls = []
+
+    def _respond(_system_prompt, user_prompt, cwd):
+        items = json.loads(user_prompt)
+        calls.append([item["id"] for item in items])
+        return json.dumps({item["id"]: {"description": f"{item['name']} stuff.", "files": []} for item in items})
+
+    writing_adapter = MagicMock()
+    writing_adapter.simple_completion.side_effect = _respond
+
+    generate_subsystems(evidence, naming_adapter, writing_adapter)
+
+    assert len(calls) == 2, f"expected one LLM call per cluster under a 50-token budget, got {calls}"
+
+
 def test_generate_overview_happy_path():
     evidence = make_evidence()
     subsystem_records = [{"subsystem_id": "0", "name": "Authentication", "description": "Handles login."}]
