@@ -117,6 +117,7 @@ def _run_batched_with_retry(
     is_resolved: Callable[[_BatchResult], bool],
     attempts: int,
     batch_size: int,
+    chunker: Callable[[list[_BatchTarget]], list[list[_BatchTarget]]] | None = None,
 ) -> list[_BatchTarget]:
     """Shared shape behind both subsystem and file-page batch generation:
     chunk `targets`, run chunks concurrently via `write_batch`, retry only
@@ -129,12 +130,20 @@ def _run_batched_with_retry(
     file-page callers need to keep the *last* result with a usable detail
     even across failed retries, for salvage. Returns the targets that never
     satisfied `is_resolved` after the final attempt.
+
+    `chunker`: overrides the default fixed-size `_batches(remaining,
+    batch_size)` chunking when given (see `_pack_subsystem_batches` - a
+    fixed target COUNT per batch has no relationship to a batch's actual
+    prompt size, which is what a pricing-tier token boundary like Haiku
+    5.5's 100K cliff actually cares about). `batch_size` is still required
+    and still used verbatim by any caller that doesn't pass a chunker - the
+    file-page caller is deliberately unchanged.
     """
     remaining = list(targets)
     for _attempt in range(1, attempts + 1):
         if not remaining:
             break
-        chunks = _batches(remaining, batch_size)
+        chunks = chunker(remaining) if chunker is not None else _batches(remaining, batch_size)
         chunk_results = _run_concurrently(
             [lambda c=chunk: write_batch(c) for chunk in chunks], max_workers=_generation_worker_count()
         )
@@ -909,27 +918,156 @@ class _SubsystemWriteTarget:
         self.prior_record = prior_record
 
 
+def _subsystem_payload_entry(
+    evidence: dict, target: _SubsystemWriteTarget, *, entry_cache: dict[str, dict] | None = None
+) -> dict:
+    """The exact per-target shape `_write_subsystem_batch` sends - factored
+    out so `_pack_subsystem_batches`' size estimate is computed against the
+    real payload shape, not a hand-maintained approximation of it that
+    could silently drift from what actually gets sent.
+
+    `entry_cache`, when given, is read and written keyed by
+    `cluster_id_str`: the packer computes this same entry once per target
+    per retry round purely to size it, then `_write_subsystem_batch` built
+    it again from scratch for the real call - including re-walking
+    `_related_files`' full module-path rebuild each time. A target's brief
+    doesn't change within one `_generate_subsystem_records_for_targets`
+    call, so the second computation was pure repeated work, not a
+    different answer."""
+    cached = entry_cache.get(target.cluster_id_str) if entry_cache is not None else None
+    if cached is not None:
+        return cached
+    entry = {
+        "id": target.cluster_id_str,
+        "name": target.name,
+        "brief": target.brief,
+        "related_files": _related_files(evidence, target.brief),
+        "skip_files": target.skip_files or [],
+    }
+    if entry_cache is not None:
+        entry_cache[target.cluster_id_str] = entry
+    return entry
+
+
+# Real chars-per-token for deepseek-v4.1-flash via IndieRouter - the one
+# and only model this call path uses in production (writing_adapter_for_
+# airview routes here exclusively; the direct-DeepSeek-API branch in
+# model_tiers.py only fires if INDIEROUTER_API_KEY is ever unset, which
+# production treats as a config error, not a live alternate path).
+# Measured directly, not estimated: 4 real single-target batches against
+# this repo's own clusters (12/16/19/60 files), reading the real
+# `usage.prompt_tokens` IndieRouter's API actually reported back via
+# OpenAICompatibleAdapter's on_usage, then a linear fit of prompt_tokens
+# against user-prompt chars across those 4 points (isolates the
+# roughly-constant ~929-token system-prompt overhead from the per-char
+# rate) - not the single-tokenizer-count shortcut used elsewhere, because
+# there is no bundled DeepSeek tokenizer to call locally the way
+# jina-embeddings-v2-base-code's is bundled for search_index.py's
+# HOSTED_EMBED_MAX_TOKENS (see that constant's own history: eight
+# recalibrations of a guessed ratio before switching to real counting -
+# this measures the real model's real usage instead of guessing a ratio
+# at all, same end result by a different method). Fit predicted all 4
+# actual values within ~2%. Real ratio: 2.9561 chars/token - notably
+# less dense than an earlier, wrong-tokenizer draft of this constant
+# measured against claude-haiku-5-5 (2.145-2.168), which this call path
+# never actually runs on; that number was real for Haiku, just not for
+# the model that processes this prompt. 2.6 sits deliberately below the
+# measured 2.9561: estimated_tokens = chars / this constant, so a lower
+# divisor yields a higher, more conservative estimate for the same text -
+# the margin covers the 4-sample fit's own slack and real content this
+# repo's own clusters didn't happen to exercise.
+_SUBSYSTEM_BATCH_CHARS_PER_TOKEN = 2.6
+
+# The real, measured exposure that motivated this batching change (not a
+# hypothetical): forcing 4 of this repo's real oversized clusters into
+# one combined call - reproducing the non-IndieRouter direct-fallback's
+# fixed batch-of-5 shape, not today's real IndieRouter batch-of-2 - sent
+# a real ~57,500-token request (by the measurement above) and silently
+# dropped one of the 4 subsystems entirely after both retries, live-
+# reproducing the historical Flask 83->14-file regression
+# SUBSYSTEM_WRITE_BATCH_SIZE/_subsystem_write_batch_size were originally
+# tuned for (see MAX_SYMBOLS_PER_FILE's docstring in wiki_mapping.py).
+# Today's real IndieRouter-only production path never actually combines
+# more than 2 subsystems per call regardless of this budget - max_count
+# already prevents the 4-item shape that failed from occurring at all -
+# so this budget's real job today is the oversized-single-cluster edge
+# case (logged, see _pack_subsystem_batches) and a safety margin against
+# this repo's clusters growing large enough that even 2 together cross
+# it (today's real 2 biggest clean clusters measure ~49,800 tokens
+# combined, comfortably under this). 80,000 is kept well above that
+# today, not pinned to any pricing cliff - DeepSeek has none at this
+# boundary - with the fixed count cap kept as the actual day-to-day
+# guard against the failure mode above, this budget as insurance against
+# repo growth eroding that margin silently.
+SUBSYSTEM_BATCH_TOKEN_BUDGET = 80_000
+
+
+def _pack_subsystem_batches(
+    evidence: dict,
+    targets: list[_SubsystemWriteTarget],
+    *,
+    token_budget: int = SUBSYSTEM_BATCH_TOKEN_BUDGET,
+    max_count: int,
+    entry_cache: dict[str, dict] | None = None,
+) -> list[list[_SubsystemWriteTarget]]:
+    """Greedily packs targets into batches bounded by BOTH an estimated
+    token budget (the real risk - see SUBSYSTEM_BATCH_TOKEN_BUDGET) and
+    max_count (the pre-existing fixed-count cap, kept as a secondary bound
+    on concurrency/latency, not token size). A target whose own estimate
+    already exceeds token_budget alone still gets its own batch by
+    itself - there is no smaller unit to split one cluster's brief into
+    here, and one oversized call for it is better than silently dropping
+    the subsystem.
+
+    `entry_cache`: passed straight through to `_subsystem_payload_entry` -
+    see that function's docstring. Shares the computed entry with the
+    caller's later `_write_subsystem_batch` call instead of rebuilding it.
+    """
+    batches: list[list[_SubsystemWriteTarget]] = []
+    current: list[_SubsystemWriteTarget] = []
+    current_tokens = 0.0
+    for target in targets:
+        entry_chars = len(json.dumps(_subsystem_payload_entry(evidence, target, entry_cache=entry_cache)))
+        estimated_tokens = entry_chars / _SUBSYSTEM_BATCH_CHARS_PER_TOKEN
+        if estimated_tokens > token_budget:
+            # Logged so an oversized solo call (the one case this function
+            # cannot actually bound) is observable instead of looking like
+            # every other batch - see this function's own docstring on why
+            # it still gets sent rather than being dropped.
+            logger.warning(
+                "AIRview subsystem %r alone estimates ~%d tokens, over the %d token budget - "
+                "sending as its own oversized batch rather than dropping it",
+                target.name, int(estimated_tokens), token_budget,
+            )
+        if current and (current_tokens + estimated_tokens > token_budget or len(current) >= max_count):
+            batches.append(current)
+            current = []
+            current_tokens = 0.0
+        current.append(target)
+        current_tokens += estimated_tokens
+    if current:
+        batches.append(current)
+    return batches
+
+
 def _write_subsystem_batch(
     evidence: dict,
     targets: list[_SubsystemWriteTarget],
     writing_adapter,
     fetch_line_count: Callable[[str], int | None] | None,
+    *,
+    entry_cache: dict[str, dict] | None = None,
 ) -> dict[str, tuple[dict, str]]:
     """One LLM call covering every target in this batch. Returns cluster_id_str
     -> (parsed, description) only for targets whose citations verified -
     callers are responsible for retrying whatever key is missing from the
     result, same contract as a single build_subsystem_record attempt.
+
+    `entry_cache`: see `_subsystem_payload_entry` - when the caller already
+    built this batch's entries while sizing it (`_pack_subsystem_batches`),
+    reuses them instead of recomputing `_related_files` from scratch.
     """
-    payload = [
-        {
-            "id": t.cluster_id_str,
-            "name": t.name,
-            "brief": t.brief,
-            "related_files": _related_files(evidence, t.brief),
-            "skip_files": t.skip_files or [],
-        }
-        for t in targets
-    ]
+    payload = [_subsystem_payload_entry(evidence, t, entry_cache=entry_cache) for t in targets]
     raw = writing_adapter.simple_completion(
         BATCH_SUBSYSTEM_WRITING_SYSTEM_PROMPT, json.dumps(payload), cwd="."
     )
@@ -967,10 +1105,19 @@ def _generate_subsystem_records_for_targets(
     """
     by_id = {t.cluster_id_str: t for t in targets}
     resolved: dict[str, tuple[dict, str]] = {}
+    # Shared with both the chunker and write_batch below so a target's
+    # payload entry (and the _related_files walk inside it) is computed
+    # once per round, not once for sizing and again for the real call -
+    # safe without locking because the chunker call always finishes
+    # (populating every entry this round needs) before the concurrent
+    # write_batch calls for that same round start.
+    entry_cache: dict[str, dict] = {}
     _run_batched_with_retry(
         targets,
         target_id=lambda t: t.cluster_id_str,
-        write_batch=lambda chunk: _write_subsystem_batch(evidence, chunk, writing_adapter, fetch_line_count),
+        write_batch=lambda chunk: _write_subsystem_batch(
+            evidence, chunk, writing_adapter, fetch_line_count, entry_cache=entry_cache
+        ),
         on_round_result=resolved.__setitem__,
         # _write_subsystem_batch only ever returns an entry for a target
         # whose citations verified - any presence in a round's result means
@@ -978,6 +1125,21 @@ def _generate_subsystem_records_for_targets(
         is_resolved=lambda _result: True,
         attempts=SUBSYSTEM_WRITE_ATTEMPTS,
         batch_size=_subsystem_write_batch_size(),
+        # Token-budget packing, not the fixed count alone - see
+        # _pack_subsystem_batches. max_count keeps the existing fixed cap
+        # as a secondary bound on concurrency/latency. token_budget is
+        # passed explicitly (reads the module global at call time inside
+        # this lambda) rather than left to _pack_subsystem_batches' own
+        # default - a default argument binds its value once at function
+        # definition time, so a caller/test patching the
+        # SUBSYSTEM_BATCH_TOKEN_BUDGET module constant afterward would
+        # silently have no effect on it otherwise.
+        chunker=lambda remaining: _pack_subsystem_batches(
+            evidence, remaining,
+            token_budget=SUBSYSTEM_BATCH_TOKEN_BUDGET,
+            max_count=_subsystem_write_batch_size(),
+            entry_cache=entry_cache,
+        ),
     )
 
     records: dict[str, dict] = {}
