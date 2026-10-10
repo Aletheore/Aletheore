@@ -61,3 +61,30 @@ CVE-2026-84445
 # file's own comment would otherwise trip Aletheore's own secrets check
 # the same way REPORT.md's prose quoting them did.)
 github-app-token
+
+# CVE-2026-78667, CVE-2026-78669 and CVE-2026-97031 (Go stdlib net/http and
+# crypto/tls, golang.org/x/net http2; all HIGH, "fixed" upstream in Go
+# 1.26.9/1.27.2 and x/net 0.60.0), scan-worker image only. Published after the
+# last green image scan on master (2026-10-09 18:01 UTC) and flagged since on
+# every PR, including ones that touch no Dockerfile.
+#
+# They sit entirely inside two third-party Go command-line binaries the image
+# installs from pinned, checksum-verified release archives, usr/local/bin/gosec
+# and usr/local/bin/trivy, not in anything this repo builds:
+#   * gosec v2.29.0 is its latest release (2026-08-26): go.mod pins x/net 0.58.0
+#     and go 1.25.0, so there is no fixed release to upgrade to.
+#   * trivy v0.75.0 (2026-10-01) is the latest: go.mod pins x/net 0.59.0, still
+#     below the 0.60.0 fix, so bumping it does not clear CVE-2026-78669 either.
+#
+# Accepted because the advisories are denial-of-service in HTTP/TLS request
+# handling (crafted Range headers, an HTTP/2 SETTINGS flood, repeated ECH
+# extension references) and neither binary runs as a server in this image: both
+# are invoked as one-shot local processes that scan files and exit, and nothing
+# in the scan-worker listens for requests on their behalf.
+#
+# Revisit when gosec or trivy ships a release built on Go >= 1.26.9/1.27.2 with
+# x/net >= 0.60.0: bump the pin in Dockerfile.scan-worker (with its checksum)
+# and delete these three lines.
+CVE-2026-78667
+CVE-2026-78669
+CVE-2026-97031
