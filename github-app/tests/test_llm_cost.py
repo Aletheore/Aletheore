@@ -126,22 +126,38 @@ def test_cost_for_usage_does_not_warn_for_freshly_verified_model(monkeypatch, ca
     assert caplog.records == []
 
 
-def test_cost_for_usage_unknown_model_does_not_crash_and_prices_conservatively(monkeypatch, caplog):
+def test_cost_for_usage_unknown_model_does_not_crash_and_is_not_priced_at_the_most_expensive_model(monkeypatch, caplog):
     """Code-review finding: a bare dict lookup used to KeyError straight out
     of a usage-accounting callback the moment a model got added to
-    model_tiers.py without a matching MODEL_RATES_PER_MILLION_USD entry -
-    a real risk given how often this codebase swaps models/providers. An
-    unknown model must degrade to the highest known rate (this file's own
-    "overestimate is the safe direction" rule), not crash or cost $0."""
+    model_tiers.py without a matching MODEL_RATES_PER_MILLION_USD entry. An
+    unknown model must degrade instead of crashing - but not to the table's
+    HIGHEST rate: that is claude-opus-4-8 at $15/$75 per M, about 200x the
+    production generator, and this number is drawn from the customer's real
+    credit balance, so it would silently overcharge them. It is priced at the
+    table's median, and logged at ERROR so it reaches Sentry."""
+    import statistics
+
     monkeypatch.setattr(llm_cost, "_warned_stale_models", set())
-    highest_input = max(r["input"] for r in llm_cost.MODEL_RATES_PER_MILLION_USD.values())
-    highest_output = max(r["output"] for r in llm_cost.MODEL_RATES_PER_MILLION_USD.values())
+    rates = llm_cost.MODEL_RATES_PER_MILLION_USD.values()
+    median_input = statistics.median(r["input"] for r in rates)
+    median_output = statistics.median(r["output"] for r in rates)
+    highest_input = max(r["input"] for r in rates)
+    highest_output = max(r["output"] for r in rates)
 
     with caplog.at_level("WARNING"):
         cost = cost_for_usage("some-brand-new-model-nobody-priced-yet", 1_000_000, 1_000_000)
 
-    assert cost == pytest.approx(highest_input + highest_output)
-    assert any("some-brand-new-model-nobody-priced-yet" in r.message for r in caplog.records)
+    assert cost == pytest.approx(median_input + median_output)
+    assert cost < (highest_input + highest_output) / 10
+    errors = [r for r in caplog.records if r.levelname == "ERROR" and "some-brand-new-model-nobody-priced-yet" in r.message]
+    assert len(errors) == 1
+
+
+def test_cost_for_usage_unknown_model_with_an_empty_rate_table_prices_at_zero_instead_of_crashing(monkeypatch):
+    monkeypatch.setattr(llm_cost, "_warned_stale_models", set())
+    monkeypatch.setattr(llm_cost, "MODEL_RATES_PER_MILLION_USD", {})
+
+    assert cost_for_usage("any-model", 1_000_000, 1_000_000) == 0.0
 
 
 def test_cost_for_usage_unknown_model_warns_only_once(monkeypatch, caplog):

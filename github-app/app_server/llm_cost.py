@@ -1,4 +1,5 @@
 import logging
+import statistics
 from datetime import date
 
 logger = logging.getLogger(__name__)
@@ -185,30 +186,40 @@ def stale_models(as_of: date | None = None, max_age_days: int = STALE_PRICE_MAX_
     return stale
 
 
+def _median_rates() -> dict[str, float]:
+    """The median input and output rate across MODEL_RATES_PER_MILLION_USD: the neutral price for a
+    model nobody has priced yet. An empty table (only possible mid-refactor) prices at zero rather
+    than raising, since the caller of cost_for_usage must never crash a job over a missing entry."""
+    inputs = [r["input"] for r in MODEL_RATES_PER_MILLION_USD.values()]
+    outputs = [r["output"] for r in MODEL_RATES_PER_MILLION_USD.values()]
+    if not inputs:
+        return {"input": 0.0, "output": 0.0}
+    return {"input": statistics.median(inputs), "output": statistics.median(outputs)}
+
+
 def cost_for_usage(model: str, prompt_tokens: int, completion_tokens: int) -> float:
     rates = MODEL_RATES_PER_MILLION_USD.get(model)
     if rates is None:
-        # Real risk, not hypothetical: this codebase swaps LLM models/
-        # providers often (GLM/Haiku/DeepSeek/Luna, see model_tiers.py's
-        # own history), and none of this function's call sites catch an
-        # exception from it - a model added there without a matching entry
-        # here used to KeyError straight out of a usage-accounting
-        # callback mid-scan-job. Degrade instead: this file's own rule is
-        # "overestimating cost is the safe direction", so price an unknown
-        # model at the highest input/output rate of any model actually in
-        # the table, rather than crashing or silently costing $0 - a real
-        # spend cap still gets enforced conservatively either way.
+        # This codebase swaps LLM models/providers often (GLM/Haiku/DeepSeek/Luna, see model_tiers.py's
+        # own history), and none of this function's call sites catch an exception from it - a model
+        # added there without a matching entry here used to KeyError straight out of a usage-accounting
+        # callback mid-scan-job. Degrade instead of crashing.
+        #
+        # Priced at the MEDIAN rate of the table, not its highest. This number is drawn from the
+        # customer's real credit balance (jobs.py trues up reserve_llm_spend with it), so it is not a
+        # spend-cap estimate where "over is safe": the highest rate in the table is claude-opus-4-8
+        # ($15/$75 per M), about 200x the production generator's, so a single paid review that costs
+        # $0.0009 would have been charged $0.195 and a monthly allowance gone in a few dozen reviews,
+        # silently. A median keeps the error to a small multiple either way, and the error-level log
+        # below (captured by Sentry) is what makes a human add the real entry.
         if model not in _warned_stale_models:
-            logger.warning(
-                "model %s has no entry in MODEL_RATES_PER_MILLION_USD - pricing it at the "
-                "highest known rate as a conservative fallback; add a real entry",
+            logger.error(
+                "model %s has no entry in MODEL_RATES_PER_MILLION_USD - pricing it at the table's "
+                "median rate until a real entry is added",
                 model,
             )
             _warned_stale_models.add(model)
-        rates = {
-            "input": max(r["input"] for r in MODEL_RATES_PER_MILLION_USD.values()),
-            "output": max(r["output"] for r in MODEL_RATES_PER_MILLION_USD.values()),
-        }
+        rates = _median_rates()
     elif model not in _warned_stale_models and model in stale_models():
         logger.warning(
             "price for %s was last verified on %s, more than %d days ago - "
