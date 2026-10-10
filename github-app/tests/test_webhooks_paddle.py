@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import ipaddress
@@ -7,7 +8,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -3076,6 +3077,64 @@ async def test_paid_setup_claim_is_released_when_the_gated_enqueue_fails(pool):
 
 
 @pytest.mark.asyncio
+async def test_paid_setup_claim_is_released_on_request_cancellation(pool):
+    """Code-review finding: `except Exception` does not catch
+    asyncio.CancelledError (a BaseException subclass since Python 3.8), so
+    a request cancellation mid-enqueue (e.g. a worker restart or client
+    disconnect) used to skip release_paid_setup entirely - the claim
+    stayed stuck non-NULL forever, silently skipping the one-time
+    build/attribution on every future retry. The fix catches
+    BaseException instead, so the claim is still released and cancellation
+    still propagates."""
+    cancelling_queue = MagicMock()
+    cancelling_queue.enqueue.side_effect = asyncio.CancelledError()
+    await upsert_installation(pool, 216, "acme")
+    payload = _subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", 216)
+
+    with pytest.raises(asyncio.CancelledError):
+        await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=cancelling_queue)
+
+    retry_queue = MagicMock()
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=retry_queue)
+
+    assert retry_queue.enqueue.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_release_paid_setup_failure_during_cleanup_alerts_but_still_raises_original_error(pool, monkeypatch):
+    """Code-review finding: release_paid_setup's own call inside the except
+    block was unguarded - if it raised too (plausible exactly when the
+    original failure was a correlated DB/pool outage), that new exception
+    would replace the original with no log line, and the claim would stay
+    stuck non-NULL with nothing to show why. The fix guards that call: the
+    original failure still propagates, and the release failure is surfaced
+    via send_error_alert instead of silently replacing it."""
+    from app_server.webhooks import paddle as paddle_module
+
+    alerts = _capture_alerts(monkeypatch)
+    monkeypatch.setattr(
+        paddle_module,
+        "release_paid_setup",
+        AsyncMock(side_effect=RuntimeError("db pool exhausted")),
+    )
+    failing_queue = MagicMock()
+    failing_queue.enqueue.side_effect = ConnectionError("redis down")
+    await upsert_installation(pool, 217, "acme")
+    payload = _subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", 217)
+
+    with pytest.raises(ConnectionError):
+        await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=failing_queue)
+
+    assert len(alerts) == 1
+    alert_args, _alert_kwargs = alerts[0]
+    source, error, context = alert_args
+    assert source == "paddle_webhook"
+    assert "installation 217" in str(error)
+    assert "db pool exhausted" in str(error)
+    assert context == "installation_id=217"
+
+
+@pytest.mark.asyncio
 async def test_release_paid_setup_does_not_clear_a_claim_retaken_after_it(pool):
     """Flash Review HIGH finding: release_paid_setup used to unconditionally
     NULL paid_setup_completed_at, with nothing tying the release to the
@@ -3116,24 +3175,40 @@ async def test_release_paid_setup_does_not_clear_a_claim_retaken_after_it(pool):
 
 class _DedupingFakeQueue:
     """Mimics rq's real unique=True/job_id enqueue behavior (save_unique_job)
-    closely enough to test the dedup fix: raises DuplicateJobError when a
-    job with the given id has already been created and not removed,
-    otherwise records the enqueue and succeeds. `fail` is an optional
-    predicate used to simulate a transient failure (e.g. a Redis blip) on
-    one specific call without disturbing the dedup bookkeeping."""
+    closely enough to test the dedup fix, including the TTL-bounded gap
+    found via code review: save_unique_job's own uniqueness check is a
+    plain Redis EXISTS on the job's hash key, and Job.cleanup() expires
+    that same key `result_ttl` seconds after the job finishes (rq's own
+    DEFAULT_RESULT_TTL is only 500 seconds if a caller doesn't pass its
+    own) - so unique=True stops deduping anything once that key expires,
+    regardless of job_id. `now` is an advanceable fake clock (seconds) so
+    a test can simulate a retry landing before or after a given job's own
+    result_ttl without a real sleep. `fail` is an optional predicate used
+    to simulate a transient failure (e.g. a Redis blip) on one specific
+    call without disturbing the dedup bookkeeping."""
 
     def __init__(self, fail=None):
         self._created_job_ids = []
+        self._expires_at: dict[str, float] = {}
+        self.now = 0.0
         self._fail = fail or (lambda *a, **k: False)
         self.enqueue = MagicMock(side_effect=self._enqueue)
 
-    def _enqueue(self, name, job_timeout=None, installation_id=None, job_id=None, unique=False, **kwargs):
+    def _enqueue(
+        self, name, job_timeout=None, installation_id=None, job_id=None, unique=False,
+        result_ttl=None, **kwargs,
+    ):
         if self._fail(name, job_id):
             raise ConnectionError("redis down")
-        if unique and job_id in self._created_job_ids:
+        from rq.defaults import DEFAULT_RESULT_TTL
+
+        still_deduped = job_id in self._expires_at and self._expires_at[job_id] > self.now
+        if unique and still_deduped:
             raise DuplicateJobError(f"Job with ID '{job_id}' already exists")
         if job_id is not None:
             self._created_job_ids.append(job_id)
+            ttl = result_ttl if result_ttl is not None else DEFAULT_RESULT_TTL
+            self._expires_at[job_id] = self.now + ttl
 
 
 @pytest.mark.asyncio
@@ -3175,6 +3250,50 @@ async def test_retry_after_partial_enqueue_failure_does_not_duplicate_the_wiki_j
     # and is caught as a no-op, which is exactly what the job_id assertions
     # above confirm.
     assert queue.enqueue.call_count == 4
+
+
+@pytest.mark.asyncio
+async def test_retry_landing_after_rqs_default_result_ttl_still_dedupes_the_wiki_job(pool):
+    """Code-review finding: unique=True's dedup (save_unique_job) is a
+    plain Redis EXISTS check on the job's hash key, and that key expires
+    `result_ttl` seconds after the job finishes - rq's own default is only
+    500 seconds, while Paddle's documented webhook retry window extends up
+    to three days. Without an explicit, longer result_ttl on these two
+    enqueues, a retry landing between those two numbers would stop being
+    deduped at all and silently re-run the already-succeeded wiki build -
+    the previous test above only exercised an immediate retry, which
+    can't tell this gap apart from a real fix. This one advances the fake
+    queue's clock past rq's 500-second default (but still inside the real
+    result_ttl the fix passes) before the retry, and still expects no
+    duplicate."""
+    installation_id = 215
+    await upsert_installation(pool, installation_id, "acme")
+    payload = _subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", installation_id)
+
+    queue = _DedupingFakeQueue(fail=lambda name, job_id: "docs_full_build" in name)
+    with pytest.raises(ConnectionError):
+        await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=queue)
+
+    queue.now += 600  # past rq's 500s default, still inside the real result_ttl
+    queue._fail = lambda *a, **k: False
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=queue)
+
+    wiki_job_id = f"paid-setup-wiki-{installation_id}"
+    docs_job_id = f"paid-setup-docs-{installation_id}"
+    assert queue._created_job_ids.count(wiki_job_id) == 1, "wiki build was duplicated on a late retry"
+    assert queue._created_job_ids.count(docs_job_id) == 1
+
+
+def test_paid_setup_job_enqueues_use_a_result_ttl_that_covers_paddles_retry_window():
+    """Pins the fix itself, independent of the fake queue above: Paddle's
+    documented webhook retry window is up to three days, so the real
+    enqueue's result_ttl must be at least that long, or this same dedup
+    gap reopens the moment someone "simplifies" it back toward rq's
+    500-second default."""
+    from app_server.webhooks.paddle import _PAID_SETUP_JOB_RESULT_TTL_SECONDS
+
+    three_days_seconds = 3 * 24 * 60 * 60
+    assert _PAID_SETUP_JOB_RESULT_TTL_SECONDS >= three_days_seconds
 
 
 @pytest.mark.asyncio
