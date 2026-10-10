@@ -24,21 +24,19 @@ def verify_paddle_signature(
     if ts_str is None or h1 is None:
         return False
     try:
+        # Both just reject on failure, so one try covers both parse steps -
+        # ValueError: ts_str isn't a valid int. OverflowError: a ts with a
+        # few hundred digits parses fine as a Python int (CPython's int-
+        # string conversion limit is ~4300 digits) but is far larger than a
+        # C double can hold - abs(time.time() - ts) then raises it, uncaught
+        # by this function's only caller, so an unauthenticated request
+        # with an oversized ts crashed the handler before signature
+        # verification ever ran. Treated the same as any other malformed
+        # timestamp: reject, don't crash.
         ts = int(ts_str)
-    except ValueError:
-        return False
-    try:
-        # Code-review finding: a ts with a few hundred digits parses fine
-        # as a Python int (ValueError above only fires past CPython's
-        # ~4300-digit string-to-int limit) but is far larger than a C
-        # double can hold - abs(time.time() - ts) then raises OverflowError,
-        # uncaught here and uncaught by this function's only caller, so an
-        # unauthenticated request with an oversized ts crashed the handler
-        # before signature verification ever ran. Treated the same as any
-        # other malformed timestamp: reject, don't crash.
         if abs(time.time() - ts) > tolerance_seconds:
             return False
-    except OverflowError:
+    except (ValueError, OverflowError):
         return False
 
     try:

@@ -74,3 +74,15 @@ PLAN_INTERVAL_TO_PRICE_ID: dict[tuple[str, str], str] = {
 
 def resolve_price_id_for_plan(plan: str, interval: str) -> str | None:
     return PLAN_INTERVAL_TO_PRICE_ID.get((plan, interval))
+
+
+def is_annual_subscription(subscription: dict) -> bool:
+    """Whether a get_paddle_subscription() response is on an annual billing
+    cycle - the shape both admin.py and dashboard.py independently
+    extracted and compared by hand (and how this exact bug - showing the
+    monthly credit figure for an annual subscriber - got introduced twice:
+    dashboard.py had the data and dropped it, admin.py never fetched it at
+    all). A third caller needing the same figure (jobs.py's low-balance
+    email fallback) has no subscription dict to call this with - it works
+    from a stored installations row instead - so it isn't in scope here."""
+    return (subscription.get("billing_cycle") or {}).get("interval") == "year"

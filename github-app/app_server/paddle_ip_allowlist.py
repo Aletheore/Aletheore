@@ -36,6 +36,15 @@ async def _fetch_paddle_networks() -> list[ipaddress.IPv4Network] | None:
         logger.warning("failed to fetch Paddle's published IP list: %s", exc)
         return None
 
+    if not isinstance(cidrs, list):
+        # Code-review finding: a successful 200 response with ivp4_cidrs
+        # as null (or any other non-list JSON value) assigned cleanly
+        # above - no exception, so the except block never saw it - and
+        # then "for cidr in cidrs" raised an uncaught TypeError, a worse
+        # outcome (handler crash) than the empty-list case just below.
+        logger.warning("Paddle's published IP list response had a non-list ipv4_cidrs: %r", cidrs)
+        return None
+
     networks = []
     for cidr in cidrs:
         try:
@@ -83,7 +92,9 @@ async def _cached_paddle_networks() -> list[ipaddress.IPv4Network] | None:
     return networks
 
 
-def _unwrap_ipv4_mapped(address: ipaddress.IPv4Address | ipaddress.IPv6Address):
+def _unwrap_ipv4_mapped(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
     """An IPv4-mapped IPv6 literal (e.g. "::ffff:91.228.74.14") represents
     a real IPv4 address, but `IPv6Address in IPv4Network` silently returns
     False rather than comparing the embedded bits - a known behavior of

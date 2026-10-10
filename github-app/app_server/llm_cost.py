@@ -178,7 +178,15 @@ def stale_models(as_of: date | None = None, max_age_days: int = STALE_PRICE_MAX_
         try:
             verified_at = date.fromisoformat(rates["verified_at"])
         except (KeyError, TypeError, ValueError):
-            logger.warning("model %s has a missing or malformed verified_at - treating as stale", model)
+            # Code-review finding: logged unconditionally on every call,
+            # contradicting this file's own "warn once per process per
+            # model" design (_warned_stale_models above) - cost_for_usage
+            # calls this once per distinct not-yet-warned model seen, so a
+            # single malformed entry re-logged the same warning once per
+            # OTHER model queried too.
+            if model not in _warned_stale_models:
+                logger.warning("model %s has a missing or malformed verified_at - treating as stale", model)
+                _warned_stale_models.add(model)
             stale.append(model)
             continue
         if (reference - verified_at).days > max_age_days:
@@ -221,11 +229,20 @@ def cost_for_usage(model: str, prompt_tokens: int, completion_tokens: int) -> fl
             _warned_stale_models.add(model)
         rates = _median_rates()
     elif model not in _warned_stale_models and model in stale_models():
+        # rates.get(...), not rates["verified_at"]: stale_models() tolerates
+        # a missing/malformed verified_at on this same entry (treating it as
+        # stale) - evaluating "model not in _warned_stale_models" happens
+        # before stale_models() runs (and could itself warn-and-dedupe this
+        # model as a side effect) due to left-to-right `and` evaluation, so
+        # this body can still be reached for exactly the entry stale_models()
+        # just tolerated. A bare rates["verified_at"] used to KeyError here,
+        # crashing the usage-accounting callback it was only trying to warn
+        # about.
         logger.warning(
             "price for %s was last verified on %s, more than %d days ago - "
             "confirm it's still accurate against the provider's pricing page",
             model,
-            rates["verified_at"],
+            rates.get("verified_at", "an unknown date"),
             STALE_PRICE_MAX_AGE_DAYS,
         )
         _warned_stale_models.add(model)

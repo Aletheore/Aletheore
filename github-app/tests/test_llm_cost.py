@@ -186,6 +186,49 @@ def test_stale_models_tolerates_a_malformed_verified_at_instead_of_crashing(monk
     assert "some-model-with-a-bad-date" in stale_models(as_of=date(2026, 7, 23))
 
 
+def test_stale_models_warns_about_a_malformed_verified_at_only_once(monkeypatch, caplog):
+    # Code-review finding: the malformed-verified_at warning above was
+    # logged unconditionally on every stale_models() call, contradicting
+    # this file's own "warn once per process per model" design
+    # (_warned_stale_models) - cost_for_usage calls stale_models() once per
+    # distinct not-yet-warned model it sees, so one bad entry re-logged the
+    # same warning once per OTHER model queried too.
+    monkeypatch.setattr(llm_cost, "_warned_stale_models", set())
+    monkeypatch.setitem(
+        llm_cost.MODEL_RATES_PER_MILLION_USD,
+        "some-other-model-with-a-bad-date",
+        {"input": 1.0, "output": 1.0, "verified_at": "not-a-real-date"},
+    )
+
+    with caplog.at_level("WARNING"):
+        stale_models(as_of=date(2026, 7, 23))
+        stale_models(as_of=date(2026, 7, 23))
+        stale_models(as_of=date(2026, 7, 23))
+
+    warnings = [r for r in caplog.records if "some-other-model-with-a-bad-date" in r.message]
+    assert len(warnings) == 1
+
+
+def test_cost_for_usage_does_not_crash_on_a_model_missing_verified_at(monkeypatch, caplog):
+    # Code-review finding: stale_models() tolerates a missing/malformed
+    # verified_at (treating the entry as stale), but cost_for_usage's own
+    # "price is stale" warning then did rates["verified_at"] on that exact
+    # entry and raised KeyError - crashing the usage-accounting callback
+    # (called with no try/except at every real call site) for a model
+    # whose only mistake was an incomplete price-table entry.
+    monkeypatch.setattr(llm_cost, "_warned_stale_models", set())
+    monkeypatch.setitem(
+        llm_cost.MODEL_RATES_PER_MILLION_USD,
+        "model-missing-verified-at",
+        {"input": 1.0, "output": 2.0},
+    )
+
+    with caplog.at_level("WARNING"):
+        cost = cost_for_usage("model-missing-verified-at", 1000, 1000)
+
+    assert cost == pytest.approx((1000 * 1.0 + 1000 * 2.0) / 1_000_000)
+
+
 def test_crossed_spend_warning_threshold_fires_on_the_crossing_increment():
     """A $10 increment against a $15 cap crosses the 30% ($4.50) threshold
     partway through - previous total ($2) was under it, new total ($12) is

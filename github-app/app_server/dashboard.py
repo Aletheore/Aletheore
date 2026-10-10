@@ -58,7 +58,7 @@ from app_server.github_pagination import fetch_paginated_github_collection
 from app_server.llm_cost import base_credit_for_plan
 from app_server.paddle_client import PaddleAPIError, create_portal_session
 from app_server.paddle_client import get_subscription as get_paddle_subscription
-from app_server.paddle_pricing import CREDIT_TOPUP_PRICE_ID
+from app_server.paddle_pricing import CREDIT_TOPUP_PRICE_ID, is_annual_subscription
 
 dashboard_router = APIRouter()
 MIN_CHECKS_FOR_STALE_CONFIDENCE = 5
@@ -292,6 +292,7 @@ async def get_credits(installation_id: int, request: Request):
 
     subscription_renews_at = None
     billing_interval = None
+    is_annual = False
     subscription_id = installation.get("paddle_subscription_id")
     settings = get_settings()
     if subscription_id:
@@ -304,9 +305,11 @@ async def get_credits(installation_id: int, request: Request):
             subscription = await asyncio.to_thread(get_paddle_subscription, settings.paddle_api_key, subscription_id)
             subscription_renews_at = subscription.get("next_billed_at")
             billing_interval = (subscription.get("billing_cycle") or {}).get("interval")
+            is_annual = is_annual_subscription(subscription)
         except Exception:
             subscription_renews_at = None
             billing_interval = None
+            is_annual = False
 
     flash_review_count = await get_flash_review_count_this_month(pool, installation_id)
     flash_review_cost = await get_flash_review_cost_this_month(pool, installation_id)
@@ -362,9 +365,7 @@ async def get_credits(installation_id: int, request: Request):
         # next to "billing_interval": "year" in the same payload, $3+
         # seat-bonus higher than the real stored balance
         # reset_billing_period_credit(is_annual=True) actually uses.
-        "base_credit_allotment_usd": base_credit_for_plan(
-            installation["plan"], extra_seats, is_annual=(billing_interval == "year")
-        ),
+        "base_credit_allotment_usd": base_credit_for_plan(installation["plan"], extra_seats, is_annual=is_annual),
         "paddle_customer_id": installation.get("paddle_customer_id"),
         "paddle_subscription_id": subscription_id,
         "subscription_renews_at": subscription_renews_at,
