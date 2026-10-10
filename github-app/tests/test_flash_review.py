@@ -1447,6 +1447,90 @@ def test_semantic_checker_finds_wrong_exception_type():
     assert "catches ErrorB instead" in findings[0]["issue"]
 
 
+_PY_DEP_HEADER = "--- referenced definition (not part of this diff): callee.py:op ---\n"
+
+
+def _exception_findings(added: str, dependency: str, caller_source: str | None = None, removed: str = ""):
+    removed_lines = "".join(f"-{line}\n" for line in removed.splitlines())
+    added_lines = "".join(f"+{line}\n" for line in added.splitlines())
+    diff = f"--- caller.py ---\n@@ -1,2 +1,3 @@\n{removed_lines}{added_lines}"
+    findings = find_semantic_regressions(
+        diff, {"caller.py": caller_source or added}, _PY_DEP_HEADER + dependency
+    )
+    return [f for f in findings if "raises" in f["issue"]]
+
+
+def test_exception_rule_ignores_the_word_raise_in_prose():
+    # Experiment 8 produced "submit raises an, but the changed handler catches queue instead":
+    # the dependency's docstring said it "can raise an error", and `raise an` was read as a class.
+    dependency = 'def op(x):\n    """Queue the item; can raise an error if the pool is closed."""\n    return pool.put(x)'
+    added = "try:\n    value = op(key)\nexcept Exception:\n    return None"
+
+    assert _exception_findings(added, dependency) == []
+
+
+def test_exception_rule_ignores_a_comment_that_mentions_raise():
+    dependency = "def op(x):\n    # we never raise here, the caller decides\n    return 1"
+    added = "try:\n    value = op(key)\nexcept ErrorB:\n    return None"
+
+    assert _exception_findings(added, dependency) == []
+
+
+def test_exception_rule_compares_dotted_exception_names_by_their_last_component():
+    # `except queue.Empty:` was read as `except queue`, a different type from Empty.
+    dependency = "raise Empty()"
+    added = "try:\n    value = op(key)\nexcept queue.Empty:\n    return None"
+    assert _exception_findings(added, dependency) == []
+
+    dependency = "raise queue.Empty()"
+    added = "try:\n    value = op(key)\nexcept Empty:\n    return None"
+    assert _exception_findings(added, dependency) == []
+
+
+def test_exception_rule_does_not_flag_a_tuple_that_still_includes_the_raised_type():
+    added = "try:\n    value = op(key)\nexcept (ErrorA, ErrorB) as exc:\n    return None"
+
+    assert _exception_findings(added, "raise ErrorA()") == []
+
+
+def test_exception_rule_does_not_flag_a_broad_exception_handler():
+    added = "try:\n    value = op(key)\nexcept Exception:\n    return None"
+    assert _exception_findings(added, "raise ErrorA()") == []
+    added = "try:\n    value = op(key)\nexcept BaseException:\n    return None"
+    assert _exception_findings(added, "raise ErrorA()") == []
+
+
+def test_exception_rule_still_flags_a_dotted_handler_of_the_wrong_type():
+    added = "try:\n    value = op(key)\nexcept queue.Full:\n    return None"
+
+    findings = _exception_findings(added, "raise ErrorA()")
+
+    assert len(findings) == 1
+    assert "catches Full instead" in findings[0]["issue"]
+
+
+def test_exception_rule_still_recognises_a_one_line_conditional_raise():
+    dependency = "def op(x):\n    if bad(x): raise ErrorA('bad input')\n    return 1"
+    caller = "def handler():\n    value = op(key)"
+
+    findings = _exception_findings("    value = op(key)", dependency, caller_source=caller, removed="except ErrorA as exc:")
+
+    assert len(findings) == 1
+    assert "removed its exception handler" in findings[0]["issue"]
+
+
+def test_exception_rule_ignores_a_reraise_of_a_variable_of_unknown_type():
+    caller = "def handler():\n    value = op(key)"
+
+    assert _exception_findings("    value = op(key)", "raise exc", caller_source=caller, removed="except ErrorA:") == []
+
+
+def test_exception_rule_treats_a_surviving_broad_handler_as_still_handling_the_error():
+    caller = "def handler():\n    try:\n        value = op(key)\n    except Exception:\n        return None"
+
+    assert _exception_findings("    value = op(key)", "raise ErrorA()", caller_source=caller, removed="except ErrorA:") == []
+
+
 def test_semantic_checker_finds_retry_mutation():
     findings = find_semantic_regressions(
         "--- caller.py ---\n@@ -1,2 +1,4 @@\n+for attempt in range(2):\n+    write_record(key, value)\n+    if ok:\n+        break\n",
