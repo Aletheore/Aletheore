@@ -4,12 +4,47 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-10-09
-**Snapshot Freshness:** CURRENT as of 2026-10-09 - the scan workers, `health-worker` and `scheduler` run
-`master` at commit `9cf6f24e` (tag `github-app-deploy-2026-10-09-5`); `app-server` and `jina-embed` still run
-`e3182a9f` from the 2026-10-08 deploy below, because nothing under `github-app/app_server/` or
-`github-app/jina_embed/` changed after it, so a rebuild would have produced the same code. Re-verified live
-via SSH after each step. No migration, no Dockerfile or compose change, no lockfile change in any of these.
+**Last Updated:** 2026-10-10
+**Snapshot Freshness:** CURRENT as of 2026-10-10 - `app-server`, both scan workers, `health-worker` and `scheduler` run
+`master` at commit `56c44a8c` (tag `github-app-deploy-2026-10-10`); `jina-embed` still runs `e3182a9f` from the 2026-10-08
+deploy below, because nothing under `github-app/jina_embed/` changed after it. Re-verified live via SSH after each
+step. No migration, no Dockerfile or compose change, no lockfile change.
+
+2026-10-10 deploy: a database backup first (`backups/aletheore_app_2026-10-10T17-02-01Z.dump`), then `app-server`,
+then each worker in turn only when no RQ worker was busy (0 busy at every step), so no running job was killed.
+What it brought live, since `9cf6f24e` (the 2026-10-09 worker deploy below):
+
+- #1011: Flash Review's grounding gate moves a finding whose quoted text sits on a different line to that line
+  instead of dropping it. The old check dropped 39 of 220 proposed findings in a measured run, 32 of them accurate;
+  recall on the 13-PR Experiment 8 corpus went from about 50% to 59%. A quote that is not in the file at all is kept.
+- #1013: the Python exception-mismatch rule no longer reads prose like "can raise an error" as an exception name,
+  understands dotted and tuple handlers, and treats `Exception` as covering everything (4 of the rule's 8 findings
+  in that run were false positives, none after).
+- #1012: the paid-setup job dedup holds for Paddle's three-day retry window (explicit `result_ttl`), the claim is
+  released on request cancellation, and that release is shielded against a second cancellation.
+- #1015: Paddle webhook hardening (an oversized `ts` is rejected instead of crashing before verification, the HMAC
+  hashes the header's own `ts` string, the IP allowlist no longer caches an empty list or trusts a stale one past
+  seven days, handles IPv4-mapped addresses and a trailing-comma `X-Forwarded-For`); `cost_for_usage` prices a model
+  missing from the rate table at the table's median and logs an error instead of raising (the first draft priced it at
+  the highest rate, about 200 times the production generator, against customers' real credit); annual AIR
+  subscribers see their annual credit figure on the dashboard and admin page.
+- #1010: AIRview subsystem-write batches are capped by an estimated token budget, not only by count.
+- #1008: `aletheore.__version__` is 0.9.26 in the running containers. #1014 records three new HIGH Go CVEs inside
+  the bundled gosec and trivy binaries in `.trivyignore` (no runtime change).
+
+Verified live: all five recreated services `healthy`; zero lines matching `error|traceback|exception` in each
+recreated container's logs since its restart; `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`;
+three RQ workers registered; and the new code is in the running containers, not just the checkout
+(`asyncio.shield` in the app-server's `webhooks/paddle.py`, `_unwrap_ipv4_mapped` in its IP allowlist, `_median_rates`
+in `llm_cost.py` in every container, `_verify_or_reanchor_citation`, `_python_raised_types` and
+`_pack_subsystem_batches` in the workers, `scheduler` and `health-worker` included). A direct call inside the
+app-server container rejected an oversized `ts` without a crash, verified a correctly signed webhook, and priced an
+unmapped model at $1.43 per million tokens each way where the old fallback gave $90. The cross-file check
+(`FLASH_REVIEW_CROSS_FILE_CHECK`) is unset in every container and in `.env`, so it remains off.
+
+**Previous:** CURRENT as of 2026-10-09 - the scan workers, `health-worker` and `scheduler` ran
+`master` at commit `9cf6f24e` (tag `github-app-deploy-2026-10-09-5`); `app-server` and `jina-embed` still ran
+`e3182a9f`.
 
 Five worker-only deploys on 2026-10-09, each built from `master` and rolled one container at a time, waiting
 for that worker to be idle first so no running job was killed:
