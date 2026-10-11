@@ -14,6 +14,8 @@ import os
 
 import httpx
 
+from app_server import hosted_embedder
+
 # jina-embeddings-v2-base-code supports an 8192-token context (vs nomic's
 # hard 2048), but this cap is kept conservative rather than re-tuned
 # against the new model's real limit: it was already comfortably safe for
@@ -31,7 +33,15 @@ MAX_EMBEDDING_CHARS = 5000
 # in the same change that points JINA_EMBED_BASE_URL (or its replacement)
 # at the new service - it's what makes an old row's cached vector
 # correctly stop matching new queries the moment the embedder does.
-CURRENT_EMBEDDER = "jina-embed:jina-embeddings-v2-base-code"
+LOCAL_EMBEDDER = "jina-embed:jina-embeddings-v2-base-code"
+# Fixed per process: EMBED_PROVIDER is read once at import, so every cache row a
+# process writes or reads carries the tag of the embedder that process really
+# calls. See app_server/hosted_embedder.py for why there is no runtime fallback.
+CURRENT_EMBEDDER = (
+    f"deepinfra:{hosted_embedder.deepinfra_model()}"
+    if hosted_embedder.provider() == hosted_embedder.PROVIDER_DEEPINFRA
+    else LOCAL_EMBEDDER
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +69,13 @@ def embed_text(text: str, base_url: str | None = None, timeout_seconds: float = 
     # costs nothing but a slightly slower cache lookup.
     if len(text) > MAX_EMBEDDING_CHARS:
         text = text[:MAX_EMBEDDING_CHARS]
+    if CURRENT_EMBEDDER != LOCAL_EMBEDDER:
+        # One attempt: a cache lookup should degrade to a miss, not stall a scan.
+        try:
+            return hosted_embedder.embed_batch([text], timeout_seconds=timeout_seconds, retries=1)[0]
+        except hosted_embedder.EmbedderUnavailable as exc:
+            logger.warning("embedding call failed (%s); treating cache as unavailable", exc)
+            return None
     try:
         # Not a `with` block: _client is now a pooled, cached-for-the-
         # process-lifetime client (see its own docstring) - closing it

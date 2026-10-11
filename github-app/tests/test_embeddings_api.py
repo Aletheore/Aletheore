@@ -363,3 +363,36 @@ async def test_successful_embeddings_request_records_token_use(pool):
     assert response.status_code == 200
     after = await pool.fetchval("SELECT last_used_at FROM api_tokens WHERE token_hash = $1", token_hash)
     assert after is not None
+
+
+@pytest.mark.asyncio
+async def test_deepinfra_mode_returns_that_models_vectors_and_never_touches_jina(pool):
+    await _installation_with_token(pool, 9030, "air", "di-token")
+    jina = _fake_jina()
+
+    with patch.dict("os.environ", {"EMBED_PROVIDER": "deepinfra"}), \
+         patch("app_server.embeddings_api.get_jina_client", return_value=jina), \
+         patch("app_server.embeddings_api.hosted_embedder.embed_batch", return_value=[[0.5] * 1024]):
+        response = await _post(pool, "di-token", ["x"])
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model"] == "Qwen/Qwen3-Embedding-0.6B"
+    assert len(body["vectors"][0]) == 1024
+    jina.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_deepinfra_failure_is_502_and_does_not_fall_back_to_jina(pool):
+    from app_server.hosted_embedder import EmbedderUnavailable
+
+    await _installation_with_token(pool, 9031, "air", "di-fail-token")
+    jina = _fake_jina()
+
+    with patch.dict("os.environ", {"EMBED_PROVIDER": "deepinfra"}), \
+         patch("app_server.embeddings_api.get_jina_client", return_value=jina), \
+         patch("app_server.embeddings_api.hosted_embedder.embed_batch", side_effect=EmbedderUnavailable("down")):
+        response = await _post(pool, "di-fail-token", ["x"])
+
+    assert response.status_code == 502
+    jina.post.assert_not_called()

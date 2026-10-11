@@ -15,6 +15,10 @@ Nothing is stored. Chunk text arrives, vectors go back, and the index lives
 on the caller's disk. That is a deliberately smaller promise than "we index
 your code": no retention policy to write, no deletion path to honour, and
 nothing here for a subpoena to reach.
+
+That promise covers this service. With EMBED_PROVIDER=deepinfra (off by default,
+see hosted_embedder.py) chunk text is forwarded to DeepInfra for embedding;
+nothing is stored here either way.
 """
 
 import asyncio
@@ -28,6 +32,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app_server import hosted_embedder
 from app_server.db import (
     get_installation_by_token_hash,
     touch_api_token,
@@ -235,6 +240,16 @@ async def create_embeddings(request: Request, body: EmbeddingsRequest):
         )
     except Exception as exc:  # noqa: BLE001 - bookkeeping must never fail the request
         logger.warning("could not record api token use (%s)", exc)
+
+    if hosted_embedder.provider() == hosted_embedder.PROVIDER_DEEPINFRA:
+        # No concurrency slot: that cap protects the single-CPU jina-embed sidecar.
+        # The per-installation rate limit above still bounds request volume.
+        try:
+            vectors = await asyncio.to_thread(hosted_embedder.embed_batch, body.texts)
+        except hosted_embedder.EmbedderUnavailable as exc:
+            logger.warning("hosted embedding call failed for installation=%s (%s)", installation_id, exc)
+            raise HTTPException(status_code=502, detail="embedding provider unavailable") from exc
+        return {"model": hosted_embedder.deepinfra_model(), "vectors": vectors}
 
     slot_id = uuid.uuid4().hex
     try:
