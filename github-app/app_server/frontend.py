@@ -3907,8 +3907,8 @@ async function buyCredit(btn) {
   // charging a different amount than what is on screen.
   const rawAmount = Number(document.getElementById('topup-amount').value);
   const amount = Number.isInteger(rawAmount) ? rawAmount : NaN;
-  if (!amount || amount < 5 || amount > 1000) {
-    setStatus('Enter an amount between $5 and $1000.');
+  if (!amount || amount < 6 || amount > 1000) {
+    setStatus('Enter an amount between $6 and $1000.');
     return;
   }
   btn.disabled = true;
@@ -4017,13 +4017,13 @@ def _credits_body_html() -> str:
           <span class="qty-prefix">$</span>
           <div class="stepper">
             <button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepDown()" aria-label="Decrease amount">&minus;</button>
-            <input type="number" id="topup-amount" min="5" max="1000" step="5" value="10">
+            <input type="number" id="topup-amount" min="6" max="1000" step="1" value="10">
             <button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepUp()" aria-label="Increase amount">+</button>
           </div>
           <button class="btn btn-accent" id="topup-button">Buy credit</button>
         </div>
         <div id="topup-status" class="settings-block-hint"></div>
-        <div class="settings-block-hint">$5 minimum &middot; $1.15 per $1.00 of credit (includes a service charge), plus tax where it applies</div>
+        <div class="settings-block-hint">$6 minimum &middot; $1.15 per $1.00 of credit (includes a service charge), plus tax where it applies</div>
         <button class="btn btn-small" id="billing-portal-btn">Manage billing</button>
         <div id="billing-portal-status" class="settings-block-hint"></div>
       </div>

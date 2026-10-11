@@ -17,9 +17,21 @@ EXTRA_SEAT_PRICE_ID = "pri_01m123rwvvtgbm6bmmxcbav4hh"
 # Credit top-up - $1.15 USD/unit (1 unit = $1.00 of AI credit, the extra
 # $0.15 is a service charge covering Paddle's fee), tax added on top
 # (tax_mode "external"), one-time (not a subscription), customer-chosen
-# quantity (5-1000, i.e. $5-$1000 of credit per purchase). Created live via
+# quantity (6-1000, i.e. $6-$1000 of credit per purchase, charged $6.90-$1,150
+# before tax). Created live via
 # the Paddle MCP on 2026-10-02. Product: pro_01m23jw9evjvn00a6gs276ynrw
 # ("Aletheore Credit Top-up").
+#
+# Minimum raised from 5 to 6 on 2026-10-11 (Paddle price quantity.minimum
+# updated live via the Paddle MCP): at $1.15/unit, Paddle's 5% + $0.50 fee
+# is not fully covered by the $0.15/unit markup until quantity >= ~5.41, so
+# the $5 floor (= $5.75 subtotal) was a real, if small, loss (~$0.04) after
+# Paddle's cut - every top-up above that break-even point is profitable, so
+# 6 (= $6.90 subtotal) was chosen as the next whole unit above it. The
+# arithmetic is on the pre-tax subtotal; where tax is included in the price
+# the margin at the floor is thinner, so treat 6 as break-even-plus-a-little,
+# not a comfortable margin. The browser check in frontend.py (buyCredit and the
+# input's min attribute) must be kept in step with this number.
 #
 # It replaced the $1.00/unit price (pri_01m23jw9qbsnm4zmv28bfebx4t, tax
 # mode "location"), which sold $1 of credit for $1 and left no room for
@@ -30,6 +42,9 @@ EXTRA_SEAT_PRICE_ID = "pri_01m123rwvvtgbm6bmmxcbav4hh"
 # of the subtotal actually collected, never the unit price, so this change
 # needs no accounting change.
 CREDIT_TOPUP_PRICE_ID = "pri_01m3xpabknvke00n5vsxn4wpe0"
+# Smallest quantity Paddle accepts on that price (quantity.minimum, set live on
+# 2026-10-11). Mirrored in frontend.py's top-up form, which a test keeps in step.
+CREDIT_TOPUP_MIN_QUANTITY = 6
 LEGACY_CREDIT_TOPUP_PRICE_IDS = frozenset({"pri_01m23jw9qbsnm4zmv28bfebx4t"})
 ACCEPTED_CREDIT_TOPUP_PRICE_IDS = frozenset({CREDIT_TOPUP_PRICE_ID}) | LEGACY_CREDIT_TOPUP_PRICE_IDS
 
