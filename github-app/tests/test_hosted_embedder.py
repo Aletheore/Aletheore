@@ -347,3 +347,100 @@ def test_one_failed_batch_stops_the_batches_that_have_not_started(monkeypatch):
         he.embed_batch(texts)
 
     assert len(calls) == 1
+
+
+def _remote_client(monkeypatch):
+    monkeypatch.setenv("EMBED_PROVIDER", "deepinfra")
+    import scan_worker.embedding_client as ec
+
+    ec = importlib.reload(ec)  # a fresh module also means a fresh circuit breaker
+    monkeypatch.setattr(he.time, "sleep", lambda s: None)
+    return ec
+
+
+def _restore_local(monkeypatch):
+    import scan_worker.embedding_client as ec
+
+    monkeypatch.delenv("EMBED_PROVIDER")
+    importlib.reload(ec)
+
+
+def test_breaker_stops_calling_a_failing_provider_after_three_failed_lookups(monkeypatch):
+    ec = _remote_client(monkeypatch)
+    calls = []
+    monkeypatch.setattr(he.httpx, "post", lambda *a, **k: calls.append(1) or _response(503))
+    try:
+        for _ in range(ec.BREAKER_FAILURES):
+            assert ec.embed_text("diff") is None
+        made = len(calls)
+        assert made == ec.BREAKER_FAILURES * ec.REMOTE_ATTEMPTS  # each lookup used all its attempts
+
+        for _ in range(10):
+            assert ec.embed_text("diff") is None  # skipped: an instant miss, no network
+        assert len(calls) == made
+    finally:
+        _restore_local(monkeypatch)
+
+
+def test_breaker_lets_one_probe_through_after_the_cooldown_and_closes_on_success(monkeypatch):
+    ec = _remote_client(monkeypatch)
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(ec.time, "monotonic", lambda: clock["now"])
+    state = {"healthy": False}
+    monkeypatch.setattr(
+        he.httpx, "post", lambda *a, **k: _response(200, [[3.0, 4.0]]) if state["healthy"] else _response(503)
+    )
+    try:
+        for _ in range(ec.BREAKER_FAILURES):
+            ec.embed_text("diff")
+        assert ec.embed_text("diff") is None  # open
+
+        clock["now"] += ec.BREAKER_COOLDOWN_SECONDS + 1
+        state["healthy"] = True
+        assert ec.embed_text("diff") == pytest.approx([0.6, 0.8])  # the probe succeeds and closes it
+        assert ec.embed_text("diff") == pytest.approx([0.6, 0.8])  # and stays closed
+    finally:
+        _restore_local(monkeypatch)
+
+
+def test_a_failed_probe_reopens_the_breaker_immediately(monkeypatch):
+    ec = _remote_client(monkeypatch)
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(ec.time, "monotonic", lambda: clock["now"])
+    calls = []
+    monkeypatch.setattr(he.httpx, "post", lambda *a, **k: calls.append(1) or _response(503))
+    try:
+        for _ in range(ec.BREAKER_FAILURES):
+            ec.embed_text("diff")
+        clock["now"] += ec.BREAKER_COOLDOWN_SECONDS + 1
+        before = len(calls)
+        assert ec.embed_text("diff") is None  # the probe, which fails
+        probe_calls = len(calls) - before
+        assert probe_calls == ec.REMOTE_ATTEMPTS
+
+        assert ec.embed_text("diff") is None  # open again straight away
+        assert len(calls) == before + probe_calls
+    finally:
+        _restore_local(monkeypatch)
+
+
+def test_one_success_in_between_keeps_the_breaker_closed(monkeypatch):
+    ec = _remote_client(monkeypatch)
+    results = [503, 503, 200, 503, 503]  # failures never reach three in a row
+    outcomes = iter([r for code in results for r in ([code] * (ec.REMOTE_ATTEMPTS if code != 200 else 1))])
+    monkeypatch.setattr(
+        he.httpx, "post", lambda *a, **k: _response(200, [[1.0]]) if next(outcomes) == 200 else _response(503)
+    )
+    try:
+        for _ in results:
+            ec.embed_text("diff")
+        assert ec._remote_allowed()
+    finally:
+        _restore_local(monkeypatch)
+
+
+def test_a_non_positive_dimension_value_is_logged_not_silently_replaced(monkeypatch, caplog):
+    monkeypatch.setenv("DEEPINFRA_EMBED_DIMENSIONS", "-5")
+    with caplog.at_level("ERROR"):
+        assert he.deepinfra_dimensions() == 1024
+    assert "DEEPINFRA_EMBED_DIMENSIONS" in caplog.text

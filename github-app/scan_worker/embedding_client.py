@@ -13,6 +13,7 @@ import logging
 import math
 import os
 import threading
+import time
 
 import httpx
 
@@ -59,6 +60,42 @@ _metering = threading.local()
 # Per-feature ledger labels, so the spend breakdown shows what embeddings cost each surface.
 FEATURE_FLASH_CACHE = "flash_review_embedding"
 FEATURE_PACKET_CACHE = "airview_embedding"
+
+
+# Circuit breaker for the remote provider. A lookup that fails has already waited out
+# REMOTE_ATTEMPTS x REMOTE_TIMEOUT_SECONDS (about a minute), so when the provider is down or
+# hanging every lookup in a scan would pay that again. After BREAKER_FAILURES failed lookups in
+# a row the remote call is skipped (an immediate cache miss) for BREAKER_COOLDOWN_SECONDS, then
+# one lookup probes it: a success closes the breaker, a failure reopens it. The cache is an
+# optimisation, so losing hits for a few minutes costs far less than stalling reviews.
+BREAKER_FAILURES = 3
+BREAKER_COOLDOWN_SECONDS = 300.0
+_breaker_lock = threading.Lock()
+_breaker = {"failures": 0, "open_until": 0.0}
+
+
+def _remote_allowed() -> bool:
+    with _breaker_lock:
+        return time.monotonic() >= _breaker["open_until"]
+
+
+def _remote_succeeded() -> None:
+    with _breaker_lock:
+        _breaker["failures"] = 0
+        _breaker["open_until"] = 0.0
+
+
+def _remote_failed() -> None:
+    with _breaker_lock:
+        _breaker["failures"] += 1
+        if _breaker["failures"] >= BREAKER_FAILURES:
+            _breaker["open_until"] = time.monotonic() + BREAKER_COOLDOWN_SECONDS
+            # One more failure after the cooldown reopens it straight away.
+            _breaker["failures"] = BREAKER_FAILURES - 1
+            logger.error(
+                "remote embedder failed %d lookups in a row; skipping it for %.0fs (cache lookups "
+                "will miss meanwhile)", BREAKER_FAILURES, BREAKER_COOLDOWN_SECONDS,
+            )
 
 
 @contextlib.contextmanager
@@ -108,14 +145,20 @@ def embed_text(text: str, base_url: str | None = None, timeout_seconds: float = 
         # so it is deliberately not used here.
         # A remote call has a long latency tail (a measured 10-15% of single calls took over
         # 10 s while the median was 1.2 s), and a miss costs a whole re-review, so wait longer
-        # and retry (the 8B model also answers an occasional single call with a 429). Still bounded: a lookup degrades to a miss rather than stalling a scan.
+        # and retry (the 8B model also answers an occasional single call with a 429).
+        # A degraded provider is cut off by the circuit breaker below, so lookups degrade to a
+        # miss instead of each waiting out its full retries for the rest of a scan.
+        if not _remote_allowed():
+            return None
         try:
             vectors, tokens = hosted_embedder.embed_batch(
                 [text], timeout_seconds=max(timeout_seconds, REMOTE_TIMEOUT_SECONDS), retries=REMOTE_ATTEMPTS
             )
         except hosted_embedder.EmbedderUnavailable as exc:
+            _remote_failed()
             logger.warning("embedding call failed (%s); treating cache as unavailable", exc)
             return None
+        _remote_succeeded()
         if getattr(_metering, "tokens", None) is not None:
             _metering.tokens += tokens
         return vectors[0]

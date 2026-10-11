@@ -85,7 +85,10 @@ def deepinfra_dimensions() -> int | None:
     except ValueError:
         logger.error("invalid DEEPINFRA_EMBED_DIMENSIONS %r; using %d", raw, DEFAULT_DEEPINFRA_DIMENSIONS)
         return DEFAULT_DEEPINFRA_DIMENSIONS
-    return value if value > 0 else DEFAULT_DEEPINFRA_DIMENSIONS
+    if value <= 0:
+        logger.error("invalid DEEPINFRA_EMBED_DIMENSIONS %r (use 'native' to omit it); using %d", raw, DEFAULT_DEEPINFRA_DIMENSIONS)
+        return DEFAULT_DEEPINFRA_DIMENSIONS
+    return value
 
 
 def embedder_label() -> str:
