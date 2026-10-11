@@ -41,7 +41,9 @@ MODEL_RATES_PER_MILLION_USD = {
     # rather than cost nothing.
     "text-embedding-3-small": {"input": 0.02, "output": 0.0, "verified_at": "2026-08-11"},
     # DeepInfra's listed price for the hosted embedder (hosted_embedder.py), read from
-    # their model library on 2026-10-11. Only billed when EMBED_PROVIDER=deepinfra.
+    # their model pages on 2026-10-11 ($0.010 / 1M tokens). Only billed when
+    # EMBED_PROVIDER=deepinfra. The 0.6B entry is for a DEEPINFRA_EMBED_MODEL override.
+    "Qwen/Qwen3-Embedding-8B": {"input": 0.01, "output": 0.0, "verified_at": "2026-10-11"},
     "Qwen/Qwen3-Embedding-0.6B": {"input": 0.01, "output": 0.0, "verified_at": "2026-10-11"},
     "gpt-4o": {"input": 2.50, "output": 10.00, "verified_at": "2026-07-23"},
     "claude-opus-4-8": {"input": 15.00, "output": 75.00, "verified_at": "2026-07-23"},

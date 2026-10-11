@@ -387,7 +387,7 @@ async def test_deepinfra_mode_returns_that_models_vectors_and_charges_the_real_t
 
     assert response.status_code == 200
     body = response.json()
-    assert body["model"] == "Qwen/Qwen3-Embedding-0.6B"
+    assert body["model"] == "Qwen/Qwen3-Embedding-8B@1024"
     assert len(body["vectors"][0]) == 1024
     jina.post.assert_not_called()
     charge.assert_called_once()

@@ -275,7 +275,7 @@ async def create_embeddings(request: Request, body: EmbeddingsRequest):
         await asyncio.to_thread(
             charge_embedding_tokens, get_settings().database_url, installation_id, tokens, FEATURE_HOSTED
         )
-        return {"model": hosted_embedder.deepinfra_model(), "vectors": vectors}
+        return {"model": hosted_embedder.embedder_label(), "vectors": vectors}
 
     slot_id = uuid.uuid4().hex
     try:

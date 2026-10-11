@@ -56,7 +56,9 @@ def test_request_carries_model_input_and_bearer_key(monkeypatch):
 
     assert seen["url"] == he.DEEPINFRA_EMBEDDINGS_URL
     assert seen["headers"] == {"Authorization": "Bearer test-key-not-real"}
-    assert seen["json"] == {"model": he.DEFAULT_DEEPINFRA_MODEL, "input": ["x"], "encoding_format": "float"}
+    assert seen["json"] == {
+        "model": "Qwen/Qwen3-Embedding-8B", "input": ["x"], "encoding_format": "float", "dimensions": 1024,
+    }
 
 
 def test_large_input_is_split_into_bounded_calls_and_reassembled_in_order(monkeypatch):
@@ -120,7 +122,7 @@ def test_embed_text_uses_a_distinct_cache_tag_and_degrades_to_none(monkeypatch):
 
     try:
         ec = importlib.reload(ec)
-        assert ec.CURRENT_EMBEDDER == f"deepinfra:{he.DEFAULT_DEEPINFRA_MODEL}"
+        assert ec.CURRENT_EMBEDDER == "deepinfra:Qwen/Qwen3-Embedding-8B@1024"
         assert ec.CURRENT_EMBEDDER != ec.LOCAL_EMBEDDER
 
         monkeypatch.setattr(he.httpx, "post", lambda *a, **k: _response(200, [[3.0, 4.0]]))
@@ -230,3 +232,49 @@ def test_charge_never_raises_even_if_pricing_itself_fails(monkeypatch):
 
     monkeypatch.setattr(spend, "cost_for_usage", boom)
     assert spend.charge_embedding_tokens("dsn", 1, 10, "hosted_embeddings") == 0.0
+
+
+def test_dimensions_default_to_1024_and_can_be_changed_or_turned_off(monkeypatch):
+    monkeypatch.delenv("DEEPINFRA_EMBED_DIMENSIONS", raising=False)
+    assert he.deepinfra_dimensions() == 1024
+    assert he.embedder_label() == "Qwen/Qwen3-Embedding-8B@1024"
+
+    monkeypatch.setenv("DEEPINFRA_EMBED_DIMENSIONS", "2048")
+    assert he.embedder_label() == "Qwen/Qwen3-Embedding-8B@2048"
+
+    monkeypatch.setenv("DEEPINFRA_EMBED_DIMENSIONS", "native")
+    assert he.deepinfra_dimensions() is None
+    assert he.embedder_label() == "Qwen/Qwen3-Embedding-8B"
+
+    monkeypatch.setenv("DEEPINFRA_EMBED_DIMENSIONS", "banana")
+    assert he.deepinfra_dimensions() == 1024
+
+
+def test_native_size_omits_the_dimensions_option_from_the_request(monkeypatch):
+    monkeypatch.setenv("DEEPINFRA_EMBED_DIMENSIONS", "native")
+    seen = {}
+
+    def fake_post(url, headers, json, timeout):
+        seen["json"] = json
+        return _response(200, [[1.0]])
+
+    monkeypatch.setattr(he.httpx, "post", fake_post)
+    he.embed_batch(["x"])
+
+    assert "dimensions" not in seen["json"]
+
+
+def test_a_different_vector_size_gets_a_different_cache_tag(monkeypatch):
+    monkeypatch.setenv("EMBED_PROVIDER", "deepinfra")
+    import scan_worker.embedding_client as ec
+
+    try:
+        monkeypatch.setenv("DEEPINFRA_EMBED_DIMENSIONS", "1024")
+        first = importlib.reload(ec).CURRENT_EMBEDDER
+        monkeypatch.setenv("DEEPINFRA_EMBED_DIMENSIONS", "2048")
+        second = importlib.reload(ec).CURRENT_EMBEDDER
+        assert first != second  # rows cached at one size can never be matched against the other
+    finally:
+        monkeypatch.delenv("EMBED_PROVIDER")
+        monkeypatch.delenv("DEEPINFRA_EMBED_DIMENSIONS")
+        importlib.reload(ec)

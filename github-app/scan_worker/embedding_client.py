@@ -27,6 +27,10 @@ from app_server import hosted_embedder
 # regardless of how it was found.
 MAX_EMBEDDING_CHARS = 5000
 
+# Remote (DeepInfra) cache lookups: per-attempt timeout and number of attempts.
+REMOTE_TIMEOUT_SECONDS = 20.0
+REMOTE_ATTEMPTS = 3
+
 # Identifies which embedder produced a vector, recorded alongside every
 # similarity-cache row (packet_cache.py, flash_review_cache.py) so a
 # future embedder switch can't silently compare vectors from two
@@ -40,7 +44,7 @@ LOCAL_EMBEDDER = "jina-embed:jina-embeddings-v2-base-code"
 # process writes or reads carries the tag of the embedder that process really
 # calls. See app_server/hosted_embedder.py for why there is no runtime fallback.
 CURRENT_EMBEDDER = (
-    f"deepinfra:{hosted_embedder.deepinfra_model()}"
+    f"deepinfra:{hosted_embedder.embedder_label()}"
     if hosted_embedder.provider() == hosted_embedder.PROVIDER_DEEPINFRA
     else LOCAL_EMBEDDER
 )
@@ -100,9 +104,13 @@ def embed_text(text: str, base_url: str | None = None, timeout_seconds: float = 
     if len(text) > MAX_EMBEDDING_CHARS:
         text = text[:MAX_EMBEDDING_CHARS]
     if CURRENT_EMBEDDER != LOCAL_EMBEDDER:
-        # One attempt: a cache lookup should degrade to a miss, not stall a scan.
+        # A remote call has a long latency tail (a measured 10-15% of single calls took over
+        # 10 s while the median was 1.2 s), and a miss costs a whole re-review, so wait longer
+        # and retry (the 8B model also answers an occasional single call with a 429). Still bounded: a lookup degrades to a miss rather than stalling a scan.
         try:
-            vectors, tokens = hosted_embedder.embed_batch([text], timeout_seconds=timeout_seconds, retries=1)
+            vectors, tokens = hosted_embedder.embed_batch(
+                [text], timeout_seconds=max(timeout_seconds, REMOTE_TIMEOUT_SECONDS), retries=REMOTE_ATTEMPTS
+            )
         except hosted_embedder.EmbedderUnavailable as exc:
             logger.warning("embedding call failed (%s); treating cache as unavailable", exc)
             return None

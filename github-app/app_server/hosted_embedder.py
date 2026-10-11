@@ -29,11 +29,18 @@ PROVIDER_LOCAL = "local"
 PROVIDER_DEEPINFRA = "deepinfra"
 
 DEEPINFRA_EMBEDDINGS_URL = "https://api.deepinfra.com/v1/openai/embeddings"
-# 1024-dim, not 768 on purpose: an older CLI labels whatever the hosted endpoint
+# Qwen3-Embedding-8B, asked for 1024 of its 4096 dimensions (it is trained so that a
+# leading slice is still a good embedding). Measured on 332 retrieval questions the
+# 1024-dim vectors scored the same as the full 4096 (MRR difference +0.001, 95% CI
+# -0.011 to +0.013), at a quarter of the storage and cache-lookup cost, and beat the
+# 0.6B model (+0.030, CI +0.003 to +0.056) at the same price per token.
+#
+# The size is not 768 on purpose: an older CLI labels whatever the hosted endpoint
 # returns as the jina model, so a 768-dim replacement would be accepted into an
 # existing jina index and silently mix two vector spaces. A different dimension
 # is caught by the CLI's dimension guard and forces a clean rebuild.
-DEFAULT_DEEPINFRA_MODEL = "Qwen/Qwen3-Embedding-0.6B"
+DEFAULT_DEEPINFRA_MODEL = "Qwen/Qwen3-Embedding-8B"
+DEFAULT_DEEPINFRA_DIMENSIONS = 1024
 
 # Per-request bounds, taken from the retrieval benchmark harness: large enough to
 # keep the call count low, small enough to stay clear of request-size limits.
@@ -63,6 +70,29 @@ def provider() -> str:
 
 def deepinfra_model() -> str:
     return os.environ.get("DEEPINFRA_EMBED_MODEL", "").strip() or DEFAULT_DEEPINFRA_MODEL
+
+
+def deepinfra_dimensions() -> int | None:
+    """Vector size to request, or None to take the model's native size.
+    DEEPINFRA_EMBED_DIMENSIONS=0 (or "native") opts out, for a model that does not take the option."""
+    raw = os.environ.get("DEEPINFRA_EMBED_DIMENSIONS", "").strip().lower()
+    if not raw:
+        return DEFAULT_DEEPINFRA_DIMENSIONS
+    if raw in ("0", "native"):
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.error("invalid DEEPINFRA_EMBED_DIMENSIONS %r; using %d", raw, DEFAULT_DEEPINFRA_DIMENSIONS)
+        return DEFAULT_DEEPINFRA_DIMENSIONS
+    return value if value > 0 else DEFAULT_DEEPINFRA_DIMENSIONS
+
+
+def embedder_label() -> str:
+    """Names the model and vector size, e.g. 'Qwen/Qwen3-Embedding-8B@1024'. Used as the cache
+    tag and the hosted response's model, so vectors of two different sizes are never compared."""
+    dimensions = deepinfra_dimensions()
+    return deepinfra_model() if dimensions is None else f"{deepinfra_model()}@{dimensions}"
 
 
 def _normalize(vector: list[float]) -> list[float]:
@@ -98,6 +128,10 @@ def _embed_one_call(
     if not api_key:
         raise EmbedderUnavailable("DEEPINFRA_API_KEY is not set")
     last_status: int | str = "no response"
+    payload = {"model": deepinfra_model(), "input": batch, "encoding_format": "float"}
+    dimensions = deepinfra_dimensions()
+    if dimensions is not None:
+        payload["dimensions"] = dimensions
     for attempt in range(retries):
         if attempt:
             # Backing off matters most for a 429: an immediate retry would fail the same way.
@@ -107,7 +141,7 @@ def _embed_one_call(
                 response = httpx.post(
                     DEEPINFRA_EMBEDDINGS_URL,
                     headers={"Authorization": f"Bearer {api_key}"},
-                    json={"model": deepinfra_model(), "input": batch, "encoding_format": "float"},
+                    json=payload,
                     timeout=timeout_seconds,
                 )
         except httpx.HTTPError as exc:
