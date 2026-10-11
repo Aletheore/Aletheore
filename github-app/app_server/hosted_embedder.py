@@ -17,6 +17,8 @@ the jina-embed container stays deployed for that.
 import logging
 import math
 import os
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
@@ -39,7 +41,12 @@ MAX_TEXTS_PER_CALL = 48
 MAX_CHARS_PER_CALL = 120_000
 MAX_PARALLEL_CALLS = 4
 RETRIES = 3
+BACKOFF_SECONDS = 0.5
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+# Process-wide cap on simultaneous calls to the provider, so many requests at once
+# queue here instead of fanning out into a burst of 429s that the retries amplify.
+MAX_IN_FLIGHT_CALLS = 8
+_IN_FLIGHT = threading.BoundedSemaphore(MAX_IN_FLIGHT_CALLS)
 
 
 class EmbedderUnavailable(Exception):
@@ -78,9 +85,10 @@ def _batches(texts: list[str]) -> list[list[str]]:
     return batches
 
 
-# Used only when a response omits `usage`: dense code runs about 2.6 characters
-# per token, so dividing by 2.5 errs toward billing slightly more, never less.
-FALLBACK_CHARS_PER_TOKEN = 2.5
+# Used only when a response omits `usage`, which DeepInfra does not do in practice.
+# Dense code runs about 2.6 characters per token and prose about 4, so 3.0 sits
+# between the two: it never charges a customer much more than the real cost.
+FALLBACK_CHARS_PER_TOKEN = 3.0
 
 
 def _embed_one_call(
@@ -91,13 +99,17 @@ def _embed_one_call(
         raise EmbedderUnavailable("DEEPINFRA_API_KEY is not set")
     last_status: int | str = "no response"
     for attempt in range(retries):
+        if attempt:
+            # Backing off matters most for a 429: an immediate retry would fail the same way.
+            time.sleep(BACKOFF_SECONDS * 2 ** (attempt - 1))
         try:
-            response = httpx.post(
-                DEEPINFRA_EMBEDDINGS_URL,
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={"model": deepinfra_model(), "input": batch, "encoding_format": "float"},
-                timeout=timeout_seconds,
-            )
+            with _IN_FLIGHT:
+                response = httpx.post(
+                    DEEPINFRA_EMBEDDINGS_URL,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json={"model": deepinfra_model(), "input": batch, "encoding_format": "float"},
+                    timeout=timeout_seconds,
+                )
         except httpx.HTTPError as exc:
             last_status = type(exc).__name__
             continue
@@ -125,10 +137,14 @@ def _embed_one_call(
 def embed_batch(
     texts: list[str], timeout_seconds: float = 60.0, retries: int = RETRIES
 ) -> tuple[list[list[float]], int]:
-    """Embed `texts` in input order and report the prompt tokens the provider
-    billed, or raise EmbedderUnavailable. Blocking."""
+    """Embed `texts` in input order and report the prompt tokens to charge: the
+    provider's own `usage` figure, or a character-based estimate on the rare
+    response that omits it. Raises EmbedderUnavailable. Blocking."""
     if not texts:
         return [], 0
+    # Callers already cap each text far below this; it only keeps a single oversized
+    # text from becoming a request larger than the per-call bound.
+    texts = [text[:MAX_CHARS_PER_CALL] for text in texts]
     batches = _batches(texts)
     if len(batches) == 1:
         return _embed_one_call(batches[0], timeout_seconds, retries)

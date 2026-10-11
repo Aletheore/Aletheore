@@ -250,7 +250,9 @@ async def create_embeddings(request: Request, body: EmbeddingsRequest):
         # Unlike the Jina path this one costs real money, so it is drawn from the
         # installation's credit like every other LLM feature. A request can cost at most
         # about $0.008 (256 texts of 8,000 characters), so checking the balance first and
-        # charging the real token count afterwards overshoots by less than that.
+        # charging the real token count afterwards overshoots by less than that per request
+        # that was in flight when the balance ran out. The balance is clamped at zero when
+        # charged, so an overshoot costs us that sliver, never a negative customer balance.
         installation_row = await get_installation(request.app.state.db_pool, installation_id)
         remaining = (
             float(installation_row["base_credit_remaining_usd"]) + float(installation_row["topup_credit_balance_usd"])

@@ -76,11 +76,14 @@ def test_large_input_is_split_into_bounded_calls_and_reassembled_in_order(monkey
     assert [int(round(v[0] * int(t))) if int(t) else 0 for v, t in zip(vectors, texts)] == [int(t) for t in texts]
 
 
-def test_retryable_status_is_retried_then_succeeds(monkeypatch):
+def test_retryable_status_is_retried_with_backoff_then_succeeds(monkeypatch):
     results = iter([_response(429), _response(503), _response(200, [[1.0]])])
     monkeypatch.setattr(he.httpx, "post", lambda *a, **k: next(results))
+    slept = []
+    monkeypatch.setattr(he.time, "sleep", slept.append)
 
     assert he.embed_batch(["x"]) == ([[1.0]], 7)
+    assert slept == [0.5, 1.0]  # waits before each retry, doubling, and not before the first attempt
 
 
 def test_non_retryable_status_fails_immediately_without_leaking_the_body(monkeypatch):
@@ -137,7 +140,7 @@ def test_tokens_come_from_the_providers_usage_and_fall_back_to_a_generous_estima
 
     monkeypatch.setattr(he.httpx, "post", lambda *a, **k: _response(200, [[1.0]], usage=None))
     _, estimated = he.embed_batch(["y" * 250])
-    assert estimated == 100  # 250 chars / 2.5, rounded up: errs toward billing more, never less
+    assert estimated == 84  # 250 chars / 3.0, rounded up
 
 
 def test_embed_text_reports_tokens_only_inside_a_metering_block(monkeypatch):
@@ -204,3 +207,26 @@ def test_charge_drains_what_is_left_when_the_balance_cannot_cover_the_cost(monke
     spend.charge_embedding_tokens("dsn", 1, 1_000_000, "hosted_embeddings")
 
     assert reserved == [pytest.approx(0.01), pytest.approx(0.0015)]
+
+
+def test_a_single_oversized_text_is_cut_to_the_per_call_bound(monkeypatch):
+    seen = {}
+
+    def fake_post(url, headers, json, timeout):
+        seen["sizes"] = [len(t) for t in json["input"]]
+        return _response(200, [[1.0]])
+
+    monkeypatch.setattr(he.httpx, "post", fake_post)
+    he.embed_batch(["z" * (he.MAX_CHARS_PER_CALL + 5000)])
+
+    assert seen["sizes"] == [he.MAX_CHARS_PER_CALL]
+
+
+def test_charge_never_raises_even_if_pricing_itself_fails(monkeypatch):
+    import scan_worker.embedding_spend as spend
+
+    def boom(*args, **kwargs):
+        raise KeyError("model missing from the rate table")
+
+    monkeypatch.setattr(spend, "cost_for_usage", boom)
+    assert spend.charge_embedding_tokens("dsn", 1, 10, "hosted_embeddings") == 0.0

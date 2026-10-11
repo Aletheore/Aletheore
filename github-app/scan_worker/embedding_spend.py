@@ -27,8 +27,8 @@ def charge_embedding_tokens(dsn: str, installation_id: int, tokens: int, feature
     Returns the dollars charged (0.0 when there was nothing to charge or billing failed)."""
     if tokens <= 0:
         return 0.0
-    cost = cost_for_usage(deepinfra_model(), tokens, 0)
     try:
+        cost = cost_for_usage(deepinfra_model(), tokens, 0)
         if not reserve_llm_spend(dsn, installation_id, cost):
             # The embedding is already done, so its cost is sunk. Take what is left rather
             # than leaving the balance overstated (same drain-to-zero tail as the review job).
@@ -39,6 +39,8 @@ def charge_embedding_tokens(dsn: str, installation_id: int, tokens: int, feature
                 )
                 if remaining > 0:
                     reserve_llm_spend(dsn, installation_id, remaining)
+        # The ledger records what the embedding really cost, even when the balance could
+        # only cover part of it: same as the review job, so per-feature totals stay true.
         record_llm_spend(dsn, installation_id, cost, feature=feature)
     except Exception as exc:  # noqa: BLE001 - billing bookkeeping must never fail the caller
         logger.warning(
