@@ -7,10 +7,12 @@ bge-m3 actually underperformed nomic. See jina_embed/server.py, which
 serves this model behind a plain /embed endpoint.
 """
 
+import contextlib
 import functools
 import logging
 import math
 import os
+import threading
 
 import httpx
 
@@ -45,6 +47,34 @@ CURRENT_EMBEDDER = (
 
 logger = logging.getLogger(__name__)
 
+# Billable tokens from embed_text calls made inside `metered_embedding` on this thread.
+# Thread-local because the cache lookups that call embed_text run on worker threads
+# and the cost belongs to whichever installation's job is on that thread.
+_metering = threading.local()
+
+# Per-feature ledger labels, so the spend breakdown shows what embeddings cost each surface.
+FEATURE_FLASH_CACHE = "flash_review_embedding"
+FEATURE_PACKET_CACHE = "airview_embedding"
+
+
+@contextlib.contextmanager
+def metered_embedding(dsn: str, installation_id: int, feature: str):
+    """Charge the installation's credit for any remote embedding tokens used inside the
+    block. A no-op cost for the local embedder, which reports none."""
+    previous = getattr(_metering, "tokens", None)
+    _metering.tokens = 0
+    try:
+        yield
+    finally:
+        tokens = _metering.tokens
+        _metering.tokens = previous
+        if tokens:
+            # Imported here: embedding_spend pulls in the database layer, which the
+            # unmetered path (and its tests) should not need.
+            from scan_worker.embedding_spend import charge_embedding_tokens
+
+            charge_embedding_tokens(dsn, installation_id, tokens, feature)
+
 
 @functools.lru_cache(maxsize=None)
 def _client(base_url: str | None = None) -> httpx.Client:
@@ -72,10 +102,13 @@ def embed_text(text: str, base_url: str | None = None, timeout_seconds: float = 
     if CURRENT_EMBEDDER != LOCAL_EMBEDDER:
         # One attempt: a cache lookup should degrade to a miss, not stall a scan.
         try:
-            return hosted_embedder.embed_batch([text], timeout_seconds=timeout_seconds, retries=1)[0]
+            vectors, tokens = hosted_embedder.embed_batch([text], timeout_seconds=timeout_seconds, retries=1)
         except hosted_embedder.EmbedderUnavailable as exc:
             logger.warning("embedding call failed (%s); treating cache as unavailable", exc)
             return None
+        if getattr(_metering, "tokens", None) is not None:
+            _metering.tokens += tokens
+        return vectors[0]
     try:
         # Not a `with` block: _client is now a pooled, cached-for-the-
         # process-lifetime client (see its own docstring) - closing it

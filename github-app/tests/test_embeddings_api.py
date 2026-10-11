@@ -365,14 +365,24 @@ async def test_successful_embeddings_request_records_token_use(pool):
     assert after is not None
 
 
+async def _set_credit(pool, installation_id: int, base: float, topup: float = 0.0) -> None:
+    await pool.execute(
+        "UPDATE installations SET base_credit_remaining_usd = $2, topup_credit_balance_usd = $3 "
+        "WHERE installation_id = $1",
+        installation_id, base, topup,
+    )
+
+
 @pytest.mark.asyncio
-async def test_deepinfra_mode_returns_that_models_vectors_and_never_touches_jina(pool):
+async def test_deepinfra_mode_returns_that_models_vectors_and_charges_the_real_token_count(pool):
     await _installation_with_token(pool, 9030, "air", "di-token")
+    await _set_credit(pool, 9030, 5.0)
     jina = _fake_jina()
 
     with patch.dict("os.environ", {"EMBED_PROVIDER": "deepinfra"}), \
          patch("app_server.embeddings_api.get_jina_client", return_value=jina), \
-         patch("app_server.embeddings_api.hosted_embedder.embed_batch", return_value=[[0.5] * 1024]):
+         patch("app_server.embeddings_api.hosted_embedder.embed_batch", return_value=([[0.5] * 1024], 1234)), \
+         patch("app_server.embeddings_api.charge_embedding_tokens") as charge:
         response = await _post(pool, "di-token", ["x"])
 
     assert response.status_code == 200
@@ -380,19 +390,51 @@ async def test_deepinfra_mode_returns_that_models_vectors_and_never_touches_jina
     assert body["model"] == "Qwen/Qwen3-Embedding-0.6B"
     assert len(body["vectors"][0]) == 1024
     jina.post.assert_not_called()
+    charge.assert_called_once()
+    assert charge.call_args.args[1:] == (9030, 1234, "hosted_embeddings")
 
 
 @pytest.mark.asyncio
-async def test_deepinfra_failure_is_502_and_does_not_fall_back_to_jina(pool):
+async def test_deepinfra_mode_refuses_with_402_when_credit_is_used_up_and_never_calls_the_provider(pool):
+    await _installation_with_token(pool, 9032, "air", "di-empty-token")
+    await _set_credit(pool, 9032, 0.0, 0.0)
+
+    with patch.dict("os.environ", {"EMBED_PROVIDER": "deepinfra"}), \
+         patch("app_server.embeddings_api.hosted_embedder.embed_batch") as embed:
+        response = await _post(pool, "di-empty-token", ["x"])
+
+    assert response.status_code == 402
+    assert "credit" in response.json()["detail"]
+    embed.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_deepinfra_mode_counts_purchased_top_up_credit_as_available(pool):
+    await _installation_with_token(pool, 9033, "air", "di-topup-token")
+    await _set_credit(pool, 9033, 0.0, 2.0)
+
+    with patch.dict("os.environ", {"EMBED_PROVIDER": "deepinfra"}), \
+         patch("app_server.embeddings_api.hosted_embedder.embed_batch", return_value=([[0.5] * 4], 10)), \
+         patch("app_server.embeddings_api.charge_embedding_tokens"):
+        response = await _post(pool, "di-topup-token", ["x"])
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_deepinfra_failure_is_502_charges_nothing_and_does_not_fall_back_to_jina(pool):
     from app_server.hosted_embedder import EmbedderUnavailable
 
     await _installation_with_token(pool, 9031, "air", "di-fail-token")
+    await _set_credit(pool, 9031, 5.0)
     jina = _fake_jina()
 
     with patch.dict("os.environ", {"EMBED_PROVIDER": "deepinfra"}), \
          patch("app_server.embeddings_api.get_jina_client", return_value=jina), \
-         patch("app_server.embeddings_api.hosted_embedder.embed_batch", side_effect=EmbedderUnavailable("down")):
+         patch("app_server.embeddings_api.hosted_embedder.embed_batch", side_effect=EmbedderUnavailable("down")), \
+         patch("app_server.embeddings_api.charge_embedding_tokens") as charge:
         response = await _post(pool, "di-fail-token", ["x"])
 
     assert response.status_code == 502
     jina.post.assert_not_called()
+    charge.assert_not_called()

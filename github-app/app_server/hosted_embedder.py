@@ -78,7 +78,14 @@ def _batches(texts: list[str]) -> list[list[str]]:
     return batches
 
 
-def _embed_one_call(batch: list[str], timeout_seconds: float, retries: int) -> list[list[float]]:
+# Used only when a response omits `usage`: dense code runs about 2.6 characters
+# per token, so dividing by 2.5 errs toward billing slightly more, never less.
+FALLBACK_CHARS_PER_TOKEN = 2.5
+
+
+def _embed_one_call(
+    batch: list[str], timeout_seconds: float, retries: int
+) -> tuple[list[list[float]], int]:
     api_key = os.environ.get("DEEPINFRA_API_KEY", "").strip()
     if not api_key:
         raise EmbedderUnavailable("DEEPINFRA_API_KEY is not set")
@@ -96,13 +103,18 @@ def _embed_one_call(batch: list[str], timeout_seconds: float, retries: int) -> l
             continue
         if response.status_code == 200:
             try:
-                rows = sorted(response.json()["data"], key=lambda item: item["index"])
+                payload = response.json()
+                rows = sorted(payload["data"], key=lambda item: item["index"])
                 vectors = [_normalize([float(v) for v in row["embedding"]]) for row in rows]
             except (KeyError, TypeError, ValueError) as exc:
                 raise EmbedderUnavailable("malformed response from the embedding provider") from exc
             if len(vectors) != len(batch):
                 raise EmbedderUnavailable("embedding provider returned the wrong number of vectors")
-            return vectors
+            usage = payload.get("usage")
+            tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+            if not isinstance(tokens, int) or isinstance(tokens, bool) or tokens < 0:
+                tokens = math.ceil(sum(len(text) for text in batch) / FALLBACK_CHARS_PER_TOKEN)
+            return vectors, tokens
         last_status = response.status_code
         if response.status_code not in RETRYABLE_STATUS:
             break
@@ -110,13 +122,19 @@ def _embed_one_call(batch: list[str], timeout_seconds: float, retries: int) -> l
     raise EmbedderUnavailable(f"embedding provider call failed ({last_status})")
 
 
-def embed_batch(texts: list[str], timeout_seconds: float = 60.0, retries: int = RETRIES) -> list[list[float]]:
-    """Embed `texts` in input order, or raise EmbedderUnavailable. Blocking."""
+def embed_batch(
+    texts: list[str], timeout_seconds: float = 60.0, retries: int = RETRIES
+) -> tuple[list[list[float]], int]:
+    """Embed `texts` in input order and report the prompt tokens the provider
+    billed, or raise EmbedderUnavailable. Blocking."""
     if not texts:
-        return []
+        return [], 0
     batches = _batches(texts)
     if len(batches) == 1:
         return _embed_one_call(batches[0], timeout_seconds, retries)
     with ThreadPoolExecutor(max_workers=MAX_PARALLEL_CALLS) as pool:
         results = list(pool.map(lambda batch: _embed_one_call(batch, timeout_seconds, retries), batches))
-    return [vector for result in results for vector in result]
+    return (
+        [vector for vectors, _ in results for vector in vectors],
+        sum(tokens for _, tokens in results),
+    )

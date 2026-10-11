@@ -40,6 +40,9 @@ MODEL_RATES_PER_MILLION_USD = {
     # cost_for_usage multiplies both, and a missing key would KeyError
     # rather than cost nothing.
     "text-embedding-3-small": {"input": 0.02, "output": 0.0, "verified_at": "2026-08-11"},
+    # DeepInfra's listed price for the hosted embedder (hosted_embedder.py), read from
+    # their model library on 2026-10-11. Only billed when EMBED_PROVIDER=deepinfra.
+    "Qwen/Qwen3-Embedding-0.6B": {"input": 0.01, "output": 0.0, "verified_at": "2026-10-11"},
     "gpt-4o": {"input": 2.50, "output": 10.00, "verified_at": "2026-07-23"},
     "claude-opus-4-8": {"input": 15.00, "output": 75.00, "verified_at": "2026-07-23"},
 }
