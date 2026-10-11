@@ -112,6 +112,12 @@ _HOSTED_EMBED_CONCURRENCY_KEY = "concurrency:hosted-embed"
 MAX_REPO_ID_LENGTH = 128
 
 
+def _embed_and_charge(texts: list[str], dsn: str, installation_id: int) -> list[list[float]]:
+    vectors, tokens = hosted_embedder.embed_batch(texts)
+    charge_embedding_tokens(dsn, installation_id, tokens, FEATURE_HOSTED)
+    return vectors
+
+
 class EmbeddingsRequest(BaseModel):
     texts: list[str] = Field(min_length=1, max_length=MAX_TEXTS_PER_REQUEST)
     # Optional so an older CLI that predates this field still works - it
@@ -268,13 +274,15 @@ async def create_embeddings(request: Request, body: EmbeddingsRequest):
                 ),
             )
         try:
-            vectors, tokens = await asyncio.to_thread(hosted_embedder.embed_batch, body.texts)
+            # Embed and charge in one thread: if the caller disconnects and this request is
+            # cancelled mid-call, the thread still finishes, so work we paid the provider for
+            # is never left uncharged.
+            vectors = await asyncio.to_thread(
+                _embed_and_charge, body.texts, get_settings().database_url, installation_id
+            )
         except hosted_embedder.EmbedderUnavailable as exc:
             logger.warning("hosted embedding call failed for installation=%s (%s)", installation_id, exc)
             raise HTTPException(status_code=502, detail="embedding provider unavailable") from exc
-        await asyncio.to_thread(
-            charge_embedding_tokens, get_settings().database_url, installation_id, tokens, FEATURE_HOSTED
-        )
         return {"model": hosted_embedder.embedder_label(), "vectors": vectors}
 
     slot_id = uuid.uuid4().hex

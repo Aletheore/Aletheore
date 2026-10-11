@@ -104,6 +104,8 @@ def embed_text(text: str, base_url: str | None = None, timeout_seconds: float = 
     if len(text) > MAX_EMBEDDING_CHARS:
         text = text[:MAX_EMBEDDING_CHARS]
     if CURRENT_EMBEDDER != LOCAL_EMBEDDER:
+        # base_url only addresses the local sidecar; the remote provider has a fixed endpoint,
+        # so it is deliberately not used here.
         # A remote call has a long latency tail (a measured 10-15% of single calls took over
         # 10 s while the median was 1.2 s), and a miss costs a whole re-review, so wait longer
         # and retry (the 8B model also answers an occasional single call with a 429). Still bounded: a lookup degrades to a miss rather than stalling a scan.

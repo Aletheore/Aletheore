@@ -278,3 +278,72 @@ def test_a_different_vector_size_gets_a_different_cache_tag(monkeypatch):
         monkeypatch.delenv("EMBED_PROVIDER")
         monkeypatch.delenv("DEEPINFRA_EMBED_DIMENSIONS")
         importlib.reload(ec)
+
+
+def test_a_network_timeout_is_retried_like_a_retryable_status(monkeypatch):
+    outcomes = iter([httpx.ReadTimeout("slow"), httpx.ConnectError("refused"), _response(200, [[1.0]])])
+
+    def fake_post(*a, **k):
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(he.httpx, "post", fake_post)
+    monkeypatch.setattr(he.time, "sleep", lambda s: None)
+
+    assert he.embed_batch(["x"])[0] == [[1.0]]
+
+
+def test_giving_up_after_the_last_attempt_reports_the_last_status_and_sleeps_only_between_attempts(monkeypatch):
+    attempts = []
+    slept = []
+    monkeypatch.setattr(he.httpx, "post", lambda *a, **k: attempts.append(1) or _response(429))
+    monkeypatch.setattr(he.time, "sleep", slept.append)
+
+    with pytest.raises(he.EmbedderUnavailable, match="429"):
+        he.embed_batch(["x"])
+
+    assert len(attempts) == he.RETRIES
+    assert slept == [0.5, 1.0]  # two waits for three attempts, none after the last
+
+
+def test_a_single_attempt_never_sleeps(monkeypatch):
+    slept = []
+    monkeypatch.setattr(he.httpx, "post", lambda *a, **k: _response(503))
+    monkeypatch.setattr(he.time, "sleep", slept.append)
+
+    with pytest.raises(he.EmbedderUnavailable):
+        he.embed_batch(["x"], retries=1)
+
+    assert slept == []
+
+
+def test_the_in_flight_slot_is_released_while_backing_off(monkeypatch):
+    # A call waiting out a 429 must not hold one of the process-wide slots, or a throttled
+    # provider would also stall every other request that could have used it.
+    free_during_sleep = []
+    results = iter([_response(429), _response(200, [[1.0]])])
+    monkeypatch.setattr(he.httpx, "post", lambda *a, **k: next(results))
+    monkeypatch.setattr(he.time, "sleep", lambda s: free_during_sleep.append(he._IN_FLIGHT._value))
+
+    he.embed_batch(["x"])
+
+    assert free_during_sleep == [he.MAX_IN_FLIGHT_CALLS]
+
+
+def test_one_failed_batch_stops_the_batches_that_have_not_started(monkeypatch):
+    monkeypatch.setattr(he, "MAX_PARALLEL_CALLS", 1)  # strictly one at a time, so the rest are still queued
+    calls = []
+
+    def fake_post(url, headers, json, timeout):
+        calls.append(len(json["input"]))
+        return httpx.Response(400, json={}, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(he.httpx, "post", fake_post)
+    texts = ["t"] * (he.MAX_TEXTS_PER_CALL * 5)  # five batches
+
+    with pytest.raises(he.EmbedderUnavailable):
+        he.embed_batch(texts)
+
+    assert len(calls) == 1

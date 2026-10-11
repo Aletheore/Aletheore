@@ -149,14 +149,14 @@ def _embed_one_call(
             continue
         if response.status_code == 200:
             try:
-                payload = response.json()
-                rows = sorted(payload["data"], key=lambda item: item["index"])
+                body = response.json()
+                rows = sorted(body["data"], key=lambda item: item["index"])
                 vectors = [_normalize([float(v) for v in row["embedding"]]) for row in rows]
             except (KeyError, TypeError, ValueError) as exc:
                 raise EmbedderUnavailable("malformed response from the embedding provider") from exc
             if len(vectors) != len(batch):
                 raise EmbedderUnavailable("embedding provider returned the wrong number of vectors")
-            usage = payload.get("usage")
+            usage = body.get("usage")
             tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
             if not isinstance(tokens, int) or isinstance(tokens, bool) or tokens < 0:
                 tokens = math.ceil(sum(len(text) for text in batch) / FALLBACK_CHARS_PER_TOKEN)
@@ -183,7 +183,15 @@ def embed_batch(
     if len(batches) == 1:
         return _embed_one_call(batches[0], timeout_seconds, retries)
     with ThreadPoolExecutor(max_workers=MAX_PARALLEL_CALLS) as pool:
-        results = list(pool.map(lambda batch: _embed_one_call(batch, timeout_seconds, retries), batches))
+        futures = [pool.submit(_embed_one_call, batch, timeout_seconds, retries) for batch in batches]
+        try:
+            results = [future.result() for future in futures]
+        except BaseException:
+            # One batch failing fails the whole request, so do not start (and pay the provider
+            # for) the batches that have not begun. Ones already running finish on their own.
+            for future in futures:
+                future.cancel()
+            raise
     return (
         [vector for vectors, _ in results for vector in vectors],
         sum(tokens for _, tokens in results),
