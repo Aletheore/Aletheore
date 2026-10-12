@@ -44,6 +44,14 @@ export const changelogEntries: ChangelogEntry[] = [
       "Scanning large repos is now meaningfully faster: on the Linux kernel (1.46M commits, ~95k files), a cold scan dropped from roughly 12+ minutes to about 5 minutes, and a warm re-scan to about 2.5 minutes, mainly from overlapping git/network/parsing work that used to run sequentially and caching more per-file state between scans. Three real bugs were found and fixed along the way: a quadratic slowdown in error handling on repos with many parse errors, a parser-cache collision that applied the wrong language grammar to .ts and .tsx files interchangeably once scanning ran in parallel (nondeterministic, wrong results on some files), and a history-depth setting that wasn't persisting correctly on warm scans.",
   },
   {
+    date: "2026-10-03",
+    title: "Fixed AIRview and Docs occasionally dropping entire outputs",
+    tags: ["fix"],
+    body:
+      "A formatting quirk in the underlying model's output could cause AIRview and Docs to silently drop an entire batch of generated descriptions when one response came back malformed. The model is now asked to return valid JSON directly, significantly reducing these failures.",
+    link: { label: "PR #907 on GitHub", href: "https://github.com/Aletheore/Aletheore/pull/907" },
+  },
+  {
     date: "2026-10-02",
     title: "Removing a repo from an installation now deletes its retained checkout, and the privacy policy was corrected to match",
     tags: ["security", "fix"],
@@ -58,23 +66,6 @@ export const changelogEntries: ChangelogEntry[] = [
     tags: ["fix"],
     body:
       "If a reserved charge came out of purchased top-up credit (because the plan's included credit was already used up) and that charge was later refunded, the refund was going back into the plan's credit bucket instead of the top-up balance it actually came from - meaning credit a customer paid for could quietly turn into credit that resets at renewal instead of staying theirs. Fixed so a refund returns to the balance it was drawn from. A separate bug in the same pass: free-tier installs were being held to a per-repo review cap meant only for paid plans; that cap is now paid-only, as intended.",
-  },
-  {
-    date: "2026-09-28",
-    title: "Fixed a cross-account access issue in installation permission checks",
-    tags: ["security", "fix"],
-    responseTime: "about 1 day from report to fix merged, fix deployed the same day",
-    body:
-      "A user reported that signing in with their own, unrelated GitHub account could show another installation's private repository list and billing/checkout target. Root cause: GitHub's own installations API returns every installation where an account has read access to even one repository, including through a public repo with no invitation - and that broad set was being used directly as \"this account administers this installation\" in several places with no further per-account check. A full sweep of the affected code found six endpoints with the same gap, the most severe being one that could mint a usable API credential for someone else's installation. All six were fixed with a shared, correct permission check, each with its own regression test, and the fix was deployed to production the same day it was confirmed.",
-    link: { label: "Our security practices", href: "/security" },
-  },
-  {
-    date: "2026-10-03",
-    title: "Fixed AIRview and Docs occasionally dropping entire outputs",
-    tags: ["fix"],
-    body:
-      "A formatting quirk in the underlying model's output could cause AIRview and Docs to silently drop an entire batch of generated descriptions when one response came back malformed. The model is now asked to return valid JSON directly, significantly reducing these failures.",
-    link: { label: "PR #907 on GitHub", href: "https://github.com/Aletheore/Aletheore/pull/907" },
   },
   {
     date: "2026-10-02",
@@ -139,6 +130,15 @@ export const changelogEntries: ChangelogEntry[] = [
     body:
       "Aletheore's evidence comment on a pull request now includes a diagram showing which changed files have dependents elsewhere in the repo, and which of those have new findings, instead of only a text list.",
     link: { label: "PR #881 on GitHub", href: "https://github.com/Aletheore/Aletheore/pull/881" },
+  },
+  {
+    date: "2026-09-28",
+    title: "Fixed a cross-account access issue in installation permission checks",
+    tags: ["security", "fix"],
+    responseTime: "about 1 day from report to fix merged, fix deployed the same day",
+    body:
+      "A user reported that signing in with their own, unrelated GitHub account could show another installation's private repository list and billing/checkout target. Root cause: GitHub's own installations API returns every installation where an account has read access to even one repository, including through a public repo with no invitation - and that broad set was being used directly as \"this account administers this installation\" in several places with no further per-account check. A full sweep of the affected code found six endpoints with the same gap, the most severe being one that could mint a usable API credential for someone else's installation. All six were fixed with a shared, correct permission check, each with its own regression test, and the fix was deployed to production the same day it was confirmed.",
+    link: { label: "Our security practices", href: "/security" },
   },
   {
     date: "2026-09-24",

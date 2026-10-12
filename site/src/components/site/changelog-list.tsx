@@ -23,7 +23,15 @@ const tagLabel: Record<ChangelogTag, string> = {
 };
 
 function formatDate(iso: string): string {
-  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  // timeZone UTC matches the UTC midnight parsed above. Without it the day shown depended on the
+  // runtime's timezone: a visitor west of UTC saw the previous day, and the server-rendered text
+  // could differ from what the browser rendered on hydration.
+  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", {
+    timeZone: "UTC",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
 }
 
 export function ChangelogList() {
