@@ -2167,6 +2167,9 @@ def test_login_saves_token_when_installation_auto_resolved(tmp_path, monkeypatch
     assert result.exit_code == 0
     assert "acme" in result.output
     assert "already saved" not in result.output.lower()
+    # Saving a token switches 'aletheore index' to the hosted embedder, which
+    # uploads source chunks - login is where the user learns that.
+    assert "hosted embedding service" in " ".join(result.output.split())
     saved = json.loads(creds_path.read_text())
     assert saved["aletheore-managed-audit"] == "aletheore-tok-xyz"
 

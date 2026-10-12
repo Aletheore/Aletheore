@@ -309,3 +309,21 @@ def test_restrict_windows_acl_is_a_noop_when_no_identity_available(tmp_path, mon
     monkeypatch.setattr("subprocess.run", lambda args, **kw: calls.append(args))
     _restrict_windows_acl(tmp_path / "credentials.json")
     assert calls == []
+
+
+def test_get_api_key_shows_the_disclosure_only_when_it_actually_prompts(monkeypatch, tmp_path, capsys):
+    monkeypatch.delenv("TESTPROVIDER_API_KEY", raising=False)
+    responses = iter(["sk-entered", "once"])
+
+    get_api_key(
+        "TESTPROVIDER_API_KEY", "testprovider", tmp_path / "creds.json",
+        lambda _msg: next(responses), disclosure="where requests go",
+    )
+    assert "where requests go" in capsys.readouterr().out
+
+    monkeypatch.setenv("TESTPROVIDER_API_KEY", "sk-env")
+    get_api_key(
+        "TESTPROVIDER_API_KEY", "testprovider", tmp_path / "creds.json",
+        lambda _msg: "", disclosure="where requests go",
+    )
+    assert "where requests go" not in capsys.readouterr().out

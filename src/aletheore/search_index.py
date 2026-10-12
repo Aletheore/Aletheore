@@ -16,7 +16,12 @@ from lancedb.index import FTS
 from openai import APIConnectionError, NotFoundError, OpenAI
 from tokenizers import Tokenizer
 
-from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, get_api_key, has_api_key
+from aletheore.credentials import (
+    DEFAULT_CREDENTIALS_PATH,
+    HOSTED_EMBEDDINGS_DISCLOSURE,
+    get_api_key,
+    has_api_key,
+)
 
 FALLBACK_CHUNK_MAX_LINES = 200
 DEFAULT_EMBEDDING_BASE_URL = "http://localhost:11434/v1"
@@ -1307,6 +1312,18 @@ HOSTED_EMBED_MAX_TOKENS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_TOKENS"
 _HOSTED_TOKENIZER_PATH = Path(__file__).resolve().parent / "data" / "jina_v2_base_code_tokenizer.json"
 _hosted_tokenizer_cache: Tokenizer | None = None
 
+# Once per process: an index build (or watch-mode re-index) says once that it is
+# uploading source chunks, rather than on every batch.
+_hosted_disclosure_shown = False
+
+
+def _show_hosted_disclosure_once() -> None:
+    # stderr, never stdout: the MCP server speaks its protocol over stdout.
+    global _hosted_disclosure_shown
+    if not _hosted_disclosure_shown:
+        _hosted_disclosure_shown = True
+        print(f"aletheore: {HOSTED_EMBEDDINGS_DISCLOSURE}", file=sys.stderr)
+
 
 def _hosted_tokenizer() -> Tokenizer:
     """Lazily load jina-embeddings-v2-base-code's real WordPiece tokenizer.
@@ -1402,6 +1419,9 @@ def _embed_in_batches(
         "ALETHEORE_API_TOKEN", "aletheore-managed-audit", prompt_fn=lambda _: ""
     )
     use_hosted = bool(token) and allow_hosted
+    # Code chunks, not a single search query: a query embeds one short string.
+    if use_hosted and len(texts) > 1:
+        _show_hosted_disclosure_once()
     if token and not allow_hosted:
         print(
             "aletheore: hosted embeddings available but not permitted in this "

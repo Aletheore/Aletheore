@@ -2876,3 +2876,38 @@ def test_provider_switch_with_zero_stale_chunks_does_not_embed_chunks_0_twice(tm
 
     assert len(embedded) == len(set(embedded))
     assert len(embedded) == 2
+
+
+def test_hosted_embedding_says_once_per_run_that_it_uploads_source_chunks(monkeypatch, capsys):
+    # Audit finding 10/12: a saved Aletheore token silently switches indexing to
+    # the hosted embedder, the one CLI path that uploads source code, and a token
+    # set through ALETHEORE_API_TOKEN never passes a prompt that could say so.
+    import aletheore.search_index as search_index_module
+    from aletheore.credentials import HOSTED_EMBEDDINGS_DISCLOSURE
+
+    monkeypatch.setenv("ALETHEORE_API_TOKEN", "tok")
+    monkeypatch.setattr(search_index_module, "_hosted_disclosure_shown", False)
+    monkeypatch.setattr(
+        search_index_module, "embed_texts_hosted", lambda batch, token, repo_id=None: [[0.0] * 768 for _ in batch]
+    )
+
+    search_index_module._embed_in_batches(["def a(): pass", "def b(): pass"])
+    search_index_module._embed_in_batches(["def c(): pass", "def d(): pass"])
+    captured = capsys.readouterr()
+
+    assert captured.err.count(HOSTED_EMBEDDINGS_DISCLOSURE) == 1
+    assert HOSTED_EMBEDDINGS_DISCLOSURE not in captured.out
+
+
+def test_a_single_hosted_query_embedding_does_not_print_the_upload_notice(monkeypatch, capsys):
+    import aletheore.search_index as search_index_module
+
+    monkeypatch.setenv("ALETHEORE_API_TOKEN", "tok")
+    monkeypatch.setattr(search_index_module, "_hosted_disclosure_shown", False)
+    monkeypatch.setattr(
+        search_index_module, "embed_texts_hosted", lambda batch, token, repo_id=None: [[0.0] * 768 for _ in batch]
+    )
+
+    search_index_module._embed_in_batches(["how is auth handled?"])
+
+    assert capsys.readouterr().err == ""

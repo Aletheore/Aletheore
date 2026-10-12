@@ -38,7 +38,7 @@ from aletheore.citation_verifier import (
     local_line_count_fetcher,
     verify_citations,
 )
-from aletheore.credentials import get_api_key
+from aletheore.credentials import HOSTED_EMBEDDINGS_DISCLOSURE, get_api_key
 from aletheore.device_auth import infer_repo_full_name_from_cwd_git_remote
 from aletheore.preferences import (
     has_shown_crash_reporting_notice,
@@ -664,7 +664,9 @@ def _managed_audit(
     check_bearer: bool | None = None,
     check_joern: bool | None = None,
 ) -> int:
-    resolved_token = token or get_api_key("ALETHEORE_API_TOKEN", "aletheore-managed-audit")
+    resolved_token = token or get_api_key(
+        "ALETHEORE_API_TOKEN", "aletheore-managed-audit", disclosure=HOSTED_EMBEDDINGS_DISCLOSURE
+    )
     if not resolved_token:
         console.print("[bold red]error:[/bold red] no managed-audit token available")
         return 1
@@ -2258,6 +2260,7 @@ def login() -> None:
             f"[bold]{installation['account_login']}[/bold]. "
             "This replaces any previously saved token."
         )
+        console.print(HOSTED_EMBEDDINGS_DISCLOSURE)
     except DeviceFlowError as exc:
         console.print(f"[bold red]error:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc

@@ -32,12 +32,28 @@ def has_api_key(
     return _load_saved_key(provider_name, credentials_path) is not None
 
 
+# Shown wherever an Aletheore API token is obtained (login, the managed-audit
+# prompt) and once per run when the hosted embedder is actually used, since a
+# token set through ALETHEORE_API_TOKEN never passes through either prompt.
+# Saving a token silently switches 'aletheore index' from the local embedder
+# to the hosted one, which is the one path where the CLI uploads source code.
+HOSTED_EMBEDDINGS_DISCLOSURE = (
+    "With an Aletheore token, 'aletheore index' sends chunks of the repository's source code "
+    "to Aletheore's hosted embedding service to build the search index. They are embedded and "
+    "returned, not stored. Run 'aletheore logout' (or unset ALETHEORE_API_TOKEN) to keep "
+    "indexing on this machine."
+)
+
+
 def get_api_key(
     env_var: str,
     provider_name: str,
     credentials_path: Path = DEFAULT_CREDENTIALS_PATH,
     prompt_fn: Callable[[str], str] = input,
+    disclosure: str | None = None,
 ) -> str | None:
+    """`disclosure`: shown right before the key is asked for, to say where
+    requests made with it will go. Only printed when actually prompting."""
     if env_var:
         env_value = os.environ.get(env_var)
         if env_value:
@@ -56,6 +72,8 @@ def get_api_key(
     if prompt_fn is input and not sys.stdin.isatty():
         return None
 
+    if disclosure:
+        print(disclosure)
     key_prompt = (
         f"No {env_var} found. Enter your {provider_name} API key "
         f"(or press Enter to cancel): "
