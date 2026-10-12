@@ -1,4 +1,4 @@
-from app_server.paddle_pricing import resolve_plan_for_price_id, resolve_price_id_for_plan
+from app_server.paddle_pricing import is_annual_subscription, resolve_plan_for_price_id, resolve_price_id_for_plan
 
 
 def test_resolves_both_real_air_price_ids():
@@ -16,6 +16,23 @@ def test_resolve_price_id_for_plan_round_trips_both_intervals():
     assert resolve_plan_for_price_id(monthly) == "air"
     assert resolve_plan_for_price_id(annual) == "air"
     assert monthly != annual
+
+
+def test_is_annual_subscription_true_for_year_interval():
+    assert is_annual_subscription({"billing_cycle": {"interval": "year"}}) is True
+
+
+def test_is_annual_subscription_false_for_month_interval():
+    assert is_annual_subscription({"billing_cycle": {"interval": "month"}}) is False
+
+
+def test_is_annual_subscription_false_when_billing_cycle_missing():
+    # Code-review finding: admin.py and dashboard.py each independently
+    # hand-rolled (subscription.get("billing_cycle") or {}).get("interval")
+    # == "year" - which is how the annual-credit display bug got
+    # introduced twice. Shared here so there's one place to get it right.
+    assert is_annual_subscription({}) is False
+    assert is_annual_subscription({"billing_cycle": None}) is False
 
 
 def test_resolve_price_id_for_plan_returns_none_for_unknown_plan_or_interval():

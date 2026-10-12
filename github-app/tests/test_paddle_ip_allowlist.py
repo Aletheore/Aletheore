@@ -121,6 +121,23 @@ def test_fetch_paddle_networks_returns_none_for_an_empty_cidr_list(monkeypatch):
     assert result is None
 
 
+def test_fetch_paddle_networks_returns_none_for_a_non_list_ipv4_cidrs(monkeypatch):
+    # Code-review finding: a 200 response with ipv4_cidrs as null (or any
+    # other non-list JSON value) assigned cleanly with no exception, so
+    # "for cidr in cidrs" ran next and raised an uncaught TypeError - a
+    # worse outcome (handler crash) than the empty-list case just above.
+    async def _fake_get(*args, **kwargs):
+        request = httpx.Request("GET", "https://api.paddle.com/ips")
+        return httpx.Response(200, json={"data": {"ipv4_cidrs": None}}, request=request)
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_get)
+
+    import asyncio
+
+    result = asyncio.run(_real_fetch_paddle_networks())
+    assert result is None
+
+
 def test_fetch_paddle_networks_skips_one_malformed_cidr_keeps_the_rest(monkeypatch, caplog):
     # Code-review finding: ipaddress.ip_network's default strict=True
     # raised on one malformed CIDR anywhere in Paddle's response, and the
