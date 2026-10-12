@@ -15,6 +15,10 @@ Nothing is stored. Chunk text arrives, vectors go back, and the index lives
 on the caller's disk. That is a deliberately smaller promise than "we index
 your code": no retention policy to write, no deletion path to honour, and
 nothing here for a subpoena to reach.
+
+That promise covers this service. With EMBED_PROVIDER=deepinfra (off by default,
+see hosted_embedder.py) chunk text is forwarded to DeepInfra for embedding;
+nothing is stored here either way.
 """
 
 import asyncio
@@ -28,12 +32,16 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app_server import hosted_embedder
+from app_server.config import get_settings
 from app_server.db import (
+    get_installation,
     get_installation_by_token_hash,
     touch_api_token,
 )
 from app_server.rate_limit import acquire_concurrency_slot, is_rate_limited, release_concurrency_slot
 from app_server.redis_client import get_redis_client
+from scan_worker.embedding_spend import FEATURE_HOSTED, charge_embedding_tokens
 
 embeddings_router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -102,6 +110,12 @@ _HOSTED_EMBED_CONCURRENCY_KEY = "concurrency:hosted-embed"
 # billing, so nothing worse than a wasted Redis key results from an odd
 # value. Bounded anyway against a pathological string bloating a key.
 MAX_REPO_ID_LENGTH = 128
+
+
+def _embed_and_charge(texts: list[str], dsn: str, installation_id: int) -> list[list[float]]:
+    vectors, tokens = hosted_embedder.embed_batch(texts)
+    charge_embedding_tokens(dsn, installation_id, tokens, FEATURE_HOSTED)
+    return vectors
 
 
 class EmbeddingsRequest(BaseModel):
@@ -235,6 +249,41 @@ async def create_embeddings(request: Request, body: EmbeddingsRequest):
         )
     except Exception as exc:  # noqa: BLE001 - bookkeeping must never fail the request
         logger.warning("could not record api token use (%s)", exc)
+
+    if hosted_embedder.provider() == hosted_embedder.PROVIDER_DEEPINFRA:
+        # No concurrency slot: that cap protects the single-CPU jina-embed sidecar.
+        # The per-installation rate limit above still bounds request volume.
+        # Unlike the Jina path this one costs real money, so it is drawn from the
+        # installation's credit like every other LLM feature. A request can cost at most
+        # about $0.008 (256 texts of 8,000 characters), so checking the balance first and
+        # charging the real token count afterwards overshoots by less than that per request
+        # that was in flight when the balance ran out. The balance is clamped at zero when
+        # charged, so an overshoot costs us that sliver, never a negative customer balance.
+        installation_row = await get_installation(request.app.state.db_pool, installation_id)
+        remaining = (
+            float(installation_row["base_credit_remaining_usd"]) + float(installation_row["topup_credit_balance_usd"])
+            if installation_row
+            else 0.0
+        )
+        if remaining <= 0:
+            raise HTTPException(
+                status_code=402,
+                detail=(
+                    "your credit is used up - top up to keep using hosted embeddings, or run "
+                    "'aletheore index' with a local Ollama or your own OPENAI_API_KEY, which is free"
+                ),
+            )
+        try:
+            # Embed and charge in one thread: if the caller disconnects and this request is
+            # cancelled mid-call, the thread still finishes, so work we paid the provider for
+            # is never left uncharged.
+            vectors = await asyncio.to_thread(
+                _embed_and_charge, body.texts, get_settings().database_url, installation_id
+            )
+        except hosted_embedder.EmbedderUnavailable as exc:
+            logger.warning("hosted embedding call failed for installation=%s (%s)", installation_id, exc)
+            raise HTTPException(status_code=502, detail="embedding provider unavailable") from exc
+        return {"model": hosted_embedder.embedder_label(), "vectors": vectors}
 
     slot_id = uuid.uuid4().hex
     try:
