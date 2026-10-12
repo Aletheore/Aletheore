@@ -4589,6 +4589,38 @@ def test_semantic_checker_finds_shared_state_run_on_threads():
     assert "shared mutable instance state" in findings[0]["issue"]
 
 
+@pytest.mark.parametrize(
+    "added_line",
+    [
+        "t = threading.Thread(target=self.worker)",
+        "loop.run_in_executor(None, self.worker)",
+        "await asyncio.to_thread(self.worker)",
+    ],
+)
+def test_semantic_checker_finds_shared_state_on_module_qualified_and_asyncio_threads(added_line):
+    # Audit finding 10/12: the Thread trigger's lookbehind excluded the "." in
+    # threading.Thread(...), the usual spelling, so only a bare Thread(...) ever
+    # matched. run_in_executor and to_thread also hand the callable to threads.
+    findings = find_semantic_regressions(
+        f"--- caller.py ---\n@@ -1,1 +1,2 @@\n+{added_line}\n",
+        {"caller.py": "worker(value)"},
+        "--- referenced definition (not part of this diff): worker.py:worker ---\nself.count += 1",
+    )
+
+    assert len(findings) == 1
+    assert "shared mutable instance state" in findings[0]["issue"]
+
+
+def test_semantic_checker_ignores_thread_attribute_on_an_unrelated_object():
+    findings = find_semantic_regressions(
+        "--- caller.py ---\n@@ -1,1 +1,2 @@\n+handle = obj.Thread(target=worker)\n",
+        {"caller.py": "worker(value)"},
+        "--- referenced definition (not part of this diff): worker.py:worker ---\nself.cache = {}",
+    )
+
+    assert findings == []
+
+
 def test_semantic_checker_finds_shared_state_called_concurrently_across_wrapped_lines():
     # Black-style multi-line call: pool.map's callable and the hunk's trigger
     # keyword end up on different added lines (real regression found on

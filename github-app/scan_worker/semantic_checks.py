@@ -241,9 +241,14 @@ def _finding(file: str, line: int, issue: str, suggestion: str) -> dict:
 # or any other unrelated .map()/.submit() on some other object (false
 # positive seen on PR #987's own fix). Thread needs its own \b-equivalent
 # (handled by the negative lookbehind in _CONCURRENCY_TRIGGER_RE below) so it
-# doesn't match inside an unrelated identifier like EventThread(...).
+# doesn't match inside an unrelated identifier like EventThread(...), but the
+# module-qualified threading.Thread(...) is the usual spelling and must match:
+# the lookbehind alone also excluded the "." in it, so the rule never saw it.
+# run_in_executor and to_thread hand their callable to a thread pool too.
 _CONCURRENCY_TRIGGER_RE = re.compile(
-    r"(?:(?i:\w*(?:pool|executor)\w*)\s*\.\s*(?:map|submit|apply_async|starmap)|(?<![\w.])Thread)\s*\(",
+    r"(?:(?i:\w*(?:pool|executor)\w*)\s*\.\s*(?:map|submit|apply_async|starmap)"
+    r"|(?:\bthreading\s*\.\s*|(?<![\w.]))Thread"
+    r"|\.\s*run_in_executor|\bto_thread)\s*\(",
 )
 
 
