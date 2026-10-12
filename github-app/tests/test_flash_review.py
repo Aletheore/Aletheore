@@ -649,6 +649,48 @@ def test_validate_findings_still_drops_a_line_past_the_end_of_the_file_with_noth
     assert _validate_findings([nothing_quoted, quote_not_in_file], diff_text, file_contents=file_contents) == []
 
 
+def test_validate_findings_drops_a_cache_replayed_finding_whose_quoted_code_is_gone():
+    # Audit finding 10/12: #1011 keeps a fresh finding whose quote is nowhere in the file (usually a
+    # paraphrase), but the same rule on a cache replay reposted findings for code that had since been
+    # fixed - the cache matches on a similar diff, and the quoted code vanishing is the sign it is stale.
+    diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
+    diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"
+    file_contents = {"a.py": "\n".join(["filler"] * 20)}
+    finding = {"file": "a.py", "line": 5, "issue": "unsafe: 'eval(user_input)' runs untrusted input", "source": "llm"}
+
+    assert _validate_findings([finding], diff_text, file_contents=file_contents) == [finding]
+    assert _validate_findings([finding], diff_text, file_contents=file_contents, replayed_from_cache=True) == []
+
+
+def test_validate_findings_cache_replay_drops_a_quote_found_only_away_from_the_diff():
+    diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
+    diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"
+    file_lines = ["filler"] * 100
+    file_lines[79] = "the buggy literal text"
+    finding = {"file": "a.py", "line": 15, "issue": "wrong place: 'the buggy literal text'", "source": "llm"}
+
+    kept = _validate_findings(
+        [finding], diff_text, file_contents={"a.py": "\n".join(file_lines)}, replayed_from_cache=True
+    )
+
+    assert kept == []
+
+
+def test_validate_findings_cache_replay_keeps_a_quote_still_near_the_diff_and_semantic_findings():
+    diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
+    diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"
+    file_lines = ["filler"] * 20
+    file_lines[4] = "eval(user_input)"
+    file_contents = {"a.py": "\n".join(file_lines)}
+    still_there = {"file": "a.py", "line": 5, "issue": "unsafe: 'eval(user_input)'", "source": "llm"}
+    # Semantic findings are recomputed against this diff, not replayed, so they keep the lenient rule.
+    semantic = {"file": "a.py", "line": 5, "issue": "lost: 'something not in the file'", "source": "semantic"}
+
+    kept = _validate_findings([still_there, semantic], diff_text, file_contents=file_contents, replayed_from_cache=True)
+
+    assert kept == [still_there, semantic]
+
+
 def test_verify_or_reanchor_citation_recovers_the_original_hallucinated_line_incident():
     # case 001-flask-cli-key-quote: the model cited line 561 for text that is at line 798.
     lines = ["filler"] * 1000
@@ -954,6 +996,21 @@ def test_review_diff_revalidates_cache_hit_against_current_diff():
 
     mock_adapter_class.assert_not_called()
     assert findings == [{"file": "app.py", "line": 42, "issue": "still valid", "source": "llm"}]
+
+
+def test_review_diff_cache_hit_drops_a_finding_whose_quoted_code_was_fixed():
+    diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')"
+    file_contents = {"app.py": "\n".join(["pass"] * 41 + ["f = open('x')"])}
+    cached_findings = [
+        {"file": "app.py", "line": 42, "issue": "leaks a handle: \"open('x')\""},
+        {"file": "app.py", "line": 42, "issue": "unsafe: \"eval(user_input)\""},
+    ]
+
+    with patch("scan_worker.flash_review.flash_review_generation_adapter") as mock_adapter_class:
+        findings = review_diff(diff_text, file_contents=file_contents, cache_lookup=lambda diff: cached_findings)
+
+    mock_adapter_class.assert_not_called()
+    assert [f["issue"] for f in findings] == [cached_findings[0]["issue"]]
 
 
 @patch("scan_worker.flash_review.flash_review_generation_adapter")
