@@ -7,7 +7,7 @@ export const developersHead = {
 };
 
 export const flow = [
-  { id: "scan", k: "$ aletheore scan", title: "Build the evidence", body: "Tree-sitter and git history produce air.json and air.toon. No LLM in the scan path and no account. The only network calls are dependency advisory and license lookups and an update check, each of which can be turned off." },
+  { id: "scan", k: "$ aletheore scan", title: "Build the evidence", body: "Tree-sitter and git history produce air.json and air.toon. No LLM in the scan path and no account. A scan makes dependency advisory and license lookups and checks for a newer release, each of which can be turned off, and sends a crash report only if the CLI itself crashes." },
   { id: "app", k: "on: pull_request", title: "The GitHub App keeps watch", body: "Automatic PR comments, branch-protection checks, and Flash reviews on every push: same evidence, hosted." },
   { id: "mcp", k: "$ aletheore mcp .", title: "Agents query it directly", body: "Read-only tools over stdio, TOON-encoded: a coding agent gets exact answers instead of re-reading files on every lookup." },
 ] as const;
