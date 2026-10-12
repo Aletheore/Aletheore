@@ -16,7 +16,12 @@ from lancedb.index import FTS
 from openai import APIConnectionError, NotFoundError, OpenAI
 from tokenizers import Tokenizer
 
-from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, get_api_key, has_api_key
+from aletheore.credentials import (
+    DEFAULT_CREDENTIALS_PATH,
+    HOSTED_EMBEDDINGS_DISCLOSURE,
+    get_api_key,
+    has_api_key,
+)
 
 FALLBACK_CHUNK_MAX_LINES = 200
 DEFAULT_EMBEDDING_BASE_URL = "http://localhost:11434/v1"
@@ -1307,6 +1312,18 @@ HOSTED_EMBED_MAX_TOKENS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_TOKENS"
 _HOSTED_TOKENIZER_PATH = Path(__file__).resolve().parent / "data" / "jina_v2_base_code_tokenizer.json"
 _hosted_tokenizer_cache: Tokenizer | None = None
 
+# Once per process: an index build (or watch-mode re-index) says once that it is
+# uploading source chunks, rather than on every batch.
+_hosted_disclosure_shown = False
+
+
+def _show_hosted_disclosure_once() -> None:
+    # stderr, never stdout: the MCP server speaks its protocol over stdout.
+    global _hosted_disclosure_shown
+    if not _hosted_disclosure_shown:
+        _hosted_disclosure_shown = True
+        print(f"aletheore: {HOSTED_EMBEDDINGS_DISCLOSURE}", file=sys.stderr)
+
 
 def _hosted_tokenizer() -> Tokenizer:
     """Lazily load jina-embeddings-v2-base-code's real WordPiece tokenizer.
@@ -1359,6 +1376,7 @@ def _embed_in_batches(
     repo_id: str | None = None,
     allow_hosted: bool = True,
     on_progress: Callable[[int, int], None] | None = None,
+    is_query: bool = False,
 ) -> tuple[list[list[float]], str]:
     """Embed everything, preferring Aletheore's endpoint when entitled.
 
@@ -1384,6 +1402,11 @@ def _embed_in_batches(
     repo_id: forwarded to embed_texts_hosted so the hosted rate limit can be
     keyed per repo rather than per installation - see _repo_id.
 
+    is_query: the text is a search query, not repository code. Only code
+    chunks trigger the hosted-upload notice, and it must not depend on how
+    many chunks there are: a one-chunk repo, or the single changed chunk of a
+    watch-mode re-index, uploads source code just as a large build does.
+
     allow_hosted: the caller's consent to transmit this repository's code to
     Aletheore's hosted embedding endpoint. Defaults to True to preserve the
     CLI's existing interactive behavior. MCP's aletheore_index tool passes
@@ -1402,6 +1425,10 @@ def _embed_in_batches(
         "ALETHEORE_API_TOKEN", "aletheore-managed-audit", prompt_fn=lambda _: ""
     )
     use_hosted = bool(token) and allow_hosted
+    # Code chunks, not a search query. Decided by what the text is, not by how many
+    # texts there are (see is_query above).
+    if use_hosted and texts and not is_query:
+        _show_hosted_disclosure_once()
     if token and not allow_hosted:
         print(
             "aletheore: hosted embeddings available but not permitted in this "
@@ -1942,7 +1969,7 @@ def search_index(
     # error at all. Matching the same provider choice at query time removes
     # the coincidence the guard was accidentally relying on.
     query_vectors, query_embedder = _embed_in_batches(
-        [query_text], repo_id=_repo_id(repo_path), allow_hosted=allow_hosted
+        [query_text], repo_id=_repo_id(repo_path), allow_hosted=allow_hosted, is_query=True
     )
     query_vector = query_vectors[0]
 
