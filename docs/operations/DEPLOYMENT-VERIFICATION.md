@@ -14,13 +14,10 @@ change, no lockfile change.
 and import-tested before anything running was touched, then `app-server`, then each worker in turn only when no RQ
 worker was busy (0 busy at every step), so no running job was killed. What it brought live, since `56c44a8c`:
 
-- #1017: an optional DeepInfra embedder behind `EMBED_PROVIDER` (Qwen3-Embedding-8B at 1024 dimensions). **It is
-  off:** `EMBED_PROVIDER` is unset in every container and in `.env`, so the similarity caches and the hosted
-  `/v1/embeddings` endpoint still use the self-hosted `jina-embed`. `DEEPINFRA_API_KEY` is in `.env` and in the
-  containers. Switched on, it is metered against the customer's credit, has no per-request fallback to Jina, and a
-  circuit breaker skips the provider for five minutes after three failed lookups in a row. Turning it on means
-  setting `EMBED_PROVIDER=deepinfra` in `.env` and restarting the app server and the workers; every AIR user's local
-  index then rebuilds once, and the privacy policy change (#1026) should go live with it.
+- #1017: an optional DeepInfra embedder behind `EMBED_PROVIDER` (Qwen3-Embedding-8B at 1024 dimensions). It shipped
+  **off** and was **switched on the same day** (see "Switched on" below). It is metered against the customer's
+  credit, has no per-request fallback to Jina, and a circuit breaker skips the provider for five minutes after three
+  failed lookups in a row.
 - #1019: the credit top-up minimum is $6 on the dashboard form, matching Paddle's price (`quantity.minimum` was raised
   from 5 to 6 on 2026-10-11, so checkout already enforced it).
 - #1021: Flash Review cache replays drop a finding whose quoted code is no longer near the diff, which usually means it
@@ -39,6 +36,16 @@ each of the five, including `hosted_embedder`, the circuit breaker in `embedding
 citation check, `is_annual_subscription` and a top-up minimum of 6). The rendered credits form shows the $6 minimum.
 A one-string call to DeepInfra from a scan worker, with the flag overridden for that single process, returned a
 1024-dimension unit vector tagged `deepinfra:Qwen/Qwen3-Embedding-8B@1024`.
+
+**Switched on (2026-10-13, after the deploy above):** `EMBED_PROVIDER=deepinfra` was added to `.env` and all five
+services were force-recreated, workers one at a time while idle (0 busy at every step). Verified in each of the five
+containers: provider `deepinfra`, cache tag `deepinfra:Qwen/Qwen3-Embedding-8B@1024`, hosted response label
+`Qwen/Qwen3-Embedding-8B@1024`; all `healthy`, zero error lines, `/healthz` ok, three RQ workers, and `/v1/embeddings`
+answers 401 without a token. Consequences to expect: the Flash diff cache and the AIRview packet cache start cold
+(rows tagged with the Jina embedder no longer match), and every AIR user's local search index rebuilds once because
+the vector size changed from 768 to 1024. The privacy policy names DeepInfra as the embedding provider (#1026, merged
+after the switch). To switch back: delete the `EMBED_PROVIDER` line from `.env` and recreate the same five services;
+`jina-embed` is still running and untouched.
 
 **Previous:** CURRENT as of 2026-10-10 - `app-server`, both scan workers, `health-worker` and `scheduler` ran
 `master` at commit `56c44a8c` (tag `github-app-deploy-2026-10-10`); `jina-embed` still runs `e3182a9f` from the 2026-10-08
