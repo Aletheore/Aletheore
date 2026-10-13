@@ -10,6 +10,10 @@ from scan_worker.github_api import fetch_default_branch_head_sha, fetch_pr_chang
 logger = logging.getLogger(__name__)
 
 ENQUEUE_ACTIONS = ("opened", "reopened", "synchronize")
+# A draft is marked ready: GitHub sends this with the PR's current head. Draft pushes get no Flash Review
+# (see flash_review_skip_reason), so this is when the review happens. It queues the review only: the
+# deterministic scan already ran on every push to the draft, and the head has not changed since.
+REVIEW_ONLY_ACTIONS = ("ready_for_review",)
 
 PR_SCAN_JOB_TIMEOUT_SECONDS = 300
 # Flash review makes a real LLM call plus several sequential GitHub API
@@ -53,7 +57,12 @@ def flash_review_skip_reason(pull_request: dict) -> str | None:
     }
     if labels & FLASH_REVIEW_FORCE_LABELS:
         return None
-    author = str((pull_request.get("user") or {}).get("login", "")).lower()
+    # `is True`, not truthiness: only an explicit draft flag skips. A missing or odd value reviews.
+    # The review is not lost: when the draft is marked ready, GitHub sends ready_for_review, which
+    # queues one (REVIEW_ONLY_ACTIONS), covering everything since the last reviewed commit.
+    if pull_request.get("draft") is True:
+        return "draft pull request"
+    author =str((pull_request.get("user") or {}).get("login", "")).lower()
     if author in FLASH_REVIEW_SKIP_AUTHORS:
         return f"opened by {author}"
     title = str(pull_request.get("title") or "").lower()
@@ -82,7 +91,7 @@ def _default_branch_head_and_pr_files_sync(
 
 async def handle_pull_request_event(payload: dict, pool, redis_url: str, queue=None) -> None:
     action = payload.get("action")
-    if action not in ENQUEUE_ACTIONS and action != "closed":
+    if action not in ENQUEUE_ACTIONS and action not in REVIEW_ONLY_ACTIONS and action != "closed":
         return
 
     installation_id = payload["installation"]["id"]
@@ -157,15 +166,16 @@ async def handle_pull_request_event(payload: dict, pool, redis_url: str, queue=N
                     )
         return
 
-    queue.enqueue(
-        "scan_worker.jobs.run_pr_scan_job",
-        job_timeout=PR_SCAN_JOB_TIMEOUT_SECONDS,
-        installation_id=installation_id,
-        repo_full_name=repo_full_name,
-        pr_number=payload["number"],
-        base_sha=payload["pull_request"]["base"]["sha"],
-        head_sha=payload["pull_request"]["head"]["sha"],
-    )
+    if action not in REVIEW_ONLY_ACTIONS:
+        queue.enqueue(
+            "scan_worker.jobs.run_pr_scan_job",
+            job_timeout=PR_SCAN_JOB_TIMEOUT_SECONDS,
+            installation_id=installation_id,
+            repo_full_name=repo_full_name,
+            pr_number=payload["number"],
+            base_sha=payload["pull_request"]["base"]["sha"],
+            head_sha=payload["pull_request"]["head"]["sha"],
+        )
     skip_reason = flash_review_skip_reason(payload["pull_request"])
     if skip_reason is not None:
         logger.info(
