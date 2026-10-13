@@ -38,15 +38,14 @@ MODEL_RATES_PER_MILLION_USD = {
     "deepseek-v4.1-flash": {"input": 0.2273, "output": 0.6819, "verified_at": "2026-10-04"},
     # Embeddings bill on input only, so output is 0 rather than absent -
     # cost_for_usage multiplies both, and a missing key would KeyError
-    # rather than cost nothing.
-    "text-embedding-3-small": {"input": 0.02, "output": 0.0, "verified_at": "2026-08-11"},
+    # rather than cost nothing. _median_rates leaves these rows out (an output
+    # rate of 0 is not a typical chat-model price).
+    #
     # DeepInfra's listed price for the hosted embedder (hosted_embedder.py), read from
     # their model pages on 2026-10-11 ($0.010 / 1M tokens). Only billed when
     # EMBED_PROVIDER=deepinfra. The 0.6B entry is for a DEEPINFRA_EMBED_MODEL override.
     "Qwen/Qwen3-Embedding-8B": {"input": 0.01, "output": 0.0, "verified_at": "2026-10-11"},
     "Qwen/Qwen3-Embedding-0.6B": {"input": 0.01, "output": 0.0, "verified_at": "2026-10-11"},
-    "gpt-4o": {"input": 2.50, "output": 10.00, "verified_at": "2026-07-23"},
-    "claude-opus-4-8": {"input": 15.00, "output": 75.00, "verified_at": "2026-07-23"},
 }
 
 STALE_PRICE_MAX_AGE_DAYS = 90
@@ -200,14 +199,19 @@ def stale_models(as_of: date | None = None, max_age_days: int = STALE_PRICE_MAX_
 
 
 def _median_rates() -> dict[str, float]:
-    """The median input and output rate across MODEL_RATES_PER_MILLION_USD: the neutral price for a
-    model nobody has priced yet. An empty table (only possible mid-refactor) prices at zero rather
-    than raising, since the caller of cost_for_usage must never crash a job over a missing entry."""
-    inputs = [r["input"] for r in MODEL_RATES_PER_MILLION_USD.values()]
-    outputs = [r["output"] for r in MODEL_RATES_PER_MILLION_USD.values()]
-    if not inputs:
+    """The median input and output rate across the chat models in MODEL_RATES_PER_MILLION_USD: the
+    neutral price for a model nobody has priced yet. Embedding-only rows (an output rate of 0) are left
+    out: they bill on input alone, so counting them dragged the output median toward zero (adding two
+    embedding rows moved the fallback's output rate from about $1.20 to about $0.68 per million).
+    An empty table (only possible mid-refactor) prices at zero rather than raising, since the caller of
+    cost_for_usage must never crash a job over a missing entry."""
+    chat_rows = [r for r in MODEL_RATES_PER_MILLION_USD.values() if r["output"] > 0]
+    if not chat_rows:
         return {"input": 0.0, "output": 0.0}
-    return {"input": statistics.median(inputs), "output": statistics.median(outputs)}
+    return {
+        "input": statistics.median(r["input"] for r in chat_rows),
+        "output": statistics.median(r["output"] for r in chat_rows),
+    }
 
 
 def cost_for_usage(model: str, prompt_tokens: int, completion_tokens: int) -> float:
@@ -220,10 +224,11 @@ def cost_for_usage(model: str, prompt_tokens: int, completion_tokens: int) -> fl
         #
         # Priced at the MEDIAN rate of the table, not its highest. This number is drawn from the
         # customer's real credit balance (jobs.py trues up reserve_llm_spend with it), so it is not a
-        # spend-cap estimate where "over is safe": the highest rate in the table is claude-opus-4-8
-        # ($15/$75 per M), about 200x the production generator's, so a single paid review that costs
-        # $0.0009 would have been charged $0.195 and a monthly allowance gone in a few dozen reviews,
-        # silently. A median keeps the error to a small multiple either way, and the error-level log
+        # spend-cap estimate where "over is safe": the first draft used the highest rate, then a
+        # $15/$75 per M model (since removed from the table), about 200x the production generator's, so
+        # a single paid review that costs $0.0009 would have been charged $0.195 and a monthly
+        # allowance gone in a few dozen reviews, silently. A median over the chat models keeps the
+        # error to a small multiple either way, and the error-level log
         # below (captured by Sentry) is what makes a human add the real entry.
         if model not in _warned_stale_models:
             logger.error(
