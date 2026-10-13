@@ -217,6 +217,7 @@
     "getpass",
     "inotify",
     "MSIX",
-    "Qwen"
+    "Qwen",
+    "deepinfra"
   ]
 }

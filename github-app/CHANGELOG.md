@@ -25,7 +25,7 @@ Commit `c9b63d98`, tagged `github-app-deploy-2026-10-13`, no migrations. `app-se
 `e3182a9f`. Headlines: an optional DeepInfra embedder behind `EMBED_PROVIDER` (#1017), shipped off and switched on the same day (the
 privacy policy names DeepInfra as of #1026); the credit
 top-up minimum is $6 on the dashboard form, matching Paddle's price (#1019); Flash Review cache replays drop a finding
-whose quoted code is gone instead of reposting it (#1021); the shared-state check sees `threading.Thread`,
+whose quoted code is gone instead of posting it again (#1021); the shared-state check sees `threading.Thread`,
 `run_in_executor` and `to_thread` (#1022); and follow-ups from the #1015 review (#1020). See the snapshot in
 `docs/operations/DEPLOYMENT-VERIFICATION.md` for what was verified live.
 

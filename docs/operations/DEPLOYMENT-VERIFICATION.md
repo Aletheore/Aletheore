@@ -21,7 +21,7 @@ worker was busy (0 busy at every step), so no running job was killed. What it br
 - #1019: the credit top-up minimum is $6 on the dashboard form, matching Paddle's price (`quantity.minimum` was raised
   from 5 to 6 on 2026-10-11, so checkout already enforced it).
 - #1021: Flash Review cache replays drop a finding whose quoted code is no longer near the diff, which usually means it
-  was fixed, instead of reposting it.
+  was fixed, instead of posting it again.
 - #1022: the shared-state check sees `threading.Thread`, `run_in_executor` and `to_thread`.
 - #1020: follow-ups from the #1015 review: one shared annual-plan helper, a non-list Paddle IP response is rejected,
   the webhook timestamp check is a single try block, and the stale-price warning no longer repeats or crashes on an
