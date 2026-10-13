@@ -216,6 +216,7 @@
     "rescanned",
     "getpass",
     "inotify",
-    "MSIX"
+    "MSIX",
+    "Qwen"
   ]
 }
