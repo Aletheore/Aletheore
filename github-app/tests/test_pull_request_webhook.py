@@ -155,3 +155,68 @@ async def test_hidden_repo_does_not_enqueue_anything(pool):
     fake_queue = MagicMock()
     await handle_pull_request_event(_payload("opened"), pool, "redis://unused", queue=fake_queue)
     fake_queue.enqueue.assert_not_called()
+
+
+def _pr(**fields):
+    return {"base": {"sha": "aaa111"}, "head": {"sha": "bbb222"}, "merged": False, **fields}
+
+
+@pytest.mark.parametrize("login", ["dependabot[bot]", "renovate[bot]", "pre-commit-ci[bot]", "snyk-bot", "Dependabot[bot]"])
+def test_dependency_bots_get_no_flash_review(login):
+    from app_server.webhooks.pull_request import flash_review_skip_reason
+
+    assert flash_review_skip_reason(_pr(user={"login": login}, title="Bump x from 1 to 2")) == f"opened by {login.lower()}"
+
+
+@pytest.mark.parametrize("login", ["octocat", "copilot-swe-agent[bot]", "claude[bot]", "github-actions[bot]", ""])
+def test_humans_and_ai_coding_agents_are_still_reviewed(login):
+    # "Bot" is not a reason to skip: AI agents that open pull requests are bots too, and are worth reviewing.
+    from app_server.webhooks.pull_request import flash_review_skip_reason
+
+    assert flash_review_skip_reason(_pr(user={"login": login}, title="Add a feature")) is None
+
+
+@pytest.mark.parametrize("title", ["[skip review] wip: spike", "Tidy imports [No Review]", "chore [SKIP ALETHEORE]"])
+def test_title_markers_skip_the_review_case_insensitively(title):
+    from app_server.webhooks.pull_request import flash_review_skip_reason
+
+    assert flash_review_skip_reason(_pr(user={"login": "octocat"}, title=title)) is not None
+
+
+def test_a_skip_label_skips_and_the_force_label_overrides_every_skip_rule():
+    from app_server.webhooks.pull_request import flash_review_skip_reason
+
+    assert flash_review_skip_reason(_pr(user={"login": "octocat"}, labels=[{"name": "skip-review"}])) == "labelled skip-review"
+    # a maintainer edited the Dependabot branch by hand and wants it reviewed
+    forced = _pr(user={"login": "dependabot[bot]"}, title="[skip review] x", labels=[{"name": "Aletheore-Review"}, {"name": "no-review"}])
+    assert flash_review_skip_reason(forced) is None
+
+
+def test_a_payload_missing_every_field_is_reviewed_not_skipped():
+    from app_server.webhooks.pull_request import flash_review_skip_reason
+
+    assert flash_review_skip_reason({}) is None
+    assert flash_review_skip_reason({"user": None, "title": None, "labels": None}) is None
+    assert flash_review_skip_reason({"labels": ["not-a-dict"]}) is None
+
+
+@pytest.mark.asyncio
+async def test_a_dependabot_pull_request_runs_the_deterministic_scan_but_no_flash_review(pool):
+    payload = _payload("opened")
+    payload["pull_request"]["user"] = {"login": "dependabot[bot]"}
+    fake_queue = MagicMock()
+
+    await handle_pull_request_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    assert [call.args[0] for call in fake_queue.enqueue.call_args_list] == ["scan_worker.jobs.run_pr_scan_job"]
+
+
+@pytest.mark.asyncio
+async def test_a_human_pull_request_still_gets_both_jobs(pool):
+    payload = _payload("synchronize")
+    payload["pull_request"]["user"] = {"login": "octocat"}
+    fake_queue = MagicMock()
+
+    await handle_pull_request_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    assert fake_queue.enqueue.call_count == 2

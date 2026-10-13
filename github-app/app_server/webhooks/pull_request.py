@@ -24,6 +24,47 @@ FLASH_REVIEW_JOB_TIMEOUT_SECONDS = 900
 
 PUSH_SCAN_JOB_TIMEOUT_SECONDS = 300
 
+# Authors whose pull requests get no Flash Review. These are automated dependency and formatting
+# updaters: a version bump has nothing for a code review to find, and a review is an LLM call charged
+# to the installation's credit (or, on the Community plan, to its monthly review allowance). The
+# deterministic PR scan still runs on them, since its dependency vulnerability and license checks are
+# exactly what a bump needs and it makes no LLM call. This is an explicit list, not "every bot": AI
+# coding agents that open pull requests are bots too, and those are worth reviewing.
+FLASH_REVIEW_SKIP_AUTHORS = frozenset({
+    "dependabot[bot]",
+    "renovate[bot]",
+    "pre-commit-ci[bot]",
+    "snyk-bot",
+})
+# Escape hatches for a human PR (matched case-insensitively against the title) ...
+FLASH_REVIEW_SKIP_TITLE_MARKERS = ("[skip review]", "[no review]", "[skip aletheore]")
+# ... or a label, and a label that forces a review of a PR that would otherwise be skipped
+# (for example a Dependabot bump that a maintainer has since changed by hand).
+FLASH_REVIEW_SKIP_LABELS = frozenset({"skip-review", "no-review"})
+FLASH_REVIEW_FORCE_LABELS = frozenset({"aletheore-review"})
+
+
+def flash_review_skip_reason(pull_request: dict) -> str | None:
+    """Why this pull request should not get a Flash Review, or None to review it. Reads only the
+    webhook payload, so it costs no API call. Missing fields mean "review it": a skip is only ever
+    triggered by something positively present."""
+    labels = {
+        str(label.get("name", "")).lower() for label in (pull_request.get("labels") or []) if isinstance(label, dict)
+    }
+    if labels & FLASH_REVIEW_FORCE_LABELS:
+        return None
+    author = str((pull_request.get("user") or {}).get("login", "")).lower()
+    if author in FLASH_REVIEW_SKIP_AUTHORS:
+        return f"opened by {author}"
+    title = str(pull_request.get("title") or "").lower()
+    for marker in FLASH_REVIEW_SKIP_TITLE_MARKERS:
+        if marker in title:
+            return f"title contains {marker}"
+    skipped = labels & FLASH_REVIEW_SKIP_LABELS
+    if skipped:
+        return f"labelled {sorted(skipped)[0]}"
+    return None
+
 
 def _default_branch_head_and_pr_files_sync(
     installation_id: int, repo_full_name: str, base_sha: str, head_sha: str
@@ -125,6 +166,13 @@ async def handle_pull_request_event(payload: dict, pool, redis_url: str, queue=N
         base_sha=payload["pull_request"]["base"]["sha"],
         head_sha=payload["pull_request"]["head"]["sha"],
     )
+    skip_reason = flash_review_skip_reason(payload["pull_request"])
+    if skip_reason is not None:
+        logger.info(
+            "skipping Flash Review: %s installation=%s repo=%s pr=%s",
+            skip_reason, installation_id, repo_full_name, payload["number"],
+        )
+        return
     queue.enqueue(
         "scan_worker.jobs.run_flash_review_job",
         job_timeout=FLASH_REVIEW_JOB_TIMEOUT_SECONDS,
