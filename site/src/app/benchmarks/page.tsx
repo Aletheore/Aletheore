@@ -224,6 +224,16 @@ export default function BenchmarksPage() {
       </Section>
 
       <Section id="hosted-embeddings" eyebrow={B.embeddings.eyebrow} title={B.embeddings.title} intro={B.embeddings.intro}>
+        <h3 className="mb-3 font-display text-[13.5px] font-bold">{B.embeddings.current.title}</h3>
+        <Prose className="mb-4 text-[12.5px]">{B.embeddings.current.body}</Prose>
+        <DataTable
+          caption="Embedders on 332 code-search questions"
+          columns={[{ key: "a", label: "Configuration" }, { key: "b", label: "MRR", align: "right" }, { key: "c", label: "MRR against Jina (95% interval)", align: "right" }, { key: "d", label: "Questions", align: "right" }]}
+          rows={B.embeddings.current.rows.map(([a, b, c, d]) => ({ a, b, c, d }))}
+        />
+        <p className="mt-3 text-[12px] leading-[1.6] text-faint">{B.embeddings.current.note}</p>
+        <p className="mt-3 text-[12.5px]"><a className="text-ink underline" href={B.embeddings.current.href} rel="noopener">Full method, limitations and the reproduce script &rarr;</a></p>
+        <h3 className="mb-3 mt-10 font-display text-[13.5px] font-bold">{B.embeddings.olderTitle}</h3>
         <Prose>{B.embeddings.summary}</Prose>
         <div className="mt-6">
           <Disclosure summary="All 23 corpus and regime rows: nomic against jina">

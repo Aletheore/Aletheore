@@ -36,7 +36,7 @@ export const toc = [
   { id: "comprehension", label: "Comprehension", fresh: true },
   { id: "deterministic-vs-llm", label: "vs a bare LLM", fresh: true },
   { id: "scanner-accuracy", label: "Scanner accuracy", fresh: true },
-  { id: "hosted-embeddings", label: "Embeddings", fresh: false },
+  { id: "hosted-embeddings", label: "Embeddings", fresh: true },
   { id: "toon", label: "TOON", fresh: false },
   { id: "where-we-lose", label: "Where we lose", fresh: false },
 ] as const;
@@ -202,10 +202,24 @@ export const scanners = {
 };
 
 export const embeddings = {
-  eyebrow: "Hosted embeddings, jina against local nomic",
-  title: "Full 23-row comparison.",
+  eyebrow: "Hosted embeddings",
+  title: "What the hosted endpoint runs, and how we chose it.",
   intro:
-    "This one does not carry the same \"no API key, no network\" guarantee as the rest of the page: it measures Aletheore's hosted embedding endpoint (jina-embeddings-v2-base-code, requires aletheore login and a paid plan) against the same 13 corpora, 23 corpus and regime pairs and questions as the retrieval matrix, with only the embedder changed from local nomic-embed-text to hosted jina (both 768-dim).",
+    "Aletheore's hosted embedding endpoint serves Qwen3-Embedding-8B at 1024 dimensions (since 2026-10-13); it used to serve jina-embeddings-v2-base-code. This section has two measurements. The first, behind the switch, recomputes offline from committed rankings. The second, older one measured the Jina model and needs the hosted service (aletheore login and a paid plan) to re-run, so it does not carry the \"no API key, no network\" guarantee of the rest of the page.",
+  current: {
+    title: "Why Qwen3-Embedding-8B: level on quality, much faster",
+    body: "We tested nine configurations (eight hosted models and one query-instruction variant) against the production Jina model on the same code-search questions as the retrieval matrix: 257 questions used to choose, 90 held out. Qwen3-Embedding-8B is level with Jina on retrieval quality, not better: +0.008 MRR with a 95% interval of -0.019 to +0.035 on 332 questions for the shipped setting, and the same on the held-out questions. Asking for a 1024-dimension vector scores the same as the native 4096. Three of the other models (bge-m3, bge-base, Nemotron 1B) were clearly worse than Jina. What changed is operational: on one production host, bulk indexing ran about 7 times faster with one request at a time and up to about 17 times faster with four in parallel, and the CPU-bound sidecar can be retired. Embedding code now means sending code chunks to the provider; the privacy policy names it and the CLI says so before it uploads.",
+    columns: ["Configuration", "MRR", "MRR against Jina (95% interval)", "Questions"],
+    rows: [
+      ["Qwen3-8B at 1024 dimensions (shipped)", "0.695", "+0.008 [-0.019, +0.035]", "332"],
+      ["Qwen3-8B at 4096 dimensions (native)", "0.694", "+0.007 [-0.020, +0.034]", "332"],
+      ["Jina (previous production model)", "0.687", "baseline", "332"],
+      ["Qwen3-0.6B", "0.665", "-0.022 [-0.049, +0.004]", "332"],
+    ],
+    note: "Small effects on a small set: a 95% interval on MRR is about plus or minus 0.03, so differences under that are noise. The speed figures are for one host's CPU and vary with provider load; the raw runs, including one that did not scale, are published with the method and limitations.",
+    href: "https://github.com/Aletheore/aletheore-benchmarks/blob/master/embedder_comparison/README.md",
+  },
+  olderTitle: "Earlier measurement: local nomic against hosted jina",
   summary:
     "Mean: top-1 +5.0 points, MRR +0.049. 20 of 23 rows flat or better; 3 worse, all in Slim's vocabulary regime or zod. Thrift's cross-language row is the largest single gain (+20.0 points), the same regime the language pre-filter fix targeted.",
   update:
