@@ -49,7 +49,7 @@ export const plans: Plan[] = [
       "Everything in Community.",
       {
         parts: [
-          "Automatic Flash reviews on every push to an open pull request, powered by $5 of AI credit each month. One model, evidence-grounded. On 13 real pull requests Flash caught about 53% of human-identified bugs with about 93% of its findings judged accurate, in the same range as other leading AI reviewers (small sample, wide intervals; method and limits on the ",
+          "Automatic Flash reviews on every push to an open pull request, powered by $5 of AI credit each month. One model, evidence-grounded. On 13 real pull requests Flash caught about 55% of human-identified bugs with about 89% of its findings judged accurate, in the same range as other leading AI reviewers (small sample, wide intervals; method and limits on the ",
           { href: "/benchmarks#pr-review-head-to-head", label: "Benchmarks page" },
           ").",
         ],

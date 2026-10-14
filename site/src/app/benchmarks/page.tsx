@@ -110,6 +110,16 @@ export default function BenchmarksPage() {
             <p className="mt-3 text-[12px] leading-[1.6] text-faint">{B.prReview.pairwise.note}</p>
           </div>
         </div>
+        <div className="mt-8">
+          <h3 className="mb-3 font-display text-[13.5px] font-bold">{B.prReview.production.title}</h3>
+          <Prose className="mb-4 text-[12.5px]">{B.prReview.production.body}</Prose>
+          <DataTable
+            caption="Flash Review, production call against the diff-only path"
+            columns={[{ key: "a", label: "Configuration" }, { key: "b", label: "Recall", align: "right" }, { key: "c", label: "Precision", align: "right" }, { key: "d", label: "Confirmed false positives per run", align: "right" }]}
+            rows={B.prReview.production.rows.map(([a, b, c, d]) => ({ a, b, c, d }))}
+          />
+          <p className="mt-3 text-[12.5px]"><a className="text-ink underline" href={B.prReview.production.href} rel="noopener">Full method, limitations and the reproduce script, Experiment 9 &rarr;</a></p>
+        </div>
         <div className="mt-8 grid gap-6 lg:grid-cols-3">
           {B.prReview.read.map((r) => (<Callout key={r.title} title={r.title}>{r.body}</Callout>))}
         </div>
