@@ -131,14 +131,15 @@ def test_cost_for_usage_unknown_model_does_not_crash_and_is_not_priced_at_the_mo
     of a usage-accounting callback the moment a model got added to
     model_tiers.py without a matching MODEL_RATES_PER_MILLION_USD entry. An
     unknown model must degrade instead of crashing - but not to the table's
-    HIGHEST rate: that is claude-opus-4-8 at $15/$75 per M, about 200x the
-    production generator, and this number is drawn from the customer's real
-    credit balance, so it would silently overcharge them. It is priced at the
-    table's median, and logged at ERROR so it reaches Sentry."""
+    HIGHEST rate: the first draft did that and priced it at $15/$75 per M
+    (a model since removed from the table), about 200x the production
+    generator, and this number is drawn from the customer's real credit
+    balance, so it would silently overcharge them. It is priced at the median
+    of the chat-model rows, and logged at ERROR so it reaches Sentry."""
     import statistics
 
     monkeypatch.setattr(llm_cost, "_warned_stale_models", set())
-    rates = llm_cost.MODEL_RATES_PER_MILLION_USD.values()
+    rates = [r for r in llm_cost.MODEL_RATES_PER_MILLION_USD.values() if r["output"] > 0]
     median_input = statistics.median(r["input"] for r in rates)
     median_output = statistics.median(r["output"] for r in rates)
     highest_input = max(r["input"] for r in rates)
@@ -148,7 +149,7 @@ def test_cost_for_usage_unknown_model_does_not_crash_and_is_not_priced_at_the_mo
         cost = cost_for_usage("some-brand-new-model-nobody-priced-yet", 1_000_000, 1_000_000)
 
     assert cost == pytest.approx(median_input + median_output)
-    assert cost < (highest_input + highest_output) / 10
+    assert cost < highest_input + highest_output  # strictly below the most expensive model, never at it
     errors = [r for r in caplog.records if r.levelname == "ERROR" and "some-brand-new-model-nobody-priced-yet" in r.message]
     assert len(errors) == 1
 
@@ -288,3 +289,38 @@ def test_base_credit_for_plan_air_annual_keeps_the_per_seat_bonus():
 
 def test_base_credit_for_plan_ignores_annual_for_a_plan_with_no_annual_price():
     assert base_credit_for_plan("flash", extra_seats=0, is_annual=True) == 5.00
+
+
+def test_unknown_model_fallback_ignores_embedding_only_rows(monkeypatch):
+    # Embedding rows bill on input alone (output 0). Counting them dragged the fallback's output median
+    # toward zero: adding two of them to the table moved it from about $1.20 to about $0.68 per million.
+    monkeypatch.setattr(llm_cost, "_warned_stale_models", set())
+    monkeypatch.setattr(
+        llm_cost,
+        "MODEL_RATES_PER_MILLION_USD",
+        {
+            "chat-a": {"input": 1.0, "output": 2.0, "verified_at": "2026-10-01"},
+            "chat-b": {"input": 3.0, "output": 6.0, "verified_at": "2026-10-01"},
+            "chat-c": {"input": 5.0, "output": 10.0, "verified_at": "2026-10-01"},
+            "embed-a": {"input": 0.01, "output": 0.0, "verified_at": "2026-10-01"},
+            "embed-b": {"input": 0.01, "output": 0.0, "verified_at": "2026-10-01"},
+            "embed-c": {"input": 0.01, "output": 0.0, "verified_at": "2026-10-01"},
+        },
+    )
+
+    # median of the three chat rows is 3.0 in and 6.0 out; with the embedding rows it would be about 1.0 / 2.0
+    assert cost_for_usage("an-unpriced-model", 1_000_000, 1_000_000) == pytest.approx(3.0 + 6.0)
+
+
+def test_unknown_model_fallback_with_only_embedding_rows_prices_at_zero(monkeypatch):
+    monkeypatch.setattr(llm_cost, "_warned_stale_models", set())
+    monkeypatch.setattr(
+        llm_cost, "MODEL_RATES_PER_MILLION_USD", {"embed": {"input": 0.01, "output": 0.0, "verified_at": "2026-10-01"}}
+    )
+
+    assert cost_for_usage("an-unpriced-model", 1_000_000, 1_000_000) == 0.0
+
+
+def test_the_deepinfra_embedding_models_are_priced():
+    for model in ("Qwen/Qwen3-Embedding-8B", "Qwen/Qwen3-Embedding-0.6B"):
+        assert cost_for_usage(model, 1_000_000, 0) == pytest.approx(0.01)
