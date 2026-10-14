@@ -18,6 +18,17 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-10-14
+
+Two deploys, no migrations. Commit `46b6739d` (tag `github-app-deploy-2026-10-14`) and commit `f2e1bcf4` (tag
+`github-app-deploy-2026-10-14-2`); `app-server`, both scan workers, `health-worker` and `scheduler` rebuilt and rolled
+(workers one at a time while idle), `jina-embed` untouched. Headlines: Flash Review is no longer queued for
+dependency-bot pull requests (Dependabot, Renovate, pre-commit-ci, snyk), draft pull requests, or titles and labels
+that ask to skip it, and a draft is reviewed once when it is marked ready (#1038); the unknown-model fallback price no
+longer moves when embedding rows are added (#1037); the app server runs uvloop 0.23.0 and asyncpg 0.32.0 (#1029,
+#1030), tested in an isolated A/B stack before merging. See the snapshot in
+`docs/operations/DEPLOYMENT-VERIFICATION.md` for what was verified live.
+
 ## 2026-10-13
 
 Commit `c9b63d98`, tagged `github-app-deploy-2026-10-13`, no migrations. `app-server`, both scan workers,
