@@ -218,6 +218,8 @@
     "inotify",
     "MSIX",
     "Qwen",
-    "deepinfra"
+    "deepinfra",
+    "uvloop",
+    "markupsafe"
   ]
 }

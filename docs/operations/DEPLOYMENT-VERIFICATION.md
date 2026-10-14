@@ -4,8 +4,52 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-10-13
-**Snapshot Freshness:** CURRENT as of 2026-10-13 - `app-server`, both scan workers, `health-worker` and `scheduler` run
+**Last Updated:** 2026-10-14
+**Snapshot Freshness:** CURRENT as of 2026-10-14 - `app-server`, both scan workers, `health-worker` and `scheduler` run
+`master` at commit `f2e1bcf4` (tag `github-app-deploy-2026-10-14-2`); `jina-embed` still runs `e3182a9f` (nothing it
+runs changed, and it is deliberately not rebuilt while it is the rollback for the DeepInfra embedder). No migration, no
+Dockerfile or compose change. Two deploys that day, each preceded by a database backup and rolled with the workers one
+at a time while idle (0 busy at every step), then re-verified live via SSH.
+
+2026-10-14 deploy 1 (`46b6739d`, tag `github-app-deploy-2026-10-14`, backup `backups/aletheore_app_2026-10-14T11-05-57Z.dump`):
+
+- #1038: Flash Review is no longer queued for pull requests opened by `dependabot[bot]`, `renovate[bot]`,
+  `pre-commit-ci[bot]` or `snyk-bot`, for draft pull requests, for a title containing `[skip review]`, `[no review]` or
+  `[skip aletheore]`, or for the labels `skip-review` and `no-review`. The deterministic scan still runs on all of them.
+  Marking a draft ready (`ready_for_review`) queues one review, which covers everything since the last reviewed commit.
+  The label `aletheore-review` forces a review. Before this, a review (charged to the customer's credit, or to the
+  Community allowance) ran on every Dependabot version bump.
+- #1037: three unused rate-table rows removed, and the unknown-model fallback price now ignores embedding-only rows
+  (it had dropped from about $0.23 in / $1.20 out to $0.20 / $0.68 per million when the DeepInfra rows were added; it is
+  now $0.2137 / $0.9409, the median of the chat models).
+
+2026-10-14 deploy 2 (`f2e1bcf4`, tag `github-app-deploy-2026-10-14-2`, backup `backups/aletheore_app_2026-10-14T11-20-27Z.dump`):
+
+- #1029 uvloop 0.22.1 to 0.23.0 and #1030 asyncpg 0.31.0 to 0.32.0, the event loop and database driver of the app
+  server. Tested before merging, not just by CI (which does not run uvloop): the real image with both bumps, and the
+  image production ran, were each started in an isolated scratch stack (own Postgres, Redis and network, torn down
+  afterwards) and given the same load: 3,000 requests each of `/healthz`, a bad-token and a flash-token
+  `/v1/embeddings` (asyncpg token lookups), signed `/webhook` pull-request events, and 3,000 mixed at concurrency 150.
+  Both returned only the expected statuses, the bumped build with zero exceptions and zero error log lines, memory
+  about 162 MiB in both, latency level; and the queue counts proved #1038 end to end (300 Dependabot PRs queued 300
+  scan jobs and no reviews, 100 drafts 100, 100 human PRs 200). `uvicorn` selects `uvloop.Loop` in both images.
+- The images also resolve `tree-sitter-php` 0.25.1 now that #1028 allows it. A scan of two real PHP repositories
+  (132 and 125 files) gave identical symbols, imports, security and architecture under 0.24.1 and 0.25.1.
+- #1034, #1035, #1036 (prettier and two GitHub Actions patch bumps) are CI-only; #1031 (markupsafe 3.0.4) is in the
+  `jina-embed` lock file only and takes effect when that image is next rebuilt.
+- Not taken: #1032 (fastapi 0.143.0, which left the hash-pinned `requirements-jina-embed.lock.txt` incomplete so the
+  image build failed) and #1033 (jsonschema 4.26.0, which conflicts with semgrep's pins). Both were closed with the
+  reason; the fastapi bump needs the three lock files regenerated together.
+
+Verified live after each deploy: all five recreated services `healthy`; zero lines matching `error|traceback|exception`
+in each recreated container's logs since its restart; `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`;
+three RQ workers registered; and the new code is in the running containers (seven markers in each of the five after
+deploy 1; after deploy 2, uvloop 0.23.0, asyncpg 0.32.0, `tree-sitter-php` 0.25.1, the skip rules and the DeepInfra
+setting in each of the five). The database showed 6 connections of 100 allowed, 5 of them idle: asyncpg 0.32 keeps the
+pool's `min_size=5` open as a floor. The DeepInfra embedder stayed on throughout, with no embedding warnings in the
+logs since it was switched on, and 14 Flash Review plus 4 AIRview embeddings metered at about $0.0002 in total.
+
+**Previous:** CURRENT as of 2026-10-13 - `app-server`, both scan workers, `health-worker` and `scheduler` ran
 `master` at commit `c9b63d98` (tag `github-app-deploy-2026-10-13`); `jina-embed` still runs `e3182a9f`, because nothing
 under `github-app/jina_embed/` changed. Re-verified live via SSH after each step. No migration, no Dockerfile or compose
 change, no lockfile change.
