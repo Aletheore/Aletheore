@@ -52,6 +52,16 @@ export const prReview = {
     title: "The gap we found and closed",
     body: "Before the fix, of Aletheore's roughly 96 findings per run, about 13 were confirmed false positives and about 14 more were ones the judge could not confirm; precision counts both against us, which is why it was 71.5%. Most were claims about one file that another file in the same pull request contradicts (\"no migration is included\", \"this field is never registered\"), because each per-file review call saw only its own patch. Showing every call the rest of the pull request raised Flash precision from 71.5% to 92.6% (a 20.4-point gain, 95% interval +7.2 to +31.3) with recall unchanged, and AIR from 79.7% to 93.3%. On Flash, confirmed false positives fell from 13.0 to 2.0 per run.",
   },
+  production: {
+    title: "The same 13 pull requests through the full production call",
+    body: "The comparison above scores the diff-only generation path. We then ran the same 13 pull requests through the full call the hosted product makes (file contents, referenced symbols, deterministic checks, ranking and the grounding gate), on the code deployed on 2026-10-14, four times. Recall was 55.1% and precision 89.2%, with 3.5 confirmed false positives per run. Against the earlier run that is +1.7 points on recall (95% interval -2.6 to +6.4) and -3.2 on precision (-8.5 to +3.1), neither distinguishable from zero. The two runs used different code and different numbers of trials, so read it as the same range, not a change. If you want one precision figure for the hosted product today, it is the 89%.",
+    columns: ["Configuration", "Recall", "Precision", "Confirmed false positives per run"],
+    rows: [
+      ["Production call, 4 runs, 2026-10-14", "55.1% [43-67]", "89.2% [83-94]", "3.5"],
+      ["Diff-only path, 2 runs, 2026-09-24", "53.4% [39-68]", "92.6% [86-96]", "2.0"],
+    ],
+    href: "https://github.com/Aletheore/aletheore-benchmarks/blob/master/pr_review/README.md#experiment-9-flash-review-in-its-production-configuration-2026-10-14",
+  },
   pairwise: {
     title: "Head to head, with intervals",
     rows: [
@@ -225,7 +235,7 @@ export const lose = {
     "On SWE-PRBench our absolute recall (22.3%) and precision (20.5%) are low, as they are for every model; the score is above the published cluster by a margin close to our own run-to-run variance.",
     "The Graphify comparison rests on 15 questions on one corpus, of which only 2 discriminate between conditions.",
     "Our local setup was slower than Graphify's: scanning and indexing ERPNext took about 23 minutes against their about 1 minute. We found the real bottleneck (dead-code detection, 77% of scan time, not parsing) and fixed it in aletheore 0.9.5: 53.23 s against the old 236.02 s, verified against the installed release. Indexing (about 19 minutes, a separate I/O-bound step) is now the honest remaining gap.",
-    "The PR-review comparison rests on 13 pull requests, so its intervals are wide and small differences between tools are noise. Our fix for cross-file false positives was developed while looking at these same pull requests and has not been checked on unseen ones. \"Precision\" counts any accurate, specific claim about the diff, so it measures accuracy of claims, not how important they are. The benchmark runs the diff-only generation path; the hosted product adds more context and checks. The other tools' rows are single runs from before 2026-09-23.",
+    "The PR-review comparison rests on 13 pull requests, so its intervals are wide and small differences between tools are noise. Our fix for cross-file false positives was developed while looking at these same pull requests and has not been checked on unseen ones. \"Precision\" counts any accurate, specific claim about the diff, so it measures accuracy of claims, not how important they are. The head-to-head runs the diff-only generation path; a separate four-run measurement of the production call scored 89.2% precision, and it too was developed while looking at these pull requests. The other tools' rows are single runs from before 2026-09-23.",
   ],
 };
 
