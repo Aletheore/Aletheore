@@ -1,3 +1,4 @@
+import os
 from unittest.mock import MagicMock, patch
 
 from aletheore.static_analysis.sonarqube_scanner import check_sonarqube
@@ -26,6 +27,21 @@ def test_check_sonarqube_reports_scanner_not_installed(tmp_path):
 
     assert result["checked"] is False
     assert "sonar-scanner CLI not installed" in result["reason"]
+
+
+def test_check_sonarqube_resolves_which_to_an_absolute_path(tmp_path):
+    # Real gap found by an independent Strix pentest pass (2026-10-15):
+    # shutil.which() can return a path relative to a relative PATH entry,
+    # and the subprocess below switches cwd to repo_path - a scanned
+    # (untrusted) repo could shadow a bare relative name with its own
+    # same-named executable and have it run with this process's privileges.
+    with patch("aletheore.static_analysis.sonarqube_scanner.shutil.which", return_value="relative/sonar-scanner"), \
+         patch("aletheore.static_analysis.sonarqube_scanner.subprocess.run", return_value=_mock_run(0)) as mock_run:
+        check_sonarqube(tmp_path, host_url="http://localhost:9000")
+
+    called_cmd = mock_run.call_args[0][0]
+    assert os.path.isabs(called_cmd[0])
+    assert called_cmd[0] != "relative/sonar-scanner"
 
 
 def test_check_sonarqube_full_happy_path(tmp_path, monkeypatch):

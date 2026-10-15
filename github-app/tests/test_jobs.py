@@ -12497,6 +12497,26 @@ def test_git_path_falls_back_to_the_bare_name_when_git_is_not_on_path(monkeypatc
     assert jobs._git_path() == "git"
 
 
+def test_git_path_resolves_a_relative_which_result_to_an_absolute_path(monkeypatch):
+    # Real gap found by an independent Strix pentest pass (2026-10-15):
+    # _GIT_PATH is cached once per process and reused across every
+    # subsequent git invocation's cwd=<checkout dir> - a different,
+    # untrusted cloned repo on every later scan. If shutil.which() ever
+    # returned a path relative to a relative PATH entry, ANY repo scanned
+    # later in this worker's lifetime (not just the one scanned when
+    # _GIT_PATH was first resolved) could shadow it with its own
+    # same-named executable.
+    from scan_worker import jobs
+
+    monkeypatch.setattr(jobs.shutil, "which", lambda name: "relative/git" if name == "git" else None)
+    jobs._GIT_PATH = None
+
+    resolved = jobs._git_path()
+
+    assert os.path.isabs(resolved)
+    assert resolved != "relative/git"
+
+
 def test_run_scan_resolves_the_bare_aletheore_cli_name(tmp_path, monkeypatch):
     # Same Bandit B607 class as the git fixes above, one more bare
     # executable name this file passed straight to subprocess.run.

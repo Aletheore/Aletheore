@@ -117,6 +117,12 @@ def check_sonarqube(
     binary = shutil.which("sonar-scanner")
     if binary is None:
         return {"checked": False, "reason": "sonar-scanner CLI not installed", "findings": []}
+    # Resolve to an absolute path before the subprocess below switches its
+    # cwd to repo_path - shutil.which() can return a path relative to a
+    # relative PATH entry, which a scanned (untrusted) repo could otherwise
+    # shadow with its own same-named executable (Strix security review,
+    # 2026-10-15).
+    binary = os.path.abspath(binary)
 
     token = os.environ.get("SONARQUBE_TOKEN", "")
     project_key = _project_key(repo_path)

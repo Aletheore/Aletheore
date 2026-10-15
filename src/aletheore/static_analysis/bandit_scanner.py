@@ -1,5 +1,6 @@
 import ast
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -218,6 +219,12 @@ def check_bandit(repo_path: Path, timeout: int = DEFAULT_BANDIT_TIMEOUT_SECONDS)
     binary = shutil.which("bandit")
     if binary is None:
         return {"checked": False, "reason": "bandit not installed", "findings": []}
+    # Resolve to an absolute path before the subprocess below switches its
+    # cwd to repo_path - shutil.which() can return a path relative to a
+    # relative PATH entry, which a scanned (untrusted) repo could otherwise
+    # shadow with its own same-named executable (Strix security review,
+    # 2026-10-15).
+    binary = os.path.abspath(binary)
 
     cmd = [binary, "-r", ".", "-f", "json", "-q"]
     exclude_arg = _exclude_arg(repo_path)

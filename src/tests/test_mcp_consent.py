@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -120,6 +121,42 @@ async def test_withheld_tools_are_absent_not_merely_refusing(tmp_path):
     with pytest.raises(Exception) as excinfo:
         await server.call_tool("aletheore_scan", {})
     assert "aletheore_scan" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_answer_tool_needs_external_when_the_adapter_requires_consent(tmp_path):
+    # Real gap found by an independent Strix pentest pass (2026-10-15):
+    # aletheore_answer's own TOOL_REQUIRED_EFFECTS entry lists only
+    # `network`, since a requires_consent=False local CLI adapter never
+    # leaves the machine - but build_server used to never add `external`
+    # for a requires_consent=True direct-API adapter either, so selecting
+    # one via `--agent` was enough to send retrieved repository code to a
+    # third-party API with only `network` granted, the one path the
+    # equivalent CLI `query answer` flow explicitly warns and confirms
+    # before doing.
+    adapter = MagicMock(requires_consent=True)
+    repo = make_repo(tmp_path)
+
+    names = await tool_names(repo, answer_adapter=adapter, allow=frozenset({EFFECT_NETWORK}))
+    assert "aletheore_answer" not in names
+
+    names = await tool_names(
+        repo, answer_adapter=adapter, allow=frozenset({EFFECT_NETWORK, EFFECT_EXTERNAL})
+    )
+    assert "aletheore_answer" in names
+
+
+@pytest.mark.asyncio
+async def test_answer_tool_only_needs_network_when_the_adapter_does_not_require_consent(tmp_path):
+    # The other half of the same gate: an intentionally local CLI adapter
+    # (requires_consent=False) must keep working on `network` alone -
+    # nothing it does ever reaches a third party, so requiring `external`
+    # for it too would be a real regression, not extra safety.
+    adapter = MagicMock(requires_consent=False)
+
+    names = await tool_names(make_repo(tmp_path), answer_adapter=adapter, allow=frozenset({EFFECT_NETWORK}))
+
+    assert "aletheore_answer" in names
 
 
 @pytest.mark.asyncio

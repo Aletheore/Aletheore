@@ -417,7 +417,15 @@ def _git_path() -> str:
     """
     global _GIT_PATH
     if _GIT_PATH is None:
-        _GIT_PATH = shutil.which("git") or "git"
+        # Resolved to an absolute path, not just whatever which() returns
+        # as-is: this value is cached for the worker process's whole
+        # lifetime and reused across many different repos' checkout dirs as
+        # cwd, so a relative PATH entry would let ANY later-scanned
+        # (untrusted) repo shadow it with its own same-named executable -
+        # not just the repo scanned at the moment of first resolution
+        # (Strix security review, 2026-10-15).
+        found = shutil.which("git")
+        _GIT_PATH = os.path.abspath(found) if found else "git"
     return _GIT_PATH
 
 

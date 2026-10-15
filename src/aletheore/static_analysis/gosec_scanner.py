@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -50,6 +51,12 @@ def check_gosec(repo_path: Path, timeout: int | None = None) -> dict:
     binary = shutil.which("gosec")
     if binary is None:
         return {"checked": False, "reason": "gosec not installed", "findings": []}
+    # Resolve to an absolute path before the subprocess below switches its
+    # cwd to repo_path - shutil.which() can return a path relative to a
+    # relative PATH entry, which a scanned (untrusted) repo could otherwise
+    # shadow with its own same-named executable (Strix security review,
+    # 2026-10-15).
+    binary = os.path.abspath(binary)
 
     if timeout is None:
         timeout = _scaled_timeout(file_count)
