@@ -4,8 +4,38 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-10-14
-**Snapshot Freshness:** CURRENT as of 2026-10-14 - `app-server`, both scan workers, `health-worker` and `scheduler` run
+**Last Updated:** 2026-10-15
+**Snapshot Freshness:** CURRENT as of 2026-10-15 - `app-server`, both scan workers, `health-worker` and `scheduler` run
+`master` at commit `4adddf55` (tag `github-app-deploy-2026-10-15`); `jina-embed` still runs `e3182a9f` and was not
+rebuilt (it is idle: 38 hours of its logs held health checks and one embed request, and it stays as the rollback for the
+DeepInfra embedder). No migration, no Dockerfile or compose change. One deploy, preceded by a database backup
+(`backups/aletheore_app_2026-10-15T15-48-01Z.dump`); the new images were import-tested before anything was replaced,
+`app-server` was rolled first, and the workers were rolled only once all three RQ workers were idle.
+
+2026-10-15 deploy (`4adddf55`, tag `github-app-deploy-2026-10-15`):
+
+- #1043: fastapi 0.141.1 to 0.143.2, with `requirements.lock.txt`, `requirements-dev.lock.txt` and
+  `requirements-jina-embed.lock.txt` regenerated together under Python 3.12 (the images' Python). This is the change that
+  Dependabot's #1032 could not make: fastapi 0.143 also needs `opentelemetry-api`, which was not pinned, so
+  `pip install --require-hashes` failed the image build. Only fastapi was asked to upgrade; starlette stays at 1.6.0.
+  The dev lock was also stale (it lacked `bandit` and its dependencies) and now includes them. fastapi 0.143.0 makes
+  automatic OpenTelemetry exporter setup opt-in; nothing here configures OTel exporters, and only the API package is
+  added, so there is no behavior change.
+- CI on the pull request: the full suite on Python 3.11 to 3.14 (plus Windows and macOS), and the image build and
+  scan for all three images including `jina-embed`, all green. A local run on a developer Mac showed test-isolation
+  failures that fail identically on the old lock files and not in CI.
+- `requirements-jina-embed.lock.txt` now pins fastapi 0.143.2 but the running `jina-embed` container keeps its old
+  image until it is next rebuilt.
+
+Verified live: in a throwaway container from each new image, fastapi 0.143.2, starlette 1.6.0 and `opentelemetry-api`
+1.45.1, and `app_server.main` and `scan_worker.jobs` import; all five recreated services `healthy`, exactly one
+`github-app-scan-worker-1` and one `github-app-scan-worker-2-1`; `/healthz` returns
+`200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}` locally and at the public hostname, and a GET on
+`/v1/embeddings` still returns 405; three RQ workers registered; zero lines matching `error|traceback|exception` in each
+recreated container's logs three minutes after the roll; and a real embedding call from the new scan-worker image
+returned a 1024-dimension vector labelled `deepinfra:Qwen/Qwen3-Embedding-8B@1024`.
+
+**Previous:** CURRENT as of 2026-10-14 - `app-server`, both scan workers, `health-worker` and `scheduler` run
 `master` at commit `f2e1bcf4` (tag `github-app-deploy-2026-10-14-2`); `jina-embed` still runs `e3182a9f` (nothing it
 runs changed, and it is deliberately not rebuilt while it is the rollback for the DeepInfra embedder). No migration, no
 Dockerfile or compose change. Two deploys that day, each preceded by a database backup and rolled with the workers one

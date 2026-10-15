@@ -18,6 +18,14 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-10-15
+
+One deploy, no migrations. Commit `4adddf55` (tag `github-app-deploy-2026-10-15`); `app-server`, both scan workers,
+`health-worker` and `scheduler` rebuilt and rolled (`app-server` first, workers once all three RQ workers were idle),
+`jina-embed` untouched. Headline: fastapi 0.141.1 to 0.143.2 with the three lock files regenerated together (#1043),
+which is what Dependabot's #1032 needed; the build had failed because fastapi 0.143 also needs `opentelemetry-api`.
+No behavior change. See the snapshot in `docs/operations/DEPLOYMENT-VERIFICATION.md` for what was verified live.
+
 ## 2026-10-14
 
 Two deploys, no migrations. Commit `46b6739d` (tag `github-app-deploy-2026-10-14`) and commit `f2e1bcf4` (tag
