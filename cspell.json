@@ -221,6 +221,7 @@
     "deepinfra",
     "uvloop",
     "markupsafe",
-    "opentelemetry"
+    "opentelemetry",
+    "starlette"
   ]
 }
