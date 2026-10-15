@@ -220,6 +220,7 @@
     "Qwen",
     "deepinfra",
     "uvloop",
-    "markupsafe"
+    "markupsafe",
+    "opentelemetry"
   ]
 }
