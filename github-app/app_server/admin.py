@@ -1590,6 +1590,13 @@ DELETION_OTP_ATTEMPT_LIMIT = 10
 DELETION_OTP_ATTEMPT_WINDOW_SECONDS = 3600
 DELETION_OTP_VALIDITY_MINUTES = 10
 
+# Explicit allowlist rather than an equality check against "production":
+# an unset, misspelled, or differently-cased SENTRY_ENVIRONMENT must still
+# fail closed (treated as production) instead of silently falling through
+# to logging the raw deletion OTP - see the brittleness Flash Review
+# flagged on PR #1044 against the equality-check version of this guard.
+_NON_PRODUCTION_ENVIRONMENTS = {"test", "development", "dev", "local", "staging"}
+
 
 @admin_router.post("/admin/{org}/{repo}/delete-all-data/request-otp")
 async def request_deletion_otp(org: str, repo: str, request: Request):
@@ -1645,7 +1652,10 @@ async def request_deletion_otp(org: str, repo: str, request: Request):
             detail="no verified email on file for your GitHub account - contact support@aletheore.com",
         )
 
-    if not settings.resend_api_key and settings.sentry_environment == "production":
+    if (
+        not settings.resend_api_key
+        and settings.sentry_environment.strip().lower() not in _NON_PRODUCTION_ENVIRONMENTS
+    ):
         # Real gap closed here (2026-10-12, Strix security review): this
         # used to create the code row and log the raw OTP unconditionally
         # whenever RESEND_API_KEY was missing, with no check for which

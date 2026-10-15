@@ -159,6 +159,36 @@ async def test_request_otp_fails_closed_in_production_instead_of_logging_the_cod
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("environment", ["Production", " production ", "PRODUCTION"])
+async def test_request_otp_fails_closed_regardless_of_production_label_casing(
+    pool, monkeypatch, caplog, environment
+):
+    # Flash Review caught this on PR #1044: the guard above used to compare
+    # settings.sentry_environment == "production" exactly, so a deploy
+    # naming its environment "Production" or "PRODUCTION" (or one with
+    # stray whitespace) would silently miss the guard and fall through to
+    # logging the raw OTP - reopening the exact leak this fix exists to
+    # close. The guard now fails closed unless the value is explicitly in
+    # the non-production allowlist, so any production-labelled variant
+    # (not just the literal lowercase string) must still 503 and never log.
+    client = await _logged_in_client(pool, monkeypatch)
+    monkeypatch.setenv("SENTRY_ENVIRONMENT", environment)
+    await pool.execute(
+        "INSERT INTO github_user_emails (github_login, email) VALUES ('octocat', 'octocat@example.com') "
+        "ON CONFLICT (github_login) DO UPDATE SET email = EXCLUDED.email"
+    )
+    monkeypatch.setattr("app_server.admin.is_rate_limited", lambda *a, **k: False)
+    monkeypatch.setattr("app_server.admin.secrets.randbelow", lambda _n: 424242)
+
+    with caplog.at_level("WARNING", logger="app_server.admin"):
+        async with client:
+            response = await client.post("/admin/octocat/hello-world/delete-all-data/request-otp")
+
+    assert response.status_code == 503
+    assert not any("424242" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_request_otp_is_rate_limited(pool, monkeypatch):
     # Same pattern as test_ingest_abuse_controls.py: mock is_rate_limited
     # itself rather than driving a real Redis six times - it's the
