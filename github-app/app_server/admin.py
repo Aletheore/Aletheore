@@ -68,6 +68,7 @@ from app_server.db import (
     remove_installation_member,
     replace_endpoint_health_selection,
     revoke_api_token,
+    revoke_api_tokens_created_by,
     set_docs_repo_commit_enabled,
     set_llm_suggestions_enabled,
     set_public_status_enabled,
@@ -1090,10 +1091,19 @@ async def remove_member(org: str, repo: str, github_login: str, request: Request
     installation = await _require_admin_installation(request, org, repo)
     pool = request.app.state.db_pool
     await remove_installation_member(pool, installation["installation_id"], github_login)
+    # Real gap closed here (2026-10-12, Strix security review): an API
+    # token authenticates purely by its hash, with no check that its
+    # creator is still a member - so a removed member's own tokens used to
+    # stay fully usable forever unless someone separately noticed and
+    # revoked them one at a time. Revoking them as part of removal closes
+    # that without relying on anyone remembering the separate step.
+    revoked_token_count = await revoke_api_tokens_created_by(
+        pool, installation["installation_id"], github_login
+    )
     session = await get_current_session(request)
     await record_admin_action(
         pool, installation["installation_id"], session["github_login"], "member_removed",
-        {"github_login": github_login},
+        {"github_login": github_login, "revoked_token_count": revoked_token_count},
     )
     return {"ok": True}
 
@@ -1635,6 +1645,29 @@ async def request_deletion_otp(org: str, repo: str, request: Request):
             detail="no verified email on file for your GitHub account - contact support@aletheore.com",
         )
 
+    if not settings.resend_api_key and settings.sentry_environment == "production":
+        # Real gap closed here (2026-10-12, Strix security review): this
+        # used to create the code row and log the raw OTP unconditionally
+        # whenever RESEND_API_KEY was missing, with no check for which
+        # environment was running - so a real production misconfiguration
+        # (the secret rotated out, an env var typo) would have leaked a
+        # code that exists specifically to gate a destructive
+        # data-deletion action into application logs, which get shipped to
+        # Sentry/log aggregators. Checked before any side effect (the code
+        # row insert below, not just the log line) so a request that can't
+        # be delivered doesn't leave an orphaned, undeliverable-but-valid
+        # code sitting in the database either. A missing email provider in
+        # production is a real incident, not a safe local-dev fallback:
+        # fail the request instead.
+        logger.error(
+            "RESEND_API_KEY not configured in production (environment=%s); deletion OTP could not be sent",
+            settings.sentry_environment,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="unable to send a confirmation code right now - contact support@aletheore.com",
+        )
+
     code = f"{secrets.randbelow(1_000_000):06d}"
     code_hash = hashlib.sha256(code.encode()).hexdigest()
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=DELETION_OTP_VALIDITY_MINUTES)
@@ -1653,8 +1686,9 @@ async def request_deletion_otp(org: str, repo: str, request: Request):
             message["text"],
         )
     else:
-        # No email provider configured (local dev) - log it instead of
-        # silently succeeding with a code nobody can ever receive.
+        # No email provider configured, but we've already established
+        # above that we're not in production - local dev. Log it instead
+        # of silently succeeding with a code nobody can ever receive.
         logger.warning("RESEND_API_KEY not configured, deletion OTP not sent: %s", code)
 
     masked = to_email[0] + "***" + to_email[to_email.index("@"):] if "@" in to_email else "***"

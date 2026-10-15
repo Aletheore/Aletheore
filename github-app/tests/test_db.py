@@ -36,6 +36,7 @@ from app_server.db import (
     remove_health_check_target,
     remove_installation_member,
     revoke_api_token,
+    revoke_api_tokens_created_by,
     record_llm_spend,
     set_installation_plan,
     set_webhook_url,
@@ -185,6 +186,33 @@ async def test_webhook_url_and_token_lifecycle(pool):
     assert await get_installation_by_token_hash(pool, "hash1") is None
 
 
+@pytest.mark.asyncio
+async def test_revoke_api_tokens_created_by_only_revokes_that_creators_tokens(pool):
+    # Regression test for a real bug (2026-10-12 Strix security review):
+    # a token authenticates purely by hash + revoked_at IS NULL, with
+    # nothing tying its continued validity to its creator still being an
+    # installation member - removing someone used to leave every token
+    # they'd personally created fully usable indefinitely. This is the DB
+    # primitive remove_member now calls to close that.
+    await upsert_installation(pool, 101, "octocat")
+    await create_api_token(pool, 101, "alice-hash-1", "alice-laptop", "alice")
+    await create_api_token(pool, 101, "alice-hash-2", "alice-ci", "alice")
+    await create_api_token(pool, 101, "bob-hash-1", "bob-laptop", "bob")
+
+    revoked_count = await revoke_api_tokens_created_by(pool, 101, "alice")
+
+    assert revoked_count == 2
+    assert await get_installation_by_token_hash(pool, "alice-hash-1") is None
+    assert await get_installation_by_token_hash(pool, "alice-hash-2") is None
+    # Bob was not removed - his own token must keep working.
+    assert (await get_installation_by_token_hash(pool, "bob-hash-1"))["installation_id"] == 101
+
+
+@pytest.mark.asyncio
+async def test_revoke_api_tokens_created_by_is_a_noop_for_a_login_with_no_tokens(pool):
+    await upsert_installation(pool, 102, "octocat")
+    revoked_count = await revoke_api_tokens_created_by(pool, 102, "nobody")
+    assert revoked_count == 0
 
 
 @pytest.mark.asyncio

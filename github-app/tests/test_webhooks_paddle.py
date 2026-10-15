@@ -2465,9 +2465,10 @@ async def test_transaction_completed_regular_purchase_for_referred_installation_
 
 
 def _adjustment_payload(
-    transaction_id: str, action: str = "refund", total: str | None = None, adjustment_id: str | None = "adj_test_1"
+    transaction_id: str, action: str = "refund", total: str | None = None, adjustment_id: str | None = "adj_test_1",
+    status: str = "pending_approval",
 ) -> dict:
-    data = {"transaction_id": transaction_id, "action": action, "status": "pending_approval"}
+    data = {"transaction_id": transaction_id, "action": action, "status": status}
     if adjustment_id is not None:
         data["id"] = adjustment_id
     if total is not None:
@@ -2499,11 +2500,86 @@ async def test_adjustment_created_reverses_the_commission_for_the_refunded_trans
     )
 
     await handle_paddle_webhook_event(
-        _adjustment_payload("txn_refunded_sub", total="100"), pool, "redis://unused"
+        _adjustment_payload("txn_refunded_sub", total="100", status="approved"), pool, "redis://unused"
     )
 
     totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
     assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("0.00")
+
+
+@pytest.mark.asyncio
+async def test_adjustment_created_while_pending_approval_does_not_reverse_the_commission(pool, monkeypatch):
+    # Regression test for a real bug (2026-10-12 Strix security review): a
+    # refund adjustment can arrive still "pending_approval" and later be
+    # rejected - reversing commission on first sight, before approval, could
+    # permanently cost an affiliate their commission on a sale that, in the
+    # end, was never actually refunded. This must mirror
+    # _claw_back_refunded_topup's own approval gate on the credit side.
+    _capture_alerts(monkeypatch)
+    affiliate = await create_affiliate(pool, "PEND10", "dsc_pend_wh", "Penny")
+    await upsert_installation(pool, 1958, "acme")
+    await record_referral(pool, 1958, affiliate["id"])
+    await record_commission(
+        pool, affiliate["id"], 1958, "txn_pending_refund", Decimal("1.20"),
+        datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+
+    await handle_paddle_webhook_event(
+        _adjustment_payload("txn_pending_refund", total="100", status="pending_approval"), pool, "redis://unused"
+    )
+
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("1.20")
+
+
+@pytest.mark.asyncio
+async def test_adjustment_rejected_never_reverses_the_commission(pool, monkeypatch):
+    _capture_alerts(monkeypatch)
+    affiliate = await create_affiliate(pool, "REJ10", "dsc_rej_wh", "Reja")
+    await upsert_installation(pool, 1959, "acme")
+    await record_referral(pool, 1959, affiliate["id"])
+    await record_commission(
+        pool, affiliate["id"], 1959, "txn_rejected_refund", Decimal("1.20"),
+        datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+
+    await handle_paddle_webhook_event(
+        _adjustment_payload("txn_rejected_refund", total="100", status="rejected"), pool, "redis://unused"
+    )
+
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("1.20")
+
+
+@pytest.mark.asyncio
+async def test_adjustment_updated_to_approved_reverses_the_commission_that_created_left_pending(pool, monkeypatch):
+    # The real-world sequence: adjustment.created arrives pending_approval
+    # (no reversal, per the regression test above), then a later
+    # adjustment.updated confirms approval - THAT event must be the one
+    # that actually reverses the commission, using the same adjustment id
+    # so reverse_commission_partial's own dedup still applies if both
+    # happened to carry "approved".
+    _capture_alerts(monkeypatch)
+    affiliate = await create_affiliate(pool, "SEQ10", "dsc_seq_wh", "Seqa")
+    await upsert_installation(pool, 1960, "acme")
+    await record_referral(pool, 1960, affiliate["id"])
+    await record_commission(
+        pool, affiliate["id"], 1960, "txn_sequenced_refund", Decimal("1.20"),
+        datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+
+    await handle_paddle_webhook_event(
+        _adjustment_payload("txn_sequenced_refund", total="100", status="pending_approval"), pool, "redis://unused"
+    )
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("1.20"), "still untouched while pending"
+
+    payload = _adjustment_payload("txn_sequenced_refund", total="100", status="approved")
+    payload["event_type"] = "adjustment.updated"
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("0.00"), "approval must now reverse it"
 
 
 @pytest.mark.asyncio
@@ -2523,7 +2599,7 @@ async def test_adjustment_created_with_no_usable_total_alerts_instead_of_reversi
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
 
-    await handle_paddle_webhook_event(_adjustment_payload("txn_no_total"), pool, "redis://unused")
+    await handle_paddle_webhook_event(_adjustment_payload("txn_no_total", status="approved"), pool, "redis://unused")
 
     totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
     assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("1.20")
@@ -2542,7 +2618,7 @@ async def test_adjustment_created_with_no_id_alerts_instead_of_silently_skipping
     )
 
     await handle_paddle_webhook_event(
-        _adjustment_payload("txn_no_id", total="100", adjustment_id=None), pool, "redis://unused"
+        _adjustment_payload("txn_no_id", total="100", adjustment_id=None, status="approved"), pool, "redis://unused"
     )
 
     totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
