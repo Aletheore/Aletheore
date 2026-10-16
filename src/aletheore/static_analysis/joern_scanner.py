@@ -54,8 +54,21 @@ def check_joern(repo_path: Path, timeout: int = DEFAULT_JOERN_TIMEOUT_SECONDS) -
             "findings": [],
         }
 
+    # Real gap found via audit: unlike every sibling scanner here (bandit,
+    # bearer, gosec, pmd, semgrep, sonarqube all join a flag and its value
+    # into one `--flag=value`/comma-joined argv token), this appends
+    # `name` as its OWN separate argv element after `--exclude` - and
+    # `name` can be an arbitrary slash-free string from a scanned repo's
+    # own .aletheore.json (fully attacker-controlled when scanning a
+    # third-party repo, see excluded_dir_names/repo_config.py). A
+    # dash-prefixed value would reach gosrc2cpg's own argument parser
+    # looking like a new flag rather than --exclude's value - skipping
+    # such entries here costs nothing: filter_findings below is still the
+    # authoritative backstop for anything a native --exclude flag misses.
     exclude_args = []
     for name in excluded_dir_names(repo_path):
+        if name.startswith("-"):
+            continue
         exclude_args.extend(["--exclude", name])
 
     # Real bug found live building this: running `joern`/`gosrc2cpg` with

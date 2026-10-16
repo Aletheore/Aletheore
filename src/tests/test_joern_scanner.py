@@ -122,6 +122,48 @@ def test_check_joern_resolves_which_to_absolute_paths(tmp_path):
         assert not cmd[0].startswith("relative/")
 
 
+def test_check_joern_drops_dash_prefixed_exclude_names_instead_of_passing_them_as_argv(tmp_path):
+    # Real gap found via audit: unlike every sibling scanner (which join a
+    # flag and its value into one argv token), this one appends `name` as
+    # its own separate element after `--exclude` - a slash-free
+    # .aletheore.json ignored_paths entry starting with `-` (fully
+    # attacker-controlled when scanning a third-party repo) would reach
+    # gosrc2cpg's own argument parser looking like a new flag rather than
+    # --exclude's value.
+    (tmp_path / "go.mod").write_text("module example\n\ngo 1.21\n")
+    (tmp_path / "main.go").write_text("package main\n")
+
+    build_cmd = []
+
+    def fake_run(cmd, **kwargs):
+        if "gosrc2cpg" in cmd[0]:
+            build_cmd.extend(cmd)
+            cpg_path = cmd[cmd.index("-o") + 1]
+            with open(cpg_path, "w") as f:
+                f.write("fake cpg")
+            return _mock_run(0)
+        output_path = None
+        for arg in cmd:
+            if arg.startswith("outputPath="):
+                output_path = arg.split("=", 1)[1]
+        with open(output_path, "w") as f:
+            json.dump([], f)
+        return _mock_run(0)
+
+    with patch(
+        "aletheore.static_analysis.joern_scanner.excluded_dir_names",
+        return_value=["node_modules", "--output=/etc/passwd"],
+    ), patch(
+        "aletheore.static_analysis.joern_scanner.shutil.which",
+        side_effect=lambda name: f"/usr/local/bin/{name}",
+    ), patch("aletheore.static_analysis.joern_scanner.subprocess.run", side_effect=fake_run):
+        check_joern(tmp_path)
+
+    assert "--output=/etc/passwd" not in build_cmd
+    assert "node_modules" in build_cmd
+    assert build_cmd.count("--exclude") == 1  # only the safe entry survived
+
+
 def test_check_joern_excludes_findings_under_worktrees_dir(tmp_path):
     # Real bug found via audit (2026-09-21): unlike bandit/bearer/gosec/
     # semgrep/sonarqube, check_joern never called filter_findings, so a
