@@ -180,9 +180,27 @@ def _locked_rw_credentials_file(credentials_path: Path):
                 loaded = json.loads(raw) if raw else {}
             except ValueError:
                 # Never silently discard an unparseable file: keep a copy so
-                # other saved keys can be recovered by hand.
+                # other saved keys can be recovered by hand. `raw` can hold
+                # a real (if malformed) secret, so this gets the exact same
+                # restrictive-permissions treatment as credentials_path
+                # itself above - a plain write_bytes created it at the OS
+                # default mode (0644 under the common umask), the one real
+                # gap an audit found in this otherwise-locked-down function.
                 with contextlib.suppress(OSError):
-                    credentials_path.with_suffix(".json.bak").write_bytes(raw)
+                    backup_path = credentials_path.with_suffix(".json.bak")
+                    backup_fd = os.open(
+                        str(backup_path),
+                        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0),
+                        0o600,
+                    )
+                    try:
+                        if sys.platform != "win32":
+                            os.fchmod(backup_fd, 0o600)
+                        else:
+                            _restrict_windows_acl(backup_path)
+                        _write_all(backup_fd, raw)
+                    finally:
+                        os.close(backup_fd)
                 loaded = {}
             data = loaded if isinstance(loaded, dict) else {}
             yield data
