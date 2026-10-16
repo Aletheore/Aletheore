@@ -12,6 +12,7 @@ import math
 import re
 import subprocess
 import time
+from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -232,3 +233,30 @@ def render_locate(
             used += len(block)
     return "\n\n".join(out)
 
+
+
+def _files_changed_since_scan(repo_path: Path, paths: list[str], scanned_at: object) -> list[str]:
+    try:
+        scan_time = datetime.fromisoformat(str(scanned_at)).timestamp()
+    except ValueError:
+        return []
+    changed = []
+    for rel in paths:
+        try:
+            if (Path(repo_path) / rel).stat().st_mtime > scan_time:
+                changed.append(rel)
+        except OSError:
+            continue
+    return changed
+
+
+def locate_report(evidence: dict, repo_path: Path, query: str, *, no_match_hint: str = "try grep or a literal search") -> str:
+    """What the `aletheore locate` command and the `aletheore_locate` MCP tool return for `query`."""
+    cands = locate(query, repo_path, evidence["repository"]["modules"], all_words=True, require_confidence=False)
+    text = render_locate(cands, repo_path) if cands else ""
+    if not text:
+        return f"no match for {query!r}; {no_match_hint}"
+    changed = _files_changed_since_scan(repo_path, [c.path for c in cands], evidence.get("scanned_at"))
+    if changed:
+        text = f"note: {', '.join(changed)} changed since the last scan; line ranges may be off\n\n{text}"
+    return text

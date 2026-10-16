@@ -2037,6 +2037,28 @@ def query(
     raise typer.Exit(code=_query(kind, target, repo_path, full, agent, k, symbol, language))
 
 
+@app.command(
+    help=(
+        "find where names are defined and print the matching functions with their source, "
+        "e.g. aletheore locate 'write_usage HelpFormatter'"
+    )
+)
+def locate(
+    query: str = typer.Argument(..., help="names to look for, as plain words"),
+    path: str = typer.Argument(".", help="repository path"),
+    path_option: Optional[str] = _PATH_OPTION,
+) -> None:
+    from aletheore.code_locator import locate_report
+
+    repo = Path(_resolve_path(path, path_option)).resolve()
+    try:
+        evidence = load_evidence(repo)
+    except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
+        print(f"error: {exc} (run 'aletheore scan' first)")
+        raise typer.Exit(code=1)
+    print(locate_report(evidence, repo, query))
+
+
 @app.command(help="compare two air.json files")
 def diff(
     old: str = typer.Argument(..., help="path to the baseline air.json"),

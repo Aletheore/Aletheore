@@ -55,7 +55,7 @@ from aletheore.search_index import (
     IndexNotFoundError,
     search_index,
 )
-from aletheore.code_locator import locate as locate_code, render_locate
+from aletheore.code_locator import locate_report
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.watch import EVIDENCE_WRITE_LOCK, BackgroundWatcher, start_background_watch
 
@@ -750,21 +750,6 @@ def _register_ast_pattern_tool(mcp_instance: MCPServer, repo_path: Path) -> None
             return _toon_result({"error": f"invalid tree-sitter query: {exc}"})
 
 
-def _files_changed_since_scan(repo_path: Path, paths: list[str], scanned_at: object) -> list[str]:
-    try:
-        scan_time = datetime.fromisoformat(str(scanned_at)).timestamp()
-    except ValueError:
-        return []
-    changed = []
-    for rel in paths:
-        try:
-            if (repo_path / rel).stat().st_mtime > scan_time:
-                changed.append(rel)
-        except OSError:
-            continue
-    return changed
-
-
 def _register_locate_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_locate", annotations=READ_ONLY_ANNOTATIONS)
     @_guard_evidence_read_errors
@@ -773,17 +758,10 @@ def _register_locate_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
         plain words (function, class or variable names, e.g. "write_usage HelpFormatter"). Returns the functions
         whose bodies contain those names, each as a `path::Name Lstart-end` header followed by its source (up to 40
         lines each), so you usually do not need to read the file or call another tool for the same code."""
-        evidence = read_evidence(repo_path)
-        cands = locate_code(
-            query, repo_path, evidence["repository"]["modules"], all_words=True, require_confidence=False
+        return locate_report(
+            read_evidence(repo_path), repo_path, query,
+            no_match_hint="try aletheore_search with a literal or regex pattern",
         )
-        text = render_locate(cands, repo_path) if cands else ""
-        if not text:
-            return f"no match for {query!r}; try aletheore_search with a literal or regex pattern"
-        changed = _files_changed_since_scan(repo_path, [c.path for c in cands], evidence.get("scanned_at"))
-        if changed:
-            text = f"note: {', '.join(changed)} changed since the last scan; line ranges may be off\n\n{text}"
-        return text
 
 
 def _render_symbol_source(evidence: dict, found: dict, max_lines: int) -> str:
