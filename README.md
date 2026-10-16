@@ -79,7 +79,7 @@ Ruby, PHP, C, C++, C#, and Swift**.
   `ALETHEORE_MCP_ALLOW=external` enabled) (module/symbol/dependency lookups,
   ownership, clusters, dead code, hotspots, full-text and semantic search, scan and index
   triggers) so a coding agent can query your repo's structure directly instead of shelling out
-  or re-reading files on every lookup; it re-scans in the background as files change unless started
+  for every lookup; it re-scans in the background as files change unless started
   with `--no-watch`. `aletheore mcp-install` wires it into Claude Code,
   Cursor, VS Code, Kiro, Opencode, or Codex CLI automatically.
 - **`aletheore dashboard`** — a live local web UI: dependency graph, an Obsidian-style cluster
