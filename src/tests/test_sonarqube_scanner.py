@@ -1,7 +1,7 @@
 import os
 from unittest.mock import MagicMock, patch
 
-from aletheore.static_analysis.sonarqube_scanner import check_sonarqube
+from aletheore.static_analysis.sonarqube_scanner import _fetch_issues, check_sonarqube
 
 
 def _mock_run(returncode: int = 0) -> MagicMock:
@@ -42,6 +42,20 @@ def test_check_sonarqube_resolves_which_to_an_absolute_path(tmp_path):
     called_cmd = mock_run.call_args[0][0]
     assert os.path.isabs(called_cmd[0])
     assert called_cmd[0] != "relative/sonar-scanner"
+
+
+def test_fetch_issues_url_encodes_a_project_key_containing_reserved_characters():
+    # Real gap found via audit: project_key defaults to the scanned
+    # directory's own name (_project_key), not something guaranteed
+    # URL-safe - a raw `&` previously created a second, attacker-steered
+    # componentKeys parameter instead of being treated as part of the
+    # project key's value.
+    with patch("aletheore.static_analysis.sonarqube_scanner._api_get", return_value={"issues": []}) as mock_get:
+        _fetch_issues("http://localhost:9000", "proj&componentKeys=other-project", "token")
+
+    called_path = mock_get.call_args[0][1]
+    assert "componentKeys=proj%26componentKeys%3Dother-project" in called_path
+    assert called_path.count("componentKeys=") == 1
 
 
 def test_check_sonarqube_full_happy_path(tmp_path, monkeypatch):
