@@ -108,4 +108,16 @@ async def parse_validated_body_after_auth(request: Request, model: type[BaseMode
     try:
         return model.model_validate(raw)
     except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+        # Flash Review catch: FastAPI's own 422 path routes a ValidationError
+        # through jsonable_encoder before serializing it; raising
+        # exc.errors() directly here does not. Pydantic v2's errors() can
+        # carry a non-JSON-serializable object in `ctx` (e.g. a custom
+        # validator's own raised ValueError) - a response that can't be
+        # serialized turns a client's 422-worthy bad body into an
+        # unhandled 500. None of this module's current callers' models use
+        # custom validators, so it's latent today, but the fix is cheap
+        # and removes the trap for the next field that adds one.
+        raise HTTPException(
+            status_code=422,
+            detail=[{"loc": e["loc"], "msg": e["msg"], "type": e["type"]} for e in exc.errors()],
+        ) from exc

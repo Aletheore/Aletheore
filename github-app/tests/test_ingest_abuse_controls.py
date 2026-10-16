@@ -2,6 +2,8 @@ import json
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from pydantic import BaseModel, field_validator
+from starlette.requests import Request
 
 from app_server.ingest_limits import (
     GITHUB_WEBHOOK_MAX_BODY_BYTES,
@@ -11,6 +13,7 @@ from app_server.ingest_limits import (
     BodyTooLargeError,
     MissingContentLengthError,
     check_declared_body_size,
+    parse_validated_body_after_auth,
 )
 from app_server.main import app
 
@@ -63,6 +66,46 @@ def test_managed_audit_has_a_pre_routing_body_cap():
 
 def test_get_requests_are_untouched():
     check_declared_body_size("/v1/runtime-events", "GET", None)
+
+
+def _request_with_json_body(payload: dict) -> Request:
+    body = json.dumps(payload).encode()
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    scope = {"type": "http", "method": "POST", "path": "/test", "headers": []}
+    return Request(scope, receive)
+
+
+class _ModelWithACustomValidator(BaseModel):
+    x: str
+
+    @field_validator("x")
+    @classmethod
+    def _reject(cls, v: str) -> str:
+        # Pydantic v2 puts the raised ValueError itself (not just its
+        # message) into this error's `ctx` - not JSON-serializable on its
+        # own, which is exactly the shape Flash Review caught.
+        raise ValueError("custom validator failure")
+
+
+@pytest.mark.asyncio
+async def test_parse_validated_body_after_auth_sanitizes_an_unserializable_validation_error():
+    # Flash Review catch: raising exc.errors() directly (as this helper
+    # used to) can carry a non-JSON-serializable object in `ctx` for a
+    # model with a custom validator - a client's 422-worthy bad body would
+    # then fail to serialize and surface as an unhandled 500 instead.
+    from fastapi import HTTPException
+
+    request = _request_with_json_body({"x": "bad"})
+
+    with pytest.raises(HTTPException) as excinfo:
+        await parse_validated_body_after_auth(request, _ModelWithACustomValidator)
+
+    assert excinfo.value.status_code == 422
+    # Must not raise: every entry is plain, JSON-serializable data.
+    json.dumps(excinfo.value.detail)
 
 
 def test_github_webhook_has_a_pre_routing_body_cap():
