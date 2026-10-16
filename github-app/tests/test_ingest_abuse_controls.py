@@ -4,7 +4,9 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app_server.ingest_limits import (
+    GITHUB_WEBHOOK_MAX_BODY_BYTES,
     MANAGED_AUDIT_MAX_BODY_BYTES,
+    PADDLE_WEBHOOK_MAX_BODY_BYTES,
     RUNTIME_EVENT_MAX_BODY_BYTES,
     BodyTooLargeError,
     MissingContentLengthError,
@@ -61,6 +63,22 @@ def test_managed_audit_has_a_pre_routing_body_cap():
 
 def test_get_requests_are_untouched():
     check_declared_body_size("/v1/runtime-events", "GET", None)
+
+
+def test_github_webhook_has_a_pre_routing_body_cap():
+    # Real gap found via audit: /webhook's HMAC check (signature.py) only
+    # runs inside the handler, after request.body() has already fully
+    # buffered an unauthenticated POST - this path had no entry in
+    # MAX_BODY_BYTES_BY_PATH at all until this fix.
+    check_declared_body_size("/webhook", "POST", str(GITHUB_WEBHOOK_MAX_BODY_BYTES))
+    with pytest.raises(BodyTooLargeError):
+        check_declared_body_size("/webhook", "POST", str(GITHUB_WEBHOOK_MAX_BODY_BYTES + 1))
+
+
+def test_paddle_webhook_has_a_pre_routing_body_cap():
+    check_declared_body_size("/webhooks/paddle", "POST", str(PADDLE_WEBHOOK_MAX_BODY_BYTES))
+    with pytest.raises(BodyTooLargeError):
+        check_declared_body_size("/webhooks/paddle", "POST", str(PADDLE_WEBHOOK_MAX_BODY_BYTES + 1))
 
 
 # --- Runtime events: the queue is the resource being protected ---------------
