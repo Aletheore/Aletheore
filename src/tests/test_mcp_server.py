@@ -561,7 +561,8 @@ async def test_aletheore_symbol_source_returns_exact_source(tmp_path):
 
     result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "foo"})
 
-    assert tool_result_body(result)["result"]["source"] == "def foo():"
+    lines = result.content[0].text.split("\n")
+    assert lines[0] == "a.py::foo L1-1" and lines[1:] == ["def foo():"]
 
 
 @pytest.mark.asyncio
@@ -1656,3 +1657,28 @@ async def test_aletheore_search_rejects_empty_path_glob_with_structured_error(tm
     result = await server.call_tool("aletheore_search", {"pattern": "TARGET", "path_glob": ""})
 
     assert "path_glob" in tool_result_body(result)["result"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_symbol_source_returns_the_code_unescaped(tmp_path):
+    # The agent pays for every character it reads. Source inside a quoted TOON string needs every quote and newline
+    # escaped, which costs more tokens than the code itself; the tool returns a one-line header and the raw code.
+    repo = make_repo_with_evidence(tmp_path)
+    (repo / "a.py").write_text('def foo(): return "x\\y"\n')
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "foo"})
+
+    assert result.content[0].text == 'a.py::foo L1-1\ndef foo(): return "x\\y"'
+
+
+@pytest.mark.asyncio
+async def test_tool_results_are_not_sent_twice(tmp_path):
+    # Without this, the same text goes back as content and again as a JSON-wrapped structured copy, and the model
+    # is shown the wrapped copy with every quote and newline escaped a second time.
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_overview", {})
+
+    assert result.structured_content is None and len(result.content) == 1

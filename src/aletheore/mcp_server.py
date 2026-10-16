@@ -754,7 +754,8 @@ def _register_symbol_source_tool(mcp_instance: MCPServer, repo_path: Path) -> No
         symbol: the function or class name alone (e.g. "my_function")."""
         evidence = read_evidence(repo_path)
         try:
-            return _toon_result(find_symbol_source(evidence, repo_path, module, symbol))
+            found = find_symbol_source(evidence, repo_path, module, symbol)
+            return f"{found['module']}::{found['symbol']} L{found['start_line']}-{found['end_line']}\n{found['source']}"
         except (ModuleNotFoundInEvidenceError, SymbolNotFoundInEvidenceError) as exc:
             return _toon_result({"error": str(exc)})
 
@@ -1126,6 +1127,15 @@ def build_server(
     effects = allowed_effects(os.environ.get(_ALLOW_ENV_VAR)) if allow is None else allow
 
     mcp_instance = MCPServer("aletheore", instructions=SERVER_INSTRUCTIONS)
+    # A tool that returns a string would otherwise also send a JSON-wrapped structured copy, and the model is shown
+    # that copy with every quote and newline escaped again. One text result per call.
+    register_tool = mcp_instance.tool
+
+    def tool_without_structured_copy(*args, **kwargs):
+        kwargs.setdefault("structured_output", False)
+        return register_tool(*args, **kwargs)
+
+    mcp_instance.tool = tool_without_structured_copy
     _register_query_wrapper_tools(mcp_instance, repo_path)
     _register_changes_tool(mcp_instance, repo_path)
     _register_neighborhood_tool(mcp_instance, repo_path)
