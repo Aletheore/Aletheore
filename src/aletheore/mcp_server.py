@@ -771,7 +771,8 @@ def _register_locate_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     def aletheore_locate(query: str) -> str:
         """Find where something is defined and see the code, in one call. Pass the names you are looking for as
         plain words (function, class or variable names, e.g. "write_usage HelpFormatter"). Returns the functions
-        whose bodies contain those names, each as a `path::Name Lstart-end` header followed by its source."""
+        whose bodies contain those names, each as a `path::Name Lstart-end` header followed by its source (up to 40
+        lines each), so you usually do not need to read the file or call another tool for the same code."""
         evidence = read_evidence(repo_path)
         cands = locate_code(
             query, repo_path, evidence["repository"]["modules"], all_words=True, require_confidence=False
