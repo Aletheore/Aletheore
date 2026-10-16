@@ -350,7 +350,7 @@ def test_ensure_persistent_checkout_does_not_leave_a_live_token_on_disk(tmp_path
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:2] == ["git", "clone"]:
             dest = args[-1]
@@ -380,7 +380,7 @@ def test_ensure_persistent_checkout_strips_credentials_on_reuse_path_too(tmp_pat
     calls = []
     monkeypatch.setattr(
         "scan_worker.jobs.subprocess.run",
-        lambda args, cwd=None, check=None: calls.append(args) or subprocess.CompletedProcess(args, 0),
+        lambda args, cwd=None, check=None, **kwargs: calls.append(args) or subprocess.CompletedProcess(args, 0),
     )
 
     credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
@@ -390,6 +390,38 @@ def test_ensure_persistent_checkout_strips_credentials_on_reuse_path_too(tmp_pat
     assert len(set_url_calls) == 2  # once with the live token to fetch, once to strip it
     assert set_url_calls[0][-1] == credentialed_url
     assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
+
+
+def test_ensure_persistent_checkout_captures_output_on_every_git_invocation(tmp_path, monkeypatch):
+    # Real gap found via audit: the reuse path's fetch/checkout/clean calls
+    # ran via a bare subprocess.run with no capture_output, so anything git
+    # wrote - including a fatal message echoing the credentialed remote it
+    # reads out of .git/config, which these commands' own argv never
+    # mentions at all - streamed straight to the worker's real
+    # stdout/stderr, reaching a log aggregator before the _run_git scrub
+    # (which only ever saw argv, not that text) got a chance to run. Every
+    # invocation here must go through _run_git, which captures by default.
+    from scan_worker.jobs import _ensure_persistent_checkout
+
+    checkout_dir = tmp_path / "existing"
+    (checkout_dir / ".git").mkdir(parents=True)
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None, **kwargs):
+        calls.append(kwargs)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    _ensure_persistent_checkout(
+        "https://x-access-token:livetoken@github.com/org/repo.git", "somesha", checkout_dir
+    )
+
+    assert calls, "expected at least one subprocess invocation"
+    assert all(kw.get("capture_output") is True for kw in calls), (
+        "every git invocation on the reuse path must capture output, not inherit the real streams"
+    )
 
 
 def test_clone_ref_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch):
@@ -409,7 +441,7 @@ def test_clone_ref_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch):
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
@@ -439,7 +471,7 @@ def test_clone_ref_scrubs_the_token_even_when_the_fetch_fails(tmp_path, monkeypa
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
@@ -473,7 +505,7 @@ def test_checkout_sha_falls_back_to_pr_ref_when_direct_checkout_fails(tmp_path, 
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:3] == ["git", "checkout", "-q"] and args[-1] == "deadsha":
             raise subprocess.CalledProcessError(128, args)
@@ -496,7 +528,7 @@ def test_checkout_sha_reraises_when_no_pr_number_to_fall_back_to(tmp_path, monke
     # doesn't apply here.
     from scan_worker.jobs import _checkout_sha
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         if args[:2] == ["git", "checkout"]:
             raise subprocess.CalledProcessError(128, args)
         return subprocess.CompletedProcess(args, 0)
@@ -517,7 +549,7 @@ def test_clone_ref_recovers_a_deleted_branchs_head_via_the_pr_ref(tmp_path, monk
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
@@ -556,7 +588,7 @@ def test_clone_ref_scrubs_the_token_even_when_remote_add_is_interrupted(tmp_path
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
@@ -585,7 +617,7 @@ def test_clone_ref_does_not_attempt_a_scrub_when_init_never_created_a_git_dir(tm
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:2] == ["git", "init"]:
             raise subprocess.CalledProcessError(1, args)
@@ -608,7 +640,7 @@ def test_clone_pr_head_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
@@ -633,7 +665,7 @@ def test_clone_pr_head_scrubs_the_token_even_when_remote_add_is_interrupted(tmp_
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
@@ -661,7 +693,7 @@ def test_clone_pr_head_does_not_attempt_a_scrub_when_init_never_created_a_git_di
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:2] == ["git", "init"]:
             raise subprocess.CalledProcessError(1, args)
@@ -12463,6 +12495,49 @@ def test_run_git_scrubs_credentialed_url_from_a_failed_clone_error(tmp_path):
 
     assert "supersecrettoken" not in str(exc_info.value)
     assert "https://github.com/acme/does-not-exist.git" in exc_info.value.cmd
+
+
+def test_run_git_captures_output_instead_of_letting_the_child_inherit_real_streams(monkeypatch):
+    # The mechanism behind the fix: a child git process's own stdout/stderr
+    # must be captured, not inherited from this process, so nothing it
+    # writes can reach a real log stream before _run_git's scrub runs.
+    from scan_worker import jobs
+
+    captured = {}
+    monkeypatch.setattr(
+        jobs.subprocess, "run", lambda args, **kw: captured.update(kw) or subprocess.CompletedProcess(args, 0)
+    )
+
+    jobs._run_git(["git", "status"], cwd="/tmp")
+
+    assert captured["capture_output"] is True
+    assert captured["text"] is True
+
+
+def test_run_git_scrubs_a_credentialed_url_found_in_raw_stdout_or_stderr(monkeypatch):
+    # Real gap found via audit: a failing command's own argv doesn't always
+    # mention a URL (e.g. `git fetch origin`, `git clean -fdx`) - git can
+    # still echo the credentialed remote it read out of .git/config in its
+    # own diagnostic text. The pre-existing scrub only ever rewrote
+    # exc.cmd; it never touched exc.stdout/exc.stderr, so that text reached
+    # callers (and whatever logs the resulting exception) unredacted.
+    from scan_worker import jobs
+
+    def fake_run(args, **kwargs):
+        raise subprocess.CalledProcessError(
+            128,
+            args,
+            output="fatal: unable to access 'https://x-access-token:supersecrettoken@github.com/acme/repo.git/'\n",
+            stderr="remote.origin.url was https://x-access-token:supersecrettoken@github.com/acme/repo.git\n",
+        )
+
+    monkeypatch.setattr(jobs.subprocess, "run", fake_run)
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        jobs._run_git(["git", "fetch", "-q", "origin"], cwd="/tmp")
+
+    assert "supersecrettoken" not in exc_info.value.stdout
+    assert "supersecrettoken" not in exc_info.value.stderr
 
 
 def test_run_git_resolves_the_bare_git_name_to_its_shutil_which_path(monkeypatch):
