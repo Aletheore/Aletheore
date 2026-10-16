@@ -406,6 +406,27 @@ on some operating systems or Python versions can be found. It is on by default.
   `aletheore config crash-reporting` with no argument, like `aletheore status`, shows the current state.
 - You see a one-time notice on first run and a line after any crash that was reported, both on stderr.
 
+### `aletheore tokens audit` / `aletheore tokens profile <name>`
+
+A coding agent re-reads its fixed context (system prompt and tool definitions) on every turn. These commands
+show that cost and let you trim the part you do not use. Everything is local; nothing is sent to Aletheore.
+
+- `aletheore tokens audit [--project DIR] [--compare core]` sends one tiny request through your own `claude`
+  CLI and prints the tools your agent loads, your `ENABLE_TOOL_SEARCH` setting and the fixed per-turn
+  input-token count. `--compare core` sends a second request with the `core` profile's deny list on the
+  command line (no file is changed) and prints the count after. Each request costs a fraction of a cent, and
+  the command asks before it sends anything (`--yes` skips the question).
+- `aletheore tokens profile core|core+web [--project DIR]` shows the exact entries it would add to
+  `permissions.deny` in the project's `.claude/settings.json` and applies them only after you type `yes`
+  (`--yes` skips the question). `core` keeps Bash, Read, Edit, Write, Grep, Glob, Task and ToolSearch, plus
+  every MCP tool, and denies the other built-in tools (scheduling, artifacts, worktrees, notifications, web).
+  `core+web` also keeps WebFetch and WebSearch.
+- `aletheore tokens profile off` removes exactly the entries it added and nothing else. It never touches your
+  user-level settings, and a settings file it cannot parse is left unchanged.
+
+The profile is off until you apply it. A tool the profile denies is unavailable to the agent in that project, so
+switch to `core+web` or `off` if your work needs it.
+
 ### `aletheore query <kind> [target]`
 
 Answers one targeted question from an existing `air.json`, without re-scanning or an LLM
