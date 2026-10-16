@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -30,6 +31,18 @@ def check_joern(repo_path: Path, timeout: int = DEFAULT_JOERN_TIMEOUT_SECONDS) -
     joern = shutil.which("joern")
     if gosrc2cpg is None or joern is None:
         return {"checked": False, "reason": "joern not installed", "findings": []}
+    # Resolve to absolute paths before the subprocess calls below switch
+    # their cwd to a throwaway tmp_path - shutil.which() can return a path
+    # relative to a relative PATH entry, which a scanned (untrusted) repo
+    # could otherwise shadow with its own same-named executable, the same
+    # class the other 7 scanner wrappers in this package were already
+    # fixed for (Strix security review, 2026-10-15). This one was missed
+    # then: cwd here is a fresh empty tempdir rather than repo_path, which
+    # accidentally narrows the window (a relative result would fail to
+    # resolve rather than silently run an attacker binary) but is fragile
+    # to rely on - resolving explicitly is the same real fix regardless.
+    gosrc2cpg = os.path.abspath(gosrc2cpg)
+    joern = os.path.abspath(joern)
 
     # Real requirement confirmed live: gosrc2cpg needs a go.mod at (or
     # above) the parse target to resolve module context - pointing it at a
