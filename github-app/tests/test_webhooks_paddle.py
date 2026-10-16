@@ -57,7 +57,7 @@ WEBHOOK_SECRET = "pdl_ntfset_test_secret"
 # verifies custom_data.installation_token against this same secret via
 # get_settings().session_secret, so a test-built token has to be signed
 # with it to pass.
-SESSION_SECRET = "test-session-secret"
+SESSION_SECRET = "test-session-secret-at-least-32-characters-long"
 
 
 def _sign(raw_body: bytes, secret: str = WEBHOOK_SECRET) -> str:
