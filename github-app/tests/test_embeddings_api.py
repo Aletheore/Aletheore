@@ -54,6 +54,20 @@ async def test_rejects_an_unknown_token(pool):
 
 
 @pytest.mark.asyncio
+async def test_rejects_an_unauthenticated_malformed_body_with_401_not_422(pool):
+    # Real gap found via audit: `body: EmbeddingsRequest` as a route
+    # parameter gets parsed and Pydantic-validated before the handler's
+    # first line (_authenticated_installation) ever runs - so an
+    # unauthenticated caller could already force that work. A malformed
+    # body that would fail validation (texts is required) must still come
+    # back 401 (auth), not 422 (validation).
+    app.state.db_pool = pool
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/v1/embeddings", json={})
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_free_plan_is_refused_with_402_and_told_what_to_do_instead(pool):
     """The gate is the server returning 402, not a check inside the CLI - a
     client-side check in an open-source binary is a suggestion.
