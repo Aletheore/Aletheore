@@ -1164,7 +1164,6 @@ def stop_watchers() -> None:
 
 
 TOOL_REQUIRED_EFFECTS: dict[str, frozenset[str]] = {
-    "aletheore_locate": frozenset(),
     "aletheore_search_codebase": frozenset({EFFECT_NETWORK}),
     "aletheore_scan": frozenset({EFFECT_WRITE, EFFECT_NETWORK}),
     "aletheore_healthcheck": frozenset({EFFECT_WRITE, EFFECT_NETWORK}),
