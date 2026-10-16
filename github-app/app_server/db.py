@@ -1267,18 +1267,25 @@ async def reconcile_installation_member_identity(
       that seat was never granted to whoever is logging in now, so the
       stale row is removed rather than silently inherited.
     """
-    await pool.execute(
-        "DELETE FROM installation_members "
-        "WHERE github_login = $1 AND github_user_id IS NOT NULL AND github_user_id != $2",
-        github_login,
-        github_user_id,
-    )
-    await pool.execute(
-        "UPDATE installation_members SET github_user_id = $2 "
-        "WHERE github_login = $1 AND github_user_id IS NULL",
-        github_login,
-        github_user_id,
-    )
+    # Flash Review catch: both statements are individually idempotent, so a
+    # crash between them just leaves a consistent-but-partial state the
+    # next login finishes - but running them in one transaction removes
+    # any doubt and matches this module's own convention for a
+    # multi-statement write that should be all-or-nothing.
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "DELETE FROM installation_members "
+                "WHERE github_login = $1 AND github_user_id IS NOT NULL AND github_user_id != $2",
+                github_login,
+                github_user_id,
+            )
+            await conn.execute(
+                "UPDATE installation_members SET github_user_id = $2 "
+                "WHERE github_login = $1 AND github_user_id IS NULL",
+                github_login,
+                github_user_id,
+            )
 
 
 async def list_installation_member_emails(pool: asyncpg.Pool, installation_id: int) -> list[str]:
