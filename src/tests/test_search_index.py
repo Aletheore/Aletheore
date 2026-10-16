@@ -2886,7 +2886,7 @@ def test_hosted_embedding_says_once_per_run_that_it_uploads_source_chunks(monkey
     from aletheore.credentials import HOSTED_EMBEDDINGS_DISCLOSURE
 
     monkeypatch.setenv("ALETHEORE_API_TOKEN", "tok")
-    monkeypatch.setattr(search_index_module, "_hosted_disclosure_shown", False)
+    monkeypatch.setattr(search_index_module, "_hosted_embedding_confirmed", None)
     monkeypatch.setattr(
         search_index_module, "embed_texts_hosted", lambda batch, token, repo_id=None: [[0.0] * 768 for _ in batch]
     )
@@ -2903,7 +2903,7 @@ def test_a_single_hosted_query_embedding_does_not_print_the_upload_notice(monkey
     import aletheore.search_index as search_index_module
 
     monkeypatch.setenv("ALETHEORE_API_TOKEN", "tok")
-    monkeypatch.setattr(search_index_module, "_hosted_disclosure_shown", False)
+    monkeypatch.setattr(search_index_module, "_hosted_embedding_confirmed", None)
     monkeypatch.setattr(
         search_index_module, "embed_texts_hosted", lambda batch, token, repo_id=None: [[0.0] * 768 for _ in batch]
     )
@@ -2920,7 +2920,7 @@ def test_one_hosted_code_chunk_still_gets_the_upload_notice(monkeypatch, capsys)
     from aletheore.credentials import HOSTED_EMBEDDINGS_DISCLOSURE
 
     monkeypatch.setenv("ALETHEORE_API_TOKEN", "tok")
-    monkeypatch.setattr(search_index_module, "_hosted_disclosure_shown", False)
+    monkeypatch.setattr(search_index_module, "_hosted_embedding_confirmed", None)
     monkeypatch.setattr(
         search_index_module, "embed_texts_hosted", lambda batch, token, repo_id=None: [[0.0] * 768 for _ in batch]
     )
@@ -2949,7 +2949,7 @@ def test_searching_a_hosted_index_does_not_print_the_upload_notice(monkeypatch, 
         }],
     )
     monkeypatch.setenv("ALETHEORE_API_TOKEN", "tok")
-    monkeypatch.setattr(search_index_module, "_hosted_disclosure_shown", False)
+    monkeypatch.setattr(search_index_module, "_hosted_embedding_confirmed", None)
     monkeypatch.setattr(
         search_index_module, "embed_texts_hosted", lambda batch, token, repo_id=None: [[0.2] * 768 for _ in batch]
     )
@@ -2957,3 +2957,73 @@ def test_searching_a_hosted_index_does_not_print_the_upload_notice(monkeypatch, 
     search_index_module.search_index(tmp_path, "where is foo")
 
     assert capsys.readouterr().err == ""
+
+
+def test_hosted_embedding_on_a_real_terminal_blocks_for_confirmation(monkeypatch):
+    # Real gap Strix flagged but declined to file as a finding (a policy
+    # question, not a clear bug): a saved ALETHEORE_API_TOKEN silently
+    # switched 'aletheore index' to uploading source code, with only a
+    # passive one-time notice and no way to say no - unlike the
+    # OpenAI-fallback gate's real [y/N] prompt just above in this file.
+    monkeypatch.setenv("ALETHEORE_API_TOKEN", "tok")
+    monkeypatch.setattr(search_index_module, "_hosted_embedding_confirmed", None)
+    monkeypatch.setattr(sys, "stdin", MagicMock(isatty=lambda: True))
+    confirm_fn = MagicMock(return_value=True)
+    hosted = MagicMock(return_value=[[0.0] * 768])
+
+    with patch("aletheore.search_index.embed_texts_hosted", hosted):
+        search_index_module._embed_in_batches(["def a(): pass"], confirm_fn=confirm_fn)
+
+    confirm_fn.assert_called_once()
+    hosted.assert_called_once()
+
+
+def test_declining_the_hosted_embedding_confirmation_falls_back_to_local(monkeypatch):
+    monkeypatch.setenv("ALETHEORE_API_TOKEN", "tok")
+    monkeypatch.setattr(search_index_module, "_hosted_embedding_confirmed", None)
+    monkeypatch.setattr(sys, "stdin", MagicMock(isatty=lambda: True))
+    confirm_fn = MagicMock(return_value=False)
+    hosted = MagicMock(return_value=[[0.0] * 768])
+    local = MagicMock(return_value=[[0.1] * 768])
+
+    with patch("aletheore.search_index.embed_texts_hosted", hosted), \
+         patch("aletheore.search_index.embed_texts", local):
+        search_index_module._embed_in_batches(["def a(): pass"], confirm_fn=confirm_fn)
+
+    hosted.assert_not_called()
+    local.assert_called_once()
+
+
+def test_hosted_embedding_confirmation_is_asked_at_most_once_per_process(monkeypatch):
+    # Must hold for every later batch of the same index build (or every
+    # later rebuild of a long-running `aletheore watch` loop), not
+    # re-prompt each time.
+    monkeypatch.setenv("ALETHEORE_API_TOKEN", "tok")
+    monkeypatch.setattr(search_index_module, "_hosted_embedding_confirmed", None)
+    monkeypatch.setattr(sys, "stdin", MagicMock(isatty=lambda: True))
+    confirm_fn = MagicMock(return_value=True)
+    hosted = MagicMock(return_value=[[0.0] * 768])
+
+    with patch("aletheore.search_index.embed_texts_hosted", hosted):
+        search_index_module._embed_in_batches(["def a(): pass"], confirm_fn=confirm_fn)
+        search_index_module._embed_in_batches(["def b(): pass"], confirm_fn=confirm_fn)
+
+    confirm_fn.assert_called_once()
+
+
+def test_hosted_embedding_confirmation_is_skipped_outside_a_real_terminal(monkeypatch):
+    # The MCP server speaks its protocol over stdio, and a non-interactive
+    # background run (CI, a watch loop with no attached terminal) has
+    # nobody to answer a prompt - both must proceed on the caller's own
+    # `allow_hosted` consent rather than hang or corrupt stdout.
+    monkeypatch.setenv("ALETHEORE_API_TOKEN", "tok")
+    monkeypatch.setattr(search_index_module, "_hosted_embedding_confirmed", None)
+    monkeypatch.setattr(sys, "stdin", MagicMock(isatty=lambda: False))
+    confirm_fn = MagicMock(return_value=False)
+    hosted = MagicMock(return_value=[[0.0] * 768])
+
+    with patch("aletheore.search_index.embed_texts_hosted", hosted):
+        search_index_module._embed_in_batches(["def a(): pass"], confirm_fn=confirm_fn)
+
+    confirm_fn.assert_not_called()
+    hosted.assert_called_once()
