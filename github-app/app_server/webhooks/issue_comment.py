@@ -18,11 +18,20 @@ AUDIT_COMMAND = "/aletheore audit"
 # collaborator-permission lookup), charged against the whole installation's
 # shared GitHub API quota, for every comment that merely matches the
 # command text - before that commenter is known to have any access at all.
-# Keyed by installation (not commenter): the quota being protected is
-# per-installation, so that's the unit a flood actually drains, the same
-# reasoning runtime_events.py/embeddings_api.py use for their own caps.
 # Deliberately tight relative to real usage - a maintainer typing this
 # command is a rare, deliberate action, not routine traffic.
+#
+# Keyed by (installation, commenter), not installation alone - Flash
+# Review caught the real flaw in an installation-only key: the check runs
+# BEFORE permission is verified, so any GitHub account (no access needed)
+# could drain the whole installation's shared budget with 20 comments and
+# silently lock out a legitimate maintainer's own attempt right after,
+# turning this DoS guard into a cheap DoS against the installation's own
+# users. Per-commenter keying means an attacker can only ever exhaust
+# their own bucket; a real maintainer's is untouched by someone else's
+# spam. Scaling the attack now needs many distinct GitHub accounts, not
+# one - a much higher bar, and the one the original GitHub-API-quota
+# concern was actually about.
 COMMENT_COMMAND_RATE_LIMIT = 20
 COMMENT_COMMAND_RATE_LIMIT_WINDOW_SECONDS = 3600
 
@@ -48,7 +57,7 @@ def _verify_commenter_permission_sync(
     return get_repo_permission_for_user(repo_full_name, commenter, token)
 
 
-async def _is_comment_command_rate_limited(installation_id: int) -> bool:
+async def _is_comment_command_rate_limited(installation_id: int, commenter: str) -> bool:
     from app_server.redis_client import get_redis_client
 
     try:
@@ -58,7 +67,7 @@ async def _is_comment_command_rate_limited(installation_id: int) -> bool:
         return await asyncio.to_thread(
             is_rate_limited,
             get_redis_client(),
-            f"ratelimit:comment-command:{installation_id}",
+            f"ratelimit:comment-command:{installation_id}:{commenter}",
             COMMENT_COMMAND_RATE_LIMIT,
             COMMENT_COMMAND_RATE_LIMIT_WINDOW_SECONDS,
         )
@@ -121,12 +130,12 @@ async def handle_issue_comment_event(payload: dict, pool, redis_url: str, queue=
     if await is_repo_hidden(pool, installation_id, repo_full_name):
         return
 
-    if await _is_comment_command_rate_limited(installation_id):
+    if await _is_comment_command_rate_limited(installation_id, commenter):
         logger.info(
-            "ignoring '%s' on %s: installation %s is over the comment-command rate limit",
+            "ignoring '%s' on %s: %s is over the comment-command rate limit",
             AUDIT_COMMAND,
             repo_full_name,
-            installation_id,
+            commenter,
         )
         return
 
