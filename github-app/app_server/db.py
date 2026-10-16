@@ -1240,6 +1240,47 @@ async def is_installation_member(pool: asyncpg.Pool, installation_id: int, githu
     return row is not None
 
 
+async def reconcile_installation_member_identity(
+    pool: asyncpg.Pool, github_login: str, github_user_id: int
+) -> None:
+    """Called from auth.py's OAuth callback with the CURRENT, just-verified
+    (login, numeric id) pair for whoever is logging in right now - closes
+    the identity-rebinding gap where installation_members is keyed on the
+    mutable github_login alone (migration 073's own docstring).
+
+    A github_login is globally unique on GitHub at any one time, so this
+    reconciles every installation that login is a member of, not just the
+    one(s) the caller happens to be looking at right now - a seat granted
+    under a login that's since been reassigned must stop being trusted the
+    moment the new holder of that login is seen, regardless of which
+    installation they're currently authenticating against.
+
+    Two cases, run every login (cheap, idempotent):
+    - A matching row with no github_user_id yet (granted before this
+      migration, or before this login's current holder ever logged in) is
+      bound to this user - the only identity information available at the
+      time the seat was granted (admin.py's add_member only ever has a
+      login string the admin typed in) is the account that first proves it
+      by logging in under that exact login.
+    - A matching row whose bound github_user_id does NOT match this user
+      is for a DIFFERENT real GitHub account that used to hold this login -
+      that seat was never granted to whoever is logging in now, so the
+      stale row is removed rather than silently inherited.
+    """
+    await pool.execute(
+        "DELETE FROM installation_members "
+        "WHERE github_login = $1 AND github_user_id IS NOT NULL AND github_user_id != $2",
+        github_login,
+        github_user_id,
+    )
+    await pool.execute(
+        "UPDATE installation_members SET github_user_id = $2 "
+        "WHERE github_login = $1 AND github_user_id IS NULL",
+        github_login,
+        github_user_id,
+    )
+
+
 async def list_installation_member_emails(pool: asyncpg.Pool, installation_id: int) -> list[str]:
     """Emails for every member of this installation who has logged in at
     least once (and so has a captured row in github_user_emails). Members

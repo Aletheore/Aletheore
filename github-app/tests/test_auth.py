@@ -228,6 +228,96 @@ async def test_callback_creates_session_and_sets_cookie(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_callback_binds_an_unbound_installation_member_row_to_the_logged_in_user(pool, monkeypatch):
+    # Real gap this closes: installation_members has no way to tell a login
+    # string's original holder apart from whoever claims that login later -
+    # the callback's own (login, numeric id) pair from GitHub is what binds
+    # a pre-existing, not-yet-bound row the first time its holder logs in.
+    from app_server.db import add_installation_member, is_installation_member, upsert_installation
+
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
+    await upsert_installation(pool, 900, "someorg")
+    await add_installation_member(pool, 900, "octocat", "someorg")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login/oauth/access_token":
+            return httpx.Response(200, json={"access_token": "gho_faketoken"})
+        if request.url.path == "/user":
+            return httpx.Response(200, json={"id": 42, "login": "octocat"})
+        return httpx.Response(404)
+
+    monkeypatch.setattr(
+        "app_server.auth._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+    monkeypatch.setattr(
+        "app_server.auth._github_oauth_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://github.com"),
+    )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="https://test") as client:
+        login_response = await client.get("/auth/login", follow_redirects=False)
+        state = login_response.headers["location"].split("state=")[1]
+        await client.get(f"/auth/callback?code=fake-code&state={state}", follow_redirects=False)
+
+    async with pool.acquire() as conn:
+        bound_id = await conn.fetchval(
+            "SELECT github_user_id FROM installation_members WHERE installation_id = $1 AND github_login = $2",
+            900,
+            "octocat",
+        )
+    assert bound_id == 42
+    assert await is_installation_member(pool, 900, "octocat") is True
+
+
+@pytest.mark.asyncio
+async def test_callback_evicts_a_membership_row_bound_to_a_different_github_account(pool, monkeypatch):
+    # The login "octocat" was already bound to a different numeric id (the
+    # real original member, 99001) - this login is now signing in as a
+    # DIFFERENT real GitHub account (42, matching the mock /user response
+    # below). That account must not inherit the original member's seat.
+    from app_server.db import (
+        add_installation_member,
+        is_installation_member,
+        reconcile_installation_member_identity,
+        upsert_installation,
+    )
+
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
+    await upsert_installation(pool, 901, "someorg")
+    await add_installation_member(pool, 901, "octocat", "someorg")
+    await reconcile_installation_member_identity(pool, "octocat", 99001)
+    assert await is_installation_member(pool, 901, "octocat") is True
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login/oauth/access_token":
+            return httpx.Response(200, json={"access_token": "gho_faketoken"})
+        if request.url.path == "/user":
+            return httpx.Response(200, json={"id": 42, "login": "octocat"})
+        return httpx.Response(404)
+
+    monkeypatch.setattr(
+        "app_server.auth._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+    monkeypatch.setattr(
+        "app_server.auth._github_oauth_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://github.com"),
+    )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="https://test") as client:
+        login_response = await client.get("/auth/login", follow_redirects=False)
+        state = login_response.headers["location"].split("state=")[1]
+        await client.get(f"/auth/callback?code=fake-code&state={state}", follow_redirects=False)
+
+    assert await is_installation_member(pool, 901, "octocat") is False
+
+
+@pytest.mark.asyncio
 async def test_callback_stores_refresh_token_when_github_returns_one(pool, monkeypatch):
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
 
