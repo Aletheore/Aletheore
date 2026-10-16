@@ -1747,3 +1747,57 @@ async def test_aletheore_locate_warns_when_a_file_changed_after_the_scan(tmp_pat
 
     text = result.content[0].text
     assert text.startswith("note: a.py changed since the last scan") and "a.py::foo L1-1" in text
+
+
+def _set_a_py(repo, source: str, functions: list[dict], classes: list[dict]) -> None:
+    (repo / "a.py").write_text(source)
+    path = repo / ".aletheore" / "air.json"
+    evidence = json.loads(path.read_text())
+    evidence["repository"]["modules"][0]["symbols"] = {"functions": functions, "classes": classes}
+    path.write_text(json.dumps(evidence))
+
+
+@pytest.mark.asyncio
+async def test_symbol_source_cuts_a_long_function_and_says_how_to_get_the_rest(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    source = "def foo():\n" + "".join(f"    x{i} = {i}\n" for i in range(200))
+    _set_a_py(repo, source, [{"name": "foo", "start_line": 1, "end_line": 201}], [])
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "foo", "max_lines": 30})
+
+    lines = result.content[0].text.split("\n")
+    assert lines[0] == "a.py::foo L1-201" and lines[1] == "def foo():"
+    assert "x28 = 28" in lines[30] and "x29" not in result.content[0].text
+    assert "171 more lines" in lines[-1] and "max_lines=0" in lines[-1]
+
+
+@pytest.mark.asyncio
+async def test_symbol_source_shows_a_long_class_as_its_head_plus_a_method_list(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    body = "class Big:\n    \"\"\"doc\"\"\"\n" + "".join(
+        f"    def m{i}(self):\n" + "".join(f"        y{j} = {j}\n" for j in range(10)) for i in range(20)
+    )
+    methods = [{"name": f"m{i}", "start_line": 3 + i * 11, "end_line": 3 + i * 11 + 10} for i in range(20)]
+    _set_a_py(repo, body, methods, [{"name": "Big", "start_line": 1, "end_line": 2 + 20 * 11}])
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "Big", "max_lines": 20})
+
+    text = result.content[0].text
+    assert text.startswith("a.py::Big L1-222\nclass Big:")
+    assert "m0 L3-13" in text and "m19 L212-222" in text  # the method list names every method with its range
+    assert "y9 = 9" not in text  # method bodies are not dumped
+    assert "more lines; ask for one method by name" in text
+
+
+@pytest.mark.asyncio
+async def test_symbol_source_max_lines_zero_returns_everything(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    source = "def foo():\n" + "".join(f"    x{i} = {i}\n" for i in range(200))
+    _set_a_py(repo, source, [{"name": "foo", "start_line": 1, "end_line": 201}], [])
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "foo", "max_lines": 0})
+
+    assert "x199 = 199" in result.content[0].text and "more lines" not in result.content[0].text

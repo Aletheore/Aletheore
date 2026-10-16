@@ -786,19 +786,45 @@ def _register_locate_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
         return text
 
 
+def _render_symbol_source(evidence: dict, found: dict, max_lines: int) -> str:
+    header = f"{found['module']}::{found['symbol']} L{found['start_line']}-{found['end_line']}"
+    lines = found["source"].split("\n")
+    if max_lines <= 0 or len(lines) <= max_lines:
+        return f"{header}\n{found['source']}"
+    module = next((m for m in evidence["repository"]["modules"] if m["path"] == found["module"]), {})
+    symbols = module.get("symbols", {})
+    start, end = found["start_line"], found["end_line"]
+    is_class = any(c["name"] == found["symbol"] and c["start_line"] == start for c in symbols.get("classes", []))
+    methods = [
+        f for f in symbols.get("functions", []) if f["start_line"] > start and f["end_line"] <= end
+    ]
+    if is_class and methods:
+        first_method = min(m["start_line"] for m in methods)
+        head = lines[: max(1, min(first_method - start, max_lines // 2))]
+        listing = ", ".join(f"{m['name']} L{m['start_line']}-{m['end_line']}" for m in methods)
+        return (
+            f"{header}\n" + "\n".join(head) + f"\n... methods: {listing}\n"
+            f"... ({len(lines) - len(head)} more lines; ask for one method by name, or pass max_lines=0 for all)"
+        )
+    shown = lines[:max_lines]
+    return f"{header}\n" + "\n".join(shown) + f"\n... ({len(lines) - max_lines} more lines; pass max_lines=0 for all)"
+
+
 def _register_symbol_source_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_symbol_source", annotations=READ_ONLY_ANNOTATIONS)
     @_guard_evidence_read_errors
-    def aletheore_symbol_source(module: str, symbol: str) -> str:
+    def aletheore_symbol_source(module: str, symbol: str, max_lines: int = 120) -> str:
         """Exact source text for one named function/class, with resolved line bounds.
 
         Two separate arguments, not a combined "path::name" - module: the
         file path exactly as it appears in evidence (e.g. "src/app.py").
-        symbol: the function or class name alone (e.g. "my_function")."""
+        symbol: the function or class name alone (e.g. "my_function").
+        max_lines: a longer symbol is cut (a long class is shown as its head plus a list of its methods
+        with line ranges, ask for one method by name); 0 returns everything."""
         evidence = read_evidence(repo_path)
         try:
             found = find_symbol_source(evidence, repo_path, module, symbol)
-            return f"{found['module']}::{found['symbol']} L{found['start_line']}-{found['end_line']}\n{found['source']}"
+            return _render_symbol_source(evidence, found, max_lines)
         except (ModuleNotFoundInEvidenceError, SymbolNotFoundInEvidenceError) as exc:
             return _toon_result({"error": str(exc)})
 
