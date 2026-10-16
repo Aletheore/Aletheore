@@ -188,9 +188,21 @@ def _locked_rw_credentials_file(credentials_path: Path):
                 # gap an audit found in this otherwise-locked-down function.
                 with contextlib.suppress(OSError):
                     backup_path = credentials_path.with_suffix(".json.bak")
+                    # Flash Review catch: O_TRUNC on a path an attacker
+                    # pre-planted as a symlink (same credentials directory
+                    # this whole function already treats as a locked-down
+                    # threat boundary) would follow it and write the raw
+                    # secret bytes through to whatever the link points at.
+                    # Same O_NOFOLLOW pattern cli.py's own
+                    # _write_config_file_no_symlink_follow already uses for
+                    # exactly this: POSIX-only, so Windows (which has no
+                    # O_NOFOLLOW) checks is_symlink() explicitly instead.
+                    no_follow = getattr(os, "O_NOFOLLOW", 0)
+                    if not no_follow and backup_path.is_symlink():
+                        raise OSError("refusing to write the backup through a symlink")
                     backup_fd = os.open(
                         str(backup_path),
-                        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0),
+                        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | no_follow | getattr(os, "O_BINARY", 0),
                         0o600,
                     )
                     try:

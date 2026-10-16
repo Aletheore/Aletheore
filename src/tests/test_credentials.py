@@ -349,3 +349,23 @@ def test_malformed_credentials_backup_is_written_with_restrictive_permissions(tm
     assert backup_path.exists()
     mode = stat.S_IMODE(backup_path.stat().st_mode)
     assert mode == 0o600, f"expected 0o600, got {oct(mode)}"
+
+
+@_posix_only_permissions
+def test_malformed_credentials_backup_does_not_follow_a_preexisting_symlink(tmp_path):
+    # Flash Review catch: O_TRUNC on a path an attacker pre-planted as a
+    # symlink would follow it and write the raw (malformed-but-secret)
+    # credentials content through to whatever the link points at, inside
+    # this same locked-down credentials directory.
+    creds_path = tmp_path / "creds.json"
+    creds_path.write_text("not valid json {{{")
+    os.chmod(creds_path, 0o600)
+
+    target = tmp_path / "attacker-target.txt"
+    target.write_text("do not overwrite me")
+    backup_path = creds_path.with_suffix(".json.bak")
+    backup_path.symlink_to(target)
+
+    save_api_token("testprovider", "sk-recovered", creds_path)
+
+    assert target.read_text() == "do not overwrite me"
