@@ -30,7 +30,7 @@ def _clean_env(monkeypatch):
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "webhook-secret")
     monkeypatch.setenv("GITHUB_APP_SLUG", "aletheore")
     monkeypatch.setenv("GITHUB_CLIENT_SECRET", "client-secret")
-    monkeypatch.setenv("SESSION_SECRET", "session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "session-secret-at-least-32-characters-long")
     monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "raw-key-value")
     monkeypatch.setenv("AUDIT_SIGNING_PRIVATE_KEY", "11" * 32)
     monkeypatch.setenv("PADDLE_WEBHOOK_SECRET", "pdl_ntfset_test_secret")
@@ -62,14 +62,14 @@ def test_path_takes_precedence_over_raw_env_var(tmp_path, monkeypatch):
 def test_reads_paid_tier_settings(monkeypatch):
     monkeypatch.setenv("GITHUB_CLIENT_ID", "client-id")
     monkeypatch.setenv("GITHUB_CLIENT_SECRET", "client-secret")
-    monkeypatch.setenv("SESSION_SECRET", "session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "session-secret-at-least-32-characters-long")
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://example.com")
 
     settings = get_settings()
 
     assert settings.github_client_id == "client-id"
     assert settings.github_client_secret == "client-secret"
-    assert settings.session_secret == "session-secret"
+    assert settings.session_secret == "session-secret-at-least-32-characters-long"
     assert settings.public_base_url == "https://example.com"
 
 
@@ -113,6 +113,22 @@ def test_raises_when_required_secret_is_blank(missing_var, monkeypatch):
     monkeypatch.setenv(missing_var, "   ")
     with pytest.raises(RuntimeError, match=missing_var):
         get_settings()
+
+
+def test_raises_when_session_secret_is_shorter_than_the_minimum(monkeypatch):
+    # auth._derive_key runs HKDF with salt=None, so SESSION_SECRET's own
+    # entropy is the only thing protecting both derived subkeys (cookie
+    # signing and the Fernet key that decrypts every stored OAuth token) -
+    # a short, guessable value must fail at startup, not silently load.
+    monkeypatch.setenv("SESSION_SECRET", "short-secret")
+    with pytest.raises(RuntimeError, match="SESSION_SECRET"):
+        get_settings()
+
+
+def test_accepts_a_session_secret_at_exactly_the_minimum_length(monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "a" * 32)
+    settings = get_settings()
+    assert settings.session_secret == "a" * 32
 
 
 def test_raises_when_private_key_path_points_to_empty_file(tmp_path, monkeypatch):
