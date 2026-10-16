@@ -54,7 +54,12 @@ def test_invoke_returns_stdout_on_success(mock_run, mock_which):
     result = ClaudeCodeAdapter().invoke("do the audit", cwd="/some/repo")
     assert result == "report text"
     args, kwargs = mock_run.call_args
-    assert args[0][0] == "/usr/local/bin/claude"
+    # Not the raw mocked string: the adapter resolves it with os.path.abspath
+    # (see test_invoke_resolves_which_to_an_absolute_path below), which
+    # normalizes an already-absolute POSIX-style path differently on
+    # Windows (drive-letter-prefixed, backslash-separated) than on POSIX
+    # (a no-op) - asserting the literal input here failed there.
+    assert args[0][0] == os.path.abspath("/usr/local/bin/claude")
     assert kwargs["cwd"] == "/some/repo"
 
 
@@ -114,7 +119,10 @@ def test_opencode_invoke_returns_stdout_on_success(mock_run, mock_which):
     result = OpenCodeAdapter().invoke("do the audit", cwd="/some/repo")
     assert result == "report text"
     args, kwargs = mock_run.call_args
-    assert args[0] == ["/usr/local/bin/opencode", "run", "do the audit"]
+    # See the identical note in test_invoke_returns_stdout_on_success above:
+    # os.path.abspath normalizes an already-absolute POSIX-style path
+    # differently on Windows than on POSIX.
+    assert args[0] == [os.path.abspath("/usr/local/bin/opencode"), "run", "do the audit"]
     assert kwargs["cwd"] == "/some/repo"
 
 

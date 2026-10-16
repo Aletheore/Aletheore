@@ -43,7 +43,11 @@ def test_cli_adapter_contract(adapter_cls, name, binary, expected_command):
     with patch(f"{module_name}.shutil.which", return_value=None):
         assert adapter.is_available() is False
 
-    resolved_command = [f"/usr/local/bin/{binary}", *expected_command[1:]]
+    # os.path.abspath, not the raw mocked which() string: it normalizes an
+    # already-absolute POSIX-style path differently on Windows
+    # (drive-letter-prefixed, backslash-separated) than on POSIX (a no-op) -
+    # asserting the literal mocked string here failed on the Windows runner.
+    resolved_command = [os.path.abspath(f"/usr/local/bin/{binary}"), *expected_command[1:]]
     with patch(f"{module_name}.shutil.which", return_value=f"/usr/local/bin/{binary}"), \
          patch(f"{module_name}.subprocess.run") as run:
         run.return_value = MagicMock(returncode=0, stdout="report text", stderr="")
