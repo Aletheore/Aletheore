@@ -1,5 +1,6 @@
 import functools
 import json
+from datetime import datetime
 import multiprocessing
 import os
 import queue
@@ -54,6 +55,7 @@ from aletheore.search_index import (
     IndexNotFoundError,
     search_index,
 )
+from aletheore.code_locator import locate as locate_code, render_locate
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.watch import EVIDENCE_WRITE_LOCK, BackgroundWatcher, start_background_watch
 
@@ -125,6 +127,11 @@ def _guard_evidence_read_errors(tool_func: Callable[..., str]) -> Callable[..., 
 # recovering 20-47 points when the same questions used the project's own
 # terms), not a guess. Kept to what changes agent behavior, not a full tool
 # catalog - each tool's own docstring is already visible to the client.
+NAV_INSTRUCTIONS = (
+    "Aletheore code navigation. aletheore_locate finds where names are defined and returns the code in one call; "
+    "aletheore_symbol_source returns one function or class; aletheore_search is a literal or regex search."
+)
+
 SERVER_INSTRUCTIONS = """Aletheore is a deterministic, evidence-grounded code intelligence tool for \
 this repository - every result cites a real file:line, nothing is invented.
 
@@ -743,6 +750,41 @@ def _register_ast_pattern_tool(mcp_instance: MCPServer, repo_path: Path) -> None
             return _toon_result({"error": f"invalid tree-sitter query: {exc}"})
 
 
+def _files_changed_since_scan(repo_path: Path, paths: list[str], scanned_at: object) -> list[str]:
+    try:
+        scan_time = datetime.fromisoformat(str(scanned_at)).timestamp()
+    except ValueError:
+        return []
+    changed = []
+    for rel in paths:
+        try:
+            if (repo_path / rel).stat().st_mtime > scan_time:
+                changed.append(rel)
+        except OSError:
+            continue
+    return changed
+
+
+def _register_locate_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+    @mcp_instance.tool(name="aletheore_locate", annotations=READ_ONLY_ANNOTATIONS)
+    @_guard_evidence_read_errors
+    def aletheore_locate(query: str) -> str:
+        """Find where something is defined and see the code, in one call. Pass the names you are looking for as
+        plain words (function, class or variable names, e.g. "write_usage HelpFormatter"). Returns the functions
+        whose bodies contain those names, each as a `path::Name Lstart-end` header followed by its source."""
+        evidence = read_evidence(repo_path)
+        cands = locate_code(
+            query, repo_path, evidence["repository"]["modules"], all_words=True, require_confidence=False
+        )
+        text = render_locate(cands, repo_path) if cands else ""
+        if not text:
+            return f"no match for {query!r}; try aletheore_search with a literal or regex pattern"
+        changed = _files_changed_since_scan(repo_path, [c.path for c in cands], evidence.get("scanned_at"))
+        if changed:
+            text = f"note: {', '.join(changed)} changed since the last scan; line ranges may be off\n\n{text}"
+        return text
+
+
 def _register_symbol_source_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_symbol_source", annotations=READ_ONLY_ANNOTATIONS)
     @_guard_evidence_read_errors
@@ -1095,6 +1137,7 @@ def stop_watchers() -> None:
 
 
 TOOL_REQUIRED_EFFECTS: dict[str, frozenset[str]] = {
+    "aletheore_locate": frozenset(),
     "aletheore_search_codebase": frozenset({EFFECT_NETWORK}),
     "aletheore_scan": frozenset({EFFECT_WRITE, EFFECT_NETWORK}),
     "aletheore_healthcheck": frozenset({EFFECT_WRITE, EFFECT_NETWORK}),
@@ -1109,6 +1152,7 @@ def build_server(
     answer_adapter: AgentAdapter | None = None,
     allow: frozenset[str] | None = None,
     watch: bool = False,
+    profile: str = "full",
 ) -> MCPServer:
     """Assemble the MCP server, registering only tools whose effects are permitted.
 
@@ -1124,9 +1168,11 @@ def build_server(
     also needs the `write` effect, the same permission aletheore_scan needs to
     rewrite .aletheore/, so an operator who withheld write gets no watcher.
     """
+    if profile not in ("full", "nav"):
+        raise ValueError(f"unknown MCP profile {profile!r}; choose full or nav")
     effects = allowed_effects(os.environ.get(_ALLOW_ENV_VAR)) if allow is None else allow
 
-    mcp_instance = MCPServer("aletheore", instructions=SERVER_INSTRUCTIONS)
+    mcp_instance = MCPServer("aletheore", instructions=NAV_INSTRUCTIONS if profile == "nav" else SERVER_INSTRUCTIONS)
     # A tool that returns a string would otherwise also send a JSON-wrapped structured copy, and the model is shown
     # that copy with every quote and newline escaped again. One text result per call.
     register_tool = mcp_instance.tool
@@ -1136,6 +1182,14 @@ def build_server(
         return register_tool(*args, **kwargs)
 
     mcp_instance.tool = tool_without_structured_copy
+    if profile == "nav":
+        # Three tools, small enough to load up front instead of behind a search step: find code, read one symbol,
+        # or search literally. Everything else needs the full profile.
+        _register_locate_tool(mcp_instance, repo_path)
+        _register_symbol_source_tool(mcp_instance, repo_path)
+        _register_search_tool(mcp_instance, repo_path)
+        return mcp_instance
+    _register_locate_tool(mcp_instance, repo_path)
     _register_query_wrapper_tools(mcp_instance, repo_path)
     _register_changes_tool(mcp_instance, repo_path)
     _register_neighborhood_tool(mcp_instance, repo_path)

@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -259,6 +260,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_search",
         "aletheore_ast_pattern",
         "aletheore_symbol_source",
+        "aletheore_locate",
         "aletheore_verify_citations",
         "aletheore_scan",
         "aletheore_healthcheck",
@@ -270,7 +272,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_find_evidence_for_dependency",
     }
     assert expected.issubset(names)
-    assert len(names) == 36
+    assert len(names) == 37
     assert "aletheore_answer" not in names
 
 
@@ -1682,3 +1684,66 @@ async def test_tool_results_are_not_sent_twice(tmp_path):
     result = await server.call_tool("aletheore_overview", {})
 
     assert result.structured_content is None and len(result.content) == 1
+
+
+@pytest.mark.asyncio
+async def test_aletheore_locate_returns_the_function_that_holds_the_query_words(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    (repo / "a.py").write_text("def foo(): return 1\n")
+    os.utime(repo / "a.py", (1577836800, 1577836800))  # 2020, before the evidence's scanned_at
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_locate", {"query": "foo"})
+
+    assert result.content[0].text == "a.py::foo L1-1\ndef foo(): return 1"
+
+
+@pytest.mark.asyncio
+async def test_aletheore_locate_says_so_when_nothing_matches_and_points_at_search(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_locate", {"query": "no_such_identifier_anywhere"})
+
+    text = result.content[0].text
+    assert "no match" in text and "aletheore_search" in text
+
+
+@pytest.mark.asyncio
+async def test_nav_profile_exposes_only_the_three_navigation_tools(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo, profile="nav")
+
+    tools = await server.list_tools()
+
+    assert {t.name for t in tools} == {"aletheore_locate", "aletheore_symbol_source", "aletheore_search"}
+
+
+@pytest.mark.asyncio
+async def test_nav_profile_instructions_are_short(tmp_path):
+    # The instructions text is sent to the model on every session; the nav profile exists to keep that cost tiny.
+    repo = make_repo_with_evidence(tmp_path)
+    assert len(build_server(repo, profile="nav").instructions) < 600
+
+
+def test_an_unknown_profile_is_rejected(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    with pytest.raises(ValueError):
+        build_server(repo, profile="turbo")
+
+
+@pytest.mark.asyncio
+async def test_aletheore_locate_warns_when_a_file_changed_after_the_scan(tmp_path):
+    # Line ranges come from the scan. After the agent edits a file they can be off, and a wrong range is worse
+    # than none, so the result says so.
+    import os
+
+    repo = make_repo_with_evidence(tmp_path)
+    (repo / "a.py").write_text("def foo(): return 2\n")
+    os.utime(repo / "a.py", (4102444800, 4102444800))  # year 2100, far after scanned_at
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_locate", {"query": "foo"})
+
+    text = result.content[0].text
+    assert text.startswith("note: a.py changed since the last scan") and "a.py::foo L1-1" in text

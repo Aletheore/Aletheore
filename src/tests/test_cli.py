@@ -2034,7 +2034,7 @@ def test_main_mcp_invokes_mcp_flow(tmp_path):
         result = runner.invoke(app, ["mcp", str(tmp_path)])
 
     assert result.exit_code == 0
-    mock_mcp.assert_called_once_with(str(tmp_path), None, watch=True)
+    mock_mcp.assert_called_once_with(str(tmp_path), None, watch=True, profile="full")
 
 
 def test_main_mcp_threads_answer_agent(tmp_path):
@@ -2042,7 +2042,7 @@ def test_main_mcp_threads_answer_agent(tmp_path):
         result = runner.invoke(app, ["mcp", str(tmp_path), "--agent", "ollama"])
 
     assert result.exit_code == 0
-    mock_mcp.assert_called_once_with(str(tmp_path), "ollama", watch=True)
+    mock_mcp.assert_called_once_with(str(tmp_path), "ollama", watch=True, profile="full")
 
 
 def test_main_dashboard_invokes_dashboard_flow(tmp_path):
@@ -2998,6 +2998,22 @@ def _run_mcp_command(tmp_path, monkeypatch, *, watch: bool = True, env: str | No
     return build.call_args.kwargs
 
 
+def test_mcp_passes_the_profile_through_to_the_server(tmp_path, monkeypatch):
+    from aletheore.cli import _mcp
+
+    monkeypatch.delenv("ALETHEORE_MCP_WATCH", raising=False)
+    fake_server = MagicMock()
+    with patch("aletheore.mcp_server.build_server", return_value=fake_server) as build:
+        _mcp(str(tmp_path), None, watch=False, profile="nav")
+    assert build.call_args.kwargs["profile"] == "nav"
+
+
+def test_mcp_command_rejects_an_unknown_profile(tmp_path):
+    result = CliRunner().invoke(app, ["mcp", str(tmp_path), "--profile", "turbo"])
+
+    assert result.exit_code == 2 and "unknown profile" in result.output
+
+
 def test_mcp_watches_by_default(tmp_path, monkeypatch):
     assert _run_mcp_command(tmp_path, monkeypatch)["watch"] is True
 
@@ -3021,7 +3037,7 @@ def test_main_mcp_no_watch_flag_reaches_the_mcp_flow(tmp_path):
         result = runner.invoke(app, ["mcp", str(tmp_path), "--no-watch"])
 
     assert result.exit_code == 0
-    mock_mcp.assert_called_once_with(str(tmp_path), None, watch=False)
+    mock_mcp.assert_called_once_with(str(tmp_path), None, watch=False, profile="full")
 
 
 def test_the_mcp_command_documents_no_watch():

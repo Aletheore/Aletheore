@@ -1172,7 +1172,7 @@ def _healthcheck(repo_path: str, base_url: str) -> int:
     return 0
 
 
-def _mcp(repo_path: str, forced_agent: str | None = None, watch: bool = True) -> int:
+def _mcp(repo_path: str, forced_agent: str | None = None, watch: bool = True, profile: str = "full") -> int:
     from aletheore.mcp_server import build_server
 
     repo = Path(repo_path).resolve()
@@ -1193,6 +1193,7 @@ def _mcp(repo_path: str, forced_agent: str | None = None, watch: bool = True) ->
         repo,
         answer_adapter=answer_adapter,
         watch=watch and not watching_disabled_by_env(),
+        profile=profile,
     )
     # stderr, never stdout - an MCP client treats this process's stdout as the
     # JSON-RPC channel from the moment it starts, so anything written there
@@ -2104,10 +2105,21 @@ def mcp(
             f"(same as {WATCH_ENV_VAR}=0)"
         ),
     ),
+    profile: str = typer.Option(
+        "full",
+        "--profile",
+        help=(
+            "tool set to expose: full (every tool) or nav (three code-navigation tools, small enough "
+            "to load up front)"
+        ),
+    ),
 ) -> None:
+    if profile not in ("full", "nav"):
+        console.print(f"[bold red]error:[/bold red] unknown profile {profile!r}; choose full or nav")
+        raise typer.Exit(code=2)
     path = _resolve_path(path, path_option)
     _checked_dir(path)
-    raise typer.Exit(code=_mcp(path, agent, watch=not no_watch))
+    raise typer.Exit(code=_mcp(path, agent, watch=not no_watch and profile == "full", profile=profile))
 
 
 @app.command(
