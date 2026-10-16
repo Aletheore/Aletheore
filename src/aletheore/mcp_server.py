@@ -3,6 +3,7 @@ import json
 import multiprocessing
 import os
 import queue
+import shutil
 import time
 import re
 import sys
@@ -1116,6 +1117,14 @@ TOOL_REQUIRED_EFFECTS: dict[str, frozenset[str]] = {
 }
 
 
+def _sonarqube_upload_configured() -> bool:
+    """Mirrors static_analysis.sonarqube_scanner.check_sonarqube's own
+    silent-no-op gating exactly: if either half is missing, that function
+    does nothing, so aletheore_scan transmits nothing external and the
+    base {write, network} requirement already covers it honestly."""
+    return bool(os.environ.get("SONARQUBE_HOST_URL")) and shutil.which("sonar-scanner") is not None
+
+
 def build_server(
     repo_path: Path,
     answer_adapter: AgentAdapter | None = None,
@@ -1150,6 +1159,21 @@ def build_server(
     required_effects = dict(TOOL_REQUIRED_EFFECTS)
     if answer_adapter is not None and answer_adapter.requires_consent:
         required_effects["aletheore_answer"] = required_effects["aletheore_answer"] | {EFFECT_EXTERNAL}
+    if _sonarqube_upload_configured():
+        # Real gap found via audit: aletheore_scan's own wrapper never
+        # overrides check_static_analysis, so it always runs static
+        # analysis - which, once an operator has configured
+        # SONARQUBE_HOST_URL and installed sonar-scanner, transmits this
+        # repo's full source to that third-party server (check_sonarqube's
+        # own -Dsonar.sources=. call) with no way for the MCP caller to
+        # opt out. That is exactly what EFFECT_EXTERNAL exists to gate -
+        # aletheore_scan's base {write, network} requirement silently
+        # missed it, same class of gap as aletheore_answer's own fix
+        # above. Mirrors check_sonarqube's own gating exactly (host
+        # configured AND the CLI installed) so a server where neither is
+        # set, the overwhelming majority, is never asked for a permission
+        # it doesn't need.
+        required_effects["aletheore_scan"] = required_effects["aletheore_scan"] | {EFFECT_EXTERNAL}
 
     mcp_instance = MCPServer("aletheore", instructions=SERVER_INSTRUCTIONS)
     _register_query_wrapper_tools(mcp_instance, repo_path)

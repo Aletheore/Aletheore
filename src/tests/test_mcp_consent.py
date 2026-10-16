@@ -168,6 +168,67 @@ async def test_network_only_posture_withholds_writers_but_keeps_query_embedding(
     assert "aletheore_index" not in names
 
 
+# --- aletheore_scan's conditional `external` requirement ------------------
+#
+# Real gap found via audit: aletheore_scan always runs static analysis,
+# which uploads this repo's full source to a configured SonarQube server
+# (check_sonarqube's own -Dsonar.sources=.) - exactly what EFFECT_EXTERNAL
+# exists to gate. The requirement is conditional (not simply added to
+# aletheore_scan's base set) because check_sonarqube itself is a silent
+# no-op unless BOTH SONARQUBE_HOST_URL is set AND the sonar-scanner CLI is
+# installed - an operator with neither must not be asked for a permission
+# aletheore_scan could never actually use.
+
+
+@pytest.mark.asyncio
+async def test_scan_does_not_require_external_when_sonarqube_is_not_configured(tmp_path, monkeypatch):
+    monkeypatch.delenv("SONARQUBE_HOST_URL", raising=False)
+
+    names = await tool_names(make_repo(tmp_path), allow=frozenset({EFFECT_WRITE, EFFECT_NETWORK}))
+
+    assert "aletheore_scan" in names
+
+
+@pytest.mark.asyncio
+async def test_scan_requires_external_once_sonarqube_host_and_cli_are_both_present(tmp_path, monkeypatch):
+    monkeypatch.setenv("SONARQUBE_HOST_URL", "https://sonar.example.com")
+    monkeypatch.setattr(
+        "aletheore.mcp_server.shutil.which", lambda name: "/usr/local/bin/sonar-scanner" if name == "sonar-scanner" else None
+    )
+    repo = make_repo(tmp_path)
+
+    write_network_only = await tool_names(repo, allow=frozenset({EFFECT_WRITE, EFFECT_NETWORK}))
+    assert "aletheore_scan" not in write_network_only
+
+    with_external = await tool_names(repo, allow=frozenset({EFFECT_WRITE, EFFECT_NETWORK, EFFECT_EXTERNAL}))
+    assert "aletheore_scan" in with_external
+
+
+@pytest.mark.asyncio
+async def test_scan_does_not_require_external_when_the_cli_is_missing_even_with_host_set(tmp_path, monkeypatch):
+    # Matches check_sonarqube's own gating: a host URL alone, with no
+    # sonar-scanner binary on PATH, is already a silent no-op - nothing
+    # external can be transmitted, so nothing extra should be required.
+    monkeypatch.setenv("SONARQUBE_HOST_URL", "https://sonar.example.com")
+    monkeypatch.setattr("aletheore.mcp_server.shutil.which", lambda name: None)
+
+    names = await tool_names(make_repo(tmp_path), allow=frozenset({EFFECT_WRITE, EFFECT_NETWORK}))
+
+    assert "aletheore_scan" in names
+
+
+@pytest.mark.asyncio
+async def test_withholding_notice_names_external_when_sonarqube_is_the_reason(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SONARQUBE_HOST_URL", "https://sonar.example.com")
+    monkeypatch.setattr("aletheore.mcp_server.shutil.which", lambda name: "/usr/local/bin/sonar-scanner")
+
+    build_server(make_repo(tmp_path), allow=frozenset({EFFECT_WRITE, EFFECT_NETWORK}))
+    notice = capsys.readouterr().err
+
+    assert "external" in notice
+    assert "aletheore_scan" in notice
+
+
 @pytest.mark.asyncio
 async def test_the_env_var_drives_registration_when_allow_is_not_passed(tmp_path, monkeypatch):
     monkeypatch.setenv("ALETHEORE_MCP_ALLOW", "write,network,external")
