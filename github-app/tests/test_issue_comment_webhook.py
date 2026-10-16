@@ -11,6 +11,16 @@ from app_server.webhooks.issue_comment import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_rate_limit(monkeypatch):
+    # Every test here shares one hardcoded installation_id (111, see
+    # _payload) against a real Redis instance - without this, repeated
+    # test runs within the same rate-limit window would accumulate real
+    # counts and eventually start failing nondeterministically. The tests
+    # that are actually about the limiter override this explicitly.
+    monkeypatch.setattr("app_server.webhooks.issue_comment.is_rate_limited", lambda *a, **k: False)
+
+
 def _payload(comment_body: str, has_pr: bool = True, commenter: str = "someuser"):
     payload = {
         "action": "created",
@@ -240,6 +250,39 @@ async def test_audit_command_on_a_hidden_repo_does_not_reach_the_permission_chec
     await handle_issue_comment_event(_payload("/aletheore audit"), pool, "redis://unused", queue=fake_queue)
     permission_check.assert_not_called()
     fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_audit_command_over_the_rate_limit_does_not_reach_the_permission_check(pool, monkeypatch):
+    # Real gap found via audit: verifying a commenter's permission is 2 real
+    # outbound GitHub API calls, charged against the installation's shared
+    # quota, reachable by ANY commenter on a public repo - there is no
+    # token to revoke the way there is for the API endpoints. A tripped
+    # limit must stop the 2 API calls, not just the eventual enqueue.
+    await _seed_paid_installation(pool)
+    monkeypatch.setattr("app_server.webhooks.issue_comment.is_rate_limited", lambda *a, **k: True)
+    permission_check = MagicMock()
+    monkeypatch.setattr(
+        "app_server.webhooks.issue_comment.get_repo_permission_for_user", permission_check
+    )
+    fake_queue = MagicMock()
+    await handle_issue_comment_event(_payload("/aletheore audit"), pool, "redis://unused", queue=fake_queue)
+    permission_check.assert_not_called()
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_audit_command_rate_limit_is_keyed_by_installation(pool, monkeypatch):
+    await _seed_paid_installation(pool)
+    _mock_permission_check(monkeypatch, "write")
+    keys = []
+    monkeypatch.setattr(
+        "app_server.webhooks.issue_comment.is_rate_limited",
+        lambda redis_conn, key, limit, window: keys.append(key) or False,
+    )
+    fake_queue = MagicMock()
+    await handle_issue_comment_event(_payload("/aletheore audit"), pool, "redis://unused", queue=fake_queue)
+    assert keys == ["ratelimit:comment-command:111"]
 
 
 @pytest.mark.asyncio

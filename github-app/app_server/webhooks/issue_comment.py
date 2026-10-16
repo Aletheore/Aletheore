@@ -4,11 +4,27 @@ import logging
 from app_server.config import get_settings
 from app_server.db import get_installation, is_repo_hidden
 from app_server.github_auth import generate_app_jwt, get_installation_token, get_repo_permission_for_user
+from app_server.rate_limit import is_rate_limited
 from app_server.webhooks.comment_commands import command_candidate_lines, matches_command
 
 logger = logging.getLogger(__name__)
 
 AUDIT_COMMAND = "/aletheore audit"
+
+# Real gap found via audit: this ChatOps trigger is reachable by ANY GitHub
+# account that can comment on a PR of a public repo - unlike an API token,
+# there is nothing to revoke. Verifying a commenter's permission costs 2
+# real outbound GitHub API calls (mint an installation token, then a
+# collaborator-permission lookup), charged against the whole installation's
+# shared GitHub API quota, for every comment that merely matches the
+# command text - before that commenter is known to have any access at all.
+# Keyed by installation (not commenter): the quota being protected is
+# per-installation, so that's the unit a flood actually drains, the same
+# reasoning runtime_events.py/embeddings_api.py use for their own caps.
+# Deliberately tight relative to real usage - a maintainer typing this
+# command is a rare, deliberate action, not routine traffic.
+COMMENT_COMMAND_RATE_LIMIT = 20
+COMMENT_COMMAND_RATE_LIMIT_WINDOW_SECONDS = 3600
 
 # Re-exported under their old private names: comment_commands.py now holds
 # the real implementation (shared with pull_request_review_comment.py's
@@ -30,6 +46,32 @@ def _verify_commenter_permission_sync(
 ) -> str:
     token = get_installation_token(installation_id, app_jwt)
     return get_repo_permission_for_user(repo_full_name, commenter, token)
+
+
+async def _is_comment_command_rate_limited(installation_id: int) -> bool:
+    from app_server.redis_client import get_redis_client
+
+    try:
+        # is_rate_limited uses the synchronous redis-py client and blocks on
+        # pipe.execute() - run off the event loop, same reasoning as every
+        # other rate limit in this service.
+        return await asyncio.to_thread(
+            is_rate_limited,
+            get_redis_client(),
+            f"ratelimit:comment-command:{installation_id}",
+            COMMENT_COMMAND_RATE_LIMIT,
+            COMMENT_COMMAND_RATE_LIMIT_WINDOW_SECONDS,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Fails open, matching every other rate limit in this service - a
+        # Redis outage should cost this throttle, not webhook availability.
+        # Unlike the permission check below, this gate isn't a security
+        # boundary on its own (GitHub's own per-account posting limits and
+        # the permission check that still follows both still apply); it
+        # only bounds amplification, so failing open here is a far smaller
+        # concession than the permission check's own fail-closed stance.
+        logger.warning("comment-command rate limit check failed (%s); allowing request", exc)
+        return False
 
 
 async def handle_issue_comment_event(payload: dict, pool, redis_url: str, queue=None) -> None:
@@ -77,6 +119,15 @@ async def handle_issue_comment_event(payload: dict, pool, redis_url: str, queue=
     # hide_repo) - our access is already revoked; stay quiet rather than
     # verify a commenter's permission on a repo we can't act on anyway.
     if await is_repo_hidden(pool, installation_id, repo_full_name):
+        return
+
+    if await _is_comment_command_rate_limited(installation_id):
+        logger.info(
+            "ignoring '%s' on %s: installation %s is over the comment-command rate limit",
+            AUDIT_COMMAND,
+            repo_full_name,
+            installation_id,
+        )
         return
 
     settings = get_settings()
