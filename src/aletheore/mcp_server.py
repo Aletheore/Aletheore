@@ -27,7 +27,7 @@ from aletheore.evidence import (
 from aletheore.healthcheck import run_healthcheck, save_healthcheck
 from aletheore.history import compute_diff, list_snapshots, save_snapshot
 from aletheore.managed_audit_client import run_managed_audit_request
-from aletheore.mcp_budget import apply_budget
+from aletheore.mcp_budget import apply_budget, budget_chars
 from aletheore.query import (
     BranchNotFoundInEvidenceError,
     ModuleNotFoundInEvidenceError,
@@ -274,8 +274,9 @@ _QUERY_TOOL_DESCRIPTIONS = {
 # long list plus how many were left out, and the same tool can be called
 # again with section/offset/limit/filter to page through the rest
 # losslessly. A result that already fits is returned completely untouched -
-# this only changes behavior on the repos it exists for.
-_QUERY_BUDGET_CHARS = 20_000
+# this only changes behavior on the repos it exists for. The size itself is
+# still operator-configurable via ALETHEORE_MCP_BUDGET_CHARS (budget_chars),
+# just not the on/off switch - see mcp_budget.py's module docstring.
 
 # Most severe first, so a budgeted static-analysis overview shows what matters before what doesn't.
 _SEVERITY_RANK = {
@@ -529,6 +530,10 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
     # underlying query already supported one.
     optional_target_kinds = {"ownership"}
 
+    # Read once, when the server is built, so every call this session uses
+    # the same budget rather than re-reading the env on every tool call.
+    query_budget_chars = budget_chars()
+
     for tool_name, kind in _TOOL_NAME_TO_QUERY_KIND.items():
         func, requires_target = QUERY_FUNCTIONS[kind]
 
@@ -547,7 +552,9 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
                     except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
                         return _toon_result({"error": str(exc)})
 
-            elif kind in optional_target_kinds:
+                return tool, False
+
+            if kind in optional_target_kinds:
 
                 def tool(target: str | None = None) -> str:
                     evidence = read_evidence(repo_path)
@@ -556,35 +563,41 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
                     except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
                         return _toon_result({"error": str(exc)})
 
-            else:
+                return tool, False
 
-                def tool(
-                    section: str | None = None,
-                    offset: int = 0,
-                    limit: int | None = None,
-                    filter: str | None = None,
-                ) -> str:
-                    evidence = read_evidence(repo_path)
-                    return _toon_result(
-                        apply_budget(
-                            func(evidence, None),
-                            size_of=lambda data: len(_toon_result(data)),
-                            budget_chars=_QUERY_BUDGET_CHARS,
-                            section=section,
-                            offset=offset,
-                            limit=limit,
-                            filter=filter,
-                            sort_by=_QUERY_BUDGET_SORT_BY.get(kind),
-                        )
+            # Real audit finding (Flash Review, Low): the doc-suffix
+            # condition used to be recomputed separately from this
+            # if/elif/else dispatch (not requires_target and kind not in
+            # optional_target_kinds) - logically identical today, but two
+            # independently-maintained conditions can silently drift if
+            # this dispatch ever changes shape. Returning whether THIS is
+            # the budgeted branch, right where that's decided, makes
+            # drift impossible instead of just unlikely.
+            def tool(
+                section: str | None = None,
+                offset: int = 0,
+                limit: int | None = None,
+                filter: str | None = None,
+            ) -> str:
+                evidence = read_evidence(repo_path)
+                return _toon_result(
+                    apply_budget(
+                        func(evidence, None),
+                        size_of=lambda data: len(_toon_result(data)),
+                        budget_chars=query_budget_chars,
+                        section=section,
+                        offset=offset,
+                        limit=limit,
+                        filter=filter,
+                        sort_by=_QUERY_BUDGET_SORT_BY.get(kind),
                     )
+                )
 
-            return tool
+            return tool, True
 
-        tool_func = make_tool()
+        tool_func, budgeted = make_tool()
         tool_func.__name__ = tool_name
-        tool_func.__doc__ = _QUERY_TOOL_DESCRIPTIONS[kind] + (
-            _QUERY_BUDGET_DOC_SUFFIX if not requires_target and kind not in optional_target_kinds else ""
-        )
+        tool_func.__doc__ = _QUERY_TOOL_DESCRIPTIONS[kind] + (_QUERY_BUDGET_DOC_SUFFIX if budgeted else "")
         mcp_instance.tool(name=tool_name, annotations=READ_ONLY_ANNOTATIONS)(
             _guard_evidence_read_errors(tool_func)
         )

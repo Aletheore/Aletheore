@@ -46,9 +46,10 @@ async def test_a_no_target_tool_always_has_paging_parameters_and_documents_them(
 
 @pytest.mark.asyncio
 async def test_over_budget_result_is_bounded_and_pageable_to_the_exact_original(tmp_path, monkeypatch):
-    import aletheore.mcp_server as mcp_server
-
-    monkeypatch.setattr(mcp_server, "_QUERY_BUDGET_CHARS", 3000)
+    # query_budget_chars is read once via budget_chars() when the server's
+    # tools are registered, so the env var has to be set before build_server
+    # runs, not patched onto a module attribute afterward.
+    monkeypatch.setenv("ALETHEORE_MCP_BUDGET_CHARS", "3000")
     repo = make_repo_with_evidence(tmp_path)
     bloat(repo, 300)
     server = build_server(repo)

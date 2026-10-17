@@ -69,7 +69,17 @@ def extract_identifiers(query: str, *, all_words: bool = False) -> tuple[dict[st
     # backticked identifier that also looked "codey" (underscore/camelCase/Error suffix) matched again here on
     # top of the weight-2 it already earned above, for an effective weight of 3, not the documented 2. Blanking
     # backtick spans first keeps a backticked identifier's weight at exactly what the docstring promises.
-    plain_query = re.sub(r"`[^`\n]{2,120}`", " ", query)
+    # No {2,120} length cap here, unlike the weight-2 extraction above:
+    # that cap is a sane limit on how large a span earns weight 2, but
+    # blanking exists only to keep ANY backtick span out of the plain-word
+    # pass below - a span over 120 chars (a pasted code block, say) didn't
+    # match the weight-2 regex above either, so without a length-independent
+    # blank it still reached the plain-word pass and could pick up weight 1
+    # there, the same "backticked content isn't really plain text" leak
+    # this whole change exists to close, Flash Review's real finding (its
+    # "effective weight 3" framing describes the short-span case; a long
+    # span's leak is weight 0->1, not 2->3, but it's the same defect).
+    plain_query = re.sub(r"`[^`\n]*`", " ", query)
     shortest = 2 if all_words else 3  # an agent's own query may name a three-letter function
     for tok in re.findall(rf"\b[A-Za-z_][A-Za-z0-9_]{{{shortest},}}\b", plain_query):
         codey = all_words or "_" in tok or re.search(r"[a-z][A-Z]", tok) or tok.endswith("Error")

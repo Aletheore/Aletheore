@@ -8,8 +8,13 @@ left out, and the same tool can be called again with `section`, `offset`, `limit
 and `filter` to page through everything. Paging every page of a section yields
 the original list exactly.
 
-Off by default (see `budget_enabled`): with the flag unset the server returns
-exactly what it always has. The flag is read once, when the server is built.
+Applied unconditionally to every repo-wide, no-target MCP query tool - not
+gated behind a flag. An agent has no way to discover or set an env var, and
+this is a correctness fix (an unscoped result on a real repo can be
+unusably large), not a token-savings lever that needs benchmarking before
+it defaults on. `budget_chars` still lets an operator override the size
+via an env var if the default doesn't suit a particular repo; read once,
+when the server is built.
 """
 
 from __future__ import annotations
@@ -18,11 +23,9 @@ import json
 import os
 from typing import Any, Callable, Mapping
 
-BUDGET_ENV_VAR = "ALETHEORE_MCP_BUDGET"
 BUDGET_CHARS_ENV_VAR = "ALETHEORE_MCP_BUDGET_CHARS"
 DEFAULT_BUDGET_CHARS = 20_000
 
-_TRUTHY = {"1", "true", "yes", "on"}
 _MIN_SHOWN = 3  # every non-empty list keeps at least this many items in an overview
 _MAX_STRING = 500  # longer strings inside shown items are trimmed with a visible marker
 _FACET_MAX_VALUES = 12
@@ -30,11 +33,6 @@ _FACET_MIN_LIST = 10
 _ROOT = "$"
 
 SizeOf = Callable[[Any], int]
-
-
-def budget_enabled(environ: Mapping[str, str] | None = None) -> bool:
-    env = os.environ if environ is None else environ
-    return env.get(BUDGET_ENV_VAR, "").strip().lower() in _TRUTHY
 
 
 def budget_chars(environ: Mapping[str, str] | None = None) -> int:
@@ -74,6 +72,15 @@ def _rebuild(node: Any, path: str, replacements: dict[str, list]) -> Any:
 
 
 def _ordered(path: str, items: list, sort_by: Mapping[str, Callable[[Any], Any]] | None) -> list:
+    # Real audit finding (Flash Review, Medium): the bare-leaf-name fallback
+    # (sort_by.get(path.rsplit(".", 1)[-1])) matches any list whose path
+    # ends in that key, so two distinct lists sharing a leaf name (e.g.
+    # "a.findings" and "b.findings") would both get the sort function meant
+    # for only one of them. Not reachable today - every caller passes a
+    # sort_by dict scoped to one specific query kind's own result shape,
+    # which has at most one list per leaf name - but it's a real collision
+    # risk if a future kind's sort_by shares a leaf name with another
+    # list in the same result.
     if not sort_by:
         return items
     key = sort_by.get(path) or sort_by.get(path.rsplit(".", 1)[-1])
@@ -102,6 +109,13 @@ def _facets(items: list) -> dict[str, dict[str, int]]:
         counts: dict[str, int] = {}
         usable = True
         for item in items:
+            # Real audit finding (Flash Review): only the first 50 items were
+            # checked for dict-ness above - a later non-dict item (a mixed
+            # list past that sample) crashed this with AttributeError on
+            # item.get instead of just marking the field unusable.
+            if not isinstance(item, dict):
+                usable = False
+                break
             value = item.get(field)
             if not isinstance(value, (str, bool)):
                 usable = False
@@ -156,7 +170,14 @@ def _overview(
     def build() -> Any:
         replacements = {p: [_trim(i) for i in ordered[p][: shown[p]]] for p in shown if shown[p] < len(ordered[p])}
         truncated = {
-            p: {"total": len(ordered[p]), "shown": shown[p], "next_offset": shown[p], "facets": facets[p]}
+            # Real audit finding (Flash Review, Possible Bug): facets was
+            # only computed for the paths phase 1 had already decided to
+            # trim, but phase 2's tightening loop below can shrink further
+            # paths phase 1 never touched - facets[p] crashed with KeyError
+            # for one of those. .get(p, {}) degrades to "no breakdown shown"
+            # for a path only trimmed in phase 2, instead of crashing the
+            # whole budgeted result.
+            p: {"total": len(ordered[p]), "shown": shown[p], "next_offset": shown[p], "facets": facets.get(p, {})}
             for p in replacements
         }
         if not truncated:

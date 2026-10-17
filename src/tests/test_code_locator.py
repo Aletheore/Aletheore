@@ -75,6 +75,16 @@ def test_backticked_identifier_weighs_exactly_two_even_when_it_also_looks_codey(
     assert ids["write_usage"] == 2
 
 
+def test_backticked_identifier_inside_a_span_over_120_chars_is_still_blanked():
+    # Real audit finding (Flash Review): the blanking regex used to share
+    # the weight-2 extraction regex's {2,120} length cap, so a backtick
+    # span longer than 120 characters (e.g. a pasted code block) wasn't
+    # blanked and its identifiers leaked into the plain-word pass below.
+    padding = "x" * 130
+    ids, _ = extract_identifiers(f"`{padding} write_usage` please")
+    assert "write_usage" not in ids
+
+
 def test_locate_finds_the_file_that_defines_the_named_symbol(tmp_path):
     repo = make_repo(tmp_path, FILES)
     cands = locate("HelpFormatter write_usage", repo, modules_for(FILES), all_words=True)

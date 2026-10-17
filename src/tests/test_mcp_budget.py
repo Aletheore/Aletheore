@@ -6,7 +6,6 @@ from aletheore.mcp_budget import (
     DEFAULT_BUDGET_CHARS,
     apply_budget,
     budget_chars,
-    budget_enabled,
 )
 
 
@@ -27,14 +26,6 @@ def call(data, budget=6000, **kw):
 
 
 # --- flag helpers -----------------------------------------------------------
-
-def test_budget_is_off_by_default_and_on_for_truthy_values():
-    assert budget_enabled({}) is False
-    for v in ("1", "true", "TRUE", "yes", "on"):
-        assert budget_enabled({"ALETHEORE_MCP_BUDGET": v}) is True
-    for v in ("0", "false", "", "off", "no"):
-        assert budget_enabled({"ALETHEORE_MCP_BUDGET": v}) is False
-
 
 def test_budget_chars_default_override_and_invalid_values():
     assert budget_chars({}) == DEFAULT_BUDGET_CHARS == 20000
