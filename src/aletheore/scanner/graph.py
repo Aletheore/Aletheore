@@ -6,6 +6,7 @@ import stat
 import xml.etree.ElementTree as ET
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
+from functools import lru_cache
 from pathlib import Path
 
 import tree_sitter_c as tsc
@@ -3124,12 +3125,61 @@ def _python_source_roots(repo_path: Path) -> list[Path]:
     return sorted(roots, key=lambda p: (len(p.parts), str(p)))
 
 
+@lru_cache(maxsize=8192)
+def _listing_at(directory: str, mtime_ns: int) -> frozenset[str]:
+    # Keyed by the directory's mtime, which changes on every add, remove or rename inside it, so a long-lived
+    # process (the MCP watcher re-scanning) never reads a stale listing while a scan still lists each
+    # directory once instead of once per import candidate.
+    return frozenset(os.listdir(directory))
+
+
+def _names_in(directory: Path) -> frozenset[str]:
+    return _listing_at(str(directory), directory.stat().st_mtime_ns)
+
+
+def _exists_exact_case(repo_path: Path, candidate: Path) -> bool:
+    """True only if candidate exists AND every path component under repo_path
+    matches the on-disk spelling. A plain exists() is case-insensitive on
+    macOS/Windows, so `from pkg import Point` (a class re-exported by
+    pkg/__init__.py) would otherwise "resolve" to pkg/Point.py when the real
+    module is pkg/point.py - attaching the edge to the wrong file name.
+
+    A candidate outside repo_path (an import root beside it) is checked from the nearest ancestor it shares
+    with repo_path, so the components that were discovered on disk are all verified and the part of the path
+    the caller typed is not.
+    """
+    if not candidate.exists():
+        return False
+    try:
+        anchor = repo_path
+        parts = candidate.relative_to(anchor).parts
+    except ValueError:
+        try:
+            anchor = Path(os.path.commonpath([repo_path, candidate]))
+            parts = candidate.relative_to(anchor).parts
+        except ValueError:  # different drives: nothing shared to anchor on
+            anchor = candidate.parent
+            parts = candidate.parts[-1:]
+    directory = anchor
+    for part in parts:
+        if part in (".", ".."):
+            directory = directory / part
+            continue
+        try:
+            if part not in _names_in(directory):
+                return False
+        except OSError:
+            return False
+        directory = directory / part
+    return True
+
+
 def _module_or_package_path(repo_path: Path, as_path: Path) -> str | None:
     candidate_module = Path(as_path.as_posix() + ".py")
     candidate_package = as_path / "__init__.py"
-    if candidate_module.exists():
+    if _exists_exact_case(repo_path, candidate_module):
         return _rel(repo_path, candidate_module)
-    if candidate_package.exists():
+    if _exists_exact_case(repo_path, candidate_package):
         return _rel(repo_path, candidate_package)
     return None
 
