@@ -29,6 +29,9 @@ class _LazyModule:
     def __getattr__(self, attr: str):
         return getattr(self._load(), attr)
 
+    def __dir__(self):
+        return dir(self._load())
+
     def __setattr__(self, attr: str, value) -> None:
         setattr(self._load(), attr, value)
 
