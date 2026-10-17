@@ -11,6 +11,7 @@ import difflib
 from datetime import datetime
 from pathlib import Path
 
+from aletheore.scope_filter import in_scope, is_test_path, normalize_under  # noqa: F401  (is_test_path re-exported)
 
 
 class DependentsError(Exception):
@@ -34,62 +35,76 @@ def _files_changed_since_scan(repo_path: Path, paths: list[str], scanned_at: obj
     return changed
 
 
-def _matches(path: str, pattern: str) -> bool:
-    """`pattern` is a whole directory name or file name ("tests", "locale"), not a substring: "locale" must not drop
-    a module called django/middleware/locale.py."""
-    return pattern in path.split("/")
-
-
-def dependents_of(evidence: dict, target: str) -> tuple[list[str], set[str]]:
-    """(all transitive dependents, the direct ones), neither containing `target`."""
+def dependents_of(evidence: dict, target: str | set[str]) -> tuple[list[str], set[str]]:
+    """(all transitive dependents, the direct ones), none of them one of the seeds. `target` is one file or a set of
+    files treated as one unit (every file of a package)."""
+    seeds = {target} if isinstance(target, str) else set(target)
     by_path = {m["path"]: m for m in evidence["repository"]["modules"] if m.get("path")}
-    direct = {p for p in (by_path[target].get("imported_by") or []) if p != target}
+    direct = {p for s_ in seeds for p in (by_path[s_].get("imported_by") or []) if p not in seeds}
     seen = set(direct)
     queue = sorted(direct)
     while queue:
         for dep in by_path.get(queue.pop(), {}).get("imported_by") or []:
-            if dep != target and dep not in seen:
+            if dep not in seeds and dep not in seen:
                 seen.add(dep)
                 queue.append(dep)
     return sorted(seen), direct
 
 
+def _dir_of(path: str) -> str:
+    return path.rsplit("/", 1)[0] if "/" in path else "."
+
+
 def dependents_report(
-    evidence: dict, repo_path: Path, target: str, exclude: list[str] | None = None, under: list[str] | None = None
+    evidence: dict, repo_path: Path, target: str, exclude: list[str] | None = None, under: list[str] | None = None,
+    no_tests: bool = False, packages: bool = False,
 ) -> str:
     modules = evidence["repository"]["modules"]
     by_path = {m["path"]: m for m in modules if m.get("path")}
-    target = target.removeprefix("./")
-    if target not in by_path:
-        close = difflib.get_close_matches(target, list(by_path), n=3)
-        hint = f"; closest: {', '.join(close)}" if close else ""
-        raise DependentsError(f"{target!r} is not a module in the scan{hint}")
+    target = target.removeprefix("./").rstrip("/") or "."
+    if target in by_path:
+        seeds = {target}
+        unit = "file"
+    else:
+        seeds = {p for p in by_path if _dir_of(p) == target}
+        unit = "package"
+        if not seeds:
+            close = difflib.get_close_matches(target, list(by_path) + sorted({_dir_of(p) for p in by_path}), n=3)
+            hint = f"; closest: {', '.join(close)}" if close else ""
+            raise DependentsError(f"{target!r} is not a module or a directory with modules in the scan{hint}")
 
-    allp, direct = dependents_of(evidence, target)
+    allp, direct = dependents_of(evidence, seeds)
     exclude = exclude or []
-    under = [u.removeprefix('./').strip('/') for u in (under or [])]
-    under = [u + '/' for u in under if u not in ('', '.')]
-    shown = [p for p in allp if not any(_matches(p, e) for e in exclude) and (not under or p.startswith(tuple(under)))]
+    prefixes = normalize_under(under)
+    shown = [p for p in allp if in_scope(p, exclude, prefixes, no_tests)]
     dropped = len(allp) - len(shown)
 
-    language = by_path[target].get("language") or "unknown"
+    language = by_path[sorted(seeds)[0]].get("language") or "unknown"
     unparseable = len(evidence["repository"].get("unparseable_files") or [])
     scan_time = evidence.get("scanned_at")
-    changed = _files_changed_since_scan(repo_path, [target, *allp], scan_time)
+    changed = _files_changed_since_scan(repo_path, [*sorted(seeds), *allp], scan_time)
     if changed is None:
         fresh = "freshness unknown (the evidence has no readable scan time), so re-scan if the code changed"
     elif not changed:
         fresh = "no listed file changed since the scan (files added after it are not covered)"
     else:
         extra = f", {', '.join(changed[:3])}{', ...' if len(changed) > 3 else ''}"
-        who = "the file asked about and " if target in changed else ""
+        who = f"the {unit} asked about and " if seeds & set(changed) else ""
         fresh = f"STALE: {who}{len(changed)} file(s) changed after the scan{extra}; re-scan before relying on this"
-    excl = f" ({dropped} more left out by --exclude/--under)" if dropped else ""
+    excl = f" ({dropped} more left out by --exclude/--under/--no-tests)" if dropped else ""
+    if packages:
+        dirs = sorted({_dir_of(p) for p in shown})
+        head = f"{len(dirs)} packages (directories) import {target}, directly or through other imports{excl}:"
+        body = dirs
+    else:
+        head = f"{len(shown)} files import {target}, directly or through other imports{excl}:"
+        body = shown
+    what = "this file" if unit == "file" else f"this package ({len(seeds)} files)"
     lines = [
-        f"{len(shown)} files import {target}, directly or through other imports{excl}:",
-        *shown,
+        head,
+        *body,
         "",
-        f"Repo-wide this file has {len(direct)} direct importers plus {len(allp) - len(direct)} that reach it through "
+        f"Repo-wide {what} has {len(direct)} direct importers plus {len(allp) - len(direct)} that reach it through "
         f"other files (before --under/--exclude), deduplicated. Coverage: static {language} imports only, "
         f"{len(modules)} modules indexed, {unparseable} unparseable; {fresh}. Not tracked: imports built at run time "
         "(importlib, __import__, string-based plugin loading). For static imports this list does not need to be "
