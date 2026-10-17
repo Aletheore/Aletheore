@@ -128,7 +128,19 @@ def _files_changed_since_scan(repo_path: Path, paths: list[str], scanned_at: obj
     return changed
 
 
-def cycles_report(evidence: dict, repo_path: Path) -> str:
+def _scoped(path: str, exclude: list[str], under: list[str]) -> bool:
+    """In scope when below one of the --under directories (if any) and not under a directory/file named in --exclude
+    (whole path parts, so "locale" does not drop "middleware/locale.py")."""
+    if exclude and any(e in path.split("/") for e in exclude):
+        return False
+    return not under or path.startswith(tuple(under))
+
+
+def cycles_report(
+    evidence: dict, repo_path: Path, exclude: list[str] | None = None, under: list[str] | None = None
+) -> str:
+    exclude = exclude or []
+    under = [u + "/" for u in (u.removeprefix("./").strip("/") for u in (under or [])) if u not in ("", ".")]
     adj = _build_adjacency(evidence)
     groups = sorted(
         (sorted(comp) for comp in _tarjan_sccs(adj) if len(comp) > 1),
@@ -151,6 +163,25 @@ def cycles_report(evidence: dict, repo_path: Path) -> str:
             "no circular import dependency found.\n\n"
             f"Coverage: static imports only, {len(adj)} modules considered. {fresh}."
         )
+
+    if exclude or under:
+        # Scoped answer: cycles are still found over the whole graph (a cycle may run through files outside the scope),
+        # but only files inside the scope are listed, as one flat answer-ready list.
+        in_scope = sorted({p for g in groups for p in g if _scoped(p, exclude, under)})
+        lines = [f"{len(in_scope)} file(s) in the requested scope are part of an import cycle:", *in_scope, ""]
+        for group in groups:
+            mine = [p for p in group if _scoped(p, exclude, under)]
+            if mine:
+                chain = _example_cycle(adj, group)
+                arrow = " -> ".join(chain[:CYCLE_MAX_CHAIN_LEN]) + (" -> ..." if len(chain) > CYCLE_MAX_CHAIN_LEN else "")
+                lines.append(f"group of {len(group)} file(s) repo-wide, {len(mine)} in scope; example cycle: {arrow}")
+        lines.append(
+            f"\nCoverage: static imports only, {len(adj)} modules considered; cycles were found over the whole repo and "
+            f"only files matching --under/--exclude are listed. Not tracked: imports built at run time (importlib, "
+            f"__import__, string-based plugin loading). {fresh}. For static imports this list does not need to be "
+            "re-derived with grep or a script."
+        )
+        return "\n".join(lines)
 
     shown = groups[:CYCLES_MAX_GROUPS]
     truncated = len(groups) - len(shown)
