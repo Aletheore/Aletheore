@@ -198,11 +198,15 @@ def _locked_rw_credentials_file(credentials_path: Path):
                     # exactly this: POSIX-only, so Windows (which has no
                     # O_NOFOLLOW) checks is_symlink() explicitly instead.
                     no_follow = getattr(os, "O_NOFOLLOW", 0)
-                    if not no_follow and backup_path.is_symlink():
-                        raise OSError("refusing to write the backup through a symlink")
+                    # Remove whatever is at the path (unlink removes a symlink itself, it never follows it),
+                    # then create it with O_EXCL, which refuses to open an existing path, symlink or not.
+                    # Unlike an is_symlink() check before an O_TRUNC open, nothing planted between the two
+                    # steps can be followed, on Windows (no O_NOFOLLOW) or anywhere else.
+                    with contextlib.suppress(FileNotFoundError):
+                        os.unlink(str(backup_path))
                     backup_fd = os.open(
                         str(backup_path),
-                        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | no_follow | getattr(os, "O_BINARY", 0),
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow | getattr(os, "O_BINARY", 0),
                         0o600,
                     )
                     try:
