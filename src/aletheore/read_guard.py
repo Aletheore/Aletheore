@@ -26,9 +26,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
+
+_LOG = logging.getLogger(__name__)
 
 READ_GUARD_ENV_VAR = "ALETHEORE_READ_GUARD"
 _STATE_DIRNAME = "read_guard"
@@ -158,8 +161,8 @@ def main_pre(stdin=None, stdout=None, environ=None) -> int:
         out = pre_read_decision(payload)
         if out:
             (stdout or sys.stdout).write(json.dumps(out))
-    except Exception:
-        pass
+    except Exception:  # a hook must never block the agent; keep the reason for debugging
+        _LOG.debug("read guard hook failed; allowing the call", exc_info=True)
     return 0
 
 
@@ -175,6 +178,6 @@ def main_post(stdin=None, stdout=None, environ=None) -> int:
         payload = json.loads((stdin or sys.stdin).read() or "{}")
         if isinstance(payload, dict):
             record_read(payload)
-    except Exception:
-        pass
+    except Exception:  # a hook must never block the agent; keep the reason for debugging
+        _LOG.debug("read guard hook failed; allowing the call", exc_info=True)
     return 0
