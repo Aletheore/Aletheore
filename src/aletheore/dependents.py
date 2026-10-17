@@ -13,12 +13,17 @@ from pathlib import Path
 
 
 
-def _files_changed_since_scan(repo_path: Path, paths: list[str], scanned_at: object) -> list[str]:
-    """Files whose mtime is later than the scan, so a stale answer can say so."""
+class DependentsError(Exception):
+    """The request cannot be answered (unknown file); the message is what the user should see."""
+
+
+def _files_changed_since_scan(repo_path: Path, paths: list[str], scanned_at: object) -> list[str] | None:
+    """Files whose mtime is later than the scan, so a stale answer can say so. None when the scan time is missing
+    or unreadable: "nothing changed" and "could not check" must never look the same."""
     try:
         scan_time = datetime.fromisoformat(str(scanned_at)).timestamp()
     except ValueError:
-        return []
+        return None
     changed = []
     for rel in paths:
         try:
@@ -58,7 +63,7 @@ def dependents_report(
     if target not in by_path:
         close = difflib.get_close_matches(target, list(by_path), n=3)
         hint = f"; closest: {', '.join(close)}" if close else ""
-        return f"error: {target!r} is not a module in the scan{hint}"
+        raise DependentsError(f"{target!r} is not a module in the scan{hint}")
 
     allp, direct = dependents_of(evidence, target)
     exclude = exclude or []
@@ -69,8 +74,16 @@ def dependents_report(
 
     language = by_path[target].get("language") or "unknown"
     unparseable = len(evidence["repository"].get("unparseable_files") or [])
-    changed = _files_changed_since_scan(repo_path, [target, *allp], evidence.get("scanned_at"))
-    fresh = "no listed file changed since the scan (files added after it are not covered)" if not changed else f"STALE: {len(changed)} of these files changed after the scan ({', '.join(changed[:3])}{', ...' if len(changed) > 3 else ''})"
+    scan_time = evidence.get("scanned_at")
+    changed = _files_changed_since_scan(repo_path, [target, *allp], scan_time)
+    if changed is None:
+        fresh = "freshness unknown (the evidence has no readable scan time), so re-scan if the code changed"
+    elif not changed:
+        fresh = "no listed file changed since the scan (files added after it are not covered)"
+    else:
+        extra = f", {', '.join(changed[:3])}{', ...' if len(changed) > 3 else ''}"
+        who = "the file asked about and " if target in changed else ""
+        fresh = f"STALE: {who}{len(changed)} file(s) changed after the scan{extra}; re-scan before relying on this"
     excl = f" ({dropped} more left out by --exclude/--under)" if dropped else ""
     lines = [
         f"{len(shown)} files import {target}, directly or through other imports{excl}:",

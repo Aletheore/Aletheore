@@ -2053,7 +2053,7 @@ def dependents(
     under: list[str] = typer.Option([], "--under", help="only list files below this directory; repeatable"),
     path_option: Optional[str] = _PATH_OPTION,
 ) -> None:
-    from aletheore.dependents import dependents_report
+    from aletheore.dependents import DependentsError, dependents_report
 
     repo = Path(_resolve_path(path, path_option)).resolve()
     try:
@@ -2061,9 +2061,10 @@ def dependents(
     except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
         print(f"error: {exc} (run 'aletheore scan' first)")
         raise typer.Exit(code=1)
-    report = dependents_report(evidence, repo, file, exclude, under)
-    print(report)
-    if report.startswith("error:"):
+    try:
+        print(dependents_report(evidence, repo, file, exclude, under))
+    except DependentsError as exc:
+        print(f"error: {exc}")
         raise typer.Exit(code=1)
 
 

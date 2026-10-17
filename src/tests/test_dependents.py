@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from aletheore.dependents import dependents_of, dependents_report
+import pytest
+
+from aletheore.dependents import DependentsError, dependents_of, dependents_report
 
 
 def _ev(graph: dict[str, list[str]], unparseable=0):
@@ -37,8 +39,8 @@ def test_exclude_filters_and_counts(tmp_path: Path):
 
 
 def test_unknown_target_suggests_closest(tmp_path: Path):
-    text = dependents_report(_ev(GRAPH), tmp_path, "b.pyy")
-    assert text.startswith("error:") and "b.py" in text
+    with pytest.raises(DependentsError, match="b.py"):
+        dependents_report(_ev(GRAPH), tmp_path, "b.pyy")
 
 
 def test_stale_scan_is_flagged(tmp_path: Path):
@@ -86,3 +88,17 @@ def test_under_accepts_dot_slash_and_dot(tmp_path: Path):
     g = {"pkg/a.py": ["pkg/b.py", "bench/x.py"], "pkg/b.py": [], "bench/x.py": []}
     assert "1 files import pkg/a.py" in dependents_report(_ev(g), tmp_path, "pkg/a.py", under=["./pkg/"])
     assert "2 files import pkg/a.py" in dependents_report(_ev(g), tmp_path, "pkg/a.py", under=["."])
+
+
+def test_missing_scan_time_is_reported_as_unknown_not_current(tmp_path: Path):
+    ev = _ev(GRAPH)
+    del ev["scanned_at"]
+    text = dependents_report(ev, tmp_path, "a.py")
+    assert "freshness unknown" in text and "no listed file changed" not in text
+
+
+def test_changed_target_is_named_as_such(tmp_path: Path):
+    (tmp_path / "a.py").write_text("x")
+    ev = _ev(GRAPH)
+    ev["scanned_at"] = "2000-01-01T00:00:00+00:00"
+    assert "the file asked about and" in dependents_report(ev, tmp_path, "a.py")
