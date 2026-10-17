@@ -1,5 +1,6 @@
 import functools
 import json
+from datetime import datetime
 import multiprocessing
 import os
 import queue
@@ -26,6 +27,7 @@ from aletheore.evidence import (
 from aletheore.healthcheck import run_healthcheck, save_healthcheck
 from aletheore.history import compute_diff, list_snapshots, save_snapshot
 from aletheore.managed_audit_client import run_managed_audit_request
+from aletheore.mcp_budget import apply_budget, budget_chars
 from aletheore.query import (
     BranchNotFoundInEvidenceError,
     ModuleNotFoundInEvidenceError,
@@ -54,6 +56,7 @@ from aletheore.search_index import (
     IndexNotFoundError,
     search_index,
 )
+from aletheore.code_locator import locate_report
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.watch import EVIDENCE_WRITE_LOCK, BackgroundWatcher, start_background_watch
 
@@ -125,6 +128,11 @@ def _guard_evidence_read_errors(tool_func: Callable[..., str]) -> Callable[..., 
 # recovering 20-47 points when the same questions used the project's own
 # terms), not a guess. Kept to what changes agent behavior, not a full tool
 # catalog - each tool's own docstring is already visible to the client.
+NAV_INSTRUCTIONS = (
+    "Aletheore code navigation. aletheore_locate finds where names are defined and returns the code in one call; "
+    "aletheore_symbol_source returns one function or class; aletheore_search is a literal or regex search."
+)
+
 SERVER_INSTRUCTIONS = """Aletheore is a deterministic, evidence-grounded code intelligence tool for \
 this repository - every result cites a real file:line, nothing is invented.
 
@@ -253,6 +261,41 @@ _QUERY_TOOL_DESCRIPTIONS = {
     "and catch handlers (file and line), plus per-type counts. Python, C/C++, JS/TS, Java, C#, PHP, Kotlin, "
     "Ruby, Swift, Go and Rust. Takes no target.",
 }
+
+# Real audit finding: every no-target kind above returns its evidence
+# section raw, with no cap at all - on this project's own evidence,
+# aletheore_database renders to 972,404 characters, aletheore_error_handling
+# to 100,517, aletheore_environment_variables to 99,571, aletheore_static_analysis
+# to 42,505, aletheore_endpoints to 29,113, aletheore_dead_code to 17,422,
+# aletheore_hotspots to 10,939, aletheore_infrastructure to 9,249 -
+# unconditionally, every call, regardless of repo size. apply_budget (see
+# mcp_budget.py) bounds the result to a size budget without losing
+# anything: an over-budget result keeps its shape, shows a sample of each
+# long list plus how many were left out, and the same tool can be called
+# again with section/offset/limit/filter to page through the rest
+# losslessly. A result that already fits is returned completely untouched -
+# this only changes behavior on the repos it exists for. The size itself is
+# still operator-configurable via ALETHEORE_MCP_BUDGET_CHARS (budget_chars),
+# just not the on/off switch - see mcp_budget.py's module docstring.
+
+# Most severe first, so a budgeted static-analysis overview shows what matters before what doesn't.
+_SEVERITY_RANK = {
+    "critical": 0, "high": 1, "error": 1, "medium": 2, "moderate": 2, "warning": 2, "low": 3, "info": 4, "note": 4
+}
+
+
+def _severity_key(finding: object) -> int:
+    severity = finding.get("severity") if isinstance(finding, dict) else None
+    return _SEVERITY_RANK.get(str(severity).lower(), 5)
+
+
+_QUERY_BUDGET_SORT_BY = {"static-analysis": {"findings": _severity_key}}
+
+_QUERY_BUDGET_DOC_SUFFIX = (
+    " Output is capped to a size budget: if a list is cut, the result says how many items were left out "
+    "and call this tool again with section=<list path>, offset=<next_offset> (optional limit, filter) to page "
+    "through them."
+)
 
 _SEARCH_MATCH_CAP = 200
 # Guards the whole regex search against catastrophic backtracking (e.g.
@@ -487,6 +530,10 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
     # underlying query already supported one.
     optional_target_kinds = {"ownership"}
 
+    # Read once, when the server is built, so every call this session uses
+    # the same budget rather than re-reading the env on every tool call.
+    query_budget_chars = budget_chars()
+
     for tool_name, kind in _TOOL_NAME_TO_QUERY_KIND.items():
         func, requires_target = QUERY_FUNCTIONS[kind]
 
@@ -505,7 +552,9 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
                     except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
                         return _toon_result({"error": str(exc)})
 
-            elif kind in optional_target_kinds:
+                return tool, False
+
+            if kind in optional_target_kinds:
 
                 def tool(target: str | None = None) -> str:
                     evidence = read_evidence(repo_path)
@@ -514,26 +563,121 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
                     except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
                         return _toon_result({"error": str(exc)})
 
-            else:
+                return tool, False
 
-                def tool() -> str:
-                    evidence = read_evidence(repo_path)
-                    return _toon_result(func(evidence, None))
+            # Real audit finding (Flash Review, Low): the doc-suffix
+            # condition used to be recomputed separately from this
+            # if/elif/else dispatch (not requires_target and kind not in
+            # optional_target_kinds) - logically identical today, but two
+            # independently-maintained conditions can silently drift if
+            # this dispatch ever changes shape. Returning whether THIS is
+            # the budgeted branch, right where that's decided, makes
+            # drift impossible instead of just unlikely.
+            def tool(
+                section: str | None = None,
+                offset: int = 0,
+                limit: int | None = None,
+                filter: str | None = None,
+            ) -> str:
+                evidence = read_evidence(repo_path)
+                return _toon_result(
+                    apply_budget(
+                        func(evidence, None),
+                        size_of=lambda data: len(_toon_result(data)),
+                        budget_chars=query_budget_chars,
+                        section=section,
+                        offset=offset,
+                        limit=limit,
+                        filter=filter,
+                        sort_by=_QUERY_BUDGET_SORT_BY.get(kind),
+                    )
+                )
 
-            return tool
+            return tool, True
 
-        tool_func = make_tool()
+        tool_func, budgeted = make_tool()
         tool_func.__name__ = tool_name
-        tool_func.__doc__ = _QUERY_TOOL_DESCRIPTIONS[kind]
+        tool_func.__doc__ = _QUERY_TOOL_DESCRIPTIONS[kind] + (_QUERY_BUDGET_DOC_SUFFIX if budgeted else "")
         mcp_instance.tool(name=tool_name, annotations=READ_ONLY_ANNOTATIONS)(
             _guard_evidence_read_errors(tool_func)
         )
 
 
+# Found in the same audit as symbol_source/neighborhood/list's caps, in two
+# parts: compute_diff(full=True)'s raw path-level diff (_compute_full_diff)
+# has no size cap on added/removed/changed, AND - worse, since it's the
+# DEFAULT path, not opt-in - the curated diff's own new/resolved lists
+# (secrets, vulnerabilities, static_analysis, layer_violations, endpoints)
+# have no cap either: a scan that freshly enables static analysis, or a
+# dependency bump that introduces many new advisories, reports every one of
+# them uncapped by default. Capped only here, at the MCP-tool layer, not
+# inside compute_diff/_compute_full_diff themselves - the CLI's `aletheore
+# diff`/`--full` are a human reading a terminal (no token cost to scrolling)
+# or feed `--fail-on-new-*` CI gating, which needs the real, complete count
+# to be correct; truncating there would silently hide a violation instead
+# of just a display inconvenience.
+_CHANGES_MAX_ITEMS = 200
+
+# (category key, sub-keys that are lists of findings) for every section the
+# curated diff can return. static_analysis also has unexpected_tool_skips
+# (tool names, not findings) - deliberately left uncapped, it's small by
+# construction.
+_CURATED_DIFF_LIST_SECTIONS = (
+    ("secrets", ("new", "resolved")),
+    ("history_secrets", ("new", "resolved")),
+    ("vulnerabilities", ("new", "resolved")),
+    ("static_analysis", ("new", "resolved")),
+    ("layer_violations", ("new", "resolved")),
+    ("endpoints", ("new", "resolved")),
+)
+
+
+def _cap_list(items: list, max_items: int) -> tuple[list, bool]:
+    if max_items <= 0 or len(items) <= max_items:
+        return items, False
+    return items[:max_items], True
+
+
+def _cap_diff(diff: dict, full: bool, max_items: int) -> dict:
+    if full:
+        # Copy and patch, not rebuild from just these three keys - mirrors
+        # the curated branch below, which mutates in place and keeps
+        # everything. Real audit finding: a from-scratch {added: ..., ...}
+        # dict silently drops any key compute_diff(full=True) might ever
+        # add beyond these three (it only returns these today, but nothing
+        # enforces that staying true).
+        capped = dict(diff)
+        for key in ("added", "removed", "changed"):
+            items, truncated = _cap_list(diff.get(key, []), max_items)
+            capped[key] = items
+            capped[f"{key}_truncated"] = truncated
+        return capped
+    for category, subkeys in _CURATED_DIFF_LIST_SECTIONS:
+        block = diff.get(category)
+        if not isinstance(block, dict):
+            continue
+        for subkey in subkeys:
+            items = block.get(subkey)
+            if not isinstance(items, list):
+                continue
+            capped_items, truncated = _cap_list(items, max_items)
+            block[subkey] = capped_items
+            if truncated:
+                block[f"{subkey}_truncated"] = True
+    return diff
+
+
 def _register_changes_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_changes", annotations=READ_ONLY_ANNOTATIONS)
-    def aletheore_changes(full: bool = False) -> str:
-        """What changed between the two most recent scans of this repo."""
+    def aletheore_changes(full: bool = False, max_items: int = _CHANGES_MAX_ITEMS) -> str:
+        """What changed between the two most recent scans of this repo.
+
+        full: the default is a curated summary (secrets/vulnerabilities/
+        static analysis/layer violations/endpoints); full=True is the raw
+        path-level diff instead. Either way each findings list is capped at
+        max_items (default 200, 0 for everything) with a *_truncated flag -
+        a scan that freshly enables a check, or a change that introduces
+        many findings at once, can otherwise be unbounded."""
         snapshots = list_snapshots(repo_path)
         if len(snapshots) < 2:
             return _toon_result({"message": "no prior snapshot to compare against"})
@@ -546,14 +690,51 @@ def _register_changes_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
             except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
                 return _toon_result({"error": str(exc)})
         old, new = loaded
-        return _toon_result(compute_diff(old, new, full=full))
+        diff = _cap_diff(compute_diff(old, new, full=full), full, max_items)
+        return _toon_result(diff)
+
+
+# Real audit finding: imports/imported_by were returned raw with no cap -
+# a 255-dependent hub (this repo's own scan_worker/jobs.py) renders to 19.2k
+# characters. Unlike aletheore_list, ranking helps here: the agent is asking
+# "what does this module touch", not hunting one exact identifier, so
+# showing the most structurally central dependents first (by their own
+# import+imported_by degree - a cheap, no-iteration proxy for Aider repo-
+# map's PageRank) is more useful than an arbitrary prefix of evidence's own
+# list order.
+_NEIGHBORHOOD_MAX_ITEMS = 20
+
+
+def _module_degree(by_path: dict[str, dict], module_path: str) -> int:
+    module = by_path.get(module_path)
+    if module is None:
+        return 0
+    return len(module.get("imports") or []) + len(module.get("imported_by") or [])
+
+
+def _rank_and_cap(
+    by_path: dict[str, dict], paths: list[str], max_items: int
+) -> tuple[list[str], bool]:
+    if max_items <= 0 or len(paths) <= max_items:
+        return paths, False
+    ranked = sorted(paths, key=lambda p: _module_degree(by_path, p), reverse=True)
+    return ranked[:max_items], True
 
 
 def _register_neighborhood_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_neighborhood", annotations=READ_ONLY_ANNOTATIONS)
     @_guard_evidence_read_errors
-    def aletheore_neighborhood(target: str) -> str:
-        """A module's imports, dependents, and cluster in one call."""
+    def aletheore_neighborhood(target: str, max_items: int = _NEIGHBORHOOD_MAX_ITEMS) -> str:
+        """A module's imports, dependents, and cluster in one call.
+
+        max_items caps imports/imported_by (default 20): a module with more
+        than that many is trimmed to the ones most central to the
+        dependency graph (ranked by each dependent's own import+imported_by
+        count), with a *_truncated flag and a *_total count - the ranking
+        can drop a real direct dependency in favor of an unrelated but more
+        central hub, so *_total says how much was cut rather than leaving
+        that invisible behind a bare boolean. Pass max_items=0 for
+        everything."""
         evidence = read_evidence(repo_path)
         # find_imports/find_imported_by raise ModuleNotFoundInEvidenceError for the
         # same reason find_cluster below does (unknown target) - unlike cluster,
@@ -568,11 +749,18 @@ def _register_neighborhood_tool(mcp_instance: MCPServer, repo_path: Path) -> Non
             cluster = find_cluster(evidence, target)
         except ModuleNotFoundInEvidenceError:
             cluster = None
+        by_path = {m["path"]: m for m in evidence["repository"]["modules"] if m.get("path")}
+        shown_imports, imports_truncated = _rank_and_cap(by_path, imports, max_items)
+        shown_imported_by, imported_by_truncated = _rank_and_cap(by_path, imported_by, max_items)
         return _toon_result(
             {
                 "target": target,
-                "imports": imports,
-                "imported_by": imported_by,
+                "imports": shown_imports,
+                "imports_truncated": imports_truncated,
+                "imports_total": len(imports),
+                "imported_by": shown_imported_by,
+                "imported_by_truncated": imported_by_truncated,
+                "imported_by_total": len(imported_by),
                 "cluster": cluster,
             }
         )
@@ -639,24 +827,49 @@ _LIST_KIND_TO_FUNCTION = {
     "branches": list_branches,
 }
 
+# Real audit finding: list_modules returns every module path with no cap at
+# all - 570 modules renders to 27.4k characters on this repo, the single
+# largest unbounded-MCP-response case found (bigger than the symbol_source
+# and neighborhood blowups fixed alongside this). Unlike neighborhood,
+# relevance-ranking would actively hurt this tool's one job (finding the
+# exact identifier another tool's `target` argument needs) - a "most
+# central module" isn't more likely to be the one the agent is looking for.
+# `filter` lets the agent narrow by substring before the cap ever matters;
+# `max_items` is the backstop for when it doesn't.
+_LIST_MAX_ITEMS = 200
+
 
 def _register_list_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_list", annotations=READ_ONLY_ANNOTATIONS)
     @_guard_evidence_read_errors
-    def aletheore_list(kind: str) -> str:
+    def aletheore_list(kind: str, filter: str | None = None, max_items: int = _LIST_MAX_ITEMS) -> str:
         """Lists the valid names/identifiers for one evidence collection, so
         other tools' exact-match `target` arguments can be filled in
         correctly. kind: one of 'modules' (file paths, for aletheore_imports/
         _imported_by/_symbols/_secrets/_cluster/_neighborhood/_symbol_source's
         module argument), 'clusters' (architecture cluster ids), or
-        'branches' (git branch names, for aletheore_branch)."""
+        'branches' (git branch names, for aletheore_branch).
+        filter: optional case-insensitive substring to narrow 'modules'
+        results before the cap (e.g. filter="jobs" instead of scrolling past
+        hundreds of unrelated paths); ignored for 'clusters'/'branches'.
+        max_items caps the result (default 200); 0 returns everything."""
         func = _LIST_KIND_TO_FUNCTION.get(kind)
         if func is None:
             return _toon_result(
                 {"error": f"unknown kind {kind!r} - expected one of {sorted(_LIST_KIND_TO_FUNCTION)}"}
             )
         evidence = read_evidence(repo_path)
-        return _toon_result(func(evidence))
+        items = func(evidence)
+        if kind == "modules" and filter:
+            needle = filter.lower()
+            items = [path for path in items if needle in path.lower()]
+        # Real audit finding (Flash Review on this PR): always the same
+        # {items, total, truncated} shape, never a bare list for the small
+        # case - a client that parses the result as a list would fail
+        # exactly on the large repos this cap exists for.
+        truncated = 0 < max_items < len(items)
+        shown = items[:max_items] if truncated else items
+        return _toon_result({"items": shown, "total": len(items), "truncated": truncated})
 
 
 def _register_overview_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
@@ -743,18 +956,87 @@ def _register_ast_pattern_tool(mcp_instance: MCPServer, repo_path: Path) -> None
             return _toon_result({"error": f"invalid tree-sitter query: {exc}"})
 
 
+def _register_locate_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+    @mcp_instance.tool(name="aletheore_locate", annotations=READ_ONLY_ANNOTATIONS)
+    @_guard_evidence_read_errors
+    def aletheore_locate(query: str) -> str:
+        """Find where something is defined and see the code, in one call. Pass the names you are looking for as
+        plain words (function, class or variable names, e.g. "write_usage HelpFormatter"). Returns the functions
+        whose bodies contain those names, each as a `path::Name Lstart-end` header followed by its source (up to 40
+        lines each), so you usually do not need to read the file or call another tool for the same code."""
+        return locate_report(
+            read_evidence(repo_path), repo_path, query,
+            no_match_hint="try aletheore_search with a literal or regex pattern",
+        )
+
+
+_SYMBOL_SOURCE_DEFAULT_MAX_LINES = 120
+
+
+def _render_symbol_source(evidence: dict, found: dict, max_lines: int) -> str:
+    # Real audit finding (Flash Review): `max_lines <= 0` silently treated
+    # any negative value the same as the documented "0 means everything"
+    # sentinel, so a caller computing a limit arithmetically (e.g. a
+    # subtraction that goes negative) got the uncapped response this cap
+    # exists to prevent, with no error. Only 0 is "everything"; anything
+    # else negative falls back to the tool's own default instead.
+    if max_lines < 0:
+        max_lines = _SYMBOL_SOURCE_DEFAULT_MAX_LINES
+    header = f"{found['module']}::{found['symbol']} L{found['start_line']}-{found['end_line']}"
+    lines = found["source"].split("\n")
+    if max_lines == 0 or len(lines) <= max_lines:
+        return f"{header}\n{found['source']}"
+    module = next((m for m in evidence["repository"]["modules"] if m["path"] == found["module"]), {})
+    symbols = module.get("symbols", {})
+    start, end = found["start_line"], found["end_line"]
+    is_class = any(c["name"] == found["symbol"] and c["start_line"] == start for c in symbols.get("classes", []))
+    all_functions = symbols.get("functions", [])
+    methods = [
+        f
+        for f in all_functions
+        if f["start_line"] > start
+        and f["end_line"] <= end
+        # Real audit finding (Flash Review): a closure defined inside a
+        # method (e.g. `def method(self): def helper(): ...`) is its own
+        # entry in symbols.functions, nested entirely within its enclosing
+        # method's range - without this check it was listed as if it were
+        # itself a method of the class, which it isn't. A lookup by name
+        # still resolved it correctly either way (it's a real, independently
+        # addressable symbol); this only fixes what the summary calls it.
+        and not any(
+            other is not f and other["start_line"] <= f["start_line"] and other["end_line"] >= f["end_line"]
+            for other in all_functions
+        )
+    ]
+    if is_class and methods:
+        first_method = min(m["start_line"] for m in methods)
+        head = lines[: max(1, min(first_method - start, max_lines // 2))]
+        listing = ", ".join(f"{m['name']} L{m['start_line']}-{m['end_line']}" for m in methods)
+        return (
+            f"{header}\n" + "\n".join(head) + f"\n... methods: {listing}\n"
+            f"... ({len(lines) - len(head)} more lines; ask for one method by name, or pass max_lines=0 for all)"
+        )
+    shown = lines[:max_lines]
+    return f"{header}\n" + "\n".join(shown) + f"\n... ({len(lines) - max_lines} more lines; pass max_lines=0 for all)"
+
+
 def _register_symbol_source_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_symbol_source", annotations=READ_ONLY_ANNOTATIONS)
     @_guard_evidence_read_errors
-    def aletheore_symbol_source(module: str, symbol: str) -> str:
+    def aletheore_symbol_source(
+        module: str, symbol: str, max_lines: int = _SYMBOL_SOURCE_DEFAULT_MAX_LINES
+    ) -> str:
         """Exact source text for one named function/class, with resolved line bounds.
 
         Two separate arguments, not a combined "path::name" - module: the
         file path exactly as it appears in evidence (e.g. "src/app.py").
-        symbol: the function or class name alone (e.g. "my_function")."""
+        symbol: the function or class name alone (e.g. "my_function").
+        max_lines: a longer symbol is cut (a long class is shown as its head plus a list of its methods
+        with line ranges, ask for one method by name); 0 returns everything."""
         evidence = read_evidence(repo_path)
         try:
-            return _toon_result(find_symbol_source(evidence, repo_path, module, symbol))
+            found = find_symbol_source(evidence, repo_path, module, symbol)
+            return _render_symbol_source(evidence, found, max_lines)
         except (ModuleNotFoundInEvidenceError, SymbolNotFoundInEvidenceError) as exc:
             return _toon_result({"error": str(exc)})
 
@@ -1108,6 +1390,7 @@ def build_server(
     answer_adapter: AgentAdapter | None = None,
     allow: frozenset[str] | None = None,
     watch: bool = False,
+    profile: str = "full",
 ) -> MCPServer:
     """Assemble the MCP server, registering only tools whose effects are permitted.
 
@@ -1123,9 +1406,35 @@ def build_server(
     also needs the `write` effect, the same permission aletheore_scan needs to
     rewrite .aletheore/, so an operator who withheld write gets no watcher.
     """
+    if profile not in ("full", "nav"):
+        raise ValueError(f"unknown MCP profile {profile!r}; choose full or nav")
     effects = allowed_effects(os.environ.get(_ALLOW_ENV_VAR)) if allow is None else allow
 
-    mcp_instance = MCPServer("aletheore", instructions=SERVER_INSTRUCTIONS)
+    mcp_instance = MCPServer("aletheore", instructions=NAV_INSTRUCTIONS if profile == "nav" else SERVER_INSTRUCTIONS)
+    # A tool that returns a string would otherwise also send a JSON-wrapped structured copy, and the model is shown
+    # that copy with every quote and newline escaped again. One text result per call.
+    #
+    # Flash Review flagged this instance-attribute patch as fragile, uncertain whether MCPServer.tool even accepts
+    # structured_output (if not, every registration below would TypeError at startup). Checked directly:
+    # inspect.signature(MCPServer.tool) shows `structured_output: bool | None = None` as a real, stable parameter -
+    # not a private/unstable one this library could drop silently. The patch also runs here, before every single
+    # _register_*_tool call below (both profiles), so nothing in this function can have captured the unpatched
+    # mcp_instance.tool first.
+    register_tool = mcp_instance.tool
+
+    def tool_without_structured_copy(*args, **kwargs):
+        kwargs.setdefault("structured_output", False)
+        return register_tool(*args, **kwargs)
+
+    mcp_instance.tool = tool_without_structured_copy
+    if profile == "nav":
+        # Three tools, small enough to load up front instead of behind a search step: find code, read one symbol,
+        # or search literally. Everything else needs the full profile.
+        _register_locate_tool(mcp_instance, repo_path)
+        _register_symbol_source_tool(mcp_instance, repo_path)
+        _register_search_tool(mcp_instance, repo_path)
+        return mcp_instance
+    _register_locate_tool(mcp_instance, repo_path)
     _register_query_wrapper_tools(mcp_instance, repo_path)
     _register_changes_tool(mcp_instance, repo_path)
     _register_neighborhood_tool(mcp_instance, repo_path)
