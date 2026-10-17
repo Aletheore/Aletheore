@@ -1,8 +1,12 @@
+from __future__ import annotations
+
 import time
 
-import httpx
 
+from aletheore._lazy import lazy_module
 from aletheore.toon_encoding import ToonEncodingError, to_toon
+
+httpx = lazy_module("httpx")
 
 
 class ManagedAuditError(Exception):
