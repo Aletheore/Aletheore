@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import hashlib
 import ipaddress
 import os
@@ -10,17 +12,19 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-import httpx
 import lancedb
 from lancedb.index import FTS
 from tokenizers import Tokenizer
 
+from aletheore._lazy import lazy_module
 from aletheore.credentials import (
     DEFAULT_CREDENTIALS_PATH,
     HOSTED_EMBEDDINGS_DISCLOSURE,
     get_api_key,
     has_api_key,
 )
+
+httpx = lazy_module("httpx")
 
 FALLBACK_CHUNK_MAX_LINES = 200
 DEFAULT_EMBEDDING_BASE_URL = "http://localhost:11434/v1"

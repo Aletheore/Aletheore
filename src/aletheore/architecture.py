@@ -1,9 +1,6 @@
 import json
 from pathlib import Path
 
-import networkx as nx
-from networkx.algorithms.community import greedy_modularity_communities
-
 from aletheore.repo_config import load_repo_config
 from aletheore.wiki_diagrams import _ambiguous_edges
 
@@ -93,6 +90,9 @@ def build_clusters(
     edges = [
         (a, b) for a, b in dependency_graph["edges"] if a in kept and b in kept
     ]
+
+    import networkx as nx
+    from networkx.algorithms.community import greedy_modularity_communities
 
     graph = nx.Graph()
     graph.add_nodes_from(nodes)
