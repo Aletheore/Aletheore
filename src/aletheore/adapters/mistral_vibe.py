@@ -25,7 +25,10 @@ class MistralVibeAdapter(AgentAdapter):
         # jobs.py's _git_path() and the scanner wrappers' shutil.which()
         # fixes).
         mistral_vibe_path = shutil.which("mistral-vibe")
-        mistral_vibe_path = os.path.abspath(mistral_vibe_path) if mistral_vibe_path else "mistral-vibe"
+        if not mistral_vibe_path:
+            # Never fall back to the bare name: it would be re-resolved against PATH inside the untrusted cwd.
+            raise AdapterInvocationError("mistral-vibe is not installed or not on PATH")
+        mistral_vibe_path = os.path.abspath(mistral_vibe_path)
         try:
             # --auto-approve, like codex's --sandbox workspace-write, lets
             # this write .aletheore/audit-report.md itself per the manual's

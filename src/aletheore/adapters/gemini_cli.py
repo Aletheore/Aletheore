@@ -24,7 +24,10 @@ class GeminiCliAdapter(AgentAdapter):
         # (Strix security review, 2026-10-15; same class as jobs.py's
         # _git_path() and the scanner wrappers' shutil.which() fixes).
         gemini_path = shutil.which("gemini")
-        gemini_path = os.path.abspath(gemini_path) if gemini_path else "gemini"
+        if not gemini_path:
+            # Never fall back to the bare name: it would be re-resolved against PATH inside the untrusted cwd.
+            raise AdapterInvocationError("gemini is not installed or not on PATH")
+        gemini_path = os.path.abspath(gemini_path)
         try:
             result = subprocess.run(
                 [gemini_path, "-p", instruction],

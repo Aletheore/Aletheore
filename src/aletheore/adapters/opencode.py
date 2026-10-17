@@ -24,7 +24,10 @@ class OpenCodeAdapter(AgentAdapter):
         # jobs.py's _git_path() and the scanner wrappers' shutil.which()
         # fixes).
         opencode_path = shutil.which("opencode")
-        opencode_path = os.path.abspath(opencode_path) if opencode_path else "opencode"
+        if not opencode_path:
+            # Never fall back to the bare name: it would be re-resolved against PATH inside the untrusted cwd.
+            raise AdapterInvocationError("opencode is not installed or not on PATH")
+        opencode_path = os.path.abspath(opencode_path)
         try:
             result = subprocess.run(
                 [opencode_path, "run", instruction],

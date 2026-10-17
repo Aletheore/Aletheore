@@ -95,3 +95,25 @@ def test_cli_adapter_invoke_resolves_which_to_an_absolute_path(adapter_cls, bina
     args, _ = run.call_args
     assert os.path.isabs(args[0][0])
     assert args[0][0] != relative_path
+
+
+@pytest.mark.parametrize(
+    ("module_name", "adapter_cls_name"),
+    [
+        ("aletheore.adapters.claude_code", "ClaudeCodeAdapter"),
+        ("aletheore.adapters.codex_cli", "CodexCliAdapter"),
+        ("aletheore.adapters.gemini_cli", "GeminiCliAdapter"),
+        ("aletheore.adapters.grok_build", "GrokBuildAdapter"),
+        ("aletheore.adapters.mistral_vibe", "MistralVibeAdapter"),
+        ("aletheore.adapters.opencode", "OpenCodeAdapter"),
+    ],
+)
+def test_invoke_refuses_to_fall_back_to_a_bare_binary_name_when_which_finds_nothing(module_name, adapter_cls_name):
+    import importlib
+
+    module = importlib.import_module(module_name)
+    adapter = getattr(module, adapter_cls_name)()
+    with patch(f"{module_name}.shutil.which", return_value=None), patch(f"{module_name}.subprocess.run") as run:
+        with pytest.raises(AdapterInvocationError, match="not installed or not on PATH"):
+            adapter.invoke("do the audit", cwd="/some/untrusted/repo")
+    run.assert_not_called()

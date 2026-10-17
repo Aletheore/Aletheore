@@ -23,7 +23,10 @@ class ClaudeCodeAdapter(AgentAdapter):
         # (Strix security review, 2026-10-15; same class as jobs.py's
         # _git_path() and the scanner wrappers' shutil.which() fixes).
         claude_path = shutil.which("claude")
-        claude_path = os.path.abspath(claude_path) if claude_path else "claude"
+        if not claude_path:
+            # Never fall back to the bare name: it would be re-resolved against PATH inside the untrusted cwd.
+            raise AdapterInvocationError("claude is not installed or not on PATH")
+        claude_path = os.path.abspath(claude_path)
         try:
             result = subprocess.run(
                 [claude_path, "-p", instruction],

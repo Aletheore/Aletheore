@@ -24,7 +24,10 @@ class GrokBuildAdapter(AgentAdapter):
         # (Strix security review, 2026-10-15; same class as jobs.py's
         # _git_path() and the scanner wrappers' shutil.which() fixes).
         grok_path = shutil.which("grok")
-        grok_path = os.path.abspath(grok_path) if grok_path else "grok"
+        if not grok_path:
+            # Never fall back to the bare name: it would be re-resolved against PATH inside the untrusted cwd.
+            raise AdapterInvocationError("grok is not installed or not on PATH")
+        grok_path = os.path.abspath(grok_path)
         try:
             result = subprocess.run(
                 [grok_path, "-p", instruction],

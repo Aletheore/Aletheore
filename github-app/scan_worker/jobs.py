@@ -399,7 +399,9 @@ def _url_without_credentials(url: str) -> str:
     return urlunsplit(parts._replace(netloc=parts.hostname))
 
 
-_CREDENTIALED_URL_RE = re.compile(r"(https?://)[^\s/@]+:[^\s/@]+@")
+# The userinfo may itself contain "@" (an unescaped one in a password): the class excludes only whitespace and
+# "/", so the match runs to the LAST "@" before the first "/" and the whole userinfo is redacted.
+_CREDENTIALED_URL_RE = re.compile(r"(https?://)[^\s/]+:[^\s/]+@")
 
 
 def _scrub_credentialed_urls(text: str) -> str:
@@ -423,12 +425,10 @@ def _git_path() -> str:
     the ollama/sh fixes elsewhere in this codebase: a bare name re-
     resolves PATH again at execution time, which could pick up a
     different binary than the one a security review of PATH would have
-    checked). Falls back to the bare name only if git genuinely isn't on
-    PATH - every function here that shells out to git already assumes
-    it's installed and lets the subprocess call fail naturally if it
-    isn't, so there's no new "git missing" handling to add; this only
-    changes which path component runs, the same already-accepted failure
-    mode either way.
+    checked). Raises FileNotFoundError if git isn't on PATH instead of falling
+    back to the bare name (which would be re-resolved against PATH inside
+    the untrusted checkout) - the same exception the bare call would have
+    raised, so callers need no new handling.
     """
     global _GIT_PATH
     if _GIT_PATH is None:
@@ -440,7 +440,11 @@ def _git_path() -> str:
         # not just the repo scanned at the moment of first resolution
         # (Strix security review, 2026-10-15).
         found = shutil.which("git")
-        _GIT_PATH = os.path.abspath(found) if found else "git"
+        if not found:
+            # Never fall back to the bare name: it would be re-resolved against PATH inside whatever repo
+            # checkout is the cwd. FileNotFoundError is what the bare call would have raised anyway.
+            raise FileNotFoundError("git was not found on PATH")
+        _GIT_PATH = os.path.abspath(found)
     return _GIT_PATH
 
 
@@ -473,10 +477,19 @@ def _run_git(args: list[str], **kwargs) -> None:
     """
     if args and args[0] == "git":
         args = [_git_path(), *args[1:]]
-    kwargs.setdefault("capture_output", True)
+    # This function is the redaction chokepoint, so a caller cannot opt out of the capture-and-scrub path:
+    # capture_output is forced on and any stdout/stderr redirect (which would conflict with it) is dropped.
+    kwargs.pop("stdout", None)
+    kwargs.pop("stderr", None)
+    kwargs["capture_output"] = True
     kwargs.setdefault("text", True)
     try:
-        subprocess.run(args, check=True, **kwargs)
+        result = subprocess.run(args, check=True, **kwargs)
+        # Captured output of a successful command is not shown, but a worker debugging a slow or partly failing
+        # job still gets it at debug level, with credentials scrubbed.
+        stderr = getattr(result, "stderr", None)
+        if isinstance(stderr, str) and stderr.strip():
+            logging.getLogger("scan_worker.jobs").debug("git stderr: %s", _scrub_credentialed_urls(stderr.strip()))
     except subprocess.CalledProcessError as exc:
         exc.cmd = [
             _url_without_credentials(arg) if isinstance(arg, str) and urlsplit(arg).username else arg

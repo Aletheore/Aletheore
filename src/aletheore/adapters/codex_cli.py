@@ -24,7 +24,10 @@ class CodexCliAdapter(AgentAdapter):
         # (Strix security review, 2026-10-15; same class as jobs.py's
         # _git_path() and the scanner wrappers' shutil.which() fixes).
         codex_path = shutil.which("codex")
-        codex_path = os.path.abspath(codex_path) if codex_path else "codex"
+        if not codex_path:
+            # Never fall back to the bare name: it would be re-resolved against PATH inside the untrusted cwd.
+            raise AdapterInvocationError("codex is not installed or not on PATH")
+        codex_path = os.path.abspath(codex_path)
         try:
             # workspace-write (not full/unrestricted) scopes codex's write
             # access to cwd - it's how codex writes .aletheore/audit-report.md

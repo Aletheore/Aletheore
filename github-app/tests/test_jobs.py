@@ -12563,13 +12563,34 @@ def test_run_git_resolves_the_bare_git_name_to_its_shutil_which_path(monkeypatch
     assert captured["kwargs"]["check"] is True
 
 
-def test_git_path_falls_back_to_the_bare_name_when_git_is_not_on_path(monkeypatch):
+def test_git_path_refuses_to_fall_back_to_the_bare_name_when_git_is_not_on_path(monkeypatch):
     from scan_worker import jobs
 
     monkeypatch.setattr(jobs.shutil, "which", lambda name: None)
     jobs._GIT_PATH = None
 
-    assert jobs._git_path() == "git"
+    with pytest.raises(FileNotFoundError):
+        jobs._git_path()
+
+
+def test_run_git_forces_capture_even_when_a_caller_asks_for_inherited_streams(monkeypatch):
+    from scan_worker import jobs
+
+    captured = {}
+    monkeypatch.setattr(jobs.subprocess, "run", lambda args, **kw: captured.update(kwargs=kw))
+
+    jobs._run_git(["/usr/bin/git", "fetch"], cwd="/tmp", capture_output=False, stdout=None, stderr=None)
+
+    assert captured["kwargs"]["capture_output"] is True
+    assert "stdout" not in captured["kwargs"] and "stderr" not in captured["kwargs"]
+
+
+def test_scrub_credentialed_urls_redacts_a_userinfo_that_contains_an_at_sign():
+    from scan_worker.jobs import _scrub_credentialed_urls
+
+    text = "fatal: unable to access 'https://x-access-token:p@ss@github.com/o/r.git/'"
+    assert "p@ss" not in _scrub_credentialed_urls(text)
+    assert "github.com/o/r.git" in _scrub_credentialed_urls(text)
 
 
 def test_git_path_resolves_a_relative_which_result_to_an_absolute_path(monkeypatch):
