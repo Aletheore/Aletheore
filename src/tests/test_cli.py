@@ -403,6 +403,9 @@ def test_main_does_not_report_when_crash_reporting_is_disabled(monkeypatch):
     assert captured == []
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows holds an open handle on a process's own cwd; rmdir() on it raises PermissionError"
+)
 def test_main_exits_cleanly_without_reporting_when_cwd_was_deleted(
     monkeypatch, tmp_path, capsys
 ):
