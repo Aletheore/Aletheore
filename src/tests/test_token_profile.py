@@ -71,6 +71,51 @@ def test_remove_without_a_previous_apply_does_nothing(tmp_path):
     assert remove_deny(tmp_path) == []
 
 
+def test_remove_never_deletes_a_settings_file_that_already_existed_even_if_it_becomes_empty(tmp_path):
+    # Flash Review finding: a settings.json that existed (even as `{}`) before apply_deny ever ran must never
+    # be unlinked by remove_deny just because its content happens to become empty - only a file this tool
+    # itself created is safe to delete.
+    d = tmp_path / ".claude"
+    d.mkdir()
+    (d / "settings.json").write_text("{}")
+    apply_deny(tmp_path, ["Monitor"])
+    assert remove_deny(tmp_path) == ["Monitor"]
+    assert (d / "settings.json").exists()
+    assert json.loads((d / "settings.json").read_text()) == {}
+
+
+def test_remove_still_deletes_a_settings_file_it_actually_created_across_two_apply_calls(tmp_path):
+    # created_file must be remembered from the FIRST apply_deny call, not recomputed on a second one (by which
+    # point the file exists because this tool wrote it).
+    apply_deny(tmp_path, ["Monitor"])
+    apply_deny(tmp_path, ["CronCreate"])
+    assert remove_deny(tmp_path) == ["CronCreate", "Monitor"]
+    assert not (tmp_path / ".claude" / "settings.json").exists()
+
+
+def test_apply_refuses_a_hand_corrupted_sidecar_added_field(tmp_path):
+    # Flash Review finding: a hand-edited sidecar with `added` as a bare string would otherwise be iterated
+    # character by character (list("WebFetch")) instead of raising.
+    d = tmp_path / ".claude"
+    d.mkdir()
+    (d / "aletheore-tokens.json").write_text(json.dumps({"added": "Monitor"}))
+    with pytest.raises(ProfileError):
+        apply_deny(tmp_path, ["Monitor"])
+    assert not (d / "settings.json").exists()
+
+
+def test_remove_refuses_a_hand_corrupted_sidecar_added_field(tmp_path):
+    apply_deny(tmp_path, ["Monitor"])
+    d = tmp_path / ".claude"
+    sidecar = json.loads((d / "aletheore-tokens.json").read_text())
+    sidecar["added"] = "Monitor"
+    (d / "aletheore-tokens.json").write_text(json.dumps(sidecar))
+    before = (d / "settings.json").read_text()
+    with pytest.raises(ProfileError):
+        remove_deny(tmp_path)
+    assert (d / "settings.json").read_text() == before
+
+
 def stream(tools=("Bash", "Read"), usage=None, cost=0.005):
     usage = usage if usage is not None else {"input_tokens": 2, "cache_creation_input_tokens": 24000, "cache_read_input_tokens": 0}
     return "\n".join(json.dumps(e) for e in [

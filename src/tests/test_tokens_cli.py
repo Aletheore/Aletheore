@@ -47,6 +47,13 @@ def test_audit_reports_floor_and_comparison(tmp_path, monkeypatch):
     assert calls == [None, ["Monitor"]]
 
 
+def test_audit_rejects_an_unknown_compare_profile_before_spending_anything(tmp_path, monkeypatch):
+    # Flash Review finding: --compare was validated only after the first billable request had already run.
+    monkeypatch.setattr(tp, "run_audit", lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not run")))
+    r = runner.invoke(app, ["tokens", "audit", "--project", str(tmp_path), "--compare", "turbo", "--yes"])
+    assert r.exit_code == 1 and "unknown profile" in r.output
+
+
 def test_audit_asks_before_spending(tmp_path, monkeypatch):
     monkeypatch.setattr(tp, "run_audit", lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not run")))
     r = runner.invoke(app, ["tokens", "audit", "--project", str(tmp_path)], input="no\n")

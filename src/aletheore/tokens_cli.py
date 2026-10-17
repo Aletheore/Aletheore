@@ -25,10 +25,12 @@ def audit(
     compare: str = typer.Option("", "--compare", help="also measure with this profile's deny list (core or core+web)"),
     yes: bool = typer.Option(False, "--yes", help="skip the cost confirmation"),
 ) -> None:
-    n = 2 if compare else 1
-    if not _confirm(f"This sends {n} tiny `claude` request(s), about {n} cent(s) in total.", yes):
-        raise typer.Exit(1)
     try:
+        if compare and compare not in tp.PROFILES:
+            raise tp.ProfileError(f"unknown profile {compare!r}; choose one of {', '.join(tp.PROFILES)}")
+        n = 2 if compare else 1
+        if not _confirm(f"This sends {n} tiny `claude` request(s), about {n} cent(s) in total.", yes):
+            raise typer.Exit(1)
         before = tp.run_audit(project)
         typer.echo(f"tools loaded: {len(before.tools)}")
         typer.echo(f"ENABLE_TOOL_SEARCH: {os.environ.get('ENABLE_TOOL_SEARCH', 'unset')}")
@@ -59,7 +61,7 @@ def profile(
         typer.echo(f"profile {name} will add these to permissions.deny in {project / '.claude' / 'settings.json'}:")
         typer.echo(json.dumps(deny, indent=2))
         typer.echo("Undo any time with: aletheore tokens profile off")
-        if not _confirm("", yes):
+        if not _confirm(f"Apply profile {name}?", yes):
             typer.echo("cancelled; nothing was changed")
             raise typer.Exit(1)
         added = tp.apply_deny(project, deny)

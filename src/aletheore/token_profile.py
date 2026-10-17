@@ -65,9 +65,22 @@ def _write(path: Path, data: dict) -> None:
     os.replace(tmp, path)
 
 
+def _validated_added(sidecar: dict, sidecar_path: Path) -> list[str]:
+    """The sidecar's own record of what it added - never trusted blindly, since a hand-edited sidecar with
+    `added` as a bare string would otherwise be iterated character by character (`list("WebFetch")`), silently
+    corrupting both which entries get removed and the file this call reports having removed."""
+    added = sidecar.get("added", [])
+    if not isinstance(added, list) or not all(isinstance(t, str) for t in added):
+        raise ProfileError(f"{sidecar_path}: 'added' is not a list of strings; nothing was changed")
+    return added
+
+
 def apply_deny(project: Path, deny: list[str]) -> list[str]:
     """Merge deny entries into the project's settings. Returns the entries this call added."""
     settings_path, sidecar_path = _paths(project)
+    # Recorded so `remove_deny` only ever unlinks a settings.json this tool itself created - never one that
+    # already existed, even if its content happens to become empty once this tool's own entries are removed.
+    settings_existed = settings_path.exists()
     settings = _load(settings_path)
     sidecar = _load(sidecar_path)
     perms = settings.setdefault("permissions", {})
@@ -76,10 +89,14 @@ def apply_deny(project: Path, deny: list[str]) -> list[str]:
     existing = perms.get("deny", [])
     if not isinstance(existing, list):
         raise ProfileError(f"{settings_path}: 'permissions.deny' is not a list; nothing was changed")
+    previously_added = _validated_added(sidecar, sidecar_path)
     added = [t for t in deny if t not in existing]
     perms["deny"] = existing + added
     _write(settings_path, settings)
-    _write(sidecar_path, {"added": sorted(set(sidecar.get("added", [])) | set(added))})
+    _write(sidecar_path, {
+        "added": sorted(set(previously_added) | set(added)),
+        "created_file": sidecar.get("created_file", not settings_existed),
+    })
     return added
 
 
@@ -88,7 +105,9 @@ def remove_deny(project: Path) -> list[str]:
     settings_path, sidecar_path = _paths(project)
     if not sidecar_path.exists():
         return []
-    added = list(_load(sidecar_path).get("added", []))
+    sidecar = _load(sidecar_path)
+    added = _validated_added(sidecar, sidecar_path)
+    created_file = sidecar.get("created_file", False)
     settings = _load(settings_path)
     perms = settings.get("permissions", {})
     deny = [t for t in perms.get("deny", []) if t not in added]
@@ -100,8 +119,12 @@ def remove_deny(project: Path) -> list[str]:
         settings.pop("permissions", None)
     if settings:
         _write(settings_path, settings)
-    elif settings_path.exists():
+    elif created_file and settings_path.exists():
+        # Only delete a settings.json this tool created itself - one that pre-existed (even as `{}`) is the
+        # user's file to keep, so it gets written back empty instead of removed.
         settings_path.unlink()
+    elif settings_path.exists():
+        _write(settings_path, settings)
     sidecar_path.unlink()
     return added
 
