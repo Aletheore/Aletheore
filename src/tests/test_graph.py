@@ -1136,3 +1136,37 @@ def test_build_module_graph_java_package_private_class_is_not_public(tmp_path):
     symbols = _java_symbols(repo)
 
     assert symbols["Internal"]["is_public"] is False
+
+
+def test_python_from_import_of_exported_class_does_not_match_module_by_case(tmp_path, monkeypatch):
+    # sympy: `from sympy.physics.vector import Point` where Point is a class
+    # exported by vector/__init__.py and the real module is vector/point.py.
+    # On a case-insensitive filesystem (macOS) Path.exists() for
+    # vector/Point.py is True, so the name was wrongly treated as a submodule.
+    repo = tmp_path / "repo"
+    vector = repo / "pkg" / "vector"
+    vector.mkdir(parents=True)
+    (repo / "pkg" / "__init__.py").write_text("")
+    (vector / "__init__.py").write_text("from .point import Point\n")
+    (vector / "point.py").write_text("class Point:\n    pass\n")
+    (repo / "pkg" / "body.py").write_text("from pkg.vector import Point\n")
+
+    # Simulate a case-insensitive filesystem on any host.
+    real_exists = Path.exists
+
+    def insensitive_exists(self, *args, **kwargs):
+        if real_exists(self, *args, **kwargs):
+            return True
+        parent = self.parent
+        if not real_exists(parent):
+            return False
+        return any(child.name.lower() == self.name.lower() for child in parent.iterdir())
+
+    monkeypatch.setattr(Path, "exists", insensitive_exists)
+
+    modules, _graph, _unparseable = build_module_graph(repo)
+    by_path = {m["path"]: m for m in modules}
+
+    assert by_path["pkg/body.py"]["imports"] == ["pkg/vector/__init__.py"]
+    assert "pkg/body.py" in by_path["pkg/vector/__init__.py"]["imported_by"]
+    assert by_path["pkg/vector/point.py"]["imported_by"] == ["pkg/vector/__init__.py"]

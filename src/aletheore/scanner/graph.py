@@ -3124,12 +3124,39 @@ def _python_source_roots(repo_path: Path) -> list[Path]:
     return sorted(roots, key=lambda p: (len(p.parts), str(p)))
 
 
+def _exists_exact_case(repo_path: Path, candidate: Path) -> bool:
+    """True only if candidate exists AND every path component under repo_path
+    matches the on-disk spelling. A plain exists() is case-insensitive on
+    macOS/Windows, so `from pkg import Point` (a class re-exported by
+    pkg/__init__.py) would otherwise "resolve" to pkg/Point.py when the real
+    module is pkg/point.py - attaching the edge to the wrong file name.
+    """
+    if not candidate.exists():
+        return False
+    try:
+        parts = candidate.relative_to(repo_path).parts
+    except ValueError:
+        parts = candidate.parts[-1:]
+    directory = candidate.parents[len(parts) - 1] if parts else candidate.parent
+    for part in parts:
+        if part in (".", ".."):
+            directory = directory / part
+            continue
+        try:
+            if part not in os.listdir(directory):
+                return False
+        except OSError:
+            return False
+        directory = directory / part
+    return True
+
+
 def _module_or_package_path(repo_path: Path, as_path: Path) -> str | None:
     candidate_module = Path(as_path.as_posix() + ".py")
     candidate_package = as_path / "__init__.py"
-    if candidate_module.exists():
+    if _exists_exact_case(repo_path, candidate_module):
         return _rel(repo_path, candidate_module)
-    if candidate_package.exists():
+    if _exists_exact_case(repo_path, candidate_package):
         return _rel(repo_path, candidate_package)
     return None
 
