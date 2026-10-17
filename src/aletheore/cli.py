@@ -2046,6 +2046,10 @@ def query(
 )
 def cycles(
     path: str = typer.Argument(".", help="repository path"),
+    exclude: list[str] = typer.Option(
+        [], "--exclude", help="leave out files under a directory with this exact name, or with this exact file name; repeatable"
+    ),
+    under: list[str] = typer.Option([], "--under", help="only list files below this directory; repeatable"),
     path_option: Optional[str] = _PATH_OPTION,
 ) -> None:
     from aletheore.cycles import cycles_report
@@ -2056,7 +2060,7 @@ def cycles(
     except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
         print(f"error: {exc} (run 'aletheore scan' first)", file=sys.stderr)
         raise typer.Exit(code=1)
-    print(cycles_report(evidence, repo))
+    print(cycles_report(evidence, repo, exclude, under))
 
 
 @app.command(help="compare two air.json files")
