@@ -122,10 +122,15 @@ def _files_changed_since_scan(repo_path: Path, paths: list[str], scanned_at: obj
     changed = []
     for rel in paths:
         try:
-            if (Path(repo_path) / rel).stat().st_mtime > scan_time:
-                changed.append(rel)
+            mtime = (Path(repo_path) / rel).stat().st_mtime
         except OSError:
+            # Could not check - most commonly because the file was deleted after the scan. "Could not check"
+            # must never look like "nothing changed", so this counts as changed too (same fix applied to the
+            # identical helper in tests_for.py per a Flash Review finding there).
+            changed.append(rel)
             continue
+        if mtime > scan_time:
+            changed.append(rel)
     return changed
 
 
