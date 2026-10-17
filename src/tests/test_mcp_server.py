@@ -815,9 +815,15 @@ async def test_aletheore_changes_curated_default_caps_a_large_findings_list(tmp_
     server = build_server(repo)
 
     old = minimal_air_evidence()
+    # A real scan always carries a genuinely distinct scanned_at (the wall-clock time it finished); giving old
+    # and new the same one (both "" from minimal_air_evidence()) made list_snapshots()'s ordering fall through
+    # entirely to filesystem mtime as the tiebreaker - which a Windows CI runner does not reliably resolve at
+    # the sub-write granularity two back-to-back save_snapshot() calls need, silently swapping old and new.
+    old["scanned_at"] = "2026-07-20T00:00:00+00:00"
     save_snapshot(old, repo)
 
     new = minimal_air_evidence()
+    new["scanned_at"] = "2026-07-21T00:00:00+00:00"
     new["security"]["secrets"]["findings"] = [
         {"path": f"config_{i}.py", "line": 1, "pattern": "aws_access_key_id", "match_preview": "AKIA...MNOP"}
         for i in range(5)
@@ -845,9 +851,15 @@ async def test_aletheore_changes_full_caps_a_large_diff(tmp_path):
     server = build_server(repo)
 
     old = minimal_air_evidence()
+    # A real scan always carries a genuinely distinct scanned_at (the wall-clock time it finished); giving old
+    # and new the same one (both "" from minimal_air_evidence()) made list_snapshots()'s ordering fall through
+    # entirely to filesystem mtime as the tiebreaker - which a Windows CI runner does not reliably resolve at
+    # the sub-write granularity two back-to-back save_snapshot() calls need, silently swapping old and new.
+    old["scanned_at"] = "2026-07-20T00:00:00+00:00"
     save_snapshot(old, repo)
 
     new = minimal_air_evidence()
+    new["scanned_at"] = "2026-07-21T00:00:00+00:00"
     new["repository"]["modules"] = [
         {
             "path": f"mod_{i}.py",
@@ -875,9 +887,15 @@ async def test_aletheore_changes_full_max_items_zero_returns_everything(tmp_path
     server = build_server(repo)
 
     old = minimal_air_evidence()
+    # A real scan always carries a genuinely distinct scanned_at (the wall-clock time it finished); giving old
+    # and new the same one (both "" from minimal_air_evidence()) made list_snapshots()'s ordering fall through
+    # entirely to filesystem mtime as the tiebreaker - which a Windows CI runner does not reliably resolve at
+    # the sub-write granularity two back-to-back save_snapshot() calls need, silently swapping old and new.
+    old["scanned_at"] = "2026-07-20T00:00:00+00:00"
     save_snapshot(old, repo)
 
     new = minimal_air_evidence()
+    new["scanned_at"] = "2026-07-21T00:00:00+00:00"
     new["repository"]["modules"] = [
         {
             "path": f"mod_{i}.py",
