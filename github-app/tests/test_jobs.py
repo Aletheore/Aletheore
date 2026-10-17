@@ -9666,6 +9666,62 @@ def test_run_initial_scan_job_syncs_code_graph_while_still_holding_repo_checkout
     assert call_order == ["lock_enter", "sync_git", "sync_code", "lock_exit"]
 
 
+def test_run_initial_scan_job_enqueues_air_builds_instead_of_running_them_inline(
+    bare_repo_with_two_commits, monkeypatch
+):
+    # Sentry ALETHEORE-5: the AIRview and Docs full builds ran inline inside
+    # this job's 300s job_timeout and hit it mid LLM call on a larger repo.
+    # They must be separate jobs carrying the full-build timeout.
+    from scan_worker.jobs import LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS, run_initial_scan_job
+
+    bare_path, _base_sha, head_sha = bare_repo_with_two_commits
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True
+    )
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_github_api_client", lambda *a, **k: object())
+    monkeypatch.setattr("scan_worker.jobs.fetch_default_branch_head_sha", lambda *a, **k: head_sha)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs._sync_persistent_git_graph",
+        lambda *a, **k: a[3] if len(a) > 3 else k.get("evidence"),
+    )
+    monkeypatch.setattr("scan_worker.jobs._sync_code_graph", lambda *a, **k: None)
+
+    def _no_inline_build(*args, **kwargs):
+        raise AssertionError("full build must not run inline in the initial scan job")
+
+    monkeypatch.setattr("scan_worker.jobs.run_live_wiki_full_build_job", _no_inline_build)
+    monkeypatch.setattr("scan_worker.jobs.run_live_docs_full_build_job", _no_inline_build)
+
+    enqueued: list[tuple] = []
+
+    class _FakeQueue:
+        def enqueue(self, func, **kwargs):
+            enqueued.append((func, kwargs))
+
+    monkeypatch.setattr("scan_worker.jobs._scans_queue", lambda redis_url: _FakeQueue())
+
+    run_initial_scan_job(1, "octocat/hello-world")
+
+    assert [func for func, _ in enqueued] == [
+        "scan_worker.jobs.run_live_wiki_full_build_job",
+        "scan_worker.jobs.run_live_docs_full_build_job",
+    ]
+    for _func, kwargs in enqueued:
+        assert kwargs == {
+            "job_timeout": LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS,
+            "installation_id": 1,
+            "repo_full_name": "octocat/hello-world",
+        }
+
+
 def test_run_push_scan_job_syncs_code_graph_while_still_holding_repo_checkout_lock(
     bare_repo_with_two_commits, monkeypatch
 ):
