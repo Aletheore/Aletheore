@@ -1170,3 +1170,44 @@ def test_python_from_import_of_exported_class_does_not_match_module_by_case(tmp_
     assert by_path["pkg/body.py"]["imports"] == ["pkg/vector/__init__.py"]
     assert "pkg/body.py" in by_path["pkg/vector/__init__.py"]["imported_by"]
     assert by_path["pkg/vector/point.py"]["imported_by"] == ["pkg/vector/__init__.py"]
+
+
+def test_exact_case_check_lists_each_directory_once_and_sees_new_files(tmp_path, monkeypatch):
+    import os
+
+    import aletheore.scanner.graph as graph
+
+    repo = tmp_path / "repo"
+    pkg = repo / "pkg"
+    pkg.mkdir(parents=True)
+    (pkg / "a.py").write_text("")
+    (pkg / "b.py").write_text("")
+
+    listed = []
+    real_listdir = os.listdir
+    monkeypatch.setattr(graph.os, "listdir", lambda d: listed.append(str(d)) or real_listdir(d))
+    graph._listing_at.cache_clear()
+
+    assert graph._exists_exact_case(repo, pkg / "a.py")
+    assert graph._exists_exact_case(repo, pkg / "b.py")
+    assert listed.count(str(pkg)) == 1  # second lookup in the same directory reuses the listing
+
+    (pkg / "c.py").write_text("")
+    os.utime(pkg, ns=(0, pkg.stat().st_mtime_ns + 1_000_000_000))  # a coarse filesystem clock must not hide the add
+    assert graph._exists_exact_case(repo, pkg / "c.py")
+
+
+def test_exact_case_check_verifies_discovered_components_of_a_candidate_beside_the_repo(tmp_path):
+    import aletheore.scanner.graph as graph
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sibling = tmp_path / "shared" / "lib"
+    sibling.mkdir(parents=True)
+    (sibling / "mod.py").write_text("")
+
+    assert graph._exists_exact_case(repo, sibling / "mod.py")
+    # same file, wrong-cased directory component: where the filesystem ignores case exists() is True, and the
+    # check must still reject it because the on-disk spelling is "shared".
+    wrong = tmp_path / "Shared" / "lib" / "mod.py"
+    assert not graph._exists_exact_case(repo, wrong)
