@@ -2179,6 +2179,10 @@ def healthcheck(
 config_app = typer.Typer(help="manage local CLI preferences")
 app.add_typer(config_app, name="config")
 
+from aletheore.tokens_cli import tokens_app  # noqa: E402
+
+app.add_typer(tokens_app, name="tokens")
+
 
 @config_app.command(
     "crash-reporting",
