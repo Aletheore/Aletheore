@@ -867,6 +867,9 @@ def _query(
     k: int = 10,
     symbol: str | None = None,
     language: str | None = None,
+    exclude: list[str] | None = None,
+    under: list[str] | None = None,
+    no_tests: bool = False,
 ) -> int:
     if kind not in QUERY_KIND_CHOICES:
         # Suggestion first, listing after: a typo ("secret", "hotspot") is the
@@ -1000,6 +1003,13 @@ def _query(
         print(f"error: {exc}")
         return 1
 
+    if exclude or under or no_tests:
+        from aletheore.scope_filter import SCOPABLE, scope_result
+
+        if kind not in SCOPABLE:
+            print(f"error: --under/--exclude/--no-tests are supported for: {', '.join(sorted(SCOPABLE))}")
+            return 1
+        result = scope_result(kind, result, exclude or [], under or [], no_tests)
     print(json.dumps(result, indent=2))
     return 0
 
@@ -2031,26 +2041,31 @@ def query(
         "--language",
         help="restrict 'search-codebase' to one language, e.g. python; required for 'ast-pattern'",
     ),
+    exclude: list[str] = typer.Option([], "--exclude", help="'dead-code'/'error-handling': leave out paths with this exact directory or file name; repeatable"),
+    under: list[str] = typer.Option([], "--under", help="'dead-code'/'error-handling': only paths below this directory; repeatable"),
+    no_tests: bool = typer.Option(False, "--no-tests", help="'dead-code'/'error-handling': leave out test files"),
 ) -> None:
     if kind is None:
         console.print(_query_kinds_panel())
         raise typer.Exit(code=0)
-    raise typer.Exit(code=_query(kind, target, repo_path, full, agent, k, symbol, language))
+    raise typer.Exit(code=_query(kind, target, repo_path, full, agent, k, symbol, language, exclude, under, no_tests))
 
 
 @app.command(
     help=(
         "list every file that imports a file, directly or through other imports, as one complete deduplicated list, "
-        "e.g. aletheore dependents src/click/_compat.py --under src --exclude tests"
+        "e.g. aletheore dependents src/click/_compat.py --under src --no-tests, or aletheore dependents internal/js --packages"
     )
 )
 def dependents(
-    file: str = typer.Argument(..., help="file path exactly as it appears in the scan"),
+    file: str = typer.Argument(..., help="file path exactly as it appears in the scan, or a directory to treat all its files as one package"),
     path: str = typer.Argument(".", help="repository path"),
     exclude: list[str] = typer.Option(
         [], "--exclude", help="leave out files under a directory with this exact name, or with this exact file name; repeatable"
     ),
     under: list[str] = typer.Option([], "--under", help="only list files below this directory; repeatable"),
+    no_tests: bool = typer.Option(False, "--no-tests", help="leave out test files (tests/ directories and test-shaped file names)"),
+    packages: bool = typer.Option(False, "--packages", help="list one line per directory (package) instead of one per file"),
     path_option: Optional[str] = _PATH_OPTION,
 ) -> None:
     from aletheore.dependents import DependentsError, dependents_report
@@ -2062,7 +2077,7 @@ def dependents(
         print(f"error: {exc} (run 'aletheore scan' first)")
         raise typer.Exit(code=1)
     try:
-        print(dependents_report(evidence, repo, file, exclude, under))
+        print(dependents_report(evidence, repo, file, exclude, under, no_tests, packages))
     except DependentsError as exc:
         print(f"error: {exc}")
         raise typer.Exit(code=1)
