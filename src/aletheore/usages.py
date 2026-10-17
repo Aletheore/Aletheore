@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import difflib
 import re
+import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -66,9 +67,14 @@ def _git_grep_usages(repo_path: Path, symbol: str) -> list[tuple[str, int, str]]
     `-z` NUL-delimits the pathname field, so a colon inside the path itself (legal on POSIX filesystems) can no
     longer be mistaken for the field separator. git versions differ on whether the line-number/text separator
     that follows is also NUL'd or stays a colon, so both are accepted here rather than assuming one."""
+    # Bandit B607: pass the path shutil.which just resolved, not a bare "git" - same pattern as
+    # credentials.py's icacls resolution and search_index.py's ollama/sh resolution.
+    git = shutil.which("git")
+    if not git:
+        return None
     try:
         result = subprocess.run(
-            ["git", "grep", "-n", "-w", "-I", "-F", "-z", "-e", symbol],
+            [git, "grep", "-n", "-w", "-I", "-F", "-z", "-e", symbol],
             cwd=repo_path,
             capture_output=True,
             timeout=_GIT_GREP_TIMEOUT_S,

@@ -1,4 +1,5 @@
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -156,6 +157,7 @@ def test_git_grep_parsing_accepts_either_line_text_delimiter(sep, tmp_path: Path
     assert usages._git_grep_usages(tmp_path, "f") == [("a.py", 1, "f()")]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="NTFS does not allow a colon in a filename at all")
 def test_git_grep_handles_a_colon_in_the_file_path(tmp_path: Path):
     # Flash Review finding: splitting git grep's output on ":" silently drops hits in a path containing one
     # (legal on POSIX filesystems) because the line-number field fails int() and the line is discarded.
