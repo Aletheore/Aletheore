@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -79,10 +80,24 @@ def _fetch_issues(host_url: str, project_key: str, token: str) -> list[dict]:
     issues: list[dict] = []
     page = 1
     while True:
+        # project_key defaults to the scanned directory's own name
+        # (_project_key above), not something this code can assume is
+        # URL-safe - a raw `&` in it would silently add extra query
+        # parameters (e.g. its own componentKeys), same class of bug as a
+        # missing urlencode anywhere else a caller-influenceable value
+        # reaches a URL. urlencode handles every reserved character, not
+        # just the one Strix's own mock happened to test with.
+        query = urllib.parse.urlencode(
+            {
+                "componentKeys": project_key,
+                "statuses": "OPEN,CONFIRMED,REOPENED",
+                "ps": _ISSUES_PAGE_SIZE,
+                "p": page,
+            }
+        )
         payload = _api_get(
             host_url,
-            f"/api/issues/search?componentKeys={project_key}"
-            f"&statuses=OPEN,CONFIRMED,REOPENED&ps={_ISSUES_PAGE_SIZE}&p={page}",
+            f"/api/issues/search?{query}",
             token,
             timeout=30,
         )
@@ -117,6 +132,12 @@ def check_sonarqube(
     binary = shutil.which("sonar-scanner")
     if binary is None:
         return {"checked": False, "reason": "sonar-scanner CLI not installed", "findings": []}
+    # Resolve to an absolute path before the subprocess below switches its
+    # cwd to repo_path - shutil.which() can return a path relative to a
+    # relative PATH entry, which a scanned (untrusted) repo could otherwise
+    # shadow with its own same-named executable (Strix security review,
+    # 2026-10-15).
+    binary = os.path.abspath(binary)
 
     token = os.environ.get("SONARQUBE_TOKEN", "")
     project_key = _project_key(repo_path)

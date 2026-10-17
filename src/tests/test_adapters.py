@@ -1,3 +1,4 @@
+import os
 import subprocess
 from unittest.mock import MagicMock, patch
 
@@ -45,14 +46,38 @@ def test_is_available_false_when_binary_missing(mock_which):
     assert ClaudeCodeAdapter().is_available() is False
 
 
+@patch("aletheore.adapters.claude_code.shutil.which")
 @patch("aletheore.adapters.claude_code.subprocess.run")
-def test_invoke_returns_stdout_on_success(mock_run):
+def test_invoke_returns_stdout_on_success(mock_run, mock_which):
+    mock_which.return_value = "/usr/local/bin/claude"
     mock_run.return_value = MagicMock(returncode=0, stdout="report text", stderr="")
     result = ClaudeCodeAdapter().invoke("do the audit", cwd="/some/repo")
     assert result == "report text"
     args, kwargs = mock_run.call_args
-    assert args[0][0] == "claude"
+    # Not the raw mocked string: the adapter resolves it with os.path.abspath
+    # (see test_invoke_resolves_which_to_an_absolute_path below), which
+    # normalizes an already-absolute POSIX-style path differently on
+    # Windows (drive-letter-prefixed, backslash-separated) than on POSIX
+    # (a no-op) - asserting the literal input here failed there.
+    assert args[0][0] == os.path.abspath("/usr/local/bin/claude")
     assert kwargs["cwd"] == "/some/repo"
+
+
+@patch("aletheore.adapters.claude_code.shutil.which")
+@patch("aletheore.adapters.claude_code.subprocess.run")
+def test_invoke_resolves_which_to_an_absolute_path(mock_run, mock_which):
+    # Real gap found by an independent Strix pentest pass (2026-10-15): cwd
+    # above is the repository being analyzed, which this adapter's callers
+    # can point at untrusted third-party code. A bare command name
+    # re-resolves PATH at exec time relative to the NEW cwd, so a relative
+    # PATH entry would let that repository shadow it with its own
+    # same-named executable.
+    mock_which.return_value = "relative/claude"
+    mock_run.return_value = MagicMock(returncode=0, stdout="report text", stderr="")
+    ClaudeCodeAdapter().invoke("do the audit", cwd="/some/repo")
+    args, _ = mock_run.call_args
+    assert os.path.isabs(args[0][0])
+    assert args[0][0] != "relative/claude"
 
 
 @patch("aletheore.adapters.claude_code.subprocess.run")
@@ -86,14 +111,36 @@ def test_opencode_is_available_false_when_binary_missing(mock_which):
     assert OpenCodeAdapter().is_available() is False
 
 
+@patch("aletheore.adapters.opencode.shutil.which")
 @patch("aletheore.adapters.opencode.subprocess.run")
-def test_opencode_invoke_returns_stdout_on_success(mock_run):
+def test_opencode_invoke_returns_stdout_on_success(mock_run, mock_which):
+    mock_which.return_value = "/usr/local/bin/opencode"
     mock_run.return_value = MagicMock(returncode=0, stdout="report text", stderr="")
     result = OpenCodeAdapter().invoke("do the audit", cwd="/some/repo")
     assert result == "report text"
     args, kwargs = mock_run.call_args
-    assert args[0] == ["opencode", "run", "do the audit"]
+    # See the identical note in test_invoke_returns_stdout_on_success above:
+    # os.path.abspath normalizes an already-absolute POSIX-style path
+    # differently on Windows than on POSIX.
+    assert args[0] == [os.path.abspath("/usr/local/bin/opencode"), "run", "do the audit"]
     assert kwargs["cwd"] == "/some/repo"
+
+
+@patch("aletheore.adapters.opencode.shutil.which")
+@patch("aletheore.adapters.opencode.subprocess.run")
+def test_opencode_invoke_resolves_which_to_an_absolute_path(mock_run, mock_which):
+    # Real gap found by an independent Strix pentest pass (2026-10-15): cwd
+    # above is the repository being analyzed, which this adapter's callers
+    # can point at untrusted third-party code. A bare command name
+    # re-resolves PATH at exec time relative to the NEW cwd, so a relative
+    # PATH entry would let that repository shadow it with its own
+    # same-named executable.
+    mock_which.return_value = "relative/opencode"
+    mock_run.return_value = MagicMock(returncode=0, stdout="report text", stderr="")
+    OpenCodeAdapter().invoke("do the audit", cwd="/some/repo")
+    args, _ = mock_run.call_args
+    assert os.path.isabs(args[0][0])
+    assert args[0][0] != "relative/opencode"
 
 
 @patch("aletheore.adapters.opencode.subprocess.run")

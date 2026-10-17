@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from unittest.mock import MagicMock, patch
 
@@ -18,6 +19,23 @@ def test_check_semgrep_reports_not_installed(tmp_path):
         result = check_semgrep(tmp_path)
 
     assert result == {"checked": False, "reason": "semgrep not installed", "findings": []}
+
+
+def test_check_semgrep_resolves_which_to_an_absolute_path(tmp_path):
+    # Real gap found by an independent Strix pentest pass (2026-10-15):
+    # shutil.which() can return a path relative to a relative PATH entry,
+    # and the subprocess below switches cwd to repo_path - a scanned
+    # (untrusted) repo could shadow a bare relative name with its own
+    # same-named executable and have it run with this process's privileges.
+    mock_result = _mock_run(0, stdout=json.dumps({"results": []}))
+
+    with patch("aletheore.static_analysis.semgrep_scanner.shutil.which", return_value="relative/semgrep"), \
+         patch("aletheore.static_analysis.semgrep_scanner.subprocess.run", return_value=mock_result) as mock_run:
+        check_semgrep(tmp_path)
+
+    called_cmd = mock_run.call_args[0][0]
+    assert os.path.isabs(called_cmd[0])
+    assert called_cmd[0] != "relative/semgrep"
 
 
 def test_check_semgrep_normalizes_a_real_finding_shape(tmp_path):
