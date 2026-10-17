@@ -13,7 +13,6 @@ from pathlib import Path
 import httpx
 import lancedb
 from lancedb.index import FTS
-from openai import APIConnectionError, NotFoundError, OpenAI
 from tokenizers import Tokenizer
 
 from aletheore.credentials import (
@@ -1198,6 +1197,10 @@ def embed_texts(
     confirm_fn: Callable[[], bool] | None = None,
     ollama_install_confirm_fn: Callable[[], bool] | None = None,
 ) -> list[list[float]]:
+    # Imported here, not at module level: the `openai` SDK costs ~0.4s to import
+    # and most CLI commands never embed anything.
+    from openai import APIConnectionError, NotFoundError, OpenAI
+
     client = OpenAI(base_url=base_url, api_key="not-needed")
     try:
         response = client.embeddings.create(model=model, input=texts)
