@@ -32,12 +32,18 @@ def _find_module(evidence: dict, file_path: str) -> dict:
     raise ModuleNotFoundInEvidenceError(file_path)
 
 
+def _unique(paths: list[str]) -> list[str]:
+    """Each file once, in first-seen order. Evidence lists a file once per import statement, so a module that
+    imports another in ten places showed up ten times - tokens an agent paid for and then had to dedupe by hand."""
+    return list(dict.fromkeys(paths))
+
+
 def find_imports(evidence: dict, target: str | None) -> list[str]:
-    return _find_module(evidence, target)["imports"]
+    return _unique(_find_module(evidence, target)["imports"])
 
 
 def find_imported_by(evidence: dict, target: str | None) -> list[str]:
-    return _find_module(evidence, target)["imported_by"]
+    return _unique(_find_module(evidence, target)["imported_by"])
 
 
 def find_symbols(evidence: dict, target: str | None) -> dict:
