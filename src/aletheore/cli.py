@@ -2346,6 +2346,23 @@ def main() -> None:
         if reconfigure is not None:
             reconfigure(encoding="utf-8", errors="backslashreplace")
 
+    # A deleted working directory (a removed git worktree, a cleaned-up
+    # scratch dir) makes os.getcwd() raise FileNotFoundError, and every
+    # command resolves a relative path (the default "." included) through
+    # it - so each one would otherwise die in Path.resolve() with a raw
+    # traceback and a crash report for what is a user environment problem,
+    # not an Aletheore bug (Sentry ALETHEORE-CLI-2). Checked once here,
+    # before Sentry initialises, so nothing is reported.
+    try:
+        os.getcwd()
+    except FileNotFoundError:
+        _stderr_console.print(
+            "[bold red]error:[/bold red] the current working directory no "
+            "longer exists. cd into an existing directory and run the "
+            "command again."
+        )
+        raise SystemExit(1)
+
     init_cli_sentry()
     if not has_shown_crash_reporting_notice():
         # Product decision (2026-10-08, closing the privacy-stance tension

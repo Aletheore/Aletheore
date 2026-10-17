@@ -403,6 +403,39 @@ def test_main_does_not_report_when_crash_reporting_is_disabled(monkeypatch):
     assert captured == []
 
 
+def test_main_exits_cleanly_without_reporting_when_cwd_was_deleted(
+    monkeypatch, tmp_path, capsys
+):
+    # Sentry ALETHEORE-CLI-2: running from a deleted directory made every
+    # command die in Path(".").resolve() and report a crash.
+    from aletheore.cli import main
+
+    doomed = tmp_path / "doomed"
+    doomed.mkdir()
+    monkeypatch.chdir(doomed)
+    doomed.rmdir()
+
+    init_calls = []
+    monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: init_calls.append(1))
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: True)
+    monkeypatch.setattr("aletheore.cli.is_crash_reporting_enabled", lambda: True)
+    app_calls = []
+    monkeypatch.setattr("aletheore.cli.app", lambda: app_calls.append(1))
+    captured = []
+    monkeypatch.setattr(
+        "aletheore.cli.sentry_sdk.capture_exception", lambda exc: captured.append(exc)
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 1
+    assert "no longer exists" in capsys.readouterr().err
+    assert init_calls == []
+    assert app_calls == []
+    assert captured == []
+
+
 def test_main_does_not_report_keyboard_interrupt(monkeypatch):
     from aletheore.cli import main
 
