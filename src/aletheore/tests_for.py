@@ -31,9 +31,22 @@ def _is_test_path(path: str) -> bool:
     return bool(_TEST_PATH.search(path))
 
 
+def _direct_importers(by_path: dict, target: str) -> set[str]:
+    return {p for p in (by_path[target].get("imported_by") or []) if p != target}
+
+
 def _transitive_importers(by_path: dict, target: str) -> list[str]:
-    """Every module that imports `target`, directly or through other imports - same walk as `dependents`."""
-    direct = {p for p in (by_path[target].get("imported_by") or []) if p != target}
+    """Every module that imports `target`, directly or through other imports - same walk as `dependents`.
+
+    Measured against a real call-tracer oracle (which test files actually execute a function from the target
+    file, not just import something that imports it) on click/marshmallow/attrs/rich: the transitive walk alone
+    has perfect recall but terrible precision (as low as 0.06) - a package's own `__init__.py` is both imported
+    by nearly every test file AND imports the target, so almost the whole test suite becomes a "transitive
+    importer" of almost everything. No fixed depth cap or fan-in cutoff tested fixed this uniformly across repos
+    (different repos need different thresholds), so `tests_for_report` reports this set separately, clearly
+    labeled as lower-confidence, instead of silently blending it into one undifferentiated list.
+    """
+    direct = _direct_importers(by_path, target)
     seen = set(direct)
     queue = sorted(direct)
     while queue:
@@ -80,7 +93,9 @@ def tests_for_report(evidence: dict, repo_path: Path, target: str) -> str:
         hint = f"; closest: {', '.join(close)}" if close else ""
         raise TestsForError(f"{target!r} is not a module in the scan{hint}")
 
-    via_imports = {p for p in _transitive_importers(by_path, target) if _is_test_path(p)}
+    direct_importers = _direct_importers(by_path, target)
+    via_imports_direct = {p for p in direct_importers if _is_test_path(p)}
+    via_imports_transitive = {p for p in _transitive_importers(by_path, target) if _is_test_path(p)}
     stem = PurePosixPath(target).stem
     via_naming = {
         m["path"]
@@ -88,8 +103,12 @@ def tests_for_report(evidence: dict, repo_path: Path, target: str) -> str:
         if m.get("path") and m["path"] != target and _matches_naming_convention(stem, m["path"])
     }
 
-    both = sorted(via_imports | via_naming)
-    only_naming = sorted(via_naming - via_imports)
+    # Split into two confidence tiers rather than one blended list: a direct import or a naming match is a strong
+    # signal, but a purely transitive import (reachable only through other files, often a package's own
+    # __init__.py) is not - see _transitive_importers' docstring for the measured precision gap.
+    high_confidence = sorted(via_imports_direct | via_naming)
+    lower_confidence = sorted(via_imports_transitive - set(high_confidence))
+    both = sorted({*high_confidence, *lower_confidence})
 
     scan_time = evidence.get("scanned_at")
     changed = _files_changed_since_scan(repo_path, [target, *both], scan_time)
@@ -109,14 +128,26 @@ def tests_for_report(evidence: dict, repo_path: Path, target: str) -> str:
             "cannot see; this says only that the two signals it checks found nothing, not that the file is untested."
         )
 
-    naming_note = f" ({len(only_naming)} by naming convention only, no import found)" if only_naming else ""
-    lines = [
-        f"{len(both)} test file(s) exercise {target}{naming_note}:",
-        *both,
-        "",
-        f"Coverage: {len(via_imports)} found via the import graph (direct or transitive), {len(via_naming)} via "
-        f"filename convention (test_{stem}, {stem}_test, {stem}.test, {stem}.spec). Not tracked: tests that reach "
-        "this file only through a fixture, a dynamic import, or a parametrize id that never names it or matches "
-        f"its filename. {fresh}.",
-    ]
+    lines: list[str] = []
+    if high_confidence:
+        lines.append(f"{len(high_confidence)} test file(s) likely exercise {target} (direct import or naming match):")
+        lines.extend(high_confidence)
+    else:
+        lines.append(f"no test file directly imports or is named for {target}, but:")
+    if lower_confidence:
+        if high_confidence:
+            lines.append("")
+        lines.append(
+            f"{len(lower_confidence)} more test file(s) reach it only through other imports - lower confidence, "
+            "some may not actually run code from this file (see Coverage):"
+        )
+        lines.extend(lower_confidence)
+    lines.append("")
+    lines.append(
+        f"Coverage: {len(via_imports_direct)} found via direct import, {len(via_naming)} via filename convention "
+        f"(test_{stem}, {stem}_test, {stem}.test, {stem}.spec), {len(lower_confidence)} more reachable only "
+        "transitively (shown separately above - a transitive import, often through a package's own __init__.py, "
+        "does not prove the file's code actually runs). Not tracked: tests that reach this file only through a "
+        f"fixture, a dynamic import, or a parametrize id that never names it or matches its filename. {fresh}."
+    )
     return "\n".join(lines)

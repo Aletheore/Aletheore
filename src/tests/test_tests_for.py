@@ -19,14 +19,16 @@ def _ev(graph: dict[str, list[str]], scanned_at: str = "2999-01-01T00:00:00+00:0
 def test_direct_importer_that_is_a_test_file_is_found(tmp_path: Path):
     graph = {"a.py": ["tests/test_a.py"], "tests/test_a.py": []}
     text = render_tests_for(_ev(graph), tmp_path, "a.py")
-    assert "1 test file(s) exercise a.py" in text and "tests/test_a.py" in text
+    assert "1 test file(s) likely exercise a.py" in text and "tests/test_a.py" in text
 
 
 def test_transitive_importer_through_another_module_is_found(tmp_path: Path):
-    # tests/test_b.py -> b.py -> a.py ; a test on b transitively covers a
+    # tests/test_b.py -> b.py -> a.py ; a test on b transitively covers a, but only via another import, so it
+    # lands in the lower-confidence tier, not the direct-import one.
     graph = {"a.py": ["b.py"], "b.py": ["tests/test_b.py"], "tests/test_b.py": []}
     text = render_tests_for(_ev(graph), tmp_path, "a.py")
     assert "tests/test_b.py" in text
+    assert "lower confidence" in text
 
 
 def test_non_test_importer_is_not_counted(tmp_path: Path):
@@ -39,14 +41,15 @@ def test_naming_convention_match_without_any_import(tmp_path: Path):
     # test_a.py never imports a.py (e.g. it only uses a pytest fixture) but still matches by name.
     graph = {"a.py": [], "test_a.py": []}
     text = render_tests_for(_ev(graph), tmp_path, "a.py")
-    assert "1 test file(s) exercise a.py (1 by naming convention only, no import found)" in text
+    assert "1 test file(s) likely exercise a.py (direct import or naming match)" in text
     assert "test_a.py" in text
+    assert "0 found via direct import, 1 via filename convention" in text
 
 
 def test_js_style_naming_conventions(tmp_path: Path):
     graph = {"foo.js": [], "foo.test.js": [], "foo_test.js": [], "foo.spec.js": []}
     text = render_tests_for(_ev(graph), tmp_path, "foo.js")
-    assert "3 test file(s) exercise foo.js" in text
+    assert "3 test file(s) likely exercise foo.js" in text
     assert "foo.test.js" in text and "foo_test.js" in text and "foo.spec.js" in text
 
 
@@ -94,6 +97,32 @@ def test_a_naming_convention_file_cannot_match_itself(tmp_path: Path):
     assert "no test file imports foo.test.ts" in text
 
 
+def test_a_hub_module_that_only_transitively_reaches_the_target_is_lower_confidence(tmp_path: Path):
+    # tests/test_pkg.py imports pkg/__init__.py, which imports a.py - a direct importer of a.py (__init__.py)
+    # that is itself not a test, plus a transitive-only test file reaching a.py through it.
+    graph = {
+        "a.py": ["pkg/__init__.py"],
+        "pkg/__init__.py": ["tests/test_pkg.py"],
+        "tests/test_pkg.py": [],
+    }
+    text = render_tests_for(_ev(graph), tmp_path, "a.py")
+    assert "no test file directly imports or is named for a.py, but:" in text
+    assert "1 more test file(s) reach it only through other imports - lower confidence" in text
+    assert "tests/test_pkg.py" in text
+
+
+def test_a_direct_importer_is_never_demoted_to_the_lower_confidence_tier(tmp_path: Path):
+    graph = {
+        "a.py": ["tests/test_a.py", "pkg/__init__.py"],
+        "tests/test_a.py": [],
+        "pkg/__init__.py": ["tests/test_pkg.py"],
+        "tests/test_pkg.py": [],
+    }
+    text = render_tests_for(_ev(graph), tmp_path, "a.py")
+    before_lower = text.split("lower confidence")[0]
+    assert "tests/test_a.py" in before_lower
+
+
 def test_a_deleted_test_file_is_reported_stale_not_fresh(tmp_path: Path):
     # Flash Review finding: _files_changed_since_scan silently skipped a path whose stat() raised OSError, which
     # is exactly what a deleted file does - "no listed file changed" would be wrong, not just incomplete.
@@ -118,5 +147,5 @@ def test_cli_tests_for_end_to_end(tmp_path: Path):
     with patch("aletheore.cli.load_evidence", return_value=_ev(graph)):
         ok = CliRunner().invoke(app, ["tests-for", "a.py", str(tmp_path)])
         bad = CliRunner().invoke(app, ["tests-for", "nope.py", str(tmp_path)])
-    assert ok.exit_code == 0 and "1 test file(s) exercise a.py" in ok.output
+    assert ok.exit_code == 0 and "1 test file(s) likely exercise a.py" in ok.output
     assert bad.exit_code == 1 and "error:" in bad.output
