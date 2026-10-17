@@ -60,10 +60,14 @@ def _files_changed_since_scan(repo_path: Path, paths: list[str], scanned_at: obj
     changed = []
     for rel in paths:
         try:
-            if (Path(repo_path) / rel).stat().st_mtime > scan_time:
-                changed.append(rel)
+            mtime = (Path(repo_path) / rel).stat().st_mtime
         except OSError:
+            # Could not check - most commonly because the file (often a listed test file) was deleted after the
+            # scan. "Could not check" must never look like "nothing changed", so this counts as changed too.
+            changed.append(rel)
             continue
+        if mtime > scan_time:
+            changed.append(rel)
     return changed
 
 
@@ -78,7 +82,11 @@ def tests_for_report(evidence: dict, repo_path: Path, target: str) -> str:
 
     via_imports = {p for p in _transitive_importers(by_path, target) if _is_test_path(p)}
     stem = PurePosixPath(target).stem
-    via_naming = {m["path"] for m in modules if m.get("path") and _matches_naming_convention(stem, m["path"])}
+    via_naming = {
+        m["path"]
+        for m in modules
+        if m.get("path") and m["path"] != target and _matches_naming_convention(stem, m["path"])
+    }
 
     both = sorted(via_imports | via_naming)
     only_naming = sorted(via_naming - via_imports)

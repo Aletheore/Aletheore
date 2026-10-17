@@ -82,8 +82,29 @@ def test_dedupes_a_file_found_by_both_signals(tmp_path: Path):
     # "naming convention only" count must not include it.
     graph = {"a.py": ["tests/test_a.py"], "tests/test_a.py": []}
     text = render_tests_for(_ev(graph), tmp_path, "a.py")
-    assert text.count("tests/test_a.py") == 1
+    assert text.split("Coverage:")[0].count("tests/test_a.py") == 1
     assert "naming convention only" not in text
+
+
+def test_a_naming_convention_file_cannot_match_itself(tmp_path: Path):
+    # Flash Review finding: a target named foo.test.ts strips to "foo.test" and would match the "{stem}.test"
+    # pattern against its own name, reporting the file as a test that exercises itself.
+    graph = {"foo.test.ts": []}
+    text = render_tests_for(_ev(graph), tmp_path, "foo.test.ts")
+    assert "no test file imports foo.test.ts" in text
+
+
+def test_a_deleted_test_file_is_reported_stale_not_fresh(tmp_path: Path):
+    # Flash Review finding: _files_changed_since_scan silently skipped a path whose stat() raised OSError, which
+    # is exactly what a deleted file does - "no listed file changed" would be wrong, not just incomplete.
+    repo = tmp_path
+    (repo / "a.py").write_text("x")
+    # scanned_at is in the future relative to a.py's real mtime, so a.py itself reads as unchanged; only the
+    # listed tests/test_a.py, which was never created on disk (simulating "deleted after the scan"), can trigger
+    # staleness here - isolating the fix from a.py's own mtime.
+    ev = _ev({"a.py": ["tests/test_a.py"], "tests/test_a.py": []}, scanned_at="2999-01-01T00:00:00+00:00")
+    text = render_tests_for(ev, repo, "a.py")
+    assert "STALE" in text
 
 
 def test_cli_tests_for_end_to_end(tmp_path: Path):
