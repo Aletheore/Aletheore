@@ -833,7 +833,9 @@ async def test_aletheore_neighborhood_combines_imports_imported_by_and_cluster(t
     assert tool_result_body(result)["result"] == {
         "target": "a.py",
         "imports": ["b.py"],
+        "imports_truncated": False,
         "imported_by": [],
+        "imported_by_truncated": False,
         "cluster": {"id": 0, "modules": ["a.py", "b.py"]},
     }
 
@@ -864,6 +866,76 @@ async def test_aletheore_neighborhood_reports_an_unknown_module_as_an_error_not_
     result = await server.call_tool("aletheore_neighborhood", {"target": "does/not/exist.py"})
 
     assert "does/not/exist.py" in tool_result_body(result)["result"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_neighborhood_ranks_a_large_dependent_list_by_centrality(tmp_path):
+    # Real audit finding: imports/imported_by were returned raw and uncapped -
+    # a 255-dependent hub on this project's own codebase rendered to 19.2k
+    # characters. Centrality (each dependent's own import+imported_by degree)
+    # surfaces the structurally important dependents first, instead of an
+    # arbitrary prefix of evidence's own list order.
+    repo = make_repo_with_evidence(tmp_path)
+    evidence_path = repo / ".aletheore" / "air.json"
+    evidence = json.loads(evidence_path.read_text())
+    evidence["repository"]["modules"] = [
+        {
+            "path": "hub.py",
+            "imports": [],
+            "imported_by": ["low_a.py", "high.py", "low_c.py"],
+            "symbols": {"functions": [], "classes": []},
+        },
+        {
+            "path": "low_a.py",
+            "imports": ["hub.py"],
+            "imported_by": [],
+            "symbols": {"functions": [], "classes": []},
+        },
+        {
+            "path": "high.py",
+            "imports": ["hub.py", "x.py", "y.py"],
+            "imported_by": ["z.py"],
+            "symbols": {"functions": [], "classes": []},
+        },
+        {
+            "path": "low_c.py",
+            "imports": ["hub.py"],
+            "imported_by": [],
+            "symbols": {"functions": [], "classes": []},
+        },
+    ]
+    evidence_path.write_text(json.dumps(evidence))
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_neighborhood", {"target": "hub.py", "max_items": 2})
+    body = tool_result_body(result)["result"]
+
+    assert body["imported_by"] == ["high.py", "low_a.py"]
+    assert body["imported_by_truncated"] is True
+    assert body["imports_truncated"] is False
+
+
+@pytest.mark.asyncio
+async def test_aletheore_neighborhood_max_items_zero_returns_everything(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    evidence_path = repo / ".aletheore" / "air.json"
+    evidence = json.loads(evidence_path.read_text())
+    evidence["repository"]["modules"] = [
+        {
+            "path": "hub.py",
+            "imports": [],
+            "imported_by": [f"dep_{i}.py" for i in range(25)],
+            "symbols": {"functions": [], "classes": []},
+        },
+    ]
+    evidence_path.write_text(json.dumps(evidence))
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_neighborhood", {"target": "hub.py", "max_items": 0})
+    body = tool_result_body(result)["result"]
+
+    assert len(body["imported_by"]) == 25
+    assert body["imported_by_truncated"] is False
 
 
 @pytest.mark.asyncio
@@ -1461,6 +1533,67 @@ async def test_aletheore_list_unknown_kind_returns_an_error(tmp_path):
     result = await server.call_tool("aletheore_list", {"kind": "nonsense"})
 
     assert "error" in tool_result_body(result)["result"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_list_modules_filters_by_substring(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_list", {"kind": "modules", "filter": "A."})
+
+    assert tool_result_body(result) == {"result": ["a.py"]}
+
+
+@pytest.mark.asyncio
+async def test_aletheore_list_modules_truncates_past_max_items(tmp_path):
+    # Real audit finding: list_modules returns every module path with no cap
+    # at all - 570 modules on this project's own codebase render to 27.4k
+    # characters, the single largest unbounded-MCP-response case found.
+    repo = make_repo_with_evidence(tmp_path)
+    evidence_path = repo / ".aletheore" / "air.json"
+    evidence = json.loads(evidence_path.read_text())
+    evidence["repository"]["modules"] = [
+        {
+            "path": f"mod_{i}.py",
+            "imports": [],
+            "imported_by": [],
+            "symbols": {"functions": [], "classes": []},
+        }
+        for i in range(5)
+    ]
+    evidence_path.write_text(json.dumps(evidence))
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_list", {"kind": "modules", "max_items": 2})
+
+    assert tool_result_body(result)["result"] == {
+        "items": ["mod_0.py", "mod_1.py"],
+        "total": 5,
+        "truncated": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_aletheore_list_modules_max_items_zero_returns_everything(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    evidence_path = repo / ".aletheore" / "air.json"
+    evidence = json.loads(evidence_path.read_text())
+    evidence["repository"]["modules"] = [
+        {
+            "path": f"mod_{i}.py",
+            "imports": [],
+            "imported_by": [],
+            "symbols": {"functions": [], "classes": []},
+        }
+        for i in range(5)
+    ]
+    evidence_path.write_text(json.dumps(evidence))
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_list", {"kind": "modules", "max_items": 0})
+
+    assert tool_result_body(result)["result"] == ["mod_0.py", "mod_1.py", "mod_2.py", "mod_3.py", "mod_4.py"]
 
 
 # --- background watching (aletheore mcp keeps evidence current) ------------

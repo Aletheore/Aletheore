@@ -556,11 +556,45 @@ def _register_changes_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
         return _toon_result(compute_diff(old, new, full=full))
 
 
+# Real audit finding: imports/imported_by were returned raw with no cap -
+# a 255-dependent hub (this repo's own scan_worker/jobs.py) renders to 19.2k
+# characters. Unlike aletheore_list, ranking helps here: the agent is asking
+# "what does this module touch", not hunting one exact identifier, so
+# showing the most structurally central dependents first (by their own
+# import+imported_by degree - a cheap, no-iteration proxy for Aider repo-
+# map's PageRank) is more useful than an arbitrary prefix of evidence's own
+# list order.
+_NEIGHBORHOOD_MAX_ITEMS = 20
+
+
+def _module_degree(by_path: dict[str, dict], module_path: str) -> int:
+    module = by_path.get(module_path)
+    if module is None:
+        return 0
+    return len(module.get("imports") or []) + len(module.get("imported_by") or [])
+
+
+def _rank_and_cap(
+    by_path: dict[str, dict], paths: list[str], max_items: int
+) -> tuple[list[str], bool]:
+    if max_items <= 0 or len(paths) <= max_items:
+        return paths, False
+    ranked = sorted(paths, key=lambda p: _module_degree(by_path, p), reverse=True)
+    return ranked[:max_items], True
+
+
 def _register_neighborhood_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_neighborhood", annotations=READ_ONLY_ANNOTATIONS)
     @_guard_evidence_read_errors
-    def aletheore_neighborhood(target: str) -> str:
-        """A module's imports, dependents, and cluster in one call."""
+    def aletheore_neighborhood(target: str, max_items: int = _NEIGHBORHOOD_MAX_ITEMS) -> str:
+        """A module's imports, dependents, and cluster in one call.
+
+        max_items caps imports/imported_by (default 20): a module with more
+        than that many is trimmed to the ones most central to the
+        dependency graph (ranked by each dependent's own import+imported_by
+        count), with a *_truncated flag - a highly-connected hub (a shared
+        utils/models file) can otherwise return hundreds of unranked paths.
+        Pass max_items=0 for everything."""
         evidence = read_evidence(repo_path)
         # find_imports/find_imported_by raise ModuleNotFoundInEvidenceError for the
         # same reason find_cluster below does (unknown target) - unlike cluster,
@@ -575,11 +609,16 @@ def _register_neighborhood_tool(mcp_instance: MCPServer, repo_path: Path) -> Non
             cluster = find_cluster(evidence, target)
         except ModuleNotFoundInEvidenceError:
             cluster = None
+        by_path = {m["path"]: m for m in evidence["repository"]["modules"] if m.get("path")}
+        shown_imports, imports_truncated = _rank_and_cap(by_path, imports, max_items)
+        shown_imported_by, imported_by_truncated = _rank_and_cap(by_path, imported_by, max_items)
         return _toon_result(
             {
                 "target": target,
-                "imports": imports,
-                "imported_by": imported_by,
+                "imports": shown_imports,
+                "imports_truncated": imports_truncated,
+                "imported_by": shown_imported_by,
+                "imported_by_truncated": imported_by_truncated,
                 "cluster": cluster,
             }
         )
@@ -646,24 +685,51 @@ _LIST_KIND_TO_FUNCTION = {
     "branches": list_branches,
 }
 
+# Real audit finding: list_modules returns every module path with no cap at
+# all - 570 modules renders to 27.4k characters on this repo, the single
+# largest unbounded-MCP-response case found (bigger than the symbol_source
+# and neighborhood blowups fixed alongside this). Unlike neighborhood,
+# relevance-ranking would actively hurt this tool's one job (finding the
+# exact identifier another tool's `target` argument needs) - a "most
+# central module" isn't more likely to be the one the agent is looking for.
+# `filter` lets the agent narrow by substring before the cap ever matters;
+# `max_items` is the backstop for when it doesn't.
+_LIST_MAX_ITEMS = 200
+
 
 def _register_list_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_list", annotations=READ_ONLY_ANNOTATIONS)
     @_guard_evidence_read_errors
-    def aletheore_list(kind: str) -> str:
+    def aletheore_list(kind: str, filter: str | None = None, max_items: int = _LIST_MAX_ITEMS) -> str:
         """Lists the valid names/identifiers for one evidence collection, so
         other tools' exact-match `target` arguments can be filled in
         correctly. kind: one of 'modules' (file paths, for aletheore_imports/
         _imported_by/_symbols/_secrets/_cluster/_neighborhood/_symbol_source's
         module argument), 'clusters' (architecture cluster ids), or
-        'branches' (git branch names, for aletheore_branch)."""
+        'branches' (git branch names, for aletheore_branch).
+        filter: optional case-insensitive substring to narrow 'modules'
+        results before the cap (e.g. filter="jobs" instead of scrolling past
+        hundreds of unrelated paths); ignored for 'clusters'/'branches'.
+        max_items caps the result (default 200); 0 returns everything."""
         func = _LIST_KIND_TO_FUNCTION.get(kind)
         if func is None:
             return _toon_result(
                 {"error": f"unknown kind {kind!r} - expected one of {sorted(_LIST_KIND_TO_FUNCTION)}"}
             )
         evidence = read_evidence(repo_path)
-        return _toon_result(func(evidence))
+        items = func(evidence)
+        if kind == "modules" and filter:
+            needle = filter.lower()
+            items = [path for path in items if needle in path.lower()]
+        if isinstance(items, list) and 0 < max_items < len(items):
+            return _toon_result(
+                {
+                    "items": items[:max_items],
+                    "total": len(items),
+                    "truncated": True,
+                }
+            )
+        return _toon_result(items)
 
 
 def _register_overview_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
