@@ -27,6 +27,7 @@ from aletheore.evidence import (
 from aletheore.healthcheck import run_healthcheck, save_healthcheck
 from aletheore.history import compute_diff, list_snapshots, save_snapshot
 from aletheore.managed_audit_client import run_managed_audit_request
+from aletheore.mcp_budget import apply_budget
 from aletheore.query import (
     BranchNotFoundInEvidenceError,
     ModuleNotFoundInEvidenceError,
@@ -260,6 +261,40 @@ _QUERY_TOOL_DESCRIPTIONS = {
     "and catch handlers (file and line), plus per-type counts. Python, C/C++, JS/TS, Java, C#, PHP, Kotlin, "
     "Ruby, Swift, Go and Rust. Takes no target.",
 }
+
+# Real audit finding: every no-target kind above returns its evidence
+# section raw, with no cap at all - on this project's own evidence,
+# aletheore_database renders to 972,404 characters, aletheore_error_handling
+# to 100,517, aletheore_environment_variables to 99,571, aletheore_static_analysis
+# to 42,505, aletheore_endpoints to 29,113, aletheore_dead_code to 17,422,
+# aletheore_hotspots to 10,939, aletheore_infrastructure to 9,249 -
+# unconditionally, every call, regardless of repo size. apply_budget (see
+# mcp_budget.py) bounds the result to a size budget without losing
+# anything: an over-budget result keeps its shape, shows a sample of each
+# long list plus how many were left out, and the same tool can be called
+# again with section/offset/limit/filter to page through the rest
+# losslessly. A result that already fits is returned completely untouched -
+# this only changes behavior on the repos it exists for.
+_QUERY_BUDGET_CHARS = 20_000
+
+# Most severe first, so a budgeted static-analysis overview shows what matters before what doesn't.
+_SEVERITY_RANK = {
+    "critical": 0, "high": 1, "error": 1, "medium": 2, "moderate": 2, "warning": 2, "low": 3, "info": 4, "note": 4
+}
+
+
+def _severity_key(finding: object) -> int:
+    severity = finding.get("severity") if isinstance(finding, dict) else None
+    return _SEVERITY_RANK.get(str(severity).lower(), 5)
+
+
+_QUERY_BUDGET_SORT_BY = {"static-analysis": {"findings": _severity_key}}
+
+_QUERY_BUDGET_DOC_SUFFIX = (
+    " Output is capped to a size budget: if a list is cut, the result says how many items were left out "
+    "and call this tool again with section=<list path>, offset=<next_offset> (optional limit, filter) to page "
+    "through them."
+)
 
 _SEARCH_MATCH_CAP = 200
 # Guards the whole regex search against catastrophic backtracking (e.g.
@@ -523,15 +558,33 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
 
             else:
 
-                def tool() -> str:
+                def tool(
+                    section: str | None = None,
+                    offset: int = 0,
+                    limit: int | None = None,
+                    filter: str | None = None,
+                ) -> str:
                     evidence = read_evidence(repo_path)
-                    return _toon_result(func(evidence, None))
+                    return _toon_result(
+                        apply_budget(
+                            func(evidence, None),
+                            size_of=lambda data: len(_toon_result(data)),
+                            budget_chars=_QUERY_BUDGET_CHARS,
+                            section=section,
+                            offset=offset,
+                            limit=limit,
+                            filter=filter,
+                            sort_by=_QUERY_BUDGET_SORT_BY.get(kind),
+                        )
+                    )
 
             return tool
 
         tool_func = make_tool()
         tool_func.__name__ = tool_name
-        tool_func.__doc__ = _QUERY_TOOL_DESCRIPTIONS[kind]
+        tool_func.__doc__ = _QUERY_TOOL_DESCRIPTIONS[kind] + (
+            _QUERY_BUDGET_DOC_SUFFIX if not requires_target and kind not in optional_target_kinds else ""
+        )
         mcp_instance.tool(name=tool_name, annotations=READ_ONLY_ANNOTATIONS)(
             _guard_evidence_read_errors(tool_func)
         )
@@ -574,7 +627,13 @@ def _cap_list(items: list, max_items: int) -> tuple[list, bool]:
 
 def _cap_diff(diff: dict, full: bool, max_items: int) -> dict:
     if full:
-        capped: dict = {}
+        # Copy and patch, not rebuild from just these three keys - mirrors
+        # the curated branch below, which mutates in place and keeps
+        # everything. Real audit finding: a from-scratch {added: ..., ...}
+        # dict silently drops any key compute_diff(full=True) might ever
+        # add beyond these three (it only returns these today, but nothing
+        # enforces that staying true).
+        capped = dict(diff)
         for key in ("added", "removed", "changed"):
             items, truncated = _cap_list(diff.get(key, []), max_items)
             capped[key] = items
@@ -658,9 +717,11 @@ def _register_neighborhood_tool(mcp_instance: MCPServer, repo_path: Path) -> Non
         max_items caps imports/imported_by (default 20): a module with more
         than that many is trimmed to the ones most central to the
         dependency graph (ranked by each dependent's own import+imported_by
-        count), with a *_truncated flag - a highly-connected hub (a shared
-        utils/models file) can otherwise return hundreds of unranked paths.
-        Pass max_items=0 for everything."""
+        count), with a *_truncated flag and a *_total count - the ranking
+        can drop a real direct dependency in favor of an unrelated but more
+        central hub, so *_total says how much was cut rather than leaving
+        that invisible behind a bare boolean. Pass max_items=0 for
+        everything."""
         evidence = read_evidence(repo_path)
         # find_imports/find_imported_by raise ModuleNotFoundInEvidenceError for the
         # same reason find_cluster below does (unknown target) - unlike cluster,
@@ -683,8 +744,10 @@ def _register_neighborhood_tool(mcp_instance: MCPServer, repo_path: Path) -> Non
                 "target": target,
                 "imports": shown_imports,
                 "imports_truncated": imports_truncated,
+                "imports_total": len(imports),
                 "imported_by": shown_imported_by,
                 "imported_by_truncated": imported_by_truncated,
+                "imported_by_total": len(imported_by),
                 "cluster": cluster,
             }
         )
@@ -787,15 +850,13 @@ def _register_list_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
         if kind == "modules" and filter:
             needle = filter.lower()
             items = [path for path in items if needle in path.lower()]
-        if isinstance(items, list) and 0 < max_items < len(items):
-            return _toon_result(
-                {
-                    "items": items[:max_items],
-                    "total": len(items),
-                    "truncated": True,
-                }
-            )
-        return _toon_result(items)
+        # Real audit finding (Flash Review on this PR): always the same
+        # {items, total, truncated} shape, never a bare list for the small
+        # case - a client that parses the result as a list would fail
+        # exactly on the large repos this cap exists for.
+        truncated = 0 < max_items < len(items)
+        shown = items[:max_items] if truncated else items
+        return _toon_result({"items": shown, "total": len(items), "truncated": truncated})
 
 
 def _register_overview_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
@@ -896,17 +957,43 @@ def _register_locate_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
         )
 
 
+_SYMBOL_SOURCE_DEFAULT_MAX_LINES = 120
+
+
 def _render_symbol_source(evidence: dict, found: dict, max_lines: int) -> str:
+    # Real audit finding (Flash Review): `max_lines <= 0` silently treated
+    # any negative value the same as the documented "0 means everything"
+    # sentinel, so a caller computing a limit arithmetically (e.g. a
+    # subtraction that goes negative) got the uncapped response this cap
+    # exists to prevent, with no error. Only 0 is "everything"; anything
+    # else negative falls back to the tool's own default instead.
+    if max_lines < 0:
+        max_lines = _SYMBOL_SOURCE_DEFAULT_MAX_LINES
     header = f"{found['module']}::{found['symbol']} L{found['start_line']}-{found['end_line']}"
     lines = found["source"].split("\n")
-    if max_lines <= 0 or len(lines) <= max_lines:
+    if max_lines == 0 or len(lines) <= max_lines:
         return f"{header}\n{found['source']}"
     module = next((m for m in evidence["repository"]["modules"] if m["path"] == found["module"]), {})
     symbols = module.get("symbols", {})
     start, end = found["start_line"], found["end_line"]
     is_class = any(c["name"] == found["symbol"] and c["start_line"] == start for c in symbols.get("classes", []))
+    all_functions = symbols.get("functions", [])
     methods = [
-        f for f in symbols.get("functions", []) if f["start_line"] > start and f["end_line"] <= end
+        f
+        for f in all_functions
+        if f["start_line"] > start
+        and f["end_line"] <= end
+        # Real audit finding (Flash Review): a closure defined inside a
+        # method (e.g. `def method(self): def helper(): ...`) is its own
+        # entry in symbols.functions, nested entirely within its enclosing
+        # method's range - without this check it was listed as if it were
+        # itself a method of the class, which it isn't. A lookup by name
+        # still resolved it correctly either way (it's a real, independently
+        # addressable symbol); this only fixes what the summary calls it.
+        and not any(
+            other is not f and other["start_line"] <= f["start_line"] and other["end_line"] >= f["end_line"]
+            for other in all_functions
+        )
     ]
     if is_class and methods:
         first_method = min(m["start_line"] for m in methods)
@@ -923,7 +1010,9 @@ def _render_symbol_source(evidence: dict, found: dict, max_lines: int) -> str:
 def _register_symbol_source_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_symbol_source", annotations=READ_ONLY_ANNOTATIONS)
     @_guard_evidence_read_errors
-    def aletheore_symbol_source(module: str, symbol: str, max_lines: int = 120) -> str:
+    def aletheore_symbol_source(
+        module: str, symbol: str, max_lines: int = _SYMBOL_SOURCE_DEFAULT_MAX_LINES
+    ) -> str:
         """Exact source text for one named function/class, with resolved line bounds.
 
         Two separate arguments, not a combined "path::name" - module: the
@@ -1311,6 +1400,13 @@ def build_server(
     mcp_instance = MCPServer("aletheore", instructions=NAV_INSTRUCTIONS if profile == "nav" else SERVER_INSTRUCTIONS)
     # A tool that returns a string would otherwise also send a JSON-wrapped structured copy, and the model is shown
     # that copy with every quote and newline escaped again. One text result per call.
+    #
+    # Flash Review flagged this instance-attribute patch as fragile, uncertain whether MCPServer.tool even accepts
+    # structured_output (if not, every registration below would TypeError at startup). Checked directly:
+    # inspect.signature(MCPServer.tool) shows `structured_output: bool | None = None` as a real, stable parameter -
+    # not a private/unstable one this library could drop silently. The patch also runs here, before every single
+    # _register_*_tool call below (both profiles), so nothing in this function can have captured the unpatched
+    # mcp_instance.tool first.
     register_tool = mcp_instance.tool
 
     def tool_without_structured_copy(*args, **kwargs):

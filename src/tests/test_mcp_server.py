@@ -929,8 +929,10 @@ async def test_aletheore_neighborhood_combines_imports_imported_by_and_cluster(t
         "target": "a.py",
         "imports": ["b.py"],
         "imports_truncated": False,
+        "imports_total": 1,
         "imported_by": [],
         "imported_by_truncated": False,
+        "imported_by_total": 0,
         "cluster": {"id": 0, "modules": ["a.py", "b.py"]},
     }
 
@@ -1617,7 +1619,9 @@ async def test_aletheore_list_modules(tmp_path):
 
     result = await server.call_tool("aletheore_list", {"kind": "modules"})
 
-    assert tool_result_body(result) == {"result": ["a.py", "b.py"]}
+    assert tool_result_body(result) == {
+        "result": {"items": ["a.py", "b.py"], "total": 2, "truncated": False}
+    }
 
 
 @pytest.mark.asyncio
@@ -1637,7 +1641,9 @@ async def test_aletheore_list_modules_filters_by_substring(tmp_path):
 
     result = await server.call_tool("aletheore_list", {"kind": "modules", "filter": "A."})
 
-    assert tool_result_body(result) == {"result": ["a.py"]}
+    assert tool_result_body(result) == {
+        "result": {"items": ["a.py"], "total": 1, "truncated": False}
+    }
 
 
 @pytest.mark.asyncio
@@ -1688,7 +1694,11 @@ async def test_aletheore_list_modules_max_items_zero_returns_everything(tmp_path
 
     result = await server.call_tool("aletheore_list", {"kind": "modules", "max_items": 0})
 
-    assert tool_result_body(result)["result"] == ["mod_0.py", "mod_1.py", "mod_2.py", "mod_3.py", "mod_4.py"]
+    assert tool_result_body(result)["result"] == {
+        "items": ["mod_0.py", "mod_1.py", "mod_2.py", "mod_3.py", "mod_4.py"],
+        "total": 5,
+        "truncated": False,
+    }
 
 
 # --- background watching (aletheore mcp keeps evidence current) ------------
@@ -2017,6 +2027,50 @@ async def test_symbol_source_shows_a_long_class_as_its_head_plus_a_method_list(t
     assert "m0 L3-13" in text and "m19 L212-222" in text  # the method list names every method with its range
     assert "y9 = 9" not in text  # method bodies are not dumped
     assert "more lines; ask for one method by name" in text
+
+
+@pytest.mark.asyncio
+async def test_symbol_source_negative_max_lines_falls_back_to_the_default_cap(tmp_path):
+    # Real audit finding (Flash Review): `max_lines <= 0` treated any
+    # negative value the same as the documented "0 means everything"
+    # sentinel - a caller computing a limit arithmetically (e.g. a
+    # subtraction landing below zero) silently got the uncapped response
+    # this cap exists to prevent. Only max_lines=0 means everything now.
+    repo = make_repo_with_evidence(tmp_path)
+    source = "def foo():\n" + "".join(f"    x{i} = {i}\n" for i in range(200))
+    _set_a_py(repo, source, [{"name": "foo", "start_line": 1, "end_line": 201}], [])
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "foo", "max_lines": -1})
+
+    text = result.content[0].text
+    assert "x199 = 199" not in text
+    assert "more lines" in text
+
+
+@pytest.mark.asyncio
+async def test_symbol_source_methods_listing_excludes_a_nested_closure(tmp_path):
+    # Real audit finding (Flash Review): a closure defined inside a method
+    # (its own entry in symbols.functions, nested entirely within the
+    # method's own line range) was listed in the class summary as if it
+    # were itself a method of the class.
+    repo = make_repo_with_evidence(tmp_path)
+    body = "class Big:\n    \"\"\"doc\"\"\"\n" + "".join(
+        f"    def m{i}(self):\n" + "".join(f"        y{j} = {j}\n" for j in range(10)) for i in range(20)
+    )
+    methods = [{"name": f"m{i}", "start_line": 3 + i * 11, "end_line": 3 + i * 11 + 10} for i in range(20)]
+    # A closure nested inside m0's body (m0 spans lines 3-13): its own
+    # range (5-6) falls entirely inside m0's, same shape a real `def
+    # helper(): ...` inside a method produces.
+    methods.append({"name": "inner_helper", "start_line": 5, "end_line": 6})
+    _set_a_py(repo, body, methods, [{"name": "Big", "start_line": 1, "end_line": 2 + 20 * 11}])
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "Big", "max_lines": 20})
+
+    text = result.content[0].text
+    assert "m0 L3-13" in text
+    assert "inner_helper" not in text
 
 
 @pytest.mark.asyncio

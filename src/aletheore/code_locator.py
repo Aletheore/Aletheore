@@ -65,8 +65,13 @@ def extract_identifiers(query: str, *, all_words: bool = False) -> tuple[dict[st
         for tok in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", span):
             if tok.lower() not in _STOP:
                 ids[tok] = ids.get(tok, 0) + 2
+    # Real audit finding (Flash Review): this pass ran over the whole query, including backticked spans - a
+    # backticked identifier that also looked "codey" (underscore/camelCase/Error suffix) matched again here on
+    # top of the weight-2 it already earned above, for an effective weight of 3, not the documented 2. Blanking
+    # backtick spans first keeps a backticked identifier's weight at exactly what the docstring promises.
+    plain_query = re.sub(r"`[^`\n]{2,120}`", " ", query)
     shortest = 2 if all_words else 3  # an agent's own query may name a three-letter function
-    for tok in re.findall(rf"\b[A-Za-z_][A-Za-z0-9_]{{{shortest},}}\b", query):
+    for tok in re.findall(rf"\b[A-Za-z_][A-Za-z0-9_]{{{shortest},}}\b", plain_query):
         codey = all_words or "_" in tok or re.search(r"[a-z][A-Z]", tok) or tok.endswith("Error")
         if codey and tok.lower() not in _STOP:
             ids[tok] = ids.get(tok, 0) + 1
@@ -82,9 +87,9 @@ def _symbols_of(module: dict) -> list[Symbol]:
     return sorted(out, key=lambda s: (s.start, -s.end))
 
 
-def _git_files_containing(repo: Path, ident: str, candidates: set[str]) -> list[str] | None:
+def _git_files_containing(repo: Path, ident: str, candidates: set[str], timeout: float) -> list[str] | None:
     r = subprocess.run(
-        ["git", "grep", "-l", "-w", "-F", "-e", ident], cwd=repo, capture_output=True, text=True, timeout=10
+        ["git", "grep", "-l", "-w", "-F", "-e", ident], cwd=repo, capture_output=True, text=True, timeout=timeout
     )
     if r.returncode not in (0, 1):
         return None
@@ -132,18 +137,30 @@ def locate(
 
     scores = {rel: Candidate(rel) for rel in by_path}
     for ident, weight in ordered:
-        if time.monotonic() - started >= deadline_s:
-            return []
+        # Real audit finding (Flash Review), two parts: (1) hitting the
+        # deadline mid-loop used to discard every score already accumulated
+        # from earlier identifiers via `return []` - a large repo whose
+        # first few git grep calls are slow could get "no match" despite a
+        # confident top candidate already computed. `break` instead keeps
+        # whatever was found and lets the ranking/confidence check below
+        # decide. (2) `_git_files_containing`'s own subprocess timeout used
+        # to be a fixed 10s regardless of how much of deadline_s was left,
+        # so one slow call could blow past the promised deadline by more
+        # than 3x before control returned - its timeout is now derived from
+        # the real remaining budget.
+        remaining = deadline_s - (time.monotonic() - started)
+        if remaining <= 0:
+            break
         try:
             if use_git:
-                hits = _git_files_containing(repo, ident, candidate_set)
+                hits = _git_files_containing(repo, ident, candidate_set, timeout=max(0.1, remaining))
                 if hits is None:
                     continue
             else:
                 pat = re.compile(rf"\b{re.escape(ident)}\b")
                 hits = [rel for rel, text in texts.items() if pat.search(text)]
         except (OSError, subprocess.SubprocessError):
-            return []
+            break
         if not hits or len(hits) > max(25, n // 6):  # absent, or too common to say anything
             continue
         idf = 1 + math.log(n / len(hits))

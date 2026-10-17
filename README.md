@@ -82,6 +82,10 @@ Ruby, PHP, C, C++, C#, and Swift**.
   for every lookup; it re-scans in the background as files change unless started
   with `--no-watch`. `aletheore mcp-install` wires it into Claude Code,
   Cursor, VS Code, Kiro, Opencode, or Codex CLI automatically.
+  Every repo-wide, no-target tool (dependency usage, environment variables, error handling, ...) caps
+  its result to a size budget by default — a result that already fits is untouched; an over-budget one
+  keeps its shape, says what was left out, and the same tool takes `section`/`offset`/`limit`/`filter`
+  to page through the rest losslessly.
 - **`aletheore dashboard`** — a live local web UI: dependency graph, an Obsidian-style cluster
   graph, trend charts across scan history, and the MCP tool list.
 - **A GitHub Action** (`action.yml`, on the Marketplace as "Aletheore") — scans a PR's base and

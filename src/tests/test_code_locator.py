@@ -65,6 +65,16 @@ def test_all_words_turns_plain_query_words_into_identifiers():
     assert set(plain) == {"write_usage"}
 
 
+def test_backticked_identifier_weighs_exactly_two_even_when_it_also_looks_codey():
+    # Real audit finding (Flash Review): the docstring promises a backticked
+    # identifier weighs 2 per use, but the plain-word pass ran over the
+    # whole query including backtick characters, so an identifier that also
+    # qualified as "codey" (has an underscore, here) matched a second time
+    # for an effective weight of 3.
+    ids, _ = extract_identifiers("look at `write_usage` please")
+    assert ids["write_usage"] == 2
+
+
 def test_locate_finds_the_file_that_defines_the_named_symbol(tmp_path):
     repo = make_repo(tmp_path, FILES)
     cands = locate("HelpFormatter write_usage", repo, modules_for(FILES), all_words=True)
@@ -75,6 +85,32 @@ def test_locate_finds_the_file_that_defines_the_named_symbol(tmp_path):
 def test_locate_returns_nothing_for_a_query_that_matches_nothing(tmp_path):
     repo = make_repo(tmp_path, FILES)
     assert locate("nonexistent_function_name", repo, modules_for(FILES), all_words=True) == []
+
+
+def test_locate_keeps_partial_results_when_the_deadline_expires_mid_loop(tmp_path, monkeypatch):
+    # Real audit finding (Flash Review): hitting the deadline mid-loop used
+    # to discard every score already accumulated from earlier identifiers
+    # via `return []` unconditionally - a large repo whose first few git
+    # grep calls are slow could get "no match" despite real matches already
+    # computed. time.monotonic is patched to simulate: started at 0, still
+    # under deadline before the first identifier, then past it before the
+    # second - the first identifier's score must survive.
+    import aletheore.code_locator as code_locator
+
+    repo = make_repo(tmp_path, FILES)
+    calls = iter([0.0, 0.0, 10.0])
+    monkeypatch.setattr(code_locator.time, "monotonic", lambda: next(calls))
+
+    cands = locate(
+        "HelpFormatter bogus_other_identifier",
+        repo,
+        modules_for(FILES),
+        all_words=True,
+        deadline_s=3.0,
+        require_confidence=False,
+    )
+
+    assert cands and cands[0].path == "src/fmt.py"
 
 
 def test_render_locate_gives_a_header_and_the_raw_function_source(tmp_path):

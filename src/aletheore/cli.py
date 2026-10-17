@@ -2059,6 +2059,33 @@ def locate(
     print(locate_report(evidence, repo, query))
 
 
+@app.command(
+    help=(
+        "list every file that imports a file, directly or through other imports, as one complete deduplicated list, "
+        "e.g. aletheore dependents src/click/_compat.py --under src --exclude tests"
+    )
+)
+def dependents(
+    file: str = typer.Argument(..., help="file path exactly as it appears in the scan"),
+    path: str = typer.Argument(".", help="repository path"),
+    exclude: list[str] = typer.Option([], "--exclude", help="leave out files under a directory with this exact name, or with this exact file name; repeatable"),
+    under: list[str] = typer.Option([], "--under", help="only list files below this directory; repeatable"),
+    path_option: Optional[str] = _PATH_OPTION,
+) -> None:
+    from aletheore.dependents import dependents_report
+
+    repo = Path(_resolve_path(path, path_option)).resolve()
+    try:
+        evidence = load_evidence(repo)
+    except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
+        print(f"error: {exc} (run 'aletheore scan' first)")
+        raise typer.Exit(code=1)
+    report = dependents_report(evidence, repo, file, exclude, under)
+    print(report)
+    if report.startswith("error:"):
+        raise typer.Exit(code=1)
+
+
 @app.command(help="compare two air.json files")
 def diff(
     old: str = typer.Argument(..., help="path to the baseline air.json"),
@@ -2124,15 +2151,15 @@ def mcp(
         "--no-watch",
         help=(
             "do not re-scan in the background when source files change "
-            f"(same as {WATCH_ENV_VAR}=0)"
+            f"(same as {WATCH_ENV_VAR}=0); always off under --profile nav regardless of this flag"
         ),
     ),
     profile: str = typer.Option(
         "full",
         "--profile",
         help=(
-            "tool set to expose: full (every tool) or nav (three code-navigation tools, small enough "
-            "to load up front)"
+            "tool set to expose: full (every tool, with background watching) or nav (three "
+            "code-navigation tools, small enough to load up front, with background watching off)"
         ),
     ),
 ) -> None:
@@ -2141,6 +2168,17 @@ def mcp(
         raise typer.Exit(code=2)
     path = _resolve_path(path, path_option)
     _checked_dir(path)
+    # Real audit finding (Flash Review): `--profile nav` silently disabled
+    # watching with no indication - --no-watch's own help text describes
+    # watching as the default, and nothing said choosing nav also turns it
+    # off. A one-line note here, only when the user didn't already say
+    # --no-watch (so it's genuinely a consequence of the profile, not
+    # something they already asked for), makes it visible instead of silent.
+    if profile == "nav" and not no_watch:
+        console.print(
+            "[dim]--profile nav does not watch for file changes; re-run the scan yourself after edits, "
+            "or use --profile full for background watching.[/dim]"
+        )
     raise typer.Exit(code=_mcp(path, agent, watch=not no_watch and profile == "full", profile=profile))
 
 

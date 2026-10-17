@@ -3014,6 +3014,30 @@ def test_mcp_command_rejects_an_unknown_profile(tmp_path):
     assert result.exit_code == 2 and "unknown profile" in result.output
 
 
+def test_mcp_nav_profile_warns_that_watching_is_off(tmp_path, monkeypatch):
+    # Real audit finding (Flash Review): --profile nav silently disabled
+    # background watching (`watch=not no_watch and profile == "full"`) with
+    # no indication - --no-watch's own help text describes watching as the
+    # default, and nothing said choosing nav also turns it off.
+    monkeypatch.delenv("ALETHEORE_MCP_WATCH", raising=False)
+    fake_server = MagicMock()
+    with patch("aletheore.mcp_server.build_server", return_value=fake_server):
+        result = CliRunner().invoke(app, ["mcp", str(tmp_path), "--profile", "nav"])
+
+    assert "does not watch for file changes" in result.output
+
+
+def test_mcp_nav_profile_with_explicit_no_watch_does_not_warn(tmp_path, monkeypatch):
+    # The note only earns its place when nav is the reason watching is off -
+    # a caller who already passed --no-watch asked for that themselves.
+    monkeypatch.delenv("ALETHEORE_MCP_WATCH", raising=False)
+    fake_server = MagicMock()
+    with patch("aletheore.mcp_server.build_server", return_value=fake_server):
+        result = CliRunner().invoke(app, ["mcp", str(tmp_path), "--profile", "nav", "--no-watch"])
+
+    assert "does not watch for file changes" not in result.output
+
+
 def test_mcp_watches_by_default(tmp_path, monkeypatch):
     assert _run_mcp_command(tmp_path, monkeypatch)["watch"] is True
 

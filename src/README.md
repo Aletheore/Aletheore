@@ -495,8 +495,8 @@ Starts a stdio MCP server scoped to one repository, so a coding agent can query 
 directly instead of shelling out via Bash for every lookup. Every tool
 result is [TOON](https://toonformat.dev)-encoded rather than plain JSON — the calling agent's
 own token budget is what actually pays for reading these results, and evidence's shape (almost
-entirely uniform arrays of same-shaped objects) is exactly TOON's best case. Exposes 30 tools in
-a read-only posture, 34 by default, and 35 with every effect permitted — see
+entirely uniform arrays of same-shaped objects) is exactly TOON's best case. Exposes 32 tools in
+a read-only posture, 36 by default, and 37 with every effect permitted — see
 [Tool permissions](#tool-permissions) for what gates the rest — plus one optional answer tool
 when started with `--agent`:
 
