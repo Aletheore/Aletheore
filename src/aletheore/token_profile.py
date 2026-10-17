@@ -92,11 +92,14 @@ def apply_deny(project: Path, deny: list[str]) -> list[str]:
     previously_added = _validated_added(sidecar, sidecar_path)
     added = [t for t in deny if t not in existing]
     perms["deny"] = existing + added
-    _write(settings_path, settings)
+    # The sidecar is the safety record, so it goes first: a crash between the two writes then leaves a record of
+    # entries that may not have landed (removing an absent entry is a no-op) rather than a tool-created
+    # settings.json that nothing remembers creating.
     _write(sidecar_path, {
         "added": sorted(set(previously_added) | set(added)),
         "created_file": sidecar.get("created_file", not settings_existed),
     })
+    _write(settings_path, settings)
     return added
 
 
@@ -107,6 +110,8 @@ def remove_deny(project: Path) -> list[str]:
         return []
     sidecar = _load(sidecar_path)
     added = _validated_added(sidecar, sidecar_path)
+    # A sidecar from before `created_file` existed has no way to say who created settings.json, so it is treated as
+    # the user's: left in place (written back empty) rather than deleted.
     created_file = sidecar.get("created_file", False)
     settings = _load(settings_path)
     perms = settings.get("permissions", {})

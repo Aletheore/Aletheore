@@ -148,3 +148,31 @@ def test_run_audit_builds_the_command_and_passes_deny_only_on_the_command_line(t
     cmd = seen[1][0]
     assert json.loads(cmd[cmd.index("--settings") + 1]) == {"permissions": {"deny": ["Monitor"]}}
     assert seen[0][1] == tmp_path and not (tmp_path / ".claude").exists()
+
+
+def test_a_failed_settings_write_still_leaves_the_sidecar_that_records_who_created_the_file(tmp_path, monkeypatch):
+    import aletheore.token_profile as tp
+
+    real_write = tp._write
+
+    def fail_on_settings(path, data):
+        if path.name == "settings.json":
+            raise OSError("disk full")
+        real_write(path, data)
+
+    monkeypatch.setattr(tp, "_write", fail_on_settings)
+    with pytest.raises(OSError):
+        tp.apply_deny(tmp_path, ["WebFetch"])
+    sidecar = json.loads((tmp_path / ".claude" / tp.SIDECAR_NAME).read_text())
+    assert sidecar["created_file"] is True
+
+
+def test_a_sidecar_without_created_file_is_treated_as_the_users_settings_file(tmp_path):
+    from aletheore.token_profile import SIDECAR_NAME, remove_deny
+
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text(json.dumps({"permissions": {"deny": ["WebFetch"]}}))
+    (claude / SIDECAR_NAME).write_text(json.dumps({"added": ["WebFetch"]}))
+    remove_deny(tmp_path)
+    assert json.loads((claude / "settings.json").read_text()) == {}
