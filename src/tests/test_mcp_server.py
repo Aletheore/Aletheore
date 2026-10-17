@@ -802,6 +802,101 @@ async def test_aletheore_changes_tool_reports_no_prior_snapshot(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_aletheore_changes_curated_default_caps_a_large_findings_list(tmp_path):
+    # Real audit finding, worse than the full=True case: the curated diff
+    # (the DEFAULT, not something an agent has to opt into) has no cap on
+    # secrets/vulnerabilities/static_analysis/layer_violations/endpoints'
+    # own new/resolved lists either - a scan that freshly enables a check
+    # can report hundreds of "new" findings in one uncapped response.
+    from aletheore.history import save_snapshot
+    from tests.air_fixtures import minimal_air_evidence
+
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    old = minimal_air_evidence()
+    save_snapshot(old, repo)
+
+    new = minimal_air_evidence()
+    new["security"]["secrets"]["findings"] = [
+        {"path": f"config_{i}.py", "line": 1, "pattern": "aws_access_key_id", "match_preview": "AKIA...MNOP"}
+        for i in range(5)
+    ]
+    save_snapshot(new, repo)
+
+    result = await server.call_tool("aletheore_changes", {"max_items": 2})
+    body = tool_result_body(result)["result"]
+
+    assert len(body["secrets"]["new"]) == 2
+    assert body["secrets"]["new_truncated"] is True
+    assert "resolved_truncated" not in body["secrets"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_changes_full_caps_a_large_diff(tmp_path):
+    # Real audit finding: compute_diff(full=True)'s raw path-level diff has
+    # no size cap at all - every changed leaf path in the whole evidence
+    # tree is reported, same unbounded-MCP-response shape as symbol_source/
+    # neighborhood/list before their caps.
+    from aletheore.history import save_snapshot
+    from tests.air_fixtures import minimal_air_evidence
+
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    old = minimal_air_evidence()
+    save_snapshot(old, repo)
+
+    new = minimal_air_evidence()
+    new["repository"]["modules"] = [
+        {
+            "path": f"mod_{i}.py",
+            "imports": [],
+            "imported_by": [],
+            "symbols": {"functions": [], "classes": []},
+        }
+        for i in range(5)
+    ]
+    save_snapshot(new, repo)
+
+    result = await server.call_tool("aletheore_changes", {"full": True, "max_items": 2})
+    body = tool_result_body(result)["result"]
+
+    assert len(body["added"]) == 2
+    assert body["added_truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_aletheore_changes_full_max_items_zero_returns_everything(tmp_path):
+    from aletheore.history import save_snapshot
+    from tests.air_fixtures import minimal_air_evidence
+
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    old = minimal_air_evidence()
+    save_snapshot(old, repo)
+
+    new = minimal_air_evidence()
+    new["repository"]["modules"] = [
+        {
+            "path": f"mod_{i}.py",
+            "imports": [],
+            "imported_by": [],
+            "symbols": {"functions": [], "classes": []},
+        }
+        for i in range(5)
+    ]
+    save_snapshot(new, repo)
+
+    result = await server.call_tool("aletheore_changes", {"full": True, "max_items": 0})
+    body = tool_result_body(result)["result"]
+
+    assert len(body["added"]) > 2
+    assert body["added_truncated"] is False
+
+
+@pytest.mark.asyncio
 async def test_aletheore_changes_returns_clear_error_for_incompatible_snapshot(tmp_path):
     from aletheore.history import save_snapshot
     from tests.air_fixtures import minimal_air_evidence

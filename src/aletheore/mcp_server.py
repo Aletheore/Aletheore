@@ -537,10 +537,75 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
         )
 
 
+# Found in the same audit as symbol_source/neighborhood/list's caps, in two
+# parts: compute_diff(full=True)'s raw path-level diff (_compute_full_diff)
+# has no size cap on added/removed/changed, AND - worse, since it's the
+# DEFAULT path, not opt-in - the curated diff's own new/resolved lists
+# (secrets, vulnerabilities, static_analysis, layer_violations, endpoints)
+# have no cap either: a scan that freshly enables static analysis, or a
+# dependency bump that introduces many new advisories, reports every one of
+# them uncapped by default. Capped only here, at the MCP-tool layer, not
+# inside compute_diff/_compute_full_diff themselves - the CLI's `aletheore
+# diff`/`--full` are a human reading a terminal (no token cost to scrolling)
+# or feed `--fail-on-new-*` CI gating, which needs the real, complete count
+# to be correct; truncating there would silently hide a violation instead
+# of just a display inconvenience.
+_CHANGES_MAX_ITEMS = 200
+
+# (category key, sub-keys that are lists of findings) for every section the
+# curated diff can return. static_analysis also has unexpected_tool_skips
+# (tool names, not findings) - deliberately left uncapped, it's small by
+# construction.
+_CURATED_DIFF_LIST_SECTIONS = (
+    ("secrets", ("new", "resolved")),
+    ("history_secrets", ("new", "resolved")),
+    ("vulnerabilities", ("new", "resolved")),
+    ("static_analysis", ("new", "resolved")),
+    ("layer_violations", ("new", "resolved")),
+    ("endpoints", ("new", "resolved")),
+)
+
+
+def _cap_list(items: list, max_items: int) -> tuple[list, bool]:
+    if max_items <= 0 or len(items) <= max_items:
+        return items, False
+    return items[:max_items], True
+
+
+def _cap_diff(diff: dict, full: bool, max_items: int) -> dict:
+    if full:
+        capped: dict = {}
+        for key in ("added", "removed", "changed"):
+            items, truncated = _cap_list(diff.get(key, []), max_items)
+            capped[key] = items
+            capped[f"{key}_truncated"] = truncated
+        return capped
+    for category, subkeys in _CURATED_DIFF_LIST_SECTIONS:
+        block = diff.get(category)
+        if not isinstance(block, dict):
+            continue
+        for subkey in subkeys:
+            items = block.get(subkey)
+            if not isinstance(items, list):
+                continue
+            capped_items, truncated = _cap_list(items, max_items)
+            block[subkey] = capped_items
+            if truncated:
+                block[f"{subkey}_truncated"] = True
+    return diff
+
+
 def _register_changes_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_changes", annotations=READ_ONLY_ANNOTATIONS)
-    def aletheore_changes(full: bool = False) -> str:
-        """What changed between the two most recent scans of this repo."""
+    def aletheore_changes(full: bool = False, max_items: int = _CHANGES_MAX_ITEMS) -> str:
+        """What changed between the two most recent scans of this repo.
+
+        full: the default is a curated summary (secrets/vulnerabilities/
+        static analysis/layer violations/endpoints); full=True is the raw
+        path-level diff instead. Either way each findings list is capped at
+        max_items (default 200, 0 for everything) with a *_truncated flag -
+        a scan that freshly enables a check, or a change that introduces
+        many findings at once, can otherwise be unbounded."""
         snapshots = list_snapshots(repo_path)
         if len(snapshots) < 2:
             return _toon_result({"message": "no prior snapshot to compare against"})
@@ -553,7 +618,8 @@ def _register_changes_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
             except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
                 return _toon_result({"error": str(exc)})
         old, new = loaded
-        return _toon_result(compute_diff(old, new, full=full))
+        diff = _cap_diff(compute_diff(old, new, full=full), full, max_items)
+        return _toon_result(diff)
 
 
 # Real audit finding: imports/imported_by were returned raw with no cap -
