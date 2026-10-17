@@ -20,12 +20,21 @@ def bloat(repo, n=300):
     path.write_text(json.dumps(evidence))
 
 
+def bloat_symbols(repo, n=300):
+    path = repo / ".aletheore" / "air.json"
+    evidence = json.loads(path.read_text())
+    evidence["repository"]["modules"][0]["symbols"]["functions"] = [
+        {"name": f"fn_{i}", "start_line": i + 1, "end_line": i + 2, "params": "()"} for i in range(n)
+    ]
+    path.write_text(json.dumps(evidence))
+
+
 async def tool_named(server, name):
     return {t.name: t for t in await server.list_tools()}[name]
 
 
 @pytest.mark.asyncio
-async def test_a_no_target_tool_always_has_paging_parameters_and_documents_them(tmp_path):
+async def test_every_generic_query_tool_has_paging_parameters_and_documents_them(tmp_path):
     # Real audit finding: a whole family of no-target evidence tools
     # (aletheore_database, aletheore_error_handling, aletheore_environment_variables,
     # aletheore_static_analysis, aletheore_endpoints, ...) returned their
@@ -38,10 +47,12 @@ async def test_a_no_target_tool_always_has_paging_parameters_and_documents_them(
     tool = await tool_named(server, "aletheore_endpoints")
     assert set(tool.input_schema["properties"]) == BUDGET_PARAMS
     assert "section" in tool.description and "All API endpoints" in tool.description
-    # tools that take a target keep their exact signature - the budget only
-    # applies to repo-wide, no-target results.
+    # Real audit finding, found later: aletheore_symbols (requires_target)
+    # had no cap either - on this project's own hottest file it rendered to
+    # 82,908 characters. A tool that takes a target still takes the same
+    # budget parameters alongside it, not instead of it.
     imports = await tool_named(server, "aletheore_imports")
-    assert set(imports.input_schema["properties"]) == {"target"}
+    assert set(imports.input_schema["properties"]) == {"target"} | BUDGET_PARAMS
 
 
 @pytest.mark.asyncio
@@ -72,6 +83,35 @@ async def test_over_budget_result_is_bounded_and_pageable_to_the_exact_original(
         await server.call_tool("aletheore_endpoints", {"section": "endpoints", "filter": "/r/17"})
     )["result"]
     assert filtered["total"] == 11 and filtered["unfiltered_total"] == 300  # /r/17, /r/170 .. /r/179
+
+
+@pytest.mark.asyncio
+async def test_a_requires_target_tool_is_bounded_and_pageable_too(tmp_path, monkeypatch):
+    # Real audit finding: aletheore_symbols (requires_target=True) had no
+    # cap at all - on this project's own hottest file (234 functions/
+    # classes/constants) it rendered to 82,908 characters, bigger than
+    # almost every no-target case the earlier audit found. apply_budget
+    # now applies to the requires_target branch too, not just no-target.
+    monkeypatch.setenv("ALETHEORE_MCP_BUDGET_CHARS", "3000")
+    repo = make_repo_with_evidence(tmp_path)
+    bloat_symbols(repo, 300)
+    server = build_server(repo)
+
+    first = await server.call_tool("aletheore_symbols", {"target": "a.py"})
+    assert len(first.content[0].text) <= 3000
+    info = tool_result_body(first)["result"]["_budget"]["truncated"]["functions"]
+    assert info["total"] == 300 and 3 <= info["shown"] < 300
+
+    names, offset = [], 0
+    while offset is not None:
+        page = await server.call_tool(
+            "aletheore_symbols", {"target": "a.py", "section": "functions", "offset": offset}
+        )
+        assert len(page.content[0].text) <= 3000
+        body = tool_result_body(page)["result"]
+        names.extend(item["name"] for item in body["items"])
+        offset = body["next_offset"]
+    assert names == [f"fn_{i}" for i in range(300)]
 
 
 @pytest.mark.asyncio
