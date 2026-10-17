@@ -2059,12 +2059,12 @@ def usages(
     try:
         evidence = load_evidence(repo)
     except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
-        print(f"error: {exc} (run 'aletheore scan' first)")
+        print(f"error: {exc} (run 'aletheore scan' first)", file=sys.stderr)
         raise typer.Exit(code=1)
     try:
         print(usages_report(evidence, repo, symbol, exclude, under))
     except UsagesError as exc:
-        print(f"error: {exc}")
+        print(f"error: {exc}", file=sys.stderr)
         raise typer.Exit(code=1)
 
 

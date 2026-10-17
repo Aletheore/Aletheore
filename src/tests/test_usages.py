@@ -127,6 +127,31 @@ def test_cli_usages_end_to_end(tmp_path: Path):
     assert bad.exit_code == 1 and "error:" in bad.output
 
 
+def test_recursive_call_inside_the_definition_is_not_counted_as_a_usage(tmp_path: Path):
+    # Flash Review finding: only the definition's start_line was excluded, so a recursive call or a self-reference
+    # anywhere else in the body was double-counted as a "usage outside its own definition".
+    repo = _git_repo(
+        tmp_path,
+        {
+            "a.py": "def fact(n):\n    if n <= 1:\n        return 1\n    return n * fact(n - 1)\n",
+            "b.py": "from a import fact\nfact(5)\n",
+        },
+    )
+    ev = _ev({"a.py": {"functions": [{"name": "fact", "start_line": 1, "end_line": 4}]}, "b.py": {}})
+    text = usages_report(ev, repo, "fact")
+    assert "Used 2 time(s)" in text  # only b.py's import line and call, not the recursive call in a.py
+    assert "a.py:4" not in text.split("Coverage:")[0]
+
+
+def test_git_grep_handles_a_colon_in_the_file_path(tmp_path: Path):
+    # Flash Review finding: splitting git grep's output on ":" silently drops hits in a path containing one
+    # (legal on POSIX filesystems) because the line-number field fails int() and the line is discarded.
+    repo = _git_repo(tmp_path, {"a.py": "def f():\n    pass\n", "weird:name.py": "from a import f\nf()\n"})
+    ev = _ev({"a.py": {"functions": [{"name": "f", "start_line": 1, "end_line": 2}]}, "weird:name.py": {}})
+    text = usages_report(ev, repo, "f")
+    assert "weird:name.py:2: f()" in text
+
+
 def test_renamed_import_alias_is_an_honest_gap(tmp_path: Path):
     # Documented limitation: usages matches the literal name, so an alias import is invisible to it. This test
     # pins that known gap rather than silently letting it drift.

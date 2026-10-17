@@ -58,13 +58,15 @@ def _known_symbol_names(evidence: dict) -> set[str]:
 
 
 def _git_grep_usages(repo_path: Path, symbol: str) -> list[tuple[str, int, str]] | None:
-    """(path, line, text) for every whole-word occurrence git tracks; None if git itself could not be used."""
+    """(path, line, text) for every whole-word occurrence git tracks; None if git itself could not be used.
+
+    `-z` makes git grep emit "path\\0lineno\\0text\\n" instead of "path:lineno:text\\n" - a plain colon split
+    silently drops any hit in a file whose path itself contains a colon (legal on POSIX filesystems)."""
     try:
         result = subprocess.run(
-            ["git", "grep", "-n", "-w", "-I", "-F", "-e", symbol],
+            ["git", "grep", "-n", "-w", "-I", "-F", "-z", "-e", symbol],
             cwd=repo_path,
             capture_output=True,
-            text=True,
             timeout=_GIT_GREP_TIMEOUT_S,
         )
     except (OSError, subprocess.SubprocessError):
@@ -72,9 +74,11 @@ def _git_grep_usages(repo_path: Path, symbol: str) -> list[tuple[str, int, str]]
     if result.returncode not in (0, 1):
         return None
     out = []
-    for raw in result.stdout.splitlines():
-        path, _, rest = raw.partition(":")
-        lineno_s, _, text = rest.partition(":")
+    for raw in result.stdout.decode(errors="replace").split("\n"):
+        if not raw:
+            continue
+        path, _, rest = raw.partition("\0")
+        lineno_s, _, text = rest.partition("\0")
         try:
             out.append((path, int(lineno_s), text))
         except ValueError:
@@ -135,7 +139,12 @@ def usages_report(
         raise UsagesError(f"{symbol!r} is not a known function or class name in the scan{hint}")
 
     defs = _symbol_definitions(evidence, symbol)
-    def_headers = {(path, start) for path, _kind, start, _end in defs}
+    def_ranges: dict[str, list[tuple[int, int]]] = {}
+    for path, _kind, start, end in defs:
+        def_ranges.setdefault(path, []).append((start, end))
+
+    def _inside_own_definition(path: str, lineno: int) -> bool:
+        return any(start <= lineno <= end for start, end in def_ranges.get(path, []))
 
     repo_path = Path(repo_path)
     hits = _git_grep_usages(repo_path, symbol) if (repo_path / ".git").exists() else None
@@ -143,7 +152,9 @@ def usages_report(
     if hits is None:
         hits = _plain_scan_usages(repo_path, evidence, symbol)
 
-    non_def_hits = [h for h in hits if (h[0], h[1]) not in def_headers]
+    # A hit anywhere inside the definition's own start..end range is part of the definition, not a usage of it -
+    # a recursive call, a class referencing its own name in a nested method, etc. must not count twice.
+    non_def_hits = [h for h in hits if not _inside_own_definition(h[0], h[1])]
 
     exclude = exclude or []
     under = [u.removeprefix("./").strip("/") for u in (under or [])]
