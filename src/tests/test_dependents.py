@@ -27,7 +27,7 @@ def test_report_lists_files_and_states_coverage(tmp_path: Path):
     text = dependents_report(_ev(GRAPH, unparseable=2), tmp_path, "a.py")
     assert text.splitlines()[0].startswith("4 files import a.py")
     assert text.count("\n.py") == 0 and "b.py\nc.py\nd.py\ne.py" in text
-    assert "2 direct importers plus 2" in text and "2 unparseable" in text and "scan is current" in text
+    assert "2 direct importers plus 2" in text and "2 unparseable" in text and "no listed file changed" in text
     assert "importlib" in text
 
 
@@ -80,3 +80,9 @@ def test_cli_dependents_end_to_end(tmp_path: Path):
         bad = CliRunner().invoke(app, ["dependents", "nope.py", str(tmp_path)])
     assert ok.exit_code == 0 and "3 files import a.py" in ok.output
     assert bad.exit_code == 1 and "error:" in bad.output
+
+
+def test_under_accepts_dot_slash_and_dot(tmp_path: Path):
+    g = {"pkg/a.py": ["pkg/b.py", "bench/x.py"], "pkg/b.py": [], "bench/x.py": []}
+    assert "1 files import pkg/a.py" in dependents_report(_ev(g), tmp_path, "pkg/a.py", under=["./pkg/"])
+    assert "2 files import pkg/a.py" in dependents_report(_ev(g), tmp_path, "pkg/a.py", under=["."])

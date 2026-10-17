@@ -62,22 +62,24 @@ def dependents_report(
 
     allp, direct = dependents_of(evidence, target)
     exclude = exclude or []
-    under = [u.strip('/') + '/' for u in (under or [])]
+    under = [u.removeprefix('./').strip('/') for u in (under or [])]
+    under = [u + '/' for u in under if u not in ('', '.')]
     shown = [p for p in allp if not any(_matches(p, e) for e in exclude) and (not under or p.startswith(tuple(under)))]
     dropped = len(allp) - len(shown)
 
     language = by_path[target].get("language") or "unknown"
     unparseable = len(evidence["repository"].get("unparseable_files") or [])
     changed = _files_changed_since_scan(repo_path, [target, *allp], evidence.get("scanned_at"))
-    fresh = "scan is current" if not changed else f"STALE: {len(changed)} of these files changed after the scan ({', '.join(changed[:3])}{', ...' if len(changed) > 3 else ''})"
+    fresh = "no listed file changed since the scan (files added after it are not covered)" if not changed else f"STALE: {len(changed)} of these files changed after the scan ({', '.join(changed[:3])}{', ...' if len(changed) > 3 else ''})"
     excl = f" ({dropped} more left out by --exclude/--under)" if dropped else ""
     lines = [
         f"{len(shown)} files import {target}, directly or through other imports{excl}:",
         *shown,
         "",
-        f"This list is complete for static {language} imports: {len(direct)} direct importers plus "
-        f"{len(allp) - len(direct)} that reach it through other files, deduplicated, {len(modules)} modules indexed, "
-        f"{unparseable} unparseable; {fresh}. Not tracked: imports built at run time (importlib, __import__, "
-        "string-based plugin loading). Nothing here needs to be re-derived with grep.",
+        f"Repo-wide this file has {len(direct)} direct importers plus {len(allp) - len(direct)} that reach it through "
+        f"other files (before --under/--exclude), deduplicated. Coverage: static {language} imports only, "
+        f"{len(modules)} modules indexed, {unparseable} unparseable; {fresh}. Not tracked: imports built at run time "
+        "(importlib, __import__, string-based plugin loading). For static imports this list does not need to be "
+        "re-derived with grep.",
     ]
     return "\n".join(lines)
