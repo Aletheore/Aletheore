@@ -2355,7 +2355,7 @@ def main() -> None:
     # before Sentry initialises, so nothing is reported.
     try:
         os.getcwd()
-    except FileNotFoundError:
+    except OSError:  # FileNotFoundError on POSIX; a plain OSError (WinError 3) on Windows
         _stderr_console.print(
             "[bold red]error:[/bold red] the current working directory no "
             "longer exists. cd into an existing directory and run the "

@@ -1801,7 +1801,12 @@ def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
                         repo_full_name=repo_full_name,
                     )
                 except Exception:  # noqa: BLE001
-                    pass
+                    # One build failing to enqueue must not fail the scan that already finished, and must not
+                    # stop the other build from being enqueued - but it must leave a trace.
+                    logging.getLogger("scan_worker.jobs").warning(
+                        "could not enqueue %s for installation=%s repo=%s",
+                        build_job, installation_id, repo_full_name, exc_info=True,
+                    )
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("scan_worker.jobs").warning(
             "initial scan job failed for installation=%s repo=%s (%s)",
