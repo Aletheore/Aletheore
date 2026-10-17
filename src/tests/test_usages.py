@@ -143,6 +143,19 @@ def test_recursive_call_inside_the_definition_is_not_counted_as_a_usage(tmp_path
     assert "a.py:4" not in text.split("Coverage:")[0]
 
 
+@pytest.mark.parametrize("sep", ["\0", ":"])
+def test_git_grep_parsing_accepts_either_line_text_delimiter(sep, tmp_path: Path, monkeypatch):
+    # git versions differ on whether -z NULs only the path separator or the line/text separator too - pin both,
+    # since this exact ambiguity caused a real regression (Flash Review finding) in an earlier fix attempt.
+    from unittest.mock import MagicMock
+
+    from aletheore import usages
+
+    fake = MagicMock(returncode=0, stdout=f"a.py\x001{sep}f()\n".encode())
+    monkeypatch.setattr(usages.subprocess, "run", lambda *a, **k: fake)
+    assert usages._git_grep_usages(tmp_path, "f") == [("a.py", 1, "f()")]
+
+
 def test_git_grep_handles_a_colon_in_the_file_path(tmp_path: Path):
     # Flash Review finding: splitting git grep's output on ":" silently drops hits in a path containing one
     # (legal on POSIX filesystems) because the line-number field fails int() and the line is discarded.

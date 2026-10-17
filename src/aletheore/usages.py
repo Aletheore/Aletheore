@@ -57,11 +57,15 @@ def _known_symbol_names(evidence: dict) -> set[str]:
     return names
 
 
+_GIT_GREP_Z_LINE = re.compile(r"(\d+)[:\0](.*)", re.DOTALL)
+
+
 def _git_grep_usages(repo_path: Path, symbol: str) -> list[tuple[str, int, str]] | None:
     """(path, line, text) for every whole-word occurrence git tracks; None if git itself could not be used.
 
-    `-z` makes git grep emit "path\\0lineno\\0text\\n" instead of "path:lineno:text\\n" - a plain colon split
-    silently drops any hit in a file whose path itself contains a colon (legal on POSIX filesystems)."""
+    `-z` NUL-delimits the pathname field, so a colon inside the path itself (legal on POSIX filesystems) can no
+    longer be mistaken for the field separator. git versions differ on whether the line-number/text separator
+    that follows is also NUL'd or stays a colon, so both are accepted here rather than assuming one."""
     try:
         result = subprocess.run(
             ["git", "grep", "-n", "-w", "-I", "-F", "-z", "-e", symbol],
@@ -77,12 +81,12 @@ def _git_grep_usages(repo_path: Path, symbol: str) -> list[tuple[str, int, str]]
     for raw in result.stdout.decode(errors="replace").split("\n"):
         if not raw:
             continue
-        path, _, rest = raw.partition("\0")
-        lineno_s, _, text = rest.partition("\0")
-        try:
-            out.append((path, int(lineno_s), text))
-        except ValueError:
+        path, sep, rest = raw.partition("\0")
+        if not sep:
             continue
+        match = _GIT_GREP_Z_LINE.match(rest)
+        if match:
+            out.append((path, int(match.group(1)), match.group(2)))
     return out
 
 
