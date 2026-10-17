@@ -155,3 +155,32 @@ def test_a_weak_single_match_is_dropped_unless_confidence_is_waived(tmp_path):
     repo = make_repo(tmp_path, files)
     assert locate("big_function_name", repo, modules_for(files), all_words=True) == []
     assert locate("big_function_name", repo, modules_for(files), all_words=True, require_confidence=False)
+
+
+def test_locate_keeps_partial_results_when_a_later_git_call_fails(tmp_path, monkeypatch):
+    # An OSError/SubprocessError mid-loop stops the search but keeps what earlier identifiers already scored,
+    # instead of throwing the whole result away.
+    import aletheore.code_locator as code_locator
+
+    repo = make_repo(tmp_path, FILES)
+    real = code_locator._git_files_containing
+    seen = []
+
+    def flaky(repo_path, ident, candidates, timeout):
+        seen.append(ident)
+        if len(seen) > 1:
+            raise subprocess.SubprocessError("git went away")
+        return real(repo_path, ident, candidates, timeout=timeout)
+
+    monkeypatch.setattr(code_locator, "_git_files_containing", flaky)
+
+    cands = locate(
+        "HelpFormatter bogus_other_identifier",
+        repo,
+        modules_for(FILES),
+        all_words=True,
+        require_confidence=False,
+    )
+
+    assert len(seen) == 2
+    assert cands and cands[0].path == "src/fmt.py"
