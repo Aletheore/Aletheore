@@ -31,7 +31,9 @@ from app_server.github_pagination import GITHUB_LIST_PER_PAGE
 from app_server.db import (
     add_installation_member,
     add_paddle_ids_to_installation,
+    create_api_token,
     create_session,
+    get_installation_by_token_hash,
     get_max_tokens,
     get_session,
     insert_repo_history,
@@ -507,6 +509,25 @@ async def test_generate_token_returns_raw_value_once(pool, monkeypatch):
     async with client:
         response = await client.post("/admin/octocat/hello-world/tokens", json={"label": "laptop"})
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_remove_member_revokes_api_tokens_that_member_created(pool, monkeypatch):
+    # Regression test for a real bug (2026-10-12 Strix security review):
+    # removing a member used to leave any API token they'd personally
+    # created fully usable indefinitely, since a token authenticates
+    # purely by hash with no check that its creator is still a member.
+    client = await _logged_in_client(pool, monkeypatch)
+    await create_api_token(pool, 100, "departing-hash", "departing-laptop", "departing-member")
+    await create_api_token(pool, 100, "octocat-hash", "octocat-laptop", "octocat")
+
+    async with client:
+        response = await client.delete("/admin/octocat/hello-world/members/departing-member")
+
+    assert response.status_code == 200
+    assert await get_installation_by_token_hash(pool, "departing-hash") is None
+    # The acting admin's own token, from a different login, must survive.
+    assert (await get_installation_by_token_hash(pool, "octocat-hash"))["installation_id"] == 100
 
 
 @pytest.mark.asyncio

@@ -1992,6 +1992,26 @@ async def revoke_api_token(pool: asyncpg.Pool, installation_id: int, token_id: i
     )
 
 
+async def revoke_api_tokens_created_by(pool: asyncpg.Pool, installation_id: int, github_login: str) -> int:
+    """Revokes every still-active API token this login personally created on
+    this installation. Called from remove_member (real bug fixed
+    2026-10-12, Strix security review): tokens authenticate purely by hash
+    plus revoked_at IS NULL - nothing ties a token's continued validity to
+    its creator still being a member - so removing someone used to leave
+    any token they'd made fully usable indefinitely. Returns how many
+    tokens were revoked, so the caller can log it."""
+    result = await pool.execute(
+        """
+        UPDATE api_tokens SET revoked_at = now()
+        WHERE installation_id = $1 AND created_by_github_login = $2 AND revoked_at IS NULL
+        """,
+        installation_id,
+        github_login,
+    )
+    # asyncpg's execute() returns a command tag string like "UPDATE 3".
+    return int(result.split()[-1]) if result.startswith("UPDATE") else 0
+
+
 async def list_api_tokens(pool: asyncpg.Pool, installation_id: int) -> list[dict]:
     rows = await pool.fetch(
         """

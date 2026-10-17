@@ -581,10 +581,36 @@ _REPO_CHECKOUT_ROOT_ENV = "ALETHEORE_REPO_CHECKOUT_ROOT"
 _DEFAULT_REPO_CHECKOUT_ROOT = "/data/aletheore-repo-checkouts"
 
 
+class _CheckoutPathEscapeError(ValueError):
+    """repo_full_name resolved outside its own installation's checkout
+    root - see _persistent_checkout_dir's docstring."""
+
+
 def _persistent_checkout_dir(installation_id: int, repo_full_name: str) -> Path:
+    """The on-disk checkout path for one repo under one installation.
+
+    Containment is enforced here, not left to each caller (real gap fixed
+    2026-10-12, Strix security review): this only ever replaced "/"
+    characters in repo_full_name, so a bare ".." segment (no slash to
+    replace) passed straight through and could resolve outside the
+    installation's own directory - purge_repo_checkout_job already
+    independently re-checked containment before deleting anything, but
+    _prepare_head_checkout/_ensure_persistent_checkout (which create and
+    write to this path) did not, an inconsistency between two call sites
+    of the same function rather than a deliberate choice. Raising here
+    instead protects every caller at the source: _prepare_head_checkout's
+    existing try/except already falls back to a safe ephemeral clone on
+    any exception, and purge_repo_checkout_job's own try/except (below)
+    just logs and refuses, matching its prior behavior exactly."""
     root = Path(os.environ.get(_REPO_CHECKOUT_ROOT_ENV, _DEFAULT_REPO_CHECKOUT_ROOT))
     safe_name = repo_full_name.replace("/", "__")
-    return root / str(installation_id) / safe_name
+    candidate = root / str(installation_id) / safe_name
+    installation_root = (root / str(installation_id)).resolve()
+    if candidate.resolve().parent != installation_root:
+        raise _CheckoutPathEscapeError(
+            f"repo_full_name {repo_full_name!r} resolves outside installation {installation_id}'s checkout root"
+        )
+    return candidate
 
 
 def _installation_checkout_root(installation_id: int) -> Path:
@@ -618,12 +644,13 @@ def purge_repo_checkout_job(installation_id: int, repo_full_name: str) -> None:
     (see handle_installation_event).
 
     shutil.rmtree on a path that escaped this installation's own directory
-    would delete other installations' source, so anything that doesn't
-    resolve to a direct child of this installation's root is refused.
+    would delete other installations' source - _persistent_checkout_dir
+    itself now refuses to build such a path (see its docstring), so this
+    just has to not delete anything if that refusal fires.
     """
-    installation_root = _installation_checkout_root(installation_id).resolve()
-    target = _persistent_checkout_dir(installation_id, repo_full_name)
-    if target.resolve().parent != installation_root:
+    try:
+        target = _persistent_checkout_dir(installation_id, repo_full_name)
+    except _CheckoutPathEscapeError:
         logging.getLogger("scan_worker.jobs").warning(
             "refusing to purge checkout for installation %s: %r is not a direct child of its checkout root",
             installation_id, repo_full_name,
@@ -2416,18 +2443,26 @@ def run_flash_review_job(
     # How much of reserved_spend was drawn from purchased top-up credit, so a
     # release (the true-up refund or the failure path below) goes back there.
     reserved_topup: dict = {}
+    # Captured once and threaded through every reserve/release call below -
+    # a job that runs long enough to straddle a month boundary must release
+    # against the same row it reserved, not whichever month happens to be
+    # current when release runs (confirmed real bug, 2026-10-12 Strix review:
+    # release used to recompute "now()" independently and could decrement a
+    # legitimate new-month reservation instead of the stale old-month one).
+    reservation_month = datetime.now(timezone.utc).date().replace(day=1)
     if is_free_tier:
         # Not recorded to history - always free tier here, and
         # _record_review_outcome no-ops for free tier anyway (see its own
         # docstring: the read route 404s free installs).
         if not reserve_flash_review_count(
-            settings.database_url, installation_id, MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH
+            settings.database_url, installation_id, MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH,
+            month=reservation_month,
         ):
             return
     else:
         # Paid plans have no review-count cap (limit=None still counts the
         # review); the dollar reservation below is what bounds them.
-        reserve_flash_review_count(settings.database_url, installation_id, None)
+        reserve_flash_review_count(settings.database_url, installation_id, None, month=reservation_month)
         # reserve_llm_spend rejects the WHOLE reservation when the combined
         # balance is below the requested amount (its `>= %(reserve)s` WHERE
         # clause - deliberately untouched, that atomicity is what stops two
@@ -2454,7 +2489,7 @@ def run_flash_review_job(
             settings.database_url, installation_id, reserved_spend, feature="flash_review",
             topup_out=reserved_topup,
         ):
-            release_flash_review_count_reservation(settings.database_url, installation_id)
+            release_flash_review_count_reservation(settings.database_url, installation_id, month=reservation_month)
             _record_review_outcome(
                 settings, installation_id, repo_full_name, pr_number,
                 "skipped", skip_reason="AI credit exhausted",
@@ -2526,7 +2561,7 @@ def run_flash_review_job(
         # actually used - see release_flash_review_count_reservation and
         # release_llm_spend_reservation.
         if not review_ran:
-            release_flash_review_count_reservation(settings.database_url, installation_id)
+            release_flash_review_count_reservation(settings.database_url, installation_id, month=reservation_month)
             if reserved_spend and not reservation_state["settled"]:
                 _release_spend(
                     settings.database_url, installation_id, reserved_spend,

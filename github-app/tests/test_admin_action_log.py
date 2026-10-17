@@ -97,7 +97,7 @@ async def test_remove_member_route_records_admin_action(pool, monkeypatch):
     actions = await list_admin_actions(pool, 100)
     matching = [a for a in actions if a["action"] == "member_removed"]
     assert len(matching) == 1
-    assert matching[0]["detail"] == {"github_login": "leaving-member"}
+    assert matching[0]["detail"] == {"github_login": "leaving-member", "revoked_token_count": 0}
 
 
 @pytest.mark.asyncio

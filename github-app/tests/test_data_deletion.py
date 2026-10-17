@@ -44,6 +44,10 @@ async def _get_otp_code(client, delete_path, monkeypatch):
     # persistent-checkout purge job - same unreachable-Redis-in-tests
     # reasoning as is_rate_limited above.
     monkeypatch.setattr("rq.Queue.enqueue", MagicMock())
+    # No RESEND_API_KEY in the test env: the OTP route only falls back to
+    # logging the code when SENTRY_ENVIRONMENT is explicitly non-production,
+    # otherwise it fails closed with a 503.
+    monkeypatch.setenv("SENTRY_ENVIRONMENT", "test")
     response = await client.post(f"{delete_path}/request-otp")
     assert response.status_code == 200, response.text
     return "424242"
