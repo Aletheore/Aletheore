@@ -1,4 +1,4 @@
-from app_server.paddle_pricing import resolve_plan_for_price_id, resolve_price_id_for_plan
+from app_server.paddle_pricing import is_annual_subscription, resolve_plan_for_price_id, resolve_price_id_for_plan
 
 
 def test_resolves_both_real_air_price_ids():
@@ -16,6 +16,23 @@ def test_resolve_price_id_for_plan_round_trips_both_intervals():
     assert resolve_plan_for_price_id(monthly) == "air"
     assert resolve_plan_for_price_id(annual) == "air"
     assert monthly != annual
+
+
+def test_is_annual_subscription_true_for_year_interval():
+    assert is_annual_subscription({"billing_cycle": {"interval": "year"}}) is True
+
+
+def test_is_annual_subscription_false_for_month_interval():
+    assert is_annual_subscription({"billing_cycle": {"interval": "month"}}) is False
+
+
+def test_is_annual_subscription_false_when_billing_cycle_missing():
+    # Code-review finding: admin.py and dashboard.py each independently
+    # hand-rolled (subscription.get("billing_cycle") or {}).get("interval")
+    # == "year" - which is how the annual-credit display bug got
+    # introduced twice. Shared here so there's one place to get it right.
+    assert is_annual_subscription({}) is False
+    assert is_annual_subscription({"billing_cycle": None}) is False
 
 
 def test_resolve_price_id_for_plan_returns_none_for_unknown_plan_or_interval():
@@ -39,3 +56,23 @@ def test_current_topup_price_is_accepted_alongside_the_legacy_one():
 
     assert CREDIT_TOPUP_PRICE_ID not in LEGACY_CREDIT_TOPUP_PRICE_IDS
     assert ACCEPTED_CREDIT_TOPUP_PRICE_IDS == {CREDIT_TOPUP_PRICE_ID} | LEGACY_CREDIT_TOPUP_PRICE_IDS
+
+
+def test_the_top_up_form_enforces_the_same_minimum_as_the_paddle_price():
+    # Paddle rejects a quantity below the price's quantity.minimum at checkout. If the form
+    # (the input's min, the hint text, the click-time check) disagrees, a customer is told one
+    # thing and stopped by another - this happened once with the check in buyCredit().
+    from pathlib import Path
+
+    from app_server.paddle_pricing import CREDIT_TOPUP_MIN_QUANTITY
+
+    source = (Path(__file__).resolve().parent.parent / "app_server" / "frontend.py").read_text()
+    n = CREDIT_TOPUP_MIN_QUANTITY
+
+    assert f'id="topup-amount" min="{n}"' in source
+    assert f"${n} minimum" in source
+    assert f"amount < {n} || amount > 1000" in source
+    assert f"between ${n} and $1000" in source
+    # and no leftover copy of the old floor in the same form
+    assert 'id="topup-amount" min="5"' not in source
+    assert "between $5 and $1000" not in source

@@ -446,6 +446,26 @@ def test_rebuild_refreshes_an_index_that_already_exists(tmp_path):
     assert "index updated (7 chunks)" in messages
 
 
+def test_rebuild_passes_allow_hosted_through_to_build_index(tmp_path):
+    # Real gap found by an independent Strix pentest pass (2026-10-15):
+    # rebuild() used to call build_index(repo_path, evidence) with no
+    # allow_hosted argument at all, so a watcher-triggered reindex always
+    # got build_index's own allow_hosted=True default regardless of
+    # whether the MCP operator actually granted `external` - a saved
+    # managed-audit token meant every edit-triggered reindex sent changed
+    # source chunks to Aletheore's hosted embedding service even when
+    # `external` was denied. build_server now always passes the
+    # operator's real grant through ensure_watcher -> start_background_watch
+    # -> BackgroundWatcher -> watch() -> here.
+    repo = _git_repo(tmp_path)
+    (repo / ".aletheore" / "index.lancedb").mkdir(parents=True)
+
+    with patch("aletheore.search_index.build_index", return_value=0) as build:
+        rebuild(repo, lambda _message: None, allow_hosted=False)
+
+    assert build.call_args.kwargs["allow_hosted"] is False
+
+
 def test_an_unreachable_embedder_does_not_end_the_watch(tmp_path):
     """Evidence is already current, which is most of the value, and the next
     edit retries."""
@@ -838,7 +858,7 @@ def test_stopping_during_a_rebuild_keeps_the_repository_lock_until_the_thread_en
     in_rebuild = threading.Event()
     finish_rebuild = threading.Event()
 
-    def slow_rebuild(_repo, _report):
+    def slow_rebuild(_repo, _report, **_kwargs):
         in_rebuild.set()
         finish_rebuild.wait(timeout=20)
 

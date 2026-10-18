@@ -14,14 +14,14 @@ async def _async_true(*args, **kwargs) -> bool:
 
 
 async def _logged_in_client(pool, monkeypatch, administered_ids):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     monkeypatch.setenv("GITHUB_APP_SLUG", "aletheore")
     await create_session(
         pool,
         "picker-sess",
         42,
         "octocat",
-        encrypt_access_token("gho_faketoken", "test-session-secret"),
+        encrypt_access_token("gho_faketoken", "test-session-secret-at-least-32-characters-long"),
         datetime.now(timezone.utc) + timedelta(hours=1),
     )
 
@@ -40,7 +40,7 @@ async def _logged_in_client(pool, monkeypatch, administered_ids):
     )
     monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
     app.state.db_pool = pool
-    signed = sign_session_id("picker-sess", "test-session-secret")
+    signed = sign_session_id("picker-sess", "test-session-secret-at-least-32-characters-long")
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test", cookies={"session": signed})
 
 

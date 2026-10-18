@@ -47,7 +47,7 @@ from app_server.paddle_pricing import EXTRA_SEAT_PRICE_ID
 
 
 async def _logged_in_client(pool, monkeypatch, installation_id=100, plan="air"):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     await upsert_installation(pool, installation_id, "octocat")
     await set_installation_plan(pool, installation_id, plan)
     await insert_repo_history(
@@ -62,7 +62,7 @@ async def _logged_in_client(pool, monkeypatch, installation_id=100, plan="air"):
         "sess-1",
         42,
         "octocat",
-        encrypt_access_token("gho_faketoken", "test-session-secret"),
+        encrypt_access_token("gho_faketoken", "test-session-secret-at-least-32-characters-long"),
         datetime.now(timezone.utc) + timedelta(hours=1),
     )
 
@@ -91,7 +91,7 @@ async def _logged_in_client(pool, monkeypatch, installation_id=100, plan="air"):
     monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
 
     app.state.db_pool = pool
-    signed = sign_session_id("sess-1", "test-session-secret")
+    signed = sign_session_id("sess-1", "test-session-secret-at-least-32-characters-long")
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed})
 
@@ -132,15 +132,15 @@ async def _mock_github_installations(monkeypatch, installation_ids: list[int], g
 async def _create_session_with_tokens(
     pool, monkeypatch, session_id, access_token, refresh_token=None
 ):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     await create_session(
         pool,
         session_id,
         42,
         "octocat",
-        encrypt_access_token(access_token, "test-session-secret"),
+        encrypt_access_token(access_token, "test-session-secret-at-least-32-characters-long"),
         datetime.now(timezone.utc) + timedelta(hours=1),
-        refresh_token=encrypt_access_token(refresh_token, "test-session-secret") if refresh_token else None,
+        refresh_token=encrypt_access_token(refresh_token, "test-session-secret-at-least-32-characters-long") if refresh_token else None,
     )
     return {
         "id": session_id,
@@ -194,7 +194,7 @@ async def test_administered_ids_for_session_succeeds_without_refresh_when_token_
     assert ids == {1, 2}
     # Untouched - no refresh was needed.
     row = await get_session(pool, "sess-valid")
-    assert decrypt_access_token(row["github_access_token"], "test-session-secret") == "gho_valid"
+    assert decrypt_access_token(row["github_access_token"], "test-session-secret-at-least-32-characters-long") == "gho_valid"
 
 
 @pytest.mark.asyncio
@@ -225,8 +225,8 @@ async def test_administered_ids_for_session_refreshes_and_retries_on_401(pool, m
     assert ids == {7}
 
     row = await get_session(pool, "sess-refresh")
-    assert decrypt_access_token(row["github_access_token"], "test-session-secret") == "gho_fresh"
-    assert decrypt_access_token(row["github_refresh_token"], "test-session-secret") == "ghr_rotated"
+    assert decrypt_access_token(row["github_access_token"], "test-session-secret-at-least-32-characters-long") == "gho_fresh"
+    assert decrypt_access_token(row["github_refresh_token"], "test-session-secret-at-least-32-characters-long") == "ghr_rotated"
 
 
 @pytest.mark.asyncio
@@ -254,7 +254,7 @@ async def test_administered_ids_for_session_keeps_old_refresh_token_if_github_om
     await _administered_installation_ids_for_session_or_401(pool, session)
 
     row = await get_session(pool, "sess-norotate")
-    assert decrypt_access_token(row["github_refresh_token"], "test-session-secret") == "ghr_stillgood"
+    assert decrypt_access_token(row["github_refresh_token"], "test-session-secret-at-least-32-characters-long") == "ghr_stillgood"
 
 
 @pytest.mark.asyncio
@@ -425,6 +425,32 @@ async def test_admin_page_surfaces_base_credit_allotment(pool, monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["base_credit_allotment_usd"] == pytest.approx(PLAN_BASE_CREDIT_USD["air"])
+
+
+@pytest.mark.asyncio
+async def test_admin_page_uses_the_annual_credit_figure_for_an_annual_subscriber(pool, monkeypatch):
+    # Code-review finding: this page never even fetched billing_interval
+    # (unlike dashboard.py's get_credits, which fetched it but didn't pass
+    # it through either) - base_credit_allotment_usd always used the
+    # monthly figure, overstating an annual AIR subscriber's real
+    # progress-bar denominator by $3 (plus any seat bonus).
+    from app_server.llm_cost import base_credit_for_plan
+
+    client = await _logged_in_client(pool, monkeypatch, plan="air")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test_annual", "ctm_test_annual")
+
+    def _annual_subscription(api_key, subscription_id):
+        return {"next_billed_at": "2027-10-10T00:00:00Z", "billing_cycle": {"interval": "year"}}
+
+    monkeypatch.setattr("app_server.admin.get_paddle_subscription", _annual_subscription)
+
+    async with client:
+        response = await client.get("/admin/octocat/hello-world")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["base_credit_allotment_usd"] == base_credit_for_plan("air", 0, is_annual=True)
+    assert body["base_credit_allotment_usd"] != pytest.approx(PLAN_BASE_CREDIT_USD["air"])
 
 
 @pytest.mark.asyncio
@@ -1491,10 +1517,10 @@ async def _second_session_client(monkeypatch, github_user_id: int, login: str, s
         session_id,
         github_user_id,
         login,
-        encrypt_access_token("gho_faketoken2", "test-session-secret"),
+        encrypt_access_token("gho_faketoken2", "test-session-secret-at-least-32-characters-long"),
         datetime.now(timezone.utc) + timedelta(hours=1),
     )
-    signed = sign_session_id(session_id, "test-session-secret")
+    signed = sign_session_id(session_id, "test-session-secret-at-least-32-characters-long")
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed})
 
@@ -1525,7 +1551,7 @@ async def test_admin_page_rejects_an_unadministered_installation_with_the_same_4
     await _logged_in_client(pool, monkeypatch)  # sets up installation 100 + real repo_history
     await _mock_github_installations(monkeypatch, [999])  # this session administers 999, not 100
 
-    signed = sign_session_id("sess-1", "test-session-secret")
+    signed = sign_session_id("sess-1", "test-session-secret-at-least-32-characters-long")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed}) as client:
         response = await client.get("/admin/octocat/hello-world")

@@ -7,12 +7,17 @@ bge-m3 actually underperformed nomic. See jina_embed/server.py, which
 serves this model behind a plain /embed endpoint.
 """
 
+import contextlib
 import functools
 import logging
 import math
 import os
+import threading
+import time
 
 import httpx
+
+from app_server import hosted_embedder
 
 # jina-embeddings-v2-base-code supports an 8192-token context (vs nomic's
 # hard 2048), but this cap is kept conservative rather than re-tuned
@@ -23,6 +28,10 @@ import httpx
 # regardless of how it was found.
 MAX_EMBEDDING_CHARS = 5000
 
+# Remote (DeepInfra) cache lookups: per-attempt timeout and number of attempts.
+REMOTE_TIMEOUT_SECONDS = 20.0
+REMOTE_ATTEMPTS = 3
+
 # Identifies which embedder produced a vector, recorded alongside every
 # similarity-cache row (packet_cache.py, flash_review_cache.py) so a
 # future embedder switch can't silently compare vectors from two
@@ -31,9 +40,81 @@ MAX_EMBEDDING_CHARS = 5000
 # in the same change that points JINA_EMBED_BASE_URL (or its replacement)
 # at the new service - it's what makes an old row's cached vector
 # correctly stop matching new queries the moment the embedder does.
-CURRENT_EMBEDDER = "jina-embed:jina-embeddings-v2-base-code"
+LOCAL_EMBEDDER = "jina-embed:jina-embeddings-v2-base-code"
+# Fixed per process: EMBED_PROVIDER is read once at import, so every cache row a
+# process writes or reads carries the tag of the embedder that process really
+# calls. See app_server/hosted_embedder.py for why there is no runtime fallback.
+CURRENT_EMBEDDER = (
+    f"deepinfra:{hosted_embedder.embedder_label()}"
+    if hosted_embedder.provider() == hosted_embedder.PROVIDER_DEEPINFRA
+    else LOCAL_EMBEDDER
+)
 
 logger = logging.getLogger(__name__)
+
+# Billable tokens from embed_text calls made inside `metered_embedding` on this thread.
+# Thread-local because the cache lookups that call embed_text run on worker threads
+# and the cost belongs to whichever installation's job is on that thread.
+_metering = threading.local()
+
+# Per-feature ledger labels, so the spend breakdown shows what embeddings cost each surface.
+FEATURE_FLASH_CACHE = "flash_review_embedding"
+FEATURE_PACKET_CACHE = "airview_embedding"
+
+
+# Circuit breaker for the remote provider. A lookup that fails has already waited out
+# REMOTE_ATTEMPTS x REMOTE_TIMEOUT_SECONDS (about a minute), so when the provider is down or
+# hanging every lookup in a scan would pay that again. After BREAKER_FAILURES failed lookups in
+# a row the remote call is skipped (an immediate cache miss) for BREAKER_COOLDOWN_SECONDS, then
+# one lookup probes it: a success closes the breaker, a failure reopens it. The cache is an
+# optimisation, so losing hits for a few minutes costs far less than stalling reviews.
+BREAKER_FAILURES = 3
+BREAKER_COOLDOWN_SECONDS = 300.0
+_breaker_lock = threading.Lock()
+_breaker = {"failures": 0, "open_until": 0.0}
+
+
+def _remote_allowed() -> bool:
+    with _breaker_lock:
+        return time.monotonic() >= _breaker["open_until"]
+
+
+def _remote_succeeded() -> None:
+    with _breaker_lock:
+        _breaker["failures"] = 0
+        _breaker["open_until"] = 0.0
+
+
+def _remote_failed() -> None:
+    with _breaker_lock:
+        _breaker["failures"] += 1
+        if _breaker["failures"] >= BREAKER_FAILURES:
+            _breaker["open_until"] = time.monotonic() + BREAKER_COOLDOWN_SECONDS
+            # One more failure after the cooldown reopens it straight away.
+            _breaker["failures"] = BREAKER_FAILURES - 1
+            logger.error(
+                "remote embedder failed %d lookups in a row; skipping it for %.0fs (cache lookups "
+                "will miss meanwhile)", BREAKER_FAILURES, BREAKER_COOLDOWN_SECONDS,
+            )
+
+
+@contextlib.contextmanager
+def metered_embedding(dsn: str, installation_id: int, feature: str):
+    """Charge the installation's credit for any remote embedding tokens used inside the
+    block. A no-op cost for the local embedder, which reports none."""
+    previous = getattr(_metering, "tokens", None)
+    _metering.tokens = 0
+    try:
+        yield
+    finally:
+        tokens = _metering.tokens
+        _metering.tokens = previous
+        if tokens:
+            # Imported here: embedding_spend pulls in the database layer, which the
+            # unmetered path (and its tests) should not need.
+            from scan_worker.embedding_spend import charge_embedding_tokens
+
+            charge_embedding_tokens(dsn, installation_id, tokens, feature)
 
 
 @functools.lru_cache(maxsize=None)
@@ -59,6 +140,28 @@ def embed_text(text: str, base_url: str | None = None, timeout_seconds: float = 
     # costs nothing but a slightly slower cache lookup.
     if len(text) > MAX_EMBEDDING_CHARS:
         text = text[:MAX_EMBEDDING_CHARS]
+    if CURRENT_EMBEDDER != LOCAL_EMBEDDER:
+        # base_url only addresses the local sidecar; the remote provider has a fixed endpoint,
+        # so it is deliberately not used here.
+        # A remote call has a long latency tail (a measured 10-15% of single calls took over
+        # 10 s while the median was 1.2 s), and a miss costs a whole re-review, so wait longer
+        # and retry (the 8B model also answers an occasional single call with a 429).
+        # A degraded provider is cut off by the circuit breaker below, so lookups degrade to a
+        # miss instead of each waiting out its full retries for the rest of a scan.
+        if not _remote_allowed():
+            return None
+        try:
+            vectors, tokens = hosted_embedder.embed_batch(
+                [text], timeout_seconds=max(timeout_seconds, REMOTE_TIMEOUT_SECONDS), retries=REMOTE_ATTEMPTS
+            )
+        except hosted_embedder.EmbedderUnavailable as exc:
+            _remote_failed()
+            logger.warning("embedding call failed (%s); treating cache as unavailable", exc)
+            return None
+        _remote_succeeded()
+        if getattr(_metering, "tokens", None) is not None:
+            _metering.tokens += tokens
+        return vectors[0]
     try:
         # Not a `with` block: _client is now a pooled, cached-for-the-
         # process-lifetime client (see its own docstring) - closing it

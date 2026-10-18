@@ -410,7 +410,7 @@ def make_repo_with_evidence(tmp_path: Path) -> Path:
 def test_root_serves_html_page(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     app = build_app(repo)
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1")
 
     response = client.get("/")
 
@@ -419,10 +419,36 @@ def test_root_serves_html_page(tmp_path):
     assert 'id="app"' in response.text
 
 
+def test_api_evidence_rejects_a_forged_host_header(tmp_path):
+    # Real gap found via audit: this server binds only to 127.0.0.1
+    # (cli.py's _dashboard) but previously had no Host check at all - a
+    # DNS-rebinding page (served from an attacker domain, then re-resolved
+    # to 127.0.0.1) could send that domain as its Host header and still
+    # reach every route with a normal 200, confirmed directly against the
+    # real route before this fix.
+    repo = make_repo_with_evidence(tmp_path)
+    app = build_app(repo)
+    client = TestClient(app, base_url="http://attacker-controlled.example")
+
+    response = client.get("/api/evidence")
+
+    assert response.status_code == 400
+
+
+def test_api_evidence_accepts_a_localhost_host_header(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    app = build_app(repo)
+    client = TestClient(app, base_url="http://localhost")
+
+    response = client.get("/api/evidence")
+
+    assert response.status_code == 200
+
+
 def test_api_evidence_returns_summary(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     app = build_app(repo)
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1")
 
     response = client.get("/api/evidence")
 
@@ -435,7 +461,7 @@ def test_api_evidence_returns_summary(tmp_path):
 def test_api_history_returns_list(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     app = build_app(repo)
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1")
 
     response = client.get("/api/history")
 
@@ -446,7 +472,7 @@ def test_api_history_returns_list(tmp_path):
 def test_api_graph_returns_shape(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     app = build_app(repo)
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1")
 
     response = client.get("/api/graph")
 
@@ -461,7 +487,7 @@ def test_api_mcp_tools_reflects_the_configured_consent_posture(tmp_path):
     # which is withheld until ALETHEORE_MCP_ALLOW opts into `external`.
     repo = make_repo_with_evidence(tmp_path)
     app = build_app(repo)
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1")
 
     response = client.get("/api/mcp-tools")
 
@@ -489,7 +515,7 @@ def test_api_mcp_tools_reflects_the_configured_consent_posture(tmp_path):
 def test_logo_route_serves_the_bundled_png(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     app = build_app(repo)
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1")
 
     response = client.get("/logo.png")
 
@@ -595,7 +621,7 @@ def test_build_app_exposes_the_shutdown_event_the_cli_signals():
 def test_browser_icon_requests_are_served_rather_than_404(tmp_path):
     """A page load requests all four unprompted; each 404'd, filling the log
     with errors for a dashboard that had served the page fine."""
-    client = TestClient(build_app(tmp_path))
+    client = TestClient(build_app(tmp_path), base_url="http://127.0.0.1")
 
     for path in (
         "/favicon.ico", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png", "/logo.png",

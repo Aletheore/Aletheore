@@ -1,10 +1,19 @@
 import type { NextConfig } from "next";
 
-const PAGES = "pricing|developers|benchmarks|dogfooding|status|privacy|terms|refund|security";
+const PAGES = "pricing|developers|benchmarks|dogfooding|status|changelog|privacy|terms|refund|security";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // A stray package-lock.json in the home directory (outside this repo) was
+  // making Turbopack infer the workspace root as the home directory itself,
+  // which made it try to resolve/watch the whole home folder. Pinning the
+  // root here is the fix Next's own Turbopack docs recommend for a
+  // misdetected root. process.cwd() is the directory `next` is run from, so
+  // this is only right when it is run from site/ (the Vercel project's root
+  // directory, and `npm run dev` / `npm run build` inside site/); running it
+  // from the repo root would pin the wrong directory.
+  turbopack: { root: process.cwd() },
   async headers() {
     return [
       {

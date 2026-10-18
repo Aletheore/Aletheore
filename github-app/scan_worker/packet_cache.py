@@ -14,7 +14,7 @@ from scan_worker.db import (
     list_recent_evidence_packet_cache_rows,
     record_evidence_packet_cache_hit,
 )
-from scan_worker.embedding_client import CURRENT_EMBEDDER, embed_text
+from scan_worker.embedding_client import CURRENT_EMBEDDER, FEATURE_PACKET_CACHE, embed_text, metered_embedding
 
 SIMILARITY_THRESHOLD = 0.92
 
@@ -69,7 +69,8 @@ def lookup_cached_result(
         if vector_cache is not None and key in vector_cache:
             vector = vector_cache[key]
         else:
-            vector = embed_text(text)
+            with metered_embedding(dsn, installation_id, FEATURE_PACKET_CACHE):
+                vector = embed_text(text)
             if vector_cache is not None:
                 vector_cache[key] = vector
         if vector is None:
@@ -141,7 +142,8 @@ def store_result(
         if vector_cache is not None and key in vector_cache:
             vector = vector_cache[key]
         else:
-            vector = embed_text(text)
+            with metered_embedding(dsn, installation_id, FEATURE_PACKET_CACHE):
+                vector = embed_text(text)
             if vector_cache is not None:
                 vector_cache[key] = vector
         if vector is None:

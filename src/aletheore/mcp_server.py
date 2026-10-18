@@ -4,6 +4,7 @@ from datetime import datetime
 import multiprocessing
 import os
 import queue
+import shutil
 import time
 import re
 import sys
@@ -473,8 +474,15 @@ _ALL_EFFECTS = frozenset({EFFECT_WRITE, EFFECT_NETWORK, EFFECT_EXTERNAL})
 # tool silently resolves a token from the OS keychain - a user who once ran
 # `aletheore login` has an agent that can upload without ever being asked.
 #
-# (aletheore_answer also reaches an LLM, but it is registered only when the
-# operator passes `aletheore mcp --agent`, which is itself the consent step.)
+# (aletheore_answer also reaches an LLM: TOOL_REQUIRED_EFFECTS lists only
+# `network` for it, since a `requires_consent=False` local CLI adapter never
+# leaves this machine - but build_server adds `external` to that
+# requirement per-server when the operator's selected `--agent` adapter is
+# itself `requires_consent=True`, so a direct third-party API adapter still
+# needs the operator to have granted `external`. Selecting `--agent` is not,
+# by itself, that consent - see build_server's `required_effects`. Strix
+# security review, 2026-10-15: this comment used to claim selection alone
+# was sufficient, which it never was for a requires_consent adapter.)
 _DEFAULT_ALLOWED_EFFECTS = frozenset({EFFECT_WRITE, EFFECT_NETWORK})
 
 _ALLOW_ENV_VAR = "ALETHEORE_MCP_ALLOW"
@@ -1208,7 +1216,11 @@ def _register_index_tool(mcp_instance: MCPServer, repo_path: Path, effects: froz
         with EVIDENCE_WRITE_LOCK:
             evidence = read_evidence(repo_path)
             try:
-                count = build_index(repo_path, evidence, allow_hosted=EFFECT_EXTERNAL in effects)
+                count = build_index(
+                    repo_path, evidence,
+                    allow_hosted=EFFECT_EXTERNAL in effects,
+                    already_consented=EFFECT_EXTERNAL in effects,
+                )
             except Exception as exc:  # noqa: BLE001
                 return _toon_result({"error": str(exc)})
         return _toon_result({"indexed_chunks": count})
@@ -1344,12 +1356,18 @@ def _watch_report(message: str) -> None:
         pass
 
 
-def ensure_watcher(repo_path: Path) -> None:
+def ensure_watcher(repo_path: Path, allow_hosted: bool = True) -> None:
     """Start the background watcher for this repository if it is not running.
 
     Safe to call repeatedly (after every scan). A start that was refused for a
     reason that will not change on its own (too many files, another process
     already watching) is remembered so it is not re-announced on every scan.
+
+    allow_hosted must be the operator's actual `external` effect grant, not
+    just left at its True default here - see build_server's watching setup
+    (Strix security review, 2026-10-15: the watcher used to always allow
+    hosted embedding on every edit-triggered reindex regardless of whether
+    `external` was denied).
     """
     with _watchers_lock:
         existing = _watchers.get(repo_path)
@@ -1358,7 +1376,7 @@ def ensure_watcher(repo_path: Path) -> None:
         if repo_path in _watch_declined:
             return
         had_evidence = (repo_path / ".aletheore" / "air.json").exists()
-        watcher = start_background_watch(repo_path, _watch_report)
+        watcher = start_background_watch(repo_path, _watch_report, allow_hosted=allow_hosted)
         if watcher is not None:
             _watchers[repo_path] = watcher
         elif had_evidence:
@@ -1385,6 +1403,14 @@ TOOL_REQUIRED_EFFECTS: dict[str, frozenset[str]] = {
 }
 
 
+def _sonarqube_upload_configured() -> bool:
+    """Mirrors static_analysis.sonarqube_scanner.check_sonarqube's own
+    silent-no-op gating exactly: if either half is missing, that function
+    does nothing, so aletheore_scan transmits nothing external and the
+    base {write, network} requirement already covers it honestly."""
+    return bool(os.environ.get("SONARQUBE_HOST_URL")) and shutil.which("sonar-scanner") is not None
+
+
 def build_server(
     repo_path: Path,
     answer_adapter: AgentAdapter | None = None,
@@ -1409,6 +1435,34 @@ def build_server(
     if profile not in ("full", "nav"):
         raise ValueError(f"unknown MCP profile {profile!r}; choose full or nav")
     effects = allowed_effects(os.environ.get(_ALLOW_ENV_VAR)) if allow is None else allow
+    # A per-server copy, not the module-level TOOL_REQUIRED_EFFECTS directly:
+    # aletheore_answer only needs `external` added when the selected adapter
+    # actually reaches a third-party API (requires_consent=True) - an
+    # intentionally local CLI adapter (requires_consent=False) keeps working
+    # on `network` alone. Strix security review, 2026-10-15: this tool used
+    # to never require `external` regardless of the adapter, so an operator
+    # who denied it still had retrieved repository code sent to a
+    # consent-requiring adapter's API - the one place the equivalent CLI
+    # `query answer` flow explicitly warns and asks first (cli.py's
+    # `requires_consent` check), this path had no equivalent gate at all.
+    required_effects = dict(TOOL_REQUIRED_EFFECTS)
+    if answer_adapter is not None and answer_adapter.requires_consent:
+        required_effects["aletheore_answer"] = required_effects["aletheore_answer"] | {EFFECT_EXTERNAL}
+    if _sonarqube_upload_configured():
+        # Real gap found via audit: aletheore_scan's own wrapper never
+        # overrides check_static_analysis, so it always runs static
+        # analysis - which, once an operator has configured
+        # SONARQUBE_HOST_URL and installed sonar-scanner, transmits this
+        # repo's full source to that third-party server (check_sonarqube's
+        # own -Dsonar.sources=. call) with no way for the MCP caller to
+        # opt out. That is exactly what EFFECT_EXTERNAL exists to gate -
+        # aletheore_scan's base {write, network} requirement silently
+        # missed it, same class of gap as aletheore_answer's own fix
+        # above. Mirrors check_sonarqube's own gating exactly (host
+        # configured AND the CLI installed) so a server where neither is
+        # set, the overwhelming majority, is never asked for a permission
+        # it doesn't need.
+        required_effects["aletheore_scan"] = required_effects["aletheore_scan"] | {EFFECT_EXTERNAL}
 
     mcp_instance = MCPServer("aletheore", instructions=NAV_INSTRUCTIONS if profile == "nav" else SERVER_INSTRUCTIONS)
     # A tool that returns a string would otherwise also send a JSON-wrapped structured copy, and the model is shown
@@ -1451,7 +1505,7 @@ def build_server(
     withheld: list[str] = []
 
     def permitted(tool_name: str) -> bool:
-        if TOOL_REQUIRED_EFFECTS[tool_name] <= effects:
+        if required_effects[tool_name] <= effects:
             return True
         withheld.append(tool_name)
         return False
@@ -1462,8 +1516,16 @@ def build_server(
             f"file watching off: it rewrites .aletheore/ and the write effect is not permitted (see {_ALLOW_ENV_VAR})"
         )
 
+    allow_hosted = EFFECT_EXTERNAL in effects
+
     if permitted("aletheore_scan"):
-        _register_scan_tool(mcp_instance, repo_path, after_scan=ensure_watcher if watching else None)
+        _register_scan_tool(
+            mcp_instance,
+            repo_path,
+            after_scan=(
+                (lambda path: ensure_watcher(path, allow_hosted=allow_hosted)) if watching else None
+            ),
+        )
     if permitted("aletheore_healthcheck"):
         _register_healthcheck_tool(mcp_instance, repo_path)
     if permitted("aletheore_index"):
@@ -1476,13 +1538,13 @@ def build_server(
         _register_answer_tool(mcp_instance, repo_path, answer_adapter, effects)
 
     if watching:
-        ensure_watcher(repo_path)
+        ensure_watcher(repo_path, allow_hosted=allow_hosted)
 
     if withheld:
         # stderr, not stdout: stdout is the MCP transport. The operator is the
         # one who grants consent, so they need to see what was withheld and
         # how to allow it - otherwise a missing tool looks like a bug.
-        missing = sorted(set().union(*(TOOL_REQUIRED_EFFECTS[name] for name in withheld)) - effects)
+        missing = sorted(set().union(*(required_effects[name] for name in withheld)) - effects)
         print(
             f"aletheore: withholding {len(withheld)} tool(s) needing "
             f"{', '.join(missing)}: {', '.join(sorted(withheld))}. "

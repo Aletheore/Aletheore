@@ -32,12 +32,28 @@ def has_api_key(
     return _load_saved_key(provider_name, credentials_path) is not None
 
 
+# Shown wherever an Aletheore API token is obtained (login, the managed-audit
+# prompt) and once per run when the hosted embedder is actually used, since a
+# token set through ALETHEORE_API_TOKEN never passes through either prompt.
+# Saving a token silently switches 'aletheore index' from the local embedder
+# to the hosted one, which is the one path where the CLI uploads source code.
+HOSTED_EMBEDDINGS_DISCLOSURE = (
+    "With an Aletheore token, 'aletheore index' sends chunks of the repository's source code "
+    "to Aletheore's hosted embedding service to build the search index. They are embedded and "
+    "returned, not stored. Run 'aletheore logout' (or unset ALETHEORE_API_TOKEN) to keep "
+    "indexing on this machine."
+)
+
+
 def get_api_key(
     env_var: str,
     provider_name: str,
     credentials_path: Path = DEFAULT_CREDENTIALS_PATH,
     prompt_fn: Callable[[str], str] = input,
+    disclosure: str | None = None,
 ) -> str | None:
+    """`disclosure`: shown right before the key is asked for, to say where
+    requests made with it will go. Only printed when actually prompting."""
     if env_var:
         env_value = os.environ.get(env_var)
         if env_value:
@@ -56,6 +72,8 @@ def get_api_key(
     if prompt_fn is input and not sys.stdin.isatty():
         return None
 
+    if disclosure:
+        print(disclosure)
     key_prompt = (
         f"No {env_var} found. Enter your {provider_name} API key "
         f"(or press Enter to cancel): "
@@ -162,9 +180,43 @@ def _locked_rw_credentials_file(credentials_path: Path):
                 loaded = json.loads(raw) if raw else {}
             except ValueError:
                 # Never silently discard an unparseable file: keep a copy so
-                # other saved keys can be recovered by hand.
+                # other saved keys can be recovered by hand. `raw` can hold
+                # a real (if malformed) secret, so this gets the exact same
+                # restrictive-permissions treatment as credentials_path
+                # itself above - a plain write_bytes created it at the OS
+                # default mode (0644 under the common umask), the one real
+                # gap an audit found in this otherwise-locked-down function.
                 with contextlib.suppress(OSError):
-                    credentials_path.with_suffix(".json.bak").write_bytes(raw)
+                    backup_path = credentials_path.with_suffix(".json.bak")
+                    # Flash Review catch: O_TRUNC on a path an attacker
+                    # pre-planted as a symlink (same credentials directory
+                    # this whole function already treats as a locked-down
+                    # threat boundary) would follow it and write the raw
+                    # secret bytes through to whatever the link points at.
+                    # Same O_NOFOLLOW pattern cli.py's own
+                    # _write_config_file_no_symlink_follow already uses for
+                    # exactly this: POSIX-only, so Windows (which has no
+                    # O_NOFOLLOW) checks is_symlink() explicitly instead.
+                    no_follow = getattr(os, "O_NOFOLLOW", 0)
+                    # Remove whatever is at the path (unlink removes a symlink itself, it never follows it),
+                    # then create it with O_EXCL, which refuses to open an existing path, symlink or not.
+                    # Unlike an is_symlink() check before an O_TRUNC open, nothing planted between the two
+                    # steps can be followed, on Windows (no O_NOFOLLOW) or anywhere else.
+                    with contextlib.suppress(FileNotFoundError):
+                        os.unlink(str(backup_path))
+                    backup_fd = os.open(
+                        str(backup_path),
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow | getattr(os, "O_BINARY", 0),
+                        0o600,
+                    )
+                    try:
+                        if sys.platform != "win32":
+                            os.fchmod(backup_fd, 0o600)
+                        else:
+                            _restrict_windows_acl(backup_path)
+                        _write_all(backup_fd, raw)
+                    finally:
+                        os.close(backup_fd)
                 loaded = {}
             data = loaded if isinstance(loaded, dict) else {}
             yield data

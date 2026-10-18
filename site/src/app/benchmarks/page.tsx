@@ -110,6 +110,16 @@ export default function BenchmarksPage() {
             <p className="mt-3 text-[12px] leading-[1.6] text-faint">{B.prReview.pairwise.note}</p>
           </div>
         </div>
+        <div className="mt-8">
+          <h3 className="mb-3 font-display text-[13.5px] font-bold">{B.prReview.production.title}</h3>
+          <Prose className="mb-4 text-[12.5px]">{B.prReview.production.body}</Prose>
+          <DataTable
+            caption="Flash Review, production call against the diff-only path"
+            columns={[{ key: "a", label: "Configuration" }, { key: "b", label: "Recall", align: "right" }, { key: "c", label: "Precision", align: "right" }, { key: "d", label: "Confirmed false positives per run", align: "right" }]}
+            rows={B.prReview.production.rows.map(([a, b, c, d]) => ({ a, b, c, d }))}
+          />
+          <p className="mt-3 text-[12.5px]"><a className="text-ink underline" href={B.prReview.production.href} rel="noopener">Full method, limitations and the reproduce script, Experiment 9 &rarr;</a></p>
+        </div>
         <div className="mt-8 grid gap-6 lg:grid-cols-3">
           {B.prReview.read.map((r) => (<Callout key={r.title} title={r.title}>{r.body}</Callout>))}
         </div>
@@ -214,6 +224,16 @@ export default function BenchmarksPage() {
       </Section>
 
       <Section id="hosted-embeddings" eyebrow={B.embeddings.eyebrow} title={B.embeddings.title} intro={B.embeddings.intro}>
+        <h3 className="mb-3 font-display text-[13.5px] font-bold">{B.embeddings.current.title}</h3>
+        <Prose className="mb-4 text-[12.5px]">{B.embeddings.current.body}</Prose>
+        <DataTable
+          caption="Embedders on 332 code-search questions"
+          columns={[{ key: "a", label: "Configuration" }, { key: "b", label: "MRR", align: "right" }, { key: "c", label: "MRR against Jina (95% interval)", align: "right" }, { key: "d", label: "Questions", align: "right" }]}
+          rows={B.embeddings.current.rows.map(([a, b, c, d]) => ({ a, b, c, d }))}
+        />
+        <p className="mt-3 text-[12px] leading-[1.6] text-faint">{B.embeddings.current.note}</p>
+        <p className="mt-3 text-[12.5px]"><a className="text-ink underline" href={B.embeddings.current.href} rel="noopener">Full method, limitations and the reproduce script &rarr;</a></p>
+        <h3 className="mb-3 mt-10 font-display text-[13.5px] font-bold">{B.embeddings.olderTitle}</h3>
         <Prose>{B.embeddings.summary}</Prose>
         <div className="mt-6">
           <Disclosure summary="All 23 corpus and regime rows: nomic against jina">

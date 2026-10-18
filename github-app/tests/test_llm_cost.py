@@ -126,6 +126,110 @@ def test_cost_for_usage_does_not_warn_for_freshly_verified_model(monkeypatch, ca
     assert caplog.records == []
 
 
+def test_cost_for_usage_unknown_model_does_not_crash_and_is_not_priced_at_the_most_expensive_model(monkeypatch, caplog):
+    """Code-review finding: a bare dict lookup used to KeyError straight out
+    of a usage-accounting callback the moment a model got added to
+    model_tiers.py without a matching MODEL_RATES_PER_MILLION_USD entry. An
+    unknown model must degrade instead of crashing - but not to the table's
+    HIGHEST rate: the first draft did that and priced it at $15/$75 per M
+    (a model since removed from the table), about 200x the production
+    generator, and this number is drawn from the customer's real credit
+    balance, so it would silently overcharge them. It is priced at the median
+    of the chat-model rows, and logged at ERROR so it reaches Sentry."""
+    import statistics
+
+    monkeypatch.setattr(llm_cost, "_warned_stale_models", set())
+    rates = [r for r in llm_cost.MODEL_RATES_PER_MILLION_USD.values() if r["output"] > 0]
+    median_input = statistics.median(r["input"] for r in rates)
+    median_output = statistics.median(r["output"] for r in rates)
+    highest_input = max(r["input"] for r in rates)
+    highest_output = max(r["output"] for r in rates)
+
+    with caplog.at_level("WARNING"):
+        cost = cost_for_usage("some-brand-new-model-nobody-priced-yet", 1_000_000, 1_000_000)
+
+    assert cost == pytest.approx(median_input + median_output)
+    assert cost < highest_input + highest_output  # strictly below the most expensive model, never at it
+    errors = [r for r in caplog.records if r.levelname == "ERROR" and "some-brand-new-model-nobody-priced-yet" in r.message]
+    assert len(errors) == 1
+
+
+def test_cost_for_usage_unknown_model_with_an_empty_rate_table_prices_at_zero_instead_of_crashing(monkeypatch):
+    monkeypatch.setattr(llm_cost, "_warned_stale_models", set())
+    monkeypatch.setattr(llm_cost, "MODEL_RATES_PER_MILLION_USD", {})
+
+    assert cost_for_usage("any-model", 1_000_000, 1_000_000) == 0.0
+
+
+def test_cost_for_usage_unknown_model_warns_only_once(monkeypatch, caplog):
+    monkeypatch.setattr(llm_cost, "_warned_stale_models", set())
+
+    with caplog.at_level("WARNING"):
+        cost_for_usage("another-unpriced-model", 1000, 1000)
+        cost_for_usage("another-unpriced-model", 1000, 1000)
+
+    warnings = [r for r in caplog.records if "another-unpriced-model" in r.message]
+    assert len(warnings) == 1
+
+
+def test_stale_models_tolerates_a_malformed_verified_at_instead_of_crashing(monkeypatch):
+    """Code-review finding: date.fromisoformat used to raise uncaught on a
+    malformed verified_at on ANY entry - even one never actually billed -
+    which crashed cost accounting for every model, not just the broken
+    one. A malformed entry is now treated as stale (the conservative
+    direction) instead."""
+    monkeypatch.setitem(
+        llm_cost.MODEL_RATES_PER_MILLION_USD,
+        "some-model-with-a-bad-date",
+        {"input": 1.0, "output": 1.0, "verified_at": "not-a-real-date"},
+    )
+
+    assert "some-model-with-a-bad-date" in stale_models(as_of=date(2026, 7, 23))
+
+
+def test_stale_models_warns_about_a_malformed_verified_at_only_once(monkeypatch, caplog):
+    # Code-review finding: the malformed-verified_at warning above was
+    # logged unconditionally on every stale_models() call, contradicting
+    # this file's own "warn once per process per model" design
+    # (_warned_stale_models) - cost_for_usage calls stale_models() once per
+    # distinct not-yet-warned model it sees, so one bad entry re-logged the
+    # same warning once per OTHER model queried too.
+    monkeypatch.setattr(llm_cost, "_warned_stale_models", set())
+    monkeypatch.setitem(
+        llm_cost.MODEL_RATES_PER_MILLION_USD,
+        "some-other-model-with-a-bad-date",
+        {"input": 1.0, "output": 1.0, "verified_at": "not-a-real-date"},
+    )
+
+    with caplog.at_level("WARNING"):
+        stale_models(as_of=date(2026, 7, 23))
+        stale_models(as_of=date(2026, 7, 23))
+        stale_models(as_of=date(2026, 7, 23))
+
+    warnings = [r for r in caplog.records if "some-other-model-with-a-bad-date" in r.message]
+    assert len(warnings) == 1
+
+
+def test_cost_for_usage_does_not_crash_on_a_model_missing_verified_at(monkeypatch, caplog):
+    # Code-review finding: stale_models() tolerates a missing/malformed
+    # verified_at (treating the entry as stale), but cost_for_usage's own
+    # "price is stale" warning then did rates["verified_at"] on that exact
+    # entry and raised KeyError - crashing the usage-accounting callback
+    # (called with no try/except at every real call site) for a model
+    # whose only mistake was an incomplete price-table entry.
+    monkeypatch.setattr(llm_cost, "_warned_stale_models", set())
+    monkeypatch.setitem(
+        llm_cost.MODEL_RATES_PER_MILLION_USD,
+        "model-missing-verified-at",
+        {"input": 1.0, "output": 2.0},
+    )
+
+    with caplog.at_level("WARNING"):
+        cost = cost_for_usage("model-missing-verified-at", 1000, 1000)
+
+    assert cost == pytest.approx((1000 * 1.0 + 1000 * 2.0) / 1_000_000)
+
+
 def test_crossed_spend_warning_threshold_fires_on_the_crossing_increment():
     """A $10 increment against a $15 cap crosses the 30% ($4.50) threshold
     partway through - previous total ($2) was under it, new total ($12) is
@@ -185,3 +289,38 @@ def test_base_credit_for_plan_air_annual_keeps_the_per_seat_bonus():
 
 def test_base_credit_for_plan_ignores_annual_for_a_plan_with_no_annual_price():
     assert base_credit_for_plan("flash", extra_seats=0, is_annual=True) == 5.00
+
+
+def test_unknown_model_fallback_ignores_embedding_only_rows(monkeypatch):
+    # Embedding rows bill on input alone (output 0). Counting them dragged the fallback's output median
+    # toward zero: adding two of them to the table moved it from about $1.20 to about $0.68 per million.
+    monkeypatch.setattr(llm_cost, "_warned_stale_models", set())
+    monkeypatch.setattr(
+        llm_cost,
+        "MODEL_RATES_PER_MILLION_USD",
+        {
+            "chat-a": {"input": 1.0, "output": 2.0, "verified_at": "2026-10-01"},
+            "chat-b": {"input": 3.0, "output": 6.0, "verified_at": "2026-10-01"},
+            "chat-c": {"input": 5.0, "output": 10.0, "verified_at": "2026-10-01"},
+            "embed-a": {"input": 0.01, "output": 0.0, "verified_at": "2026-10-01"},
+            "embed-b": {"input": 0.01, "output": 0.0, "verified_at": "2026-10-01"},
+            "embed-c": {"input": 0.01, "output": 0.0, "verified_at": "2026-10-01"},
+        },
+    )
+
+    # median of the three chat rows is 3.0 in and 6.0 out; with the embedding rows it would be about 1.0 / 2.0
+    assert cost_for_usage("an-unpriced-model", 1_000_000, 1_000_000) == pytest.approx(3.0 + 6.0)
+
+
+def test_unknown_model_fallback_with_only_embedding_rows_prices_at_zero(monkeypatch):
+    monkeypatch.setattr(llm_cost, "_warned_stale_models", set())
+    monkeypatch.setattr(
+        llm_cost, "MODEL_RATES_PER_MILLION_USD", {"embed": {"input": 0.01, "output": 0.0, "verified_at": "2026-10-01"}}
+    )
+
+    assert cost_for_usage("an-unpriced-model", 1_000_000, 1_000_000) == 0.0
+
+
+def test_the_deepinfra_embedding_models_are_priced():
+    for model in ("Qwen/Qwen3-Embedding-8B", "Qwen/Qwen3-Embedding-0.6B"):
+        assert cost_for_usage(model, 1_000_000, 0) == pytest.approx(0.01)

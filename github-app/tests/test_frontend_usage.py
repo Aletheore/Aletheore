@@ -19,10 +19,10 @@ async def _async_true(*args, **kwargs):
 
 
 async def _client(pool, monkeypatch, administered_ids):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     await create_session(
         pool, "sess-1", 42, "octocat",
-        encrypt_access_token("gho_faketoken", "test-session-secret"),
+        encrypt_access_token("gho_faketoken", "test-session-secret-at-least-32-characters-long"),
         datetime.now(timezone.utc) + timedelta(hours=1),
     )
 
@@ -38,7 +38,7 @@ async def _client(pool, monkeypatch, administered_ids):
     )
     monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
     app.state.db_pool = pool
-    signed = sign_session_id("sess-1", "test-session-secret")
+    signed = sign_session_id("sess-1", "test-session-secret-at-least-32-characters-long")
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test", cookies={"session": signed})
 
 
