@@ -2351,6 +2351,10 @@ def hook_post_read() -> None:
 
     hook_main()
 
+from aletheore.tokens_cli import tokens_app  # noqa: E402
+
+app.add_typer(tokens_app, name="tokens")
+
 
 @config_app.command(
     "crash-reporting",

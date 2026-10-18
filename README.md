@@ -82,6 +82,8 @@ Ruby, PHP, C, C++, C#, and Swift**.
   or re-reading files on every lookup; it re-scans in the background as files change unless started
   with `--no-watch`. `aletheore mcp-install` wires it into Claude Code,
   Cursor, VS Code, Kiro, Opencode, or Codex CLI automatically.
+- **`aletheore tokens`** — measures how many tokens your coding agent re-reads on every turn and, if you
+  choose, trims the built-in tools a project does not use (reversible, project-scoped, off by default).
 - **`aletheore dashboard`** — a live local web UI: dependency graph, an Obsidian-style cluster
   graph, trend charts across scan history, and the MCP tool list.
 - **A GitHub Action** (`action.yml`, on the Marketplace as "Aletheore") — scans a PR's base and
