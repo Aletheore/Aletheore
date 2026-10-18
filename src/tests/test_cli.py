@@ -3640,3 +3640,39 @@ def test_skill_hub_remove_unknown_name_clean_message_not_crash(tmp_path, monkeyp
 def test_skill_hub_remove_rejects_unsafe_name(tmp_path):
     result = runner.invoke(app, ["skill-hub", "remove", "../escape"])
     assert result.exit_code != 0
+
+
+def test_login_prints_sync_disclosure_when_personal_token_saved(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+    from aletheore import skill_hub_sync
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.setattr(skill_hub_sync, "pull_merge_custom_skills", lambda **kw: None)
+
+    result = _invoke_login_with_mocks(
+        resolve_return={"installation_id": 7, "account_login": "acme"},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "sync to your Aletheore account" in result.output
+    saved = json.loads(creds_path.read_text())
+    assert saved["aletheore-personal"] == "personal-token-value"
+
+
+def test_login_does_not_print_sync_disclosure_when_personal_token_mint_fails(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+    from aletheore import skill_hub_sync
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.setattr(skill_hub_sync, "pull_merge_custom_skills", lambda **kw: None)
+
+    result = _invoke_login_with_mocks(
+        mint_personal_side_effect=httpx.ConnectError("skill hub down"),
+        resolve_return={"installation_id": 7, "account_login": "acme"},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "skill hub personal login unavailable" in result.output.lower()
+    assert "sync to your Aletheore account" not in result.output

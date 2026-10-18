@@ -2543,6 +2543,9 @@ def login() -> None:
             )
 
         if personal_token_saved:
+            console.print(
+                "[dim]Custom skills you add sync to your Aletheore account and are available on your other machines.[/dim]"
+            )
             # Pull-merge custom skills from the server now that a personal
             # token exists. Never raises (see skill_hub_sync), so it cannot
             # affect the login outcome. Skipped without a personal token:
