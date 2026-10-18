@@ -2096,6 +2096,7 @@ def dependents(
         print(dependents_report(evidence, repo, file, exclude, under))
     except DependentsError as exc:
         print(f"error: {exc}")
+        raise typer.Exit(code=1)
 
 
 @app.command(
