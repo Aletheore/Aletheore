@@ -3,6 +3,10 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## Unreleased
+
+- Fixed `aletheore scan` on large repos skipping `air.toon` with "Expected N items, but got M": python-toon 0.1.x misread `[1]` text inside a quoted docstring as an array header. The `python-toon` requirement is now `>=0.2.0,<0.3`.
+
 ## 0.9.27 - 2026-10-14
 
 **Changed: `aletheore index` now tells you when it sends your source code to Aletheore (#1024)**

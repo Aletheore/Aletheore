@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import hashlib
 import ipaddress
 import os
@@ -10,18 +12,19 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-import httpx
 import lancedb
 from lancedb.index import FTS
-from openai import APIConnectionError, NotFoundError, OpenAI
 from tokenizers import Tokenizer
 
+from aletheore._lazy import lazy_module
 from aletheore.credentials import (
     DEFAULT_CREDENTIALS_PATH,
     HOSTED_EMBEDDINGS_DISCLOSURE,
     get_api_key,
     has_api_key,
 )
+
+httpx = lazy_module("httpx")
 
 FALLBACK_CHUNK_MAX_LINES = 200
 DEFAULT_EMBEDDING_BASE_URL = "http://localhost:11434/v1"
@@ -1198,6 +1201,10 @@ def embed_texts(
     confirm_fn: Callable[[], bool] | None = None,
     ollama_install_confirm_fn: Callable[[], bool] | None = None,
 ) -> list[list[float]]:
+    # Imported here, not at module level: the `openai` SDK costs ~0.4s to import
+    # and most CLI commands never embed anything.
+    from openai import APIConnectionError, NotFoundError, OpenAI
+
     client = OpenAI(base_url=base_url, api_key="not-needed")
     try:
         response = client.embeddings.create(model=model, input=texts)
