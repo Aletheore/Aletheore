@@ -2069,6 +2069,36 @@ def query(
     raise typer.Exit(code=_query(kind, target, repo_path, full, agent, k, symbol, language))
 
 
+@app.command(
+    help=(
+        "list every file that imports a file, directly or through other imports, as one complete deduplicated list, "
+        "e.g. aletheore dependents src/click/_compat.py --under src --exclude tests"
+    )
+)
+def dependents(
+    file: str = typer.Argument(..., help="file path exactly as it appears in the scan"),
+    path: str = typer.Argument(".", help="repository path"),
+    exclude: list[str] = typer.Option(
+        [], "--exclude", help="leave out files under a directory with this exact name, or with this exact file name; repeatable"
+    ),
+    under: list[str] = typer.Option([], "--under", help="only list files below this directory; repeatable"),
+    path_option: Optional[str] = _PATH_OPTION,
+) -> None:
+    from aletheore.dependents import DependentsError, dependents_report
+
+    repo = Path(_resolve_path(path, path_option)).resolve()
+    try:
+        evidence = load_evidence(repo)
+    except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
+        print(f"error: {exc} (run 'aletheore scan' first)")
+        raise typer.Exit(code=1)
+    try:
+        print(dependents_report(evidence, repo, file, exclude, under))
+    except DependentsError as exc:
+        print(f"error: {exc}")
+        raise typer.Exit(code=1)
+
+
 @app.command(help="compare two air.json files")
 def diff(
     old: str = typer.Argument(..., help="path to the baseline air.json"),
