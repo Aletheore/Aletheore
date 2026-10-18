@@ -3,12 +3,23 @@ from unittest.mock import MagicMock
 import pytest
 
 from app_server.db import hide_repo, set_installation_plan, upsert_installation
+from app_server.webhooks import issue_comment
 from app_server.webhooks.issue_comment import (
     AUDIT_COMMAND,
     _command_candidate_lines,
     _matches_command,
     handle_issue_comment_event,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_rate_limit(monkeypatch):
+    # Every test here shares one hardcoded installation_id (111, see
+    # _payload) against a real Redis instance - without this, repeated
+    # test runs within the same rate-limit window would accumulate real
+    # counts and eventually start failing nondeterministically. The tests
+    # that are actually about the limiter override this explicitly.
+    monkeypatch.setattr("app_server.webhooks.issue_comment.is_rate_limited", lambda *a, **k: False)
 
 
 def _payload(comment_body: str, has_pr: bool = True, commenter: str = "someuser"):
@@ -240,6 +251,102 @@ async def test_audit_command_on_a_hidden_repo_does_not_reach_the_permission_chec
     await handle_issue_comment_event(_payload("/aletheore audit"), pool, "redis://unused", queue=fake_queue)
     permission_check.assert_not_called()
     fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_audit_command_over_the_rate_limit_does_not_reach_the_permission_check(pool, monkeypatch):
+    # Real gap found via audit: verifying a commenter's permission is 2 real
+    # outbound GitHub API calls, charged against the installation's shared
+    # quota, reachable by ANY commenter on a public repo - there is no
+    # token to revoke the way there is for the API endpoints. A tripped
+    # limit must stop the 2 API calls, not just the eventual enqueue.
+    await _seed_paid_installation(pool)
+    monkeypatch.setattr("app_server.webhooks.issue_comment.is_rate_limited", lambda *a, **k: True)
+    permission_check = MagicMock()
+    monkeypatch.setattr(
+        "app_server.webhooks.issue_comment.get_repo_permission_for_user", permission_check
+    )
+    fake_queue = MagicMock()
+    await handle_issue_comment_event(_payload("/aletheore audit"), pool, "redis://unused", queue=fake_queue)
+    permission_check.assert_not_called()
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_audit_command_rate_limit_is_keyed_by_installation_and_commenter(pool, monkeypatch):
+    # Real gap found by Flash Review: an installation-only key let any
+    # commenter (no access needed) drain the whole installation's shared
+    # budget before the permission check ever ran, silently locking out a
+    # legitimate maintainer's own attempt right after. Per-commenter keying
+    # means an attacker can only ever exhaust their own bucket.
+    await _seed_paid_installation(pool)
+    _mock_permission_check(monkeypatch, "write")
+    keys = []
+    monkeypatch.setattr(
+        "app_server.webhooks.issue_comment.is_rate_limited",
+        lambda redis_conn, key, limit, window: keys.append(key) or False,
+    )
+    fake_queue = MagicMock()
+    await handle_issue_comment_event(
+        _payload("/aletheore audit", commenter="someuser"), pool, "redis://unused", queue=fake_queue
+    )
+    assert keys == ["ratelimit:comment-command:111:someuser"]
+
+
+@pytest.mark.asyncio
+async def test_audit_command_rate_limit_does_not_lock_out_a_different_commenter(pool, monkeypatch):
+    # The actual scenario Flash Review caught: attacker spams 20 comments
+    # under their own login first, then a real maintainer comments the
+    # same command - the maintainer's own bucket must be untouched.
+    await _seed_paid_installation(pool)
+    _mock_permission_check(monkeypatch, "write")
+
+    from app_server import rate_limit as real_rate_limit
+
+    class _FakeRedis:
+        def __init__(self):
+            self.counts: dict[str, int] = {}
+
+        def pipeline(self):
+            return _FakePipeline(self)
+
+    class _FakePipeline:
+        def __init__(self, redis):
+            self.redis = redis
+            self.ops = []
+
+        def incr(self, key):
+            self.ops.append(("incr", key))
+
+        def expire(self, key, window_seconds, nx=True):
+            self.ops.append(("expire", key))
+
+        def execute(self):
+            results = []
+            for op, key in self.ops:
+                if op == "incr":
+                    self.redis.counts[key] = self.redis.counts.get(key, 0) + 1
+                    results.append(self.redis.counts[key])
+                else:
+                    results.append(True)
+            return results
+
+    fake_redis = _FakeRedis()
+    monkeypatch.setattr("app_server.webhooks.issue_comment.is_rate_limited", real_rate_limit.is_rate_limited)
+    monkeypatch.setattr("app_server.redis_client.get_redis_client", lambda: fake_redis)
+
+    # Attacker drains their own bucket.
+    for _ in range(issue_comment.COMMENT_COMMAND_RATE_LIMIT + 1):
+        await handle_issue_comment_event(
+            _payload("/aletheore audit", commenter="attacker"), pool, "redis://unused", queue=MagicMock()
+        )
+
+    fake_queue = MagicMock()
+    await handle_issue_comment_event(
+        _payload("/aletheore audit", commenter="maintainer"), pool, "redis://unused", queue=fake_queue
+    )
+
+    fake_queue.enqueue.assert_called_once()
 
 
 @pytest.mark.asyncio

@@ -112,6 +112,21 @@ async def test_managed_audit_requires_bearer_token(pool):
 
 
 @pytest.mark.asyncio
+async def test_managed_audit_rejects_an_unauthenticated_malformed_body_with_401_not_422(pool):
+    # Real gap found via audit: `body: StartManagedAuditRequest` as a route
+    # parameter gets parsed and Pydantic-validated before the handler's
+    # first line (_authenticate_token) ever runs - so an unauthenticated
+    # caller could already force that work. A malformed body that would
+    # fail validation (evidence is required) must still come back 401
+    # (auth), not 422 (validation).
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/v1/managed-audit", json={})
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_managed_audit_returns_422_for_oversized_evidence(pool):
     await upsert_installation(pool, 100, "octocat")
     await set_installation_plan(pool, 100, "indie")

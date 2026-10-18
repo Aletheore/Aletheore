@@ -19,6 +19,7 @@ from app_server.db import (
     create_session,
     delete_session,
     get_session,
+    reconcile_installation_member_identity,
     upsert_github_user_email,
     upsert_installation,
 )
@@ -469,6 +470,19 @@ async def callback(code: str, request: Request, state: str | None = None, instal
         if refresh_token
         else None,
     )
+
+    try:
+        # Best-effort, same discipline as the email/installation upserts
+        # below: this closes an identity-rebinding gap (see
+        # reconcile_installation_member_identity's own docstring), it must
+        # never be the reason a real, successful sign-in fails outright.
+        await reconcile_installation_member_identity(
+            request.app.state.db_pool, user["login"], user["id"]
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "installation-member identity reconciliation failed for %s (%s)", user["login"], exc,
+        )
 
     if email:
         # Best-effort, same discipline as the installation upsert below:

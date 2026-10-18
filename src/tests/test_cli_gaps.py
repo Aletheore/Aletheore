@@ -69,8 +69,9 @@ def test_k_and_debounce_validated(tmp_path):
 def test_jsonc_and_bom_configs_are_merged(tmp_path):
     cfg = tmp_path / "mcp.json"
     cfg.write_bytes(b'\xef\xbb\xbf{\n // c\n "servers": {"x": {"a": 1,},},\n /* b */\n}')
-    msg = cli._write_json_mcp_client_config(cfg, "servers", {"command": "c"})
+    msg, security_skip = cli._write_json_mcp_client_config(cfg, "servers", {"command": "c"})
     assert msg.startswith("wrote")
+    assert security_skip is False
     data = json.loads(cfg.read_text(encoding="utf-8"))
     assert data["servers"]["x"] == {"a": 1} and data["servers"]["aletheore"] == {"command": "c"}
 
