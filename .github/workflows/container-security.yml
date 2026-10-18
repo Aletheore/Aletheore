@@ -57,7 +57,7 @@ jobs:
                 -e GITHUB_WEBHOOK_SECRET="smoketest" \
                 -e GITHUB_CLIENT_ID="smoketest" \
                 -e GITHUB_CLIENT_SECRET="smoketest" \
-                -e SESSION_SECRET="smoketest-at-least-32-characters-long" \
+                -e SESSION_SECRET="placeholder-smoketest-session-secret-32chars" \
                 -e AUDIT_SIGNING_PRIVATE_KEY="smoketest" \
                 -e PADDLE_WEBHOOK_SECRET="smoketest" \
                 -e PADDLE_CLIENT_TOKEN="smoketest" \
