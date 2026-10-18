@@ -1,0 +1,14 @@
+apiVersion: security.cnrm.cloud.google.com/v1beta1
+kind: ModelArmorConfig
+metadata:
+  name: model-armor-config
+spec:
+  piAndJailbreakFilterSettings:
+    filterEnforcement: ENFORCE
+    confidenceLevel: MEDIUM
+  sdpFilterSettings:
+    filterEnforcement: ENFORCE
+    matchTypes:
+      - EMAIL_ADDRESS
+      - PHONE_NUMBER
+      - US_SOCIAL_SECURITY_NUMBER

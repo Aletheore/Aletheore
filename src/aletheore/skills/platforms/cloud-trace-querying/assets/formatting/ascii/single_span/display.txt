@@ -1,0 +1,15 @@
+Span ID: 4a2b3c4d5e6f7a8b
+Name: /db.Query
+Parent Span ID: 1a2b3c4d5e6f7a8b
+Start Time: 2026-07-14T15:00:00.100Z
+End Time: 2026-07-14T15:00:00.250Z
+Duration: 150ms
+Status: OK
+
+Attributes:
+  db.system.name: mysql
+  db.operation.name: SELECT
+  db.namespace: orders
+  db.query.text: SELECT * FROM orders WHERE order_id = ?
+  server.address: db-primary.internal
+  server.port: 3306

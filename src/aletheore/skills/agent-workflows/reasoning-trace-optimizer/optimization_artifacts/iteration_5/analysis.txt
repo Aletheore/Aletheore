@@ -1,0 +1,50 @@
+============================================================
+REASONING TRACE ANALYSIS REPORT
+============================================================
+
+Overall Score: 59/100
+
+Scores:
+  - Reasoning Clarity: 55/100
+  - Goal Adherence: 85/100
+  - Tool Usage Quality: 60/100
+  - Error Recovery: 35/100
+
+Detected Patterns:
+
+  [MEDIUM] missing_validation
+    Agent accepts incomplete results without acknowledging failures or seeking alternatives
+    Suggestion: When tool calls fail, explicitly note the failure in thinking blocks, consider alternative sources, and document what information gaps exist. Add a validation step to confirm all critical sources were successfully retrieved.
+
+  [LOW] incomplete_reasoning
+    Agent doesn't demonstrate analytical depth when processing source material
+    Suggestion: After reading sources, explicitly state: (a) key findings from each source, (b) how they relate to the research goal, (c) any contradictions or complementary findings, (d) what additional information is needed
+
+  [LOW] tool_misuse
+    Inefficient tool usage pattern - multiple web searches without reading all results first
+    Suggestion: Before making additional searches, review the URLs from previous search results. A better pattern would be: search -> read all relevant sources -> identify gaps -> targeted additional searches only if needed
+
+  [LOW] context_degradation
+    Vague thinking blocks that don't show active reasoning process
+    Suggestion: Make thinking blocks more explicit: show intermediate conclusions, decision points, how each source contributed, and how conclusions evolved. The thinking trace should be readable as a standalone explanation of the research process.
+
+Strengths:
+  + Successfully completed the primary task with a comprehensive 17,628 character research report
+  + Followed the multi-step workflow outlined in the task (search, read, save notes, write summary)
+  + Created well-structured research notes that organize findings by topic
+  + Included proper source citations with actual URLs in the final report
+  + Covered all required topics: key concepts, best practices, 'lost in the middle' problem, practical recommendations
+
+Weaknesses:
+  - Thinking blocks are too vague - they don't reveal the agent's actual reasoning process or how it interpreted source material
+  - No acknowledgment or recovery when the context-windows page fetch failed
+  - No analytical discussion of how different sources relate to each other or complement one another
+  - Multiple searches suggest inefficient information gathering rather than systematic research
+  - No evidence of error handling or validation during the research process
+
+Recommendations:
+  1. Add explicit validation step: After gathering sources, list what was obtained vs. what was attempted, noting any gaps or failures. When tool calls fail, try alternative sources and document the failure.
+  2. Require detailed thinking blocks that explain: (a) what was learned from each source, (b) how findings connect to the research goal, (c) any contradictions or gaps identified, (d) strategic decisions made
+  3. Implement a search-first strategy: Read all results from initial searches before deciding if additional searches are needed. Track which search queries have already been run.
+  4. Add a quality checklist before writing the final report: all critical sources retrieved, all required topics covered, sources properly cited, notes saved for future reference
+  5. Make the thinking trace more transparent by including intermediate conclusions, how the agent's understanding evolved, and what questions remained after reading each source

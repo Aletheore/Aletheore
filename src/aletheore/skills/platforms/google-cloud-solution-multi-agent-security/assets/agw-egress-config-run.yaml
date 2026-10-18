@@ -1,0 +1,13 @@
+name: projects/{project_number}/locations/us-east4/agentGateways/agw-tools-run
+googleManaged:
+  governedAccessPath: AGENT_TO_ANYWHERE
+registries:
+  - "//agentregistry.googleapis.com/projects/{project_number}/locations/us-east4"
+networkConfig:
+  egress:
+    networkAttachment: "projects/{project_number}/regions/us-east4/networkAttachments/agw-egress-run-attachment"
+  dnsPeeringConfig:
+    domains:
+      - "*.run.app"
+    targetProject: "{project_id}"
+    targetNetwork: "projects/{project_id}/global/networks/agent-gateway-vpc"

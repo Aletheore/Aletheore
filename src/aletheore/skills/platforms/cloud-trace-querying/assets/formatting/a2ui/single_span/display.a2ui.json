@@ -1,0 +1,37 @@
+[
+  {
+    "createSurface": {
+      "id": "span-surface-4a2b3c",
+      "title": "Span: /db.Query",
+      "components": [
+        {
+          "id": "span-metadata-table",
+          "component": "Table",
+          "headers": ["Metadata Property", "Value"],
+          "rows": [
+            ["Trace ID", "7b2c0199e4f5a3e10c55a29811d0bb3e"],
+            ["Span ID", "4a2b3c4d5e6f7a8b"],
+            ["Parent Span ID", "1a2b3c4d5e6f7a8b"],
+            ["Start Time", "2026-07-14T15:00:00.100Z"],
+            ["End Time", "2026-07-14T15:00:00.250Z"],
+            ["Duration", "150ms"],
+            ["Status", "OK"]
+          ]
+        },
+        {
+          "id": "span-attributes-table",
+          "component": "Table",
+          "headers": ["Attribute Key", "Value"],
+          "rows": [
+            ["db.system.name", "mysql"],
+            ["db.operation.name", "SELECT"],
+            ["db.namespace", "orders"],
+            ["db.query.text", "SELECT * FROM orders WHERE order_id = ?"],
+            ["server.address", "db-primary.internal"],
+            ["server.port", 3306]
+          ]
+        }
+      ]
+    }
+  }
+]

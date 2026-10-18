@@ -53,4 +53,4 @@ def test_every_declared_package_data_pattern_matches_something():
 
 
 def test_skills_directory_covered_by_package_data():
-    assert "skills/**/*.md" in _declared_patterns()
+    assert "skills/**/*" in _declared_patterns()

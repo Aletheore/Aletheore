@@ -1,0 +1,22 @@
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: my-gateway # Replace with your Gateway name
+  namespace: default # Replace with your namespace
+  annotations:
+    # Certificate Manager map (requires certificatemanager.googleapis.com).
+    # Remove this annotation if using the Secret-based certificateRefs below.
+    networking.gke.io/certmap: my-certificate-map # Replace with your CertificateMap name
+spec:
+  gatewayClassName: gke-l7-global-external-managed
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 443
+      tls:
+        mode: Terminate
+        # Only needed when NOT using the certmap annotation above.
+        certificateRefs:
+          - kind: Secret
+            name: my-tls-secret # Replace with your TLS Secret name

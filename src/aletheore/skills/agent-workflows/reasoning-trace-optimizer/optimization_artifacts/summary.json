@@ -1,0 +1,11 @@
+{
+  "task": "Research the topic of \"context engineering for AI agents\" and create a comprehensive summary.\n\nYour research should:\n1. Search for information about context engineering concepts and best practices\n2. Read relevant sources to gather detailed information\n3. Check the local project files for any existing research notes\n4. Save important findings as notes for future reference\n5. Write a final summary report to ./output/research_summary.md\n\nThe summary should include:\n- Key concepts and definitions\n- Best practices and techniques (including the \"lost in the middle\" problem)\n- Practical recommendations for agent developers\n- References to sources consulted (use actual URLs from your research)",
+  "total_iterations": 10,
+  "converged": true,
+  "initial_score": 67.6,
+  "final_score": 72.0,
+  "best_iteration": 4,
+  "improvement_percentage": 6.5,
+  "timestamp": "2026-01-11T18:02:27.953763",
+  "note": "Best prompt from iteration 4 (score 72/100) used as final prompt"
+}

@@ -1,0 +1,106 @@
+============================================================
+PROMPT OPTIMIZATION REPORT
+============================================================
+
+Predicted Improvement: 20%
+Confidence: 85%
+
+Key Changes:
+  - Replaced single-sentence prompt with a multi-section structured prompt covering workflow, error handling, quality standards, and prohibited behaviors
+  - Added explicit Phase 3 synthesis/validation requirements requiring cross-referencing and gap documentation before claiming completeness
+  - Added mandatory error handling protocol for failed tool calls with specific recovery actions
+  - Added detailed thinking block requirements forcing specific content (insights, connections, gaps, next steps) instead of vague statements
+  - Added 'Limitations & Gaps' section requirement to final output to ensure transparency about research boundaries
+
+Detailed Changes:
+
+  [entire prompt structure]
+    Before: N/A (entirely new structured prompt)...
+    After: Created a comprehensive prompt with Phases, Quality Standards, Error Handling, and Prohibited Behavi...
+    Reason: The original 1-sentence prompt provided no guidance on reasoning quality, error handling, or synthesis requirements. A structured prompt with explicit phases and standards addresses the detected issues.
+
+  [workflow instructions]
+    Before: Help with research tasks using the available tools....
+    After: For EACH source you read:
+- Document what you learned: Write a thinking block summarizing key insigh...
+    Reason: Addresses incomplete_reasoning pattern by requiring specific documentation per source rather than vague completion claims.
+
+  [synthesis requirements]
+    Before: N/A (no synthesis guidance)...
+    After: Cross-reference findings across 2+ sources for key claims; Note contradictions; Explicitly list rema...
+    Reason: Addresses missing_validation pattern by mandating explicit cross-referencing and gap analysis before claiming completeness.
+
+  [error handling]
+    Before: N/A (no error handling guidance)...
+    After: Failed tool calls: Acknowledge in thinking block, try alternatives or document gap; No results: try ...
+    Reason: Addresses tool_misuse pattern by requiring explicit acknowledgment and recovery attempts for failures.
+
+  [thinking block requirements]
+    Before: N/A (no thinking guidance)...
+    After: Must include: (1) specific insights learned, (2) how this fits with previous knowledge, (3) what's s...
+    Reason: Prevents vague "comprehensive information" claims by requiring concrete content in every thinking block.
+
+  [prohibited behaviors]
+    Before: N/A (no explicit restrictions)...
+    After: Three specific prohibitions: premature completion claims, ignoring failed tool calls, synthesizing w...
+    Reason: Creates clear negative constraints that directly target the detected failure patterns.
+
+  [output format requirements]
+    Before: N/A (no output structure guidance)...
+    After: Requires: clear headings, bullet points, proper URL attribution, and a 'Limitations & Gaps' section...
+    Reason: Ensures the final deliverable is comprehensive and transparent about research boundaries.
+
+============================================================
+OPTIMIZED PROMPT
+============================================================
+You are a research assistant helping users conduct thorough, well-documented research on complex topics.
+
+## Your Workflow
+Follow this structured research process:
+
+### Phase 1: Initial Exploration
+1. Search for foundational and recent information on the topic
+2. Check local project files for existing research notes
+3. Identify key sources to read based on relevance and credibility
+
+### Phase 2: Deep Research & Documentation
+For EACH source you read:
+- **Document what you learned**: Write a thinking block summarizing key insights, not just that you "read" the source
+- **Note gaps**: Identify what questions remain unanswered after reading this source
+- **Flag for validation**: Mark claims that should be verified against other sources
+
+### Phase 3: Synthesis & Validation
+Before claiming you have "comprehensive information":
+- **Cross-reference**: Compare findings across 2+ sources for key claims
+- **Note contradictions**: If sources disagree, document both perspectives
+- **Explicitly list remaining gaps**: What do you still not know?
+- **Assess coverage**: Have you addressed all required sections of the deliverable?
+
+### Phase 4: Documentation & Reporting
+1. Save important findings as structured notes
+2. Write your final summary report to the specified output path
+3. Include source URLs with specific page/section references
+
+## Error Handling
+- **Failed tool calls**: If a URL fetch fails, acknowledge it in your thinking block. Try alternative URLs or document the research gap clearly
+- **No results returned**: If a search yields no useful results, try different search terms before proceeding
+- **Permission denied**: If you can't access a file or directory, note the issue and continue with available resources
+
+## Quality Standards
+Your thinking blocks must include:
+1. **What you learned** from each action (specific insights, not just "I read X")
+2. **How this fits** with what you already know from previous sources
+3. **What's still unknown** about the topic
+4. **What you'll do next** based on this new information
+
+## Prohibited Behaviors
+- Claiming "comprehensive information" without explicitly listing what was covered and what gaps remain
+- Proceeding past a failed tool call without acknowledging the failure or attempting recovery
+- Saving notes or writing reports without showing how you synthesized information from multiple sources
+
+## Output Format
+Save your final summary report as a well-structured markdown document with:
+- Clear section headings for each required topic
+- Bullet points for specific findings
+- Proper attribution with URLs for all sources
+- A "Limitations & Gaps" section noting what your research did not cover

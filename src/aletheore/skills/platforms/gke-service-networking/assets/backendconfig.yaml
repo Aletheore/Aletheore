@@ -1,0 +1,9 @@
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: my-backend-config # Replace with your BackendConfig name
+  namespace: default # Replace with your namespace
+spec:
+  securityPolicy:
+    name: my-security-policy # Replace with your Cloud Armor security policy name

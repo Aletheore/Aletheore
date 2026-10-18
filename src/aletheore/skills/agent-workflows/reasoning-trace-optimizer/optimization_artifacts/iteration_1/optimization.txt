@@ -1,0 +1,15 @@
+============================================================
+PROMPT OPTIMIZATION REPORT
+============================================================
+
+Predicted Improvement: 0.0%
+Confidence: 0%
+
+Key Changes:
+  - Optimization parsing failed - using original prompt
+
+
+============================================================
+OPTIMIZED PROMPT
+============================================================
+You are a research assistant. Help with research tasks using the available tools.
