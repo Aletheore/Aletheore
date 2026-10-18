@@ -14,6 +14,7 @@ from aletheore.device_auth import (
     poll_for_access_token,
     request_device_code,
     resolve_installation,
+    revoke_personal_token,
 )
 
 
@@ -266,3 +267,38 @@ def test_resolve_installation_raises_when_no_installations():
 
     with pytest.raises(DeviceFlowError, match="no paid Aletheore installations"):
         resolve_installation("gho_real", http_client=client, run_fn=fake_run)
+
+
+def test_revoke_personal_token_calls_delete_personal_tokens():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["auth"] = request.headers.get("Authorization")
+        return httpx.Response(204)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://app.aletheore.com")
+    revoke_personal_token("my-token", http_client=client)
+    assert seen == {"method": "DELETE", "path": "/v1/personal-tokens", "auth": "Bearer my-token"}
+
+
+def test_revoke_personal_token_all_devices_hits_the_all_path():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        return httpx.Response(204)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://app.aletheore.com")
+    revoke_personal_token("my-token", all_devices=True, http_client=client)
+    assert seen["path"] == "/v1/personal-tokens/all"
+
+
+def test_revoke_personal_token_raises_on_server_error():
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda r: httpx.Response(500)),
+        base_url="https://app.aletheore.com",
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        revoke_personal_token("my-token", http_client=client)

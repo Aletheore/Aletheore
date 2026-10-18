@@ -134,6 +134,18 @@ def mint_personal_token(
     return response.json()["token"]
 
 
+def revoke_personal_token(
+    personal_token: str,
+    all_devices: bool = False,
+    api_base_url: str = "https://app.aletheore.com",
+    http_client: httpx.Client | None = None,
+) -> None:
+    client = http_client or httpx.Client(base_url=api_base_url)
+    path = "/v1/personal-tokens/all" if all_devices else "/v1/personal-tokens"
+    response = client.delete(path, headers={"Authorization": f"Bearer {personal_token}"})
+    response.raise_for_status()
+
+
 _GITHUB_REMOTE_PREFIXES = (
     "git@github.com:",
     "ssh://git@github.com/",
