@@ -2086,6 +2086,44 @@ async def get_installation_by_token_hash(pool: asyncpg.Pool, token_hash: str) ->
     return dict(row) if row else None
 
 
+async def get_or_create_personal_identity(pool: asyncpg.Pool, github_user_id: int, github_login: str) -> dict:
+    """Upserts on the GitHub user id (the stable identifier) - a login
+    rename lands as an UPDATE of the existing row's github_login, never a
+    second row for the same GitHub account.
+    """
+    row = await pool.fetchrow(
+        """
+        INSERT INTO personal_identities (github_user_id, github_login)
+        VALUES ($1, $2)
+        ON CONFLICT (github_user_id) DO UPDATE SET github_login = EXCLUDED.github_login
+        RETURNING id, github_user_id, github_login
+        """,
+        github_user_id, github_login,
+    )
+    return dict(row)
+
+
+async def create_personal_token(pool: asyncpg.Pool, personal_identity_id: int, token_hash: str, label: str) -> int:
+    row = await pool.fetchrow(
+        "INSERT INTO personal_api_tokens (personal_identity_id, token_hash, label) VALUES ($1, $2, $3) RETURNING id",
+        personal_identity_id, token_hash, label,
+    )
+    return row["id"]
+
+
+async def get_personal_identity_by_token_hash(pool: asyncpg.Pool, token_hash: str) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT p.id, p.github_user_id, p.github_login
+        FROM personal_api_tokens t
+        JOIN personal_identities p ON p.id = t.personal_identity_id
+        WHERE t.token_hash = $1 AND t.revoked_at IS NULL
+        """,
+        token_hash,
+    )
+    return dict(row) if row else None
+
+
 async def touch_api_token(
     pool: asyncpg.Pool, token_hash: str, min_interval_seconds: int = 0
 ) -> None:

@@ -283,12 +283,11 @@ def _fetch_administered_installation_ids(github_token: str) -> set[int]:
     return {item["id"] for item in installations}
 
 
-def _fetch_github_login(github_token: str) -> str:
-    """The caller's own GitHub login, for the bearer-token routes
-    (`/v1/my-installations`, `/v1/cli-tokens`) that never go through
-    `get_current_session` and so never get `session["github_login"]` for
-    free - needed to call `_is_real_installation_member_or_admin` the same
-    way every session-cookie route already does.
+def _fetch_github_user(github_token: str) -> dict:
+    """The caller's own GitHub user id and login, for the bearer-token
+    routes (`/v1/my-installations`, `/v1/cli-tokens`, `/v1/personal-tokens`)
+    that never go through `get_current_session` and so never get
+    `session["github_login"]` for free.
     """
     response = _github_http_client().get(
         "/user",
@@ -298,7 +297,17 @@ def _fetch_github_login(github_token: str) -> str:
         },
     )
     response.raise_for_status()
-    return response.json()["login"]
+    body = response.json()
+    return {"id": body["id"], "login": body["login"]}
+
+
+def _fetch_github_login(github_token: str) -> str:
+    """The caller's own GitHub login - see `_fetch_github_user` for the
+    full response this is drawn from, needed to call
+    `_is_real_installation_member_or_admin` the same way every
+    session-cookie route already does.
+    """
+    return _fetch_github_user(github_token)["login"]
 
 
 _ADMINISTERED_INSTALLATIONS_CACHE_TTL_SECONDS = 30
