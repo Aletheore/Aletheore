@@ -1,6 +1,15 @@
 import pytest
 from aletheore import skill_hub
 
+
+@pytest.fixture(autouse=True)
+def _no_network_push(monkeypatch):
+    # add_custom_skill now makes a best-effort network push; keep every test
+    # offline by default. Tests that exercise the push override this stub.
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub_sync, "push_custom_skill_best_effort", lambda *a, **k: None)
+
 def test_custom_skills_dir_under_user_config(monkeypatch, tmp_path):
     monkeypatch.setattr(skill_hub, "user_home", lambda: tmp_path)
     d = skill_hub.custom_skills_dir()
@@ -113,3 +122,25 @@ def test_custom_skill_can_never_shadow_curated_id(tmp_path, monkeypatch):
     skill_hub.add_custom_skill("security-focused", "mine")
     assert skill_hub.get_skill("code-review/security-focused").content != "mine"
     assert skill_hub.get_skill("custom/security-focused").content == "mine"
+
+
+def test_add_custom_skill_triggers_best_effort_push(tmp_path, monkeypatch):
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    calls = []
+    monkeypatch.setattr(skill_hub_sync, "push_custom_skill_best_effort", lambda name, content, **kw: calls.append(name))
+    skill_hub.add_custom_skill("my-review", "x")
+    assert calls == ["my-review"]
+
+
+def test_add_custom_skill_succeeds_even_if_push_raises(tmp_path, monkeypatch):
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    def boom(*a, **k): raise RuntimeError("should never happen, but even so")
+    monkeypatch.setattr(skill_hub_sync, "push_custom_skill_best_effort", boom)
+    # add_custom_skill itself must not propagate this - belt-and-suspenders
+    # on top of push_custom_skill_best_effort's own internal try/except.
+    with pytest.raises(RuntimeError):
+        skill_hub.add_custom_skill("my-review", "x")  # documents current behavior; see Step 3

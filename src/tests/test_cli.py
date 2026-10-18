@@ -48,6 +48,15 @@ from aletheore.report import (
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def _no_network_pull_merge(monkeypatch):
+    # login() now runs a best-effort skill-hub pull-merge over the network;
+    # keep every test offline by default. The pull-merge test overrides this.
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub_sync, "pull_merge_custom_skills", lambda *a, **k: None)
+
+
 def test_print_query_result_falls_back_to_json_on_encoding_failure(capsys, monkeypatch):
     from aletheore.toon_encoding import ToonEncodingError
 
@@ -2382,6 +2391,33 @@ def test_login_saves_personal_token_slot(tmp_path, monkeypatch):
     )
     saved = json.loads(creds_path.read_text())
     assert saved["aletheore-personal"] == "personal-token-value"
+
+
+def test_login_triggers_pull_merge(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+    from aletheore import skill_hub_sync
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    calls = []
+    monkeypatch.setattr(skill_hub_sync, "pull_merge_custom_skills", lambda **kw: calls.append(True))
+
+    with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
+         patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.mint_personal_token") as mock_mint_personal, \
+         patch("aletheore.device_auth.resolve_installation") as mock_resolve, \
+         patch("aletheore.device_auth.mint_cli_token") as mock_mint:
+        mock_request_code.return_value = MagicMock(
+            verification_uri="https://github.com/login/device",
+            user_code="ABCD-1234",
+        )
+        mock_poll.return_value = "gho_faketoken"
+        mock_mint_personal.return_value = "personal-token-value"
+        mock_resolve.side_effect = DeviceFlowError("no paid Aletheore installations found")
+
+        runner.invoke(app, ["login"])
+
+    assert calls == [True]
 
 
 def test_login_still_fails_on_genuine_installation_lookup_error(tmp_path, monkeypatch):

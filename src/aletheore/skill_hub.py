@@ -230,6 +230,11 @@ def get_skill(skill_id: str) -> Skill:
 
 
 def add_custom_skill(name: str, content: str) -> str:
-    # Local-only for now; sync push is wired in a later task.
     write_custom_skill_file(name, content)
+    # Local import: skill_hub_sync imports this module, so a top-level import
+    # here would be circular. The push never raises, so the return value is
+    # unaffected by whether the sync succeeded.
+    from aletheore import skill_hub_sync
+
+    skill_hub_sync.push_custom_skill_best_effort(name, content)
     return f"{_CUSTOM_PREFIX}{name}"

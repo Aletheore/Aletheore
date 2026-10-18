@@ -2512,6 +2512,14 @@ def login() -> None:
         personal_token = mint_personal_token(github_token, label)
         save_api_token("aletheore-personal", personal_token)
 
+        # Pull-merge custom skills from the server now that a personal token
+        # exists. Never raises (see skill_hub_sync), so it cannot affect the
+        # login outcome; it runs unconditionally, outside the installation
+        # block below.
+        from aletheore import skill_hub_sync
+
+        skill_hub_sync.pull_merge_custom_skills()
+
         # Installation resolution (for the managed-audit token) is
         # best-effort from here on: a GitHub account with no Aletheore
         # installation must not make the whole command exit non-zero
