@@ -2100,6 +2100,27 @@ def dependents(
 
 
 @app.command(
+    help=(
+        "every circular import dependency in the repo, with a concrete example chain for each one, "
+        "as one complete answer - e.g. aletheore cycles"
+    )
+)
+def cycles(
+    path: str = typer.Argument(".", help="repository path"),
+    path_option: Optional[str] = _PATH_OPTION,
+) -> None:
+    from aletheore.cycles import cycles_report
+
+    repo = Path(_resolve_path(path, path_option)).resolve()
+    try:
+        evidence = load_evidence(repo)
+    except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
+        print(f"error: {exc} (run 'aletheore scan' first)", file=sys.stderr)
+        raise typer.Exit(code=1)
+    print(cycles_report(evidence, repo))
+
+
+@app.command(
     name="tests-for",
     help=(
         "every test file that exercises a file - via the import graph or its naming convention - as one "
