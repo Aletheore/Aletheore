@@ -116,6 +116,7 @@ from scan_worker.db import (
     list_paid_repos_due_for_wiki_catchup,
     list_recent_endpoint_incidents,
     list_repos_for_installation,
+    get_wiki_overview,
     list_wiki_subsystems,
     mark_flash_review_finding_comment_resolved,
     record_digest_sent,
@@ -6230,6 +6231,41 @@ def _regenerate_wiki_overview(
     )
 
 
+# An incremental update (one push) used to re-narrate the whole repo's
+# overview every time: its input is every subsystem's name and description
+# (~30K tokens on an 85-subsystem repo), so it was the single biggest call
+# in a push, about 55% of the push's AIRview spend, to refresh a page one
+# changed subsystem rarely alters. Subsystem pages themselves stay current on
+# every push; only the repo-level overview is allowed to lag.
+WIKI_OVERVIEW_MIN_REGEN_INTERVAL_SECONDS = 6 * 3600
+
+
+def _wiki_overview_needs_regeneration(
+    dsn: str, installation_id: int, repo_full_name: str, subsystem_ids_before: set[str]
+) -> bool:
+    """Whether an incremental update should re-run the overview. Yes when
+    there is no overview yet, when the last attempt left the "unavailable"
+    placeholder (retry on the next push rather than keep it for hours), when
+    the set of subsystems changed (one was added or pruned, which the
+    overview's narrative and diagram should reflect right away), or when it
+    is older than WIKI_OVERVIEW_MIN_REGEN_INTERVAL_SECONDS. Full builds
+    (run_live_wiki_full_build_job) call _regenerate_wiki_overview directly
+    and are not debounced.
+
+    Must be called with wiki_write_lock held, after the subsystem records
+    were stored, like _regenerate_wiki_overview itself."""
+    overview = get_wiki_overview(dsn, installation_id, repo_full_name)
+    if overview is None or overview["description"] == live_wiki.OVERVIEW_UNAVAILABLE_DESCRIPTION:
+        return True
+    subsystem_ids_after = {
+        r["subsystem_id"] for r in list_wiki_subsystems(dsn, installation_id, repo_full_name)
+    }
+    if subsystem_ids_after != subsystem_ids_before:
+        return True
+    age_seconds = (datetime.now(timezone.utc) - overview["updated_at"]).total_seconds()
+    return age_seconds >= WIKI_OVERVIEW_MIN_REGEN_INTERVAL_SECONDS
+
+
 def _store_wiki_generation(
     dsn: str,
     installation_id: int,
@@ -6255,11 +6291,15 @@ def _store_wiki_generation(
     corrupting the invariant this lock exists to protect.
     """
     with wiki_write_lock(dsn, installation_id, repo_full_name):
+        subsystem_ids_before = {
+            r["subsystem_id"] for r in list_wiki_subsystems(dsn, installation_id, repo_full_name)
+        }
         _store_wiki_subsystem_records(dsn, installation_id, repo_full_name, evidence, fresh_records, source_commit)
-        _regenerate_wiki_overview(
-            dsn, installation_id, repo_full_name, evidence, writing_adapter, source_commit,
-            fetch_line_count=fetch_line_count,
-        )
+        if _wiki_overview_needs_regeneration(dsn, installation_id, repo_full_name, subsystem_ids_before):
+            _regenerate_wiki_overview(
+                dsn, installation_id, repo_full_name, evidence, writing_adapter, source_commit,
+                fetch_line_count=fetch_line_count,
+            )
 
 
 # Every cluster gets an LLM call in a full build (naming + subsystem
