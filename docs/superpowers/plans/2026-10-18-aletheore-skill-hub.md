@@ -1037,6 +1037,8 @@ git commit -m "feat: add server-side custom-skill sync endpoints"
 - Consumes: `credentials.has_api_key`/`get_api_key` (slot `"aletheore-personal"`); `skill_hub.custom_skills_dir`, `write_custom_skill_file`, `read_custom_skill_file`, `list_custom_skill_names` (Task 1).
 - Produces: `push_custom_skill_best_effort(name: str, content: str, timeout: float = 5.0) -> None` (never raises), `pull_merge_custom_skills(timeout: float = 10.0) -> None` (requires a saved personal token; network failures are caught and logged, never raised — see Review Focus).
 
+**Design note — do not use filesystem mtime for merge decisions.** An earlier draft of this task compared the local file's mtime against the server's `updated_at`. That breaks under `git checkout`, a backup restore, or a plain file copy — all of which change mtime without the content actually changing, and would cause this module to silently push stale content over a newer server copy (or the reverse). Instead, this task maintains its own small sidecar state file recording, per skill name, the content hash and timestamp *as of the last successful sync* — comparing against that, not the filesystem, is what makes "has this changed since we last synced it" accurate regardless of what touched the file's mtime.
+
 - [ ] **Step 1: Write the failing tests**
 
 ```python
@@ -1067,10 +1069,23 @@ def test_pull_merge_pushes_local_skill_newer_than_server(tmp_path, monkeypatch, 
     skill_hub_sync.pull_merge_custom_skills()
     assert fake_server_recording_puts.received("local-only-skill")
 
-def test_pull_merge_tie_resolves_deterministically_without_raising(tmp_path, monkeypatch, fake_server_with_equal_timestamp):
+def test_pull_merge_unchanged_since_last_sync_is_noop(tmp_path, monkeypatch, fake_server_matching_last_sync_state):
+    # Local content hash matches what the sidecar state recorded at the last
+    # sync, and the server's updated_at hasn't advanced past that sync either
+    # — nothing to push or pull. Deterministic no-op, not a raise.
     monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
     monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
-    skill_hub.write_custom_skill_file("tied-skill", "local-version")
+    skill_hub.write_custom_skill_file("unchanged-skill", "same content")
+    skill_hub_sync.pull_merge_custom_skills()  # must not raise
+
+def test_pull_merge_local_edited_since_last_sync_pushes_even_if_server_also_moved(tmp_path, monkeypatch, fake_server_with_newer_updated_at):
+    # The content-hash mismatch (not a timestamp comparison) is what decides
+    # this case: local changed since the sidecar's last recorded hash, so
+    # local wins and gets pushed — this is what makes the merge decision
+    # survive a git checkout or file copy that only touches mtime, never content.
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
+    skill_hub.write_custom_skill_file("edited-skill", "newly edited content")
     skill_hub_sync.pull_merge_custom_skills()  # must not raise regardless of outcome
 
 def test_pull_merge_network_failure_is_logged_not_raised(monkeypatch, http_client_that_raises):
@@ -1086,8 +1101,15 @@ Expected: FAIL
 - [ ] **Step 3: Implement in `src/aletheore/skill_hub_sync.py`**
 
 - `_personal_token() -> str | None`: `credentials.get_api_key("ALETHEORE_PERSONAL_TOKEN", "aletheore-personal", credentials_path=DEFAULT_CREDENTIALS_PATH, prompt_fn=lambda _msg: "")` returning `None` if `not credentials.has_api_key(...)` first (same guarded-read pattern `status()` already uses for the managed-audit slot).
-- `push_custom_skill_best_effort(name, content, timeout=5.0)`: if `_personal_token()` is `None`, return immediately. Otherwise `try`/`except Exception` around one `httpx.put(f"{base_url}/v1/custom-skills/{name}", json={"content": content}, headers=..., timeout=timeout)` — log a warning on any exception or non-2xx response, never re-raise. The `timeout` argument is mandatory on every call site, not a library default, since an unbounded request is exactly what Review Focus item 2 forbids.
-- `pull_merge_custom_skills(timeout=10.0)`: if `_personal_token()` is `None`, return immediately (login's caller only calls this once it has a token, but the function stays safe either way). `try`/`except Exception` around the whole network portion — log and return on failure, never raise. On success: `GET /v1/custom-skills` → for each `(name, server_updated_at)`: if no local file exists, or local file's `mtime` is **not strictly greater** than `server_updated_at` (i.e. server is newer-or-equal), `GET /v1/custom-skills/<name>` and `skill_hub.write_custom_skill_file(name, content)`; otherwise (local strictly newer) `PUT` the local content up. This "server wins on a tie" rule is what makes Review Focus item 5 deterministic — ties are resolved one specific way, not left to whichever comparison a given Python float/datetime equality happens to produce. Also push any local custom skill name that the server's list doesn't contain at all (a name that was `add`ed locally while fully offline, never pushed).
+- `push_custom_skill_best_effort(name, content, timeout=5.0)`: if `_personal_token()` is `None`, return immediately. Otherwise `try`/`except Exception` around one `httpx.put(f"{base_url}/v1/custom-skills/{name}", json={"content": content}, headers=..., timeout=timeout)` — log a warning on any exception or non-2xx response, never re-raise. On a successful response, record the sync state for `name` (see below) using the `updated_at` the server returned in its response body plus `_content_hash(content)`. The `timeout` argument is mandatory on every call site, not a library default, since an unbounded request is exactly what Review Focus item 2 forbids.
+- **Sync state (replaces mtime):** `_sync_state_path() -> Path` = `skill_hub.custom_skills_dir() / ".sync_state.json"` — a JSON object mapping `name -> {"synced_at": "<server's updated_at as returned>", "content_hash": "<sha256 hex of the content as of that sync>"}`. `_load_sync_state() -> dict`: read and `json.loads`, returning `{}` on a missing or corrupt file (never raise — this is bookkeeping, not data users can lose anything real from). `_save_sync_state(state: dict) -> None`: write it back as JSON. `_content_hash(content: str) -> str`: `hashlib.sha256(content.encode()).hexdigest()`.
+- `pull_merge_custom_skills(timeout=10.0)`: if `_personal_token()` is `None`, return immediately (login's caller only calls this once it has a token, but the function stays safe either way). `try`/`except Exception` around the whole network portion — log and return on failure, never raise. On success: `GET /v1/custom-skills` → load the sync state once, then for each `(name, server_updated_at)`:
+  - local content missing → pull: `GET /v1/custom-skills/<name>`, `skill_hub.write_custom_skill_file(name, content)`, record sync state `{synced_at: server_updated_at, content_hash: _content_hash(content)}`.
+  - local content present but `name` has no entry in the sync state (never synced from this machine before) → push: local predates any sync relationship, so it wins — `PUT` it up, record the sync state from the response.
+  - local content present and its hash **differs** from the stored `content_hash` → local was edited since the last sync (by `add`, by hand, whatever) — this is the content-hash check that replaces the old mtime comparison, and it is correct regardless of what touched the file's mtime (a `git checkout`, a backup restore, a plain copy) because none of those change the actual bytes. Push it up, record the new sync state from the response.
+  - local content present, hash **matches** the stored `content_hash`, and `server_updated_at` is newer than the stored `synced_at` → the server changed since we last synced and we haven't touched our copy — pull, record the new sync state.
+  - otherwise (hash matches, server not newer) → already in sync, no-op. This is this task's deterministic answer to Review Focus item 5 (the tie case): a tie can only happen when nothing has actually changed on either side since the last sync, in which case doing nothing is correct, not an arbitrary tiebreak.
+  - After the loop: also push any local custom skill name present in `list_custom_skill_names()` that the server's list didn't contain at all (a name `add`ed locally while fully offline, never pushed) — same push-and-record-state logic as the "never synced" branch above.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
