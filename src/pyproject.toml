@@ -128,6 +128,7 @@ aletheore = [
     "data/*.json",
     "static_analysis/semgrep_rules/*.yaml",
     "static_analysis/joern_queries/*.sc",
+    "skills/**/*.md",
 ]
 
 [tool.pytest.ini_options]
