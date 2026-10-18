@@ -3167,7 +3167,15 @@ def _exists_exact_case(repo_path: Path, candidate: Path) -> bool:
             continue
         try:
             if part not in _names_in(directory):
-                return False
+                # Flash Review catch: _listing_at is keyed on the directory's mtime, which assumes mtime
+                # changes on every add/remove/rename - true in general, but coarse on some filesystems
+                # (1-second resolution on HFS+, some network mounts). A module created and imported within
+                # the same mtime tick as the cached listing would otherwise report a real file as missing.
+                # Re-listing live (uncached) once before giving up keeps the common case cheap (this only
+                # runs when the cache already says "not found") while closing the race - os.listdir, not
+                # exists(), so the exact-case guarantee this function exists for still holds.
+                if part not in frozenset(os.listdir(directory)):
+                    return False
         except OSError:
             return False
         directory = directory / part

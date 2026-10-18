@@ -1197,6 +1197,47 @@ def test_exact_case_check_lists_each_directory_once_and_sees_new_files(tmp_path,
     assert graph._exists_exact_case(repo, pkg / "c.py")
 
 
+def test_exact_case_check_falls_back_to_a_live_listing_when_the_cache_key_did_not_change(tmp_path, monkeypatch):
+    # Flash Review catch: _listing_at is keyed on the directory's mtime, assuming mtime always bumps on
+    # an add. On a coarse-granularity filesystem it sometimes doesn't within the same tick - simulated
+    # here by forcing stat() to keep reporting the pre-add mtime even after a new file lands, so the
+    # lru_cache would reuse the stale listing without the live os.listdir fallback this test covers.
+    import os
+
+    import aletheore.scanner.graph as graph
+
+    repo = tmp_path / "repo"
+    pkg = repo / "pkg"
+    pkg.mkdir(parents=True)
+    (pkg / "a.py").write_text("")
+
+    graph._listing_at.cache_clear()
+    assert graph._exists_exact_case(repo, pkg / "a.py")  # primes the cache keyed on pkg's current mtime
+    stale_mtime_ns = pkg.stat().st_mtime_ns
+
+    (pkg / "c.py").write_text("")
+    real_stat = Path.stat
+
+    class _FrozenClockStat:
+        def __init__(self, real_result):
+            self._real = real_result
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+        @property
+        def st_mtime_ns(self):
+            return stale_mtime_ns
+
+    def frozen_clock_stat(self, *args, **kwargs):
+        result = real_stat(self, *args, **kwargs)
+        return _FrozenClockStat(result) if self == pkg else result
+
+    monkeypatch.setattr(Path, "stat", frozen_clock_stat)
+
+    assert graph._exists_exact_case(repo, pkg / "c.py")
+
+
 def test_exact_case_check_verifies_discovered_components_of_a_candidate_beside_the_repo(tmp_path):
     import aletheore.scanner.graph as graph
 
