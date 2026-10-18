@@ -2156,6 +2156,36 @@ def tests_for(
 
 @app.command(
     help=(
+        "every call site and reference to a function or class, across the whole repo, as one complete answer "
+        "with the matching source line - e.g. aletheore usages parse_config --under src --exclude tests"
+    )
+)
+def usages(
+    symbol: str = typer.Argument(..., help="function or class name exactly as it appears in the scan"),
+    path: str = typer.Argument(".", help="repository path"),
+    exclude: list[str] = typer.Option(
+        [], "--exclude", help="leave out hits under a directory with this exact name, or in this exact file name; repeatable"
+    ),
+    under: list[str] = typer.Option([], "--under", help="only show hits below this directory; repeatable"),
+    path_option: Optional[str] = _PATH_OPTION,
+) -> None:
+    from aletheore.usages import UsagesError, usages_report
+
+    repo = Path(_resolve_path(path, path_option)).resolve()
+    try:
+        evidence = load_evidence(repo)
+    except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
+        print(f"error: {exc} (run 'aletheore scan' first)", file=sys.stderr)
+        raise typer.Exit(code=1)
+    try:
+        print(usages_report(evidence, repo, symbol, exclude, under))
+    except UsagesError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise typer.Exit(code=1)
+
+
+@app.command(
+    help=(
         "find where names are defined and print the matching functions with their source, "
         "e.g. aletheore locate 'write_usage HelpFormatter'"
     )
@@ -2365,6 +2395,10 @@ def hook_post_read() -> None:
     from aletheore.read_guard import main_post as hook_main
 
     hook_main()
+
+from aletheore.tokens_cli import tokens_app  # noqa: E402
+
+app.add_typer(tokens_app, name="tokens")
 
 
 @config_app.command(
