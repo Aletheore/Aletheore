@@ -32,6 +32,17 @@ class _LazyModule:
     def __dir__(self):
         return dir(self._load())
 
+    @property
+    def __class__(self):
+        # Flash Review catch: without this, isinstance(httpx, ModuleType) and inspect.ismodule(httpx)
+        # (which is exactly isinstance under the hood) see _LazyModule instead of the real module's
+        # type - a behavioral difference from a real import that a caller inspecting these globals
+        # cannot otherwise detect. type(httpx) itself cannot be spoofed this way (CPython's type()
+        # reads the object header directly, ignoring a __class__ override) - no fix for that exists
+        # short of making _LazyModule itself a ModuleType subclass, which would defeat the deferred
+        # import this whole module exists for.
+        return type(self._load())
+
     def __setattr__(self, attr: str, value) -> None:
         setattr(self._load(), attr, value)
 
