@@ -29,9 +29,11 @@ uvicorn) importable in one process, which is exactly what
 github-app/.venv-skillhub/ was built for.
 """
 
+import logging
 import socket
 import threading
 import time
+import warnings
 
 import httpx
 import pytest
@@ -78,6 +80,63 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+class _LogCapture(logging.Handler):
+    """Captures uvicorn's own error-log records (e.g. the OSError it logs
+    when a bind fails) so a startup failure can be diagnosed from the
+    assertion message itself, not just from pytest's captured stderr.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.ERROR)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
+def _start_server(port: int) -> tuple[uvicorn.Server, threading.Thread, list, _LogCapture]:
+    """Starts uvicorn.Server.run() in a background thread, capturing both
+    any exception it raises (uvicorn exits a failed startup - e.g. a port
+    already in use - via sys.exit(), i.e. SystemExit, from inside the
+    thread, rather than returning one) and uvicorn's own "uvicorn.error"
+    log output (which carries the actual OSError text SystemExit alone
+    would lose) so a bind failure is diagnosable from the fixture's own
+    assertion message, not only from pytest's captured stderr.
+    """
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="on")
+    server = uvicorn.Server(config)
+    errors: list[BaseException] = []
+    log_capture = _LogCapture()
+
+    def _run() -> None:
+        uvicorn_logger = logging.getLogger("uvicorn.error")
+        uvicorn_logger.addHandler(log_capture)
+        try:
+            server.run()
+        except BaseException as exc:  # noqa: BLE001 - re-surfaced to the main thread below
+            errors.append(exc)
+        finally:
+            uvicorn_logger.removeHandler(log_capture)
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    return server, thread, errors, log_capture
+
+
+def _wait_for_start(server: uvicorn.Server, thread: threading.Thread, deadline_s: float = 10) -> None:
+    deadline = time.monotonic() + deadline_s
+    # Also bail out early if the thread has already died (a failed bind
+    # exits the thread almost immediately; no point burning the full
+    # deadline polling a thread that will never flip server.started).
+    while not server.started and thread.is_alive() and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+
+def _is_port_bind_error(log_messages: list[str]) -> bool:
+    text = " ".join(log_messages).lower()
+    return "address already in use" in text or "errno 48" in text or "errno 98" in text
+
+
 @pytest.fixture
 def live_skill_hub_server():
     """Runs the real app_server FastAPI app - same `app` object
@@ -87,23 +146,56 @@ def live_skill_hub_server():
     production does; conftest.py already points DATABASE_URL at the test
     Postgres). See the module docstring for why this is the real-socket
     approach rather than ASGITransport.
+
+    Hardening notes:
+    - `_free_port()` closes its probe socket before uvicorn binds the same
+      port number - a TOCTOU window another process (this machine
+      routinely runs multiple concurrent Claude sessions against this
+      repo) could win in between. If the first bind loses that race, this
+      retries once on a freshly chosen port before giving up.
+    - Any exception raised inside the server thread (plus uvicorn's own
+      logged OSError detail) is captured and folded into the startup
+      assertion's failure message, instead of that failure only ever
+      manifesting as a generic "did not start in time" with the real
+      cause visible only in pytest's captured stderr.
     """
     port = _free_port()
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="on")
-    server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
+    server, thread, errors, log_capture = _start_server(port)
+    _wait_for_start(server, thread)
 
-    deadline = time.monotonic() + 10
-    while not server.started and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert server.started, "uvicorn test server for skill hub did not start in time"
+    if not server.started and _is_port_bind_error(log_capture.messages):
+        # Likely TOCTOU loss on the first port - retry once on a new one.
+        port = _free_port()
+        server, thread, errors, log_capture = _start_server(port)
+        _wait_for_start(server, thread)
+
+    if not server.started:
+        detail_parts = []
+        if errors:
+            detail_parts.append(f"thread exception: {errors[0]!r}")
+        if log_capture.messages:
+            detail_parts.append(f"uvicorn log: {'; '.join(log_capture.messages)}")
+        detail = f" ({'; '.join(detail_parts)})" if detail_parts else ""
+        assert False, f"uvicorn test server for skill hub did not start in time{detail}"
 
     try:
         yield f"http://127.0.0.1:{port}"
     finally:
         server.should_exit = True
         thread.join(timeout=10)
+        if thread.is_alive():
+            # The test's own assertions have already run and passed by
+            # this point (we're in teardown) - a slow uvicorn shutdown
+            # (e.g. a request still in flight) shouldn't fail an
+            # otherwise-passing test, but it must not be silent either:
+            # the background thread, and the port it's bound to, are
+            # still alive after this fixture "finished".
+            warnings.warn(
+                "live_skill_hub_server: uvicorn server thread did not exit within "
+                "10s of should_exit=True; it (and its bound port) may still be "
+                "running in the background.",
+                stacklevel=2,
+            )
 
 
 @pytest.mark.asyncio
