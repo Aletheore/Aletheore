@@ -2198,6 +2198,30 @@ async def get_personal_identity_by_token_hash(pool: asyncpg.Pool, token_hash: st
     return dict(row) if row else None
 
 
+async def revoke_personal_token(pool: asyncpg.Pool, token_hash: str) -> bool:
+    """True if a non-revoked row with that hash existed and was revoked,
+    False if it didn't exist or was already revoked - idempotent, never an
+    error either way (a retried request racing with itself must not 500).
+    """
+    result = await pool.execute(
+        "UPDATE personal_api_tokens SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL",
+        token_hash,
+    )
+    return result != "UPDATE 0"
+
+
+async def revoke_all_personal_tokens(pool: asyncpg.Pool, personal_identity_id: int) -> int:
+    """Count of rows revoked, 0 if none were active."""
+    result = await pool.execute(
+        "UPDATE personal_api_tokens SET revoked_at = now() WHERE personal_identity_id = $1 AND revoked_at IS NULL",
+        personal_identity_id,
+    )
+    # asyncpg execute() returns a string like "UPDATE 3"; the count is the
+    # second token, same shape already relied on by revoke_personal_token's
+    # own "UPDATE 0" check above.
+    return int(result.split()[-1])
+
+
 async def list_custom_skills(pool: asyncpg.Pool, personal_identity_id: int) -> list[dict]:
     rows = await pool.fetch(
         "SELECT skill_name AS name, updated_at FROM custom_skills WHERE personal_identity_id = $1 ORDER BY skill_name ASC",

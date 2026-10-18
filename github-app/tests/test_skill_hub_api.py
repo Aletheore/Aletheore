@@ -104,6 +104,14 @@ async def other_personal_token_header(test_app, monkeypatch):
     return await _mint_personal_token_header(test_app, monkeypatch, github_login="other-user", github_user_id=99999)
 
 
+@pytest_asyncio.fixture
+async def second_personal_token_header_same_identity(test_app, monkeypatch):
+    # Same github_login/github_user_id as personal_token_header - mints a
+    # SECOND, distinct token for the SAME underlying identity, unlike
+    # other_personal_token_header which uses a different identity entirely.
+    return await _mint_personal_token_header(test_app, monkeypatch, github_login="octocat", github_user_id=12345)
+
+
 @pytest.mark.asyncio
 async def test_put_then_list_custom_skill(test_app, personal_token_header):
     await test_app.put("/v1/custom-skills/my-review", headers=personal_token_header, json={"content": "steps"})
@@ -404,3 +412,37 @@ async def test_delete_custom_skill_is_idempotent(test_app, personal_token_header
     await test_app.delete("/v1/custom-skills/my-review", headers=personal_token_header)
     second = await test_app.delete("/v1/custom-skills/my-review", headers=personal_token_header)
     assert second.status_code == 404  # already gone, not a 500
+
+
+@pytest.mark.asyncio
+async def test_revoke_own_token_then_it_cannot_authenticate(test_app, personal_token_header):
+    response = await test_app.delete("/v1/personal-tokens", headers=personal_token_header)
+    assert response.status_code == 204
+    list_response = await test_app.get("/v1/custom-skills", headers=personal_token_header)
+    assert list_response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_revoke_own_token_is_idempotent(test_app, personal_token_header):
+    await test_app.delete("/v1/personal-tokens", headers=personal_token_header)
+    second = await test_app.delete("/v1/personal-tokens", headers=personal_token_header)
+    assert second.status_code == 401  # the token used to authenticate this call is already revoked
+
+
+@pytest.mark.asyncio
+async def test_revoke_all_invalidates_every_token_for_identity(
+    test_app, personal_token_header, second_personal_token_header_same_identity
+):
+    response = await test_app.delete("/v1/personal-tokens/all", headers=personal_token_header)
+    assert response.status_code == 204
+    r1 = await test_app.get("/v1/custom-skills", headers=personal_token_header)
+    r2 = await test_app.get("/v1/custom-skills", headers=second_personal_token_header_same_identity)
+    assert r1.status_code == 401
+    assert r2.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_revoke_all_does_not_affect_other_identity(test_app, personal_token_header, other_personal_token_header):
+    await test_app.delete("/v1/personal-tokens/all", headers=personal_token_header)
+    response = await test_app.get("/v1/custom-skills", headers=other_personal_token_header)
+    assert response.status_code == 200

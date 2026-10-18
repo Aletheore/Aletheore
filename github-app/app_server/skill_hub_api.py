@@ -15,6 +15,8 @@ from app_server.db import (
     get_or_create_personal_identity,
     get_personal_identity_by_token_hash,
     list_custom_skills,
+    revoke_all_personal_tokens,
+    revoke_personal_token,
     upsert_custom_skill,
 )
 from app_server.rate_limit import is_rate_limited
@@ -101,6 +103,32 @@ async def _authenticate_personal_token(request: Request) -> dict:
     if identity is None:
         raise HTTPException(status_code=401, detail="invalid or revoked token")
     return identity
+
+
+def _bearer_token_hash(request: Request) -> str:
+    # Same bearer-extraction + hashing logic _authenticate_personal_token
+    # already does inline, pulled out so the revoke-self endpoint can get the
+    # raw token's hash without changing _authenticate_personal_token's
+    # existing return contract (just the identity dict), which the three
+    # custom-skills routes above depend on.
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="missing bearer token")
+    raw_token = auth_header.removeprefix("Bearer ")
+    return hashlib.sha256(raw_token.encode()).hexdigest()
+
+
+@skill_hub_router.delete("/v1/personal-tokens", status_code=204)
+async def revoke_own_personal_token(request: Request):
+    await _authenticate_personal_token(request)  # 401s on an already-invalid token before we touch anything
+    token_hash = _bearer_token_hash(request)
+    await revoke_personal_token(request.app.state.db_pool, token_hash)
+
+
+@skill_hub_router.delete("/v1/personal-tokens/all", status_code=204)
+async def revoke_all_personal_tokens_route(request: Request):
+    identity = await _authenticate_personal_token(request)
+    await revoke_all_personal_tokens(request.app.state.db_pool, identity["id"])
 
 
 @skill_hub_router.get("/v1/custom-skills")
