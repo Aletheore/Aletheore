@@ -4575,7 +4575,7 @@ def test_flash_review_job_reserves_the_free_tier_monthly_count_atomically(monkey
     # with the right cap.
     reserve_calls = []
 
-    def _reserve_flash_review_count(dsn, installation_id, limit):
+    def _reserve_flash_review_count(dsn, installation_id, limit, **kwargs):
         reserve_calls.append((installation_id, limit))
         return True
 
@@ -4932,7 +4932,7 @@ def test_flash_review_job_has_no_review_count_cap_on_paid_plans(monkeypatch, pla
     count_limits = []
     monkeypatch.setattr(
         "scan_worker.jobs.reserve_flash_review_count",
-        lambda dsn, installation_id, limit: count_limits.append(limit) or False,
+        lambda dsn, installation_id, limit, **kwargs: count_limits.append(limit) or False,
     )
     spend_reserve_called = []
     monkeypatch.setattr(
@@ -5924,7 +5924,7 @@ def test_flash_review_job_reserves_the_cap_before_running_the_review(monkeypatch
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
     monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
 
-    def _reserve_flash_review_count(dsn, iid, limit):
+    def _reserve_flash_review_count(dsn, iid, limit, **kwargs):
         call_order.append("reserve_count")
         return True
 
@@ -13359,6 +13359,81 @@ def test_purge_repo_checkout_job_never_deletes_outside_the_repos_own_directory(
 
     assert (own / "secret.py").exists()
     assert (other_installation / "secret.py").exists()
+
+
+@pytest.mark.parametrize("bad_name", ["..", "."])
+def test_persistent_checkout_dir_refuses_to_build_a_path_outside_its_installation_root(
+    tmp_path, monkeypatch, bad_name
+):
+    # Regression test for a real bug (2026-10-12 Strix security review):
+    # this only ever replaced "/" characters, so a bare ".." or "."
+    # (neither contains a "/" for replace() to touch) passed straight
+    # through untouched and resolved outside the installation's own
+    # directory. purge_repo_checkout_job already independently re-checked
+    # containment before deleting anything (see the parametrized test
+    # above), but the function that actually CREATES and writes to this
+    # path did not - an inconsistency between two callers of the same path
+    # builder, not a deliberate choice. The check now lives in the builder
+    # itself so every caller gets it, not just the one that happened to
+    # add its own.
+    from scan_worker.jobs import _CheckoutPathEscapeError, _persistent_checkout_dir
+
+    monkeypatch.setenv("ALETHEORE_REPO_CHECKOUT_ROOT", str(tmp_path))
+    with pytest.raises(_CheckoutPathEscapeError):
+        _persistent_checkout_dir(7, bad_name)
+
+
+@pytest.mark.parametrize("name", ["org/widgets", "../8", "org/.."])
+def test_persistent_checkout_dir_stays_contained_once_a_slash_is_present(tmp_path, monkeypatch, name):
+    # Any "/" in repo_full_name gets replaced with "__" before the path is
+    # built, which neutralizes ".." as a real path component even when the
+    # string visually looks like a traversal attempt ("../8", "org/..") -
+    # only a bare ".."/"." with no slash at all reaches the filesystem
+    # unescaped (see the test above). Real GitHub repo_full_name values are
+    # always "owner/repo", so this is the common, expected shape.
+    from scan_worker.jobs import _persistent_checkout_dir
+
+    monkeypatch.setenv("ALETHEORE_REPO_CHECKOUT_ROOT", str(tmp_path))
+    path = _persistent_checkout_dir(7, name)
+    assert path.parent == (tmp_path / "7").resolve()
+
+
+def test_prepare_head_checkout_falls_back_to_ephemeral_instead_of_using_an_escaped_path(
+    tmp_path, monkeypatch
+):
+    # The actual real-world path the fix closes: _prepare_head_checkout is
+    # what CREATES and writes to a persistent checkout dir (unlike
+    # purge_repo_checkout_job, which only ever deletes). Before this fix,
+    # a malicious/malformed repo_full_name reaching this function could
+    # have git-cloned into a path outside the installation's own
+    # directory. Now _persistent_checkout_dir raises, and this function's
+    # existing try/except (there for any persistent-storage failure, not
+    # written for this specifically) catches it and safely falls back to
+    # the ephemeral clone-and-delete path instead.
+    from scan_worker.jobs import _prepare_head_checkout
+
+    monkeypatch.setenv("ALETHEORE_REPO_CHECKOUT_ROOT", str(tmp_path))
+
+    clone_ref_calls = []
+
+    def fake_clone_ref(url, ref, dest, pr_number=None):
+        clone_ref_calls.append((url, ref, dest, pr_number))
+        dest.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr("scan_worker.jobs._clone_ref", fake_clone_ref)
+
+    fallback_dir = tmp_path / "ephemeral-fallback"
+    result = _prepare_head_checkout(
+        "https://github.com/org/repo.git", "somesha", 7, "..", fallback_dir
+    )
+
+    assert result == fallback_dir
+    assert len(clone_ref_calls) == 1
+    # The escape attempt (installation 7, repo_full_name "..") would have
+    # resolved to tmp_path itself (the checkout root) rather than
+    # tmp_path/7 - confirm nothing was ever created there except the one
+    # fallback directory this test itself created.
+    assert set(p.name for p in tmp_path.iterdir()) == {"ephemeral-fallback"}
 
 
 def test_incremental_spend_budget_persists_one_reservation_row_per_thread(monkeypatch):

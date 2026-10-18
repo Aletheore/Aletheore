@@ -851,35 +851,61 @@ async def _handle_adjustment_created(data: dict, pool, event_type: str = "adjust
     money_returning = action is None or action in _MONEY_RETURNING_ADJUSTMENT_ACTIONS
     is_topup = money_returning and await is_credited_topup_transaction(pool, transaction_id)
 
-    # The first sighting of an adjustment (and a transaction.updated status
-    # change) does the commission reversal and the heads-up alert. A later
-    # adjustment.updated for the same refund only carries the approval, so it
-    # must not repeat either.
-    if event_type != "adjustment.updated":
-        from app_server.affiliates import reverse_commission_partial
+    # Whether to actually attempt a commission reversal for this event, and
+    # with what dedup key/amount - set by exactly one of the two branches
+    # below, then applied once at the end so both share one warning/alert
+    # path instead of duplicating it.
+    attempt_reversal = False
+    commission_adjustment_id: str | None = None
+    refunded_total_minor: Decimal | None = None
 
-        if action is not None:
-            # A real adjustment.created event: data["id"] is the adjustment's
-            # own id (same field _claw_back_refunded_topup keys on below) and
-            # data.totals.total is the amount *this* adjustment returned, in
-            # the transaction's original currency - enough to prorate. Either
-            # can be missing on an unexpectedly-shaped payload; left as None
-            # rather than guessed at here, so reverse_commission_partial can
-            # tell "no commission on this transaction at all" (the common
-            # case, not worth alerting on) apart from "a commission exists
-            # but this payload can't apply to it" (below).
+    if action is not None:
+        # A real adjustment.created or adjustment.updated event: data["id"]
+        # is the adjustment's own id (same field _claw_back_refunded_topup
+        # keys on below) and data.totals.total is the amount *this*
+        # adjustment returned, in the transaction's original currency -
+        # enough to prorate. Either can be missing on an unexpectedly-shaped
+        # payload; left as None rather than guessed at here, so
+        # reverse_commission_partial can tell "no commission on this
+        # transaction at all" (the common case, not worth alerting on) apart
+        # from "a commission exists but this payload can't apply to it"
+        # (below).
+        #
+        # Gated on status == "approved" (real bug fixed 2026-10-12, Strix
+        # security review): an adjustment.created event can arrive while the
+        # refund is still "pending_approval" - reversing commission
+        # immediately, before knowing whether Paddle will actually approve
+        # it, could permanently cost an affiliate their commission on a sale
+        # that, in the end, was never refunded, since nothing restored it on
+        # a later rejection. This now waits for the same "approved" signal
+        # _claw_back_refunded_topup already waits for on the credit side
+        # ("a rejected one must leave the buyer's credit alone") - whichever
+        # event (created, or a later updated confirming approval) first
+        # carries status == "approved" triggers the reversal.
+        # reverse_commission_partial's own adjustment_id dedup (the
+        # "duplicate" status) keeps this safe even if both events happen to
+        # carry "approved".
+        if data.get("status") == "approved":
             commission_adjustment_id = data.get("id")
             refunded_total_minor = _finite_decimal((data.get("totals") or {}).get("total"))
-        else:
-            # transaction.updated: carries only the transaction's own
-            # id/current status, no adjustment id and no incremental
-            # refunded amount to prorate against - expected for this path,
-            # not an anomaly. Reverses the whole remaining commission in one
-            # shot, same as the old all-or-nothing behavior - keyed on the
-            # transaction id itself so a repeated status-change delivery
-            # doesn't reverse it twice.
-            commission_adjustment_id = f"txn-status:{transaction_id}"
-            refunded_total_minor = Decimal("Infinity")
+            attempt_reversal = True
+    elif event_type != "adjustment.updated":
+        # transaction.updated: carries only the transaction's own
+        # id/current status, no adjustment id and no incremental refunded
+        # amount to prorate against - expected for this path, not an
+        # anomaly. This event only reaches this handler for an already-final
+        # refunded/partially_refunded/charged_back status (see
+        # handle_paddle_webhook_event's own dispatch gate), so there is no
+        # separate approval step to wait for here. Reverses the whole
+        # remaining commission in one shot, same as the old all-or-nothing
+        # behavior - keyed on the transaction id itself so a repeated
+        # status-change delivery doesn't reverse it twice.
+        commission_adjustment_id = f"txn-status:{transaction_id}"
+        refunded_total_minor = Decimal("Infinity")
+        attempt_reversal = True
+
+    if attempt_reversal:
+        from app_server.affiliates import reverse_commission_partial
 
         commission_result = await reverse_commission_partial(
             pool, commission_adjustment_id, transaction_id, refunded_total_minor
@@ -904,20 +930,28 @@ async def _handle_adjustment_created(data: dict, pool, event_type: str = "adjust
                 PaddleWebhookAmountError(f"commission reversal skipped: {commission_result['status']}"),
                 f"transaction_id={transaction_id} action={action}",
             )
+
+    # This heads-up alert is deliberately independent of attempt_reversal
+    # above (and of approval status) - it's an early "this is happening"
+    # notice for ops, not the actual clawback, so it should still fire on
+    # first sighting of a pending refund/chargeback, not wait for approval
+    # the way the real clawback below does. Kept on its original gate (not
+    # a later adjustment.updated, so it still only fires once per
+    # transaction) rather than tied to the commission-reversal timing fix.
+    if is_topup and event_type != "adjustment.updated":
         # transaction.updated payloads carry no adjustment action; they only
         # reach this handler for a refunded/charged-back status, so a missing
         # action means money was returned.
-        if is_topup:
-            logger.warning(
-                "credit top-up %s has a refund or chargeback (status=%s); credit is taken back once it is approved",
-                transaction_id, data.get("status"),
-            )
-            send_error_alert(
-                "paddle_webhook",
-                PaddleTopupRefundedError("credit top-up refund or chargeback raised"),
-                f"transaction_id={transaction_id} action={action or 'transaction.updated'} "
-                f"status={data.get('status')}",
-            )
+        logger.warning(
+            "credit top-up %s has a refund or chargeback (status=%s); credit is taken back once it is approved",
+            transaction_id, data.get("status"),
+        )
+        send_error_alert(
+            "paddle_webhook",
+            PaddleTopupRefundedError("credit top-up refund or chargeback raised"),
+            f"transaction_id={transaction_id} action={action or 'transaction.updated'} "
+            f"status={data.get('status')}",
+        )
 
     if is_topup and data.get("id") and data.get("status") == "approved" and action is not None:
         await _claw_back_refunded_topup(data, transaction_id, pool)

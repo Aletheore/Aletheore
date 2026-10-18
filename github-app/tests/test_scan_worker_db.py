@@ -639,6 +639,55 @@ async def test_sweep_stale_llm_spend_reservations_leaves_fresh_rows_alone(pool):
 
 
 @pytest.mark.asyncio
+async def test_sweep_stale_llm_spend_reservations_never_double_refunds_under_real_concurrency(pool):
+    # Regression test for a real bug (2026-10-12 Strix security review):
+    # the sweep used to release a row's balance, then delete it in a
+    # SEPARATE transaction. Two sweep ticks racing the same stale row -
+    # both SELECT it before either DELETEs - could each independently
+    # release it, crediting the installation twice for one reservation.
+    # The fix claims each row with an atomic DELETE ... RETURNING before
+    # releasing it, so only whichever caller actually deletes the row goes
+    # on to release it. Same real-thread-concurrency style as
+    # test_reserve_flash_review_count_is_atomic_under_real_concurrency.
+    import concurrent.futures
+
+    await _insert_installation(
+        pool, 420, "sweep-race-org",
+        base_credit_allotment_usd=5.00, base_credit_remaining_usd=4.80, topup_credit_balance_usd=0.00,
+    )
+    now = datetime.now(timezone.utc)
+    await pool.execute(
+        """
+        INSERT INTO llm_spend_reservations
+            (reservation_key, installation_id, feature, reserve_usd, topup_usd, updated_at)
+        VALUES ('race-key', 420, 'docs_incremental', 0.20, 0.00, $1)
+        """,
+        now - timedelta(hours=2),
+    )
+
+    from scan_worker.db import sweep_stale_llm_spend_reservations
+
+    concurrent_sweeps = 10
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrent_sweeps) as pool_exec:
+        results = list(
+            pool_exec.map(
+                lambda _: sweep_stale_llm_spend_reservations(TEST_DATABASE_URL, max_age_seconds=3600),
+                range(concurrent_sweeps),
+            )
+        )
+
+    # Exactly one of the racing sweeps should have actually claimed and
+    # released the row; every other one must find nothing left to do.
+    assert sum(results) == 1
+    balance = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd FROM installations WHERE installation_id = 420"
+    )
+    assert float(balance["base_credit_remaining_usd"]) == pytest.approx(5.00), (
+        "the reservation's $0.20 must be refunded exactly once, not once per racing sweep"
+    )
+
+
+@pytest.mark.asyncio
 async def test_get_latest_evidence_returns_most_recent(pool):
     await _insert_installation(pool, 301, "a")
     # Version-stamped because get_latest_evidence now refuses evidence written
@@ -1316,6 +1365,45 @@ async def test_release_flash_review_count_reservation_frees_a_slot(pool):
     release_flash_review_count_reservation(TEST_DATABASE_URL, 402)
     allowed_again = reserve_flash_review_count(TEST_DATABASE_URL, 402, limit=1)
     assert allowed_again is True
+
+
+@pytest.mark.asyncio
+async def test_release_flash_review_count_reservation_respects_reservation_month(pool):
+    # Regression test for a real bug (2026-10-12 Strix security review):
+    # release_flash_review_count_reservation used to always decrement
+    # whatever month was current AT RELEASE TIME, not the month the
+    # matching reserve_flash_review_count call actually incremented. A job
+    # that reserves in one month and releases after the next month has
+    # begun (no concurrency needed - just one job's own reserve-to-release
+    # window straddling a month boundary) would erroneously decrement a
+    # legitimate new-month reservation instead of the stale old-month one,
+    # letting the free-tier cap be exceeded.
+    await _insert_installation(pool, 406, "a")
+    last_month = datetime.now(timezone.utc).date().replace(day=1) - timedelta(days=1)
+    last_month = last_month.replace(day=1)
+    this_month = datetime.now(timezone.utc).date().replace(day=1)
+
+    # A reservation made last month that will be released late (simulating
+    # a job that started before month-end and is cleaned up after it).
+    reserve_flash_review_count(TEST_DATABASE_URL, 406, limit=None, month=last_month)
+    # A legitimate, unrelated reservation already made THIS month - this is
+    # the row the bug would wrongly erase.
+    reserve_flash_review_count(TEST_DATABASE_URL, 406, limit=None, month=this_month)
+
+    # Release the stale last-month reservation, explicitly passing the same
+    # month it was reserved against.
+    release_flash_review_count_reservation(TEST_DATABASE_URL, 406, month=last_month)
+
+    last_month_count = await pool.fetchval(
+        "SELECT review_count FROM flash_review_monthly_count WHERE installation_id = $1 AND month = $2",
+        406, last_month,
+    )
+    this_month_count = await pool.fetchval(
+        "SELECT review_count FROM flash_review_monthly_count WHERE installation_id = $1 AND month = $2",
+        406, this_month,
+    )
+    assert last_month_count == 0, "the released reservation's own month should be decremented"
+    assert this_month_count == 1, "an unrelated, later reservation must not be touched by an earlier month's release"
 
 
 @pytest.mark.asyncio

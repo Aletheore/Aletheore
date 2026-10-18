@@ -108,6 +108,41 @@ def test_wiki_banner_does_not_claim_a_separate_fast_model_for_incremental_update
     assert "frontier model" in frontend.WIKI_HTML
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_finding_action_button_escapes_line_not_just_path():
+    # Regression test for a real bug (2026-10-12 Strix security review):
+    # f.path was passed through escapeHtml() but f.line was concatenated
+    # raw into an HTML attribute (data-line="..."). Findings are expected
+    # to always carry a real integer line number by the time they reach
+    # the dashboard, but that enforcement lives in src/aletheore (outside
+    # this file), so this test does not rely on it - it proves the
+    # rendering layer itself is safe regardless of what upstream
+    # guarantees, by feeding a line value shaped like an attribute
+    # breakout and confirming it can't inject a new attribute.
+    js = frontend.SECURITY_HTML
+    fn = _extract_js_function(js, "findingActionButtonHtml")
+    harness = (
+        "function escapeHtml(s){return String(s).replace(/[&<>\"']/g,"
+        "function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"
+        "\"'\":'&#39;'}[c];});}\n"
+        + fn
+        + "\n"
+        "const malicious = {path: 'a.py', line: '1\" onmouseover=\"alert(1)\"', tool: 't', rule_id: 'r', content_fingerprint: ''};\n"
+        "const out = findingActionButtonHtml('static_analysis', malicious, 'Fix', 'applyFix');\n"
+        # A real, un-neutralized attribute injection would make the string
+        # "onmouseover" appear as a literal new HTML attribute, i.e.
+        # preceded by a real '"' and whitespace with no '&quot;' in between.
+        "if (/\"\\s+onmouseover=\"/.test(out)) {\n"
+        "  throw new Error('line value broke out of its attribute: ' + out);\n"
+        "}\n"
+        "if (!out.includes('&quot; onmouseover=&quot;alert(1)&quot;')) {\n"
+        "  throw new Error('line value was not escaped at all: ' + out);\n"
+        "}\n"
+    )
+    result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def _extract_js_function(source, name):
     # Balanced-brace extraction, not just js.index("\n}", ...) (that only
     # works for a function with no nested {} blocks of its own) - buySeat/
