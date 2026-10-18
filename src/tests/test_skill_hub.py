@@ -70,3 +70,46 @@ def test_malformed_skill_frontmatter_is_skipped_not_fatal(tmp_path, monkeypatch)
     # Must not raise, and must still be able to list whatever else is present
     # (here, nothing else - just asserting no exception propagates).
     assert skill_hub.list_bundled_skills() == []
+
+
+def test_list_skills_merges_curated_and_custom(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    skill_hub.add_custom_skill("my-review", "# my review steps")
+    ids = [m.skill_id for m in skill_hub.list_skills()]
+    assert "custom/my-review" in ids
+    assert "code-review/security-focused" in ids
+
+
+def test_add_custom_skill_returns_prefixed_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    assert skill_hub.add_custom_skill("my-review", "x") == "custom/my-review"
+
+
+def test_get_skill_curated_by_id():
+    skill = skill_hub.get_skill("code-review/security-focused")
+    assert skill.license is not None
+
+
+def test_get_skill_custom_by_prefixed_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    skill_hub.add_custom_skill("my-review", "custom body")
+    skill = skill_hub.get_skill("custom/my-review")
+    assert skill.content == "custom body"
+    assert skill.license is None
+    assert skill.source_url is None
+
+
+def test_get_skill_unknown_id_raises():
+    with pytest.raises(skill_hub.SkillNotFoundError):
+        skill_hub.get_skill("custom/does-not-exist")
+    with pytest.raises(skill_hub.SkillNotFoundError):
+        skill_hub.get_skill("not-a-real/category")
+
+
+def test_custom_skill_can_never_shadow_curated_id(tmp_path, monkeypatch):
+    # A custom skill named exactly like a curated one's trailing segment must
+    # resolve to its own custom/-prefixed id, never to or over the curated one.
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    skill_hub.add_custom_skill("security-focused", "mine")
+    assert skill_hub.get_skill("code-review/security-focused").content != "mine"
+    assert skill_hub.get_skill("custom/security-focused").content == "mine"

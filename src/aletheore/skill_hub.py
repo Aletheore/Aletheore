@@ -146,3 +146,90 @@ def get_bundled_skill(skill_id: str) -> CuratedSkill | None:
         if f"{path.parent.parent.name}/{path.parent.name}" == skill_id:
             return _parse_skill_file(path)
     return None
+
+
+# --- Unified public API: the only surface callers (MCP tools, CLI) should use. ---
+
+_CUSTOM_PREFIX = "custom/"
+_CUSTOM_CATEGORY = "custom"
+
+
+class SkillNotFoundError(Exception):
+    """Raised by get_skill when no curated or custom skill matches the id."""
+
+
+@dataclass
+class SkillMeta:
+    skill_id: str
+    category: str
+    title: str
+    description: str
+
+
+@dataclass
+class Skill:
+    skill_id: str
+    title: str
+    description: str
+    content: str
+    source_url: str | None
+    license: str | None
+
+
+def list_skills(category: str | None = None) -> list[SkillMeta]:
+    metas = [
+        SkillMeta(
+            skill_id=meta.skill_id,
+            category=meta.category,
+            title=meta.title,
+            description=meta.description,
+        )
+        for meta in list_bundled_skills(category)
+    ]
+    if category is None or category == _CUSTOM_CATEGORY:
+        metas.extend(
+            SkillMeta(
+                skill_id=f"{_CUSTOM_PREFIX}{name}",
+                category=_CUSTOM_CATEGORY,
+                title=name,
+                description="",
+            )
+            for name in list_custom_skill_names()
+        )
+    return metas
+
+
+def get_skill(skill_id: str) -> Skill:
+    if skill_id.startswith(_CUSTOM_PREFIX):
+        name = skill_id[len(_CUSTOM_PREFIX):]
+        try:
+            text = read_custom_skill_file(name)
+        except ValueError as exc:
+            raise SkillNotFoundError(skill_id) from exc
+        if text is None:
+            raise SkillNotFoundError(skill_id)
+        return Skill(
+            skill_id=skill_id,
+            title=name,
+            description="",
+            content=text,
+            source_url=None,
+            license=None,
+        )
+    curated = get_bundled_skill(skill_id)
+    if curated is None:
+        raise SkillNotFoundError(skill_id)
+    return Skill(
+        skill_id=curated.skill_id,
+        title=curated.title,
+        description=curated.description,
+        content=curated.content,
+        source_url=curated.source_url,
+        license=curated.license,
+    )
+
+
+def add_custom_skill(name: str, content: str) -> str:
+    # Local-only for now; sync push is wired in a later task.
+    write_custom_skill_file(name, content)
+    return f"{_CUSTOM_PREFIX}{name}"
