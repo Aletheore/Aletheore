@@ -206,6 +206,10 @@ def _no_real_auth_rate_limiting(monkeypatch):
     # that specifically exercise the 429 path patch is_rate_limited back
     # to something real (or fake it directly) within their own test body.
     monkeypatch.setattr("app_server.auth.is_rate_limited", lambda *a, **k: False)
+    # Same reasoning for POST /v1/personal-tokens' per-GitHub-account limit:
+    # many tests mint tokens for the same fixed test user id. The 429 tests
+    # in test_skill_hub_api.py patch the real limiter back in.
+    monkeypatch.setattr("app_server.skill_hub_api.is_rate_limited", lambda *a, **k: False)
 
 
 @pytest.fixture(scope="session")

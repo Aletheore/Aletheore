@@ -893,6 +893,8 @@ SCAN_SLOT_LOCK_NAMESPACE = 1
 HEALTH_CHECK_TARGET_LOCK_NAMESPACE = 4
 API_TOKEN_LOCK_NAMESPACE = 5
 SEAT_LOCK_NAMESPACE = 6
+# 7 and 8 are claimed by scan_worker/db.py (wiki-write, check-run creation).
+PERSONAL_TOKEN_LOCK_NAMESPACE = 9
 ADVISORY_LOCK_TIMEOUT = "5s"
 
 
@@ -2103,12 +2105,49 @@ async def get_or_create_personal_identity(pool: asyncpg.Pool, github_user_id: in
     return dict(row)
 
 
-async def create_personal_token(pool: asyncpg.Pool, personal_identity_id: int, token_hash: str, label: str) -> int:
-    row = await pool.fetchrow(
-        "INSERT INTO personal_api_tokens (personal_identity_id, token_hash, label) VALUES ($1, $2, $3) RETURNING id",
-        personal_identity_id, token_hash, label,
-    )
-    return row["id"]
+# Flat cap on active personal (Skill Hub) tokens per GitHub identity. A v1
+# constant, unlike installation tokens' per-installation max_api_tokens
+# column: personal identities have no plan or settings row to read a limit
+# from. Every `aletheore login` mints one token, so this is the number of
+# machines/logins one account can have live at once.
+MAX_PERSONAL_TOKENS_PER_IDENTITY = 10
+
+
+async def create_personal_token_within_limit(
+    pool: asyncpg.Pool,
+    personal_identity_id: int,
+    token_hash: str,
+    label: str,
+    limit: int = MAX_PERSONAL_TOKENS_PER_IDENTITY,
+) -> int | None:
+    """Same atomic count-bound insert as create_api_token_within_limit, keyed
+    on the personal identity instead of an installation. Returns the new
+    token's id, or None if the identity already has `limit` active tokens.
+    """
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('lock_timeout', $1, true)", ADVISORY_LOCK_TIMEOUT)
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock($1, $2)",
+                PERSONAL_TOKEN_LOCK_NAMESPACE,
+                personal_identity_id,
+            )
+            row = await conn.fetchrow(
+                """
+                INSERT INTO personal_api_tokens (personal_identity_id, token_hash, label)
+                SELECT $1, $2, $3
+                WHERE (
+                    SELECT count(*) FROM personal_api_tokens
+                    WHERE personal_identity_id = $1 AND revoked_at IS NULL
+                ) < $4
+                RETURNING id
+                """,
+                personal_identity_id,
+                token_hash,
+                label,
+                limit,
+            )
+    return row["id"] if row is not None else None
 
 
 async def get_personal_identity_by_token_hash(pool: asyncpg.Pool, token_hash: str) -> dict | None:

@@ -30,8 +30,8 @@ logger = logging.getLogger(__name__)
 # lock made a concurrent seat-admission call block for its full
 # lock_timeout and then fail), fixed by moving SEAT_LOCK_NAMESPACE to 6.
 # 7 is claimed below for the wiki-write lock, 8 for the check-run creation
-# lock - keep this registry comment in sync with any new namespace either
-# file adds.
+# lock, and app_server.db claims 9 (PERSONAL_TOKEN_LOCK_NAMESPACE) - keep
+# this registry comment in sync with any new namespace either file adds.
 SCAN_SLOT_LOCK_NAMESPACE = 1
 SPEND_LOCK_NAMESPACE = 2
 # Real gap found via audit: insert_repo_history's retention trim (below)

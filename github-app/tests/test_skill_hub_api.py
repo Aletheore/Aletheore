@@ -156,3 +156,152 @@ async def test_custom_skills_endpoints_require_bearer_401(test_app):
     assert list_response.status_code == 401
     assert get_response.status_code == 401
     assert put_response.status_code == 401
+
+
+# --- abuse limits (final Skill Hub review) ---------------------------------
+
+
+@pytest.mark.asyncio
+async def test_personal_token_mint_is_capped_per_identity(test_app, monkeypatch, pool):
+    from app_server.db import MAX_PERSONAL_TOKENS_PER_IDENTITY
+
+    _mock_github_user(monkeypatch)
+    statuses = []
+    for i in range(MAX_PERSONAL_TOKENS_PER_IDENTITY + 1):
+        response = await test_app.post(
+            "/v1/personal-tokens",
+            headers={"Authorization": "Bearer fake-github-token"},
+            json={"label": f"machine-{i}"},
+        )
+        statuses.append(response.status_code)
+
+    assert statuses[:-1] == [200] * MAX_PERSONAL_TOKENS_PER_IDENTITY
+    assert statuses[-1] == 409
+    count = await pool.fetchval("SELECT count(*) FROM personal_api_tokens")
+    assert count == MAX_PERSONAL_TOKENS_PER_IDENTITY
+
+
+@pytest.mark.asyncio
+async def test_personal_token_relogin_below_the_cap_still_works(test_app, monkeypatch, pool):
+    from app_server.db import MAX_PERSONAL_TOKENS_PER_IDENTITY
+
+    _mock_github_user(monkeypatch)
+    for i in range(MAX_PERSONAL_TOKENS_PER_IDENTITY - 1):
+        await test_app.post(
+            "/v1/personal-tokens",
+            headers={"Authorization": "Bearer fake-github-token"},
+            json={"label": f"machine-{i}"},
+        )
+
+    response = await test_app.post(
+        "/v1/personal-tokens",
+        headers={"Authorization": "Bearer fake-github-token"},
+        json={"label": "one-more-login"},
+    )
+
+    assert response.status_code == 200
+    # And the freshly minted token actually authenticates.
+    list_response = await test_app.get(
+        "/v1/custom-skills", headers={"Authorization": f"Bearer {response.json()['token']}"}
+    )
+    assert list_response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_personal_token_cap_is_per_identity_not_global(test_app, monkeypatch):
+    from app_server.db import MAX_PERSONAL_TOKENS_PER_IDENTITY
+
+    _mock_github_user(monkeypatch, github_login="octocat", github_user_id=12345)
+    for _ in range(MAX_PERSONAL_TOKENS_PER_IDENTITY):
+        await test_app.post(
+            "/v1/personal-tokens", headers={"Authorization": "Bearer fake-github-token"}, json={"label": "x"}
+        )
+
+    _mock_github_user(monkeypatch, github_login="other-user", github_user_id=99999)
+    response = await test_app.post(
+        "/v1/personal-tokens", headers={"Authorization": "Bearer fake-github-token"}, json={"label": "x"}
+    )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_personal_token_mint_rate_limited_per_github_account(test_app, monkeypatch, redis_conn):
+    # Mirrors test_auth.py's test_login_rate_limits_after_threshold: swap the
+    # real limiter back in (conftest stubs it out suite-wide), point it at
+    # the test Redis, and shrink the limit.
+    import app_server.skill_hub_api as skill_hub_api_module
+    from app_server.rate_limit import is_rate_limited as real_is_rate_limited
+
+    monkeypatch.setattr(skill_hub_api_module, "is_rate_limited", real_is_rate_limited)
+    monkeypatch.setattr(skill_hub_api_module, "PERSONAL_TOKEN_RATE_LIMIT", 2)
+    monkeypatch.setattr(skill_hub_api_module, "get_redis_client", lambda: redis_conn)
+
+    _mock_github_user(monkeypatch)
+    statuses = []
+    for _ in range(3):
+        response = await test_app.post(
+            "/v1/personal-tokens", headers={"Authorization": "Bearer fake-github-token"}, json={"label": "x"}
+        )
+        statuses.append(response.status_code)
+
+    assert statuses == [200, 200, 429]
+
+    # Keyed on the GitHub user id, not shared across accounts.
+    _mock_github_user(monkeypatch, github_login="other-user", github_user_id=99999)
+    other = await test_app.post(
+        "/v1/personal-tokens", headers={"Authorization": "Bearer fake-github-token"}, json={"label": "x"}
+    )
+    assert other.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_put_custom_skill_rejects_oversized_content(test_app, personal_token_header, pool):
+    from app_server.skill_hub_api import MAX_CUSTOM_SKILL_CONTENT_CHARS
+
+    response = await test_app.put(
+        "/v1/custom-skills/big",
+        headers=personal_token_header,
+        json={"content": "x" * (MAX_CUSTOM_SKILL_CONTENT_CHARS + 1)},
+    )
+
+    assert response.status_code == 422
+    assert await pool.fetchval("SELECT count(*) FROM custom_skills") == 0
+
+
+@pytest.mark.asyncio
+async def test_put_custom_skill_accepts_content_at_the_cap(test_app, personal_token_header):
+    from app_server.skill_hub_api import MAX_CUSTOM_SKILL_CONTENT_CHARS
+
+    response = await test_app.put(
+        "/v1/custom-skills/big",
+        headers=personal_token_header,
+        json={"content": "x" * MAX_CUSTOM_SKILL_CONTENT_CHARS},
+    )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_name",
+    # A literal ".." segment is normalized away by the HTTP client before it
+    # is ever sent; "%2e%2e" is how one actually reaches the route.
+    ["has.dot", "white space", "semi;colon", "a" * 129, "%2e%2e", "caf%C3%A9"],
+)
+async def test_put_custom_skill_rejects_invalid_name(test_app, personal_token_header, pool, bad_name):
+    response = await test_app.put(
+        f"/v1/custom-skills/{bad_name}", headers=personal_token_header, json={"content": "x"}
+    )
+
+    assert response.status_code == 400
+    assert await pool.fetchval("SELECT count(*) FROM custom_skills") == 0
+
+
+@pytest.mark.asyncio
+async def test_put_custom_skill_accepts_a_max_length_safe_name(test_app, personal_token_header):
+    response = await test_app.put(
+        f"/v1/custom-skills/{'a' * 128}", headers=personal_token_header, json={"content": "x"}
+    )
+
+    assert response.status_code == 200
