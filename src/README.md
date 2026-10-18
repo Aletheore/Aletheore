@@ -437,6 +437,12 @@ aletheore query search-codebase "how does auth work?" --path .
 aletheore query answer "how does auth work?" --path . --agent ollama
 ```
 
+`dead-code` and `error-handling` print a whole repo, which is often far more than a question about one folder needs.
+They accept `--under <dir>`, `--exclude <name>` and `--no-tests` (same meaning as on `dependents`) and then list only
+the matching paths, plus a `scope` block saying how many entries were left out. Counts that are not per path
+(`by_error_type`, `unused_dependencies`) stay repo-wide, and `error-handling` still carries the caps applied when the
+scan was written (`truncated`). Other kinds reject these flags.
+
 `search-codebase` returns TOON-encoded semantic retrieval results from the local index.
 `answer` retrieves code chunks from that same index, gates low-confidence matches, and then
 uses the selected provider's simple completion path to answer with citations.

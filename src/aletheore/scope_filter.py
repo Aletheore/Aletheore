@@ -1,4 +1,9 @@
-"""Path scoping for `aletheore dependents`: `--under <dir>`, `--exclude <name>` and `--no-tests`."""
+"""Path scoping shared by `aletheore dependents` and the repo-wide `aletheore query` kinds: `--under <dir>`,
+`--exclude <name>` and `--no-tests`, with one meaning everywhere.
+
+Only kinds whose answer is a long list of paths can be scoped (see SCOPABLE). The scoped result says how much was left
+out, so nothing disappears silently.
+"""
 
 from __future__ import annotations
 
@@ -35,3 +40,27 @@ def in_scope(path: str, exclude: list[str], under: list[str], no_tests: bool) ->
         return False
     return not under or path.startswith(tuple(under))
 
+
+# kind -> {list key in the result: key holding that entry's path, or None when the entry is the path string itself}
+SCOPABLE: dict[str, dict[str, str | None]] = {
+    "dead-code": {"unreachable_modules": "path", "entry_points_detected": None},
+    "error-handling": {"error_types": "file", "raise_sites": "file", "handlers": "file"},
+}
+
+
+def scope_result(kind: str, result: dict, exclude: list[str], under: list[str], no_tests: bool) -> dict:
+    prefixes = normalize_under(under)
+    out = dict(result)
+    left_out: dict[str, int] = {}
+    for key, path_key in SCOPABLE[kind].items():
+        items = result.get(key) or []
+        kept = [i for i in items if in_scope(i if path_key is None else i.get(path_key, ""), exclude, prefixes, no_tests)]
+        out[key] = kept
+        left_out[key] = len(items) - len(kept)
+    out["scope"] = {
+        "applied": {"under": under, "exclude": exclude, "no_tests": no_tests},
+        "left_out": left_out,
+        "note": "lists were filtered by file path after the scan; counts in other fields (by_error_type, "
+        "unused_dependencies) are repo-wide",
+    }
+    return out

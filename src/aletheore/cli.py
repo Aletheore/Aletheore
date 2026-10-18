@@ -867,6 +867,9 @@ def _query(
     k: int = 10,
     symbol: str | None = None,
     language: str | None = None,
+    exclude: list[str] | None = None,
+    under: list[str] | None = None,
+    no_tests: bool = False,
 ) -> int:
     if kind not in QUERY_KIND_CHOICES:
         # Suggestion first, listing after: a typo ("secret", "hotspot") is the
@@ -1000,6 +1003,13 @@ def _query(
         print(f"error: {exc}")
         return 1
 
+    if exclude or under or no_tests:
+        from aletheore.scope_filter import SCOPABLE, scope_result
+
+        if kind not in SCOPABLE:
+            print(f"error: --under/--exclude/--no-tests are supported for: {', '.join(sorted(SCOPABLE))}")
+            return 1
+        result = scope_result(kind, result, exclude or [], under or [], no_tests)
     print(json.dumps(result, indent=2))
     return 0
 
@@ -2031,11 +2041,14 @@ def query(
         "--language",
         help="restrict 'search-codebase' to one language, e.g. python; required for 'ast-pattern'",
     ),
+    exclude: list[str] = typer.Option([], "--exclude", help="'dead-code'/'error-handling': leave out paths with this exact directory or file name; repeatable"),
+    under: list[str] = typer.Option([], "--under", help="'dead-code'/'error-handling': only paths below this directory; repeatable"),
+    no_tests: bool = typer.Option(False, "--no-tests", help="'dead-code'/'error-handling': leave out test files"),
 ) -> None:
     if kind is None:
         console.print(_query_kinds_panel())
         raise typer.Exit(code=0)
-    raise typer.Exit(code=_query(kind, target, repo_path, full, agent, k, symbol, language))
+    raise typer.Exit(code=_query(kind, target, repo_path, full, agent, k, symbol, language, exclude, under, no_tests))
 
 
 @app.command(
