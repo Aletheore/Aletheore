@@ -505,8 +505,8 @@ Expected: FAIL
 
 - `ALLOWED_LICENSES = frozenset({"MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC"})` module constant.
 - `check_license`: `None` if `license_id in ALLOWED_LICENSES`, else a `VettingFailure`.
-- `SUSPICIOUS_PATTERNS`: a module-level list of compiled regexes covering, at minimum, piping a remote download into a shell (`curl|wget ... | sh|bash`), and phrasing that asks to send a secret/credential/token to a URL. `check_instruction_text` returns one `VettingFailure` per pattern that matches (case-insensitive).
-- `check_bundled_scripts(skill_dir)`: if a `scripts/` subdirectory exists, run it through whatever function Aletheore's own secrets/vuln scanner already exposes (same one the `aletheore_secrets` MCP tool calls) and translate any finding into a `VettingFailure`; `[]` if `scripts/` doesn't exist.
+- `SUSPICIOUS_PATTERNS`: a module-level list of compiled regexes covering, at minimum, piping a remote download into a shell (`curl|wget ... | sh|bash`), and phrasing that asks to send a secret/credential/token to a URL. `check_instruction_text` returns one `VettingFailure` per pattern that matches (case-insensitive). **Name and document this honestly as a lint, not a security guarantee**: a fixed pattern list catches the specific known-bad shapes it was written for and nothing it wasn't — it does not detect general prompt injection, novel phrasing, or anything a competent attacker bothers to obfuscate. The module docstring and this function's docstring must say so explicitly (e.g. "catches known-bad instruction patterns; not a substitute for human review or a general prompt-injection detector"), so a passing result is never read as "this skill was security-reviewed."
+- `check_bundled_scripts(skill_dir)`: if a `scripts/` subdirectory exists, run it through whatever function Aletheore's own secrets/vuln scanner already exposes (same one the `aletheore_secrets` MCP tool calls) and translate any finding into a `VettingFailure`; `[]` if `scripts/` doesn't exist. This one *is* a real, substantive check — Aletheore's own scanner is the actual security-relevant part of this module; say so in its docstring too, so the distinction between "real scan" (this function) and "pattern lint" (`check_instruction_text`) is clear to anyone reading the code later.
 - `vet_skill_directory(skill_dir)`: read `(skill_dir / "SKILL.md").read_text()`, split on the `---` frontmatter delimiters, `yaml.safe_load` just the frontmatter block, and pull out `license` (a `KeyError`/parse error here means license check fails, same as `check_license(None)` — do not raise). **Deliberately self-contained**: this duplicates a few lines of YAML-splitting logic that Task 2's `_parse_skill_file` also does, rather than importing from `skill_hub.py` — Section C is specified to be independent of Section A (buildable and testable with zero dependency on Task 1/2/3 landing first), and importing a Task 2 private helper would silently break that. Then run all three checks, concatenate every non-`None` failure into one list.
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -518,7 +518,7 @@ Expected: PASS
 
 ```bash
 git add src/aletheore/skill_vetting.py src/tests/test_skill_vetting.py
-git commit -m "feat: add automated license and security vetting for curated skills"
+git commit -m "feat: add license-compliance check and known-bad-pattern lint for curated skills"
 ```
 
 ---
