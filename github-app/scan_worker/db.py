@@ -271,6 +271,24 @@ def get_llm_spend_this_month(dsn: str, installation_id: int) -> float:
             return float(row[0]) if row else 0.0
 
 
+def get_llm_review_spend_this_month(dsn: str, installation_id: int) -> float:
+    """This month's spend on PR reviews alone (feature "flash_review" and its
+    embedding sibling), from the llm_spend_events ledger. get_llm_spend_this_month
+    is the all-feature total, so the two together let a message say how much
+    of the total actually went to reviews."""
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(cost_usd), 0) FROM llm_spend_events
+                WHERE installation_id = %s AND feature LIKE 'flash_review%%'
+                  AND created_at >= date_trunc('month', now())
+                """,
+                (installation_id,),
+            )
+            return float(cur.fetchone()[0])
+
+
 def get_llm_spend_breakdown(dsn: str, installation_id: int, since: datetime) -> dict[str, float]:
     """Per-feature cost breakdown for one installation since `since` - the
     query llm_spend's own blended monthly total can never answer, and the

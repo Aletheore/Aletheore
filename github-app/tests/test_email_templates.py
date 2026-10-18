@@ -142,6 +142,40 @@ def test_weekly_digest_email_reports_real_numbers_when_active():
     assert "7 automated PR reviews" in message["text"]
 
 
+def test_weekly_digest_email_splits_review_spend_from_other_ai_spend():
+    # The all-feature total used to be shown as "across N PR reviews", which
+    # attributed AIRview/Docs spend to reviews.
+    message = weekly_digest_email(
+        account_login="acme-corp",
+        plan="air",
+        scans_this_week=3,
+        endpoints_reachable=4,
+        endpoints_total=5,
+        llm_spend_month_to_date=9.04,
+        flash_reviews_month_to_date=336,
+        llm_spend_reviews_month_to_date=0.61,
+    )
+    assert (
+        "$9.04 in AI spend this month: $0.61 on 336 automated PR reviews "
+        "and $8.43 on other AI features."
+    ) in message["text"]
+    assert "across 336" not in message["text"]
+
+
+def test_weekly_digest_email_keeps_plain_wording_when_reviews_are_all_the_spend():
+    message = weekly_digest_email(
+        account_login="acme-corp",
+        plan="flash",
+        scans_this_week=3,
+        endpoints_reachable=0,
+        endpoints_total=0,
+        llm_spend_month_to_date=1.23,
+        flash_reviews_month_to_date=5,
+        llm_spend_reviews_month_to_date=1.23,
+    )
+    assert "$1.23 in AI spend this month, across 5 automated PR reviews." in message["text"]
+
+
 def test_weekly_digest_email_singular_scan_and_review_wording():
     message = weekly_digest_email(
         account_login="acme-corp",

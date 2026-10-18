@@ -253,6 +253,7 @@ def weekly_digest_email(
     endpoints_total: int,
     llm_spend_month_to_date: float,
     flash_reviews_month_to_date: int,
+    llm_spend_reviews_month_to_date: float | None = None,
 ) -> dict:
     # Sent unconditionally to every paid installation, including quiet
     # ones (see digest_sends' migration comment - this is meant to
@@ -286,10 +287,27 @@ def weekly_digest_email(
             )
 
     review_word = "review" if flash_reviews_month_to_date == 1 else "reviews"
-    spend_line = (
-        f"${llm_spend_month_to_date:.2f} in AI spend this month, across "
-        f"{flash_reviews_month_to_date} automated PR {review_word}."
+    # llm_spend_month_to_date is the all-feature total (AIRview, Docs and
+    # audits as well as PR reviews), so "$X across N reviews" used to read as
+    # if every dollar went to reviews - in practice AIRview updates were ~90%
+    # of it. When the reviews-only share is known, show the split. Optional so
+    # digest jobs queued before this field existed still render.
+    other_spend = (
+        llm_spend_month_to_date - llm_spend_reviews_month_to_date
+        if llm_spend_reviews_month_to_date is not None
+        else 0.0
     )
+    if llm_spend_reviews_month_to_date is not None and other_spend >= 0.005:
+        spend_line = (
+            f"${llm_spend_month_to_date:.2f} in AI spend this month: "
+            f"${llm_spend_reviews_month_to_date:.2f} on {flash_reviews_month_to_date} "
+            f"automated PR {review_word} and ${other_spend:.2f} on other AI features."
+        )
+    else:
+        spend_line = (
+            f"${llm_spend_month_to_date:.2f} in AI spend this month, across "
+            f"{flash_reviews_month_to_date} automated PR {review_word}."
+        )
 
     lines = [scan_line]
     if is_air:

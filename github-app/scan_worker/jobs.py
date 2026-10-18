@@ -92,6 +92,7 @@ from scan_worker.db import (
     get_evidence_by_head_sha,
     get_evidence_by_id,
     get_latest_evidence,
+    get_llm_review_spend_this_month,
     get_llm_spend_this_month,
     get_seconds_since_last_health_check,
     insert_audit_report,
@@ -5393,6 +5394,7 @@ def run_weekly_digest_sweep_job() -> None:
                 "plan": installation["plan"],
                 "scans_this_week": count_repo_scans_since(dsn, installation_id, since),
                 "llm_spend_month_to_date": get_llm_spend_this_month(dsn, installation_id),
+                "llm_spend_reviews_month_to_date": get_llm_review_spend_this_month(dsn, installation_id),
                 "flash_reviews_month_to_date": get_flash_review_count_this_month(dsn, installation_id),
             }
             endpoint_summary = get_endpoint_health_summary(dsn, installation_id)
