@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 
 from app_server.admin import TokenLabel, _bearer_github_token, _fetch_github_user
 from app_server.db import (
-    MAX_PERSONAL_TOKENS_PER_IDENTITY,
     create_personal_token_within_limit,
     get_custom_skill,
     get_or_create_personal_identity,
@@ -78,11 +77,9 @@ async def mint_personal_token(request: Request, body: CreatePersonalTokenRequest
     identity = await get_or_create_personal_identity(pool, user["id"], user["login"])
     raw_token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-    token_id = await create_personal_token_within_limit(pool, identity["id"], token_hash, body.label)
-    if token_id is None:
-        raise HTTPException(
-            status_code=409, detail=f"token limit reached ({MAX_PERSONAL_TOKENS_PER_IDENTITY})"
-        )
+    # Never rejects: at the cap this rotates out the single oldest token
+    # instead of 409ing (see create_personal_token_within_limit).
+    await create_personal_token_within_limit(pool, identity["id"], token_hash, body.label)
     return {"token": raw_token}
 
 

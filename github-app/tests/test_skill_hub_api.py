@@ -1,3 +1,5 @@
+import hashlib
+
 import httpx
 import pytest
 import pytest_asyncio
@@ -162,7 +164,13 @@ async def test_custom_skills_endpoints_require_bearer_401(test_app):
 
 
 @pytest.mark.asyncio
-async def test_personal_token_mint_is_capped_per_identity(test_app, monkeypatch, pool):
+async def test_personal_token_mint_rotates_oldest_token_on_overflow(test_app, monkeypatch, pool):
+    # 2026-10-18 fix: `aletheore login` mints a brand new personal token on
+    # every login and nothing ever revokes one (no revoke endpoint exists),
+    # so cap-and-reject-at-10 permanently locked out any identity that had
+    # logged in MAX_PERSONAL_TOKENS_PER_IDENTITY+ times, with no recovery
+    # path. The (limit+1)th mint (and every one after it) must now succeed
+    # - never a 409 - by rotating out the single oldest token instead.
     from app_server.db import MAX_PERSONAL_TOKENS_PER_IDENTITY
 
     _mock_github_user(monkeypatch)
@@ -175,9 +183,8 @@ async def test_personal_token_mint_is_capped_per_identity(test_app, monkeypatch,
         )
         statuses.append(response.status_code)
 
-    assert statuses[:-1] == [200] * MAX_PERSONAL_TOKENS_PER_IDENTITY
-    assert statuses[-1] == 409
-    count = await pool.fetchval("SELECT count(*) FROM personal_api_tokens")
+    assert statuses == [200] * (MAX_PERSONAL_TOKENS_PER_IDENTITY + 1)
+    count = await pool.fetchval("SELECT count(*) FROM personal_api_tokens WHERE revoked_at IS NULL")
     assert count == MAX_PERSONAL_TOKENS_PER_IDENTITY
 
 
@@ -205,6 +212,54 @@ async def test_personal_token_relogin_below_the_cap_still_works(test_app, monkey
         "/v1/custom-skills", headers={"Authorization": f"Bearer {response.json()['token']}"}
     )
     assert list_response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_personal_token_evicted_on_rotation_no_longer_authenticates(test_app, monkeypatch, pool):
+    from app_server.db import MAX_PERSONAL_TOKENS_PER_IDENTITY
+
+    _mock_github_user(monkeypatch)
+    first_response = await test_app.post(
+        "/v1/personal-tokens",
+        headers={"Authorization": "Bearer fake-github-token"},
+        json={"label": "machine-0"},
+    )
+    oldest_raw_token = first_response.json()["token"]
+    oldest_token_hash = hashlib.sha256(oldest_raw_token.encode()).hexdigest()
+
+    # Backdate the first-minted token so it is unambiguously the oldest by
+    # created_at, independent of how close together these requests land.
+    await pool.execute(
+        "UPDATE personal_api_tokens SET created_at = now() - interval '1 hour' WHERE token_hash = $1",
+        oldest_token_hash,
+    )
+
+    # It authenticates fine before the overflow mint.
+    still_valid = await test_app.get(
+        "/v1/custom-skills", headers={"Authorization": f"Bearer {oldest_raw_token}"}
+    )
+    assert still_valid.status_code == 200
+
+    for i in range(1, MAX_PERSONAL_TOKENS_PER_IDENTITY):
+        await test_app.post(
+            "/v1/personal-tokens",
+            headers={"Authorization": "Bearer fake-github-token"},
+            json={"label": f"machine-{i}"},
+        )
+
+    # This is the (limit+1)th mint for this identity; it must rotate out the
+    # backdated oldest token to make room.
+    overflow_response = await test_app.post(
+        "/v1/personal-tokens",
+        headers={"Authorization": "Bearer fake-github-token"},
+        json={"label": "machine-overflow"},
+    )
+    assert overflow_response.status_code == 200
+
+    response = await test_app.get(
+        "/v1/custom-skills", headers={"Authorization": f"Bearer {oldest_raw_token}"}
+    )
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio

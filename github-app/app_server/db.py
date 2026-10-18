@@ -2119,10 +2119,30 @@ async def create_personal_token_within_limit(
     token_hash: str,
     label: str,
     limit: int = MAX_PERSONAL_TOKENS_PER_IDENTITY,
-) -> int | None:
-    """Same atomic count-bound insert as create_api_token_within_limit, keyed
-    on the personal identity instead of an installation. Returns the new
-    token's id, or None if the identity already has `limit` active tokens.
+) -> int:
+    """Keyed on the personal identity instead of an installation, but unlike
+    create_api_token_within_limit this never rejects: `aletheore login`
+    mints a brand new personal token on every single login and nothing ever
+    revokes one (there is no revoke endpoint for personal tokens), so a
+    cap-and-reject-at-`limit` design permanently locked out any identity
+    that had logged in `limit`+ times, with no recovery path short of a
+    manual DB edit.
+
+    Instead, once the identity is already at `limit` non-revoked tokens,
+    this revokes the single OLDEST one (by created_at, id as a deterministic
+    tiebreak) to make room before inserting the new one. That keeps a
+    rolling window of the `limit` most-recently-created tokens always valid
+    - multi-machine sync keeps working for up to `limit` concurrent
+    machines, and a login can never 409.
+
+    Stays inside the same advisory-xact-lock scope create_api_token_within_limit
+    uses (mirrored here, keyed on personal_identity_id instead of
+    installation_id): the count check, the eviction, and the insert all run
+    serialized against any other concurrent call for this identity, so two
+    near-simultaneous logins at the cap can't both see "room", double-evict
+    the same row, or leave the identity over `limit`.
+
+    Returns the new token's id.
     """
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -2132,22 +2152,37 @@ async def create_personal_token_within_limit(
                 PERSONAL_TOKEN_LOCK_NAMESPACE,
                 personal_identity_id,
             )
+            count = await conn.fetchval(
+                """
+                SELECT count(*) FROM personal_api_tokens
+                WHERE personal_identity_id = $1 AND revoked_at IS NULL
+                """,
+                personal_identity_id,
+            )
+            if count >= limit:
+                await conn.execute(
+                    """
+                    UPDATE personal_api_tokens SET revoked_at = now()
+                    WHERE id = (
+                        SELECT id FROM personal_api_tokens
+                        WHERE personal_identity_id = $1 AND revoked_at IS NULL
+                        ORDER BY created_at ASC, id ASC
+                        LIMIT 1
+                    )
+                    """,
+                    personal_identity_id,
+                )
             row = await conn.fetchrow(
                 """
                 INSERT INTO personal_api_tokens (personal_identity_id, token_hash, label)
-                SELECT $1, $2, $3
-                WHERE (
-                    SELECT count(*) FROM personal_api_tokens
-                    WHERE personal_identity_id = $1 AND revoked_at IS NULL
-                ) < $4
+                VALUES ($1, $2, $3)
                 RETURNING id
                 """,
                 personal_identity_id,
                 token_hash,
                 label,
-                limit,
             )
-    return row["id"] if row is not None else None
+    return row["id"]
 
 
 async def get_personal_identity_by_token_hash(pool: asyncpg.Pool, token_hash: str) -> dict | None:
