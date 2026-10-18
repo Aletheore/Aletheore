@@ -2124,6 +2124,36 @@ async def get_personal_identity_by_token_hash(pool: asyncpg.Pool, token_hash: st
     return dict(row) if row else None
 
 
+async def list_custom_skills(pool: asyncpg.Pool, personal_identity_id: int) -> list[dict]:
+    rows = await pool.fetch(
+        "SELECT skill_name AS name, updated_at FROM custom_skills WHERE personal_identity_id = $1 ORDER BY skill_name ASC",
+        personal_identity_id,
+    )
+    return [dict(row) for row in rows]
+
+
+async def get_custom_skill(pool: asyncpg.Pool, personal_identity_id: int, skill_name: str) -> dict | None:
+    row = await pool.fetchrow(
+        "SELECT skill_name AS name, content, updated_at FROM custom_skills WHERE personal_identity_id = $1 AND skill_name = $2",
+        personal_identity_id, skill_name,
+    )
+    return dict(row) if row else None
+
+
+async def upsert_custom_skill(pool: asyncpg.Pool, personal_identity_id: int, skill_name: str, content: str) -> dict:
+    row = await pool.fetchrow(
+        """
+        INSERT INTO custom_skills (personal_identity_id, skill_name, content)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (personal_identity_id, skill_name)
+        DO UPDATE SET content = EXCLUDED.content, updated_at = now()
+        RETURNING skill_name AS name, content, updated_at
+        """,
+        personal_identity_id, skill_name, content,
+    )
+    return dict(row)
+
+
 async def touch_api_token(
     pool: asyncpg.Pool, token_hash: str, min_interval_seconds: int = 0
 ) -> None:
