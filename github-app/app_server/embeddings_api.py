@@ -39,6 +39,7 @@ from app_server.db import (
     get_installation_by_token_hash,
     touch_api_token,
 )
+from app_server.ingest_limits import parse_validated_body_after_auth
 from app_server.rate_limit import acquire_concurrency_slot, is_rate_limited, release_concurrency_slot
 from app_server.redis_client import get_redis_client
 from scan_worker.embedding_spend import FEATURE_HOSTED, charge_embedding_tokens
@@ -162,9 +163,14 @@ _TOKEN_TOUCH_MIN_INTERVAL_SECONDS = 60
 
 
 @embeddings_router.post("/v1/embeddings")
-async def create_embeddings(request: Request, body: EmbeddingsRequest):
+async def create_embeddings(request: Request):
     installation = await _authenticated_installation(request)
     installation_id = installation["installation_id"]
+
+    # Parsed right after auth, not before: that's the fix. Still ahead of
+    # the plan check below so a malformed body gets the same 422 it always
+    # did, regardless of plan - only the auth/parse ordering changed.
+    body = await parse_validated_body_after_auth(request, EmbeddingsRequest)
 
     # AIR-exclusive, not "any paid plan" - the flash plan doesn't include
     # hosted embeddings/MCP.
