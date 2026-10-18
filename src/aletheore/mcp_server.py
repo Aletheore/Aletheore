@@ -1,3 +1,4 @@
+import dataclasses
 import functools
 import json
 from datetime import datetime
@@ -58,6 +59,7 @@ from aletheore.search_index import (
     search_index,
 )
 from aletheore.code_locator import locate_report
+from aletheore import skill_hub
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.watch import EVIDENCE_WRITE_LOCK, BackgroundWatcher, start_background_watch
 
@@ -913,6 +915,63 @@ def _register_overview_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
         return _toon_result(find_repo_overview(evidence))
 
 
+def _register_skill_hub_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
+    # Skills (curated + local custom) aren't repo-scoped - unlike every other
+    # tool group in this file, neither of these two ever touches repo_path or
+    # evidence, so there's no read_evidence call and no
+    # _guard_evidence_read_errors wrapper to apply. Both are pure reads, so
+    # (like aletheore_list/aletheore_overview) they're registered
+    # unconditionally rather than gated through TOOL_REQUIRED_EFFECTS -
+    # aletheore_add_custom_skill is the one skill-hub tool that writes, and is
+    # registered separately, gated on the write effect, below.
+    @mcp_instance.tool(name="aletheore_list_skills", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_list_skills(category: str | None = None) -> str:
+        """Lists available skills (bundled/curated plus local custom skills),
+        optionally filtered to one category. Each entry has a skill_id
+        (e.g. 'code-review/security-focused' or 'custom/my-review'),
+        category, title, and description. Call this before aletheore_get_skill
+        to find a valid skill_id."""
+        metas = [dataclasses.asdict(meta) for meta in skill_hub.list_skills(category)]
+        return _toon_result(metas)
+
+    @mcp_instance.tool(name="aletheore_get_skill", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_get_skill(skill_id: str) -> str:
+        """Fetches one skill's full content by its skill_id (from
+        aletheore_list_skills), including its title, description, and body."""
+        try:
+            skill = skill_hub.get_skill(skill_id)
+        except skill_hub.SkillNotFoundError:
+            return f"Skill '{skill_id}' not found."
+        return _toon_result(dataclasses.asdict(skill))
+
+
+def _register_add_custom_skill_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+    # Writes under the user's home config directory (not under repo_path -
+    # custom skills are local-user-scoped, not repo-scoped), but it's still a
+    # filesystem write an agent could trigger unprompted, so it's gated the
+    # same way aletheore_scan/aletheore_index are: behind the `write` effect,
+    # absent (not merely refusing) unless permitted.
+    @mcp_instance.tool(
+        name="aletheore_add_custom_skill",
+        # Matches aletheore_scan's annotations: every gated (effectful) tool in
+        # this file declares openWorldHint=True, not just the network-reaching
+        # ones - see test_effectful_tools_are_distinguishable_from_read_only_ones.
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
+        ),
+    )
+    def aletheore_add_custom_skill(name: str, content: str) -> str:
+        """Saves a local custom skill under the given name, so it can later be
+        fetched via aletheore_get_skill('custom/<name>') and shows up in
+        aletheore_list_skills. name must contain only letters, digits, '-',
+        and '_' (no path separators)."""
+        try:
+            skill_id = skill_hub.add_custom_skill(name, content)
+        except ValueError as exc:
+            return str(exc)
+        return f"Saved custom skill as '{skill_id}'."
+
+
 def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_search", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_search(pattern: str, regex: bool = False, path_glob: str | None = None) -> str:
@@ -1428,6 +1487,7 @@ TOOL_REQUIRED_EFFECTS: dict[str, frozenset[str]] = {
     "aletheore_index": frozenset({EFFECT_WRITE, EFFECT_NETWORK}),
     "aletheore_answer": frozenset({EFFECT_NETWORK}),
     "aletheore_managed_audit": frozenset({EFFECT_EXTERNAL, EFFECT_NETWORK}),
+    "aletheore_add_custom_skill": frozenset({EFFECT_WRITE}),
 }
 
 
@@ -1524,6 +1584,7 @@ def build_server(
     _register_symbol_path_tool(mcp_instance, repo_path)
     _register_list_tool(mcp_instance, repo_path)
     _register_overview_tool(mcp_instance, repo_path)
+    _register_skill_hub_tools(mcp_instance, repo_path)
     _register_search_tool(mcp_instance, repo_path)
     _register_ast_pattern_tool(mcp_instance, repo_path)
     _register_symbol_source_tool(mcp_instance, repo_path)
@@ -1562,6 +1623,8 @@ def build_server(
         _register_search_codebase_tool(mcp_instance, repo_path, effects)
     if permitted("aletheore_managed_audit"):
         _register_managed_audit_tool(mcp_instance, repo_path)
+    if permitted("aletheore_add_custom_skill"):
+        _register_add_custom_skill_tool(mcp_instance, repo_path)
     if answer_adapter is not None and permitted("aletheore_answer"):
         _register_answer_tool(mcp_instance, repo_path, answer_adapter, effects)
 

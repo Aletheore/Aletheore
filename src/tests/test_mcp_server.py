@@ -9,6 +9,7 @@ import pytest
 import toon
 from mcp.server.mcpserver.exceptions import ToolError
 
+from aletheore import skill_hub
 from aletheore.mcp_server import build_server
 from aletheore.search_index import IndexNotFoundError
 from aletheore.schema_map import skipped_schema
@@ -270,9 +271,12 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_find_evidence_for_endpoint",
         "aletheore_find_evidence_for_symbol",
         "aletheore_find_evidence_for_dependency",
+        "aletheore_list_skills",
+        "aletheore_get_skill",
+        "aletheore_add_custom_skill",
     }
     assert expected.issubset(names)
-    assert len(names) == 37
+    assert len(names) == 40
     assert "aletheore_answer" not in names
 
 
@@ -2133,3 +2137,63 @@ async def test_symbol_source_max_lines_zero_returns_everything(tmp_path):
     result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "foo", "max_lines": 0})
 
     assert "x199 = 199" in result.content[0].text and "more lines" not in result.content[0].text
+
+
+# --- skill hub (aletheore_list_skills / _get_skill / _add_custom_skill) ----
+
+
+@pytest.mark.asyncio
+async def test_aletheore_list_skills_tool_returns_catalog(tmp_path):
+    server = build_server(tmp_path)
+
+    result = await server.call_tool("aletheore_list_skills", {})
+
+    skill_ids = [meta["skill_id"] for meta in tool_result_body(result)["result"]]
+    assert "code-review/security-focused" in skill_ids
+
+
+@pytest.mark.asyncio
+async def test_aletheore_get_skill_tool_returns_content(tmp_path):
+    server = build_server(tmp_path)
+
+    result = await server.call_tool(
+        "aletheore_get_skill", {"skill_id": "code-review/security-focused"}
+    )
+
+    body = tool_result_body(result)["result"]
+    assert "security" in body["content"].lower()
+
+
+@pytest.mark.asyncio
+async def test_aletheore_get_skill_tool_unknown_id_is_clear_error(tmp_path):
+    server = build_server(tmp_path)
+
+    result = await server.call_tool("aletheore_get_skill", {"skill_id": "custom/nope"})
+
+    assert "not found" in result.content[0].text.lower()
+
+
+@pytest.mark.asyncio
+async def test_aletheore_add_custom_skill_tool_then_list_shows_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path / "custom_skills")
+    server = build_server(tmp_path)
+
+    await server.call_tool(
+        "aletheore_add_custom_skill", {"name": "my-review", "content": "steps"}
+    )
+    result = await server.call_tool("aletheore_list_skills", {})
+
+    skill_ids = [meta["skill_id"] for meta in tool_result_body(result)["result"]]
+    assert "custom/my-review" in skill_ids
+
+
+@pytest.mark.asyncio
+async def test_aletheore_add_custom_skill_tool_unsafe_name_is_clear_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path / "custom_skills")
+    server = build_server(tmp_path)
+
+    result = await server.call_tool(
+        "aletheore_add_custom_skill", {"name": "../escape", "content": "steps"}
+    )
+
+    assert "invalid" in result.content[0].text.lower()
