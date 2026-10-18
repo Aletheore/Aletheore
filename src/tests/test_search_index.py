@@ -2906,8 +2906,8 @@ def test_hosted_embedding_says_once_per_run_that_it_uploads_source_chunks(monkey
         search_index_module, "embed_texts_hosted", lambda batch, token, repo_id=None: [[0.0] * 768 for _ in batch]
     )
 
-    search_index_module._embed_in_batches(["def a(): pass", "def b(): pass"])
-    search_index_module._embed_in_batches(["def c(): pass", "def d(): pass"])
+    search_index_module._embed_in_batches(["def a(): pass", "def b(): pass"], already_consented=True)
+    search_index_module._embed_in_batches(["def c(): pass", "def d(): pass"], already_consented=True)
     captured = capsys.readouterr()
 
     assert captured.err.count(HOSTED_EMBEDDINGS_DISCLOSURE) == 1
@@ -2940,7 +2940,7 @@ def test_one_hosted_code_chunk_still_gets_the_upload_notice(monkeypatch, capsys)
         search_index_module, "embed_texts_hosted", lambda batch, token, repo_id=None: [[0.0] * 768 for _ in batch]
     )
 
-    search_index_module._embed_in_batches(["def only_chunk(): pass"])
+    search_index_module._embed_in_batches(["def only_chunk(): pass"], already_consented=True)
 
     assert HOSTED_EMBEDDINGS_DISCLOSURE in capsys.readouterr().err
 

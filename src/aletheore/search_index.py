@@ -1359,12 +1359,15 @@ def _confirm_hosted_embedding(confirm_fn: Callable[[], bool] | None = None, *, a
     time.
     """
     global _hosted_embedding_confirmed
-    if already_consented:
-        return True
     if _hosted_embedding_confirmed is not None:
         return _hosted_embedding_confirmed
-    # stderr, never stdout: the MCP server speaks its protocol over stdout.
+    # stderr, never stdout: the MCP server speaks its protocol over stdout. Printed before the
+    # already_consented/tty branches below, same as before this gate existed - already_consented
+    # (and the old non-tty auto-approve it replaces) skips asking, never skips disclosing.
     print(f"aletheore: {HOSTED_EMBEDDINGS_DISCLOSURE}", file=sys.stderr)
+    if already_consented:
+        _hosted_embedding_confirmed = True
+        return True
     if not sys.stdin.isatty():
         _hosted_embedding_confirmed = False
         return False
