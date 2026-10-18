@@ -49,12 +49,24 @@ SCOPABLE: dict[str, dict[str, str | None]] = {
 
 
 def scope_result(kind: str, result: dict, exclude: list[str], under: list[str], no_tests: bool) -> dict:
+    if kind not in SCOPABLE:
+        raise ValueError(f"cannot scope {kind!r}; supported kinds: {', '.join(sorted(SCOPABLE))}")
     prefixes = normalize_under(under)
     out = dict(result)
     left_out: dict[str, int] = {}
+    no_path: dict[str, int] = {}
     for key, path_key in SCOPABLE[kind].items():
         items = result.get(key) or []
-        kept = [i for i in items if in_scope(i if path_key is None else i.get(path_key, ""), exclude, prefixes, no_tests)]
+        kept = []
+        for item in items:
+            path = item if path_key is None else (item.get(path_key) if isinstance(item, dict) else None)
+            if not path:
+                # An entry with no file cannot be placed inside or outside a directory, so it is kept and counted
+                # rather than dropped for looking out of scope.
+                kept.append(item)
+                no_path[key] = no_path.get(key, 0) + 1
+            elif in_scope(path, exclude, prefixes, no_tests):
+                kept.append(item)
         out[key] = kept
         left_out[key] = len(items) - len(kept)
     out["scope"] = {
@@ -63,4 +75,6 @@ def scope_result(kind: str, result: dict, exclude: list[str], under: list[str], 
         "note": "lists were filtered by file path after the scan; counts in other fields (by_error_type, "
         "unused_dependencies) are repo-wide",
     }
+    if no_path:
+        out["scope"]["kept_without_a_path"] = no_path
     return out

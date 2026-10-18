@@ -55,3 +55,22 @@ def test_cli_query_scoping(tmp_path):
         bad = CliRunner().invoke(app, ["query", "hotspots", "--path", str(tmp_path), "--under", "pkg"])
     assert ok.exit_code == 0 and [m["path"] for m in json.loads(ok.output)["unreachable_modules"]] == ["pkg/a.py"]
     assert bad.exit_code == 1 and "supported for" in bad.output and set(SCOPABLE) <= set(bad.output.replace(",", " ").split())
+
+
+def test_scope_result_keeps_and_reports_entries_that_have_no_file():
+    from aletheore.scope_filter import scope_result
+
+    result = {"error_types": [{"name": "A", "file": "pkg/a.py"}, {"name": "B"}, {"name": "C", "file": "other/c.py"}]}
+    out = scope_result("error-handling", result, [], ["pkg"], False)
+    assert [e["name"] for e in out["error_types"]] == ["A", "B"]
+    assert out["scope"]["left_out"]["error_types"] == 1
+    assert out["scope"]["kept_without_a_path"] == {"error_types": 1}
+
+
+def test_scope_result_rejects_an_unscopable_kind_with_a_clear_error():
+    import pytest
+
+    from aletheore.scope_filter import scope_result
+
+    with pytest.raises(ValueError, match="cannot scope 'hotspots'"):
+        scope_result("hotspots", {}, [], [], False)
