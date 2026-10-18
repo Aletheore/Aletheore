@@ -3,6 +3,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -398,6 +399,22 @@ def _url_without_credentials(url: str) -> str:
     return urlunsplit(parts._replace(netloc=parts.hostname))
 
 
+# The userinfo may itself contain "@" (an unescaped one in a password): the class excludes only whitespace and
+# "/", so the match runs to the LAST "@" before the first "/" and the whole userinfo is redacted.
+_CREDENTIALED_URL_RE = re.compile(r"(https?://)[^\s/]+:[^\s/]+@")
+
+
+def _scrub_credentialed_urls(text: str) -> str:
+    """Redacts the userinfo (x-access-token:TOKEN@...) from any URL found in
+    free-form text. Unlike _url_without_credentials (one known URL, parsed
+    exactly) this is a best-effort regex over text whose shape isn't known
+    in advance - git's own fatal-error output, which can embed the
+    credentialed remote it read out of .git/config (see
+    _ensure_persistent_checkout's docstring) even on an invocation whose own
+    argv never mentioned a URL at all, e.g. a bare `git fetch`."""
+    return _CREDENTIALED_URL_RE.sub(r"\1", text)
+
+
 _GIT_PATH: str | None = None
 
 
@@ -408,21 +425,32 @@ def _git_path() -> str:
     the ollama/sh fixes elsewhere in this codebase: a bare name re-
     resolves PATH again at execution time, which could pick up a
     different binary than the one a security review of PATH would have
-    checked). Falls back to the bare name only if git genuinely isn't on
-    PATH - every function here that shells out to git already assumes
-    it's installed and lets the subprocess call fail naturally if it
-    isn't, so there's no new "git missing" handling to add; this only
-    changes which path component runs, the same already-accepted failure
-    mode either way.
+    checked). Raises FileNotFoundError if git isn't on PATH instead of falling
+    back to the bare name (which would be re-resolved against PATH inside
+    the untrusted checkout) - the same exception the bare call would have
+    raised, so callers need no new handling.
     """
     global _GIT_PATH
     if _GIT_PATH is None:
-        _GIT_PATH = shutil.which("git") or "git"
+        # Resolved to an absolute path, not just whatever which() returns
+        # as-is: this value is cached for the worker process's whole
+        # lifetime and reused across many different repos' checkout dirs as
+        # cwd, so a relative PATH entry would let ANY later-scanned
+        # (untrusted) repo shadow it with its own same-named executable -
+        # not just the repo scanned at the moment of first resolution
+        # (Strix security review, 2026-10-15).
+        found = shutil.which("git")
+        if not found:
+            # Never fall back to the bare name: it would be re-resolved against PATH inside whatever repo
+            # checkout is the cwd. FileNotFoundError is what the bare call would have raised anyway.
+            raise FileNotFoundError("git was not found on PATH")
+        _GIT_PATH = os.path.abspath(found)
     return _GIT_PATH
 
 
 def _run_git(args: list[str], **kwargs) -> None:
-    """subprocess.run wrapper for git invocations whose argv may embed a
+    """subprocess.run wrapper for git invocations whose argv - or whose
+    configured remote (see _ensure_persistent_checkout) - may embed a
     credentialed clone URL (see _clone_url). A failing git command raises
     CalledProcessError, whose __str__ includes the full argv verbatim -
     unredacted, that string is what logging_config.log_job both writes to
@@ -433,19 +461,54 @@ def _run_git(args: list[str], **kwargs) -> None:
     parses as a URL with embedded credentials before letting the error
     propagate.
 
+    Also captures stdout/stderr (rather than letting the child inherit this
+    process's real file descriptors) and scrubs the same credential shape
+    out of both before re-raising. Argv alone isn't the only place a token
+    can surface: git's own fatal-error text echoes the remote URL it read
+    out of .git/config on a fetch/checkout/clean failure, even when the
+    failing command's own argv never mentioned a URL at all - real audit
+    found every caller that ran such a command via a bare subprocess.run
+    streamed that text straight to the worker's real stdout/stderr, reaching
+    a log aggregator before this function's scrub ever got a chance to run.
+
     Also resolves a leading bare "git" to _git_path() - the one
     chokepoint nearly every git invocation in this module goes through,
     so this alone fixes every ["git", ...] call site that uses it.
     """
     if args and args[0] == "git":
         args = [_git_path(), *args[1:]]
+    # This function is the redaction chokepoint, so a caller cannot opt out of the capture-and-scrub path:
+    # capture_output is forced on and any stdout/stderr redirect (which would conflict with it) is dropped.
+    # Flash Review catch: dropping those kwargs with no signal at all left a caller's own
+    # stdout=/stderr= redirect silently ignored - logging it keeps the override from being a surprise.
+    if "stdout" in kwargs or "stderr" in kwargs:
+        logging.getLogger("scan_worker.jobs").warning(
+            "_run_git: caller-supplied stdout/stderr kwargs are ignored; output is always captured "
+            "and credential-scrubbed instead"
+        )
+    kwargs.pop("stdout", None)
+    kwargs.pop("stderr", None)
+    kwargs["capture_output"] = True
+    kwargs.setdefault("text", True)
     try:
-        subprocess.run(args, check=True, **kwargs)
+        result = subprocess.run(args, check=True, **kwargs)
+        # Captured output of a successful command is not shown, but a worker debugging a slow or partly failing
+        # job still gets it at debug level, with credentials scrubbed.
+        stdout = getattr(result, "stdout", None)
+        if isinstance(stdout, str) and stdout.strip():
+            logging.getLogger("scan_worker.jobs").debug("git stdout: %s", _scrub_credentialed_urls(stdout.strip()))
+        stderr = getattr(result, "stderr", None)
+        if isinstance(stderr, str) and stderr.strip():
+            logging.getLogger("scan_worker.jobs").debug("git stderr: %s", _scrub_credentialed_urls(stderr.strip()))
     except subprocess.CalledProcessError as exc:
         exc.cmd = [
             _url_without_credentials(arg) if isinstance(arg, str) and urlsplit(arg).username else arg
             for arg in exc.cmd
         ]
+        if isinstance(exc.stdout, str):
+            exc.stdout = _scrub_credentialed_urls(exc.stdout)
+        if isinstance(exc.stderr, str):
+            exc.stderr = _scrub_credentialed_urls(exc.stderr)
         raise
 
 
@@ -474,16 +537,12 @@ def _checkout_sha(dest: Path, sha: str, pr_number: int | None, *, force: bool = 
     """
     args = [_git_path(), "checkout", "-q", *(["-f"] if force else []), sha]
     try:
-        subprocess.run(args, cwd=dest, check=True)
+        _run_git(args, cwd=dest)
     except subprocess.CalledProcessError:
         if pr_number is None:
             raise
-        subprocess.run(
-            [_git_path(), "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"], cwd=dest, check=True
-        )
-        subprocess.run(
-            [_git_path(), "checkout", "-q", *(["-f"] if force else []), "FETCH_HEAD"], cwd=dest, check=True
-        )
+        _run_git(["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"], cwd=dest)
+        _run_git(["git", "checkout", "-q", *(["-f"] if force else []), "FETCH_HEAD"], cwd=dest)
 
 
 def _fetch_and_checkout(dest: Path, sha: str, pr_number: int | None) -> None:
@@ -514,16 +573,12 @@ def _fetch_and_checkout(dest: Path, sha: str, pr_number: int | None) -> None:
     small as `--depth 1`, which isn't safe for any current caller.
     """
     try:
-        subprocess.run([_git_path(), "fetch", "-q", "origin", sha], cwd=dest, check=True)
+        _run_git(["git", "fetch", "-q", "origin", sha], cwd=dest)
     except subprocess.CalledProcessError:
         if pr_number is None:
             raise
-        subprocess.run(
-            [_git_path(), "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
-            cwd=dest,
-            check=True,
-        )
-    subprocess.run([_git_path(), "checkout", "-q", "FETCH_HEAD"], cwd=dest, check=True)
+        _run_git(["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"], cwd=dest)
+    _run_git(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest)
 
 
 def _clone_ref(url: str, ref: str, dest: Path, pr_number: int | None = None) -> None:
@@ -567,11 +622,7 @@ def _clone_ref(url: str, ref: str, dest: Path, pr_number: int | None = None) -> 
         _fetch_and_checkout(dest, ref, pr_number)
     finally:
         if (dest / ".git").exists():
-            subprocess.run(
-                [_git_path(), "remote", "set-url", "origin", _url_without_credentials(url)],
-                cwd=dest,
-                check=True,
-            )
+            _run_git(["git", "remote", "set-url", "origin", _url_without_credentials(url)], cwd=dest)
 
 
 # Root for persistent, reused-across-scans checkouts (see
@@ -674,15 +725,11 @@ def _ensure_persistent_checkout(
     if (checkout_dir / ".git").exists():
         _run_git(["git", "remote", "set-url", "origin", url], cwd=checkout_dir)
         try:
-            subprocess.run([_git_path(), "fetch", "-q", "origin"], cwd=checkout_dir, check=True)
+            _run_git(["git", "fetch", "-q", "origin"], cwd=checkout_dir)
             _checkout_sha(checkout_dir, checkout_sha, pr_number, force=True)
-            subprocess.run([_git_path(), "clean", "-q", "-fdx"], cwd=checkout_dir, check=True)
+            _run_git(["git", "clean", "-q", "-fdx"], cwd=checkout_dir)
         finally:
-            subprocess.run(
-                [_git_path(), "remote", "set-url", "origin", credential_free_url],
-                cwd=checkout_dir,
-                check=True,
-            )
+            _run_git(["git", "remote", "set-url", "origin", credential_free_url], cwd=checkout_dir)
     else:
         checkout_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -690,11 +737,7 @@ def _ensure_persistent_checkout(
             _checkout_sha(checkout_dir, checkout_sha, pr_number)
         finally:
             if (checkout_dir / ".git").exists():
-                subprocess.run(
-                    [_git_path(), "remote", "set-url", "origin", credential_free_url],
-                    cwd=checkout_dir,
-                    check=True,
-                )
+                _run_git(["git", "remote", "set-url", "origin", credential_free_url], cwd=checkout_dir)
 
 
 def _prepare_head_checkout(
@@ -1981,19 +2024,11 @@ def _clone_pr_head(url: str, pr_number: int, dest: Path) -> None:
     try:
         _run_git(["git", "init", "-q", str(dest)])
         _run_git(["git", "remote", "add", "origin", url], cwd=dest)
-        subprocess.run(
-            [_git_path(), "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
-            cwd=dest,
-            check=True,
-        )
-        subprocess.run([_git_path(), "checkout", "-q", "FETCH_HEAD"], cwd=dest, check=True)
+        _run_git(["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"], cwd=dest)
+        _run_git(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest)
     finally:
         if (dest / ".git").exists():
-            subprocess.run(
-                [_git_path(), "remote", "set-url", "origin", _url_without_credentials(url)],
-                cwd=dest,
-                check=True,
-            )
+            _run_git(["git", "remote", "set-url", "origin", _url_without_credentials(url)], cwd=dest)
 
 
 def _git_rev_parse_head(repo_dir: Path) -> str | None:

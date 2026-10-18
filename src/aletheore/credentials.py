@@ -180,9 +180,43 @@ def _locked_rw_credentials_file(credentials_path: Path):
                 loaded = json.loads(raw) if raw else {}
             except ValueError:
                 # Never silently discard an unparseable file: keep a copy so
-                # other saved keys can be recovered by hand.
+                # other saved keys can be recovered by hand. `raw` can hold
+                # a real (if malformed) secret, so this gets the exact same
+                # restrictive-permissions treatment as credentials_path
+                # itself above - a plain write_bytes created it at the OS
+                # default mode (0644 under the common umask), the one real
+                # gap an audit found in this otherwise-locked-down function.
                 with contextlib.suppress(OSError):
-                    credentials_path.with_suffix(".json.bak").write_bytes(raw)
+                    backup_path = credentials_path.with_suffix(".json.bak")
+                    # Flash Review catch: O_TRUNC on a path an attacker
+                    # pre-planted as a symlink (same credentials directory
+                    # this whole function already treats as a locked-down
+                    # threat boundary) would follow it and write the raw
+                    # secret bytes through to whatever the link points at.
+                    # Same O_NOFOLLOW pattern cli.py's own
+                    # _write_config_file_no_symlink_follow already uses for
+                    # exactly this: POSIX-only, so Windows (which has no
+                    # O_NOFOLLOW) checks is_symlink() explicitly instead.
+                    no_follow = getattr(os, "O_NOFOLLOW", 0)
+                    # Remove whatever is at the path (unlink removes a symlink itself, it never follows it),
+                    # then create it with O_EXCL, which refuses to open an existing path, symlink or not.
+                    # Unlike an is_symlink() check before an O_TRUNC open, nothing planted between the two
+                    # steps can be followed, on Windows (no O_NOFOLLOW) or anywhere else.
+                    with contextlib.suppress(FileNotFoundError):
+                        os.unlink(str(backup_path))
+                    backup_fd = os.open(
+                        str(backup_path),
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow | getattr(os, "O_BINARY", 0),
+                        0o600,
+                    )
+                    try:
+                        if sys.platform != "win32":
+                            os.fchmod(backup_fd, 0o600)
+                        else:
+                            _restrict_windows_acl(backup_path)
+                        _write_all(backup_fd, raw)
+                    finally:
+                        os.close(backup_fd)
                 loaded = {}
             data = loaded if isinstance(loaded, dict) else {}
             yield data

@@ -1,4 +1,5 @@
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 from aletheore.static_analysis.joern_scanner import check_joern
@@ -79,6 +80,88 @@ def test_check_joern_parses_real_finding_shape(tmp_path):
 
     assert result["checked"] is True
     assert result["findings"] == findings_payload
+
+
+def test_check_joern_resolves_which_to_absolute_paths(tmp_path):
+    # Real gap found via audit: this scanner was missed by the sibling fix
+    # (bandit/semgrep/gosec/pmd/bearer/sonarqube/trivy) for the same class
+    # - shutil.which() can return a path relative to a relative PATH
+    # entry, and both subprocess calls below switch cwd to a throwaway
+    # tmp_path - a scanned (untrusted) repo could shadow a bare relative
+    # name with its own same-named executable (Strix security review,
+    # 2026-10-15).
+    (tmp_path / "go.mod").write_text("module example\n\ngo 1.21\n")
+    (tmp_path / "main.go").write_text("package main\n")
+
+    called_cmds = []
+
+    def fake_run(cmd, **kwargs):
+        called_cmds.append(cmd)
+        if "gosrc2cpg" in cmd[0]:
+            cpg_path = cmd[cmd.index("-o") + 1]
+            with open(cpg_path, "w") as f:
+                f.write("fake cpg")
+            return _mock_run(0)
+        output_path = None
+        for arg in cmd:
+            if arg.startswith("outputPath="):
+                output_path = arg.split("=", 1)[1]
+        with open(output_path, "w") as f:
+            json.dump([], f)
+        return _mock_run(0)
+
+    with patch(
+        "aletheore.static_analysis.joern_scanner.shutil.which",
+        side_effect=lambda name: f"relative/{name}",
+    ), patch("aletheore.static_analysis.joern_scanner.subprocess.run", side_effect=fake_run):
+        check_joern(tmp_path)
+
+    assert len(called_cmds) == 2
+    for cmd in called_cmds:
+        assert os.path.isabs(cmd[0])
+        assert not cmd[0].startswith("relative/")
+
+
+def test_check_joern_drops_dash_prefixed_exclude_names_instead_of_passing_them_as_argv(tmp_path):
+    # Real gap found via audit: unlike every sibling scanner (which join a
+    # flag and its value into one argv token), this one appends `name` as
+    # its own separate element after `--exclude` - a slash-free
+    # .aletheore.json ignored_paths entry starting with `-` (fully
+    # attacker-controlled when scanning a third-party repo) would reach
+    # gosrc2cpg's own argument parser looking like a new flag rather than
+    # --exclude's value.
+    (tmp_path / "go.mod").write_text("module example\n\ngo 1.21\n")
+    (tmp_path / "main.go").write_text("package main\n")
+
+    build_cmd = []
+
+    def fake_run(cmd, **kwargs):
+        if "gosrc2cpg" in cmd[0]:
+            build_cmd.extend(cmd)
+            cpg_path = cmd[cmd.index("-o") + 1]
+            with open(cpg_path, "w") as f:
+                f.write("fake cpg")
+            return _mock_run(0)
+        output_path = None
+        for arg in cmd:
+            if arg.startswith("outputPath="):
+                output_path = arg.split("=", 1)[1]
+        with open(output_path, "w") as f:
+            json.dump([], f)
+        return _mock_run(0)
+
+    with patch(
+        "aletheore.static_analysis.joern_scanner.excluded_dir_names",
+        return_value=["node_modules", "--output=/etc/passwd"],
+    ), patch(
+        "aletheore.static_analysis.joern_scanner.shutil.which",
+        side_effect=lambda name: f"/usr/local/bin/{name}",
+    ), patch("aletheore.static_analysis.joern_scanner.subprocess.run", side_effect=fake_run):
+        check_joern(tmp_path)
+
+    assert "--output=/etc/passwd" not in build_cmd
+    assert "node_modules" in build_cmd
+    assert build_cmd.count("--exclude") == 1  # only the safe entry survived
 
 
 def test_check_joern_excludes_findings_under_worktrees_dir(tmp_path):

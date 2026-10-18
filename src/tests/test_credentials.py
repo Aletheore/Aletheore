@@ -1,4 +1,6 @@
 import json
+import os
+import stat
 import sys
 
 import pytest
@@ -327,3 +329,43 @@ def test_get_api_key_shows_the_disclosure_only_when_it_actually_prompts(monkeypa
         lambda _msg: "", disclosure="where requests go",
     )
     assert "where requests go" not in capsys.readouterr().out
+
+
+@_posix_only_permissions
+def test_malformed_credentials_backup_is_written_with_restrictive_permissions(tmp_path):
+    # Real gap found via audit: the primary credentials file is always
+    # created via os.open(..., 0o600) + fchmod - but the .json.bak written
+    # when an existing file fails json.loads used a plain write_bytes,
+    # which creates the file at the OS default mode (0644 under the
+    # common umask 022). The backup can carry the exact same secret-bearing
+    # content as the primary file it's recovering from.
+    creds_path = tmp_path / "creds.json"
+    creds_path.write_text("not valid json {{{")
+    os.chmod(creds_path, 0o600)
+
+    save_api_token("testprovider", "sk-recovered", creds_path)
+
+    backup_path = creds_path.with_suffix(".json.bak")
+    assert backup_path.exists()
+    mode = stat.S_IMODE(backup_path.stat().st_mode)
+    assert mode == 0o600, f"expected 0o600, got {oct(mode)}"
+
+
+@_posix_only_permissions
+def test_malformed_credentials_backup_does_not_follow_a_preexisting_symlink(tmp_path):
+    # Flash Review catch: O_TRUNC on a path an attacker pre-planted as a
+    # symlink would follow it and write the raw (malformed-but-secret)
+    # credentials content through to whatever the link points at, inside
+    # this same locked-down credentials directory.
+    creds_path = tmp_path / "creds.json"
+    creds_path.write_text("not valid json {{{")
+    os.chmod(creds_path, 0o600)
+
+    target = tmp_path / "attacker-target.txt"
+    target.write_text("do not overwrite me")
+    backup_path = creds_path.with_suffix(".json.bak")
+    backup_path.symlink_to(target)
+
+    save_api_token("testprovider", "sk-recovered", creds_path)
+
+    assert target.read_text() == "do not overwrite me"

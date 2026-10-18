@@ -332,7 +332,7 @@ async def test_dynamic_query_tools_have_distinct_non_generic_descriptions(tmp_pa
 @pytest.mark.asyncio
 async def test_answer_tool_present_with_adapter(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
-    server = build_server(repo, answer_adapter=MagicMock())
+    server = build_server(repo, answer_adapter=MagicMock(requires_consent=False))
 
     tools = await server.list_tools()
     names = {t.name for t in tools}
@@ -410,7 +410,7 @@ async def test_aletheore_search_codebase_returns_friendly_error_on_dimension_mis
 @pytest.mark.asyncio
 async def test_aletheore_answer_returns_friendly_error_when_index_not_built(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
-    server = build_server(repo, answer_adapter=MagicMock())
+    server = build_server(repo, answer_adapter=MagicMock(requires_consent=False))
 
     with patch(
         "aletheore.mcp_server.answer_question",
@@ -433,7 +433,7 @@ async def test_aletheore_answer_returns_friendly_error_on_dimension_mismatch(tmp
     from aletheore.mcp_server import IndexDimensionMismatchError
 
     repo = make_repo_with_evidence(tmp_path)
-    server = build_server(repo, answer_adapter=MagicMock())
+    server = build_server(repo, answer_adapter=MagicMock(requires_consent=False))
 
     with patch(
         "aletheore.mcp_server.answer_question",
@@ -453,7 +453,7 @@ async def test_aletheore_answer_tool_forbids_hosted_embeddings_by_default(tmp_pa
     # grant - unlike aletheore_index/aletheore_search_codebase, which this
     # same default-posture test already covers for their own hosted calls.
     repo = make_repo_with_evidence(tmp_path)
-    server = build_server(repo, answer_adapter=MagicMock())  # default effects, no `allow=` override
+    server = build_server(repo, answer_adapter=MagicMock(requires_consent=False))  # default effects, no `allow=` override
 
     with patch("aletheore.mcp_server.answer_question", return_value={"answer": "", "cited_chunks": [], "confidence_gated": True}) as mock_answer:
         await server.call_tool("aletheore_answer", {"question": "what does foo do"})
@@ -465,7 +465,7 @@ async def test_aletheore_answer_tool_forbids_hosted_embeddings_by_default(tmp_pa
 async def test_aletheore_answer_tool_permits_hosted_embeddings_when_external_is_allowed(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     server = build_server(
-        repo, answer_adapter=MagicMock(), allow=frozenset({"write", "network", "external"})
+        repo, answer_adapter=MagicMock(requires_consent=False), allow=frozenset({"write", "network", "external"})
     )
 
     with patch("aletheore.mcp_server.answer_question", return_value={"answer": "", "cited_chunks": [], "confidence_gated": True}) as mock_answer:
@@ -1492,6 +1492,38 @@ def test_build_server_does_not_watch_unless_asked(tmp_path, mcp_watchers):
     build_server(repo)
 
     assert mcp_watchers == {}
+
+
+def test_watching_passes_the_operators_actual_external_grant_through(tmp_path, mcp_watchers):
+    # Real gap found by an independent Strix pentest pass (2026-10-15):
+    # ensure_watcher used to start the watcher with no allow_hosted
+    # argument at all (defaulting all the way down to build_index's own
+    # allow_hosted=True), so an operator who denied `external` still had
+    # every watcher-triggered reindex hosted-embed changed source chunks
+    # whenever a managed-audit token was saved. build_server now threads
+    # the operator's actual EFFECT_EXTERNAL grant through
+    # start_background_watch on both paths that can start the watcher:
+    # the initial build_server(watch=True) call and the after-scan
+    # callback.
+    # Two separate repos: a declined start (mocked to return None, as below)
+    # marks that repo_path as permanently declined for the rest of the
+    # process, which would otherwise make a second build_server call for
+    # the same path short-circuit before ever reaching start_background_watch
+    # again.
+    repo_without_external = make_repo_with_evidence(tmp_path / "a")
+    repo_with_external = make_repo_with_evidence(tmp_path / "b")
+
+    with patch("aletheore.mcp_server.start_background_watch", return_value=None) as mock_start:
+        build_server(repo_without_external, allow=frozenset({"write", "network"}), watch=True)
+
+    assert mock_start.call_args.kwargs["allow_hosted"] is False
+
+    with patch("aletheore.mcp_server.start_background_watch", return_value=None) as mock_start:
+        build_server(
+            repo_with_external, allow=frozenset({"write", "network", "external"}), watch=True
+        )
+
+    assert mock_start.call_args.kwargs["allow_hosted"] is True
 
 
 def test_watching_needs_the_write_effect_and_says_why_it_is_off(tmp_path, mcp_watchers, capsys):
