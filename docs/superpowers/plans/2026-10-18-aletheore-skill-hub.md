@@ -506,7 +506,7 @@ Expected: FAIL
 - `check_license`: `None` if `license_id in ALLOWED_LICENSES`, else a `VettingFailure`.
 - `SUSPICIOUS_PATTERNS`: a module-level list of compiled regexes covering, at minimum, piping a remote download into a shell (`curl|wget ... | sh|bash`), and phrasing that asks to send a secret/credential/token to a URL. `check_instruction_text` returns one `VettingFailure` per pattern that matches (case-insensitive).
 - `check_bundled_scripts(skill_dir)`: if a `scripts/` subdirectory exists, run it through whatever function Aletheore's own secrets/vuln scanner already exposes (same one the `aletheore_secrets` MCP tool calls) and translate any finding into a `VettingFailure`; `[]` if `scripts/` doesn't exist.
-- `vet_skill_directory(skill_dir)`: parse `SKILL.md`'s frontmatter for `license` (reuse the same YAML-split approach as `skill_hub._parse_skill_file`, Task 2 — don't reimplement frontmatter parsing, import and reuse it, exposing it as non-private if needed), run all three checks, concatenate every non-`None` failure into one list.
+- `vet_skill_directory(skill_dir)`: read `(skill_dir / "SKILL.md").read_text()`, split on the `---` frontmatter delimiters, `yaml.safe_load` just the frontmatter block, and pull out `license` (a `KeyError`/parse error here means license check fails, same as `check_license(None)` — do not raise). **Deliberately self-contained**: this duplicates a few lines of YAML-splitting logic that Task 2's `_parse_skill_file` also does, rather than importing from `skill_hub.py` — Section C is specified to be independent of Section A (buildable and testable with zero dependency on Task 1/2/3 landing first), and importing a Task 2 private helper would silently break that. Then run all three checks, concatenate every non-`None` failure into one list.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -539,11 +539,11 @@ from aletheore import skill_hub, skill_vetting
 
 def test_every_bundled_skill_passes_vetting():
     failures = {}
-    for skill_dir in skill_hub._iter_bundled_skill_dirs_as_paths():  # or whatever Task 2's
-        # directory-iteration helper is actually named — reuse it, don't re-glob here.
-        result = skill_vetting.vet_skill_directory(skill_dir.parent)
+    for skill_md_path in skill_hub._iter_bundled_skill_dirs():  # Task 2's exact helper name;
+        # yields each */*/SKILL.md path under bundled_skills_dir()
+        result = skill_vetting.vet_skill_directory(skill_md_path.parent)
         if result:
-            failures[str(skill_dir)] = result
+            failures[str(skill_md_path)] = result
     assert failures == {}, failures
 ```
 
