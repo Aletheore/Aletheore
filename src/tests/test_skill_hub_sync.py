@@ -30,6 +30,7 @@ def http_client_that_raises_if_called(monkeypatch):
 
     monkeypatch.setattr(skill_hub_sync.httpx, "put", _fail)
     monkeypatch.setattr(skill_hub_sync.httpx, "get", _fail)
+    monkeypatch.setattr(skill_hub_sync.httpx, "delete", _fail)
 
 
 class _Call:
@@ -73,6 +74,7 @@ def http_client_that_raises(monkeypatch):
         raise httpx.ConnectError("no network")
 
     monkeypatch.setattr(skill_hub_sync.httpx, "get", _get)
+    monkeypatch.setattr(skill_hub_sync.httpx, "delete", _get)
 
 
 @pytest.fixture
@@ -383,3 +385,171 @@ def test_personal_token_returns_saved_token_when_has_api_key_true(monkeypatch):
     monkeypatch.setattr(skill_hub_sync.credentials, "has_api_key", lambda *a, **k: True)
     monkeypatch.setattr(skill_hub_sync.credentials, "get_api_key", lambda *a, **k: "saved-tok")
     assert skill_hub_sync._personal_token() == "saved-tok"
+
+
+# --- delete_custom_skill_best_effort + pending-deletes tombstone ------------
+
+
+@pytest.fixture
+def recording_http_client_for_delete(monkeypatch):
+    """Server accepts the delete (204 - "gone")."""
+    recorder = types.SimpleNamespace(last_call=None)
+
+    def _delete(url, **kwargs):
+        recorder.last_call = _Call("DELETE", url, **kwargs)
+        return _resp("DELETE", url, status=204)
+
+    monkeypatch.setattr(skill_hub_sync.httpx, "delete", _delete)
+    return recorder
+
+
+@pytest.fixture
+def server_that_already_lacks_the_skill(monkeypatch):
+    """Server returns 404 - it already doesn't have this skill, which this
+    function must treat the same as a successful delete."""
+
+    def _delete(url, **kwargs):
+        return _resp("DELETE", url, status=404)
+
+    monkeypatch.setattr(skill_hub_sync.httpx, "delete", _delete)
+
+
+@pytest.fixture
+def fake_server_that_accepts_delete(monkeypatch):
+    """The flush's retried DELETE now succeeds (simulating "back online").
+    Because the merge's GET /v1/custom-skills list call happens strictly
+    *after* the flush, a server that genuinely just accepted the delete no
+    longer lists the name by the time that call happens - matching real
+    server behavior, not a special case the merge loop needs to know about."""
+    recorder = types.SimpleNamespace(delete_called=False, get_content_called=False)
+
+    def _get(url, **kwargs):
+        if url.endswith("/v1/custom-skills"):
+            return _resp("GET", url, skills=[])
+        recorder.get_content_called = True
+        raise AssertionError(f"unexpected content GET {url}")
+
+    def _delete(url, **kwargs):
+        recorder.delete_called = True
+        return _resp("DELETE", url, status=204)
+
+    monkeypatch.setattr(skill_hub_sync.httpx, "get", _get)
+    monkeypatch.setattr(skill_hub_sync.httpx, "delete", _delete)
+    return recorder
+
+
+@pytest.fixture
+def fake_server_that_rejects_delete(monkeypatch):
+    """Server's list still has the skill, and the retried DELETE fails
+    again (still offline) - the name must stay pending."""
+    recorder = types.SimpleNamespace(get_content_called=False)
+
+    def _get(url, **kwargs):
+        if url.endswith("/v1/custom-skills"):
+            return _resp(
+                "GET", url, skills=[{"name": "still-pending", "updated_at": "2026-01-01T00:00:00+00:00"}]
+            )
+        recorder.get_content_called = True
+        raise AssertionError(f"unexpected content GET {url} - branch 1 must be suppressed")
+
+    def _delete(*args, **kwargs):
+        raise httpx.ConnectError("still offline")
+
+    monkeypatch.setattr(skill_hub_sync.httpx, "get", _get)
+    monkeypatch.setattr(skill_hub_sync.httpx, "delete", _delete)
+    return recorder
+
+
+def test_delete_best_effort_removes_sync_state_on_success(
+    tmp_path, monkeypatch, recording_http_client_for_delete
+):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
+    skill_hub_sync._record_sync_state("my-review", "2026-01-01T00:00:00Z", "somehash")
+    skill_hub_sync.delete_custom_skill_best_effort("my-review")
+    assert "my-review" not in skill_hub_sync._load_sync_state()
+    assert "my-review" not in skill_hub_sync._load_pending_deletes()
+
+
+def test_delete_best_effort_treats_404_as_already_gone(
+    tmp_path, monkeypatch, server_that_already_lacks_the_skill
+):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
+    skill_hub_sync._record_sync_state("my-review", "2026-01-01T00:00:00Z", "somehash")
+    skill_hub_sync._record_pending_delete("my-review")
+    skill_hub_sync.delete_custom_skill_best_effort("my-review")  # must not raise
+    assert "my-review" not in skill_hub_sync._load_sync_state()
+    assert "my-review" not in skill_hub_sync._load_pending_deletes()
+
+
+def test_delete_best_effort_records_pending_on_network_failure(tmp_path, monkeypatch, http_client_that_raises):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
+    skill_hub_sync.delete_custom_skill_best_effort("my-review")  # must not raise
+    assert "my-review" in skill_hub_sync._load_pending_deletes()
+
+
+def test_delete_best_effort_records_pending_on_server_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
+
+    def _delete(url, **kwargs):
+        return _resp("DELETE", url, status=500)
+
+    monkeypatch.setattr(skill_hub_sync.httpx, "delete", _delete)
+    skill_hub_sync.delete_custom_skill_best_effort("my-review")  # must not raise
+    assert "my-review" in skill_hub_sync._load_pending_deletes()
+
+
+def test_delete_best_effort_is_noop_with_no_personal_token(monkeypatch, http_client_that_raises_if_called):
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: None)
+    skill_hub_sync.delete_custom_skill_best_effort("my-review")  # no-op, no http call, no raise
+
+
+def test_pull_merge_flushes_pending_delete_before_syncing(tmp_path, monkeypatch, fake_server_that_accepts_delete):
+    # A name is pending-delete from an earlier offline remove, and still
+    # exists server-side. pull_merge's flush step must retry the DELETE;
+    # once it succeeds, branch 1 ("local missing -> pull") must NOT fire
+    # for that name even though the server still listed it before the flush.
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
+    skill_hub_sync._record_pending_delete("server-still-has-this")
+    skill_hub_sync.pull_merge_custom_skills()
+    assert skill_hub.read_custom_skill_file("server-still-has-this") is None
+    assert "server-still-has-this" not in skill_hub_sync._load_pending_deletes()
+    assert fake_server_that_accepts_delete.delete_called is True
+    assert fake_server_that_accepts_delete.get_content_called is False
+
+
+def test_pull_merge_skips_resurrection_when_flush_still_fails(tmp_path, monkeypatch, fake_server_that_rejects_delete):
+    # The retry itself fails again (still offline) - the name must stay
+    # pending and branch 1 must still be suppressed for it this run, not
+    # silently pull it back down.
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
+    skill_hub_sync._record_pending_delete("still-pending")
+    skill_hub_sync.pull_merge_custom_skills()  # must not raise
+    assert skill_hub.read_custom_skill_file("still-pending") is None
+    assert "still-pending" in skill_hub_sync._load_pending_deletes()
+    assert fake_server_that_rejects_delete.get_content_called is False
+
+
+def test_load_pending_deletes_tolerates_corrupt_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    (tmp_path / ".pending_deletes.json").write_text("not valid json")
+    assert skill_hub_sync._load_pending_deletes() == set()
+
+
+def test_load_pending_deletes_returns_empty_set_when_file_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    assert skill_hub_sync._load_pending_deletes() == set()
+
+
+def test_record_and_clear_pending_delete_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    skill_hub_sync._record_pending_delete("a-skill")
+    assert "a-skill" in skill_hub_sync._load_pending_deletes()
+    skill_hub_sync._clear_pending_delete("a-skill")
+    assert "a-skill" not in skill_hub_sync._load_pending_deletes()
+    skill_hub_sync._clear_pending_delete("never-there")  # must not raise

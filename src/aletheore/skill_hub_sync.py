@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_API_BASE_URL = "https://app.aletheore.com"
 _SYNC_STATE_FILENAME = ".sync_state.json"
+_PENDING_DELETES_FILENAME = ".pending_deletes.json"
 
 
 def _personal_token() -> str | None:
@@ -82,6 +83,45 @@ def _record_sync_state(name: str, synced_at, content_hash: str) -> None:
     _save_sync_state(state)
 
 
+def _pending_deletes_path() -> Path:
+    return skill_hub.custom_skills_dir() / _PENDING_DELETES_FILENAME
+
+
+def _load_pending_deletes() -> set[str]:
+    """Bookkeeping, not data a user can lose anything real from - a
+    missing or corrupt tombstone file just means nothing is currently
+    suppressed from re-pull, never a crash. Mirrors `_load_sync_state`'s
+    tolerate-anything pattern exactly."""
+    path = _pending_deletes_path()
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return set()
+    try:
+        loaded = json.loads(raw)
+    except ValueError:
+        return set()
+    return set(loaded) if isinstance(loaded, list) else set()
+
+
+def _save_pending_deletes(names: set[str]) -> None:
+    path = _pending_deletes_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(sorted(names), indent=2), encoding="utf-8")
+
+
+def _record_pending_delete(name: str) -> None:
+    names = _load_pending_deletes()
+    names.add(name)
+    _save_pending_deletes(names)
+
+
+def _clear_pending_delete(name: str) -> None:
+    names = _load_pending_deletes()
+    names.discard(name)
+    _save_pending_deletes(names)
+
+
 def _parse_timestamp(value):
     if not isinstance(value, str):
         return None
@@ -132,6 +172,47 @@ def push_custom_skill_best_effort(name: str, content: str, timeout: float = 5.0)
         logger.warning("push of custom skill '%s' failed", name, exc_info=True)
 
 
+def delete_custom_skill_best_effort(name: str, timeout: float = 5.0) -> None:
+    """Fire-and-forget delete of one custom skill, called right after a
+    local `remove`. Never raises: a token-less machine, an offline
+    machine, and a server error are all just "didn't sync this time", not
+    a failure the caller needs to handle.
+
+    A 204 and a 404 both mean the server no longer has it (a 404 is just
+    "already gone" from this function's point of view, not an error) -
+    either way, clear any sync-state entry for `name` so a future
+    pull-merge doesn't think it's still tracking a synced copy, and clear
+    any pending-delete tombstone entry. Any other outcome (network
+    exception, 500, etc.) means the delete didn't reach the server: record
+    `name` in the pending-deletes tombstone instead, so the next
+    pull-merge retries it and - critically - doesn't resurrect it locally
+    in the meantime."""
+    token = _personal_token()
+    if token is None:
+        return
+    try:
+        response = httpx.delete(
+            f"{DEFAULT_API_BASE_URL}/v1/custom-skills/{name}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=timeout,
+        )
+        if response.status_code == 204 or response.status_code == 404:
+            sync_state = _load_sync_state()
+            if sync_state.pop(name, None) is not None:
+                _save_sync_state(sync_state)
+            _clear_pending_delete(name)
+            return
+        logger.warning(
+            "delete of custom skill '%s' failed: server returned %s",
+            name,
+            response.status_code,
+        )
+        _record_pending_delete(name)
+    except Exception:
+        logger.warning("delete of custom skill '%s' failed", name, exc_info=True)
+        _record_pending_delete(name)
+
+
 def _fetch_skill_content(name: str, headers: dict, timeout: float) -> str:
     response = httpx.get(
         f"{DEFAULT_API_BASE_URL}/v1/custom-skills/{name}", headers=headers, timeout=timeout
@@ -164,6 +245,14 @@ def pull_merge_custom_skills(timeout: float = 10.0) -> None:
     if token is None:
         return
     try:
+        # Flush pending deletes first, before even listing the server's
+        # skills - a name that still fails to delete here must not have
+        # branch 1 below pull it back down this run, even though the
+        # server's list (fetched next) still contains it.
+        for pending_name in _load_pending_deletes():
+            delete_custom_skill_best_effort(pending_name, timeout=timeout)
+        still_pending = _load_pending_deletes()
+
         headers = {"Authorization": f"Bearer {token}"}
         response = httpx.get(
             f"{DEFAULT_API_BASE_URL}/v1/custom-skills", headers=headers, timeout=timeout
@@ -186,6 +275,14 @@ def pull_merge_custom_skills(timeout: float = 10.0) -> None:
             state_entry = sync_state.get(name)
 
             if local_content is None:
+                if name in still_pending:
+                    # This machine deleted it locally and the delete still
+                    # hasn't reached the server (the flush above just
+                    # retried and failed again) - the server's list still
+                    # contains it, but pulling it back down now would
+                    # silently undo the user's own `remove`. Skip branch 1
+                    # for this name for the rest of this run.
+                    continue
                 # Branch 1: local content missing entirely - pull.
                 content = _fetch_skill_content(name, headers, timeout)
                 skill_hub.write_custom_skill_file(name, content)
