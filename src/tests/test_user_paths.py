@@ -52,6 +52,48 @@ def test_private_fallback_home_rejects_a_preexisting_symlink(tmp_path, monkeypat
     assert path != real_dir
 
 
+# --- Windows (no os.getuid) path trust -------------------------------------
+#
+# Real gap found via audit: with os.getuid absent (true on Windows - this
+# simulates it on any platform via monkeypatch, so it runs in CI everywhere,
+# not just on a Windows runner), ownership/mode verification used to
+# short-circuit to True unconditionally - trusting ANY pre-existing
+# directory at this predictable path (not even per-user-unique: the name
+# literally embeds "user", not a real identifier) with zero verification,
+# even one left world-writable by a different account that planted it first.
+
+
+def test_trusted_private_dir_never_trusts_a_preexisting_dir_without_getuid(tmp_path, monkeypatch):
+    monkeypatch.delattr(os, "getuid", raising=False)
+    preexisting = tmp_path / "aletheore-home-user"
+    preexisting.mkdir(mode=0o777)
+
+    result = user_paths._trusted_private_dir(preexisting)
+
+    assert result is None
+
+
+def test_trusted_private_dir_trusts_a_dir_it_just_created_without_getuid(tmp_path, monkeypatch):
+    monkeypatch.delattr(os, "getuid", raising=False)
+    fresh = tmp_path / "aletheore-home-user"
+
+    result = user_paths._trusted_private_dir(fresh)
+
+    assert result == fresh
+
+
+def test_trusted_private_dir_never_trusts_a_preexisting_symlink_without_getuid(tmp_path, monkeypatch):
+    monkeypatch.delattr(os, "getuid", raising=False)
+    real_dir = tmp_path / "elsewhere"
+    real_dir.mkdir()
+    link = tmp_path / "aletheore-home-user"
+    link.symlink_to(real_dir)
+
+    result = user_paths._trusted_private_dir(link)
+
+    assert result is None
+
+
 def test_mkdtemp_fallback_is_called_at_most_once_per_process(tmp_path, monkeypatch):
     # Real gap found via audit: every DEFAULT_*_PATH constant calls
     # user_home() independently at import time, so without caching, each

@@ -32,12 +32,18 @@ def _find_module(evidence: dict, file_path: str) -> dict:
     raise ModuleNotFoundInEvidenceError(file_path)
 
 
+def _unique(paths: list[str]) -> list[str]:
+    """Each file once, in first-seen order. Evidence lists a file once per import statement, so a module that
+    imports another in ten places showed up ten times - tokens an agent paid for and then had to dedupe by hand."""
+    return list(dict.fromkeys(paths))
+
+
 def find_imports(evidence: dict, target: str | None) -> list[str]:
-    return _find_module(evidence, target)["imports"]
+    return _unique(_find_module(evidence, target)["imports"])
 
 
 def find_imported_by(evidence: dict, target: str | None) -> list[str]:
-    return _find_module(evidence, target)["imported_by"]
+    return _unique(_find_module(evidence, target)["imported_by"])
 
 
 def find_symbols(evidence: dict, target: str | None) -> dict:
@@ -160,20 +166,19 @@ def find_layer_violations(evidence: dict, target: str | None) -> dict:
     return evidence["architecture"]["layer_violations"]
 
 
-# Matches scan_worker/flash_review.py's build_blast_radius_context
-# constants (MAX_BLAST_RADIUS_CANDIDATES, MAX_BLAST_RADIUS_CALLERS_SHOWN) -
-# same design, adapted to read local files directly instead of fetching
-# over the GitHub API, so no batching/threading is needed here.
+# Originally matched the constants of Flash Review's build_blast_radius_context
+# (MAX_BLAST_RADIUS_CANDIDATES, MAX_BLAST_RADIUS_CALLERS_SHOWN), adapted to read
+# local files directly instead of fetching over the GitHub API. That function
+# was removed as dead code in #982; these values now stand on their own.
 _BLAST_RADIUS_CONFIRM_CANDIDATES = 40
 _BLAST_RADIUS_CONFIRMED_CALLERS_SHOWN = 10
 _BLAST_RADIUS_MAX_TRANSITIVE = 50
 # Real bug found via audit: direct_dependents (evidence's own raw
 # imported_by list) was returned verbatim with no cap at all - unlike
 # transitive_dependents just below (capped, with an honest truncated
-# flag) and unlike flash_review.py's own build_blast_radius_context,
-# which this function's docstring says it mirrors - that sibling caps
-# its candidate list at MAX_BLAST_RADIUS_CANDIDATES (40) right at the
-# start. A genuinely central module (a shared utils.py/models.py) can
+# flag) and unlike the Flash Review function this was modelled on, which
+# capped its candidate list at 40 right at the start. A genuinely central
+# module (a shared utils.py/models.py) can
 # have hundreds-to-thousands of direct importers on a real repo -
 # confirmed directly: a 500-file synthetic hub returned all 500 with no
 # truncation signal, the same unbounded-MCP/CLI-result failure mode
@@ -198,8 +203,7 @@ def find_blast_radius(
     list is exhaustive.
 
     With `symbol` given, also confirms which of the direct dependents
-    actually CALL it, not just import the file - mirrors
-    scan_worker/flash_review.py's build_blast_radius_context exactly: a
+    actually CALL it, not just import the file: a
     candidate only counts if its real file content contains the symbol
     name in a call-shaped position (`name(`), the same deliberately
     high-confidence-only design (a bare "imports the file" says nothing

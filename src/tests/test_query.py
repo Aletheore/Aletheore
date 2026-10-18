@@ -478,8 +478,7 @@ def test_find_blast_radius_omits_confirmed_callers_without_a_symbol(tmp_path):
 
 def test_find_blast_radius_confirms_callers_via_real_file_content(tmp_path):
     """The high-confidence guarantee: a candidate only counts if the real
-    file content actually calls the symbol, not merely imports its module -
-    mirrors scan_worker/flash_review.py's build_blast_radius_context."""
+    file content actually calls the symbol, not merely imports its module."""
     (tmp_path / "service").mkdir()
     (tmp_path / "service" / "handler.py").write_text(
         "from core.util import parse_config\nresult = parse_config(raw)\n"

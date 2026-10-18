@@ -57,8 +57,8 @@ RUN apt-get update \
 # the real, currently-published pmd-dist-7.28.0-bin.zip (and matching
 # GitHub's own published asset digest) rather than left unverified.
 RUN curl -sfL -o /tmp/trivy.tar.gz \
-      https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz \
-    && echo "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a  /tmp/trivy.tar.gz" | sha256sum -c - \
+      https://github.com/aquasecurity/trivy/releases/download/v0.76.0/trivy_0.76.0_Linux-64bit.tar.gz \
+    && echo "e24b1c51293c1b15e4ba8d45bbc7891ba053f90278ec2698f3562c993e145fe7  /tmp/trivy.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy \
     && rm /tmp/trivy.tar.gz \
     && curl -sfL -o /tmp/gosec.tar.gz \

@@ -1414,32 +1414,78 @@ def _line_citation_content_matches(finding: dict, file_contents: dict[str, str])
     return any(q in window_text for q in quoted)
 
 
-def _has_verifiable_content_citation(finding: dict, file_contents: dict[str, str] | None) -> bool:
-    """True when _line_citation_content_matches had a real literal quote to
-    check the finding's claimed line against - False when it could only
-    fall back to its own "nothing to check, pass" case (no file_contents
-    fetched for this file, or the finding's issue names no literal quoted
-    string).
+_MAX_CITATION_OCCURRENCES = 200
 
-    That fallback is the right call for a FRESH finding: false-rejection
-    (dropping a real, correctly-described-but-unquotable bug) is worse
-    than false-acceptance there. It is backwards for a *cached* finding
-    being replayed against a new, merely similar diff (see review_diff's
-    cache_lookup branch) - a logical/omission bug ("X is never done"),
-    which by nature has no specific buggy literal to quote, gets zero real
-    re-validation and can be re-affirmed as still-open forever even after
-    the diff that introduced it is long fixed. Real gap found in
-    production: a finding on Flash Review's own PR #547 ("unsupported
-    events are discarded, never surfaced") kept getting served from cache
-    and passing grounding by this exact route for three pushes after the
-    discard was actually fixed, because its issue text had nothing to
-    quote. Used by review_diff to flag exactly this finding shape for a
-    real re-check instead of trusting the cache indefinitely."""
-    if not file_contents:
-        return False
-    if file_contents.get(finding["file"]) is None:
-        return False
-    return bool(_quoted_strings(finding.get("issue") or ""))
+
+def _quote_line_numbers(content: str, quoted: list[str]) -> list[int]:
+    """1-indexed line numbers where any of the quoted strings starts in the file. Counts real
+    newlines, never splitlines(), for the reason given in _line_citation_content_matches."""
+    found: set[int] = set()
+    for quote in quoted:
+        start = 0
+        for _ in range(_MAX_CITATION_OCCURRENCES):
+            pos = content.find(quote, start)
+            if pos == -1:
+                break
+            found.add(content.count("\n", 0, pos) + 1)
+            start = pos + 1
+    return sorted(found)
+
+
+def _verify_or_reanchor_citation(
+    finding: dict,
+    file_contents: dict[str, str],
+    valid_lines: dict | None = None,
+    *,
+    strict_quotes: bool = False,
+) -> dict | None:
+    """The grounding gate's citation check, changed to correct a wrong line instead of dropping it.
+
+    Returns the finding (with its line corrected when it was wrong), or None when the citation cannot
+    stand at all.
+
+    _line_citation_content_matches drops a finding unless one of its quoted strings sits within
+    LINE_CITATION_CONTEXT_WINDOW lines of the cited line. Measured on the 13 real PRs of Experiment 8
+    with production's inputs, that dropped 39 of 220 proposed findings across two runs, and 32 of those
+    39 were judged accurate (9 caught a known bug) against 7 that were not. Why it dropped them:
+
+      * 28 of the 39 quoted text that is not anywhere in the file. The model uses quote marks for
+        paraphrases, UI strings, error messages defined elsewhere, translations. That is not a wrong
+        line, it is a quote that cannot be verified, which this check treats the same as a finding
+        with no quote at all: kept.
+      * 11 of the 39 quoted text that is in the file, but more than the window from the cited line
+        (9 to 199 lines away). That is a wrong line number on a finding that is otherwise right, so
+        the finding is moved to the nearest real occurrence.
+
+    What the check was added for is unchanged: a line number the model invented for text it did quote
+    (case 001-flask-cli-key-quote, line 561 for text at line 798) now ends up at 798 instead of being
+    discarded. A cited line past the end of the file with nothing to anchor it to is still dropped.
+
+    A corrected line must itself be near the diff so the inline comment can be posted there. If no
+    occurrence is, the finding keeps the line it came with.
+
+    strict_quotes: for a finding replayed from the review cache, not a fresh one. The cache matches on
+    a similar diff, not the same one, and when the code a cached finding quotes is no longer anywhere
+    in the file, the likeliest reason is that it was fixed. Keeping it would repost a fixed bug (the
+    Flash Review false re-affirmation gap, #547/#549). So in strict mode a quote that cannot be found,
+    or found only away from the diff, drops the finding instead of keeping it unverified."""
+    content = file_contents.get(finding["file"])
+    if content is None:
+        return finding
+    line = finding["line"]
+    in_bounds = 1 <= line <= content.count("\n") + 1
+    quoted = _quoted_strings(finding.get("issue") or "")
+    if not quoted:
+        return finding if in_bounds else None
+    if in_bounds and _line_citation_content_matches(finding, file_contents):
+        return finding
+    occurrences = _quote_line_numbers(content, quoted)
+    if not occurrences:
+        return None if strict_quotes or not in_bounds else finding
+    for candidate in sorted(occurrences, key=lambda n: (abs(n - line), n)):
+        if valid_lines is None or _line_is_near_diff(candidate, _lookup_valid_lines(finding["file"], valid_lines)):
+            return {**finding, "line": candidate}
+    return None if strict_quotes or not in_bounds else finding
 
 
 _FILE_MARKER_RE = re.compile(r"^--- (.+) ---$")
@@ -1755,8 +1801,13 @@ def _validate_findings(
     diff_patches: tuple[tuple[str, str], ...] | None = None,
     referenced_symbol_context: str = "",
     sibling_file_context: str = "",
+    replayed_from_cache: bool = False,
 ) -> list[dict]:
     """Drops findings whose cited location doesn't hold up, and says so.
+
+    replayed_from_cache: the findings came from the review cache, not a fresh generation. Their LLM
+    findings are then held to strict quotes (see _verify_or_reanchor_citation). Deterministic semantic
+    findings merged in alongside them were computed against this diff, so they are not.
 
     Every rejection here is logged with its file, line and reason. Before
     that existed, this function could silently discard correct findings and
@@ -1781,14 +1832,26 @@ def _validate_findings(
 
     line_ok = []
     content_mismatch = []
+    reanchored = []
     for finding in in_diff:
         # Classified in one pass rather than by comparing against the kept
         # list - two findings on the same line can be equal dicts, and an
         # `in`-based split would then mis-attribute one of them.
-        if not file_contents or _line_citation_content_matches(finding, file_contents):
+        if not file_contents:
             line_ok.append(finding)
-        else:
+            continue
+        checked = _verify_or_reanchor_citation(
+            finding,
+            file_contents,
+            valid_lines,
+            strict_quotes=replayed_from_cache and finding.get("source") == "llm",
+        )
+        if checked is None:
             content_mismatch.append(finding)
+            continue
+        if checked["line"] != finding["line"]:
+            reanchored.append(f"{finding['file']}:{finding['line']}->{checked['line']}")
+        line_ok.append(checked)
 
     # Deterministic identifier grounding - a grep-style check, not a model
     # call: every backtick-quoted symbol a finding names must actually
@@ -1831,11 +1894,13 @@ def _validate_findings(
         else:
             identifier_mismatch.append(finding)
 
-    if out_of_diff or content_mismatch or identifier_mismatch:
+    if out_of_diff or content_mismatch or identifier_mismatch or reanchored:
         logger.info(
             "flash review grounding: kept %d/%d finding(s); dropped %d outside the diff (%s), "
-            "%d whose quoted content wasn't near the cited line (%s), "
-            "%d whose named symbol doesn't appear in the file (%s)",
+            "%d whose citation could not stand (cited line past the end of the file, or on a cache "
+            "replay, quoted text no longer near the diff) (%s), "
+            "%d whose named symbol doesn't appear in the file (%s); "
+            "moved %d to the line their quoted text is really on (%s)",
             len(kept),
             len(findings),
             len(out_of_diff),
@@ -1844,6 +1909,8 @@ def _validate_findings(
             ", ".join(f"{f['file']}:{f['line']}" for f in content_mismatch) or "-",
             len(identifier_mismatch),
             ", ".join(f"{f['file']}:{f['line']}" for f in identifier_mismatch) or "-",
+            len(reanchored),
+            ", ".join(reanchored) or "-",
         )
 
     # Annotated here, once, after grounding - both review_diff call sites
@@ -2496,6 +2563,7 @@ def review_diff(
                 combined, diff_text, file_contents, diff_patches,
                 referenced_symbol_context=referenced_symbol_context,
                 sibling_file_context=sibling_file_context,
+                replayed_from_cache=True,
             )
 
             if on_grounding_result is not None:

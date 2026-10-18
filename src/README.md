@@ -462,6 +462,45 @@ aletheore query answer "how does auth work?" --path . --agent ollama
 `answer` retrieves code chunks from that same index, gates low-confidence matches, and then
 uses the selected provider's simple completion path to answer with citations.
 
+### `aletheore dependents <file> [path]`
+
+Lists every file that imports `<file>`, directly or through a chain of other imports, as one complete,
+deduplicated, sorted list. Use it for "what depends on this file?" questions instead of looping over
+`query imported-by` by hand.
+
+```bash
+aletheore dependents src/click/_compat.py --under src --exclude tests
+```
+
+- The target can also be a directory: all files directly in it are treated as one package, which is the natural unit for
+  Go (`aletheore dependents internal/js --packages`). `--packages` lists one line per importing directory instead of one
+  per file.
+- `--no-tests` leaves out test files (`tests/` style directories and test-shaped names such as `test_x.py`,
+  `x_test.go`, `x.test.ts`, `x.spec.js`, `XTest.java`).
+- `--under <dir>` keeps only files below a directory (repeatable).
+- `--exclude <name>` drops files under a directory with that exact name, or with that exact file name (repeatable).
+  It matches whole path parts, so `--exclude locale` does not drop `middleware/locale.py`.
+- The last paragraph of the output states what the list covers: static imports of the file's language, how many
+  modules were indexed, how many files could not be parsed, and whether any listed file changed after the scan.
+  Imports built at run time (`importlib`, `__import__`) are not tracked.
+
+### `aletheore cycles [path]`
+
+Lists every circular import dependency in the repo, with an example chain for each group of files that
+import each other in a circle.
+
+```bash
+aletheore cycles                                 # every group, repo-wide
+aletheore cycles --under src/billing --exclude tests
+```
+
+- `--under <dir>` and `--exclude <name>` (both repeatable) scope the answer. Cycles are still found over the
+  whole graph, so a cycle that runs through files outside `<dir>` is not missed, but only files inside the scope
+  are listed, as one flat list followed by a one-line summary per group.
+- `--exclude` matches whole path parts, so `--exclude locale` does not drop `middleware/locale.py`.
+- The closing paragraph states the coverage: static imports only, modules considered, and whether any listed file
+  changed after the scan. Imports built at run time (`importlib`, `__import__`) are not tracked.
+
 ### `aletheore diff <old.json> <new.json>`
 
 Compares two `air.json` files directly — new/resolved secrets, API endpoints, layer

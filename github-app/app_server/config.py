@@ -38,6 +38,28 @@ def _required_env(name: str) -> str:
     return value
 
 
+# HKDF (auth._derive_key) runs with salt=None, so SESSION_SECRET's own
+# entropy is the only thing standing between an attacker and both derived
+# subkeys: cookie-signing (forge any session) and the Fernet key that
+# decrypts every stored GitHub OAuth token. _required_env only ever checked
+# "non-empty" - a deploy could set this to a short, guessable value and
+# start up without any warning. 32 raw characters is a floor, not a
+# guarantee of real entropy, but it rules out the trivially weak case
+# (a password, a short word) this same class of check exists to catch.
+_SESSION_SECRET_MIN_LENGTH = 32
+
+
+def _required_session_secret() -> str:
+    value = _required_env("SESSION_SECRET")
+    if len(value) < _SESSION_SECRET_MIN_LENGTH:
+        raise RuntimeError(
+            f"SESSION_SECRET must be at least {_SESSION_SECRET_MIN_LENGTH} characters "
+            "(it's the root key for session-cookie signing and stored OAuth-token "
+            "encryption - generate one with, e.g., `openssl rand -hex 32`)"
+        )
+    return value
+
+
 def _load_private_key() -> str:
     # A PEM private key contains real newlines, which plain env-file values
     # (docker run/compose --env-file) reject outright - confirmed empirically
@@ -98,7 +120,7 @@ def get_settings() -> Settings:
         github_webhook_secret=_required_env("GITHUB_WEBHOOK_SECRET"),
         github_client_id=_required_env("GITHUB_CLIENT_ID"),
         github_client_secret=_required_env("GITHUB_CLIENT_SECRET"),
-        session_secret=_required_env("SESSION_SECRET"),
+        session_secret=_required_session_secret(),
         public_base_url=os.environ.get("PUBLIC_BASE_URL", "https://aletheore.com"),
         internal_metrics_token=os.environ.get("INTERNAL_METRICS_TOKEN", "").strip() or None,
         audit_signing_private_key=_required_env("AUDIT_SIGNING_PRIVATE_KEY"),

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import hashlib
 import ipaddress
 import os
@@ -10,13 +12,19 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-import httpx
 import lancedb
 from lancedb.index import FTS
-from openai import APIConnectionError, NotFoundError, OpenAI
 from tokenizers import Tokenizer
 
-from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, get_api_key, has_api_key
+from aletheore._lazy import lazy_module
+from aletheore.credentials import (
+    DEFAULT_CREDENTIALS_PATH,
+    HOSTED_EMBEDDINGS_DISCLOSURE,
+    get_api_key,
+    has_api_key,
+)
+
+httpx = lazy_module("httpx")
 
 FALLBACK_CHUNK_MAX_LINES = 200
 DEFAULT_EMBEDDING_BASE_URL = "http://localhost:11434/v1"
@@ -1193,6 +1201,10 @@ def embed_texts(
     confirm_fn: Callable[[], bool] | None = None,
     ollama_install_confirm_fn: Callable[[], bool] | None = None,
 ) -> list[list[float]]:
+    # Imported here, not at module level: the `openai` SDK costs ~0.4s to import
+    # and most CLI commands never embed anything.
+    from openai import APIConnectionError, NotFoundError, OpenAI
+
     client = OpenAI(base_url=base_url, api_key="not-needed")
     try:
         response = client.embeddings.create(model=model, input=texts)
@@ -1307,6 +1319,69 @@ HOSTED_EMBED_MAX_TOKENS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_TOKENS"
 _HOSTED_TOKENIZER_PATH = Path(__file__).resolve().parent / "data" / "jina_v2_base_code_tokenizer.json"
 _hosted_tokenizer_cache: Tokenizer | None = None
 
+def _default_confirm_hosted_embedding() -> bool:
+    return input("Continue with hosted embeddings? [y/N]: ").strip().lower() == "y"
+
+
+# Once per process: an index build (or watch-mode re-index) asks, and shows
+# the disclosure, exactly once - not on every batch, and not once per
+# rebuild in a long-running `aletheore watch` loop. None means "not decided
+# yet this process"; True/False is the cached answer.
+_hosted_embedding_confirmed: bool | None = None
+
+
+def _confirm_hosted_embedding(confirm_fn: Callable[[], bool] | None = None, *, already_consented: bool = False) -> bool:
+    """Gate that must return True before the first repository code chunk is
+    sent to Aletheore's hosted embedding endpoint.
+
+    Previously this only ever printed HOSTED_EMBEDDINGS_DISCLOSURE as a
+    passive, one-time notice: a saved ALETHEORE_API_TOKEN silently switched
+    'aletheore index' to upload source code, with no way to say no -
+    unlike the OpenAI-fallback gate below (_default_confirm_openai_fallback),
+    which blocks for a real yes/no before sending anything there. This
+    closes that gap the same way, for the same reason.
+
+    already_consented: True when the caller already obtained consent through
+    a different, appropriate channel - specifically MCP's own EFFECT_EXTERNAL
+    permission grant (see mcp_server.py's TOOL_REQUIRED_EFFECTS) - and this
+    gate should pass without prompting or inspecting stdin at all.
+
+    Otherwise only blocks on a real interactive terminal (`sys.stdin.isatty()`).
+    A non-tty stdin with no `already_consented` channel declines rather than
+    auto-approving. Flash Review catch: this used to treat *any* non-tty
+    stdin as proof the caller's `allow_hosted` reflected consent from
+    elsewhere, but the plain CLI path (`aletheore index`) always defaults
+    `allow_hosted` to True and has no other consent channel - a human
+    running it with piped or redirected stdin (common in scripts, cron,
+    `| tee`, even though a human still started it) got silently
+    auto-approved with no real opportunity to decline. Calling input()
+    against a non-tty stdin would also hang forever on a closed pipe or
+    corrupt the MCP server's own protocol framing on stdout/stdin, so a
+    non-tty, non-already-consented caller fails closed (declines, falls
+    back to the local provider - see _embed_in_batches) instead.
+
+    Asked at most once per process and cached: a decision must hold for
+    every later batch of the same `aletheore index` run, or every later
+    rebuild of a long-running `aletheore watch` loop, not re-prompt each
+    time.
+    """
+    global _hosted_embedding_confirmed
+    if _hosted_embedding_confirmed is not None:
+        return _hosted_embedding_confirmed
+    # stderr, never stdout: the MCP server speaks its protocol over stdout. Printed before the
+    # already_consented/tty branches below, same as before this gate existed - already_consented
+    # (and the old non-tty auto-approve it replaces) skips asking, never skips disclosing.
+    print(f"aletheore: {HOSTED_EMBEDDINGS_DISCLOSURE}", file=sys.stderr)
+    if already_consented:
+        _hosted_embedding_confirmed = True
+        return True
+    if not sys.stdin.isatty():
+        _hosted_embedding_confirmed = False
+        return False
+    confirm = confirm_fn if confirm_fn is not None else _default_confirm_hosted_embedding
+    _hosted_embedding_confirmed = confirm()
+    return _hosted_embedding_confirmed
+
 
 def _hosted_tokenizer() -> Tokenizer:
     """Lazily load jina-embeddings-v2-base-code's real WordPiece tokenizer.
@@ -1359,6 +1434,9 @@ def _embed_in_batches(
     repo_id: str | None = None,
     allow_hosted: bool = True,
     on_progress: Callable[[int, int], None] | None = None,
+    is_query: bool = False,
+    confirm_fn: Callable[[], bool] | None = None,
+    already_consented: bool = False,
 ) -> tuple[list[list[float]], str]:
     """Embed everything, preferring Aletheore's endpoint when entitled.
 
@@ -1384,6 +1462,11 @@ def _embed_in_batches(
     repo_id: forwarded to embed_texts_hosted so the hosted rate limit can be
     keyed per repo rather than per installation - see _repo_id.
 
+    is_query: the text is a search query, not repository code. Only code
+    chunks trigger the hosted-upload notice, and it must not depend on how
+    many chunks there are: a one-chunk repo, or the single changed chunk of a
+    watch-mode re-index, uploads source code just as a large build does.
+
     allow_hosted: the caller's consent to transmit this repository's code to
     Aletheore's hosted embedding endpoint. Defaults to True to preserve the
     CLI's existing interactive behavior. MCP's aletheore_index tool passes
@@ -1397,11 +1480,35 @@ def _embed_in_batches(
     that can take over an hour on a large repo (thrift: 553 sequential
     hosted batches at the old char cap). None by default so non-interactive
     callers (MCP, watch mode) see no behavior change.
+
+    confirm_fn: overrides the default interactive yes/no prompt shown before
+    the first code chunk is uploaded (see _confirm_hosted_embedding). Only
+    consulted on a real terminal; a test double for non-interactive callers.
+
+    already_consented: forwarded to _confirm_hosted_embedding - True only
+    when `allow_hosted` itself already reflects a real consent decision made
+    through another channel (MCP's EFFECT_EXTERNAL grant), not the CLI's
+    bare default.
     """
     token = get_api_key(
         "ALETHEORE_API_TOKEN", "aletheore-managed-audit", prompt_fn=lambda _: ""
     )
     use_hosted = bool(token) and allow_hosted
+    # Code chunks, not a search query. Decided by what the text is, not by how many
+    # texts there are (see is_query above).
+    if use_hosted and texts and not is_query and not _confirm_hosted_embedding(
+        confirm_fn, already_consented=already_consented
+    ):
+        use_hosted = False
+        # "trying" the local provider, not "using" it: this prints before the local
+        # embed call runs, and that call can still fail (no Ollama, no OpenAI fallback) -
+        # the only part of this message guaranteed true at the point it's printed is the
+        # privacy claim, so the wording must not assert an outcome that hasn't happened yet.
+        print(
+            "aletheore: hosted embeddings declined - no repository code was sent; "
+            "trying the local provider next",
+            file=sys.stderr,
+        )
     if token and not allow_hosted:
         print(
             "aletheore: hosted embeddings available but not permitted in this "
@@ -1512,6 +1619,7 @@ def _embed_stale_by_hash(
     repo_id: str | None = None,
     allow_hosted: bool = True,
     on_progress: Callable[[int, int], None] | None = None,
+    already_consented: bool = False,
 ) -> tuple[dict[str, list[float]], str]:
     stale_by_hash = {chunk["chunk_hash"]: chunk["text"] for chunk in stale}
     stale_hashes = list(stale_by_hash)
@@ -1520,6 +1628,7 @@ def _embed_stale_by_hash(
         repo_id=repo_id,
         allow_hosted=allow_hosted,
         on_progress=on_progress,
+        already_consented=already_consented,
     )
     return dict(zip(stale_hashes, fresh_vectors)), embedder
 
@@ -1529,6 +1638,7 @@ def build_index(
     evidence: dict,
     allow_hosted: bool = True,
     on_progress: Callable[[int, int], None] | None = None,
+    already_consented: bool = False,
 ) -> int:
     chunks = build_chunks(evidence, repo_path)
     if not chunks:
@@ -1552,7 +1662,7 @@ def build_index(
     stale = [chunk for chunk in chunks if chunk["chunk_hash"] not in reusable]
     repo = _repo_id(repo_path)
     fresh, current_embedder = _embed_stale_by_hash(
-        stale, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress
+        stale, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress, already_consented=already_consented
     )
     fresh_vectors = list(fresh.values())
 
@@ -1591,7 +1701,7 @@ def build_index(
             current_dimension = len(fresh_vectors[0])
         else:
             probe_vectors, current_embedder = _embed_in_batches(
-                [chunks[0]["text"]], repo_id=repo, allow_hosted=allow_hosted
+                [chunks[0]["text"]], repo_id=repo, allow_hosted=allow_hosted, already_consented=already_consented
             )
             current_dimension = len(probe_vectors[0])
             # The probe above already paid to embed chunks[0] under
@@ -1615,7 +1725,8 @@ def build_index(
             missing = [chunk for chunk in chunks if chunk["chunk_hash"] not in fresh]
             if fresh and missing:
                 extra, extra_embedder = _embed_stale_by_hash(
-                    missing, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress
+                    missing, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress,
+                    already_consented=already_consented,
                 )
                 if extra_embedder == current_embedder:
                     fresh = {**fresh, **extra}
@@ -1623,11 +1734,13 @@ def build_index(
                     # Provider changed again mid-rebuild: the two halves are
                     # not comparable, so redo everything with one provider.
                     fresh, current_embedder = _embed_stale_by_hash(
-                        chunks, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress
+                        chunks, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress,
+                        already_consented=already_consented,
                     )
             elif missing:
                 fresh, current_embedder = _embed_stale_by_hash(
-                    chunks, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress
+                    chunks, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress,
+                    already_consented=already_consented,
                 )
 
     rows = [
@@ -1942,7 +2055,7 @@ def search_index(
     # error at all. Matching the same provider choice at query time removes
     # the coincidence the guard was accidentally relying on.
     query_vectors, query_embedder = _embed_in_batches(
-        [query_text], repo_id=_repo_id(repo_path), allow_hosted=allow_hosted
+        [query_text], repo_id=_repo_id(repo_path), allow_hosted=allow_hosted, is_query=True
     )
     query_vector = query_vectors[0]
 

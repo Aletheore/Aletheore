@@ -19,7 +19,7 @@ os.environ.setdefault("GITHUB_WEBHOOK_SECRET", "test-webhook-secret")
 os.environ.setdefault("GITHUB_APP_SLUG", "aletheore")
 os.environ.setdefault("GITHUB_CLIENT_ID", "test-client-id")
 os.environ.setdefault("GITHUB_CLIENT_SECRET", "test-client-secret")
-os.environ.setdefault("SESSION_SECRET", "test-session-secret")
+os.environ.setdefault("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
 os.environ.setdefault("AUDIT_SIGNING_PRIVATE_KEY", "11" * 32)
 os.environ.setdefault("PADDLE_WEBHOOK_SECRET", "pdl_ntfset_test_secret")
 os.environ.setdefault("PADDLE_CLIENT_TOKEN", "test_conftest_client_token")
@@ -144,15 +144,25 @@ def _reset_git_path_cache(monkeypatch):
     # Most existing git-subprocess tests here mock subprocess.run and
     # assert on the literal "git" argv they themselves pass in, not
     # whatever absolute path this machine happens to resolve it to, so
-    # this also defaults shutil.which("git") to return "git" itself -
-    # unchanged behavior for those tests. A test that wants to verify
-    # real path resolution (see test_run_git_resolves_the_bare_git_name_
-    # to_its_shutil_which_path) mocks shutil.which itself within the test
-    # body, which overrides this default the normal monkeypatch way.
+    # this pins the cache to that literal "git" string directly rather
+    # than through _git_path()'s own resolution - unchanged behavior for
+    # those tests. _git_path() now always os.path.abspath()'s whatever
+    # shutil.which() returns (Strix security review, 2026-10-15: a cached,
+    # possibly-relative result was reused across many later repos' cwds
+    # for the rest of the worker process's life), so mocking
+    # shutil.which("git") to return the bare "git" string and letting
+    # _git_path() resolve it here would turn it into an absolute
+    # cwd-joined path too, breaking those literal-argv assertions. Setting
+    # _GIT_PATH directly (not None) skips _git_path()'s own resolution
+    # entirely. A test that wants to verify real path resolution (see
+    # test_run_git_resolves_the_bare_git_name_to_its_shutil_which_path and
+    # test_git_path_resolves_a_relative_which_result_to_an_absolute_path)
+    # resets _GIT_PATH to None and mocks shutil.which itself within the
+    # test body, which overrides this default the normal monkeypatch way.
     from scan_worker import jobs
 
     monkeypatch.setattr(jobs.shutil, "which", lambda name: "git" if name == "git" else None)
-    jobs._GIT_PATH = None
+    jobs._GIT_PATH = "git"
     yield
     jobs._GIT_PATH = None
 

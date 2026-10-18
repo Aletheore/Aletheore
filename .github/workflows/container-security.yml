@@ -57,7 +57,7 @@ jobs:
                 -e GITHUB_WEBHOOK_SECRET="smoketest" \
                 -e GITHUB_CLIENT_ID="smoketest" \
                 -e GITHUB_CLIENT_SECRET="smoketest" \
-                -e SESSION_SECRET="smoketest" \
+                -e SESSION_SECRET="placeholder-smoketest-session-secret-32chars" \
                 -e AUDIT_SIGNING_PRIVATE_KEY="smoketest" \
                 -e PADDLE_WEBHOOK_SECRET="smoketest" \
                 -e PADDLE_CLIENT_TOKEN="smoketest" \
@@ -94,7 +94,7 @@ jobs:
 
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         with:
           sarif_file: trivy-${{ matrix.image }}.sarif
 
@@ -129,7 +129,7 @@ jobs:
           output-file: sbom-${{ matrix.image }}.spdx.json
 
       - name: Upload SBOM
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: sbom-${{ matrix.image }}
           path: sbom-${{ matrix.image }}.spdx.json

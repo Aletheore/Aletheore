@@ -216,6 +216,12 @@
     "rescanned",
     "getpass",
     "inotify",
-    "MSIX"
+    "MSIX",
+    "Qwen",
+    "deepinfra",
+    "uvloop",
+    "markupsafe",
+    "opentelemetry",
+    "starlette"
   ]
 }

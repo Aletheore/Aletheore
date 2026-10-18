@@ -52,6 +52,29 @@ def test_nested_git_discovery_prunes_ignored_dependency_trees(tmp_path):
     assert [entry["file_count"] for entry in detect_languages(repo) if entry["name"] == "python"] == [1]
 
 
+def test_worktrees_dir_is_excluded_even_without_a_git_entry(tmp_path):
+    # Real bug found via audit: a linked worktree whose .git file was
+    # removed (e.g. a cloud-evicted or partially-removed `git worktree`) is
+    # invisible to _nested_git_roots, which only recognizes a worktree by
+    # finding its .git entry - confirmed on this project's own repo, where
+    # .worktrees/review-740 has no .git at all and its orphaned source files
+    # got scanned as live content, duplicating import-graph edges. Name-
+    # based exclusion of .worktrees itself (not just the dynamic detector)
+    # closes that gap regardless of whether .git is still there.
+    from aletheore.scanner.detect import _nested_git_roots
+
+    repo = tmp_path / "repo"
+    (repo / ".worktrees" / "orphan").mkdir(parents=True)
+    (repo / ".worktrees" / "orphan" / "app.py").write_text("import os\n")
+    (repo / "app.py").write_text("import os\n")
+    _nested_git_roots.cache_clear()
+
+    languages = detect_languages(repo)
+    by_name = {entry["name"]: entry for entry in languages}
+
+    assert by_name["python"]["file_count"] == 1
+
+
 def test_nested_git_discovery_still_finds_a_directory_style_clone_outside_ignored_dirs(tmp_path):
     """IGNORED_DIRS contains ".git" itself (so a found root's own .git
     internals aren't walked) - pruning dirnames against IGNORED_DIRS before

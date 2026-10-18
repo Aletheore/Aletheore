@@ -3,6 +3,36 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## Unreleased
+
+- Fixed `aletheore scan` on large repos skipping `air.toon` with "Expected N items, but got M": python-toon 0.1.x misread `[1]` text inside a quoted docstring as an array header. The `python-toon` requirement is now `>=0.2.0,<0.3`.
+
+## 0.9.27 - 2026-10-14
+
+**Changed: `aletheore index` now tells you when it sends your source code to Aletheore (#1024)**
+
+Saving an Aletheore token (with `aletheore login`, or by setting `ALETHEORE_API_TOKEN`) quietly switches
+`aletheore index` from the local embedder to Aletheore's hosted embedding service, which is the one place the CLI
+sends source code anywhere. It now says so:
+
+- at `aletheore login` and at the managed-audit token prompt, right where the token is obtained;
+- once per run, on stderr, when an index build actually uploads code chunks (so a token set only through the
+  environment is covered, and the MCP server's stdout is never touched). The notice does not depend on how many
+  chunks there are, and searching an index, which sends only your question, stays silent.
+
+The chunks are embedded and returned, not stored. `aletheore logout` (or unsetting `ALETHEORE_API_TOKEN`) keeps
+indexing on your machine.
+
+**Changed: the hosted embedding service now returns 1024-dimension vectors (was 768).** If you built an index
+with a token before this change, run `aletheore index` once to rebuild it; until then a search says the index and
+the query have different dimensions. Indexes built locally are not affected.
+
+**Changed: the PHP parser range is wider (#1028).** `tree-sitter-php` may now be 0.24 up to (not including) 0.26.
+Scanning two real PHP repositories (132 and 125 PHP files) with 0.24.1 and 0.25.1 produced identical symbols,
+imports, security findings and architecture.
+
+No other user-visible changes; the rest of this release is comment and internal cleanup (#1023).
+
 ## 0.9.26 - 2026-10-09
 
 **Fixed: semgrep never ran from a pip install (#1007)**

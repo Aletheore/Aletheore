@@ -18,6 +18,47 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-10-15
+
+One deploy, no migrations. Commit `4adddf55` (tag `github-app-deploy-2026-10-15`); `app-server`, both scan workers,
+`health-worker` and `scheduler` rebuilt and rolled (`app-server` first, workers once all three RQ workers were idle),
+`jina-embed` untouched. Headline: fastapi 0.141.1 to 0.143.2 with the three lock files regenerated together (#1043),
+which is what Dependabot's #1032 needed; the build had failed because fastapi 0.143 also needs `opentelemetry-api`.
+No behavior change. See the snapshot in `docs/operations/DEPLOYMENT-VERIFICATION.md` for what was verified live.
+
+## 2026-10-14
+
+Two deploys, no migrations. Commit `46b6739d` (tag `github-app-deploy-2026-10-14`) and commit `f2e1bcf4` (tag
+`github-app-deploy-2026-10-14-2`); `app-server`, both scan workers, `health-worker` and `scheduler` rebuilt and rolled
+(workers one at a time while idle), `jina-embed` untouched. Headlines: Flash Review is no longer queued for
+dependency-bot pull requests (Dependabot, Renovate, pre-commit-ci, snyk), draft pull requests, or titles and labels
+that ask to skip it, and a draft is reviewed once when it is marked ready (#1038); the unknown-model fallback price no
+longer moves when embedding rows are added (#1037); the app server runs uvloop 0.23.0 and asyncpg 0.32.0 (#1029,
+#1030), tested in an isolated A/B stack before merging. See the snapshot in
+`docs/operations/DEPLOYMENT-VERIFICATION.md` for what was verified live.
+
+## 2026-10-13
+
+Commit `c9b63d98`, tagged `github-app-deploy-2026-10-13`, no migrations. `app-server`, both scan workers,
+`health-worker` and `scheduler` were rebuilt and rolled (workers one at a time while idle); `jina-embed` stays on
+`e3182a9f`. Headlines: an optional DeepInfra embedder behind `EMBED_PROVIDER` (#1017), shipped off and switched on the same day (the
+privacy policy names DeepInfra as of #1026); the credit
+top-up minimum is $6 on the dashboard form, matching Paddle's price (#1019); Flash Review cache replays drop a finding
+whose quoted code is gone instead of posting it again (#1021); the shared-state check sees `threading.Thread`,
+`run_in_executor` and `to_thread` (#1022); and follow-ups from the #1015 review (#1020). See the snapshot in
+`docs/operations/DEPLOYMENT-VERIFICATION.md` for what was verified live.
+
+## 2026-10-10
+
+Commit `56c44a8c`, tagged `github-app-deploy-2026-10-10`, no migrations. `app-server`, both scan workers,
+`health-worker` and `scheduler` were rebuilt and rolled (workers one at a time while idle); `jina-embed` stays on
+`e3182a9f`. Headlines: Flash Review re-anchors a mis-cited finding to its quoted line instead of dropping it (#1011,
+recall on the 13-PR corpus about 50% to 59%), the Python exception-mismatch rule stops producing garbled false
+positives (#1013), the paid-setup job deduplication now outlasts Paddle's retry window and its claim release survives a second
+cancellation (#1012), Paddle webhook and IP allowlist hardening plus an unknown-model cost fallback priced at the
+table median instead of the highest rate (#1015), AIRview batches capped by token budget (#1010). See the snapshot in
+`docs/operations/DEPLOYMENT-VERIFICATION.md` for what was verified live.
+
 ## 2026-10-09
 
 Five worker-only deploys, no migrations. `9cf6f24e` (tag `github-app-deploy-2026-10-09-5`) is what the scan

@@ -33,14 +33,14 @@ def test_plan_display_name_falls_back_to_air_for_unrecognized_value():
 
 
 async def _logged_in_client(pool, monkeypatch, administered_ids):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     monkeypatch.setenv("GITHUB_APP_SLUG", "aletheore")
     await create_session(
         pool,
         "sub-sess",
         42,
         "octocat",
-        encrypt_access_token("gho_faketoken", "test-session-secret"),
+        encrypt_access_token("gho_faketoken", "test-session-secret-at-least-32-characters-long"),
         datetime.now(timezone.utc) + timedelta(hours=1),
     )
 
@@ -63,19 +63,19 @@ async def _logged_in_client(pool, monkeypatch, administered_ids):
     # test_dashboard.py's own _logged_in_client, same reasoning.
     monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
     app.state.db_pool = pool
-    signed = sign_session_id("sub-sess", "test-session-secret")
+    signed = sign_session_id("sub-sess", "test-session-secret-at-least-32-characters-long")
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test", cookies={"session": signed})
 
 
 async def _logged_in_client_with_dead_token(pool, monkeypatch):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     monkeypatch.setenv("GITHUB_APP_SLUG", "aletheore")
     await create_session(
         pool,
         "dead-sess",
         43,
         "octocat",
-        encrypt_access_token("gho_deadtoken", "test-session-secret"),
+        encrypt_access_token("gho_deadtoken", "test-session-secret-at-least-32-characters-long"),
         datetime.now(timezone.utc) + timedelta(hours=1),
     )
 
@@ -87,7 +87,7 @@ async def _logged_in_client_with_dead_token(pool, monkeypatch):
         lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
     )
     app.state.db_pool = pool
-    signed = sign_session_id("dead-sess", "test-session-secret")
+    signed = sign_session_id("dead-sess", "test-session-secret-at-least-32-characters-long")
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test", cookies={"session": signed})
 
 
@@ -160,7 +160,7 @@ async def test_one_installation_shows_checkout_with_current_plan(pool, monkeypat
     assert 'data-installation-id="2001"' not in response.text
     match = re.search(r'data-installation-token="([^"]+)"', response.text)
     assert match is not None
-    assert unsign_checkout_installation_id(match.group(1), "test-session-secret") == 2001
+    assert unsign_checkout_installation_id(match.group(1), "test-session-secret-at-least-32-characters-long") == 2001
     assert "pri_01kyhevc8bkcghfpwjymz16y2h" in response.text  # air monthly price id
     assert "customData" in response.text
     assert "installation_token" in response.text
@@ -206,7 +206,7 @@ async def test_multiple_installations_shows_selection(pool, monkeypatch):
     assert 'value="2002"' not in response.text
     assert 'value="2003"' not in response.text
     tokens = re.findall(r'name="installation_token" value="([^"]+)"', response.text)
-    decoded = {unsign_checkout_installation_id(token, "test-session-secret") for token in tokens}
+    decoded = {unsign_checkout_installation_id(token, "test-session-secret-at-least-32-characters-long") for token in tokens}
     assert decoded == {2002, 2003}
     assert "acme" in response.text
     assert "beta-corp" in response.text
