@@ -977,7 +977,7 @@ def _register_add_custom_skill_tool(mcp_instance: MCPServer, repo_path: Path) ->
 def _register_remove_custom_skill_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     # Same gating as _register_add_custom_skill_tool above: this also writes
     # under the user's home config directory and makes a best-effort network
-    # call (skill_hub_sync.delete_custom_skill_best_effort) when a Skill Hub
+    # call (skill_hub_sync.delete_custom_skill_best_effort) when a Hallbook
     # personal token is saved, so it's gated behind the same `write` and
     # `network` effects.
     @mcp_instance.tool(
@@ -1518,7 +1518,7 @@ TOOL_REQUIRED_EFFECTS: dict[str, frozenset[str]] = {
     "aletheore_answer": frozenset({EFFECT_NETWORK}),
     "aletheore_managed_audit": frozenset({EFFECT_EXTERNAL, EFFECT_NETWORK}),
     # Network too: skill_hub.add_custom_skill pushes the skill to the user's
-    # Skill Hub account whenever a personal token is saved.
+    # Hallbook account whenever a personal token is saved.
     "aletheore_add_custom_skill": frozenset({EFFECT_WRITE, EFFECT_NETWORK}),
     # Same reasoning: skill_hub.remove_custom_skill also makes a best-effort
     # network call (skill_hub_sync.delete_custom_skill_best_effort) whenever a

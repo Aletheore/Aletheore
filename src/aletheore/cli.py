@@ -2438,8 +2438,11 @@ def config_crash_reporting(
     console.print(f"[bold green]Crash reporting turned {normalized}.[/bold green]")
 
 
-skill_hub_app = typer.Typer(help="browse and manage Aletheore's skill hub")
-app.add_typer(skill_hub_app, name="skill-hub")
+skill_hub_app = typer.Typer(help="browse and manage Aletheore Hallbook, the skill hub")
+app.add_typer(skill_hub_app, name="hallbook")
+# The feature was called "skill-hub" before the rename to Hallbook. Kept as a
+# hidden alias so existing scripts keep working without a second name in --help.
+app.add_typer(skill_hub_app, name="skill-hub", hidden=True)
 
 
 @skill_hub_app.command("list", help="list curated and custom skills")
@@ -2526,7 +2529,7 @@ def login() -> None:
         # Mint and save a personal token before any installation lookup.
         # This has no dependency on an Aletheore GitHub App installation, so
         # it is what lets an account with zero installations still log in
-        # for Skill Hub purposes. It is best-effort, though: a Skill Hub
+        # for Hallbook purposes. It is best-effort, though: a Hallbook
         # failure (network error, the endpoint 404ing before it is deployed,
         # a timeout, the per-account token cap or rate limit) must never
         # block a paid user's managed-audit login below, so any failure here
@@ -2538,7 +2541,7 @@ def login() -> None:
             personal_token_saved = True
         except Exception as exc:  # noqa: BLE001 - best-effort by design
             console.print(
-                "[bold yellow]warning:[/bold yellow] Skill Hub personal login unavailable "
+                "[bold yellow]warning:[/bold yellow] Hallbook personal login unavailable "
                 f"right now ({type(exc).__name__}) - continuing without it."
             )
 
@@ -2590,17 +2593,17 @@ def login() -> None:
         except DeviceFlowError:
             if not personal_token_saved:
                 # Neither token was saved, so nothing about this login
-                # succeeded - say so instead of claiming a Skill Hub login.
+                # succeeded - say so instead of claiming a Hallbook login.
                 console.print(
                     "[bold red]error:[/bold red] No Aletheore GitHub App installation "
-                    "found, and Skill Hub login is unavailable right now - nothing "
+                    "found, and Hallbook login is unavailable right now - nothing "
                     "was saved. Retry in a moment."
                 )
                 raise typer.Exit(code=1)
             console.print(
                 "[bold yellow]warning:[/bold yellow] No Aletheore GitHub App "
                 "installation found - install it for the full feature set; "
-                "you're logged in for Skill Hub."
+                "you're logged in for Hallbook."
             )
 
         if installation_account_login is not None:
@@ -2612,7 +2615,7 @@ def login() -> None:
             console.print(HOSTED_EMBEDDINGS_DISCLOSURE)
         else:
             console.print(
-                "[bold green]Logged in.[/bold green] Personal token saved for Skill Hub."
+                "[bold green]Logged in.[/bold green] Personal token saved for Hallbook."
             )
     except DeviceFlowError as exc:
         console.print(f"[bold red]error:[/bold red] {exc}")
@@ -2622,15 +2625,57 @@ def login() -> None:
         raise typer.Exit(code=1) from exc
 
 
-@app.command(help="clear the locally saved managed-audit and Skill Hub tokens")
-def logout() -> None:
+@app.command(help="clear the locally saved managed-audit and Hallbook tokens")
+def logout(
+    all_devices: bool = typer.Option(
+        False, "--all-devices", help="also revoke every personal token on the server, not just this one"
+    ),
+) -> None:
     import aletheore.credentials as credentials
 
-    # Both slots: the managed-audit token and the Skill Hub personal token.
+    # Both slots: the managed-audit token and the Hallbook personal token.
     # status() reports them independently, and a user running logout
     # expects to be logged out of both.
+    personal_slot = "aletheore-personal"
+    # Revoke server-side first, while the token still exists locally. Same
+    # guarded read status() uses: never prompts, since logout is not an
+    # interactive ask-for-a-token moment.
+    personal_token = ""
+    if credentials.has_api_key(
+        "ALETHEORE_PERSONAL_TOKEN",
+        personal_slot,
+        credentials_path=credentials.DEFAULT_CREDENTIALS_PATH,
+    ):
+        personal_token = credentials.get_api_key(
+            "ALETHEORE_PERSONAL_TOKEN",
+            personal_slot,
+            credentials_path=credentials.DEFAULT_CREDENTIALS_PATH,
+            prompt_fn=lambda _msg: "",
+        )
+    if personal_token:
+        from aletheore.device_auth import revoke_personal_token
+
+        try:
+            revoke_personal_token(personal_token, all_devices=all_devices)
+        except Exception as exc:  # noqa: BLE001 - best-effort by design
+            # An offline logout must still log the user out locally;
+            # the server-side revoke failing is a warning, not a blocker.
+            console.print(
+                "[bold yellow]warning:[/bold yellow] couldn't revoke the personal "
+                f"token on the server ({type(exc).__name__}) - it was removed from "
+                "this machine, but may still work elsewhere until it expires or "
+                "is revoked."
+            )
+    elif all_devices:
+        # --all-devices needs a personal token to authenticate the revoke-all
+        # call. With none saved (even if a managed-audit token is), there is
+        # nothing to authenticate with, so say so instead of silently logging
+        # out locally and skipping the revoke the user explicitly asked for.
+        console.print("Not logged in to Hallbook - nothing to revoke.")
+        return
+
     removed_any = False
-    for slot in ("aletheore-managed-audit", "aletheore-personal"):
+    for slot in ("aletheore-managed-audit", personal_slot):
         if credentials.clear_api_key(slot, credentials_path=credentials.DEFAULT_CREDENTIALS_PATH):
             removed_any = True
     if removed_any:
@@ -2679,7 +2724,7 @@ def status() -> None:
                 f"Logged in as: [bold]{who.get('account_login', '?')}[/bold] ({who.get('plan', '?')} plan)"
             )
 
-    # Independent of the managed-audit/installation check above: Skill Hub
+    # Independent of the managed-audit/installation check above: Hallbook
     # login only needs the personal token slot, which login() now always
     # saves regardless of whether any Aletheore GitHub App installation
     # was found. No network round-trip here (unlike the whoami call
@@ -2690,9 +2735,9 @@ def status() -> None:
         "aletheore-personal",
         credentials_path=credentials.DEFAULT_CREDENTIALS_PATH,
     ):
-        console.print("Skill Hub: logged in")
+        console.print("Hallbook: logged in")
     else:
-        console.print("Skill Hub: not logged in - run [bold]aletheore login[/bold]")
+        console.print("Hallbook: not logged in - run [bold]aletheore login[/bold]")
 
 
 def main() -> None:
