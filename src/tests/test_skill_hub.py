@@ -144,3 +144,51 @@ def test_add_custom_skill_succeeds_even_if_push_raises(tmp_path, monkeypatch):
     # on top of push_custom_skill_best_effort's own internal try/except.
     with pytest.raises(RuntimeError):
         skill_hub.add_custom_skill("my-review", "x")  # documents current behavior; see Step 3
+
+
+def test_add_custom_skill_backs_up_existing_content_before_overwriting(tmp_path, monkeypatch):
+    # A second add under an existing name (say, a prompt-injected agent
+    # calling aletheore_add_custom_skill on a name the user already has) must
+    # not silently destroy the first version: it goes to <name>.md.bak, the
+    # same convention skill_hub_sync's pull-merge uses.
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    skill_hub.add_custom_skill("my-review", "first version")
+
+    skill_hub.add_custom_skill("my-review", "second version")
+
+    assert (tmp_path / "my-review.md").read_text(encoding="utf-8") == "second version"
+    assert (tmp_path / "my-review.md.bak").read_text(encoding="utf-8") == "first version"
+
+
+def test_add_custom_skill_keeps_only_the_most_recent_backup(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    skill_hub.add_custom_skill("my-review", "v1")
+    skill_hub.add_custom_skill("my-review", "v2")
+    skill_hub.add_custom_skill("my-review", "v3")
+
+    assert (tmp_path / "my-review.md.bak").read_text(encoding="utf-8") == "v2"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["my-review.md", "my-review.md.bak"]
+
+
+def test_add_custom_skill_first_add_writes_no_backup(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    skill_hub.add_custom_skill("my-review", "v1")
+
+    assert not (tmp_path / "my-review.md.bak").exists()
+
+
+def test_add_custom_skill_identical_content_does_not_clobber_the_backup(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    skill_hub.add_custom_skill("my-review", "v1")
+    skill_hub.add_custom_skill("my-review", "v2")
+    skill_hub.add_custom_skill("my-review", "v2")  # re-adding the same content
+
+    assert (tmp_path / "my-review.md.bak").read_text(encoding="utf-8") == "v1"
+
+
+def test_backup_file_is_not_listed_as_a_skill(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    skill_hub.add_custom_skill("my-review", "v1")
+    skill_hub.add_custom_skill("my-review", "v2")
+
+    assert skill_hub.list_custom_skill_names() == ["my-review"]

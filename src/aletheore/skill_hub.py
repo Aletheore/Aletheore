@@ -230,6 +230,17 @@ def get_skill(skill_id: str) -> Skill:
 
 
 def add_custom_skill(name: str, content: str) -> str:
+    # Local-only safety net, separate from skill_hub_sync's pull-merge
+    # backup: if a skill already exists under this name (a user re-adding it,
+    # or an agent calling aletheore_add_custom_skill on a name the user
+    # already has), keep its current content in <name>.md.bak before
+    # overwriting. Same convention as the sync side: one file, overwritten
+    # each time, not a history. Skipped when the content is identical, so a
+    # repeated add can't replace a meaningful backup with a duplicate.
+    existing = read_custom_skill_file(name)
+    if existing is not None and existing != content:
+        backup_path = custom_skills_dir() / f"{sanitize_skill_name(name)}.md.bak"
+        backup_path.write_text(existing, encoding="utf-8")
     write_custom_skill_file(name, content)
     # Local import: skill_hub_sync imports this module, so a top-level import
     # here would be circular. The push never raises, so the return value is
