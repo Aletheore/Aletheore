@@ -551,46 +551,22 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
             # the rest never raise either, so these except clauses are simply never
             # hit for those kinds - matching aletheore_neighborhood's own handling of
             # find_cluster below and the CLI's generic dispatcher (cli.py's _query).
-            if requires_target:
-
-                def tool(target: str) -> str:
-                    evidence = read_evidence(repo_path)
-                    try:
-                        return _toon_result(func(evidence, target))
-                    except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
-                        return _toon_result({"error": str(exc)})
-
-                return tool, False
-
-            if kind in optional_target_kinds:
-
-                def tool(target: str | None = None) -> str:
-                    evidence = read_evidence(repo_path)
-                    try:
-                        return _toon_result(func(evidence, target))
-                    except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
-                        return _toon_result({"error": str(exc)})
-
-                return tool, False
-
-            # Real audit finding (Flash Review, Low): the doc-suffix
-            # condition used to be recomputed separately from this
-            # if/elif/else dispatch (not requires_target and kind not in
-            # optional_target_kinds) - logically identical today, but two
-            # independently-maintained conditions can silently drift if
-            # this dispatch ever changes shape. Returning whether THIS is
-            # the budgeted branch, right where that's decided, makes
-            # drift impossible instead of just unlikely.
-            def tool(
-                section: str | None = None,
-                offset: int = 0,
-                limit: int | None = None,
-                filter: str | None = None,
-            ) -> str:
-                evidence = read_evidence(repo_path)
+            #
+            # Real audit finding: apply_budget used to be wired into only the
+            # no-target branch below - aletheore_symbols (requires_target=True)
+            # returned every function/class/constant in a file raw, with no cap
+            # at all. On this project's own hottest file (scan_worker/jobs.py,
+            # 234 symbols across functions/classes/constants) that's 82,908
+            # characters - bigger than almost every no-target case the earlier
+            # audit found. apply_budget is safe to apply unconditionally (a
+            # result already under budget comes back untouched), so every
+            # generic query-wrapper tool gets it now, not just the no-target
+            # ones - including the "requires a target" and "optional target"
+            # branches below, which previously had no cap whatsoever.
+            def budgeted(result, section, offset, limit, filter):
                 return _toon_result(
                     apply_budget(
-                        func(evidence, None),
+                        result,
                         size_of=lambda data: len(_toon_result(data)),
                         budget_chars=query_budget_chars,
                         section=section,
@@ -600,6 +576,51 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
                         sort_by=_QUERY_BUDGET_SORT_BY.get(kind),
                     )
                 )
+
+            if requires_target:
+
+                def tool(
+                    target: str,
+                    section: str | None = None,
+                    offset: int = 0,
+                    limit: int | None = None,
+                    filter: str | None = None,
+                ) -> str:
+                    evidence = read_evidence(repo_path)
+                    try:
+                        result = func(evidence, target)
+                    except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
+                        return _toon_result({"error": str(exc)})
+                    return budgeted(result, section, offset, limit, filter)
+
+                return tool, True
+
+            if kind in optional_target_kinds:
+
+                def tool(
+                    target: str | None = None,
+                    section: str | None = None,
+                    offset: int = 0,
+                    limit: int | None = None,
+                    filter: str | None = None,
+                ) -> str:
+                    evidence = read_evidence(repo_path)
+                    try:
+                        result = func(evidence, target)
+                    except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
+                        return _toon_result({"error": str(exc)})
+                    return budgeted(result, section, offset, limit, filter)
+
+                return tool, True
+
+            def tool(
+                section: str | None = None,
+                offset: int = 0,
+                limit: int | None = None,
+                filter: str | None = None,
+            ) -> str:
+                evidence = read_evidence(repo_path)
+                return budgeted(func(evidence, None), section, offset, limit, filter)
 
             return tool, True
 
@@ -1234,6 +1255,8 @@ _NO_INDEX_ERROR = {
 def _register_search_codebase_tool(
     mcp_instance: MCPServer, repo_path: Path, effects: frozenset[str]
 ) -> None:
+    search_budget_chars = budget_chars()
+
     @mcp_instance.tool(
         name="aletheore_search_codebase",
         # Writes nothing, but embeds the query text through the configured
@@ -1247,16 +1270,18 @@ def _register_search_codebase_tool(
         indexed code. language: optional filter, e.g. 'python', 'typescript' -
         use it on a polyglot repo when the question is about one stack, since
         an unfiltered search ranks every language's chunks against each other.
-        Names must match evidence's own repository.languages values."""
+        Names must match evidence's own repository.languages values. k is
+        the one count control here - raise or lower it directly rather than
+        paging; a result is still capped to a size budget as a safety net
+        (a wide hit on large code chunks could otherwise exceed it even at
+        a modest k)."""
         try:
-            return _toon_result(
-                search_index(
-                    repo_path,
-                    query,
-                    k=k,
-                    language=language,
-                    allow_hosted=EFFECT_EXTERNAL in effects,
-                )
+            results = search_index(
+                repo_path,
+                query,
+                k=k,
+                language=language,
+                allow_hosted=EFFECT_EXTERNAL in effects,
             )
         except IndexNotFoundError:
             return _toon_result(_NO_INDEX_ERROR)
@@ -1264,6 +1289,9 @@ def _register_search_codebase_tool(
             return _toon_result({"error": str(exc)})
         except (EmbeddingProviderUnavailableError, HostedEmbeddingUnavailableError) as exc:
             return _toon_result({"error": str(exc)})
+        return _toon_result(
+            apply_budget(results, size_of=lambda data: len(_toon_result(data)), budget_chars=search_budget_chars)
+        )
 
 
 def _register_answer_tool(
