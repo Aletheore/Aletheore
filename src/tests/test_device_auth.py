@@ -10,6 +10,7 @@ from aletheore.device_auth import (
     infer_org_from_cwd_git_remote,
     infer_repo_full_name_from_cwd_git_remote,
     mint_cli_token,
+    mint_personal_token,
     poll_for_access_token,
     request_device_code,
     resolve_installation,
@@ -118,6 +119,24 @@ def test_mint_cli_token_returns_raw_token():
     client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://app.aletheore.com")
     token = mint_cli_token("gho_real", 100, "x", http_client=client)
     assert token == "aletheore-tok"
+
+
+def test_mint_personal_token_posts_and_returns_token():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["auth"] = request.headers["Authorization"]
+        seen["body"] = request.read()
+        return httpx.Response(200, json={"token": "aletheore-personal-tok", "id": 1, "label": "my-laptop"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://app.aletheore.com")
+    token = mint_personal_token("gho_real", "my-laptop", http_client=client)
+    assert token == "aletheore-personal-tok"
+    assert seen["path"] == "/v1/personal-tokens"
+    assert seen["auth"] == "Bearer gho_real"
+    assert b'"label"' in seen["body"] and b"my-laptop" in seen["body"]
+    assert b"installation_id" not in seen["body"]
 
 
 def test_infer_org_from_cwd_git_remote_ssh_style():

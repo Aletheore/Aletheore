@@ -118,6 +118,22 @@ def mint_cli_token(
     return response.json()["token"]
 
 
+def mint_personal_token(
+    github_token: str,
+    label: str,
+    api_base_url: str = "https://app.aletheore.com",
+    http_client: httpx.Client | None = None,
+) -> str:
+    client = http_client or httpx.Client(base_url=api_base_url)
+    response = client.post(
+        "/v1/personal-tokens",
+        headers={"Authorization": f"Bearer {github_token}"},
+        json={"label": label},
+    )
+    response.raise_for_status()
+    return response.json()["token"]
+
+
 _GITHUB_REMOTE_PREFIXES = (
     "git@github.com:",
     "ssh://git@github.com/",
