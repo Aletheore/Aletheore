@@ -1779,15 +1779,34 @@ def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
         # same gap the Paddle subscription.created wiki-build trigger
         # closed for brand-new upgrades. AIR-exclusive, not "any paid
         # plan" - the flash plan doesn't include AIRview/Docs at all.
+        #
+        # Enqueued as their own jobs, not called inline: both builds make
+        # a long series of LLM calls and get LIVE_WIKI_FULL_BUILD_JOB_
+        # TIMEOUT_SECONDS everywhere else they run (the Paddle trigger's
+        # per-repo fan-out, the catch-up sweeps), but this job's own
+        # enqueue timeout is 300s - an inline build on a larger repo hit
+        # that limit mid LLM call and failed the whole initial scan job
+        # (Sentry ALETHEORE-5), which the ops monitor then escalated.
         if installation is not None and installation["plan"] == "air":
-            try:
-                run_live_wiki_full_build_job(installation_id, repo_full_name)
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                run_live_docs_full_build_job(installation_id, repo_full_name)
-            except Exception:  # noqa: BLE001
-                pass
+            queue = _scans_queue(settings.redis_url)
+            for build_job in (
+                "scan_worker.jobs.run_live_wiki_full_build_job",
+                "scan_worker.jobs.run_live_docs_full_build_job",
+            ):
+                try:
+                    queue.enqueue(
+                        build_job,
+                        job_timeout=LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS,
+                        installation_id=installation_id,
+                        repo_full_name=repo_full_name,
+                    )
+                except Exception:  # noqa: BLE001
+                    # One build failing to enqueue must not fail the scan that already finished, and must not
+                    # stop the other build from being enqueued - but it must leave a trace.
+                    logging.getLogger("scan_worker.jobs").warning(
+                        "could not enqueue %s for installation=%s repo=%s",
+                        build_job, installation_id, repo_full_name, exc_info=True,
+                    )
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("scan_worker.jobs").warning(
             "initial scan job failed for installation=%s repo=%s (%s)",
