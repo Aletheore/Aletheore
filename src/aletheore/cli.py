@@ -47,6 +47,7 @@ from aletheore.preferences import (
     mark_crash_reporting_notice_shown,
     set_crash_reporting_enabled,
 )
+from aletheore import skill_hub
 from aletheore.sentry_reporting import init_cli_sentry
 from aletheore.evidence import (
     IncompatibleEvidenceVersionError,
@@ -2435,6 +2436,39 @@ def config_crash_reporting(
 
     set_crash_reporting_enabled(normalized == "on")
     console.print(f"[bold green]Crash reporting turned {normalized}.[/bold green]")
+
+
+skill_hub_app = typer.Typer(help="browse and manage Aletheore's skill hub")
+app.add_typer(skill_hub_app, name="skill-hub")
+
+
+@skill_hub_app.command("list", help="list curated and custom skills")
+def skill_hub_list(
+    category: Optional[str] = typer.Option(None, "--category", help="filter to one category"),
+) -> None:
+    for meta in skill_hub.list_skills(category):
+        console.print(f"{meta.skill_id}  {meta.title}")
+
+
+@skill_hub_app.command("get", help="print a skill's content")
+def skill_hub_get(skill_id: str) -> None:
+    try:
+        skill = skill_hub.get_skill(skill_id)
+    except skill_hub.SkillNotFoundError as exc:
+        console.print(f"[bold red]error:[/bold red] skill not found: {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print(skill.content)
+
+
+@skill_hub_app.command("add", help="add a custom skill from a local file")
+def skill_hub_add(name: str, file: Path) -> None:
+    content = file.read_text(encoding="utf-8")
+    try:
+        skill_id = skill_hub.add_custom_skill(name, content)
+    except ValueError as exc:
+        console.print(f"[bold red]error:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print(f"[bold green]Added custom skill[/bold green] {skill_id}")
 
 
 @app.command(help="authenticate with GitHub via device flow and save a personal API token")

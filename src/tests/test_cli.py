@@ -30,6 +30,7 @@ from aletheore.cli import (
     _write_toml_mcp_client_config,
     app,
 )
+from aletheore import skill_hub
 from aletheore.device_auth import DeviceFlowError
 from aletheore.preferences import is_crash_reporting_enabled, set_crash_reporting_enabled
 from aletheore.evidence import EVIDENCE_VERSION
@@ -3252,3 +3253,37 @@ def test_managed_audit_reports_network_error_instead_of_traceback(tmp_path):
 
     assert result.exit_code == 1
     assert "Evidence is still available" in result.output
+
+
+def test_skill_hub_list_shows_curated_skill():
+    result = runner.invoke(app, ["skill-hub", "list"])
+    assert result.exit_code == 0
+    assert "code-review/security-focused" in result.stdout
+
+
+def test_skill_hub_get_prints_content():
+    result = runner.invoke(app, ["skill-hub", "get", "code-review/security-focused"])
+    assert result.exit_code == 0
+    assert "security" in result.stdout.lower()
+
+
+def test_skill_hub_get_unknown_id_nonzero_exit():
+    result = runner.invoke(app, ["skill-hub", "get", "custom/nope"])
+    assert result.exit_code != 0
+
+
+def test_skill_hub_add_then_get(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    skill_file = tmp_path / "input.md"
+    skill_file.write_text("my steps")
+    result = runner.invoke(app, ["skill-hub", "add", "my-review", str(skill_file)])
+    assert result.exit_code == 0
+    result = runner.invoke(app, ["skill-hub", "get", "custom/my-review"])
+    assert "my steps" in result.stdout
+
+
+def test_skill_hub_add_rejects_unsafe_name(tmp_path):
+    skill_file = tmp_path / "input.md"
+    skill_file.write_text("x")
+    result = runner.invoke(app, ["skill-hub", "add", "../escape", str(skill_file)])
+    assert result.exit_code != 0
