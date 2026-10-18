@@ -1,10 +1,14 @@
+from __future__ import annotations
+
 import re
 import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-import httpx
+from aletheore._lazy import lazy_module
+httpx = lazy_module("httpx")
+
 
 GITHUB_CLIENT_ID = "Iv23liGMhaWSkY927jgI"
 

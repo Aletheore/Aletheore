@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import difflib
 import hashlib
 import json
@@ -14,8 +16,6 @@ from pathlib import Path
 from typing import Optional
 
 import click
-import httpx
-import sentry_sdk
 import tomli_w
 import typer
 import uvicorn
@@ -24,6 +24,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from aletheore._lazy import lazy_module
 from aletheore.adapters.anthropic_native import AnthropicAdapter
 from aletheore.adapters.claude_code import AdapterInvocationError, ClaudeCodeAdapter
 from aletheore.adapters.codex_cli import CodexCliAdapter
@@ -77,6 +78,9 @@ from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.watch import DEBOUNCE_SECONDS as WATCH_DEBOUNCE_SECONDS
 from aletheore.watch import WATCH_ENV_VAR, watching_disabled_by_env
 from aletheore.user_paths import user_home
+
+httpx = lazy_module("httpx")
+sentry_sdk = lazy_module("sentry_sdk")
 
 KNOWN_ADAPTERS = [
     ClaudeCodeAdapter(),
@@ -1440,26 +1444,31 @@ def _write_json_mcp_client_config(
     *,
     server_name: str = "aletheore",
     repo_path: Path | None = None,
-) -> str:
+) -> tuple[str, bool]:
+    """Returns (message, security_skip) - security_skip is True only for the
+    symlink-escapes-the-repo case, never for an ordinary skip (bad existing
+    JSON, wrong shape, ...), so a caller can tell "this needs attention
+    because something tried to write outside the repo" apart from "this
+    file just wasn't in a shape we could merge into"."""
     # repo_path is None for claude-desktop's target: that config file is
     # deliberately global (shared across every project on this machine,
     # not under any one repo), so there's no repo boundary to check -
     # every other target writes a per-repo path and must pass repo_path.
     if repo_path is not None and _config_path_escapes_repo(config_path, repo_path):
-        return f"skipped (path escapes the repo via a symlink): {config_path}"
+        return f"skipped (path escapes the repo via a symlink): {config_path}", True
     if config_path.exists():
         try:
             data = _loads_jsonc(config_path.read_text(encoding="utf-8-sig"))
         except (UnicodeDecodeError, json.JSONDecodeError):
-            return f"skipped (existing file is not valid JSON): {config_path}"
+            return f"skipped (existing file is not valid JSON): {config_path}", False
         if not isinstance(data, dict):
-            return f"skipped (existing file's top level is not a JSON object): {config_path}"
+            return f"skipped (existing file's top level is not a JSON object): {config_path}", False
     else:
         data = {}
 
     servers = data.get(top_level_key, {})
     if not isinstance(servers, dict):
-        return f"skipped (existing '{top_level_key}' is not a JSON object): {config_path}"
+        return f"skipped (existing '{top_level_key}' is not a JSON object): {config_path}", False
 
     already_present = server_name in servers
     servers[server_name] = entry
@@ -1471,34 +1480,36 @@ def _write_json_mcp_client_config(
         try:
             _write_config_file_no_symlink_follow(config_path, content)
         except OSError:
-            return f"skipped (path escapes the repo via a symlink): {config_path}"
+            return f"skipped (path escapes the repo via a symlink): {config_path}", True
     else:
         # claude-desktop's global config has no repo boundary to enforce -
         # a symlink here is the user's own, legitimate choice (e.g.
         # dotfiles synced through a symlinked config directory), not
         # attacker-controlled repo content, so it's followed as before.
         config_path.write_text(content, encoding="utf-8")
-    return f"{'updated' if already_present else 'wrote'} {config_path}"
+    return f"{'updated' if already_present else 'wrote'} {config_path}", False
 
 
 def _write_toml_mcp_client_config(
     config_path: Path, top_level_key: str, entry: dict, *, repo_path: Path | None = None
-) -> str:
+) -> tuple[str, bool]:
+    """Returns (message, security_skip) - see _write_json_mcp_client_config's
+    docstring."""
     if repo_path is not None and _config_path_escapes_repo(config_path, repo_path):
-        return f"skipped (path escapes the repo via a symlink): {config_path}"
+        return f"skipped (path escapes the repo via a symlink): {config_path}", True
     if config_path.exists():
         try:
             data = tomllib.loads(config_path.read_text(encoding="utf-8-sig"))
         except (UnicodeDecodeError, tomllib.TOMLDecodeError):
-            return f"skipped (existing file is not valid TOML): {config_path}"
+            return f"skipped (existing file is not valid TOML): {config_path}", False
         if not isinstance(data, dict):
-            return f"skipped (existing file's top level is not a TOML table): {config_path}"
+            return f"skipped (existing file's top level is not a TOML table): {config_path}", False
     else:
         data = {}
 
     servers = data.get(top_level_key, {})
     if not isinstance(servers, dict):
-        return f"skipped (existing '{top_level_key}' is not a TOML table): {config_path}"
+        return f"skipped (existing '{top_level_key}' is not a TOML table): {config_path}", False
 
     already_present = "aletheore" in servers
     servers["aletheore"] = entry
@@ -1510,10 +1521,10 @@ def _write_toml_mcp_client_config(
         try:
             _write_config_file_no_symlink_follow(config_path, content)
         except OSError:
-            return f"skipped (path escapes the repo via a symlink): {config_path}"
+            return f"skipped (path escapes the repo via a symlink): {config_path}", True
     else:
         config_path.write_text(content, encoding="utf-8")
-    return f"{'updated' if already_present else 'wrote'} {config_path}"
+    return f"{'updated' if already_present else 'wrote'} {config_path}", False
 
 
 def _mcp_install(path: str, targets: list[str]) -> int:
@@ -1528,15 +1539,26 @@ def _mcp_install(path: str, targets: list[str]) -> int:
         )
         return 1
 
+    # Real audit finding: a target skipped because its config path escapes
+    # the repo via a symlink (the exact attacker-controlled-repo case
+    # _config_path_escapes_repo exists for) printed a warning but still
+    # exited 0 - a script calling mcp-install had no way to detect that
+    # install didn't actually happen for a security reason, as opposed to
+    # an ordinary "nothing to do" skip (ClaudeDesktop unsupported here,
+    # malformed existing file). Tracked separately from those so only the
+    # security-relevant case changes the exit code.
+    any_security_skip = False
     for target in selected:
         if target == "codex-cli":
             config_path = repo_path / ".codex" / "config.toml"
             entry = {"command": _aletheore_command(), "args": ["mcp", str(repo_path)]}
-            message = _write_toml_mcp_client_config(config_path, "mcp_servers", entry, repo_path=repo_path)
+            message, security_skip = _write_toml_mcp_client_config(
+                config_path, "mcp_servers", entry, repo_path=repo_path
+            )
         elif target == "claude-desktop":
             config_path = _claude_desktop_config_path()
             if config_path is None:
-                message = "skipped (Claude Desktop is only available on macOS and Windows)"
+                message, security_skip = "skipped (Claude Desktop is only available on macOS and Windows)", False
             else:
                 entry = _stdio_entry(repo_path, include_type=False)
                 # Global file shared across every project on this machine -
@@ -1546,7 +1568,7 @@ def _mcp_install(path: str, targets: list[str]) -> int:
                 # under the same key, since both would collide in the one
                 # shared file. See _claude_desktop_server_name's own
                 # docstring for why a plain repo_path.name isn't enough.
-                message = _write_json_mcp_client_config(
+                message, security_skip = _write_json_mcp_client_config(
                     config_path, "mcpServers", entry,
                     server_name=_claude_desktop_server_name(repo_path),
                 )
@@ -1554,7 +1576,10 @@ def _mcp_install(path: str, targets: list[str]) -> int:
             relative_path, top_level_key, entry_builder = _MCP_CLIENT_CONFIGS[target]
             config_path = repo_path / relative_path
             entry = entry_builder(repo_path)
-            message = _write_json_mcp_client_config(config_path, top_level_key, entry, repo_path=repo_path)
+            message, security_skip = _write_json_mcp_client_config(
+                config_path, top_level_key, entry, repo_path=repo_path
+            )
+        any_security_skip = any_security_skip or security_skip
         console.print(f"[bold green]{target}[/bold green]: {message}")
 
     console.print(
@@ -1614,6 +1639,12 @@ def _mcp_install(path: str, targets: list[str]) -> int:
                 "different repo later won't overwrite this one. Fully quit and reopen Claude Desktop "
                 "to pick it up - MCP servers only load at startup."
             )
+    if any_security_skip:
+        console.print(
+            "\n[bold red]error:[/bold red] at least one target was skipped because its config path "
+            "escapes the repo via a symlink - see the per-target lines above for which one."
+        )
+        return 1
     return 0
 
 
@@ -2040,6 +2071,36 @@ def query(
 
 @app.command(
     help=(
+        "list every file that imports a file, directly or through other imports, as one complete deduplicated list, "
+        "e.g. aletheore dependents src/click/_compat.py --under src --exclude tests"
+    )
+)
+def dependents(
+    file: str = typer.Argument(..., help="file path exactly as it appears in the scan"),
+    path: str = typer.Argument(".", help="repository path"),
+    exclude: list[str] = typer.Option(
+        [], "--exclude", help="leave out files under a directory with this exact name, or with this exact file name; repeatable"
+    ),
+    under: list[str] = typer.Option([], "--under", help="only list files below this directory; repeatable"),
+    path_option: Optional[str] = _PATH_OPTION,
+) -> None:
+    from aletheore.dependents import DependentsError, dependents_report
+
+    repo = Path(_resolve_path(path, path_option)).resolve()
+    try:
+        evidence = load_evidence(repo)
+    except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
+        print(f"error: {exc} (run 'aletheore scan' first)")
+        raise typer.Exit(code=1)
+    try:
+        print(dependents_report(evidence, repo, file, exclude, under))
+    except DependentsError as exc:
+        print(f"error: {exc}")
+        raise typer.Exit(code=1)
+
+
+@app.command(
+    help=(
         "every circular import dependency in the repo, with a concrete example chain for each one, "
         "as one complete answer - e.g. aletheore cycles"
     )
@@ -2370,6 +2431,23 @@ def main() -> None:
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
             reconfigure(encoding="utf-8", errors="backslashreplace")
+
+    # A deleted working directory (a removed git worktree, a cleaned-up
+    # scratch dir) makes os.getcwd() raise FileNotFoundError, and every
+    # command resolves a relative path (the default "." included) through
+    # it - so each one would otherwise die in Path.resolve() with a raw
+    # traceback and a crash report for what is a user environment problem,
+    # not an Aletheore bug (Sentry ALETHEORE-CLI-2). Checked once here,
+    # before Sentry initialises, so nothing is reported.
+    try:
+        os.getcwd()
+    except OSError:  # FileNotFoundError on POSIX; a plain OSError (WinError 3) on Windows
+        _stderr_console.print(
+            "[bold red]error:[/bold red] the current working directory no "
+            "longer exists. cd into an existing directory and run the "
+            "command again."
+        )
+        raise SystemExit(1)
 
     init_cli_sentry()
     if not has_shown_crash_reporting_notice():

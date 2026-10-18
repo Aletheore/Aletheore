@@ -885,7 +885,7 @@ def test_openai_free_tier_simple_completion_releases_reservation_on_a_failed_cal
     mock_client = MagicMock()
     mock_client.chat.completions.create.side_effect = RuntimeError("boom")
     with (
-        patch("aletheore.adapters.openai_compatible.OpenAI", return_value=mock_client),
+        patch("openai.OpenAI", return_value=mock_client),
         patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"),
     ):
         with pytest.raises(Exception):
