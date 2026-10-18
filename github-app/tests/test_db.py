@@ -39,8 +39,10 @@ from app_server.db import (
     list_installation_members,
     remove_health_check_target,
     remove_installation_member,
+    revoke_all_personal_tokens,
     revoke_api_token,
     revoke_api_tokens_created_by,
+    revoke_personal_token,
     record_llm_spend,
     set_installation_plan,
     set_webhook_url,
@@ -564,6 +566,42 @@ async def test_create_personal_token_within_limit_is_concurrency_safe(pool):
     assert len(rows) == 15
     assert len(non_revoked) == 10
     assert len(revoked) == 5
+
+
+@pytest.mark.asyncio
+async def test_revoke_personal_token_is_idempotent_at_db_layer(pool):
+    # Covers the DB layer directly, with no HTTP/auth gate in between. The
+    # HTTP-layer idempotency test (two DELETE /v1/personal-tokens calls with
+    # the same token) can't exercise this path: the second HTTP call 401s
+    # on auth before revoke_personal_token is ever reached, since the first
+    # call already revoked the only credential that could authorize it. A
+    # future refactor that calls revoke_personal_token directly (e.g. a
+    # retry path, or reordering auth vs. revoke) needs this guarded here.
+    identity = await get_or_create_personal_identity(pool, 70004, "octocat")
+    await create_personal_token_within_limit(pool, identity["id"], "hash-revoke-once", "machine-revoke-once", limit=10)
+
+    first = await revoke_personal_token(pool, "hash-revoke-once")
+    second = await revoke_personal_token(pool, "hash-revoke-once")
+
+    assert first is True
+    assert second is False
+
+
+@pytest.mark.asyncio
+async def test_revoke_all_personal_tokens_is_idempotent_at_db_layer(pool):
+    # Same DB-layer idempotency gap as the test above, for the revoke-all
+    # path: calling revoke_all_personal_tokens twice in a row, with no HTTP
+    # auth gate between the two calls, must return the real revoked count
+    # the first time and 0 the second time, with no exception either time.
+    identity = await get_or_create_personal_identity(pool, 70005, "octocat")
+    await create_personal_token_within_limit(pool, identity["id"], "hash-revoke-all-1", "machine-a", limit=10)
+    await create_personal_token_within_limit(pool, identity["id"], "hash-revoke-all-2", "machine-b", limit=10)
+
+    first = await revoke_all_personal_tokens(pool, identity["id"])
+    second = await revoke_all_personal_tokens(pool, identity["id"])
+
+    assert first == 2
+    assert second == 0
 
 
 @pytest.mark.asyncio

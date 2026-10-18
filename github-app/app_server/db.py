@@ -2122,11 +2122,11 @@ async def create_personal_token_within_limit(
 ) -> int:
     """Keyed on the personal identity instead of an installation, but unlike
     create_api_token_within_limit this never rejects: `aletheore login`
-    mints a brand new personal token on every single login and nothing ever
-    revokes one (there is no revoke endpoint for personal tokens), so a
-    cap-and-reject-at-`limit` design permanently locked out any identity
-    that had logged in `limit`+ times, with no recovery path short of a
-    manual DB edit.
+    mints a brand new personal token on every single login, and before the
+    revoke_personal_token/revoke_all_personal_tokens endpoints existed
+    nothing ever revoked one, so a cap-and-reject-at-`limit` design
+    permanently locked out any identity that had logged in `limit`+ times,
+    with no recovery path short of a manual DB edit.
 
     Instead, once the identity is already at `limit` non-revoked tokens,
     this revokes the single OLDEST one (by created_at, id as a deterministic
