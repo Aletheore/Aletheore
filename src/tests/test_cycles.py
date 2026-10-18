@@ -84,3 +84,35 @@ def test_cli_cycles_end_to_end(tmp_path: Path):
     with patch("aletheore.cli.load_evidence", return_value=_ev(graph)):
         result = CliRunner().invoke(app, ["cycles", str(tmp_path)])
     assert result.exit_code == 0 and "1 circular dependency group(s) found" in result.output
+
+
+def _evidence_with_cycle():
+    mods = {"pkg/a.py": ["pkg/b.py"], "pkg/b.py": ["other/c.py"], "other/c.py": ["pkg/a.py"], "pkg/d.py": []}
+    return {
+        "scanned_at": "2999-01-01T00:00:00+00:00",
+        "repository": {"modules": [{"path": p, "imports": imps} for p, imps in mods.items()]},
+    }
+
+
+def test_scoped_report_lists_only_files_in_scope_but_finds_cycles_through_outside_files(tmp_path):
+    from aletheore.cycles import cycles_report
+
+    text = cycles_report(_evidence_with_cycle(), tmp_path, under=["pkg"])
+    head = text.split("\n\n")[0]
+    assert head.splitlines()[0].startswith("2 file(s) in the requested scope")
+    assert "pkg/a.py" in head and "pkg/b.py" in head and "other/c.py" not in head and "pkg/d.py" not in head
+    assert "group of 3 file(s) repo-wide, 2 in scope" in text
+
+
+def test_scoped_report_exclude_matches_whole_names(tmp_path):
+    from aletheore.cycles import cycles_report
+
+    text = cycles_report(_evidence_with_cycle(), tmp_path, exclude=["other"])
+    assert "other/c.py" not in text.split("\n\n")[0]
+    assert "2 file(s) in the requested scope" in text
+
+
+def test_unscoped_report_is_unchanged(tmp_path):
+    from aletheore.cycles import cycles_report
+
+    assert "1 circular dependency group(s) found" in cycles_report(_evidence_with_cycle(), tmp_path)
