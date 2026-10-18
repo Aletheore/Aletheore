@@ -6,16 +6,18 @@ stays a module constant here rather than reading SENTRY_DSN from the
 environment the way the backend does), and a different scrub policy - see
 docs/superpowers/specs/2026-10-06-cli-crash-reporting-design.md.
 """
+from __future__ import annotations
+
 import importlib.metadata
 import logging
 import os
 import platform
 from pathlib import Path
 
-import sentry_sdk
-from sentry_sdk.integrations.logging import LoggingIntegration
-
+from aletheore._lazy import lazy_module
 from aletheore.preferences import is_crash_reporting_enabled
+
+sentry_sdk = lazy_module("sentry_sdk")
 
 _CLI_SENTRY_DSN = (
     "https://2db08ff31f604202c9bccb356383f072@"
@@ -141,6 +143,8 @@ def init_cli_sentry() -> None:
     if not is_crash_reporting_enabled():
         return
 
+    from sentry_sdk.integrations.logging import LoggingIntegration
+
     sentry_sdk.init(
         dsn=_CLI_SENTRY_DSN,
         environment="production",
@@ -148,6 +152,11 @@ def init_cli_sentry() -> None:
         send_default_pii=False,
         before_send=_scrub_event,
         traces_sample_rate=0,
+        # Auto-enabling integrations import ~100 optional framework adapters (django, flask, celery, ...) one by
+        # one, which took 3.5-6s on every `aletheore` command (a query itself needs ~0.05s). The CLI uses none of
+        # those frameworks; the default integrations (excepthook, atexit flush, logging, ...) stay on, so crash
+        # reports are unchanged.
+        auto_enabling_integrations=False,
         integrations=[
             LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)
         ],

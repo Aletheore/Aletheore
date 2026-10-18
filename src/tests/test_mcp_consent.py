@@ -176,7 +176,7 @@ def test_embedding_fallback_cannot_send_code_to_openai_without_a_terminal(monkey
 
     from aletheore.search_index import EmbeddingProviderUnavailableError, embed_texts
 
-    with patch("aletheore.search_index.OpenAI") as mock_openai, patch(
+    with patch("openai.OpenAI") as mock_openai, patch(
         "aletheore.search_index.has_api_key", return_value=True
     ):
         mock_openai.return_value.embeddings.create.side_effect = RuntimeError("ollama down")

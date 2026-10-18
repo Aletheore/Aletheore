@@ -6,9 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
-import openai
 import toon
-from openai import OpenAI
 
 from aletheore.adapters.base import AdapterInvocationError, AgentAdapter
 from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, get_api_key, has_api_key
@@ -52,13 +50,22 @@ MAX_CONSECUTIVE_NO_TOOL_CALLS = 2
 # retry. BadRequestError and friends (bad params, content policy, 404) are
 # deliberately excluded - retrying an error that will fail identically
 # every time just delays surfacing it.
-_RETRYABLE_EXCEPTIONS: tuple[type[Exception], ...] = (
-    openai.AuthenticationError,
-    openai.RateLimitError,
-    openai.APIConnectionError,
-    openai.APITimeoutError,
-    openai.InternalServerError,
-)
+#
+# A function, not a module-level tuple: building the tuple needs the `openai`
+# SDK, which costs ~0.4s to import and would otherwise be paid by every CLI
+# command, including ones that never call an LLM.
+def _retryable_exceptions() -> tuple[type[Exception], ...]:
+    import openai
+
+    return (
+        openai.AuthenticationError,
+        openai.RateLimitError,
+        openai.APIConnectionError,
+        openai.APITimeoutError,
+        openai.InternalServerError,
+    )
+
+
 _MAX_CALL_ATTEMPTS = 3
 _RETRY_BASE_DELAY_SECONDS = 1.0
 
@@ -67,8 +74,10 @@ _T = TypeVar("_T")
 
 def _call_with_retry(
     fn: Callable[[], _T],
-    retryable_exceptions: tuple[type[Exception], ...] = _RETRYABLE_EXCEPTIONS,
+    retryable_exceptions: tuple[type[Exception], ...] | None = None,
 ) -> _T:
+    if retryable_exceptions is None:
+        retryable_exceptions = _retryable_exceptions()
     last_exc: Exception | None = None
     for attempt in range(_MAX_CALL_ATTEMPTS):
         try:
@@ -383,6 +392,8 @@ class OpenAICompatibleAdapter(AgentAdapter):
                     self._on_call_failed()
                 raise AdapterInvocationError(f"no API key available for {self.name}")
 
+        from openai import OpenAI
+
         client = OpenAI(base_url=self._base_url, api_key=api_key or "not-needed")
         try:
             response = _call_with_retry(
@@ -448,6 +459,8 @@ class OpenAICompatibleAdapter(AgentAdapter):
             api_key = get_api_key(self._api_key_env_var, self.name, self._credentials_path)
             if not api_key:
                 raise AdapterInvocationError(f"no API key available for {self.name}")
+
+        from openai import OpenAI
 
         client = OpenAI(base_url=self._base_url, api_key=api_key or "not-needed")
         manual_dir = Path(__file__).resolve().parent.parent / "manual"

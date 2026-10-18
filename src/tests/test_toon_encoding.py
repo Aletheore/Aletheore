@@ -213,3 +213,34 @@ def test_to_toon_round_trips_or_cleanly_rejects_thousands_of_random_shapes():
     # not evidence of a problem - this just confirms the generator isn't
     # producing exclusively-unencodable garbage.
     assert successes > 500
+
+
+def test_to_toon_round_trips_bracket_text_inside_a_quoted_string_in_a_large_array():
+    # python-toon 0.1.x's decoder read a "[N]" inside a quoted string value
+    # (a numpy-style docstring reference like ".. [1] :doi:") as an array
+    # header, so one such item among 1060 air.json modules made the whole
+    # TOON copy fail with "Expected 1060 items, but got 512" and air.toon was
+    # silently not written. Needs python-toon>=0.2.0.
+    modules = [
+        {
+            "path": f"pkg/mod_{i}.py",
+            "imports": ["pkg/base.py", "pkg/utils.py"],
+            "symbols": {"functions": [{"name": f"f{i}", "docstring": "plain"}]},
+        }
+        for i in range(1060)
+    ]
+    modules[511] = {
+        "path": "pkg/mod_511.py",
+        "docstring": "References\n----------\n.. [1] :doi:`Fast local algorithms` Cichocki, Andrzej",
+        "imports": ["pkg/base.py"],
+    }
+    data = {"repository": {"modules": modules}}
+
+    assert toon.decode(to_toon(data)) == data
+
+
+@pytest.mark.parametrize("text", [".. [1] :doi:`a, b`", "x [1]: a,b", "see [2] :x: y,z"])
+def test_to_toon_round_trips_a_lone_object_with_bracket_text_in_a_string(text):
+    data = {"docstring": text}
+
+    assert toon.decode(to_toon(data)) == data
