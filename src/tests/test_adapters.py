@@ -80,15 +80,17 @@ def test_invoke_resolves_which_to_an_absolute_path(mock_run, mock_which):
     assert args[0][0] != "relative/claude"
 
 
+@patch("aletheore.adapters.claude_code.shutil.which", return_value="/usr/local/bin/claude")
 @patch("aletheore.adapters.claude_code.subprocess.run")
-def test_invoke_raises_on_nonzero_exit(mock_run):
+def test_invoke_raises_on_nonzero_exit(mock_run, _which):
     mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="boom")
     with pytest.raises(AdapterInvocationError, match="boom"):
         ClaudeCodeAdapter().invoke("do the audit", cwd="/some/repo")
 
 
+@patch("aletheore.adapters.claude_code.shutil.which", return_value="/usr/local/bin/claude")
 @patch("aletheore.adapters.claude_code.subprocess.run")
-def test_invoke_raises_on_timeout(mock_run):
+def test_invoke_raises_on_timeout(mock_run, _which):
     mock_run.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=600)
     with pytest.raises(AdapterInvocationError, match="timed out"):
         ClaudeCodeAdapter().invoke("do the audit", cwd="/some/repo")
@@ -143,15 +145,17 @@ def test_opencode_invoke_resolves_which_to_an_absolute_path(mock_run, mock_which
     assert args[0][0] != "relative/opencode"
 
 
+@patch("aletheore.adapters.opencode.shutil.which", return_value="/usr/local/bin/opencode")
 @patch("aletheore.adapters.opencode.subprocess.run")
-def test_opencode_invoke_raises_on_nonzero_exit(mock_run):
+def test_opencode_invoke_raises_on_nonzero_exit(mock_run, _which):
     mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="boom")
     with pytest.raises(OpenCodeInvocationError, match="boom"):
         OpenCodeAdapter().invoke("do the audit", cwd="/some/repo")
 
 
+@patch("aletheore.adapters.opencode.shutil.which", return_value="/usr/local/bin/opencode")
 @patch("aletheore.adapters.opencode.subprocess.run")
-def test_opencode_invoke_raises_on_timeout(mock_run):
+def test_opencode_invoke_raises_on_timeout(mock_run, _which):
     mock_run.side_effect = subprocess.TimeoutExpired(cmd="opencode", timeout=600)
     with pytest.raises(OpenCodeInvocationError, match="timed out"):
         OpenCodeAdapter().invoke("do the audit", cwd="/some/repo")
