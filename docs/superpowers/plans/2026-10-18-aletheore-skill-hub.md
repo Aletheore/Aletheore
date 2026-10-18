@@ -21,7 +21,7 @@
 - Ships on the free Community tier unconditionally — no `installation.plan` check anywhere in this feature's code path.
 - `personal_identities` / `personal_api_tokens` / `custom_skills` are new tables, fully separate from `installations` / `api_tokens` — nothing in this feature touches existing paid-entitlement logic.
 - `aletheore login` must succeed (mint a personal token) for any GitHub account, with or without an Aletheore installation; failing to resolve a paid/free installation becomes a warning, never a fatal exit.
-- Next free migration number, confirmed against `github-app/migrations/`: `074`.
+- Next free migration number: `073` — re-verified directly against this worktree's `github-app/migrations/` at Section D dispatch time (highest existing file is `072_llm_spend_reservations.sql`; the plan's original research against the main checkout found `073` already taken there and said `074`, but that file doesn't exist on this branch, so `073` is what's actually free here. Take the real next-free number at implementation time regardless of what's written here, the same as the Open Risks section already says.).
 - The login-time pull-merge never silently overwrites existing local custom-skill content: the one branch that replaces it with server-side content backs up the previous version to `<name>.md.bak` and logs a visible notice naming the skill, every time — added as hardening against a compromised account pushing content that would otherwise land unannounced on every other machine at next login.
 
 ## Review Focus
@@ -601,7 +601,7 @@ git commit -m "ci: gate curated skill additions on automated vetting"
 ### Task 8: Database migration
 
 **Files:**
-- Create: `github-app/migrations/074_skill_hub_personal_identity.sql`
+- Create: `github-app/migrations/073_skill_hub_personal_identity.sql` (re-verify the real next-free number against this branch's current `github-app/migrations/` before creating the file — see Global Constraints note above)
 
 - [ ] **Step 1: Write the migration**
 
@@ -644,7 +644,7 @@ The test suite applies every file in `migrations/` itself (`github-app/README.md
 - [ ] **Step 3: Commit**
 
 ```bash
-git add github-app/migrations/074_skill_hub_personal_identity.sql
+git add github-app/migrations/073_skill_hub_personal_identity.sql
 git commit -m "feat: add personal_identities/personal_api_tokens/custom_skills tables"
 ```
 
