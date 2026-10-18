@@ -152,6 +152,11 @@ def init_cli_sentry() -> None:
         send_default_pii=False,
         before_send=_scrub_event,
         traces_sample_rate=0,
+        # Auto-enabling integrations import ~100 optional framework adapters (django, flask, celery, ...) one by
+        # one, which took 3.5-6s on every `aletheore` command (a query itself needs ~0.05s). The CLI uses none of
+        # those frameworks; the default integrations (excepthook, atexit flush, logging, ...) stay on, so crash
+        # reports are unchanged.
+        auto_enabling_integrations=False,
         integrations=[
             LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)
         ],
