@@ -2222,6 +2222,7 @@ def test_login_saves_token_when_installation_auto_resolved(tmp_path, monkeypatch
 
     with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
          patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.mint_personal_token") as mock_mint_personal, \
          patch("aletheore.device_auth.resolve_installation") as mock_resolve, \
          patch("aletheore.device_auth.mint_cli_token") as mock_mint:
         mock_request_code.return_value = MagicMock(
@@ -2229,6 +2230,7 @@ def test_login_saves_token_when_installation_auto_resolved(tmp_path, monkeypatch
             user_code="ABCD-1234",
         )
         mock_poll.return_value = "gho_faketoken"
+        mock_mint_personal.return_value = "personal-token-value"
         mock_resolve.return_value = {"installation_id": 100, "account_login": "acme"}
         mock_mint.return_value = "aletheore-tok-xyz"
 
@@ -2257,6 +2259,7 @@ def test_login_acknowledges_an_already_saved_token_before_replacing_it(tmp_path,
 
     with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
          patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.mint_personal_token") as mock_mint_personal, \
          patch("aletheore.device_auth.resolve_installation") as mock_resolve, \
          patch("aletheore.device_auth.mint_cli_token") as mock_mint:
         mock_request_code.return_value = MagicMock(
@@ -2264,6 +2267,7 @@ def test_login_acknowledges_an_already_saved_token_before_replacing_it(tmp_path,
             user_code="ABCD-1234",
         )
         mock_poll.return_value = "gho_faketoken"
+        mock_mint_personal.return_value = "personal-token-value"
         mock_resolve.return_value = {"installation_id": 100, "account_login": "acme"}
         mock_mint.return_value = "aletheore-tok-new"
 
@@ -2283,6 +2287,7 @@ def test_login_prompts_when_installation_ambiguous(tmp_path, monkeypatch):
 
     with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
          patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.mint_personal_token") as mock_mint_personal, \
          patch("aletheore.device_auth.resolve_installation") as mock_resolve, \
          patch("aletheore.device_auth.mint_cli_token") as mock_mint:
         mock_request_code.return_value = MagicMock(
@@ -2290,6 +2295,7 @@ def test_login_prompts_when_installation_ambiguous(tmp_path, monkeypatch):
             user_code="ABCD-1234",
         )
         mock_poll.return_value = "gho_faketoken"
+        mock_mint_personal.return_value = "personal-token-value"
         mock_resolve.return_value = [
             {"installation_id": 100, "account_login": "acme"},
             {"installation_id": 200, "account_login": "other"},
@@ -2318,6 +2324,97 @@ def test_login_prints_error_and_exits_nonzero_on_device_flow_error():
 
     assert result.exit_code == 1
     assert "denied" in result.output
+
+
+def test_login_succeeds_with_zero_installations(tmp_path, monkeypatch):
+    # Regression: an account with no Aletheore GitHub App installation
+    # anywhere used to make the whole command exit 1. Skill Hub has no
+    # installation dependency, so login must still succeed.
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+
+    with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
+         patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.mint_personal_token") as mock_mint_personal, \
+         patch("aletheore.device_auth.resolve_installation") as mock_resolve, \
+         patch("aletheore.device_auth.mint_cli_token") as mock_mint:
+        mock_request_code.return_value = MagicMock(
+            verification_uri="https://github.com/login/device",
+            user_code="ABCD-1234",
+        )
+        mock_poll.return_value = "gho_faketoken"
+        mock_mint_personal.return_value = "personal-token-value"
+        mock_resolve.side_effect = DeviceFlowError("no paid Aletheore installations found")
+
+        result = runner.invoke(app, ["login"])
+
+    mock_mint.assert_not_called()
+    assert result.exit_code == 0
+    assert "logged in" in result.output.lower()
+    assert "no aletheore github app installation" in result.output.lower()
+
+
+def test_login_saves_personal_token_slot(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+
+    with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
+         patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.mint_personal_token") as mock_mint_personal, \
+         patch("aletheore.device_auth.resolve_installation") as mock_resolve, \
+         patch("aletheore.device_auth.mint_cli_token") as mock_mint:
+        mock_request_code.return_value = MagicMock(
+            verification_uri="https://github.com/login/device",
+            user_code="ABCD-1234",
+        )
+        mock_poll.return_value = "gho_faketoken"
+        mock_mint_personal.return_value = "personal-token-value"
+        mock_resolve.side_effect = DeviceFlowError("no paid Aletheore installations found")
+
+        runner.invoke(app, ["login"])
+
+    assert credentials.has_api_key(
+        "ALETHEORE_PERSONAL_TOKEN", "aletheore-personal", credentials_path=creds_path
+    )
+    saved = json.loads(creds_path.read_text())
+    assert saved["aletheore-personal"] == "personal-token-value"
+
+
+def test_login_still_fails_on_genuine_installation_lookup_error(tmp_path, monkeypatch):
+    # A real network error resolving installations (as opposed to "no
+    # installations found") must NOT be swallowed into a warning - it
+    # should still surface as a login failure.
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+
+    with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
+         patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.mint_personal_token") as mock_mint_personal, \
+         patch("aletheore.device_auth.resolve_installation") as mock_resolve:
+        mock_request_code.return_value = MagicMock(
+            verification_uri="https://github.com/login/device",
+            user_code="ABCD-1234",
+        )
+        mock_poll.return_value = "gho_faketoken"
+        mock_mint_personal.return_value = "personal-token-value"
+        mock_resolve.side_effect = httpx.ConnectError("boom")
+
+        result = runner.invoke(app, ["login"])
+
+    assert result.exit_code == 1
+    assert "boom" in result.output
+    # The personal token must still have been saved before the
+    # installation-resolution failure - that step has no installation
+    # dependency and should not be rolled back by a later failure.
+    assert credentials.has_api_key(
+        "ALETHEORE_PERSONAL_TOKEN", "aletheore-personal", credentials_path=creds_path
+    )
 
 
 def test_logout_clears_saved_token(tmp_path, monkeypatch):
@@ -2500,6 +2597,44 @@ def test_status_reports_unverifiable_token(tmp_path, monkeypatch):
 
     assert result.exit_code == 0
     assert "couldn't be verified" in result.output
+
+
+def test_status_shows_skill_hub_login_state_independent_of_installation(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    monkeypatch.delenv("ALETHEORE_API_TOKEN", raising=False)
+    credentials.save_api_token("aletheore-personal", "tok", creds_path)
+
+    with patch("aletheore.cli._check_for_update", return_value="up to date"), \
+         patch("aletheore.cli._fetch_whoami") as mock_whoami:
+        result = runner.invoke(app, ["status"])
+
+    # No managed-audit token was saved, so the existing installation check
+    # is untouched - it still reports "not logged in" and never calls
+    # whoami - while the new Skill Hub line independently reports logged
+    # in from the separate "aletheore-personal" slot.
+    mock_whoami.assert_not_called()
+    assert result.exit_code == 0
+    assert "not logged in" in result.output.lower()
+    assert "skill hub" in result.output.lower()
+    assert "skill hub: not logged in" not in result.output.lower()
+
+
+def test_status_shows_skill_hub_not_logged_in(monkeypatch):
+    import aletheore.credentials as credentials
+
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    monkeypatch.delenv("ALETHEORE_API_TOKEN", raising=False)
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", Path("/nonexistent/creds.json"))
+
+    with patch("aletheore.cli._check_for_update", return_value="up to date"):
+        result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "skill hub: not logged in" in result.output.lower()
 
 
 def test_main_query_imports_prints_result(tmp_path):

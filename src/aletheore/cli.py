@@ -2477,6 +2477,7 @@ def login() -> None:
     from aletheore.device_auth import (
         DeviceFlowError,
         mint_cli_token,
+        mint_personal_token,
         poll_for_access_token,
         request_device_code,
         resolve_installation,
@@ -2500,35 +2501,68 @@ def login() -> None:
         console.print("Waiting for authorization...")
         github_token = poll_for_access_token(code)
 
-        resolved = resolve_installation(github_token)
-        if isinstance(resolved, dict):
-            installation = resolved
-        else:
-            console.print("Multiple paid installations found - pick one:")
-            for index, candidate in enumerate(resolved, start=1):
-                console.print(f"  {index}. {candidate['account_login']}")
-            while True:
-                try:
-                    raw = input(f"Enter a number [1-{len(resolved)}]: ").strip()
-                except EOFError:
-                    console.print("[bold red]error:[/bold red] no interactive input to choose an installation")
-                    raise typer.Exit(code=1)
-                if raw.isdigit() and 1 <= int(raw) <= len(resolved):
-                    installation = resolved[int(raw) - 1]
-                    break
-                console.print(
-                    f"[bold red]error:[/bold red] enter a number between 1 and {len(resolved)}"
-                )
-
         label = f"{socket.gethostname()} (device flow)"
-        token = mint_cli_token(github_token, installation["installation_id"], label)
-        save_api_token("aletheore-managed-audit", token)
-        console.print(
-            f"[bold green]Logged in.[/bold green] Token saved for "
-            f"[bold]{installation['account_login']}[/bold]. "
-            "This replaces any previously saved token."
-        )
-        console.print(HOSTED_EMBEDDINGS_DISCLOSURE)
+
+        # Mint and save a personal token unconditionally, before any
+        # installation lookup. This has no dependency on an Aletheore
+        # GitHub App installation existing anywhere, so it must always
+        # succeed once the GitHub device-flow exchange itself succeeded -
+        # it is what lets an account with zero installations still log in
+        # for Skill Hub purposes below.
+        personal_token = mint_personal_token(github_token, label)
+        save_api_token("aletheore-personal", personal_token)
+
+        # Installation resolution (for the managed-audit token) is
+        # best-effort from here on: a GitHub account with no Aletheore
+        # installation must not make the whole command exit non-zero
+        # since the personal token above already satisfies login. Only
+        # the specific "no installations found" DeviceFlowError is
+        # downgraded to a warning here - any other failure in this block
+        # (a genuine network error, a bad response, etc.) still propagates
+        # to the outer handlers below exactly as before.
+        installation_account_login: str | None = None
+        try:
+            resolved = resolve_installation(github_token)
+            if isinstance(resolved, dict):
+                installation = resolved
+            else:
+                console.print("Multiple paid installations found - pick one:")
+                for index, candidate in enumerate(resolved, start=1):
+                    console.print(f"  {index}. {candidate['account_login']}")
+                while True:
+                    try:
+                        raw = input(f"Enter a number [1-{len(resolved)}]: ").strip()
+                    except EOFError:
+                        console.print("[bold red]error:[/bold red] no interactive input to choose an installation")
+                        raise typer.Exit(code=1)
+                    if raw.isdigit() and 1 <= int(raw) <= len(resolved):
+                        installation = resolved[int(raw) - 1]
+                        break
+                    console.print(
+                        f"[bold red]error:[/bold red] enter a number between 1 and {len(resolved)}"
+                    )
+
+            token = mint_cli_token(github_token, installation["installation_id"], label)
+            save_api_token("aletheore-managed-audit", token)
+            installation_account_login = installation["account_login"]
+        except DeviceFlowError:
+            console.print(
+                "[bold yellow]warning:[/bold yellow] No Aletheore GitHub App "
+                "installation found - install it for the full feature set; "
+                "you're logged in for Skill Hub."
+            )
+
+        if installation_account_login is not None:
+            console.print(
+                f"[bold green]Logged in.[/bold green] Token saved for "
+                f"[bold]{installation_account_login}[/bold]. "
+                "This replaces any previously saved token."
+            )
+            console.print(HOSTED_EMBEDDINGS_DISCLOSURE)
+        else:
+            console.print(
+                "[bold green]Logged in.[/bold green] Personal token saved for Skill Hub."
+            )
     except DeviceFlowError as exc:
         console.print(f"[bold red]error:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
@@ -2576,21 +2610,35 @@ def status() -> None:
         credentials_path=credentials.DEFAULT_CREDENTIALS_PATH,
     ):
         console.print("Not logged in - run [bold]aletheore login[/bold]")
-        return
-
-    token = credentials.get_api_key(
-        "ALETHEORE_API_TOKEN",
-        "aletheore-managed-audit",
-        credentials_path=credentials.DEFAULT_CREDENTIALS_PATH,
-        prompt_fn=lambda _msg: "",
-    )
-    who = _fetch_whoami(token)
-    if who is None:
-        console.print("A token is saved locally, but it couldn't be verified right now.")
     else:
-        console.print(
-            f"Logged in as: [bold]{who.get('account_login', '?')}[/bold] ({who.get('plan', '?')} plan)"
+        token = credentials.get_api_key(
+            "ALETHEORE_API_TOKEN",
+            "aletheore-managed-audit",
+            credentials_path=credentials.DEFAULT_CREDENTIALS_PATH,
+            prompt_fn=lambda _msg: "",
         )
+        who = _fetch_whoami(token)
+        if who is None:
+            console.print("A token is saved locally, but it couldn't be verified right now.")
+        else:
+            console.print(
+                f"Logged in as: [bold]{who.get('account_login', '?')}[/bold] ({who.get('plan', '?')} plan)"
+            )
+
+    # Independent of the managed-audit/installation check above: Skill Hub
+    # login only needs the personal token slot, which login() now always
+    # saves regardless of whether any Aletheore GitHub App installation
+    # was found. No network round-trip here (unlike the whoami call
+    # above) - there is no installation-scoped identity endpoint for a
+    # bare personal token, so this is a purely local presence check.
+    if credentials.has_api_key(
+        "ALETHEORE_PERSONAL_TOKEN",
+        "aletheore-personal",
+        credentials_path=credentials.DEFAULT_CREDENTIALS_PATH,
+    ):
+        console.print("Skill Hub: logged in")
+    else:
+        console.print("Skill Hub: not logged in - run [bold]aletheore login[/bold]")
 
 
 def main() -> None:
