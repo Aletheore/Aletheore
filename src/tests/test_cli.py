@@ -2468,6 +2468,123 @@ def test_logout_clears_saved_token(tmp_path, monkeypatch):
     )
 
 
+def _invoke_login_with_mocks(*, mint_personal_side_effect=None, resolve_side_effect=None, resolve_return=None):
+    with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
+         patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.mint_personal_token") as mock_mint_personal, \
+         patch("aletheore.device_auth.resolve_installation") as mock_resolve, \
+         patch("aletheore.device_auth.mint_cli_token") as mock_mint:
+        mock_request_code.return_value = MagicMock(
+            verification_uri="https://github.com/login/device",
+            user_code="ABCD-1234",
+        )
+        mock_poll.return_value = "gho_faketoken"
+        mock_mint_personal.return_value = "personal-token-value"
+        if mint_personal_side_effect is not None:
+            mock_mint_personal.side_effect = mint_personal_side_effect
+        if resolve_side_effect is not None:
+            mock_resolve.side_effect = resolve_side_effect
+        else:
+            mock_resolve.return_value = resolve_return
+        mock_mint.return_value = "managed-token-value"
+        return runner.invoke(app, ["login"])
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        httpx.ConnectError("skill hub down"),
+        httpx.HTTPStatusError(
+            "404 Not Found",
+            request=httpx.Request("POST", "https://api.aletheore.com/v1/personal-tokens"),
+            response=httpx.Response(404),
+        ),
+        httpx.ReadTimeout("slow"),
+    ],
+)
+def test_login_succeeds_for_paid_user_when_personal_token_mint_fails(tmp_path, monkeypatch, failure):
+    # Regression: a failing Skill Hub personal-token mint (network error, a
+    # 404 before the endpoint is deployed, a timeout) used to abort the whole
+    # login, blocking a paid user's normal managed-audit login.
+    import aletheore.credentials as credentials
+    from aletheore import skill_hub_sync
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    pull_calls = []
+    monkeypatch.setattr(skill_hub_sync, "pull_merge_custom_skills", lambda **kw: pull_calls.append(True))
+
+    result = _invoke_login_with_mocks(
+        mint_personal_side_effect=failure,
+        resolve_return={"installation_id": 7, "account_login": "acme"},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "skill hub personal login unavailable" in result.output.lower()
+    assert "acme" in result.output
+    saved = json.loads(creds_path.read_text())
+    assert saved["aletheore-managed-audit"] == "managed-token-value"
+    assert "aletheore-personal" not in saved
+    # No personal token, so nothing to pull-merge with.
+    assert pull_calls == []
+
+
+def test_login_with_personal_mint_failure_and_no_installation_fails_honestly(tmp_path, monkeypatch):
+    # Nothing was saved at all (no personal token, no installation token),
+    # so login must not claim success or a Skill Hub login.
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+
+    result = _invoke_login_with_mocks(
+        mint_personal_side_effect=httpx.ConnectError("down"),
+        resolve_side_effect=DeviceFlowError("no paid Aletheore installations found"),
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "skill hub personal login unavailable" in result.output.lower()
+    assert "nothing was saved" in result.output.lower()
+    assert "you're logged in for skill hub" not in result.output.lower()
+    assert not credentials.has_api_key(
+        "ALETHEORE_PERSONAL_TOKEN", "aletheore-personal", credentials_path=creds_path
+    )
+
+
+def test_logout_clears_the_skill_hub_personal_slot_too(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    credentials.save_api_token("aletheore-managed-audit", "tok-123", creds_path)
+    credentials.save_api_token("aletheore-personal", "personal-123", creds_path)
+
+    result = runner.invoke(app, ["logout"])
+
+    assert result.exit_code == 0
+    assert not credentials.has_api_key(
+        "ALETHEORE_PERSONAL_TOKEN", "aletheore-personal", credentials_path=creds_path
+    )
+    assert not credentials.has_api_key(
+        "UNUSED_ENV", "aletheore-managed-audit", credentials_path=creds_path
+    )
+
+
+def test_logout_with_only_a_personal_token_saved_reports_logged_out(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    credentials.save_api_token("aletheore-personal", "personal-123", creds_path)
+
+    result = runner.invoke(app, ["logout"])
+
+    assert result.exit_code == 0
+    assert "logged out" in result.stdout.lower()
+    assert "not logged in" not in result.stdout.lower()
+
+
 def test_logout_when_not_logged_in_says_so(tmp_path, monkeypatch):
     import aletheore.credentials as credentials
 
@@ -3436,6 +3553,44 @@ def test_skill_hub_get_prints_content():
     result = runner.invoke(app, ["skill-hub", "get", "code-review/security-focused"])
     assert result.exit_code == 0
     assert "security" in result.stdout.lower()
+
+
+def test_skill_hub_get_output_is_byte_identical_to_the_skill_body():
+    # Real bug: `console.print(skill.content)` ran the body through Rich's
+    # markup parser and line wrapper, which silently deleted bracketed text
+    # like the "[borkweb/skills]" attribution link in this exact skill and
+    # hard-wrapped every line past 80 columns. The output must be the raw
+    # SKILL.md body, unchanged.
+    import re
+
+    skill_path = skill_hub.bundled_skills_dir() / "code-review" / "security-focused" / "SKILL.md"
+    body = re.match(r"\A---\n.*?\n---\n(.*)\Z", skill_path.read_text(encoding="utf-8"), re.DOTALL).group(1)
+    assert "[borkweb/skills]" in body  # guard: the test case still exercises the bug
+
+    result = runner.invoke(app, ["skill-hub", "get", "code-review/security-focused"])
+
+    assert result.exit_code == 0
+    assert result.stdout == body
+
+
+def test_skill_hub_get_does_not_crash_on_markup_shaped_content(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    (tmp_path / "weird.md").write_text("close tag with no opener: [/bold] and [red]x\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["skill-hub", "get", "custom/weird"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "close tag with no opener: [/bold] and [red]x\n"
+
+
+def test_skill_hub_list_prints_titles_without_markup_interpretation(monkeypatch):
+    fake = [skill_hub.SkillMeta(skill_id="custom/x", category="custom", title="[/bold] [vendor/repo] title", description="")]
+    monkeypatch.setattr(skill_hub, "list_skills", lambda category=None: fake)
+
+    result = runner.invoke(app, ["skill-hub", "list"])
+
+    assert result.exit_code == 0
+    assert "custom/x  [/bold] [vendor/repo] title" in result.stdout
 
 
 def test_skill_hub_get_unknown_id_nonzero_exit():

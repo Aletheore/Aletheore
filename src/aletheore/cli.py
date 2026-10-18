@@ -2446,8 +2446,10 @@ app.add_typer(skill_hub_app, name="skill-hub")
 def skill_hub_list(
     category: Optional[str] = typer.Option(None, "--category", help="filter to one category"),
 ) -> None:
+    # typer.echo, not console.print: titles come from skill frontmatter (or a
+    # custom skill's file name) and must not be parsed as Rich markup.
     for meta in skill_hub.list_skills(category):
-        console.print(f"{meta.skill_id}  {meta.title}")
+        typer.echo(f"{meta.skill_id}  {meta.title}")
 
 
 @skill_hub_app.command("get", help="print a skill's content")
@@ -2457,7 +2459,12 @@ def skill_hub_get(skill_id: str) -> None:
     except skill_hub.SkillNotFoundError as exc:
         console.print(f"[bold red]error:[/bold red] skill not found: {exc}")
         raise typer.Exit(code=1) from exc
-    console.print(skill.content)
+    # Raw write, not console.print: Rich would parse the body as markup
+    # (deleting bracketed text like "[borkweb/skills]", or raising
+    # MarkupError on a stray "[/x]") and hard-wrap long lines. The output
+    # must be the skill body byte for byte, so no extra newline either when
+    # the body already ends with one.
+    typer.echo(skill.content, nl=not skill.content.endswith("\n"))
 
 
 @skill_hub_app.command("add", help="add a custom skill from a local file")
@@ -2503,27 +2510,38 @@ def login() -> None:
 
         label = f"{socket.gethostname()} (device flow)"
 
-        # Mint and save a personal token unconditionally, before any
-        # installation lookup. This has no dependency on an Aletheore
-        # GitHub App installation existing anywhere, so it must always
-        # succeed once the GitHub device-flow exchange itself succeeded -
+        # Mint and save a personal token before any installation lookup.
+        # This has no dependency on an Aletheore GitHub App installation, so
         # it is what lets an account with zero installations still log in
-        # for Skill Hub purposes below.
-        personal_token = mint_personal_token(github_token, label)
-        save_api_token("aletheore-personal", personal_token)
+        # for Skill Hub purposes. It is best-effort, though: a Skill Hub
+        # failure (network error, the endpoint 404ing before it is deployed,
+        # a timeout, the per-account token cap or rate limit) must never
+        # block a paid user's managed-audit login below, so any failure here
+        # is a warning and the installation block still runs.
+        personal_token_saved = False
+        try:
+            personal_token = mint_personal_token(github_token, label)
+            save_api_token("aletheore-personal", personal_token)
+            personal_token_saved = True
+        except Exception as exc:  # noqa: BLE001 - best-effort by design
+            console.print(
+                "[bold yellow]warning:[/bold yellow] Skill Hub personal login unavailable "
+                f"right now ({type(exc).__name__}) - continuing without it."
+            )
 
-        # Pull-merge custom skills from the server now that a personal token
-        # exists. Never raises (see skill_hub_sync), so it cannot affect the
-        # login outcome; it runs unconditionally, outside the installation
-        # block below.
-        from aletheore import skill_hub_sync
+        if personal_token_saved:
+            # Pull-merge custom skills from the server now that a personal
+            # token exists. Never raises (see skill_hub_sync), so it cannot
+            # affect the login outcome. Skipped without a personal token:
+            # there is nothing to pull or push with.
+            from aletheore import skill_hub_sync
 
-        skill_hub_sync.pull_merge_custom_skills()
+            skill_hub_sync.pull_merge_custom_skills()
 
         # Installation resolution (for the managed-audit token) is
         # best-effort from here on: a GitHub account with no Aletheore
         # installation must not make the whole command exit non-zero
-        # since the personal token above already satisfies login. Only
+        # when the personal token above already satisfies login. Only
         # the specific "no installations found" DeviceFlowError is
         # downgraded to a warning here - any other failure in this block
         # (a genuine network error, a bad response, etc.) still propagates
@@ -2554,6 +2572,15 @@ def login() -> None:
             save_api_token("aletheore-managed-audit", token)
             installation_account_login = installation["account_login"]
         except DeviceFlowError:
+            if not personal_token_saved:
+                # Neither token was saved, so nothing about this login
+                # succeeded - say so instead of claiming a Skill Hub login.
+                console.print(
+                    "[bold red]error:[/bold red] No Aletheore GitHub App installation "
+                    "found, and Skill Hub login is unavailable right now - nothing "
+                    "was saved. Retry in a moment."
+                )
+                raise typer.Exit(code=1)
             console.print(
                 "[bold yellow]warning:[/bold yellow] No Aletheore GitHub App "
                 "installation found - install it for the full feature set; "
@@ -2579,16 +2606,19 @@ def login() -> None:
         raise typer.Exit(code=1) from exc
 
 
-@app.command(help="clear the locally saved managed-audit API token")
+@app.command(help="clear the locally saved managed-audit and Skill Hub tokens")
 def logout() -> None:
     import aletheore.credentials as credentials
 
-    removed = credentials.clear_api_key(
-        "aletheore-managed-audit",
-        credentials_path=credentials.DEFAULT_CREDENTIALS_PATH,
-    )
-    if removed:
-        console.print("[bold green]Logged out.[/bold green] Saved token removed.")
+    # Both slots: the managed-audit token and the Skill Hub personal token.
+    # status() reports them independently, and a user running logout
+    # expects to be logged out of both.
+    removed_any = False
+    for slot in ("aletheore-managed-audit", "aletheore-personal"):
+        if credentials.clear_api_key(slot, credentials_path=credentials.DEFAULT_CREDENTIALS_PATH):
+            removed_any = True
+    if removed_any:
+        console.print("[bold green]Logged out.[/bold green] Saved tokens removed.")
     else:
         console.print("Not logged in - nothing to clear.")
 
