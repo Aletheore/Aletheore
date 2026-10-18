@@ -29,6 +29,7 @@ uvicorn) importable in one process, which is exactly what
 github-app/.venv-skillhub/ was built for.
 """
 
+import hashlib
 import logging
 import socket
 import threading
@@ -278,3 +279,259 @@ async def test_add_on_one_machine_appears_after_login_on_another(
     monkeypatch.setattr(httpx, "put", _network_disabled)
 
     assert skill_hub.get_skill("custom/cross-machine-skill").content == "content from A"
+
+
+# ---
+# Task 7: integration tests for the deletion/revocation behaviors built in
+# Tasks 4-6: the pending-delete tombstone surviving a pull-merge (deletion
+# must survive this machine's own resync), and logout's server-side token
+# revocation (self and --all-devices) against the real live server.
+#
+# Same machinery as the original cross-machine test above: the real client
+# modules, the real live server fixture, real Postgres state checked via
+# `pool`. The one new mocking seam is logout's CLI entry point, which runs
+# under typer's CliRunner exactly as src/tests/test_cli.py's own logout
+# tests do.
+# ---
+
+from aletheore.cli import app as cli_app
+from typer.testing import CliRunner
+
+
+def _confirm_token_works(live_skill_hub_server: str, token: str) -> None:
+    """Proves the raw token really authenticates against the real live
+    server BEFORE the test revokes it - the precondition that makes the
+    later 401 assertion meaningful (an assertion on a token that never
+    worked can't fail for the right reason)."""
+    response = httpx.get(
+        f"{live_skill_hub_server}/v1/custom-skills",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200, (
+        f"token should authenticate before revocation, got {response.status_code}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_remove_then_relogin_does_not_resurrect_the_skill(
+    tmp_path_factory, pool, monkeypatch, live_skill_hub_server
+):
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+
+    _mock_fixed_github_identity(monkeypatch)
+    monkeypatch.setattr(skill_hub_sync, "DEFAULT_API_BASE_URL", live_skill_hub_server)
+
+    machine = tmp_path_factory.mktemp("resurrect_machine")
+    monkeypatch.setattr(skill_hub, "user_home", lambda: machine)
+    monkeypatch.setattr(
+        credentials, "DEFAULT_CREDENTIALS_PATH", machine / ".config" / "aletheore" / "credentials.json"
+    )
+
+    token = device_auth.mint_personal_token(
+        github_token="fake-github-oauth-token-resurrect",
+        label="resurrect-machine (device flow)",
+        api_base_url=live_skill_hub_server,
+    )
+    credentials.save_api_token("aletheore-personal", token)
+
+    # Add a custom skill and confirm it really landed server-side (same
+    # real-Postgres confirmation the original cross-machine test uses).
+    skill_hub.add_custom_skill("doomed-skill", "content doomed to be deleted")
+    row = await pool.fetchrow(
+        "SELECT content FROM custom_skills WHERE skill_name = 'doomed-skill'"
+    )
+    assert row is not None, "push_custom_skill_best_effort did not land the skill server-side"
+
+    # Remove it, but force the delete call to fail once (simulating an
+    # offline machine) so the pending-delete tombstone path is what gets
+    # exercised - not a delete that cleanly reached the server.
+    def _offline_delete(*_args, **_kwargs):
+        raise httpx.ConnectError("simulated offline machine")
+
+    # Scoped, NOT monkeypatch.undo(): undo would also revert the temp-home,
+    # credentials-path and server-URL redirects set up above, and the rest of
+    # this test would then run against the developer's real config directory
+    # and the real production API host.
+    with monkeypatch.context() as offline:
+        offline.setattr(skill_hub_sync.httpx, "delete", _offline_delete)
+        skill_hub.remove_custom_skill("doomed-skill")
+
+    # The local file is gone and the tombstone is recorded, but the server
+    # still has the row (the delete never reached it).
+    assert skill_hub.read_custom_skill_file("doomed-skill") is None
+    assert "doomed-skill" in skill_hub_sync._load_pending_deletes()
+    row = await pool.fetchrow(
+        "SELECT content FROM custom_skills WHERE skill_name = 'doomed-skill'"
+    )
+    assert row is not None, "the simulated-offline delete must not have reached the server"
+
+    # "Re-login": the same machine runs pull_merge_custom_skills again, as
+    # login does (cli.py's login calls it right after saving a personal
+    # token). The flush retries the delete - now unmocked, so it reaches
+    # the real server - and branch 1 ("local missing -> pull") must stay
+    # suppressed for this name even though the server's list (fetched
+    # before the flush's effect was visible) still contains it.
+    skill_hub_sync.pull_merge_custom_skills()
+
+    # The skill must still be absent locally - NOT resurrected by branch 1.
+    assert skill_hub.read_custom_skill_file("doomed-skill") is None, (
+        "pull_merge_custom_skills resurrected a skill this machine deleted"
+    )
+    assert skill_hub.list_custom_skill_names() == []
+
+    # And server-side, the retried delete must have actually removed the
+    # row - real Postgres, not just the client's own view.
+    row = await pool.fetchrow(
+        "SELECT content FROM custom_skills WHERE skill_name = 'doomed-skill'"
+    )
+    assert row is None, "the tombstone flush did not delete the skill server-side"
+    assert "doomed-skill" not in skill_hub_sync._load_pending_deletes()
+
+
+@pytest.mark.asyncio
+async def test_logout_revoked_token_cannot_be_used_again(
+    tmp_path_factory, pool, monkeypatch, live_skill_hub_server
+):
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+
+    _mock_fixed_github_identity(monkeypatch)
+
+    machine = tmp_path_factory.mktemp("logout_machine")
+    monkeypatch.setattr(skill_hub, "user_home", lambda: machine)
+    monkeypatch.setattr(
+        credentials, "DEFAULT_CREDENTIALS_PATH", machine / ".config" / "aletheore" / "credentials.json"
+    )
+
+    # Mint a real personal token via the real endpoint chain (the same
+    # mint_personal_token -> POST /v1/personal-tokens call login makes).
+    token = device_auth.mint_personal_token(
+        github_token="fake-github-oauth-token-logout",
+        label="logout-machine (device flow)",
+        api_base_url=live_skill_hub_server,
+    )
+    credentials.save_api_token("aletheore-personal", token)
+
+    # Prove the token works before logout, so the post-logout 401 below
+    # can only be explained by the revocation itself.
+    _confirm_token_works(live_skill_hub_server, token)
+
+    # Run the real `logout` command. It reads the token from the (machine-
+    # scoped) credentials file and calls revoke_personal_token, whose
+    # api_base_url default points at the real production host - point that
+    # default at the live test server instead, exactly as the sync module
+    # is pointed in the test above.
+    monkeypatch.setattr(
+        device_auth.revoke_personal_token,
+        "__defaults__",
+        (False, live_skill_hub_server, None),
+    )
+
+    result = CliRunner().invoke(cli_app, ["logout"])
+    assert result.exit_code == 0, result.output
+
+    # The local credential is gone...
+    assert not credentials.has_api_key(
+        "ALETHEORE_PERSONAL_TOKEN", "aletheore-personal", credentials_path=credentials.DEFAULT_CREDENTIALS_PATH
+    )
+
+    # ...and the same raw token is now rejected by the real live server.
+    response = httpx.get(
+        f"{live_skill_hub_server}/v1/custom-skills",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 401, (
+        f"a revoked token must be rejected by the server, got {response.status_code}"
+    )
+
+    # Server-side, the token row is really revoked in Postgres.
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    row = await pool.fetchrow(
+        "SELECT revoked_at FROM personal_api_tokens WHERE token_hash = $1", token_hash
+    )
+    assert row is not None, "logout's revoke never touched this token's row"
+    assert row["revoked_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_logout_all_devices_invalidates_a_second_machines_token(
+    tmp_path_factory, pool, monkeypatch, live_skill_hub_server
+):
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+
+    _mock_fixed_github_identity(monkeypatch)
+
+    # Two machines, same fake GitHub identity (so both tokens belong to one
+    # personal_identities row server-side), each with its own real minted
+    # token - mirroring the original cross-machine test's two-machine setup.
+    machine_a = tmp_path_factory.mktemp("all_devices_machine_a")
+    monkeypatch.setattr(skill_hub, "user_home", lambda: machine_a)
+    monkeypatch.setattr(
+        credentials, "DEFAULT_CREDENTIALS_PATH", machine_a / ".config" / "aletheore" / "credentials.json"
+    )
+    token_a = device_auth.mint_personal_token(
+        github_token="fake-github-oauth-token-all-devices-a",
+        label="machine-a (device flow)",
+        api_base_url=live_skill_hub_server,
+    )
+    credentials.save_api_token("aletheore-personal", token_a)
+
+    machine_b = tmp_path_factory.mktemp("all_devices_machine_b")
+    monkeypatch.setattr(skill_hub, "user_home", lambda: machine_b)
+    monkeypatch.setattr(
+        credentials, "DEFAULT_CREDENTIALS_PATH", machine_b / ".config" / "aletheore" / "credentials.json"
+    )
+    token_b = device_auth.mint_personal_token(
+        github_token="fake-github-oauth-token-all-devices-b",
+        label="machine-b (device flow)",
+        api_base_url=live_skill_hub_server,
+    )
+    assert token_b != token_a
+    credentials.save_api_token("aletheore-personal", token_b)
+
+    # Both tokens genuinely work before the revoke-all.
+    _confirm_token_works(live_skill_hub_server, token_a)
+    _confirm_token_works(live_skill_hub_server, token_b)
+
+    # Machine A logs out with --all-devices: revoke every personal token on
+    # the identity, not just its own.
+    monkeypatch.setattr(skill_hub, "user_home", lambda: machine_a)
+    monkeypatch.setattr(
+        credentials, "DEFAULT_CREDENTIALS_PATH", machine_a / ".config" / "aletheore" / "credentials.json"
+    )
+    monkeypatch.setattr(
+        device_auth.revoke_personal_token,
+        "__defaults__",
+        (False, live_skill_hub_server, None),
+    )
+
+    result = CliRunner().invoke(cli_app, ["logout", "--all-devices"])
+    assert result.exit_code == 0, result.output
+
+    # Machine A's own token is revoked (it authenticated the revoke-all)...
+    response_a = httpx.get(
+        f"{live_skill_hub_server}/v1/custom-skills",
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert response_a.status_code == 401, (
+        f"machine A's own token must be revoked too, got {response_a.status_code}"
+    )
+
+    # ...and so is machine B's - the whole point of --all-devices.
+    response_b = httpx.get(
+        f"{live_skill_hub_server}/v1/custom-skills",
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+    assert response_b.status_code == 401, (
+        f"--all-devices must invalidate the other machine's token too, got {response_b.status_code}"
+    )
+
+    # Real Postgres: every token row for this identity is revoked.
+    identity = await pool.fetchrow(
+        "SELECT id FROM personal_identities WHERE github_user_id = $1", _FAKE_GITHUB_USER_ID
+    )
+    assert identity is not None
+    unrevoked = await pool.fetchval(
+        "SELECT count(*) FROM personal_api_tokens WHERE personal_identity_id = $1 AND revoked_at IS NULL",
+        identity["id"],
+    )
+    assert unrevoked == 0, f"{unrevoked} token(s) for the identity survived --all-devices"
