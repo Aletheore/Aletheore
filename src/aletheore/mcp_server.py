@@ -460,7 +460,7 @@ def _stop_search_process(process) -> None:
 #      the tool list and cannot be called at all.
 # ---------------------------------------------------------------------------
 
-EFFECT_WRITE = "write"  # writes files under the repo
+EFFECT_WRITE = "write"  # writes files: under the repo (.aletheore/ evidence) or the user's home config dir (custom skills)
 EFFECT_NETWORK = "network"  # outbound requests (OSV, registries, health probes, embeddings)
 EFFECT_EXTERNAL = "external"  # transmits repository evidence to a third-party service
 
@@ -923,7 +923,7 @@ def _register_skill_hub_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
     # (like aletheore_list/aletheore_overview) they're registered
     # unconditionally rather than gated through TOOL_REQUIRED_EFFECTS -
     # aletheore_add_custom_skill is the one skill-hub tool that writes, and is
-    # registered separately, gated on the write effect, below.
+    # registered separately, gated on the write and network effects, below.
     @mcp_instance.tool(name="aletheore_list_skills", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_list_skills(category: str | None = None) -> str:
         """Lists available skills (bundled/curated plus local custom skills),
@@ -948,9 +948,11 @@ def _register_skill_hub_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
 def _register_add_custom_skill_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     # Writes under the user's home config directory (not under repo_path -
     # custom skills are local-user-scoped, not repo-scoped), but it's still a
-    # filesystem write an agent could trigger unprompted, so it's gated the
-    # same way aletheore_scan/aletheore_index are: behind the `write` effect,
-    # absent (not merely refusing) unless permitted.
+    # filesystem write an agent could trigger unprompted, and when a Skill
+    # Hub personal token is saved it also pushes the skill over the network,
+    # so it's gated the same way aletheore_scan/aletheore_index are: behind
+    # the `write` and `network` effects, absent (not merely refusing) unless
+    # both are permitted.
     @mcp_instance.tool(
         name="aletheore_add_custom_skill",
         # Matches aletheore_scan's annotations: every gated (effectful) tool in
@@ -1487,7 +1489,9 @@ TOOL_REQUIRED_EFFECTS: dict[str, frozenset[str]] = {
     "aletheore_index": frozenset({EFFECT_WRITE, EFFECT_NETWORK}),
     "aletheore_answer": frozenset({EFFECT_NETWORK}),
     "aletheore_managed_audit": frozenset({EFFECT_EXTERNAL, EFFECT_NETWORK}),
-    "aletheore_add_custom_skill": frozenset({EFFECT_WRITE}),
+    # Network too: skill_hub.add_custom_skill pushes the skill to the user's
+    # Skill Hub account whenever a personal token is saved.
+    "aletheore_add_custom_skill": frozenset({EFFECT_WRITE, EFFECT_NETWORK}),
 }
 
 
