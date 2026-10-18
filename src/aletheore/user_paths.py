@@ -38,16 +38,29 @@ def _trusted_private_dir(path: Path) -> Path | None:
     before this check existed) would otherwise pass the other checks and
     be trusted anyway."""
     try:
-        path.mkdir(mode=0o700, exist_ok=True)
+        try:
+            path.mkdir(mode=0o700)
+            just_created = True
+        except FileExistsError:
+            just_created = False
+        if not hasattr(os, "getuid"):
+            # Real gap found via audit: mkdir's mode argument (and st_mode
+            # on lstat) isn't meaningful on Windows at all - NTFS has no
+            # POSIX ownership/permission bits for os.stat to read, so the
+            # ownership/mode checks below used to short-circuit to True
+            # unconditionally here, trusting ANY pre-existing directory at
+            # this guessable path (not even per-user-unique: `uid` is the
+            # literal string "user" when os.getuid is absent) with zero
+            # verification. The only thing actually trustworthy on
+            # Windows is a directory THIS call just created - never one
+            # that already existed, which could have been planted by a
+            # different account first.
+            if path.is_symlink() or not path.is_dir() or not just_created:
+                return None
+            return path
         info = path.lstat()
-        # mkdir's mode argument (and st_mode on lstat) isn't meaningful on
-        # Windows - NTFS doesn't have POSIX permission bits, so mkdir never
-        # actually sets 0o700 there and this check would always fail,
-        # silently abandoning the deterministic path for the random mkdtemp
-        # one every time. Same guard as the ownership check just below,
-        # which already special-cases "no os.getuid" for the same reason.
-        owned = not hasattr(os, "getuid") or info.st_uid == os.getuid()
-        private_mode = not hasattr(os, "getuid") or stat.S_IMODE(info.st_mode) == 0o700
+        owned = info.st_uid == os.getuid()
+        private_mode = stat.S_IMODE(info.st_mode) == 0o700
         if path.is_symlink() or not path.is_dir() or not owned or not private_mode:
             return None
         return path

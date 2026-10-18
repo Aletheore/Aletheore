@@ -4,6 +4,8 @@ from pathlib import Path
 
 from sse_starlette.sse import EventSourceResponse
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.routing import Route
 
@@ -260,7 +262,19 @@ def build_app(repo_path: Path) -> Starlette:
             Route("/favicon.ico", favicon),
             Route("/apple-touch-icon.png", favicon),
             Route("/apple-touch-icon-precomposed.png", favicon),
-        ]
+        ],
+        # Real gap found via audit: this server binds only to 127.0.0.1
+        # (cli.py's _dashboard), but with no Host check, a DNS-rebinding
+        # page (first served from an attacker-controlled domain, then
+        # re-resolved to 127.0.0.1 after the browser has already loaded
+        # it) could still reach every route here with a forged Host/Origin
+        # - confirmed directly: a request with Host/Origin set to an
+        # attacker domain got a normal 200 with the full evidence JSON.
+        # Only a real browser pointed at this exact loopback address sends
+        # a Host header of "127.0.0.1"/"localhost" - rejecting anything
+        # else is the same mitigation webpack-dev-server, Django's
+        # runserver, and most local dev servers use for this exact class.
+        middleware=[Middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])],
     )
     app.state.shutdown_event = shutdown_event
     return app

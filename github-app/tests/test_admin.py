@@ -49,7 +49,7 @@ from app_server.paddle_pricing import EXTRA_SEAT_PRICE_ID
 
 
 async def _logged_in_client(pool, monkeypatch, installation_id=100, plan="air"):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     await upsert_installation(pool, installation_id, "octocat")
     await set_installation_plan(pool, installation_id, plan)
     await insert_repo_history(
@@ -64,7 +64,7 @@ async def _logged_in_client(pool, monkeypatch, installation_id=100, plan="air"):
         "sess-1",
         42,
         "octocat",
-        encrypt_access_token("gho_faketoken", "test-session-secret"),
+        encrypt_access_token("gho_faketoken", "test-session-secret-at-least-32-characters-long"),
         datetime.now(timezone.utc) + timedelta(hours=1),
     )
 
@@ -93,7 +93,7 @@ async def _logged_in_client(pool, monkeypatch, installation_id=100, plan="air"):
     monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
 
     app.state.db_pool = pool
-    signed = sign_session_id("sess-1", "test-session-secret")
+    signed = sign_session_id("sess-1", "test-session-secret-at-least-32-characters-long")
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed})
 
@@ -134,15 +134,15 @@ async def _mock_github_installations(monkeypatch, installation_ids: list[int], g
 async def _create_session_with_tokens(
     pool, monkeypatch, session_id, access_token, refresh_token=None
 ):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     await create_session(
         pool,
         session_id,
         42,
         "octocat",
-        encrypt_access_token(access_token, "test-session-secret"),
+        encrypt_access_token(access_token, "test-session-secret-at-least-32-characters-long"),
         datetime.now(timezone.utc) + timedelta(hours=1),
-        refresh_token=encrypt_access_token(refresh_token, "test-session-secret") if refresh_token else None,
+        refresh_token=encrypt_access_token(refresh_token, "test-session-secret-at-least-32-characters-long") if refresh_token else None,
     )
     return {
         "id": session_id,
@@ -196,7 +196,7 @@ async def test_administered_ids_for_session_succeeds_without_refresh_when_token_
     assert ids == {1, 2}
     # Untouched - no refresh was needed.
     row = await get_session(pool, "sess-valid")
-    assert decrypt_access_token(row["github_access_token"], "test-session-secret") == "gho_valid"
+    assert decrypt_access_token(row["github_access_token"], "test-session-secret-at-least-32-characters-long") == "gho_valid"
 
 
 @pytest.mark.asyncio
@@ -227,8 +227,8 @@ async def test_administered_ids_for_session_refreshes_and_retries_on_401(pool, m
     assert ids == {7}
 
     row = await get_session(pool, "sess-refresh")
-    assert decrypt_access_token(row["github_access_token"], "test-session-secret") == "gho_fresh"
-    assert decrypt_access_token(row["github_refresh_token"], "test-session-secret") == "ghr_rotated"
+    assert decrypt_access_token(row["github_access_token"], "test-session-secret-at-least-32-characters-long") == "gho_fresh"
+    assert decrypt_access_token(row["github_refresh_token"], "test-session-secret-at-least-32-characters-long") == "ghr_rotated"
 
 
 @pytest.mark.asyncio
@@ -256,7 +256,7 @@ async def test_administered_ids_for_session_keeps_old_refresh_token_if_github_om
     await _administered_installation_ids_for_session_or_401(pool, session)
 
     row = await get_session(pool, "sess-norotate")
-    assert decrypt_access_token(row["github_refresh_token"], "test-session-secret") == "ghr_stillgood"
+    assert decrypt_access_token(row["github_refresh_token"], "test-session-secret-at-least-32-characters-long") == "ghr_stillgood"
 
 
 @pytest.mark.asyncio
@@ -1538,10 +1538,10 @@ async def _second_session_client(monkeypatch, github_user_id: int, login: str, s
         session_id,
         github_user_id,
         login,
-        encrypt_access_token("gho_faketoken2", "test-session-secret"),
+        encrypt_access_token("gho_faketoken2", "test-session-secret-at-least-32-characters-long"),
         datetime.now(timezone.utc) + timedelta(hours=1),
     )
-    signed = sign_session_id(session_id, "test-session-secret")
+    signed = sign_session_id(session_id, "test-session-secret-at-least-32-characters-long")
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed})
 
@@ -1572,7 +1572,7 @@ async def test_admin_page_rejects_an_unadministered_installation_with_the_same_4
     await _logged_in_client(pool, monkeypatch)  # sets up installation 100 + real repo_history
     await _mock_github_installations(monkeypatch, [999])  # this session administers 999, not 100
 
-    signed = sign_session_id("sess-1", "test-session-secret")
+    signed = sign_session_id("sess-1", "test-session-secret-at-least-32-characters-long")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed}) as client:
         response = await client.get("/admin/octocat/hello-world")

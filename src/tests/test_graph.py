@@ -1136,3 +1136,119 @@ def test_build_module_graph_java_package_private_class_is_not_public(tmp_path):
     symbols = _java_symbols(repo)
 
     assert symbols["Internal"]["is_public"] is False
+
+
+def test_python_from_import_of_exported_class_does_not_match_module_by_case(tmp_path, monkeypatch):
+    # sympy: `from sympy.physics.vector import Point` where Point is a class
+    # exported by vector/__init__.py and the real module is vector/point.py.
+    # On a case-insensitive filesystem (macOS) Path.exists() for
+    # vector/Point.py is True, so the name was wrongly treated as a submodule.
+    repo = tmp_path / "repo"
+    vector = repo / "pkg" / "vector"
+    vector.mkdir(parents=True)
+    (repo / "pkg" / "__init__.py").write_text("")
+    (vector / "__init__.py").write_text("from .point import Point\n")
+    (vector / "point.py").write_text("class Point:\n    pass\n")
+    (repo / "pkg" / "body.py").write_text("from pkg.vector import Point\n")
+
+    # Simulate a case-insensitive filesystem on any host.
+    real_exists = Path.exists
+
+    def insensitive_exists(self, *args, **kwargs):
+        if real_exists(self, *args, **kwargs):
+            return True
+        parent = self.parent
+        if not real_exists(parent):
+            return False
+        return any(child.name.lower() == self.name.lower() for child in parent.iterdir())
+
+    monkeypatch.setattr(Path, "exists", insensitive_exists)
+
+    modules, _graph, _unparseable = build_module_graph(repo)
+    by_path = {m["path"]: m for m in modules}
+
+    assert by_path["pkg/body.py"]["imports"] == ["pkg/vector/__init__.py"]
+    assert "pkg/body.py" in by_path["pkg/vector/__init__.py"]["imported_by"]
+    assert by_path["pkg/vector/point.py"]["imported_by"] == ["pkg/vector/__init__.py"]
+
+
+def test_exact_case_check_lists_each_directory_once_and_sees_new_files(tmp_path, monkeypatch):
+    import os
+
+    import aletheore.scanner.graph as graph
+
+    repo = tmp_path / "repo"
+    pkg = repo / "pkg"
+    pkg.mkdir(parents=True)
+    (pkg / "a.py").write_text("")
+    (pkg / "b.py").write_text("")
+
+    listed = []
+    real_listdir = os.listdir
+    monkeypatch.setattr(graph.os, "listdir", lambda d: listed.append(str(d)) or real_listdir(d))
+    graph._listing_at.cache_clear()
+
+    assert graph._exists_exact_case(repo, pkg / "a.py")
+    assert graph._exists_exact_case(repo, pkg / "b.py")
+    assert listed.count(str(pkg)) == 1  # second lookup in the same directory reuses the listing
+
+    (pkg / "c.py").write_text("")
+    os.utime(pkg, ns=(0, pkg.stat().st_mtime_ns + 1_000_000_000))  # a coarse filesystem clock must not hide the add
+    assert graph._exists_exact_case(repo, pkg / "c.py")
+
+
+def test_exact_case_check_falls_back_to_a_live_listing_when_the_cache_key_did_not_change(tmp_path, monkeypatch):
+    # Flash Review catch: _listing_at is keyed on the directory's mtime, assuming mtime always bumps on
+    # an add. On a coarse-granularity filesystem it sometimes doesn't within the same tick - simulated
+    # here by forcing stat() to keep reporting the pre-add mtime even after a new file lands, so the
+    # lru_cache would reuse the stale listing without the live os.listdir fallback this test covers.
+    import os
+
+    import aletheore.scanner.graph as graph
+
+    repo = tmp_path / "repo"
+    pkg = repo / "pkg"
+    pkg.mkdir(parents=True)
+    (pkg / "a.py").write_text("")
+
+    graph._listing_at.cache_clear()
+    assert graph._exists_exact_case(repo, pkg / "a.py")  # primes the cache keyed on pkg's current mtime
+    stale_mtime_ns = pkg.stat().st_mtime_ns
+
+    (pkg / "c.py").write_text("")
+    real_stat = Path.stat
+
+    class _FrozenClockStat:
+        def __init__(self, real_result):
+            self._real = real_result
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+        @property
+        def st_mtime_ns(self):
+            return stale_mtime_ns
+
+    def frozen_clock_stat(self, *args, **kwargs):
+        result = real_stat(self, *args, **kwargs)
+        return _FrozenClockStat(result) if self == pkg else result
+
+    monkeypatch.setattr(Path, "stat", frozen_clock_stat)
+
+    assert graph._exists_exact_case(repo, pkg / "c.py")
+
+
+def test_exact_case_check_verifies_discovered_components_of_a_candidate_beside_the_repo(tmp_path):
+    import aletheore.scanner.graph as graph
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sibling = tmp_path / "shared" / "lib"
+    sibling.mkdir(parents=True)
+    (sibling / "mod.py").write_text("")
+
+    assert graph._exists_exact_case(repo, sibling / "mod.py")
+    # same file, wrong-cased directory component: where the filesystem ignores case exists() is True, and the
+    # check must still reject it because the on-disk spelling is "shared".
+    wrong = tmp_path / "Shared" / "lib" / "mod.py"
+    assert not graph._exists_exact_case(repo, wrong)

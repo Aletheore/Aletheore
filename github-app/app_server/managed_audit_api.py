@@ -23,6 +23,7 @@ from app_server.db import (
     touch_api_token,
 )
 from app_server.evidence_limits import MAX_EVIDENCE_BYTES
+from app_server.ingest_limits import parse_validated_body_after_auth
 from app_server.rate_limit import cooldown_seconds_for_loc, total_loc_from_evidence
 
 managed_audit_router = APIRouter()
@@ -94,9 +95,13 @@ async def _authenticate_token(request: Request) -> tuple[dict, str]:
 
 
 @managed_audit_router.post("/v1/managed-audit")
-async def start_managed_audit(request: Request, body: StartManagedAuditRequest):
+async def start_managed_audit(request: Request):
     installation, token_hash = await _authenticate_token(request)
     pool = request.app.state.db_pool
+    # Parsed right after auth, not before: that's the fix. Still ahead of
+    # the plan check below so a malformed body gets the same 422 it always
+    # did, regardless of plan - only the auth/parse ordering changed.
+    body = await parse_validated_body_after_auth(request, StartManagedAuditRequest)
     # AIR-exclusive, not "any paid plan" - the flash plan doesn't include
     # managed audits.
     if installation["plan"] != "air":

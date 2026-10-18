@@ -36,7 +36,7 @@ async def test_signin_page_is_not_cacheable(pool):
 
 @pytest.mark.asyncio
 async def test_get_session_returns_none_for_expired_session(pool):
-    monkeypatch_secret = "test-session-secret"
+    monkeypatch_secret = "test-session-secret-at-least-32-characters-long"
     encrypted = encrypt_access_token("gho_realtoken", monkeypatch_secret)
     # get_session compares expires_at against the DB server's own now(), not
     # the test runner's clock - a 1-second margin flakes under any real
@@ -52,11 +52,11 @@ async def test_get_session_returns_none_for_expired_session(pool):
 
 @pytest.mark.asyncio
 async def test_logout_deletes_session_and_clears_cookie(pool, monkeypatch):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
-    encrypted = encrypt_access_token("gho_realtoken", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
+    encrypted = encrypt_access_token("gho_realtoken", "test-session-secret-at-least-32-characters-long")
     expires = datetime.now(timezone.utc) + timedelta(hours=1)
     await create_session(pool, "sess-logout", 42, "octocat", encrypted, expires)
-    signed = sign_session_id("sess-logout", "test-session-secret")
+    signed = sign_session_id("sess-logout", "test-session-secret-at-least-32-characters-long")
 
     app.state.db_pool = pool
     transport = ASGITransport(app=app)
@@ -192,7 +192,7 @@ async def test_login_sets_next_cookie(pool, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_callback_creates_session_and_sets_cookie(pool, monkeypatch):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/login/oauth/access_token":
@@ -221,15 +221,105 @@ async def test_callback_creates_session_and_sets_cookie(pool, monkeypatch):
 
     assert response.status_code == 307
     assert "session" in response.cookies
-    session_id = unsign_session_id(response.cookies["session"], "test-session-secret")
+    session_id = unsign_session_id(response.cookies["session"], "test-session-secret-at-least-32-characters-long")
     row = await get_session(pool, session_id)
     assert row["github_login"] == "octocat"
     assert row["github_access_token"] != "gho_faketoken"
 
 
 @pytest.mark.asyncio
+async def test_callback_binds_an_unbound_installation_member_row_to_the_logged_in_user(pool, monkeypatch):
+    # Real gap this closes: installation_members has no way to tell a login
+    # string's original holder apart from whoever claims that login later -
+    # the callback's own (login, numeric id) pair from GitHub is what binds
+    # a pre-existing, not-yet-bound row the first time its holder logs in.
+    from app_server.db import add_installation_member, is_installation_member, upsert_installation
+
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
+    await upsert_installation(pool, 900, "someorg")
+    await add_installation_member(pool, 900, "octocat", "someorg")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login/oauth/access_token":
+            return httpx.Response(200, json={"access_token": "gho_faketoken"})
+        if request.url.path == "/user":
+            return httpx.Response(200, json={"id": 42, "login": "octocat"})
+        return httpx.Response(404)
+
+    monkeypatch.setattr(
+        "app_server.auth._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+    monkeypatch.setattr(
+        "app_server.auth._github_oauth_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://github.com"),
+    )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="https://test") as client:
+        login_response = await client.get("/auth/login", follow_redirects=False)
+        state = login_response.headers["location"].split("state=")[1]
+        await client.get(f"/auth/callback?code=fake-code&state={state}", follow_redirects=False)
+
+    async with pool.acquire() as conn:
+        bound_id = await conn.fetchval(
+            "SELECT github_user_id FROM installation_members WHERE installation_id = $1 AND github_login = $2",
+            900,
+            "octocat",
+        )
+    assert bound_id == 42
+    assert await is_installation_member(pool, 900, "octocat") is True
+
+
+@pytest.mark.asyncio
+async def test_callback_evicts_a_membership_row_bound_to_a_different_github_account(pool, monkeypatch):
+    # The login "octocat" was already bound to a different numeric id (the
+    # real original member, 99001) - this login is now signing in as a
+    # DIFFERENT real GitHub account (42, matching the mock /user response
+    # below). That account must not inherit the original member's seat.
+    from app_server.db import (
+        add_installation_member,
+        is_installation_member,
+        reconcile_installation_member_identity,
+        upsert_installation,
+    )
+
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
+    await upsert_installation(pool, 901, "someorg")
+    await add_installation_member(pool, 901, "octocat", "someorg")
+    await reconcile_installation_member_identity(pool, "octocat", 99001)
+    assert await is_installation_member(pool, 901, "octocat") is True
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login/oauth/access_token":
+            return httpx.Response(200, json={"access_token": "gho_faketoken"})
+        if request.url.path == "/user":
+            return httpx.Response(200, json={"id": 42, "login": "octocat"})
+        return httpx.Response(404)
+
+    monkeypatch.setattr(
+        "app_server.auth._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+    monkeypatch.setattr(
+        "app_server.auth._github_oauth_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://github.com"),
+    )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="https://test") as client:
+        login_response = await client.get("/auth/login", follow_redirects=False)
+        state = login_response.headers["location"].split("state=")[1]
+        await client.get(f"/auth/callback?code=fake-code&state={state}", follow_redirects=False)
+
+    assert await is_installation_member(pool, 901, "octocat") is False
+
+
+@pytest.mark.asyncio
 async def test_callback_stores_refresh_token_when_github_returns_one(pool, monkeypatch):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/login/oauth/access_token":
@@ -256,7 +346,7 @@ async def test_callback_stores_refresh_token_when_github_returns_one(pool, monke
             f"/auth/callback?code=fake-code&state={state}", follow_redirects=False
         )
 
-    session_id = unsign_session_id(response.cookies["session"], "test-session-secret")
+    session_id = unsign_session_id(response.cookies["session"], "test-session-secret-at-least-32-characters-long")
     row = await get_session(pool, session_id)
     assert row["github_refresh_token"] != "ghr_realrefresh"  # stored encrypted, not raw
     assert row["github_refresh_token"] is not None
@@ -267,7 +357,7 @@ async def test_callback_handles_missing_refresh_token(pool, monkeypatch):
     # GitHub only issues a refresh_token when the App has "Expire user
     # authorization tokens" enabled - absent otherwise, and sign-in must
     # not break just because this field is missing.
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/login/oauth/access_token":
@@ -295,14 +385,14 @@ async def test_callback_handles_missing_refresh_token(pool, monkeypatch):
         )
 
     assert response.status_code == 307
-    session_id = unsign_session_id(response.cookies["session"], "test-session-secret")
+    session_id = unsign_session_id(response.cookies["session"], "test-session-secret-at-least-32-characters-long")
     row = await get_session(pool, session_id)
     assert row["github_refresh_token"] is None
 
 
 @pytest.mark.asyncio
 async def test_callback_rejects_mismatched_state(pool, monkeypatch):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     app.state.db_pool = pool
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="https://test") as client:
@@ -315,10 +405,10 @@ async def test_callback_rejects_mismatched_state(pool, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_callback_rejects_non_ascii_state_without_500(monkeypatch):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     app.state.db_pool = object()
     transport = ASGITransport(app=app)
-    signed_state = sign_oauth_state("expected-state", "test-session-secret")
+    signed_state = sign_oauth_state("expected-state", "test-session-secret-at-least-32-characters-long")
     async with AsyncClient(transport=transport, base_url="https://test") as client:
         response = await client.get(
             "/auth/callback?code=fake-code&state=caf%C3%A9",
@@ -336,7 +426,7 @@ async def test_callback_without_state_cookie_redirects_to_login_instead_of_trust
     # in-place. Both get bounced through /auth/login, which always sets
     # state; a real installer's browser completes that round trip
     # invisibly, a forged code just goes unused.
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/login/oauth/access_token":
@@ -373,7 +463,7 @@ async def test_callback_without_state_cookie_forwards_state_as_next_on_the_login
     # direct-install entry point (no oauth_state cookie, so state isn't a
     # CSRF nonce here) - that destination must survive the extra hop
     # through /auth/login rather than being silently dropped.
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     app.state.db_pool = pool
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="https://test") as client:
@@ -394,7 +484,7 @@ async def test_callback_without_state_cookie_does_not_reach_the_synchronous_inst
     # synchronously upsert the installations row so /subscribe never saw a
     # gap before the async `installation` webhook landed. That gap is now
     # an accepted tradeoff: the webhook alone is the source of truth here.
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     monkeypatch.setattr("app_server.auth.generate_app_jwt", lambda app_id, key: "fake-app-jwt")
 
     app.state.db_pool = pool
@@ -412,11 +502,11 @@ async def test_callback_without_state_cookie_does_not_reach_the_synchronous_inst
 
 @pytest.mark.asyncio
 async def test_get_current_session_decrypts_access_token(pool, monkeypatch):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
-    encrypted = encrypt_access_token("gho_realtoken", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
+    encrypted = encrypt_access_token("gho_realtoken", "test-session-secret-at-least-32-characters-long")
     expires = datetime.now(timezone.utc) + timedelta(hours=1)
     await create_session(pool, "sess-3", 42, "octocat", encrypted, expires)
-    signed = sign_session_id("sess-3", "test-session-secret")
+    signed = sign_session_id("sess-3", "test-session-secret-at-least-32-characters-long")
 
     class FakeRequest:
         cookies = {"session": signed}
@@ -428,14 +518,14 @@ async def test_get_current_session_decrypts_access_token(pool, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_current_session_decrypts_refresh_token_when_present(pool, monkeypatch):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
-    encrypted_access = encrypt_access_token("gho_realtoken", "test-session-secret")
-    encrypted_refresh = encrypt_access_token("ghr_realrefresh", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
+    encrypted_access = encrypt_access_token("gho_realtoken", "test-session-secret-at-least-32-characters-long")
+    encrypted_refresh = encrypt_access_token("ghr_realrefresh", "test-session-secret-at-least-32-characters-long")
     expires = datetime.now(timezone.utc) + timedelta(hours=1)
     await create_session(
         pool, "sess-4", 42, "octocat", encrypted_access, expires, refresh_token=encrypted_refresh
     )
-    signed = sign_session_id("sess-4", "test-session-secret")
+    signed = sign_session_id("sess-4", "test-session-secret-at-least-32-characters-long")
 
     class FakeRequest:
         cookies = {"session": signed}
@@ -452,7 +542,7 @@ async def test_get_current_session_logs_out_gracefully_on_undecryptable_token(po
     # comment for why this is NOT the same case as a SESSION_SECRET
     # rotation) must not 500 - it should behave like "not logged in" and
     # clean up the now-unusable row.
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     await create_session(
         pool,
         "sess-corrupted",
@@ -461,7 +551,7 @@ async def test_get_current_session_logs_out_gracefully_on_undecryptable_token(po
         "not-a-valid-fernet-token",
         datetime.now(timezone.utc) + timedelta(hours=1),
     )
-    signed = sign_session_id("sess-corrupted", "test-session-secret")
+    signed = sign_session_id("sess-corrupted", "test-session-secret-at-least-32-characters-long")
 
     class FakeRequest:
         cookies = {"session": signed}
@@ -474,11 +564,11 @@ async def test_get_current_session_logs_out_gracefully_on_undecryptable_token(po
 
 @pytest.mark.asyncio
 async def test_get_current_session_leaves_refresh_token_none_when_absent(pool, monkeypatch):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
-    encrypted_access = encrypt_access_token("gho_realtoken", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
+    encrypted_access = encrypt_access_token("gho_realtoken", "test-session-secret-at-least-32-characters-long")
     expires = datetime.now(timezone.utc) + timedelta(hours=1)
     await create_session(pool, "sess-5", 42, "octocat", encrypted_access, expires)
-    signed = sign_session_id("sess-5", "test-session-secret")
+    signed = sign_session_id("sess-5", "test-session-secret-at-least-32-characters-long")
 
     class FakeRequest:
         cookies = {"session": signed}
@@ -546,7 +636,7 @@ def _handler_with_emails(emails: list[dict]):
 
 @pytest.mark.asyncio
 async def test_callback_captures_email_and_enqueues_welcome_on_first_login(pool, monkeypatch):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     _mock_github_clients(
         monkeypatch,
         _handler_with_emails(
@@ -585,7 +675,7 @@ async def test_callback_captures_email_and_enqueues_welcome_on_first_login(pool,
 
 @pytest.mark.asyncio
 async def test_callback_does_not_reenqueue_welcome_on_second_login(pool, monkeypatch):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     _mock_github_clients(
         monkeypatch,
         _handler_with_emails([{"email": "octocat@example.com", "primary": True, "verified": True}]),
@@ -613,7 +703,7 @@ async def test_callback_degrades_gracefully_when_email_permission_not_granted(po
     # The GitHub App's "Email addresses" account permission (see auth.py's
     # _fetch_primary_verified_email comment) not yet granted for this user
     # surfaces as a 403 on /user/emails - sign-in must still succeed.
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/login/oauth/access_token":
@@ -784,7 +874,7 @@ async def test_callback_handles_github_200_with_error_body_gracefully(pool, monk
     # through to `token_data["access_token"]` raising an uncaught KeyError:
     # a raw 500 plus main.py's global handler firing an internal error
     # alert email for an entirely ordinary user action.
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/login/oauth/access_token":

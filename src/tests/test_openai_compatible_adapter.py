@@ -125,7 +125,7 @@ def _adapter(tmp_path, **overrides):
     return OpenAICompatibleAdapter(**kwargs)
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_invoke_assembles_all_required_sections_in_order(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     mock_client = MagicMock()
@@ -146,7 +146,7 @@ def test_invoke_assembles_all_required_sections_in_order(mock_openai_class, tmp_
     assert first_call.kwargs["tool_choice"] == "required"
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_invoke_calls_on_usage_once_per_round_with_real_totals(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     mock_client = MagicMock()
@@ -163,7 +163,7 @@ def test_invoke_calls_on_usage_once_per_round_with_real_totals(mock_openai_class
     assert all(call == (100, 20) for call in usage_calls)
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_invoke_returns_partial_report_when_budget_stops_between_rounds(
     mock_openai_class, tmp_path
 ):
@@ -230,7 +230,7 @@ def test_simple_completion_raises_a_custom_budget_message_when_before_llm_call_d
     assert "monthly LLM spend cap" not in str(exc_info.value)
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_invoke_raises_the_custom_budget_message_when_before_llm_call_declines(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     adapter = _adapter(
@@ -244,7 +244,7 @@ def test_invoke_raises_the_custom_budget_message_when_before_llm_call_declines(m
             adapter.invoke("audit this repo", cwd=str(repo))
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_invoke_raises_if_finish_called_before_all_sections_written(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     mock_client = MagicMock()
@@ -262,7 +262,7 @@ def test_invoke_raises_if_finish_called_before_all_sections_written(mock_openai_
             adapter.invoke("audit this repo", cwd=str(repo))
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_invoke_raises_if_never_finishes_within_max_rounds(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     mock_client = MagicMock()
@@ -277,7 +277,7 @@ def test_invoke_raises_if_never_finishes_within_max_rounds(mock_openai_class, tm
             adapter.invoke("audit this repo", cwd=str(repo))
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_invoke_normalizes_provider_errors_without_leaking_details(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     mock_client = MagicMock()
@@ -294,7 +294,7 @@ def test_invoke_normalizes_provider_errors_without_leaking_details(mock_openai_c
     assert "secret detail" not in message
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_invoke_calls_on_call_failed_when_the_call_fails(mock_openai_class, tmp_path):
     # Real production bug: invoke() reserves real budget per round via
     # before_llm_call (_has_budget_for_next_call), exactly like
@@ -320,7 +320,7 @@ def test_invoke_calls_on_call_failed_when_the_call_fails(mock_openai_class, tmp_
     assert failed_calls == [1]
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_invoke_does_not_call_on_call_failed_on_success(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     mock_client = MagicMock()
@@ -336,7 +336,7 @@ def test_invoke_does_not_call_on_call_failed_on_success(mock_openai_class, tmp_p
     assert failed_calls == []
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_invoke_calls_on_call_failed_when_a_round_has_no_usage(mock_openai_class, tmp_path):
     # Same real gap as simple_completion's own no-usage-field regression:
     # a 200 response with no usage field never raises, so the except block
@@ -365,7 +365,7 @@ def test_invoke_calls_on_call_failed_when_a_round_has_no_usage(mock_openai_class
 
 
 @patch("aletheore.adapters.openai_compatible.time.sleep")
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_invoke_retries_a_transient_authentication_error_and_succeeds(
     mock_openai_class, mock_sleep, tmp_path
 ):
@@ -393,7 +393,7 @@ def test_invoke_retries_a_transient_authentication_error_and_succeeds(
 
 
 @patch("aletheore.adapters.openai_compatible.time.sleep")
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_invoke_gives_up_after_exhausting_retries_on_persistent_auth_error(
     mock_openai_class, mock_sleep, tmp_path
 ):
@@ -414,7 +414,7 @@ def test_invoke_gives_up_after_exhausting_retries_on_persistent_auth_error(
 
 
 @patch("aletheore.adapters.openai_compatible.time.sleep")
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_invoke_does_not_retry_a_non_transient_bad_request_error(
     mock_openai_class, mock_sleep, tmp_path
 ):
@@ -439,7 +439,7 @@ def test_invoke_does_not_retry_a_non_transient_bad_request_error(
 
 
 @patch("aletheore.adapters.openai_compatible.time.sleep")
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_simple_completion_retries_a_transient_rate_limit_error(mock_openai_class, mock_sleep, tmp_path):
     mock_client = MagicMock()
     mock_openai_class.return_value = mock_client
@@ -459,7 +459,7 @@ def test_simple_completion_retries_a_transient_rate_limit_error(mock_openai_clas
     assert mock_sleep.call_count == 1
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_simple_completion_calls_on_call_failed_when_the_call_fails(mock_openai_class, tmp_path):
     # Real regression: a caller that reserves real budget before a call
     # (before_llm_call) needs a way to release it when the call itself then
@@ -481,7 +481,7 @@ def test_simple_completion_calls_on_call_failed_when_the_call_fails(mock_openai_
     assert failed_calls == [1]
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_simple_completion_does_not_call_on_call_failed_on_success(mock_openai_class, tmp_path):
     mock_client = MagicMock()
     mock_openai_class.return_value = mock_client
@@ -507,7 +507,7 @@ def test_simple_completion_does_not_call_on_call_failed_on_success(mock_openai_c
     assert usage_calls == [(10, 5)]
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_simple_completion_calls_on_call_failed_when_response_has_no_usage(mock_openai_class, tmp_path):
     # Real regression: a 200 response with no usage field is an observed
     # shape from some OpenAI-compatible gateways/proxies, not something the
@@ -560,7 +560,7 @@ def test_simple_completion_does_not_call_on_call_failed_when_budget_is_declined_
     assert failed_calls == []
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_read_evidence_section_tool_returns_wrapped_data(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": [{"path": "app.py"}]}})
     mock_client = MagicMock()
@@ -624,7 +624,7 @@ def test_invoke_raises_clean_error_on_non_utf8_evidence_bytes(tmp_path):
             adapter.invoke("audit this repo", cwd=str(repo))
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_read_evidence_section_reports_encoding_failure_instead_of_crashing(
     mock_openai_class, tmp_path
 ):
@@ -654,7 +654,7 @@ def test_read_evidence_section_reports_encoding_failure_instead_of_crashing(
     assert "could not encode section repository.modules" in tool_message["content"]
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_read_evidence_section_missing_path_reports_clearly(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     mock_client = MagicMock()
@@ -688,7 +688,7 @@ def test_is_available_false_when_key_missing(monkeypatch, tmp_path):
     assert adapter.is_available() is False
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_invoke_fails_fast_after_consecutive_no_tool_call_rounds(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     mock_client = MagicMock()
@@ -704,7 +704,7 @@ def test_invoke_fails_fast_after_consecutive_no_tool_call_rounds(mock_openai_cla
     assert mock_client.chat.completions.create.call_count == 2
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_invoke_recovers_after_single_no_tool_call_round(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     mock_client = MagicMock()
@@ -744,7 +744,7 @@ def test_ollama_style_adapter_does_not_need_key(tmp_path):
         assert adapter.is_available() is False
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_simple_completion_makes_one_plain_completion_call(mock_openai_class, tmp_path):
     mock_client = MagicMock()
     mock_openai_class.return_value = mock_client
@@ -780,7 +780,7 @@ def _plain_completion_client(mock_openai_class):
     return mock_client
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_simple_completion_asks_for_json_only_when_json_mode_is_on(mock_openai_class, tmp_path):
     mock_client = _plain_completion_client(mock_openai_class)
     with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
@@ -792,7 +792,7 @@ def test_simple_completion_asks_for_json_only_when_json_mode_is_on(mock_openai_c
     assert "response_format" not in plain_call.kwargs
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_json_mode_does_not_leak_into_the_tool_calling_loop(mock_openai_class, tmp_path):
     # invoke() sends tools; a JSON response format there would be wrong, which
     # is why json_mode is its own flag and not part of extra_body.
@@ -809,7 +809,7 @@ def test_json_mode_does_not_leak_into_the_tool_calling_loop(mock_openai_class, t
         assert "response_format" not in call.kwargs.get("extra_body", {})
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_simple_completion_calls_on_usage(mock_openai_class, tmp_path):
     mock_client = MagicMock()
     mock_openai_class.return_value = mock_client
@@ -828,7 +828,7 @@ def test_simple_completion_calls_on_usage(mock_openai_class, tmp_path):
     assert usage_calls == [(40, 8)]
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_default_request_timeout_matches_module_constant(mock_openai_class, tmp_path):
     from aletheore.adapters.openai_compatible import REQUEST_TIMEOUT_SECONDS
 
@@ -845,7 +845,7 @@ def test_default_request_timeout_matches_module_constant(mock_openai_class, tmp_
     assert first_call.kwargs["timeout"] == REQUEST_TIMEOUT_SECONDS
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_custom_request_timeout_is_threaded_through(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     mock_client = MagicMock()
@@ -860,7 +860,7 @@ def test_custom_request_timeout_is_threaded_through(mock_openai_class, tmp_path)
     assert first_call.kwargs["timeout"] == 400
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_default_max_tool_rounds_matches_module_constant(mock_openai_class, tmp_path):
     # Real gap this closes: MAX_TOOL_ROUNDS used to be a bare module global
     # .invoke() read directly, shared by every adapter - the hosted
@@ -888,7 +888,7 @@ def test_default_max_tool_rounds_matches_module_constant(mock_openai_class, tmp_
     assert mock_client.chat.completions.create.call_count == MAX_TOOL_ROUNDS
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_custom_max_tool_rounds_is_threaded_through(mock_openai_class, tmp_path):
     # The hosted managed_audit job passes MANAGED_AUDIT_MAX_TOOL_ROUNDS (40)
     # explicitly (model_tiers.writing_adapter_for_managed_audit) - every
@@ -919,7 +919,7 @@ def _mock_completion_response(content: str = "ok") -> MagicMock:
     return mock_response
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_simple_completion_default_request_timeout_matches_module_constant(mock_openai_class, tmp_path):
     # Real gap: invoke() reads self._request_timeout_seconds (see the test
     # above), but simple_completion() hard-coded the bare module constant
@@ -941,7 +941,7 @@ def test_simple_completion_default_request_timeout_matches_module_constant(mock_
     assert call.kwargs["timeout"] == REQUEST_TIMEOUT_SECONDS
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_simple_completion_custom_request_timeout_is_threaded_through(mock_openai_class, tmp_path):
     mock_client = MagicMock()
     mock_openai_class.return_value = mock_client
@@ -955,7 +955,7 @@ def test_simple_completion_custom_request_timeout_is_threaded_through(mock_opena
     assert call.kwargs["timeout"] == 300
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_supports_tool_choice_false_omits_tool_choice_from_request(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     mock_client = MagicMock()
@@ -969,7 +969,7 @@ def test_supports_tool_choice_false_omits_tool_choice_from_request(mock_openai_c
     assert "tool_choice" not in first_call.kwargs
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_supports_tool_choice_true_by_default(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     mock_client = MagicMock()
@@ -984,7 +984,7 @@ def test_supports_tool_choice_true_by_default(mock_openai_class, tmp_path):
     assert first_call.kwargs["tool_choice"] == "required"
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_invoke_forces_reasoning_effort_none_for_openai_provider(mock_openai_class, tmp_path):
     # Regression: gpt-5.6-luna rejects function tools on /v1/chat/completions
     # unless reasoning_effort is explicitly "none" - confirmed directly
@@ -1006,7 +1006,7 @@ def test_invoke_forces_reasoning_effort_none_for_openai_provider(mock_openai_cla
     assert first_call.kwargs["extra_body"] == {"reasoning_effort": "none"}
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_invoke_merges_reasoning_effort_with_existing_extra_body_for_openai(mock_openai_class, tmp_path):
     # If a caller already configured extra_body (e.g. AIRVIEW_REASONING=off
     # threading the same value through), the forced override must not
@@ -1025,7 +1025,7 @@ def test_invoke_merges_reasoning_effort_with_existing_extra_body_for_openai(mock
     assert first_call.kwargs["extra_body"] == {"reasoning_effort": "none", "other_flag": True}
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_invoke_does_not_force_reasoning_effort_for_non_openai_provider(mock_openai_class, tmp_path):
     # DeepSeek uses a different disabled-reasoning shape entirely
     # ({"thinking": {"type": "disabled"}}, not reasoning_effort) and has no
@@ -1054,7 +1054,7 @@ def test_simple_completion_releases_reservation_when_api_key_is_missing(tmp_path
     assert failed_calls == [1]
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_simple_completion_raises_adapter_error_on_empty_choices(mock_openai_class, tmp_path):
     response = MagicMock()
     response.choices = []
@@ -1065,7 +1065,7 @@ def test_simple_completion_raises_adapter_error_on_empty_choices(mock_openai_cla
             adapter.simple_completion("system", "user", cwd="/repo")
 
 
-@patch("aletheore.adapters.openai_compatible.OpenAI")
+@patch("openai.OpenAI")
 def test_invoke_raises_adapter_error_on_empty_choices(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     response = MagicMock()
