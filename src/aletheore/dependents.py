@@ -91,9 +91,12 @@ def dependents_report(
         extra = f", {', '.join(changed[:3])}{', ...' if len(changed) > 3 else ''}"
         who = f"the {unit} asked about and " if seeds & set(changed) else ""
         fresh = f"STALE: {who}{len(changed)} file(s) changed after the scan{extra}; re-scan before relying on this"
-    excl = f" ({dropped} more left out by --exclude/--under/--no-tests)" if dropped else ""
     if packages:
         dirs = sorted({_dir_of(p) for p in shown})
+        # same unit as the header: packages that vanished entirely, not files
+        dropped = len({_dir_of(p) for p in allp}) - len(dirs)
+    excl = f" ({dropped} more left out by --exclude/--under/--no-tests)" if dropped else ""
+    if packages:
         head = f"{len(dirs)} packages (directories) import {target}, directly or through other imports{excl}:"
         body = dirs
     else:
