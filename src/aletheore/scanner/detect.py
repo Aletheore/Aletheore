@@ -38,6 +38,17 @@ IGNORED_DIRS = {
     # handlers, API routers) were misreported as dead code. Always
     # gitignored by convention, never project source.
     ".claude",
+    # The project's own top-level worktree container (`git worktree add
+    # .worktrees/<name>`) - every entry under it is a separate working tree,
+    # never this repo's own source. _nested_git_roots below only catches a
+    # worktree by finding its `.git` file, which misses one whose git link
+    # was removed but whose checked-out files were left behind (confirmed on
+    # this project's own repo: .worktrees/review-740 has no .git entry at
+    # all - a real scan picked up its orphaned copy of every module and
+    # duplicated jobs.py's own imported_by list from 12 real entries to 255).
+    # Name-based exclusion, same as .claude above, closes that gap outright
+    # instead of trying to detect "an orphaned worktree remnant" generically.
+    ".worktrees",
 }
 
 FRAMEWORK_MARKERS_PY = {

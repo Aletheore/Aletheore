@@ -159,7 +159,7 @@ def test_build_chunks_skips_module_when_file_missing_on_disk(tmp_path):
     assert chunks == []
 
 
-@patch("aletheore.search_index.OpenAI")
+@patch("openai.OpenAI")
 def test_embed_texts_returns_one_vector_per_input(mock_openai_class):
     mock_client = MagicMock()
     mock_openai_class.return_value = mock_client
@@ -175,7 +175,7 @@ def test_embed_texts_returns_one_vector_per_input(mock_openai_class):
     assert call.kwargs["model"] == search_index_module.DEFAULT_EMBEDDING_MODEL
 
 
-@patch("aletheore.search_index.OpenAI")
+@patch("openai.OpenAI")
 def test_embed_texts_raises_actionable_error_when_model_unavailable(mock_openai_class):
     mock_client = MagicMock()
     mock_openai_class.return_value = mock_client
@@ -202,7 +202,7 @@ def _ollama_connection_error() -> APIConnectionError:
 
 
 @patch("aletheore.search_index._try_auto_pull_ollama_model")
-@patch("aletheore.search_index.OpenAI")
+@patch("openai.OpenAI")
 def test_embed_texts_auto_pulls_and_retries_when_model_not_found(
     mock_openai_class, mock_auto_pull
 ):
@@ -228,7 +228,7 @@ def test_embed_texts_auto_pulls_and_retries_when_model_not_found(
 
 @patch("aletheore.search_index.has_api_key", return_value=False)
 @patch("aletheore.search_index._try_auto_pull_ollama_model", return_value=False)
-@patch("aletheore.search_index.OpenAI")
+@patch("openai.OpenAI")
 def test_embed_texts_raises_actionable_error_when_auto_pull_fails(
     mock_openai_class, mock_auto_pull, mock_has_api_key
 ):
@@ -249,7 +249,7 @@ def test_embed_texts_raises_actionable_error_when_auto_pull_fails(
 
 @patch("aletheore.search_index.shutil.which", return_value=None)
 @patch("aletheore.search_index.has_api_key", return_value=False)
-@patch("aletheore.search_index.OpenAI")
+@patch("openai.OpenAI")
 def test_embed_texts_shows_setup_instructions_when_ollama_unreachable(
     mock_openai_class, mock_has_api_key, mock_which
 ):
@@ -283,7 +283,7 @@ def test_embed_texts_shows_setup_instructions_when_ollama_unreachable(
 
 @patch("aletheore.search_index._try_auto_start_ollama_server")
 @patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
-@patch("aletheore.search_index.OpenAI")
+@patch("openai.OpenAI")
 def test_embed_texts_auto_starts_ollama_server_and_retries_when_connection_refused(
     mock_openai_class, mock_which, mock_auto_start
 ):
@@ -308,7 +308,7 @@ def test_embed_texts_auto_starts_ollama_server_and_retries_when_connection_refus
 @patch("aletheore.search_index._try_auto_start_ollama_server")
 @patch("aletheore.search_index._try_auto_install_ollama")
 @patch("aletheore.search_index.shutil.which")
-@patch("aletheore.search_index.OpenAI")
+@patch("openai.OpenAI")
 def test_embed_texts_installs_then_starts_ollama_when_binary_is_missing(
     mock_openai_class, mock_which, mock_auto_install, mock_auto_start
 ):
@@ -338,7 +338,7 @@ def test_embed_texts_installs_then_starts_ollama_when_binary_is_missing(
 @patch("aletheore.search_index._try_auto_install_ollama")
 @patch("aletheore.search_index._try_auto_start_ollama_server")
 @patch("aletheore.search_index.has_api_key", return_value=False)
-@patch("aletheore.search_index.OpenAI")
+@patch("openai.OpenAI")
 def test_embed_texts_never_auto_remediates_a_remote_base_url(
     mock_openai_class, mock_has_api_key, mock_auto_start, mock_auto_install
 ):
@@ -362,7 +362,7 @@ def test_embed_texts_never_auto_remediates_a_remote_base_url(
 @patch("aletheore.search_index._try_auto_install_ollama", return_value=False)
 @patch("aletheore.search_index.shutil.which", return_value=None)
 @patch("aletheore.search_index.has_api_key", return_value=False)
-@patch("aletheore.search_index.OpenAI")
+@patch("openai.OpenAI")
 def test_embed_texts_does_not_attempt_start_when_install_fails(
     mock_openai_class, mock_has_api_key, mock_which, mock_auto_install
 ):
@@ -382,7 +382,7 @@ def test_embed_texts_does_not_attempt_start_when_install_fails(
 @patch("aletheore.search_index._try_auto_start_ollama_server", return_value=False)
 @patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
 @patch("aletheore.search_index.has_api_key", return_value=False)
-@patch("aletheore.search_index.OpenAI")
+@patch("openai.OpenAI")
 def test_embed_texts_falls_through_to_setup_instructions_when_auto_start_fails(
     mock_openai_class, mock_has_api_key, mock_which, mock_auto_start
 ):
@@ -404,7 +404,7 @@ def test_embed_texts_falls_through_to_setup_instructions_when_auto_start_fails(
 @patch("aletheore.search_index._try_auto_pull_ollama_model", return_value=True)
 @patch("aletheore.search_index._try_auto_start_ollama_server", return_value=True)
 @patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
-@patch("aletheore.search_index.OpenAI")
+@patch("openai.OpenAI")
 def test_embed_texts_chains_into_auto_pull_after_a_fresh_server_start(
     mock_openai_class, mock_which, mock_auto_start, mock_auto_pull
 ):
@@ -800,7 +800,7 @@ def test_auto_start_gives_up_after_the_timeout(
 
 
 @patch("aletheore.search_index.has_api_key", return_value=False)
-@patch("aletheore.search_index.OpenAI")
+@patch("openai.OpenAI")
 def test_embed_texts_raises_ollama_error_when_no_openai_key_configured(
     mock_openai_class, mock_has_api_key, tmp_path
 ):
@@ -822,7 +822,7 @@ def test_embed_texts_raises_ollama_error_when_no_openai_key_configured(
 @patch("aletheore.search_index.sys")
 @patch("aletheore.search_index.get_api_key", return_value="sk-test-key")
 @patch("aletheore.search_index.has_api_key", return_value=True)
-@patch("aletheore.search_index.OpenAI")
+@patch("openai.OpenAI")
 def test_embed_texts_falls_back_to_openai_when_ollama_unavailable(
     mock_openai_class, mock_has_api_key, mock_get_api_key, mock_sys, tmp_path
 ):
@@ -855,7 +855,7 @@ def test_embed_texts_falls_back_to_openai_when_ollama_unavailable(
 @patch("aletheore.search_index.sys")
 @patch("aletheore.search_index.get_api_key", return_value="sk-test-key")
 @patch("aletheore.search_index.has_api_key", return_value=True)
-@patch("aletheore.search_index.OpenAI")
+@patch("openai.OpenAI")
 def test_embed_texts_raises_when_openai_fallback_declined(
     mock_openai_class, mock_has_api_key, mock_get_api_key, mock_sys, tmp_path
 ):
@@ -878,7 +878,7 @@ def test_embed_texts_raises_when_openai_fallback_declined(
 @patch("aletheore.search_index.sys")
 @patch("aletheore.search_index.get_api_key", return_value="sk-test-key")
 @patch("aletheore.search_index.has_api_key", return_value=True)
-@patch("aletheore.search_index.OpenAI")
+@patch("openai.OpenAI")
 def test_embed_texts_refuses_fallback_when_not_interactive(
     mock_openai_class, mock_has_api_key, mock_get_api_key, mock_sys, tmp_path
 ):
@@ -897,7 +897,7 @@ def test_embed_texts_refuses_fallback_when_not_interactive(
 @patch("aletheore.search_index.sys")
 @patch("aletheore.search_index.get_api_key", return_value="sk-test-key")
 @patch("aletheore.search_index.has_api_key", return_value=True)
-@patch("aletheore.search_index.OpenAI")
+@patch("openai.OpenAI")
 def test_embed_texts_names_both_failures_when_openai_also_fails(
     mock_openai_class, mock_has_api_key, mock_get_api_key, mock_sys, tmp_path
 ):
