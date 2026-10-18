@@ -1926,6 +1926,12 @@ def attach_file_pages(records: list[dict], pages: dict[str, str]) -> list[dict]:
     return records
 
 
+# What the overview holds when generation or citation verification failed.
+# Stored as-is, so callers can recognise it and retry rather than treat it
+# as a finished overview.
+OVERVIEW_UNAVAILABLE_DESCRIPTION = "Overview description unavailable."
+
+
 def generate_overview(
     evidence: dict,
     all_subsystem_records: list[dict],
@@ -1947,7 +1953,7 @@ def generate_overview(
     description = parsed.get("description") if parsed else None
     if not isinstance(description, str) or not description.strip():
         logger.info("AIRview overview rejected: model returned no usable description")
-        description = "Overview description unavailable."
+        description = OVERVIEW_UNAVAILABLE_DESCRIPTION
     else:
         result = verify_citations(description, evidence, fetch_line_count=fetch_line_count)
         if not result["all_verified"]:
@@ -1957,9 +1963,9 @@ def generate_overview(
                 result["total_citations"],
                 ", ".join(f"{c['file']}:{c['line']}" for c in result["unverified"]),
             )
-            description = "Overview description unavailable."
+            description = OVERVIEW_UNAVAILABLE_DESCRIPTION
 
-    if description != "Overview description unavailable.":
+    if description != OVERVIEW_UNAVAILABLE_DESCRIPTION:
         paragraph = _error_handling_paragraph(evidence, writing_adapter, fetch_line_count)
         if paragraph:
             description = f"{description}\n\n{paragraph}"

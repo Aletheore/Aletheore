@@ -13667,3 +13667,73 @@ def test_incremental_review_after_a_merge_is_limited_to_the_prs_own_files(monkey
     assert "own change" in handed_to_review["diff_text"]
     assert "from_base_branch.py" not in handed_to_review["diff_text"]
     assert "merged in" not in handed_to_review["diff_text"]
+
+
+def _run_store_wiki_generation_with_overview_state(
+    monkeypatch, *, overview, ids_before, ids_after
+):
+    """Runs _store_wiki_generation with the DB layer stubbed and returns how
+    many times the (LLM-calling) overview regeneration ran."""
+    from datetime import datetime, timedelta, timezone
+
+    from scan_worker.jobs import _store_wiki_generation
+
+    now = datetime.now(timezone.utc)
+    if overview is not None and "age_hours" in overview:
+        overview = {
+            "description": overview["description"],
+            "updated_at": now - timedelta(hours=overview["age_hours"]),
+        }
+    listed = iter([[{"subsystem_id": i} for i in ids_before], [{"subsystem_id": i} for i in ids_after]])
+    monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: next(listed))
+    monkeypatch.setattr("scan_worker.jobs.get_wiki_overview", lambda *a, **k: overview)
+    monkeypatch.setattr("scan_worker.jobs._store_wiki_subsystem_records", lambda *a, **k: None)
+    regenerations = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._regenerate_wiki_overview", lambda *a, **k: regenerations.append(1)
+    )
+
+    _store_wiki_generation("postgresql://unused", 1, "octocat/hello-world", {}, [], object(), "sha")
+    return len(regenerations)
+
+
+def test_store_wiki_generation_skips_overview_regeneration_when_recent_and_subsystems_unchanged(
+    monkeypatch,
+):
+    # The overview call re-narrates every subsystem (~30K tokens on a repo
+    # with 85) and was ~55% of a push's AIRview spend.
+    assert _run_store_wiki_generation_with_overview_state(
+        monkeypatch,
+        overview={"description": "A real overview.", "age_hours": 1},
+        ids_before=["1", "2"],
+        ids_after=["1", "2"],
+    ) == 0
+
+
+@pytest.mark.parametrize(
+    "overview, ids_before, ids_after",
+    [
+        pytest.param(None, ["1"], ["1"], id="no-overview-yet"),
+        pytest.param(
+            {"description": "A real overview.", "age_hours": 6.5}, ["1"], ["1"], id="older-than-6h"
+        ),
+        pytest.param(
+            {"description": "A real overview.", "age_hours": 1}, ["1"], ["1", "2"], id="subsystem-added"
+        ),
+        pytest.param(
+            {"description": "A real overview.", "age_hours": 1}, ["1", "2"], ["1"], id="subsystem-pruned"
+        ),
+        pytest.param(
+            {"description": "Overview description unavailable.", "age_hours": 1},
+            ["1"],
+            ["1"],
+            id="placeholder-is-retried",
+        ),
+    ],
+)
+def test_store_wiki_generation_regenerates_overview_when_needed(
+    monkeypatch, overview, ids_before, ids_after
+):
+    assert _run_store_wiki_generation_with_overview_state(
+        monkeypatch, overview=overview, ids_before=ids_before, ids_after=ids_after
+    ) == 1
