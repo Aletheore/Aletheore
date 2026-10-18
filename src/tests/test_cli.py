@@ -621,12 +621,13 @@ def test_write_json_mcp_client_config_refuses_a_symlinked_config_file(tmp_path):
     (repo / ".mcp.json").symlink_to(outside_target)
     entry = {"command": "aletheore", "args": ["mcp", str(repo)]}
 
-    message = _write_json_mcp_client_config(
+    message, security_skip = _write_json_mcp_client_config(
         repo / ".mcp.json", "mcpServers", entry, repo_path=repo
     )
 
     assert "skipped" in message
     assert "escapes the repo" in message
+    assert security_skip is True
     assert json.loads(outside_target.read_text()) == {"do_not_touch": True}
 
 
@@ -642,12 +643,13 @@ def test_write_json_mcp_client_config_refuses_a_symlinked_parent_directory(tmp_p
     (repo / ".cursor").symlink_to(outside_dir)
     entry = {"command": "aletheore", "args": ["mcp", str(repo)]}
 
-    message = _write_json_mcp_client_config(
+    message, security_skip = _write_json_mcp_client_config(
         repo / ".cursor" / "mcp.json", "mcpServers", entry, repo_path=repo
     )
 
     assert "skipped" in message
     assert "escapes the repo" in message
+    assert security_skip is True
     assert list(outside_dir.iterdir()) == []
 
 
@@ -659,9 +661,10 @@ def test_write_json_mcp_client_config_without_repo_path_keeps_the_prior_global_b
     config_path = tmp_path / "claude_desktop_config.json"
     entry = {"command": "aletheore", "args": ["mcp", "/some/repo"]}
 
-    message = _write_json_mcp_client_config(config_path, "mcpServers", entry)
+    message, security_skip = _write_json_mcp_client_config(config_path, "mcpServers", entry)
 
     assert "wrote" in message
+    assert security_skip is False
     assert json.loads(config_path.read_text()) == {"mcpServers": {"aletheore": entry}}
 
 
@@ -705,9 +708,10 @@ def test_write_json_mcp_client_config_without_repo_path_still_follows_a_symlink(
     config_path.symlink_to(real_target)
     entry = {"command": "aletheore", "args": ["mcp", "/some/repo"]}
 
-    message = _write_json_mcp_client_config(config_path, "mcpServers", entry)
+    message, security_skip = _write_json_mcp_client_config(config_path, "mcpServers", entry)
 
     assert "wrote" in message
+    assert security_skip is False
     assert json.loads(real_target.read_text()) == {"mcpServers": {"aletheore": entry}}
 
 
@@ -720,18 +724,41 @@ def test_mcp_install_skips_a_symlinked_config_path_end_to_end(tmp_path):
 
     result = runner.invoke(app, ["mcp-install", str(repo), "--target", "claude-code"])
 
-    assert result.exit_code == 0
+    # Real audit finding: this used to exit 0 even though the install was
+    # refused for a security reason - a script calling mcp-install had no
+    # way to detect that install didn't actually happen, as opposed to an
+    # ordinary "nothing to do" skip. Now exits 1 specifically because the
+    # skip was security-relevant.
+    assert result.exit_code == 1
     assert "escapes the repo" in result.stdout
     assert json.loads(outside_target.read_text()) == {"do_not_touch": True}
+
+
+def test_mcp_install_exit_code_reflects_the_security_skip_even_when_another_target_succeeds(tmp_path):
+    # The aggregate exit code must not get overwritten by a later,
+    # successful target in the same run - one security-relevant skip
+    # anywhere in the selection has to make the whole command exit 1.
+    repo = tmp_path / "malicious-repo"
+    repo.mkdir()
+    outside_target = tmp_path / "outside_secret.json"
+    outside_target.write_text(json.dumps({"do_not_touch": True}))
+    (repo / ".mcp.json").symlink_to(outside_target)
+
+    result = runner.invoke(app, ["mcp-install", str(repo), "--target", "claude-code", "--target", "cursor"])
+
+    assert result.exit_code == 1
+    assert "escapes the repo" in result.stdout
+    assert (repo / ".cursor" / "mcp.json").exists()  # the other target still succeeded
 
 
 def test_write_json_mcp_client_config_creates_new_file(tmp_path):
     config_path = tmp_path / ".mcp.json"
     entry = {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
 
-    message = _write_json_mcp_client_config(config_path, "mcpServers", entry)
+    message, security_skip = _write_json_mcp_client_config(config_path, "mcpServers", entry)
 
     assert "wrote" in message
+    assert security_skip is False
     assert json.loads(config_path.read_text()) == {"mcpServers": {"aletheore": entry}}
 
 
@@ -765,9 +792,10 @@ def test_write_json_mcp_client_config_updates_existing_aletheore_entry(tmp_path)
     )
     new_entry = {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
 
-    message = _write_json_mcp_client_config(config_path, "mcpServers", new_entry)
+    message, security_skip = _write_json_mcp_client_config(config_path, "mcpServers", new_entry)
 
     assert "updated" in message
+    assert security_skip is False
     data = json.loads(config_path.read_text())
     assert data["mcpServers"]["aletheore"] == new_entry
     assert len(data["mcpServers"]) == 1
@@ -777,11 +805,12 @@ def test_write_json_mcp_client_config_skips_invalid_json_without_crashing(tmp_pa
     config_path = tmp_path / ".mcp.json"
     config_path.write_text("{not valid json")
 
-    message = _write_json_mcp_client_config(
+    message, security_skip = _write_json_mcp_client_config(
         config_path, "mcpServers", {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
     )
 
     assert "skipped" in message
+    assert security_skip is False
     assert config_path.read_text() == "{not valid json"
 
 
@@ -789,11 +818,12 @@ def test_write_json_mcp_client_config_skips_when_top_level_key_is_not_an_object(
     config_path = tmp_path / ".mcp.json"
     config_path.write_text(json.dumps({"mcpServers": "not-an-object"}))
 
-    message = _write_json_mcp_client_config(
+    message, security_skip = _write_json_mcp_client_config(
         config_path, "mcpServers", {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
     )
 
     assert "skipped" in message
+    assert security_skip is False
     assert json.loads(config_path.read_text()) == {"mcpServers": "not-an-object"}
 
 
@@ -801,9 +831,10 @@ def test_write_toml_mcp_client_config_creates_new_file(tmp_path):
     config_path = tmp_path / ".codex" / "config.toml"
     entry = {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
 
-    message = _write_toml_mcp_client_config(config_path, "mcp_servers", entry)
+    message, security_skip = _write_toml_mcp_client_config(config_path, "mcp_servers", entry)
 
     assert "wrote" in message
+    assert security_skip is False
     data = tomllib.loads(config_path.read_text())
     assert data == {"mcp_servers": {"aletheore": entry}}
 
@@ -825,9 +856,10 @@ def test_write_toml_mcp_client_config_updates_existing_aletheore_entry(tmp_path)
     config_path.write_text('[mcp_servers.aletheore]\ncommand = "aletheore"\nargs = ["mcp", "/old"]\n')
     new_entry = {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
 
-    message = _write_toml_mcp_client_config(config_path, "mcp_servers", new_entry)
+    message, security_skip = _write_toml_mcp_client_config(config_path, "mcp_servers", new_entry)
 
     assert "updated" in message
+    assert security_skip is False
     data = tomllib.loads(config_path.read_text())
     assert data["mcp_servers"]["aletheore"] == new_entry
     assert len(data["mcp_servers"]) == 1
@@ -837,11 +869,12 @@ def test_write_toml_mcp_client_config_skips_invalid_toml_without_crashing(tmp_pa
     config_path = tmp_path / "config.toml"
     config_path.write_text("not [ valid toml")
 
-    message = _write_toml_mcp_client_config(
+    message, security_skip = _write_toml_mcp_client_config(
         config_path, "mcp_servers", {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
     )
 
     assert "skipped" in message
+    assert security_skip is False
     assert config_path.read_text() == "not [ valid toml"
 
 
