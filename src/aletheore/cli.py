@@ -2120,6 +2120,33 @@ def cycles(
     print(cycles_report(evidence, repo))
 
 
+@app.command(
+    name="tests-for",
+    help=(
+        "every test file that exercises a file - via the import graph or its naming convention - as one "
+        "complete answer, e.g. aletheore tests-for src/click/_compat.py"
+    ),
+)
+def tests_for(
+    file: str = typer.Argument(..., help="file path exactly as it appears in the scan"),
+    path: str = typer.Argument(".", help="repository path"),
+    path_option: Optional[str] = _PATH_OPTION,
+) -> None:
+    from aletheore.tests_for import TestsForError, tests_for_report
+
+    repo = Path(_resolve_path(path, path_option)).resolve()
+    try:
+        evidence = load_evidence(repo)
+    except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
+        print(f"error: {exc} (run 'aletheore scan' first)", file=sys.stderr)
+        raise typer.Exit(code=1)
+    try:
+        print(tests_for_report(evidence, repo, file))
+    except TestsForError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise typer.Exit(code=1)
+
+
 @app.command(help="compare two air.json files")
 def diff(
     old: str = typer.Argument(..., help="path to the baseline air.json"),
