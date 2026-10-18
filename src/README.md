@@ -552,11 +552,11 @@ aletheore healthcheck . --base-url http://127.0.0.1:5000
 ### `aletheore mcp [path]`
 
 Starts a stdio MCP server scoped to one repository, so a coding agent can query its structure
-directly instead of shelling out via Bash or re-reading files on every lookup. Every tool
+directly instead of shelling out via Bash for every lookup. Every tool
 result is [TOON](https://toonformat.dev)-encoded rather than plain JSON — the calling agent's
 own token budget is what actually pays for reading these results, and evidence's shape (almost
-entirely uniform arrays of same-shaped objects) is exactly TOON's best case. Exposes 30 tools in
-a read-only posture, 34 by default, and 35 with every effect permitted — see
+entirely uniform arrays of same-shaped objects) is exactly TOON's best case. Exposes 32 tools in
+a read-only posture, 36 by default, and 37 with every effect permitted — see
 [Tool permissions](#tool-permissions) for what gates the rest — plus one optional answer tool
 when started with `--agent`:
 
@@ -582,8 +582,13 @@ when started with `--agent`:
 - `aletheore_ast_pattern(language, query)` — structural search by shape, not words: a raw
   tree-sitter S-expression query against every file of one language, re-parsed from disk (not
   air.json) since a structural match needs the real parse tree.
-- `aletheore_symbol_source(module, symbol)` — exact source text for one named function/class,
-  with resolved line bounds.
+- `aletheore_symbol_source(module, symbol, max_lines=120)` — source text for one named function/class,
+  with resolved line bounds, returned as a one-line header plus the raw code. A symbol longer than
+  `max_lines` is cut (a long class is shown as its head plus a list of its methods with line ranges);
+  `max_lines=0` returns all of it.
+- `aletheore_locate(query)` — find where the names in `query` are defined and see the code in one call:
+  the functions whose bodies contain those names, each as a `path::Name Lstart-end` header plus its
+  source. Says so when a file changed after the last scan and its line ranges may be off.
 - `aletheore_verify_citations(report_text)` — checks every `file:line` citation in a report
   against this repo's real evidence and real file line counts, same check as `aletheore verify`.
 - `aletheore_find_evidence_for_endpoint(method, path)`, `aletheore_find_evidence_for_symbol(symbol)`,
@@ -699,6 +704,12 @@ machine. With `external` withheld (the default posture), `aletheore_index` never
 hosted endpoint either — it falls through to the local Ollama/OpenAI-fallback path above, for the
 same reason `aletheore_managed_audit` doesn't upload evidence without being asked. Set
 `ALETHEORE_MCP_ALLOW=write,network,external` to opt in.
+
+`aletheore mcp --profile nav` starts a smaller server with only `aletheore_locate`,
+`aletheore_symbol_source` and `aletheore_search`: about a tenth of the tool-definition text of the
+full server, so a client can load it up front instead of behind a tool-search step. Whether it
+saves tokens depends on the task: where the target is already named in the request, a plain grep
+is just as cheap, and the tools mainly help when you do not yet know where to look.
 
 ### `aletheore mcp-install [path]`
 

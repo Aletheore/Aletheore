@@ -1178,7 +1178,7 @@ def _healthcheck(repo_path: str, base_url: str) -> int:
     return 0
 
 
-def _mcp(repo_path: str, forced_agent: str | None = None, watch: bool = True) -> int:
+def _mcp(repo_path: str, forced_agent: str | None = None, watch: bool = True, profile: str = "full") -> int:
     from aletheore.mcp_server import build_server
 
     repo = Path(repo_path).resolve()
@@ -1199,6 +1199,7 @@ def _mcp(repo_path: str, forced_agent: str | None = None, watch: bool = True) ->
         repo,
         answer_adapter=answer_adapter,
         watch=watch and not watching_disabled_by_env(),
+        profile=profile,
     )
     # stderr, never stdout - an MCP client treats this process's stdout as the
     # JSON-RPC channel from the moment it starts, so anything written there
@@ -2183,6 +2184,28 @@ def usages(
         raise typer.Exit(code=1)
 
 
+@app.command(
+    help=(
+        "find where names are defined and print the matching functions with their source, "
+        "e.g. aletheore locate 'write_usage HelpFormatter'"
+    )
+)
+def locate(
+    query: str = typer.Argument(..., help="names to look for, as plain words"),
+    path: str = typer.Argument(".", help="repository path"),
+    path_option: Optional[str] = _PATH_OPTION,
+) -> None:
+    from aletheore.code_locator import locate_report
+
+    repo = Path(_resolve_path(path, path_option)).resolve()
+    try:
+        evidence = load_evidence(repo)
+    except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
+        print(f"error: {exc} (run 'aletheore scan' first)")
+        raise typer.Exit(code=1)
+    print(locate_report(evidence, repo, query))
+
+
 @app.command(help="compare two air.json files")
 def diff(
     old: str = typer.Argument(..., help="path to the baseline air.json"),
@@ -2248,13 +2271,35 @@ def mcp(
         "--no-watch",
         help=(
             "do not re-scan in the background when source files change "
-            f"(same as {WATCH_ENV_VAR}=0)"
+            f"(same as {WATCH_ENV_VAR}=0); always off under --profile nav regardless of this flag"
+        ),
+    ),
+    profile: str = typer.Option(
+        "full",
+        "--profile",
+        help=(
+            "tool set to expose: full (every tool, with background watching) or nav (three "
+            "code-navigation tools, small enough to load up front, with background watching off)"
         ),
     ),
 ) -> None:
+    if profile not in ("full", "nav"):
+        console.print(f"[bold red]error:[/bold red] unknown profile {profile!r}; choose full or nav")
+        raise typer.Exit(code=2)
     path = _resolve_path(path, path_option)
     _checked_dir(path)
-    raise typer.Exit(code=_mcp(path, agent, watch=not no_watch))
+    # Real audit finding (Flash Review): `--profile nav` silently disabled
+    # watching with no indication - --no-watch's own help text describes
+    # watching as the default, and nothing said choosing nav also turns it
+    # off. A one-line note here, only when the user didn't already say
+    # --no-watch (so it's genuinely a consequence of the profile, not
+    # something they already asked for), makes it visible instead of silent.
+    if profile == "nav" and not no_watch:
+        console.print(
+            "[dim]--profile nav does not watch for file changes; re-run the scan yourself after edits, "
+            "or use --profile full for background watching.[/dim]"
+        )
+    raise typer.Exit(code=_mcp(path, agent, watch=not no_watch and profile == "full", profile=profile))
 
 
 @app.command(
