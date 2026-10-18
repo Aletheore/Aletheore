@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import subprocess
 import time
@@ -12583,6 +12584,47 @@ def test_run_git_forces_capture_even_when_a_caller_asks_for_inherited_streams(mo
 
     assert captured["kwargs"]["capture_output"] is True
     assert "stdout" not in captured["kwargs"] and "stderr" not in captured["kwargs"]
+
+
+def test_run_git_warns_when_a_callers_stdout_or_stderr_redirect_is_dropped(monkeypatch, caplog):
+    # Flash Review catch: dropping a caller's stdout=/stderr= kwarg with no
+    # signal at all left the override silently invisible - a caller that
+    # asked to suppress or redirect git's output had no way to know its
+    # request was ignored.
+    from scan_worker import jobs
+
+    monkeypatch.setattr(jobs.subprocess, "run", lambda args, **kw: subprocess.CompletedProcess(args, 0))
+    with caplog.at_level(logging.WARNING, logger="scan_worker.jobs"):
+        jobs._run_git(["/usr/bin/git", "status"], cwd="/tmp", stdout=subprocess.DEVNULL)
+
+    assert any("ignored" in record.message for record in caplog.records)
+
+
+def test_run_git_does_not_warn_when_no_caller_supplied_stdout_or_stderr(monkeypatch, caplog):
+    from scan_worker import jobs
+
+    monkeypatch.setattr(jobs.subprocess, "run", lambda args, **kw: subprocess.CompletedProcess(args, 0))
+    with caplog.at_level(logging.WARNING, logger="scan_worker.jobs"):
+        jobs._run_git(["/usr/bin/git", "status"], cwd="/tmp")
+
+    assert not any("ignored" in record.message for record in caplog.records)
+
+
+def test_run_git_logs_successful_stdout_at_debug_level_not_just_stderr(monkeypatch, caplog):
+    # Flash Review catch: a successful command's stdout was captured (so it
+    # no longer streamed to the worker's real stdout) but never logged
+    # anywhere, unlike stderr - silently dropping diagnostic output (fetch
+    # warnings, LFS progress) that used to be visible in job logs.
+    from scan_worker import jobs
+
+    monkeypatch.setattr(
+        jobs.subprocess, "run",
+        lambda args, **kw: subprocess.CompletedProcess(args, 0, stdout="some diagnostic output\n", stderr=""),
+    )
+    with caplog.at_level(logging.DEBUG, logger="scan_worker.jobs"):
+        jobs._run_git(["/usr/bin/git", "status"], cwd="/tmp")
+
+    assert any("some diagnostic output" in record.message for record in caplog.records)
 
 
 def test_scrub_credentialed_urls_redacts_a_userinfo_that_contains_an_at_sign():

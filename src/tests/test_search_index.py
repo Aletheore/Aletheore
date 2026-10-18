@@ -2106,7 +2106,7 @@ def test_build_index_does_not_reuse_vectors_from_a_different_embedder_even_when_
          patch("aletheore.search_index.httpx.Client", return_value=http):
         # Same content, same chunk_hash, same dimension - only the provider
         # available underneath it changed.
-        build_index(tmp_path, evidence)
+        build_index(tmp_path, evidence, already_consented=True)
 
     rows_after = open_index(tmp_path).to_arrow().to_pylist()
     assert rows_after[0]["vector"] == pytest.approx([0.9] * 768)
@@ -2268,7 +2268,7 @@ def test_embed_in_batches_forwards_repo_id_to_every_hosted_batch():
 
     with patch("aletheore.search_index.get_api_key", return_value="tok"), \
          patch("aletheore.search_index.httpx.Client", return_value=http):
-        _embed_in_batches(["a", "b"], batch_size=1, repo_id="repo-xyz")
+        _embed_in_batches(["a", "b"], batch_size=1, repo_id="repo-xyz", already_consented=True)
 
     assert http.post.call_count == 2
     assert all(
@@ -2289,7 +2289,7 @@ def test_build_index_sends_the_repos_own_repo_id_to_hosted_embeddings(tmp_path):
 
     with patch("aletheore.search_index.get_api_key", return_value="tok"), \
          patch("aletheore.search_index.httpx.Client", return_value=http):
-        build_index(tmp_path, evidence)
+        build_index(tmp_path, evidence, already_consented=True)
 
     assert http.post.call_args.kwargs["json"]["repo_id"] == _repo_id(tmp_path)
 
@@ -2303,7 +2303,7 @@ def test_hosted_embeddings_are_preferred_when_a_token_exists():
     with patch("aletheore.search_index.get_api_key", return_value="tok"), \
          patch("aletheore.search_index.httpx.Client", return_value=http), \
          patch("aletheore.search_index.embed_texts") as local:
-        vectors, _ = _embed_in_batches(["chunk"])
+        vectors, _ = _embed_in_batches(["chunk"], already_consented=True)
 
     assert len(vectors[0]) == 1536
     local.assert_not_called()
@@ -2319,7 +2319,7 @@ def test_a_402_falls_back_to_local_and_says_why(capsys):
     with patch("aletheore.search_index.get_api_key", return_value="tok"), \
          patch("aletheore.search_index.httpx.Client", return_value=http), \
          patch("aletheore.search_index.embed_texts", side_effect=lambda t: [[0.0] * 768] * len(t)):
-        vectors, _ = _embed_in_batches(["chunk"])
+        vectors, _ = _embed_in_batches(["chunk"], already_consented=True)
 
     # One vector for one input text - not two. The local fallback for the
     # batch that just failed on hosted used to also get re-queued as
@@ -2377,7 +2377,7 @@ def test_hosted_failure_partway_through_raises_rather_than_mixing_providers():
          patch("aletheore.search_index.httpx.Client", return_value=http), \
          patch("aletheore.search_index.embed_texts") as local, \
          pytest.raises(HostedEmbeddingUnavailableError):
-        _embed_in_batches(["a", "b"], batch_size=1)
+        _embed_in_batches(["a", "b"], batch_size=1, already_consented=True)
 
     local.assert_not_called()
 
@@ -2404,12 +2404,27 @@ def test_allow_hosted_false_skips_hosted_call_even_with_a_token(capsys):
     assert "not permitted in this context" in capsys.readouterr().err
 
 
-def test_allow_hosted_true_is_the_default_and_preserves_existing_behavior():
+def test_allow_hosted_true_alone_does_not_bypass_consent_outside_a_real_terminal(monkeypatch):
+    # allow_hosted still defaults to True (preserving the CLI's wiring), but
+    # that alone is no longer sufficient outside a real terminal - see
+    # test_hosted_embedding_confirmation_fails_closed_outside_a_real_terminal_without_other_consent.
+    # already_consented is the only way to get the old always-call-hosted
+    # behavior without a tty.
+    monkeypatch.setattr(search_index_module, "_hosted_embedding_confirmed", None)
     http = MagicMock()
     http.post.return_value = _hosted_response(200, {"vectors": [[0.1] * 1536]})
     with patch("aletheore.search_index.get_api_key", return_value="tok"), \
+         patch("aletheore.search_index.httpx.Client", return_value=http), \
+         patch("aletheore.search_index.embed_texts") as local:
+        vectors, _ = _embed_in_batches(["chunk"])  # no allow_hosted or already_consented kwarg
+
+    http.post.assert_not_called()
+    local.assert_called_once()
+
+    monkeypatch.setattr(search_index_module, "_hosted_embedding_confirmed", None)
+    with patch("aletheore.search_index.get_api_key", return_value="tok"), \
          patch("aletheore.search_index.httpx.Client", return_value=http):
-        vectors, _ = _embed_in_batches(["chunk"])  # no allow_hosted kwarg at all
+        vectors, _ = _embed_in_batches(["chunk"], already_consented=True)
 
     http.post.assert_called_once()
     assert len(vectors[0]) == 1536
@@ -3011,11 +3026,36 @@ def test_hosted_embedding_confirmation_is_asked_at_most_once_per_process(monkeyp
     confirm_fn.assert_called_once()
 
 
-def test_hosted_embedding_confirmation_is_skipped_outside_a_real_terminal(monkeypatch):
-    # The MCP server speaks its protocol over stdio, and a non-interactive
-    # background run (CI, a watch loop with no attached terminal) has
-    # nobody to answer a prompt - both must proceed on the caller's own
-    # `allow_hosted` consent rather than hang or corrupt stdout.
+def test_hosted_embedding_confirmation_fails_closed_outside_a_real_terminal_without_other_consent(monkeypatch):
+    # Flash Review catch: a non-tty stdin used to be treated as proof the
+    # caller's `allow_hosted` reflected consent from elsewhere (MCP, a CI
+    # job), but the plain CLI path (`aletheore index`) defaults
+    # `allow_hosted` to True with no other consent channel at all - a human
+    # running it with piped/redirected stdin got silently auto-approved
+    # with no real opportunity to decline. With no `already_consented`
+    # signal, a non-tty caller must now fail closed (decline, fall back to
+    # the local provider) rather than auto-upload.
+    monkeypatch.setenv("ALETHEORE_API_TOKEN", "tok")
+    monkeypatch.setattr(search_index_module, "_hosted_embedding_confirmed", None)
+    monkeypatch.setattr(sys, "stdin", MagicMock(isatty=lambda: False))
+    confirm_fn = MagicMock(return_value=False)
+    hosted = MagicMock(return_value=[[0.0] * 768])
+    local = MagicMock(return_value=[[0.1] * 768])
+
+    with patch("aletheore.search_index.embed_texts_hosted", hosted), \
+         patch("aletheore.search_index.embed_texts", local):
+        search_index_module._embed_in_batches(["def a(): pass"], confirm_fn=confirm_fn)
+
+    confirm_fn.assert_not_called()
+    hosted.assert_not_called()
+    local.assert_called_once()
+
+
+def test_hosted_embedding_confirmation_is_skipped_when_already_consented(monkeypatch):
+    # MCP's own aletheore_index tool call: it is always non-interactive
+    # (stdio protocol, nobody to answer a prompt) but has already obtained
+    # real consent through its own EFFECT_EXTERNAL permission grant, so it
+    # passes already_consented=True instead of relying on tty detection.
     monkeypatch.setenv("ALETHEORE_API_TOKEN", "tok")
     monkeypatch.setattr(search_index_module, "_hosted_embedding_confirmed", None)
     monkeypatch.setattr(sys, "stdin", MagicMock(isatty=lambda: False))
@@ -3023,7 +3063,9 @@ def test_hosted_embedding_confirmation_is_skipped_outside_a_real_terminal(monkey
     hosted = MagicMock(return_value=[[0.0] * 768])
 
     with patch("aletheore.search_index.embed_texts_hosted", hosted):
-        search_index_module._embed_in_batches(["def a(): pass"], confirm_fn=confirm_fn)
+        search_index_module._embed_in_batches(
+            ["def a(): pass"], confirm_fn=confirm_fn, already_consented=True
+        )
 
     confirm_fn.assert_not_called()
     hosted.assert_called_once()

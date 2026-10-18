@@ -479,6 +479,13 @@ def _run_git(args: list[str], **kwargs) -> None:
         args = [_git_path(), *args[1:]]
     # This function is the redaction chokepoint, so a caller cannot opt out of the capture-and-scrub path:
     # capture_output is forced on and any stdout/stderr redirect (which would conflict with it) is dropped.
+    # Flash Review catch: dropping those kwargs with no signal at all left a caller's own
+    # stdout=/stderr= redirect silently ignored - logging it keeps the override from being a surprise.
+    if "stdout" in kwargs or "stderr" in kwargs:
+        logging.getLogger("scan_worker.jobs").warning(
+            "_run_git: caller-supplied stdout/stderr kwargs are ignored; output is always captured "
+            "and credential-scrubbed instead"
+        )
     kwargs.pop("stdout", None)
     kwargs.pop("stderr", None)
     kwargs["capture_output"] = True
@@ -487,6 +494,9 @@ def _run_git(args: list[str], **kwargs) -> None:
         result = subprocess.run(args, check=True, **kwargs)
         # Captured output of a successful command is not shown, but a worker debugging a slow or partly failing
         # job still gets it at debug level, with credentials scrubbed.
+        stdout = getattr(result, "stdout", None)
+        if isinstance(stdout, str) and stdout.strip():
+            logging.getLogger("scan_worker.jobs").debug("git stdout: %s", _scrub_credentialed_urls(stdout.strip()))
         stderr = getattr(result, "stderr", None)
         if isinstance(stderr, str) and stderr.strip():
             logging.getLogger("scan_worker.jobs").debug("git stderr: %s", _scrub_credentialed_urls(stderr.strip()))

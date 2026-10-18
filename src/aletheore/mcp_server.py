@@ -934,7 +934,11 @@ def _register_index_tool(mcp_instance: MCPServer, repo_path: Path, effects: froz
         with EVIDENCE_WRITE_LOCK:
             evidence = read_evidence(repo_path)
             try:
-                count = build_index(repo_path, evidence, allow_hosted=EFFECT_EXTERNAL in effects)
+                count = build_index(
+                    repo_path, evidence,
+                    allow_hosted=EFFECT_EXTERNAL in effects,
+                    already_consented=EFFECT_EXTERNAL in effects,
+                )
             except Exception as exc:  # noqa: BLE001
                 return _toon_result({"error": str(exc)})
         return _toon_result({"indexed_chunks": count})
