@@ -2228,6 +2228,14 @@ async def upsert_custom_skill(pool: asyncpg.Pool, personal_identity_id: int, ski
     return dict(row)
 
 
+async def delete_custom_skill(pool: asyncpg.Pool, personal_identity_id: int, skill_name: str) -> bool:
+    result = await pool.execute(
+        "DELETE FROM custom_skills WHERE personal_identity_id = $1 AND skill_name = $2",
+        personal_identity_id, skill_name,
+    )
+    return result != "DELETE 0"
+
+
 async def touch_api_token(
     pool: asyncpg.Pool, token_hash: str, min_interval_seconds: int = 0
 ) -> None:

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from app_server.admin import TokenLabel, _bearer_github_token, _fetch_github_user
 from app_server.db import (
     create_personal_token_within_limit,
+    delete_custom_skill,
     get_custom_skill,
     get_or_create_personal_identity,
     get_personal_identity_by_token_hash,
@@ -127,3 +128,11 @@ async def put_custom_skill_route(request: Request, name: str, body: PutCustomSki
             detail="invalid skill name: use 1-128 letters, digits, '-' or '_'",
         )
     return await upsert_custom_skill(request.app.state.db_pool, identity["id"], name, body.content)
+
+
+@skill_hub_router.delete("/v1/custom-skills/{name}", status_code=204)
+async def delete_custom_skill_route(request: Request, name: str):
+    identity = await _authenticate_personal_token(request)
+    deleted = await delete_custom_skill(request.app.state.db_pool, identity["id"], name)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="no custom skill by that name")

@@ -360,3 +360,47 @@ async def test_put_custom_skill_accepts_a_max_length_safe_name(test_app, persona
     )
 
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_delete_custom_skill_removes_it(test_app, personal_token_header):
+    await test_app.put("/v1/custom-skills/my-review", headers=personal_token_header, json={"content": "x"})
+    response = await test_app.delete("/v1/custom-skills/my-review", headers=personal_token_header)
+    assert response.status_code == 204
+    get_response = await test_app.get("/v1/custom-skills/my-review", headers=personal_token_header)
+    assert get_response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_custom_skill_unknown_name_404(test_app, personal_token_header):
+    response = await test_app.delete("/v1/custom-skills/never-added", headers=personal_token_header)
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_custom_skill_scoped_to_caller_identity(test_app, personal_token_header, other_personal_token_header):
+    await test_app.put("/v1/custom-skills/mine", headers=personal_token_header, json={"content": "x"})
+    response = await test_app.delete("/v1/custom-skills/mine", headers=other_personal_token_header)
+    assert response.status_code == 404
+    # Still there for the real owner.
+    get_response = await test_app.get("/v1/custom-skills/mine", headers=personal_token_header)
+    assert get_response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_delete_custom_skill_leaves_same_name_for_other_identity(test_app, personal_token_header, other_personal_token_header):
+    await test_app.put("/v1/custom-skills/shared-name", headers=personal_token_header, json={"content": "mine"})
+    await test_app.put("/v1/custom-skills/shared-name", headers=other_personal_token_header, json={"content": "theirs"})
+    response = await test_app.delete("/v1/custom-skills/shared-name", headers=personal_token_header)
+    assert response.status_code == 204
+    other_response = await test_app.get("/v1/custom-skills/shared-name", headers=other_personal_token_header)
+    assert other_response.status_code == 200
+    assert other_response.json()["content"] == "theirs"
+
+
+@pytest.mark.asyncio
+async def test_delete_custom_skill_is_idempotent(test_app, personal_token_header):
+    await test_app.put("/v1/custom-skills/my-review", headers=personal_token_header, json={"content": "x"})
+    await test_app.delete("/v1/custom-skills/my-review", headers=personal_token_header)
+    second = await test_app.delete("/v1/custom-skills/my-review", headers=personal_token_header)
+    assert second.status_code == 404  # already gone, not a 500
