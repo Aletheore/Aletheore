@@ -192,3 +192,56 @@ def test_backup_file_is_not_listed_as_a_skill(tmp_path, monkeypatch):
     skill_hub.add_custom_skill("my-review", "v2")
 
     assert skill_hub.list_custom_skill_names() == ["my-review"]
+
+
+def test_remove_custom_skill_deletes_local_file_and_pushes(tmp_path, monkeypatch):
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        skill_hub_sync, "delete_custom_skill_best_effort", lambda name, **kw: calls.append(name)
+    )
+    skill_hub.add_custom_skill("my-review", "x")
+    assert skill_hub.remove_custom_skill("my-review") is True
+    assert skill_hub.read_custom_skill_file("my-review") is None
+    assert calls == ["my-review"]
+
+
+def test_remove_custom_skill_already_gone_returns_false_not_error(tmp_path, monkeypatch):
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "delete_custom_skill_best_effort", lambda name, **kw: None)
+    assert skill_hub.remove_custom_skill("never-existed") is False
+
+
+def test_remove_custom_skill_rejects_unsafe_name():
+    with pytest.raises(ValueError):
+        skill_hub.remove_custom_skill("../escape")
+
+
+def test_remove_custom_skill_leaves_bak_file_alone(tmp_path, monkeypatch):
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "delete_custom_skill_best_effort", lambda name, **kw: None)
+    skill_hub.add_custom_skill("my-review", "v1")
+    skill_hub.add_custom_skill("my-review", "v2")  # creates my-review.md.bak with "v1"
+    skill_hub.remove_custom_skill("my-review")
+    assert (tmp_path / "my-review.md.bak").read_text(encoding="utf-8") == "v1"
+
+
+def test_remove_custom_skill_calls_sync_delete_even_when_local_file_absent(tmp_path, monkeypatch):
+    # The server might still hold a stale copy from an earlier, now-forgotten
+    # local delete - a repeated remove must keep trying to clear it there even
+    # though there's nothing left to unlink locally.
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        skill_hub_sync, "delete_custom_skill_best_effort", lambda name, **kw: calls.append(name)
+    )
+    assert skill_hub.remove_custom_skill("never-existed") is False
+    assert calls == ["never-existed"]

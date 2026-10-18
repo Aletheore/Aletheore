@@ -974,6 +974,34 @@ def _register_add_custom_skill_tool(mcp_instance: MCPServer, repo_path: Path) ->
         return f"Saved custom skill as '{skill_id}'."
 
 
+def _register_remove_custom_skill_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+    # Same gating as _register_add_custom_skill_tool above: this also writes
+    # under the user's home config directory and makes a best-effort network
+    # call (skill_hub_sync.delete_custom_skill_best_effort) when a Skill Hub
+    # personal token is saved, so it's gated behind the same `write` and
+    # `network` effects.
+    @mcp_instance.tool(
+        name="aletheore_remove_custom_skill",
+        # Matches aletheore_add_custom_skill's annotations - see
+        # test_effectful_tools_are_distinguishable_from_read_only_ones.
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
+        ),
+    )
+    def aletheore_remove_custom_skill(name: str) -> str:
+        """Deletes a local custom skill by name. Returns a clean message
+        either way - deleting a name that was never added (or already
+        removed) is not an error. name must contain only letters, digits,
+        '-', and '_' (no path separators)."""
+        try:
+            existed = skill_hub.remove_custom_skill(name)
+        except ValueError as exc:
+            return str(exc)
+        if existed:
+            return f"Removed custom skill custom/{name}."
+        return f"custom/{name} was not present - nothing to remove."
+
+
 def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_search", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_search(pattern: str, regex: bool = False, path_glob: str | None = None) -> str:
@@ -1492,6 +1520,10 @@ TOOL_REQUIRED_EFFECTS: dict[str, frozenset[str]] = {
     # Network too: skill_hub.add_custom_skill pushes the skill to the user's
     # Skill Hub account whenever a personal token is saved.
     "aletheore_add_custom_skill": frozenset({EFFECT_WRITE, EFFECT_NETWORK}),
+    # Same reasoning: skill_hub.remove_custom_skill also makes a best-effort
+    # network call (skill_hub_sync.delete_custom_skill_best_effort) whenever a
+    # personal token is saved.
+    "aletheore_remove_custom_skill": frozenset({EFFECT_WRITE, EFFECT_NETWORK}),
 }
 
 
@@ -1629,6 +1661,8 @@ def build_server(
         _register_managed_audit_tool(mcp_instance, repo_path)
     if permitted("aletheore_add_custom_skill"):
         _register_add_custom_skill_tool(mcp_instance, repo_path)
+    if permitted("aletheore_remove_custom_skill"):
+        _register_remove_custom_skill_tool(mcp_instance, repo_path)
     if answer_adapter is not None and permitted("aletheore_answer"):
         _register_answer_tool(mcp_instance, repo_path, answer_adapter, effects)
 

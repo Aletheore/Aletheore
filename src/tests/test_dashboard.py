@@ -493,7 +493,7 @@ def test_api_mcp_tools_reflects_the_configured_consent_posture(tmp_path):
 
     assert response.status_code == 200
     tools = response.json()
-    assert len(tools) == 39
+    assert len(tools) == 40
     names = {t["name"] for t in tools}
     assert "aletheore_managed_audit" not in names
     assert "aletheore_scan" in names

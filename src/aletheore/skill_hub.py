@@ -249,3 +249,27 @@ def add_custom_skill(name: str, content: str) -> str:
 
     skill_hub_sync.push_custom_skill_best_effort(name, content)
     return f"{_CUSTOM_PREFIX}{name}"
+
+
+def remove_custom_skill(name: str) -> bool:
+    """Deletes a local custom skill by name.
+
+    Returns True if a local file was actually deleted, False if there was
+    nothing to remove - "already gone" is a valid outcome for a delete, not
+    an error, so this never raises SkillNotFoundError the way get_skill does.
+    Still raises ValueError for an unsafe name, same as add_custom_skill.
+    """
+    safe = sanitize_skill_name(name)
+    path = custom_skills_dir() / f"{safe}.md"
+    existed = path.is_file()
+    if existed:
+        path.unlink()
+    # Local import: skill_hub_sync imports this module, so a top-level import
+    # here would be circular. Called unconditionally, even when nothing was
+    # deleted locally: the server might still hold a stale copy from an
+    # earlier, now-forgotten local delete, and delete_custom_skill_best_effort
+    # itself handles "nothing to do" cheaply and never raises.
+    from aletheore import skill_hub_sync
+
+    skill_hub_sync.delete_custom_skill_best_effort(name)
+    return existed

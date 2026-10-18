@@ -274,9 +274,10 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_list_skills",
         "aletheore_get_skill",
         "aletheore_add_custom_skill",
+        "aletheore_remove_custom_skill",
     }
     assert expected.issubset(names)
-    assert len(names) == 40
+    assert len(names) == 41
     assert "aletheore_answer" not in names
 
 
@@ -2197,3 +2198,43 @@ async def test_aletheore_add_custom_skill_tool_unsafe_name_is_clear_error(tmp_pa
     )
 
     assert "invalid" in result.content[0].text.lower()
+
+
+@pytest.mark.asyncio
+async def test_aletheore_remove_custom_skill_tool(tmp_path, monkeypatch):
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path / "custom_skills")
+    monkeypatch.setattr(skill_hub_sync, "delete_custom_skill_best_effort", lambda name, **kw: None)
+    server = build_server(tmp_path)
+
+    await server.call_tool("aletheore_add_custom_skill", {"name": "my-review", "content": "x"})
+    result = await server.call_tool("aletheore_remove_custom_skill", {"name": "my-review"})
+
+    assert "removed" in result.content[0].text.lower() or "deleted" in result.content[0].text.lower()
+    assert skill_hub.read_custom_skill_file("my-review") is None
+
+
+@pytest.mark.asyncio
+async def test_aletheore_remove_custom_skill_tool_unsafe_name_is_clear_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path / "custom_skills")
+    server = build_server(tmp_path)
+
+    result = await server.call_tool(
+        "aletheore_remove_custom_skill", {"name": "../escape"}
+    )
+
+    assert "invalid" in result.content[0].text.lower()
+
+
+@pytest.mark.asyncio
+async def test_aletheore_remove_custom_skill_tool_already_gone_is_clean_not_error(tmp_path, monkeypatch):
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path / "custom_skills")
+    monkeypatch.setattr(skill_hub_sync, "delete_custom_skill_best_effort", lambda name, **kw: None)
+    server = build_server(tmp_path)
+
+    result = await server.call_tool("aletheore_remove_custom_skill", {"name": "never-existed"})
+
+    assert "not present" in result.content[0].text.lower() or "nothing to remove" in result.content[0].text.lower()

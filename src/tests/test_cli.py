@@ -3613,3 +3613,30 @@ def test_skill_hub_add_rejects_unsafe_name(tmp_path):
     skill_file.write_text("x")
     result = runner.invoke(app, ["skill-hub", "add", "../escape", str(skill_file)])
     assert result.exit_code != 0
+
+
+def test_skill_hub_remove_deletes_and_reports(tmp_path, monkeypatch):
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "delete_custom_skill_best_effort", lambda name, **kw: None)
+    skill_file = tmp_path / "input.md"
+    skill_file.write_text("x")
+    runner.invoke(app, ["skill-hub", "add", "my-review", str(skill_file)])
+    result = runner.invoke(app, ["skill-hub", "remove", "my-review"])
+    assert result.exit_code == 0
+    assert skill_hub.read_custom_skill_file("my-review") is None
+
+
+def test_skill_hub_remove_unknown_name_clean_message_not_crash(tmp_path, monkeypatch):
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "delete_custom_skill_best_effort", lambda name, **kw: None)
+    result = runner.invoke(app, ["skill-hub", "remove", "never-existed"])
+    assert result.exit_code == 0  # not an error - "already gone" is a fine outcome for a delete
+
+
+def test_skill_hub_remove_rejects_unsafe_name(tmp_path):
+    result = runner.invoke(app, ["skill-hub", "remove", "../escape"])
+    assert result.exit_code != 0

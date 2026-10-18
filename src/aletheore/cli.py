@@ -2478,6 +2478,19 @@ def skill_hub_add(name: str, file: Path) -> None:
     console.print(f"[bold green]Added custom skill[/bold green] {skill_id}")
 
 
+@skill_hub_app.command("remove", help="remove a custom skill")
+def skill_hub_remove(name: str) -> None:
+    try:
+        existed = skill_hub.remove_custom_skill(name)
+    except ValueError as exc:
+        console.print(f"[bold red]error:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+    if existed:
+        console.print(f"[bold green]Removed custom skill[/bold green] custom/{name}")
+    else:
+        console.print(f"custom/{name} was not present - nothing to remove.")
+
+
 @app.command(help="authenticate with GitHub via device flow and save a personal API token")
 def login() -> None:
     from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, has_api_key, save_api_token
