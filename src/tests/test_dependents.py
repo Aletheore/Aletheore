@@ -102,3 +102,58 @@ def test_changed_target_is_named_as_such(tmp_path: Path):
     ev = _ev(GRAPH)
     ev["scanned_at"] = "2000-01-01T00:00:00+00:00"
     assert "the file asked about and" in dependents_report(ev, tmp_path, "a.py")
+
+
+def test_is_test_path_covers_common_conventions():
+    from aletheore.dependents import is_test_path
+
+    for p in ("tests/a.py", "pkg/test_a.py", "pkg/a_test.go", "src/a.test.ts", "src/a.spec.js", "x/__tests__/a.js",
+              "pkg/conftest.py", "src/FooTest.java", "spec/a_spec.rb"):
+        assert is_test_path(p), p
+    for p in ("pkg/a.py", "pkg/testing.py", "pkg/contest.go", "src/latest.ts", "src/attest.js"):
+        assert not is_test_path(p), p
+
+
+def test_no_tests_drops_test_files_and_counts_them(tmp_path: Path):
+    g = {"pkg/a.go": ["pkg/b.go", "pkg/b_test.go"], "pkg/b.go": [], "pkg/b_test.go": []}
+    text = dependents_report(_ev(g), tmp_path, "pkg/a.go", no_tests=True)
+    assert "1 files import pkg/a.go" in text and "b_test.go" not in text.split("\n\n")[0] and "1 more left out" in text
+
+
+def _go_ev():
+    # pkg/lib has two files; app imports one of them, cmd imports app, a test file in tools imports lib
+    mods = {
+        "pkg/lib/a.go": ["app/m.go", "tools/x_test.go"],
+        "pkg/lib/b.go": ["app/m.go", "tools/x_test.go"],
+        "app/m.go": ["cmd/main.go"],
+        "cmd/main.go": [],
+        "tools/x_test.go": [],
+    }
+    return {
+        "scanned_at": "2999-01-01T00:00:00+00:00",
+        "repository": {"modules": [{"path": p, "language": "go", "imported_by": by} for p, by in mods.items()], "unparseable_files": []},
+    }
+
+
+def test_directory_target_is_a_package_and_packages_flag_collapses_to_directories(tmp_path: Path):
+    text = dependents_report(_go_ev(), tmp_path, "pkg/lib", no_tests=True, packages=True)
+    head = text.split("\n\n")[0].splitlines()
+    assert head[0].startswith("2 packages (directories) import pkg/lib") and head[1:] == ["app", "cmd"]
+    assert "this package (2 files)" in text
+
+
+def test_directory_target_without_flags_lists_files_and_unknown_directory_errors(tmp_path: Path):
+    text = dependents_report(_go_ev(), tmp_path, "pkg/lib", no_tests=True)
+    assert "app/m.go" in text and "cmd/main.go" in text and "pkg/lib/a.go" not in text.split("\n\n")[0]
+    with pytest.raises(DependentsError, match="not a module or a directory"):
+        dependents_report(_go_ev(), tmp_path, "pkg/nope")
+
+
+def test_packages_mode_counts_left_out_packages_not_files(tmp_path: Path):
+    g = {
+        "pkg/a.go": ["x/one.go", "x/two.go", "y/one.go", "z/one_test.go"],
+        "x/one.go": [], "x/two.go": [], "y/one.go": [], "z/one_test.go": [],
+    }
+    out = dependents_report(_ev(g), tmp_path, "pkg/a.go", under=["x"], packages=True)
+    assert out.startswith("1 packages (directories) import pkg/a.go")
+    assert "(2 more left out" in out  # packages y and z, counted as packages

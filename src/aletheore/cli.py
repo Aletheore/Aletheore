@@ -2072,16 +2072,18 @@ def query(
 @app.command(
     help=(
         "list every file that imports a file, directly or through other imports, as one complete deduplicated list, "
-        "e.g. aletheore dependents src/click/_compat.py --under src --exclude tests"
+        "e.g. aletheore dependents src/click/_compat.py --under src --no-tests, or aletheore dependents internal/js --packages"
     )
 )
 def dependents(
-    file: str = typer.Argument(..., help="file path exactly as it appears in the scan"),
+    file: str = typer.Argument(..., help="file path exactly as it appears in the scan, or a directory to treat all its files as one package"),
     path: str = typer.Argument(".", help="repository path"),
     exclude: list[str] = typer.Option(
         [], "--exclude", help="leave out files under a directory with this exact name, or with this exact file name; repeatable"
     ),
     under: list[str] = typer.Option([], "--under", help="only list files below this directory; repeatable"),
+    no_tests: bool = typer.Option(False, "--no-tests", help="leave out test files (tests/ directories and test-shaped file names)"),
+    packages: bool = typer.Option(False, "--packages", help="list one line per directory (package) instead of one per file"),
     path_option: Optional[str] = _PATH_OPTION,
 ) -> None:
     from aletheore.dependents import DependentsError, dependents_report
@@ -2093,7 +2095,7 @@ def dependents(
         print(f"error: {exc} (run 'aletheore scan' first)")
         raise typer.Exit(code=1)
     try:
-        print(dependents_report(evidence, repo, file, exclude, under))
+        print(dependents_report(evidence, repo, file, exclude, under, no_tests, packages))
     except DependentsError as exc:
         print(f"error: {exc}")
         raise typer.Exit(code=1)

@@ -451,6 +451,11 @@ deduplicated, sorted list. Use it for "what depends on this file?" questions ins
 aletheore dependents src/click/_compat.py --under src --exclude tests
 ```
 
+- The target can also be a directory: all files directly in it are treated as one package, which is the natural unit for
+  Go (`aletheore dependents internal/js --packages`). `--packages` lists one line per importing directory instead of one
+  per file.
+- `--no-tests` leaves out test files (`tests/` style directories and test-shaped names such as `test_x.py`,
+  `x_test.go`, `x.test.ts`, `x.spec.js`, `XTest.java`).
 - `--under <dir>` keeps only files below a directory (repeatable).
 - `--exclude <name>` drops files under a directory with that exact name, or with that exact file name (repeatable).
   It matches whole path parts, so `--exclude locale` does not drop `middleware/locale.py`.
