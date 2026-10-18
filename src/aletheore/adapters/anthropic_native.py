@@ -1,9 +1,7 @@
 from pathlib import Path
 from typing import Callable
 
-import anthropic
 import toon
-from anthropic import Anthropic
 
 from aletheore.adapters.base import AdapterInvocationError, AgentAdapter
 from aletheore.adapters.openai_compatible import (
@@ -28,13 +26,19 @@ MAX_TOKENS = 8192
 # for the Anthropic SDK's own exception hierarchy - see that module's comment
 # for why AuthenticationError is included (a real production run observed it
 # recover on retry with no config change in between).
-_RETRYABLE_EXCEPTIONS: tuple[type[Exception], ...] = (
-    anthropic.AuthenticationError,
-    anthropic.RateLimitError,
-    anthropic.APIConnectionError,
-    anthropic.APITimeoutError,
-    anthropic.InternalServerError,
-)
+# A function, not a module-level tuple, so the `anthropic` SDK (~0.8s import)
+# is only loaded when an LLM call is actually made.
+def _retryable_exceptions() -> tuple[type[Exception], ...]:
+    import anthropic
+
+    return (
+        anthropic.AuthenticationError,
+        anthropic.RateLimitError,
+        anthropic.APIConnectionError,
+        anthropic.APITimeoutError,
+        anthropic.InternalServerError,
+    )
+
 
 ANTHROPIC_TOOLS = [
     {
@@ -110,6 +114,8 @@ class AnthropicAdapter(AgentAdapter):
                 self._on_call_failed()
             raise AdapterInvocationError("no API key available for anthropic")
 
+        from anthropic import Anthropic
+
         client = Anthropic(api_key=api_key)
         try:
             response = _call_with_retry(
@@ -119,7 +125,7 @@ class AnthropicAdapter(AgentAdapter):
                     system=system_prompt,
                     messages=[{"role": "user", "content": user_prompt}],
                 ),
-                _RETRYABLE_EXCEPTIONS,
+                _retryable_exceptions(),
             )
         except Exception as exc:
             # _ensure_budget_for_next_call above already reserved real
@@ -147,6 +153,8 @@ class AnthropicAdapter(AgentAdapter):
         api_key = get_api_key("ANTHROPIC_API_KEY", self.name, self._credentials_path)
         if not api_key:
             raise AdapterInvocationError("no API key available for anthropic")
+
+        from anthropic import Anthropic
 
         client = Anthropic(api_key=api_key)
         manual_dir = Path(__file__).resolve().parent.parent / "manual"
@@ -198,7 +206,7 @@ class AnthropicAdapter(AgentAdapter):
                         tools=ANTHROPIC_TOOLS,
                         tool_choice={"type": "any"},
                     ),
-                    _RETRYABLE_EXCEPTIONS,
+                    _retryable_exceptions(),
                 )
             except Exception as exc:
                 # _has_budget_for_next_call above already reserved real

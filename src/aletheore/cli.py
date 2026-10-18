@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import difflib
 import hashlib
 import json
@@ -14,8 +16,6 @@ from pathlib import Path
 from typing import Optional
 
 import click
-import httpx
-import sentry_sdk
 import tomli_w
 import typer
 import uvicorn
@@ -24,6 +24,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from aletheore._lazy import lazy_module
 from aletheore.adapters.anthropic_native import AnthropicAdapter
 from aletheore.adapters.claude_code import AdapterInvocationError, ClaudeCodeAdapter
 from aletheore.adapters.codex_cli import CodexCliAdapter
@@ -77,6 +78,9 @@ from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.watch import DEBOUNCE_SECONDS as WATCH_DEBOUNCE_SECONDS
 from aletheore.watch import WATCH_ENV_VAR, watching_disabled_by_env
 from aletheore.user_paths import user_home
+
+httpx = lazy_module("httpx")
+sentry_sdk = lazy_module("sentry_sdk")
 
 KNOWN_ADAPTERS = [
     ClaudeCodeAdapter(),
