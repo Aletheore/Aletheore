@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import difflib
 import hashlib
 import json
@@ -14,8 +16,6 @@ from pathlib import Path
 from typing import Optional
 
 import click
-import httpx
-import sentry_sdk
 import tomli_w
 import typer
 import uvicorn
@@ -24,6 +24,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from aletheore._lazy import lazy_module
 from aletheore.adapters.anthropic_native import AnthropicAdapter
 from aletheore.adapters.claude_code import AdapterInvocationError, ClaudeCodeAdapter
 from aletheore.adapters.codex_cli import CodexCliAdapter
@@ -77,6 +78,9 @@ from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.watch import DEBOUNCE_SECONDS as WATCH_DEBOUNCE_SECONDS
 from aletheore.watch import WATCH_ENV_VAR, watching_disabled_by_env
 from aletheore.user_paths import user_home
+
+httpx = lazy_module("httpx")
+sentry_sdk = lazy_module("sentry_sdk")
 
 KNOWN_ADAPTERS = [
     ClaudeCodeAdapter(),
@@ -1184,7 +1188,7 @@ def _healthcheck(repo_path: str, base_url: str) -> int:
     return 0
 
 
-def _mcp(repo_path: str, forced_agent: str | None = None, watch: bool = True) -> int:
+def _mcp(repo_path: str, forced_agent: str | None = None, watch: bool = True, profile: str = "full") -> int:
     from aletheore.mcp_server import build_server
 
     repo = Path(repo_path).resolve()
@@ -1205,6 +1209,7 @@ def _mcp(repo_path: str, forced_agent: str | None = None, watch: bool = True) ->
         repo,
         answer_adapter=answer_adapter,
         watch=watch and not watching_disabled_by_env(),
+        profile=profile,
     )
     # stderr, never stdout - an MCP client treats this process's stdout as the
     # JSON-RPC channel from the moment it starts, so anything written there
@@ -1450,26 +1455,31 @@ def _write_json_mcp_client_config(
     *,
     server_name: str = "aletheore",
     repo_path: Path | None = None,
-) -> str:
+) -> tuple[str, bool]:
+    """Returns (message, security_skip) - security_skip is True only for the
+    symlink-escapes-the-repo case, never for an ordinary skip (bad existing
+    JSON, wrong shape, ...), so a caller can tell "this needs attention
+    because something tried to write outside the repo" apart from "this
+    file just wasn't in a shape we could merge into"."""
     # repo_path is None for claude-desktop's target: that config file is
     # deliberately global (shared across every project on this machine,
     # not under any one repo), so there's no repo boundary to check -
     # every other target writes a per-repo path and must pass repo_path.
     if repo_path is not None and _config_path_escapes_repo(config_path, repo_path):
-        return f"skipped (path escapes the repo via a symlink): {config_path}"
+        return f"skipped (path escapes the repo via a symlink): {config_path}", True
     if config_path.exists():
         try:
             data = _loads_jsonc(config_path.read_text(encoding="utf-8-sig"))
         except (UnicodeDecodeError, json.JSONDecodeError):
-            return f"skipped (existing file is not valid JSON): {config_path}"
+            return f"skipped (existing file is not valid JSON): {config_path}", False
         if not isinstance(data, dict):
-            return f"skipped (existing file's top level is not a JSON object): {config_path}"
+            return f"skipped (existing file's top level is not a JSON object): {config_path}", False
     else:
         data = {}
 
     servers = data.get(top_level_key, {})
     if not isinstance(servers, dict):
-        return f"skipped (existing '{top_level_key}' is not a JSON object): {config_path}"
+        return f"skipped (existing '{top_level_key}' is not a JSON object): {config_path}", False
 
     already_present = server_name in servers
     servers[server_name] = entry
@@ -1481,34 +1491,36 @@ def _write_json_mcp_client_config(
         try:
             _write_config_file_no_symlink_follow(config_path, content)
         except OSError:
-            return f"skipped (path escapes the repo via a symlink): {config_path}"
+            return f"skipped (path escapes the repo via a symlink): {config_path}", True
     else:
         # claude-desktop's global config has no repo boundary to enforce -
         # a symlink here is the user's own, legitimate choice (e.g.
         # dotfiles synced through a symlinked config directory), not
         # attacker-controlled repo content, so it's followed as before.
         config_path.write_text(content, encoding="utf-8")
-    return f"{'updated' if already_present else 'wrote'} {config_path}"
+    return f"{'updated' if already_present else 'wrote'} {config_path}", False
 
 
 def _write_toml_mcp_client_config(
     config_path: Path, top_level_key: str, entry: dict, *, repo_path: Path | None = None
-) -> str:
+) -> tuple[str, bool]:
+    """Returns (message, security_skip) - see _write_json_mcp_client_config's
+    docstring."""
     if repo_path is not None and _config_path_escapes_repo(config_path, repo_path):
-        return f"skipped (path escapes the repo via a symlink): {config_path}"
+        return f"skipped (path escapes the repo via a symlink): {config_path}", True
     if config_path.exists():
         try:
             data = tomllib.loads(config_path.read_text(encoding="utf-8-sig"))
         except (UnicodeDecodeError, tomllib.TOMLDecodeError):
-            return f"skipped (existing file is not valid TOML): {config_path}"
+            return f"skipped (existing file is not valid TOML): {config_path}", False
         if not isinstance(data, dict):
-            return f"skipped (existing file's top level is not a TOML table): {config_path}"
+            return f"skipped (existing file's top level is not a TOML table): {config_path}", False
     else:
         data = {}
 
     servers = data.get(top_level_key, {})
     if not isinstance(servers, dict):
-        return f"skipped (existing '{top_level_key}' is not a TOML table): {config_path}"
+        return f"skipped (existing '{top_level_key}' is not a TOML table): {config_path}", False
 
     already_present = "aletheore" in servers
     servers["aletheore"] = entry
@@ -1520,10 +1532,10 @@ def _write_toml_mcp_client_config(
         try:
             _write_config_file_no_symlink_follow(config_path, content)
         except OSError:
-            return f"skipped (path escapes the repo via a symlink): {config_path}"
+            return f"skipped (path escapes the repo via a symlink): {config_path}", True
     else:
         config_path.write_text(content, encoding="utf-8")
-    return f"{'updated' if already_present else 'wrote'} {config_path}"
+    return f"{'updated' if already_present else 'wrote'} {config_path}", False
 
 
 def _mcp_install(path: str, targets: list[str]) -> int:
@@ -1538,15 +1550,26 @@ def _mcp_install(path: str, targets: list[str]) -> int:
         )
         return 1
 
+    # Real audit finding: a target skipped because its config path escapes
+    # the repo via a symlink (the exact attacker-controlled-repo case
+    # _config_path_escapes_repo exists for) printed a warning but still
+    # exited 0 - a script calling mcp-install had no way to detect that
+    # install didn't actually happen for a security reason, as opposed to
+    # an ordinary "nothing to do" skip (ClaudeDesktop unsupported here,
+    # malformed existing file). Tracked separately from those so only the
+    # security-relevant case changes the exit code.
+    any_security_skip = False
     for target in selected:
         if target == "codex-cli":
             config_path = repo_path / ".codex" / "config.toml"
             entry = {"command": _aletheore_command(), "args": ["mcp", str(repo_path)]}
-            message = _write_toml_mcp_client_config(config_path, "mcp_servers", entry, repo_path=repo_path)
+            message, security_skip = _write_toml_mcp_client_config(
+                config_path, "mcp_servers", entry, repo_path=repo_path
+            )
         elif target == "claude-desktop":
             config_path = _claude_desktop_config_path()
             if config_path is None:
-                message = "skipped (Claude Desktop is only available on macOS and Windows)"
+                message, security_skip = "skipped (Claude Desktop is only available on macOS and Windows)", False
             else:
                 entry = _stdio_entry(repo_path, include_type=False)
                 # Global file shared across every project on this machine -
@@ -1556,7 +1579,7 @@ def _mcp_install(path: str, targets: list[str]) -> int:
                 # under the same key, since both would collide in the one
                 # shared file. See _claude_desktop_server_name's own
                 # docstring for why a plain repo_path.name isn't enough.
-                message = _write_json_mcp_client_config(
+                message, security_skip = _write_json_mcp_client_config(
                     config_path, "mcpServers", entry,
                     server_name=_claude_desktop_server_name(repo_path),
                 )
@@ -1564,7 +1587,10 @@ def _mcp_install(path: str, targets: list[str]) -> int:
             relative_path, top_level_key, entry_builder = _MCP_CLIENT_CONFIGS[target]
             config_path = repo_path / relative_path
             entry = entry_builder(repo_path)
-            message = _write_json_mcp_client_config(config_path, top_level_key, entry, repo_path=repo_path)
+            message, security_skip = _write_json_mcp_client_config(
+                config_path, top_level_key, entry, repo_path=repo_path
+            )
+        any_security_skip = any_security_skip or security_skip
         console.print(f"[bold green]{target}[/bold green]: {message}")
 
     console.print(
@@ -1624,6 +1650,12 @@ def _mcp_install(path: str, targets: list[str]) -> int:
                 "different repo later won't overwrite this one. Fully quit and reopen Claude Desktop "
                 "to pick it up - MCP servers only load at startup."
             )
+    if any_security_skip:
+        console.print(
+            "\n[bold red]error:[/bold red] at least one target was skipped because its config path "
+            "escapes the repo via a symlink - see the per-target lines above for which one."
+        )
+        return 1
     return 0
 
 
@@ -2083,6 +2115,110 @@ def dependents(
         raise typer.Exit(code=1)
 
 
+@app.command(
+    help=(
+        "every circular import dependency in the repo, with a concrete example chain for each one, "
+        "as one complete answer - e.g. aletheore cycles"
+    )
+)
+def cycles(
+    path: str = typer.Argument(".", help="repository path"),
+    exclude: list[str] = typer.Option(
+        [], "--exclude", help="leave out files under a directory with this exact name, or with this exact file name; repeatable"
+    ),
+    under: list[str] = typer.Option([], "--under", help="only list files below this directory; repeatable"),
+    path_option: Optional[str] = _PATH_OPTION,
+) -> None:
+    from aletheore.cycles import cycles_report
+
+    repo = Path(_resolve_path(path, path_option)).resolve()
+    try:
+        evidence = load_evidence(repo)
+    except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
+        print(f"error: {exc} (run 'aletheore scan' first)", file=sys.stderr)
+        raise typer.Exit(code=1)
+    print(cycles_report(evidence, repo, exclude, under))
+
+
+@app.command(
+    name="tests-for",
+    help=(
+        "every test file that exercises a file - via the import graph or its naming convention - as one "
+        "complete answer, e.g. aletheore tests-for src/click/_compat.py"
+    ),
+)
+def tests_for(
+    file: str = typer.Argument(..., help="file path exactly as it appears in the scan"),
+    path: str = typer.Argument(".", help="repository path"),
+    path_option: Optional[str] = _PATH_OPTION,
+) -> None:
+    from aletheore.tests_for import TestsForError, tests_for_report
+
+    repo = Path(_resolve_path(path, path_option)).resolve()
+    try:
+        evidence = load_evidence(repo)
+    except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
+        print(f"error: {exc} (run 'aletheore scan' first)", file=sys.stderr)
+        raise typer.Exit(code=1)
+    try:
+        print(tests_for_report(evidence, repo, file))
+    except TestsForError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise typer.Exit(code=1)
+
+
+@app.command(
+    help=(
+        "every call site and reference to a function or class, across the whole repo, as one complete answer "
+        "with the matching source line - e.g. aletheore usages parse_config --under src --exclude tests"
+    )
+)
+def usages(
+    symbol: str = typer.Argument(..., help="function or class name exactly as it appears in the scan"),
+    path: str = typer.Argument(".", help="repository path"),
+    exclude: list[str] = typer.Option(
+        [], "--exclude", help="leave out hits under a directory with this exact name, or in this exact file name; repeatable"
+    ),
+    under: list[str] = typer.Option([], "--under", help="only show hits below this directory; repeatable"),
+    path_option: Optional[str] = _PATH_OPTION,
+) -> None:
+    from aletheore.usages import UsagesError, usages_report
+
+    repo = Path(_resolve_path(path, path_option)).resolve()
+    try:
+        evidence = load_evidence(repo)
+    except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
+        print(f"error: {exc} (run 'aletheore scan' first)", file=sys.stderr)
+        raise typer.Exit(code=1)
+    try:
+        print(usages_report(evidence, repo, symbol, exclude, under))
+    except UsagesError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise typer.Exit(code=1)
+
+
+@app.command(
+    help=(
+        "find where names are defined and print the matching functions with their source, "
+        "e.g. aletheore locate 'write_usage HelpFormatter'"
+    )
+)
+def locate(
+    query: str = typer.Argument(..., help="names to look for, as plain words"),
+    path: str = typer.Argument(".", help="repository path"),
+    path_option: Optional[str] = _PATH_OPTION,
+) -> None:
+    from aletheore.code_locator import locate_report
+
+    repo = Path(_resolve_path(path, path_option)).resolve()
+    try:
+        evidence = load_evidence(repo)
+    except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
+        print(f"error: {exc} (run 'aletheore scan' first)")
+        raise typer.Exit(code=1)
+    print(locate_report(evidence, repo, query))
+
+
 @app.command(help="compare two air.json files")
 def diff(
     old: str = typer.Argument(..., help="path to the baseline air.json"),
@@ -2148,13 +2284,35 @@ def mcp(
         "--no-watch",
         help=(
             "do not re-scan in the background when source files change "
-            f"(same as {WATCH_ENV_VAR}=0)"
+            f"(same as {WATCH_ENV_VAR}=0); always off under --profile nav regardless of this flag"
+        ),
+    ),
+    profile: str = typer.Option(
+        "full",
+        "--profile",
+        help=(
+            "tool set to expose: full (every tool, with background watching) or nav (three "
+            "code-navigation tools, small enough to load up front, with background watching off)"
         ),
     ),
 ) -> None:
+    if profile not in ("full", "nav"):
+        console.print(f"[bold red]error:[/bold red] unknown profile {profile!r}; choose full or nav")
+        raise typer.Exit(code=2)
     path = _resolve_path(path, path_option)
     _checked_dir(path)
-    raise typer.Exit(code=_mcp(path, agent, watch=not no_watch))
+    # Real audit finding (Flash Review): `--profile nav` silently disabled
+    # watching with no indication - --no-watch's own help text describes
+    # watching as the default, and nothing said choosing nav also turns it
+    # off. A one-line note here, only when the user didn't already say
+    # --no-watch (so it's genuinely a consequence of the profile, not
+    # something they already asked for), makes it visible instead of silent.
+    if profile == "nav" and not no_watch:
+        console.print(
+            "[dim]--profile nav does not watch for file changes; re-run the scan yourself after edits, "
+            "or use --profile full for background watching.[/dim]"
+        )
+    raise typer.Exit(code=_mcp(path, agent, watch=not no_watch and profile == "full", profile=profile))
 
 
 @app.command(
@@ -2223,6 +2381,37 @@ def healthcheck(
 
 config_app = typer.Typer(help="manage local CLI preferences")
 app.add_typer(config_app, name="config")
+
+hook_app = typer.Typer(help="commands for coding-agent hooks")
+app.add_typer(hook_app, name="hook")
+
+
+@hook_app.command(
+    "pre-read",
+    help="PreToolUse hook for Read: denies a full re-read of a file that is unchanged on disk "
+    "since the agent already read it in full this session. Opt-in via ALETHEORE_READ_GUARD=1; "
+    "silent and a no-op otherwise, and never fails.",
+)
+def hook_pre_read() -> None:
+    from aletheore.read_guard import main_pre as hook_main
+
+    hook_main()
+
+
+@hook_app.command(
+    "post-read",
+    help="PostToolUse hook for Read: records a file's current on-disk hash after a full read so "
+    "a later identical read can be recognized as redundant. Opt-in via ALETHEORE_READ_GUARD=1; "
+    "silent and a no-op otherwise, and never fails.",
+)
+def hook_post_read() -> None:
+    from aletheore.read_guard import main_post as hook_main
+
+    hook_main()
+
+from aletheore.tokens_cli import tokens_app  # noqa: E402
+
+app.add_typer(tokens_app, name="tokens")
 
 
 @config_app.command(
@@ -2390,6 +2579,23 @@ def main() -> None:
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
             reconfigure(encoding="utf-8", errors="backslashreplace")
+
+    # A deleted working directory (a removed git worktree, a cleaned-up
+    # scratch dir) makes os.getcwd() raise FileNotFoundError, and every
+    # command resolves a relative path (the default "." included) through
+    # it - so each one would otherwise die in Path.resolve() with a raw
+    # traceback and a crash report for what is a user environment problem,
+    # not an Aletheore bug (Sentry ALETHEORE-CLI-2). Checked once here,
+    # before Sentry initialises, so nothing is reported.
+    try:
+        os.getcwd()
+    except OSError:  # FileNotFoundError on POSIX; a plain OSError (WinError 3) on Windows
+        _stderr_console.print(
+            "[bold red]error:[/bold red] the current working directory no "
+            "longer exists. cd into an existing directory and run the "
+            "command again."
+        )
+        raise SystemExit(1)
 
     init_cli_sentry()
     if not has_shown_crash_reporting_notice():

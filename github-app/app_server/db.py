@@ -1240,6 +1240,54 @@ async def is_installation_member(pool: asyncpg.Pool, installation_id: int, githu
     return row is not None
 
 
+async def reconcile_installation_member_identity(
+    pool: asyncpg.Pool, github_login: str, github_user_id: int
+) -> None:
+    """Called from auth.py's OAuth callback with the CURRENT, just-verified
+    (login, numeric id) pair for whoever is logging in right now - closes
+    the identity-rebinding gap where installation_members is keyed on the
+    mutable github_login alone (migration 073's own docstring).
+
+    A github_login is globally unique on GitHub at any one time, so this
+    reconciles every installation that login is a member of, not just the
+    one(s) the caller happens to be looking at right now - a seat granted
+    under a login that's since been reassigned must stop being trusted the
+    moment the new holder of that login is seen, regardless of which
+    installation they're currently authenticating against.
+
+    Two cases, run every login (cheap, idempotent):
+    - A matching row with no github_user_id yet (granted before this
+      migration, or before this login's current holder ever logged in) is
+      bound to this user - the only identity information available at the
+      time the seat was granted (admin.py's add_member only ever has a
+      login string the admin typed in) is the account that first proves it
+      by logging in under that exact login.
+    - A matching row whose bound github_user_id does NOT match this user
+      is for a DIFFERENT real GitHub account that used to hold this login -
+      that seat was never granted to whoever is logging in now, so the
+      stale row is removed rather than silently inherited.
+    """
+    # Flash Review catch: both statements are individually idempotent, so a
+    # crash between them just leaves a consistent-but-partial state the
+    # next login finishes - but running them in one transaction removes
+    # any doubt and matches this module's own convention for a
+    # multi-statement write that should be all-or-nothing.
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "DELETE FROM installation_members "
+                "WHERE github_login = $1 AND github_user_id IS NOT NULL AND github_user_id != $2",
+                github_login,
+                github_user_id,
+            )
+            await conn.execute(
+                "UPDATE installation_members SET github_user_id = $2 "
+                "WHERE github_login = $1 AND github_user_id IS NULL",
+                github_login,
+                github_user_id,
+            )
+
+
 async def list_installation_member_emails(pool: asyncpg.Pool, installation_id: int) -> list[str]:
     """Emails for every member of this installation who has logged in at
     least once (and so has a captured row in github_user_emails). Members
@@ -1990,6 +2038,26 @@ async def revoke_api_token(pool: asyncpg.Pool, installation_id: int, token_id: i
         token_id,
         installation_id,
     )
+
+
+async def revoke_api_tokens_created_by(pool: asyncpg.Pool, installation_id: int, github_login: str) -> int:
+    """Revokes every still-active API token this login personally created on
+    this installation. Called from remove_member (real bug fixed
+    2026-10-12, Strix security review): tokens authenticate purely by hash
+    plus revoked_at IS NULL - nothing ties a token's continued validity to
+    its creator still being a member - so removing someone used to leave
+    any token they'd made fully usable indefinitely. Returns how many
+    tokens were revoked, so the caller can log it."""
+    result = await pool.execute(
+        """
+        UPDATE api_tokens SET revoked_at = now()
+        WHERE installation_id = $1 AND created_by_github_login = $2 AND revoked_at IS NULL
+        """,
+        installation_id,
+        github_login,
+    )
+    # asyncpg's execute() returns a command tag string like "UPDATE 3".
+    return int(result.split()[-1]) if result.startswith("UPDATE") else 0
 
 
 async def list_api_tokens(pool: asyncpg.Pool, installation_id: int) -> list[dict]:

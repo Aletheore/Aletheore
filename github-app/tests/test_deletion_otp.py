@@ -58,6 +58,11 @@ async def test_request_otp_works_on_the_free_plan(pool, monkeypatch):
         "ON CONFLICT (github_login) DO UPDATE SET email = EXCLUDED.email"
     )
     monkeypatch.setattr("app_server.admin.is_rate_limited", lambda *a, **k: False)
+    # No RESEND_API_KEY in the test env, so this exercises the local-dev
+    # logging fallback, not a real email send - that fallback now requires
+    # an explicit non-production signal (see test_admin.py's
+    # _logged_in_client for why SENTRY_ENVIRONMENT isn't set there too).
+    monkeypatch.setenv("SENTRY_ENVIRONMENT", "test")
     async with client:
         response = await client.post("/admin/octocat/hello-world/delete-all-data/request-otp")
 
@@ -84,6 +89,7 @@ async def test_request_otp_masks_the_email_in_its_response(pool, monkeypatch):
         "ON CONFLICT (github_login) DO UPDATE SET email = EXCLUDED.email"
     )
     monkeypatch.setattr("app_server.admin.is_rate_limited", lambda *a, **k: False)
+    monkeypatch.setenv("SENTRY_ENVIRONMENT", "test")
     async with client:
         response = await client.post("/admin/octocat/hello-world/delete-all-data/request-otp")
 
@@ -102,6 +108,7 @@ async def test_request_otp_stores_a_hash_not_the_plaintext_code(pool, monkeypatc
         "ON CONFLICT (github_login) DO UPDATE SET email = EXCLUDED.email"
     )
     monkeypatch.setattr("app_server.admin.is_rate_limited", lambda *a, **k: False)
+    monkeypatch.setenv("SENTRY_ENVIRONMENT", "test")
     async with client:
         response = await client.post("/admin/octocat/hello-world/delete-all-data/request-otp")
     assert response.status_code == 200, response.text
@@ -113,6 +120,72 @@ async def test_request_otp_stores_a_hash_not_the_plaintext_code(pool, monkeypatc
     assert row["requested_by"] == "octocat"
     assert row["code_hash"] == hashlib.sha256(b"424242").hexdigest()
     assert row["code_hash"] != "424242"
+
+
+@pytest.mark.asyncio
+async def test_request_otp_fails_closed_in_production_instead_of_logging_the_code(pool, monkeypatch, caplog):
+    # Regression test for a real bug (2026-10-12 Strix security review):
+    # with no RESEND_API_KEY configured, this route used to log the real,
+    # usable deletion OTP in plaintext unconditionally - including in a
+    # genuine production misconfiguration (the secret rotated out, an env
+    # var typo), which defeats the whole point of requiring the code,
+    # since application logs get shipped to Sentry/log aggregators. The
+    # test env's SENTRY_ENVIRONMENT defaults to "production" (same default
+    # docker-compose.yml and .env.example use) unless a test explicitly
+    # opts out like the other tests in this file do - so simply NOT
+    # setting it here is what simulates "a real production deploy with no
+    # email provider configured."
+    client = await _logged_in_client(pool, monkeypatch)
+    await pool.execute(
+        "INSERT INTO github_user_emails (github_login, email) VALUES ('octocat', 'octocat@example.com') "
+        "ON CONFLICT (github_login) DO UPDATE SET email = EXCLUDED.email"
+    )
+    monkeypatch.setattr("app_server.admin.is_rate_limited", lambda *a, **k: False)
+    monkeypatch.setattr("app_server.admin.secrets.randbelow", lambda _n: 424242)
+
+    with caplog.at_level("WARNING", logger="app_server.admin"):
+        async with client:
+            response = await client.post("/admin/octocat/hello-world/delete-all-data/request-otp")
+
+    assert response.status_code == 503
+    # The real, usable code must never appear in any log record, at any level.
+    assert not any("424242" in record.getMessage() for record in caplog.records)
+    # A real deletion_otp_codes row also must not exist - a code that was
+    # never actually delivered anywhere must not be usable either.
+    row = await pool.fetchrow(
+        "SELECT 1 FROM deletion_otp_codes WHERE installation_id = 100 AND requested_by = 'octocat'"
+    )
+    assert row is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("environment", ["Production", " production ", "PRODUCTION"])
+async def test_request_otp_fails_closed_regardless_of_production_label_casing(
+    pool, monkeypatch, caplog, environment
+):
+    # Flash Review caught this on PR #1044: the guard above used to compare
+    # settings.sentry_environment == "production" exactly, so a deploy
+    # naming its environment "Production" or "PRODUCTION" (or one with
+    # stray whitespace) would silently miss the guard and fall through to
+    # logging the raw OTP - reopening the exact leak this fix exists to
+    # close. The guard now fails closed unless the value is explicitly in
+    # the non-production allowlist, so any production-labelled variant
+    # (not just the literal lowercase string) must still 503 and never log.
+    client = await _logged_in_client(pool, monkeypatch)
+    monkeypatch.setenv("SENTRY_ENVIRONMENT", environment)
+    await pool.execute(
+        "INSERT INTO github_user_emails (github_login, email) VALUES ('octocat', 'octocat@example.com') "
+        "ON CONFLICT (github_login) DO UPDATE SET email = EXCLUDED.email"
+    )
+    monkeypatch.setattr("app_server.admin.is_rate_limited", lambda *a, **k: False)
+    monkeypatch.setattr("app_server.admin.secrets.randbelow", lambda _n: 424242)
+
+    with caplog.at_level("WARNING", logger="app_server.admin"):
+        async with client:
+            response = await client.post("/admin/octocat/hello-world/delete-all-data/request-otp")
+
+    assert response.status_code == 503
+    assert not any("424242" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -144,6 +217,7 @@ async def test_full_otp_flow_end_to_end(pool, monkeypatch):
     )
     monkeypatch.setattr("app_server.admin.is_rate_limited", lambda *a, **k: False)
     monkeypatch.setattr("rq.Queue.enqueue", MagicMock())
+    monkeypatch.setenv("SENTRY_ENVIRONMENT", "test")
     async with client:
         request_response = await client.post("/admin/octocat/hello-world/delete-all-data/request-otp")
         assert request_response.status_code == 200, request_response.text
@@ -174,6 +248,7 @@ async def test_otp_rate_limit_checks_are_offloaded_to_thread(pool, monkeypatch):
         "ON CONFLICT (github_login) DO UPDATE SET email = EXCLUDED.email"
     )
     monkeypatch.setattr("rq.Queue.enqueue", MagicMock())
+    monkeypatch.setenv("SENTRY_ENVIRONMENT", "test")
 
     offloaded_funcs = []
 

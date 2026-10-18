@@ -403,6 +403,42 @@ def test_main_does_not_report_when_crash_reporting_is_disabled(monkeypatch):
     assert captured == []
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows holds an open handle on a process's own cwd; rmdir() on it raises PermissionError"
+)
+def test_main_exits_cleanly_without_reporting_when_cwd_was_deleted(
+    monkeypatch, tmp_path, capsys
+):
+    # Sentry ALETHEORE-CLI-2: running from a deleted directory made every
+    # command die in Path(".").resolve() and report a crash.
+    from aletheore.cli import main
+
+    doomed = tmp_path / "doomed"
+    doomed.mkdir()
+    monkeypatch.chdir(doomed)
+    doomed.rmdir()
+
+    init_calls = []
+    monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: init_calls.append(1))
+    monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: True)
+    monkeypatch.setattr("aletheore.cli.is_crash_reporting_enabled", lambda: True)
+    app_calls = []
+    monkeypatch.setattr("aletheore.cli.app", lambda: app_calls.append(1))
+    captured = []
+    monkeypatch.setattr(
+        "aletheore.cli.sentry_sdk.capture_exception", lambda exc: captured.append(exc)
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 1
+    assert "no longer exists" in capsys.readouterr().err
+    assert init_calls == []
+    assert app_calls == []
+    assert captured == []
+
+
 def test_main_does_not_report_keyboard_interrupt(monkeypatch):
     from aletheore.cli import main
 
@@ -585,12 +621,13 @@ def test_write_json_mcp_client_config_refuses_a_symlinked_config_file(tmp_path):
     (repo / ".mcp.json").symlink_to(outside_target)
     entry = {"command": "aletheore", "args": ["mcp", str(repo)]}
 
-    message = _write_json_mcp_client_config(
+    message, security_skip = _write_json_mcp_client_config(
         repo / ".mcp.json", "mcpServers", entry, repo_path=repo
     )
 
     assert "skipped" in message
     assert "escapes the repo" in message
+    assert security_skip is True
     assert json.loads(outside_target.read_text()) == {"do_not_touch": True}
 
 
@@ -606,12 +643,13 @@ def test_write_json_mcp_client_config_refuses_a_symlinked_parent_directory(tmp_p
     (repo / ".cursor").symlink_to(outside_dir)
     entry = {"command": "aletheore", "args": ["mcp", str(repo)]}
 
-    message = _write_json_mcp_client_config(
+    message, security_skip = _write_json_mcp_client_config(
         repo / ".cursor" / "mcp.json", "mcpServers", entry, repo_path=repo
     )
 
     assert "skipped" in message
     assert "escapes the repo" in message
+    assert security_skip is True
     assert list(outside_dir.iterdir()) == []
 
 
@@ -623,9 +661,10 @@ def test_write_json_mcp_client_config_without_repo_path_keeps_the_prior_global_b
     config_path = tmp_path / "claude_desktop_config.json"
     entry = {"command": "aletheore", "args": ["mcp", "/some/repo"]}
 
-    message = _write_json_mcp_client_config(config_path, "mcpServers", entry)
+    message, security_skip = _write_json_mcp_client_config(config_path, "mcpServers", entry)
 
     assert "wrote" in message
+    assert security_skip is False
     assert json.loads(config_path.read_text()) == {"mcpServers": {"aletheore": entry}}
 
 
@@ -669,9 +708,10 @@ def test_write_json_mcp_client_config_without_repo_path_still_follows_a_symlink(
     config_path.symlink_to(real_target)
     entry = {"command": "aletheore", "args": ["mcp", "/some/repo"]}
 
-    message = _write_json_mcp_client_config(config_path, "mcpServers", entry)
+    message, security_skip = _write_json_mcp_client_config(config_path, "mcpServers", entry)
 
     assert "wrote" in message
+    assert security_skip is False
     assert json.loads(real_target.read_text()) == {"mcpServers": {"aletheore": entry}}
 
 
@@ -684,18 +724,41 @@ def test_mcp_install_skips_a_symlinked_config_path_end_to_end(tmp_path):
 
     result = runner.invoke(app, ["mcp-install", str(repo), "--target", "claude-code"])
 
-    assert result.exit_code == 0
+    # Real audit finding: this used to exit 0 even though the install was
+    # refused for a security reason - a script calling mcp-install had no
+    # way to detect that install didn't actually happen, as opposed to an
+    # ordinary "nothing to do" skip. Now exits 1 specifically because the
+    # skip was security-relevant.
+    assert result.exit_code == 1
     assert "escapes the repo" in result.stdout
     assert json.loads(outside_target.read_text()) == {"do_not_touch": True}
+
+
+def test_mcp_install_exit_code_reflects_the_security_skip_even_when_another_target_succeeds(tmp_path):
+    # The aggregate exit code must not get overwritten by a later,
+    # successful target in the same run - one security-relevant skip
+    # anywhere in the selection has to make the whole command exit 1.
+    repo = tmp_path / "malicious-repo"
+    repo.mkdir()
+    outside_target = tmp_path / "outside_secret.json"
+    outside_target.write_text(json.dumps({"do_not_touch": True}))
+    (repo / ".mcp.json").symlink_to(outside_target)
+
+    result = runner.invoke(app, ["mcp-install", str(repo), "--target", "claude-code", "--target", "cursor"])
+
+    assert result.exit_code == 1
+    assert "escapes the repo" in result.stdout
+    assert (repo / ".cursor" / "mcp.json").exists()  # the other target still succeeded
 
 
 def test_write_json_mcp_client_config_creates_new_file(tmp_path):
     config_path = tmp_path / ".mcp.json"
     entry = {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
 
-    message = _write_json_mcp_client_config(config_path, "mcpServers", entry)
+    message, security_skip = _write_json_mcp_client_config(config_path, "mcpServers", entry)
 
     assert "wrote" in message
+    assert security_skip is False
     assert json.loads(config_path.read_text()) == {"mcpServers": {"aletheore": entry}}
 
 
@@ -729,9 +792,10 @@ def test_write_json_mcp_client_config_updates_existing_aletheore_entry(tmp_path)
     )
     new_entry = {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
 
-    message = _write_json_mcp_client_config(config_path, "mcpServers", new_entry)
+    message, security_skip = _write_json_mcp_client_config(config_path, "mcpServers", new_entry)
 
     assert "updated" in message
+    assert security_skip is False
     data = json.loads(config_path.read_text())
     assert data["mcpServers"]["aletheore"] == new_entry
     assert len(data["mcpServers"]) == 1
@@ -741,11 +805,12 @@ def test_write_json_mcp_client_config_skips_invalid_json_without_crashing(tmp_pa
     config_path = tmp_path / ".mcp.json"
     config_path.write_text("{not valid json")
 
-    message = _write_json_mcp_client_config(
+    message, security_skip = _write_json_mcp_client_config(
         config_path, "mcpServers", {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
     )
 
     assert "skipped" in message
+    assert security_skip is False
     assert config_path.read_text() == "{not valid json"
 
 
@@ -753,11 +818,12 @@ def test_write_json_mcp_client_config_skips_when_top_level_key_is_not_an_object(
     config_path = tmp_path / ".mcp.json"
     config_path.write_text(json.dumps({"mcpServers": "not-an-object"}))
 
-    message = _write_json_mcp_client_config(
+    message, security_skip = _write_json_mcp_client_config(
         config_path, "mcpServers", {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
     )
 
     assert "skipped" in message
+    assert security_skip is False
     assert json.loads(config_path.read_text()) == {"mcpServers": "not-an-object"}
 
 
@@ -765,9 +831,10 @@ def test_write_toml_mcp_client_config_creates_new_file(tmp_path):
     config_path = tmp_path / ".codex" / "config.toml"
     entry = {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
 
-    message = _write_toml_mcp_client_config(config_path, "mcp_servers", entry)
+    message, security_skip = _write_toml_mcp_client_config(config_path, "mcp_servers", entry)
 
     assert "wrote" in message
+    assert security_skip is False
     data = tomllib.loads(config_path.read_text())
     assert data == {"mcp_servers": {"aletheore": entry}}
 
@@ -789,9 +856,10 @@ def test_write_toml_mcp_client_config_updates_existing_aletheore_entry(tmp_path)
     config_path.write_text('[mcp_servers.aletheore]\ncommand = "aletheore"\nargs = ["mcp", "/old"]\n')
     new_entry = {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
 
-    message = _write_toml_mcp_client_config(config_path, "mcp_servers", new_entry)
+    message, security_skip = _write_toml_mcp_client_config(config_path, "mcp_servers", new_entry)
 
     assert "updated" in message
+    assert security_skip is False
     data = tomllib.loads(config_path.read_text())
     assert data["mcp_servers"]["aletheore"] == new_entry
     assert len(data["mcp_servers"]) == 1
@@ -801,11 +869,12 @@ def test_write_toml_mcp_client_config_skips_invalid_toml_without_crashing(tmp_pa
     config_path = tmp_path / "config.toml"
     config_path.write_text("not [ valid toml")
 
-    message = _write_toml_mcp_client_config(
+    message, security_skip = _write_toml_mcp_client_config(
         config_path, "mcp_servers", {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
     )
 
     assert "skipped" in message
+    assert security_skip is False
     assert config_path.read_text() == "not [ valid toml"
 
 
@@ -2034,7 +2103,7 @@ def test_main_mcp_invokes_mcp_flow(tmp_path):
         result = runner.invoke(app, ["mcp", str(tmp_path)])
 
     assert result.exit_code == 0
-    mock_mcp.assert_called_once_with(str(tmp_path), None, watch=True)
+    mock_mcp.assert_called_once_with(str(tmp_path), None, watch=True, profile="full")
 
 
 def test_main_mcp_threads_answer_agent(tmp_path):
@@ -2042,7 +2111,7 @@ def test_main_mcp_threads_answer_agent(tmp_path):
         result = runner.invoke(app, ["mcp", str(tmp_path), "--agent", "ollama"])
 
     assert result.exit_code == 0
-    mock_mcp.assert_called_once_with(str(tmp_path), "ollama", watch=True)
+    mock_mcp.assert_called_once_with(str(tmp_path), "ollama", watch=True, profile="full")
 
 
 def test_main_dashboard_invokes_dashboard_flow(tmp_path):
@@ -3001,6 +3070,46 @@ def _run_mcp_command(tmp_path, monkeypatch, *, watch: bool = True, env: str | No
     return build.call_args.kwargs
 
 
+def test_mcp_passes_the_profile_through_to_the_server(tmp_path, monkeypatch):
+    from aletheore.cli import _mcp
+
+    monkeypatch.delenv("ALETHEORE_MCP_WATCH", raising=False)
+    fake_server = MagicMock()
+    with patch("aletheore.mcp_server.build_server", return_value=fake_server) as build:
+        _mcp(str(tmp_path), None, watch=False, profile="nav")
+    assert build.call_args.kwargs["profile"] == "nav"
+
+
+def test_mcp_command_rejects_an_unknown_profile(tmp_path):
+    result = CliRunner().invoke(app, ["mcp", str(tmp_path), "--profile", "turbo"])
+
+    assert result.exit_code == 2 and "unknown profile" in result.output
+
+
+def test_mcp_nav_profile_warns_that_watching_is_off(tmp_path, monkeypatch):
+    # Real audit finding (Flash Review): --profile nav silently disabled
+    # background watching (`watch=not no_watch and profile == "full"`) with
+    # no indication - --no-watch's own help text describes watching as the
+    # default, and nothing said choosing nav also turns it off.
+    monkeypatch.delenv("ALETHEORE_MCP_WATCH", raising=False)
+    fake_server = MagicMock()
+    with patch("aletheore.mcp_server.build_server", return_value=fake_server):
+        result = CliRunner().invoke(app, ["mcp", str(tmp_path), "--profile", "nav"])
+
+    assert "does not watch for file changes" in result.output
+
+
+def test_mcp_nav_profile_with_explicit_no_watch_does_not_warn(tmp_path, monkeypatch):
+    # The note only earns its place when nav is the reason watching is off -
+    # a caller who already passed --no-watch asked for that themselves.
+    monkeypatch.delenv("ALETHEORE_MCP_WATCH", raising=False)
+    fake_server = MagicMock()
+    with patch("aletheore.mcp_server.build_server", return_value=fake_server):
+        result = CliRunner().invoke(app, ["mcp", str(tmp_path), "--profile", "nav", "--no-watch"])
+
+    assert "does not watch for file changes" not in result.output
+
+
 def test_mcp_watches_by_default(tmp_path, monkeypatch):
     assert _run_mcp_command(tmp_path, monkeypatch)["watch"] is True
 
@@ -3024,7 +3133,7 @@ def test_main_mcp_no_watch_flag_reaches_the_mcp_flow(tmp_path):
         result = runner.invoke(app, ["mcp", str(tmp_path), "--no-watch"])
 
     assert result.exit_code == 0
-    mock_mcp.assert_called_once_with(str(tmp_path), None, watch=False)
+    mock_mcp.assert_called_once_with(str(tmp_path), None, watch=False, profile="full")
 
 
 def test_the_mcp_command_documents_no_watch():

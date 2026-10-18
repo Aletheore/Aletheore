@@ -147,3 +147,13 @@ def test_directory_target_without_flags_lists_files_and_unknown_directory_errors
     assert "app/m.go" in text and "cmd/main.go" in text and "pkg/lib/a.go" not in text.split("\n\n")[0]
     with pytest.raises(DependentsError, match="not a module or a directory"):
         dependents_report(_go_ev(), tmp_path, "pkg/nope")
+
+
+def test_packages_mode_counts_left_out_packages_not_files(tmp_path: Path):
+    g = {
+        "pkg/a.go": ["x/one.go", "x/two.go", "y/one.go", "z/one_test.go"],
+        "x/one.go": [], "x/two.go": [], "y/one.go": [], "z/one_test.go": [],
+    }
+    out = dependents_report(_ev(g), tmp_path, "pkg/a.go", under=["x"], packages=True)
+    assert out.startswith("1 packages (directories) import pkg/a.go")
+    assert "(2 more left out" in out  # packages y and z, counted as packages

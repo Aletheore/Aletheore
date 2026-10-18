@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -259,6 +260,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_search",
         "aletheore_ast_pattern",
         "aletheore_symbol_source",
+        "aletheore_locate",
         "aletheore_verify_citations",
         "aletheore_scan",
         "aletheore_healthcheck",
@@ -270,7 +272,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_find_evidence_for_dependency",
     }
     assert expected.issubset(names)
-    assert len(names) == 36
+    assert len(names) == 37
     assert "aletheore_answer" not in names
 
 
@@ -332,7 +334,7 @@ async def test_dynamic_query_tools_have_distinct_non_generic_descriptions(tmp_pa
 @pytest.mark.asyncio
 async def test_answer_tool_present_with_adapter(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
-    server = build_server(repo, answer_adapter=MagicMock())
+    server = build_server(repo, answer_adapter=MagicMock(requires_consent=False))
 
     tools = await server.list_tools()
     names = {t.name for t in tools}
@@ -410,7 +412,7 @@ async def test_aletheore_search_codebase_returns_friendly_error_on_dimension_mis
 @pytest.mark.asyncio
 async def test_aletheore_answer_returns_friendly_error_when_index_not_built(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
-    server = build_server(repo, answer_adapter=MagicMock())
+    server = build_server(repo, answer_adapter=MagicMock(requires_consent=False))
 
     with patch(
         "aletheore.mcp_server.answer_question",
@@ -433,7 +435,7 @@ async def test_aletheore_answer_returns_friendly_error_on_dimension_mismatch(tmp
     from aletheore.mcp_server import IndexDimensionMismatchError
 
     repo = make_repo_with_evidence(tmp_path)
-    server = build_server(repo, answer_adapter=MagicMock())
+    server = build_server(repo, answer_adapter=MagicMock(requires_consent=False))
 
     with patch(
         "aletheore.mcp_server.answer_question",
@@ -453,7 +455,7 @@ async def test_aletheore_answer_tool_forbids_hosted_embeddings_by_default(tmp_pa
     # grant - unlike aletheore_index/aletheore_search_codebase, which this
     # same default-posture test already covers for their own hosted calls.
     repo = make_repo_with_evidence(tmp_path)
-    server = build_server(repo, answer_adapter=MagicMock())  # default effects, no `allow=` override
+    server = build_server(repo, answer_adapter=MagicMock(requires_consent=False))  # default effects, no `allow=` override
 
     with patch("aletheore.mcp_server.answer_question", return_value={"answer": "", "cited_chunks": [], "confidence_gated": True}) as mock_answer:
         await server.call_tool("aletheore_answer", {"question": "what does foo do"})
@@ -465,7 +467,7 @@ async def test_aletheore_answer_tool_forbids_hosted_embeddings_by_default(tmp_pa
 async def test_aletheore_answer_tool_permits_hosted_embeddings_when_external_is_allowed(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     server = build_server(
-        repo, answer_adapter=MagicMock(), allow=frozenset({"write", "network", "external"})
+        repo, answer_adapter=MagicMock(requires_consent=False), allow=frozenset({"write", "network", "external"})
     )
 
     with patch("aletheore.mcp_server.answer_question", return_value={"answer": "", "cited_chunks": [], "confidence_gated": True}) as mock_answer:
@@ -561,7 +563,8 @@ async def test_aletheore_symbol_source_returns_exact_source(tmp_path):
 
     result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "foo"})
 
-    assert tool_result_body(result)["result"]["source"] == "def foo():"
+    lines = result.content[0].text.split("\n")
+    assert lines[0] == "a.py::foo L1-1" and lines[1:] == ["def foo():"]
 
 
 @pytest.mark.asyncio
@@ -799,6 +802,119 @@ async def test_aletheore_changes_tool_reports_no_prior_snapshot(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_aletheore_changes_curated_default_caps_a_large_findings_list(tmp_path):
+    # Real audit finding, worse than the full=True case: the curated diff
+    # (the DEFAULT, not something an agent has to opt into) has no cap on
+    # secrets/vulnerabilities/static_analysis/layer_violations/endpoints'
+    # own new/resolved lists either - a scan that freshly enables a check
+    # can report hundreds of "new" findings in one uncapped response.
+    from aletheore.history import save_snapshot
+    from tests.air_fixtures import minimal_air_evidence
+
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    old = minimal_air_evidence()
+    # A real scan always carries a genuinely distinct scanned_at (the wall-clock time it finished); giving old
+    # and new the same one (both "" from minimal_air_evidence()) made list_snapshots()'s ordering fall through
+    # entirely to filesystem mtime as the tiebreaker - which a Windows CI runner does not reliably resolve at
+    # the sub-write granularity two back-to-back save_snapshot() calls need, silently swapping old and new.
+    old["scanned_at"] = "2026-07-20T00:00:00+00:00"
+    save_snapshot(old, repo)
+
+    new = minimal_air_evidence()
+    new["scanned_at"] = "2026-07-21T00:00:00+00:00"
+    new["security"]["secrets"]["findings"] = [
+        {"path": f"config_{i}.py", "line": 1, "pattern": "aws_access_key_id", "match_preview": "AKIA...MNOP"}
+        for i in range(5)
+    ]
+    save_snapshot(new, repo)
+
+    result = await server.call_tool("aletheore_changes", {"max_items": 2})
+    body = tool_result_body(result)["result"]
+
+    assert len(body["secrets"]["new"]) == 2
+    assert body["secrets"]["new_truncated"] is True
+    assert "resolved_truncated" not in body["secrets"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_changes_full_caps_a_large_diff(tmp_path):
+    # Real audit finding: compute_diff(full=True)'s raw path-level diff has
+    # no size cap at all - every changed leaf path in the whole evidence
+    # tree is reported, same unbounded-MCP-response shape as symbol_source/
+    # neighborhood/list before their caps.
+    from aletheore.history import save_snapshot
+    from tests.air_fixtures import minimal_air_evidence
+
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    old = minimal_air_evidence()
+    # A real scan always carries a genuinely distinct scanned_at (the wall-clock time it finished); giving old
+    # and new the same one (both "" from minimal_air_evidence()) made list_snapshots()'s ordering fall through
+    # entirely to filesystem mtime as the tiebreaker - which a Windows CI runner does not reliably resolve at
+    # the sub-write granularity two back-to-back save_snapshot() calls need, silently swapping old and new.
+    old["scanned_at"] = "2026-07-20T00:00:00+00:00"
+    save_snapshot(old, repo)
+
+    new = minimal_air_evidence()
+    new["scanned_at"] = "2026-07-21T00:00:00+00:00"
+    new["repository"]["modules"] = [
+        {
+            "path": f"mod_{i}.py",
+            "imports": [],
+            "imported_by": [],
+            "symbols": {"functions": [], "classes": []},
+        }
+        for i in range(5)
+    ]
+    save_snapshot(new, repo)
+
+    result = await server.call_tool("aletheore_changes", {"full": True, "max_items": 2})
+    body = tool_result_body(result)["result"]
+
+    assert len(body["added"]) == 2
+    assert body["added_truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_aletheore_changes_full_max_items_zero_returns_everything(tmp_path):
+    from aletheore.history import save_snapshot
+    from tests.air_fixtures import minimal_air_evidence
+
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    old = minimal_air_evidence()
+    # A real scan always carries a genuinely distinct scanned_at (the wall-clock time it finished); giving old
+    # and new the same one (both "" from minimal_air_evidence()) made list_snapshots()'s ordering fall through
+    # entirely to filesystem mtime as the tiebreaker - which a Windows CI runner does not reliably resolve at
+    # the sub-write granularity two back-to-back save_snapshot() calls need, silently swapping old and new.
+    old["scanned_at"] = "2026-07-20T00:00:00+00:00"
+    save_snapshot(old, repo)
+
+    new = minimal_air_evidence()
+    new["scanned_at"] = "2026-07-21T00:00:00+00:00"
+    new["repository"]["modules"] = [
+        {
+            "path": f"mod_{i}.py",
+            "imports": [],
+            "imported_by": [],
+            "symbols": {"functions": [], "classes": []},
+        }
+        for i in range(5)
+    ]
+    save_snapshot(new, repo)
+
+    result = await server.call_tool("aletheore_changes", {"full": True, "max_items": 0})
+    body = tool_result_body(result)["result"]
+
+    assert len(body["added"]) > 2
+    assert body["added_truncated"] is False
+
+
+@pytest.mark.asyncio
 async def test_aletheore_changes_returns_clear_error_for_incompatible_snapshot(tmp_path):
     from aletheore.history import save_snapshot
     from tests.air_fixtures import minimal_air_evidence
@@ -830,7 +946,11 @@ async def test_aletheore_neighborhood_combines_imports_imported_by_and_cluster(t
     assert tool_result_body(result)["result"] == {
         "target": "a.py",
         "imports": ["b.py"],
+        "imports_truncated": False,
+        "imports_total": 1,
         "imported_by": [],
+        "imported_by_truncated": False,
+        "imported_by_total": 0,
         "cluster": {"id": 0, "modules": ["a.py", "b.py"]},
     }
 
@@ -861,6 +981,76 @@ async def test_aletheore_neighborhood_reports_an_unknown_module_as_an_error_not_
     result = await server.call_tool("aletheore_neighborhood", {"target": "does/not/exist.py"})
 
     assert "does/not/exist.py" in tool_result_body(result)["result"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_neighborhood_ranks_a_large_dependent_list_by_centrality(tmp_path):
+    # Real audit finding: imports/imported_by were returned raw and uncapped -
+    # a 255-dependent hub on this project's own codebase rendered to 19.2k
+    # characters. Centrality (each dependent's own import+imported_by degree)
+    # surfaces the structurally important dependents first, instead of an
+    # arbitrary prefix of evidence's own list order.
+    repo = make_repo_with_evidence(tmp_path)
+    evidence_path = repo / ".aletheore" / "air.json"
+    evidence = json.loads(evidence_path.read_text())
+    evidence["repository"]["modules"] = [
+        {
+            "path": "hub.py",
+            "imports": [],
+            "imported_by": ["low_a.py", "high.py", "low_c.py"],
+            "symbols": {"functions": [], "classes": []},
+        },
+        {
+            "path": "low_a.py",
+            "imports": ["hub.py"],
+            "imported_by": [],
+            "symbols": {"functions": [], "classes": []},
+        },
+        {
+            "path": "high.py",
+            "imports": ["hub.py", "x.py", "y.py"],
+            "imported_by": ["z.py"],
+            "symbols": {"functions": [], "classes": []},
+        },
+        {
+            "path": "low_c.py",
+            "imports": ["hub.py"],
+            "imported_by": [],
+            "symbols": {"functions": [], "classes": []},
+        },
+    ]
+    evidence_path.write_text(json.dumps(evidence))
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_neighborhood", {"target": "hub.py", "max_items": 2})
+    body = tool_result_body(result)["result"]
+
+    assert body["imported_by"] == ["high.py", "low_a.py"]
+    assert body["imported_by_truncated"] is True
+    assert body["imports_truncated"] is False
+
+
+@pytest.mark.asyncio
+async def test_aletheore_neighborhood_max_items_zero_returns_everything(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    evidence_path = repo / ".aletheore" / "air.json"
+    evidence = json.loads(evidence_path.read_text())
+    evidence["repository"]["modules"] = [
+        {
+            "path": "hub.py",
+            "imports": [],
+            "imported_by": [f"dep_{i}.py" for i in range(25)],
+            "symbols": {"functions": [], "classes": []},
+        },
+    ]
+    evidence_path.write_text(json.dumps(evidence))
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_neighborhood", {"target": "hub.py", "max_items": 0})
+    body = tool_result_body(result)["result"]
+
+    assert len(body["imported_by"]) == 25
+    assert body["imported_by_truncated"] is False
 
 
 @pytest.mark.asyncio
@@ -1447,7 +1637,9 @@ async def test_aletheore_list_modules(tmp_path):
 
     result = await server.call_tool("aletheore_list", {"kind": "modules"})
 
-    assert tool_result_body(result) == {"result": ["a.py", "b.py"]}
+    assert tool_result_body(result) == {
+        "result": {"items": ["a.py", "b.py"], "total": 2, "truncated": False}
+    }
 
 
 @pytest.mark.asyncio
@@ -1458,6 +1650,73 @@ async def test_aletheore_list_unknown_kind_returns_an_error(tmp_path):
     result = await server.call_tool("aletheore_list", {"kind": "nonsense"})
 
     assert "error" in tool_result_body(result)["result"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_list_modules_filters_by_substring(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_list", {"kind": "modules", "filter": "A."})
+
+    assert tool_result_body(result) == {
+        "result": {"items": ["a.py"], "total": 1, "truncated": False}
+    }
+
+
+@pytest.mark.asyncio
+async def test_aletheore_list_modules_truncates_past_max_items(tmp_path):
+    # Real audit finding: list_modules returns every module path with no cap
+    # at all - 570 modules on this project's own codebase render to 27.4k
+    # characters, the single largest unbounded-MCP-response case found.
+    repo = make_repo_with_evidence(tmp_path)
+    evidence_path = repo / ".aletheore" / "air.json"
+    evidence = json.loads(evidence_path.read_text())
+    evidence["repository"]["modules"] = [
+        {
+            "path": f"mod_{i}.py",
+            "imports": [],
+            "imported_by": [],
+            "symbols": {"functions": [], "classes": []},
+        }
+        for i in range(5)
+    ]
+    evidence_path.write_text(json.dumps(evidence))
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_list", {"kind": "modules", "max_items": 2})
+
+    assert tool_result_body(result)["result"] == {
+        "items": ["mod_0.py", "mod_1.py"],
+        "total": 5,
+        "truncated": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_aletheore_list_modules_max_items_zero_returns_everything(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    evidence_path = repo / ".aletheore" / "air.json"
+    evidence = json.loads(evidence_path.read_text())
+    evidence["repository"]["modules"] = [
+        {
+            "path": f"mod_{i}.py",
+            "imports": [],
+            "imported_by": [],
+            "symbols": {"functions": [], "classes": []},
+        }
+        for i in range(5)
+    ]
+    evidence_path.write_text(json.dumps(evidence))
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_list", {"kind": "modules", "max_items": 0})
+
+    assert tool_result_body(result)["result"] == {
+        "items": ["mod_0.py", "mod_1.py", "mod_2.py", "mod_3.py", "mod_4.py"],
+        "total": 5,
+        "truncated": False,
+    }
 
 
 # --- background watching (aletheore mcp keeps evidence current) ------------
@@ -1492,6 +1751,38 @@ def test_build_server_does_not_watch_unless_asked(tmp_path, mcp_watchers):
     build_server(repo)
 
     assert mcp_watchers == {}
+
+
+def test_watching_passes_the_operators_actual_external_grant_through(tmp_path, mcp_watchers):
+    # Real gap found by an independent Strix pentest pass (2026-10-15):
+    # ensure_watcher used to start the watcher with no allow_hosted
+    # argument at all (defaulting all the way down to build_index's own
+    # allow_hosted=True), so an operator who denied `external` still had
+    # every watcher-triggered reindex hosted-embed changed source chunks
+    # whenever a managed-audit token was saved. build_server now threads
+    # the operator's actual EFFECT_EXTERNAL grant through
+    # start_background_watch on both paths that can start the watcher:
+    # the initial build_server(watch=True) call and the after-scan
+    # callback.
+    # Two separate repos: a declined start (mocked to return None, as below)
+    # marks that repo_path as permanently declined for the rest of the
+    # process, which would otherwise make a second build_server call for
+    # the same path short-circuit before ever reaching start_background_watch
+    # again.
+    repo_without_external = make_repo_with_evidence(tmp_path / "a")
+    repo_with_external = make_repo_with_evidence(tmp_path / "b")
+
+    with patch("aletheore.mcp_server.start_background_watch", return_value=None) as mock_start:
+        build_server(repo_without_external, allow=frozenset({"write", "network"}), watch=True)
+
+    assert mock_start.call_args.kwargs["allow_hosted"] is False
+
+    with patch("aletheore.mcp_server.start_background_watch", return_value=None) as mock_start:
+        build_server(
+            repo_with_external, allow=frozenset({"write", "network", "external"}), watch=True
+        )
+
+    assert mock_start.call_args.kwargs["allow_hosted"] is True
 
 
 def test_watching_needs_the_write_effect_and_says_why_it_is_off(tmp_path, mcp_watchers, capsys):
@@ -1656,3 +1947,189 @@ async def test_aletheore_search_rejects_empty_path_glob_with_structured_error(tm
     result = await server.call_tool("aletheore_search", {"pattern": "TARGET", "path_glob": ""})
 
     assert "path_glob" in tool_result_body(result)["result"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_symbol_source_returns_the_code_unescaped(tmp_path):
+    # The agent pays for every character it reads. Source inside a quoted TOON string needs every quote and newline
+    # escaped, which costs more tokens than the code itself; the tool returns a one-line header and the raw code.
+    repo = make_repo_with_evidence(tmp_path)
+    (repo / "a.py").write_text('def foo(): return "x\\y"\n')
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "foo"})
+
+    assert result.content[0].text == 'a.py::foo L1-1\ndef foo(): return "x\\y"'
+
+
+@pytest.mark.asyncio
+async def test_tool_results_are_not_sent_twice(tmp_path):
+    # Without this, the same text goes back as content and again as a JSON-wrapped structured copy, and the model
+    # is shown the wrapped copy with every quote and newline escaped a second time.
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_overview", {})
+
+    assert result.structured_content is None and len(result.content) == 1
+
+
+@pytest.mark.asyncio
+async def test_aletheore_locate_returns_the_function_that_holds_the_query_words(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    (repo / "a.py").write_text("def foo(): return 1\n")
+    os.utime(repo / "a.py", (1577836800, 1577836800))  # 2020, before the evidence's scanned_at
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_locate", {"query": "foo"})
+
+    assert result.content[0].text == "a.py::foo L1-1\ndef foo(): return 1"
+
+
+@pytest.mark.asyncio
+async def test_aletheore_locate_says_so_when_nothing_matches_and_points_at_search(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_locate", {"query": "no_such_identifier_anywhere"})
+
+    text = result.content[0].text
+    assert "no match" in text and "aletheore_search" in text
+
+
+@pytest.mark.asyncio
+async def test_nav_profile_exposes_only_the_three_navigation_tools(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo, profile="nav")
+
+    tools = await server.list_tools()
+
+    assert {t.name for t in tools} == {"aletheore_locate", "aletheore_symbol_source", "aletheore_search"}
+
+
+@pytest.mark.asyncio
+async def test_nav_profile_instructions_are_short(tmp_path):
+    # The instructions text is sent to the model on every session; the nav profile exists to keep that cost tiny.
+    repo = make_repo_with_evidence(tmp_path)
+    assert len(build_server(repo, profile="nav").instructions) < 600
+
+
+def test_an_unknown_profile_is_rejected(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    with pytest.raises(ValueError):
+        build_server(repo, profile="turbo")
+
+
+@pytest.mark.asyncio
+async def test_aletheore_locate_warns_when_a_file_changed_after_the_scan(tmp_path):
+    # Line ranges come from the scan. After the agent edits a file they can be off, and a wrong range is worse
+    # than none, so the result says so.
+    import os
+
+    repo = make_repo_with_evidence(tmp_path)
+    (repo / "a.py").write_text("def foo(): return 2\n")
+    os.utime(repo / "a.py", (4102444800, 4102444800))  # year 2100, far after scanned_at
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_locate", {"query": "foo"})
+
+    text = result.content[0].text
+    assert text.startswith("note: a.py changed since the last scan") and "a.py::foo L1-1" in text
+
+
+def _set_a_py(repo, source: str, functions: list[dict], classes: list[dict]) -> None:
+    (repo / "a.py").write_text(source)
+    path = repo / ".aletheore" / "air.json"
+    evidence = json.loads(path.read_text())
+    evidence["repository"]["modules"][0]["symbols"] = {"functions": functions, "classes": classes}
+    path.write_text(json.dumps(evidence))
+
+
+@pytest.mark.asyncio
+async def test_symbol_source_cuts_a_long_function_and_says_how_to_get_the_rest(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    source = "def foo():\n" + "".join(f"    x{i} = {i}\n" for i in range(200))
+    _set_a_py(repo, source, [{"name": "foo", "start_line": 1, "end_line": 201}], [])
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "foo", "max_lines": 30})
+
+    lines = result.content[0].text.split("\n")
+    assert lines[0] == "a.py::foo L1-201" and lines[1] == "def foo():"
+    assert "x28 = 28" in lines[30] and "x29" not in result.content[0].text
+    assert "171 more lines" in lines[-1] and "max_lines=0" in lines[-1]
+
+
+@pytest.mark.asyncio
+async def test_symbol_source_shows_a_long_class_as_its_head_plus_a_method_list(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    body = "class Big:\n    \"\"\"doc\"\"\"\n" + "".join(
+        f"    def m{i}(self):\n" + "".join(f"        y{j} = {j}\n" for j in range(10)) for i in range(20)
+    )
+    methods = [{"name": f"m{i}", "start_line": 3 + i * 11, "end_line": 3 + i * 11 + 10} for i in range(20)]
+    _set_a_py(repo, body, methods, [{"name": "Big", "start_line": 1, "end_line": 2 + 20 * 11}])
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "Big", "max_lines": 20})
+
+    text = result.content[0].text
+    assert text.startswith("a.py::Big L1-222\nclass Big:")
+    assert "m0 L3-13" in text and "m19 L212-222" in text  # the method list names every method with its range
+    assert "y9 = 9" not in text  # method bodies are not dumped
+    assert "more lines; ask for one method by name" in text
+
+
+@pytest.mark.asyncio
+async def test_symbol_source_negative_max_lines_falls_back_to_the_default_cap(tmp_path):
+    # Real audit finding (Flash Review): `max_lines <= 0` treated any
+    # negative value the same as the documented "0 means everything"
+    # sentinel - a caller computing a limit arithmetically (e.g. a
+    # subtraction landing below zero) silently got the uncapped response
+    # this cap exists to prevent. Only max_lines=0 means everything now.
+    repo = make_repo_with_evidence(tmp_path)
+    source = "def foo():\n" + "".join(f"    x{i} = {i}\n" for i in range(200))
+    _set_a_py(repo, source, [{"name": "foo", "start_line": 1, "end_line": 201}], [])
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "foo", "max_lines": -1})
+
+    text = result.content[0].text
+    assert "x199 = 199" not in text
+    assert "more lines" in text
+
+
+@pytest.mark.asyncio
+async def test_symbol_source_methods_listing_excludes_a_nested_closure(tmp_path):
+    # Real audit finding (Flash Review): a closure defined inside a method
+    # (its own entry in symbols.functions, nested entirely within the
+    # method's own line range) was listed in the class summary as if it
+    # were itself a method of the class.
+    repo = make_repo_with_evidence(tmp_path)
+    body = "class Big:\n    \"\"\"doc\"\"\"\n" + "".join(
+        f"    def m{i}(self):\n" + "".join(f"        y{j} = {j}\n" for j in range(10)) for i in range(20)
+    )
+    methods = [{"name": f"m{i}", "start_line": 3 + i * 11, "end_line": 3 + i * 11 + 10} for i in range(20)]
+    # A closure nested inside m0's body (m0 spans lines 3-13): its own
+    # range (5-6) falls entirely inside m0's, same shape a real `def
+    # helper(): ...` inside a method produces.
+    methods.append({"name": "inner_helper", "start_line": 5, "end_line": 6})
+    _set_a_py(repo, body, methods, [{"name": "Big", "start_line": 1, "end_line": 2 + 20 * 11}])
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "Big", "max_lines": 20})
+
+    text = result.content[0].text
+    assert "m0 L3-13" in text
+    assert "inner_helper" not in text
+
+
+@pytest.mark.asyncio
+async def test_symbol_source_max_lines_zero_returns_everything(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    source = "def foo():\n" + "".join(f"    x{i} = {i}\n" for i in range(200))
+    _set_a_py(repo, source, [{"name": "foo", "start_line": 1, "end_line": 201}], [])
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "foo", "max_lines": 0})
+
+    assert "x199 = 199" in result.content[0].text and "more lines" not in result.content[0].text

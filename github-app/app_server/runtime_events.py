@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from aletheore.runtime_events import parse_sentry_event
 from app_server.config import get_settings
 from app_server.db import touch_api_token
+from app_server.ingest_limits import parse_validated_body_after_auth
 from app_server.managed_audit_api import _authenticate_token, _get_queue
 from app_server.rate_limit import is_rate_limited
 
@@ -88,15 +89,19 @@ async def _enforce_runtime_event_rate_limit(installation_id: int) -> None:
 
 
 @runtime_events_router.post("/v1/runtime-events")
-async def report_runtime_event(request: Request, body: RuntimeEventRequest):
+async def report_runtime_event(request: Request):
     installation, token_hash = await _authenticate_token(request)
+    # Parsed right after auth, not before: that's the fix. Still ahead of
+    # the plan/rate-limit checks below so a malformed body gets the same
+    # 422 it always did regardless of plan or rate-limit state - only the
+    # auth/parse ordering changed.
+    body = await parse_validated_body_after_auth(request, RuntimeEventRequest)
     # AIR-exclusive, not "any paid plan" - the flash plan doesn't include
     # runtime event correlation.
     if installation["plan"] != "air":
         raise HTTPException(status_code=402, detail="runtime event correlation requires the AIR plan")
 
     await _enforce_runtime_event_rate_limit(installation["installation_id"])
-
     parsed = parse_sentry_event(body.event)
     if parsed is None:
         raise HTTPException(status_code=400, detail="event has no usable stack frame to resolve")

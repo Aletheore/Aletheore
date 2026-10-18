@@ -8,6 +8,7 @@ def _patch_installation_data(monkeypatch, *, account_login="acme", plan="air", e
     )
     monkeypatch.setattr("scan_worker.jobs.count_repo_scans_since", lambda dsn, iid, since: 3)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda dsn, iid: 5.5)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_review_spend_this_month", lambda dsn, iid: 0.5)
     monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda dsn, iid: 2)
     monkeypatch.setattr(
         "scan_worker.jobs.get_endpoint_health_summary", lambda dsn, iid: {"total": 3, "reachable": 3}
@@ -38,6 +39,7 @@ def test_processes_each_due_installation_and_enqueues_per_member(monkeypatch):
             "plan": "air",
             "scans_this_week": 3,
             "llm_spend_month_to_date": 5.5,
+            "llm_spend_reviews_month_to_date": 0.5,
             "flash_reviews_month_to_date": 2,
             "endpoints_reachable": 3,
             "endpoints_total": 3,

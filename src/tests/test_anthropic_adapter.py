@@ -56,7 +56,7 @@ def _adapter(tmp_path, **overrides):
     return AnthropicAdapter(**kwargs)
 
 
-@patch("aletheore.adapters.anthropic_native.Anthropic")
+@patch("anthropic.Anthropic")
 def test_invoke_assembles_all_required_sections_in_order(mock_anthropic_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     mock_client = MagicMock()
@@ -76,7 +76,7 @@ def test_invoke_assembles_all_required_sections_in_order(mock_anthropic_class, t
     assert first_call.kwargs["tool_choice"] == {"type": "any"}
 
 
-@patch("aletheore.adapters.anthropic_native.Anthropic")
+@patch("anthropic.Anthropic")
 def test_invoke_raises_if_finish_called_before_all_sections_written(
     mock_anthropic_class, tmp_path
 ):
@@ -95,7 +95,7 @@ def test_invoke_raises_if_finish_called_before_all_sections_written(
             adapter.invoke("audit this repo", cwd=str(repo))
 
 
-@patch("aletheore.adapters.anthropic_native.Anthropic")
+@patch("anthropic.Anthropic")
 def test_read_evidence_section_tool_returns_wrapped_data(mock_anthropic_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": [{"path": "app.py"}]}})
     mock_client = MagicMock()
@@ -167,7 +167,7 @@ def test_invoke_raises_clean_error_on_non_utf8_evidence_bytes(tmp_path):
             adapter.invoke("audit this repo", cwd=str(repo))
 
 
-@patch("aletheore.adapters.anthropic_native.Anthropic")
+@patch("anthropic.Anthropic")
 def test_read_evidence_section_reports_encoding_failure_instead_of_crashing(
     mock_anthropic_class, tmp_path
 ):
@@ -206,7 +206,7 @@ def test_read_evidence_section_reports_encoding_failure_instead_of_crashing(
     assert "could not encode section repository.modules" in tool_result_content["content"]
 
 
-@patch("aletheore.adapters.anthropic_native.Anthropic")
+@patch("anthropic.Anthropic")
 def test_invoke_raises_if_never_finishes_within_max_rounds(mock_anthropic_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     mock_client = MagicMock()
@@ -223,7 +223,7 @@ def test_invoke_raises_if_never_finishes_within_max_rounds(mock_anthropic_class,
             adapter.invoke("audit this repo", cwd=str(repo))
 
 
-@patch("aletheore.adapters.anthropic_native.Anthropic")
+@patch("anthropic.Anthropic")
 def test_invoke_normalizes_provider_errors_without_leaking_details(
     mock_anthropic_class, tmp_path
 ):
@@ -243,7 +243,7 @@ def test_invoke_normalizes_provider_errors_without_leaking_details(
 
 
 @patch("aletheore.adapters.openai_compatible.time.sleep")
-@patch("aletheore.adapters.anthropic_native.Anthropic")
+@patch("anthropic.Anthropic")
 def test_invoke_retries_a_transient_authentication_error_and_succeeds(
     mock_anthropic_class, mock_sleep, tmp_path
 ):
@@ -270,7 +270,7 @@ def test_invoke_retries_a_transient_authentication_error_and_succeeds(
 
 
 @patch("aletheore.adapters.openai_compatible.time.sleep")
-@patch("aletheore.adapters.anthropic_native.Anthropic")
+@patch("anthropic.Anthropic")
 def test_invoke_gives_up_after_exhausting_retries_on_persistent_auth_error(
     mock_anthropic_class, mock_sleep, tmp_path
 ):
@@ -291,7 +291,7 @@ def test_invoke_gives_up_after_exhausting_retries_on_persistent_auth_error(
 
 
 @patch("aletheore.adapters.openai_compatible.time.sleep")
-@patch("aletheore.adapters.anthropic_native.Anthropic")
+@patch("anthropic.Anthropic")
 def test_invoke_does_not_retry_a_non_transient_error(mock_anthropic_class, mock_sleep, tmp_path):
     # Only the conventional transient set (auth/rate-limit/connection/
     # timeout/5xx) is retried - a generic error (e.g. a genuine bad
@@ -312,7 +312,7 @@ def test_invoke_does_not_retry_a_non_transient_error(mock_anthropic_class, mock_
 
 
 @patch("aletheore.adapters.openai_compatible.time.sleep")
-@patch("aletheore.adapters.anthropic_native.Anthropic")
+@patch("anthropic.Anthropic")
 def test_simple_completion_retries_a_transient_rate_limit_error(
     mock_anthropic_class, mock_sleep, tmp_path
 ):
@@ -337,7 +337,7 @@ def test_simple_completion_retries_a_transient_rate_limit_error(
     assert mock_sleep.call_count == 1
 
 
-@patch("aletheore.adapters.anthropic_native.Anthropic")
+@patch("anthropic.Anthropic")
 def test_invoke_fails_fast_after_consecutive_no_tool_call_rounds(mock_anthropic_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     mock_client = MagicMock()
@@ -354,7 +354,7 @@ def test_invoke_fails_fast_after_consecutive_no_tool_call_rounds(mock_anthropic_
     assert mock_client.messages.create.call_count == 2
 
 
-@patch("aletheore.adapters.anthropic_native.Anthropic")
+@patch("anthropic.Anthropic")
 def test_invoke_recovers_after_single_no_tool_call_round(mock_anthropic_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     mock_client = MagicMock()
@@ -396,7 +396,7 @@ def test_name_and_requires_consent():
     assert adapter.requires_consent is True
 
 
-@patch("aletheore.adapters.anthropic_native.Anthropic")
+@patch("anthropic.Anthropic")
 def test_simple_completion_makes_one_plain_completion_call(mock_anthropic_class, tmp_path):
     mock_client = MagicMock()
     mock_anthropic_class.return_value = mock_client
@@ -418,7 +418,7 @@ def test_simple_completion_makes_one_plain_completion_call(mock_anthropic_class,
     assert "tools" not in call.kwargs
 
 
-@patch("aletheore.adapters.anthropic_native.Anthropic")
+@patch("anthropic.Anthropic")
 def test_simple_completion_reports_usage_to_callback(mock_anthropic_class, tmp_path):
     mock_client = MagicMock()
     mock_anthropic_class.return_value = mock_client
@@ -454,7 +454,7 @@ def test_simple_completion_releases_reservation_when_api_key_is_missing(tmp_path
     assert released == [1]
 
 
-@patch("aletheore.adapters.anthropic_native.Anthropic")
+@patch("anthropic.Anthropic")
 def test_simple_completion_releases_reservation_when_the_call_fails(mock_anthropic_class, tmp_path):
     mock_client = MagicMock()
     mock_anthropic_class.return_value = mock_client
@@ -469,7 +469,7 @@ def test_simple_completion_releases_reservation_when_the_call_fails(mock_anthrop
     assert released == [1]
 
 
-@patch("aletheore.adapters.anthropic_native.Anthropic")
+@patch("anthropic.Anthropic")
 def test_simple_completion_releases_reservation_when_response_has_no_usage(mock_anthropic_class, tmp_path):
     # A response with no usage field never raises, so the except block's
     # release never runs either - the same gap openai_compatible.py's
@@ -498,7 +498,7 @@ def test_simple_completion_releases_reservation_when_response_has_no_usage(mock_
     assert usage_calls == []
 
 
-@patch("aletheore.adapters.anthropic_native.Anthropic")
+@patch("anthropic.Anthropic")
 def test_invoke_releases_reservation_when_a_round_fails(mock_anthropic_class, tmp_path):
     # Same fix as simple_completion's, once per round instead of once per
     # call: _has_budget_for_next_call already reserved real budget for
@@ -517,7 +517,7 @@ def test_invoke_releases_reservation_when_a_round_fails(mock_anthropic_class, tm
     assert released == [1]
 
 
-@patch("aletheore.adapters.anthropic_native.Anthropic")
+@patch("anthropic.Anthropic")
 def test_invoke_releases_reservation_when_a_round_has_no_usage(mock_anthropic_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     mock_client = MagicMock()

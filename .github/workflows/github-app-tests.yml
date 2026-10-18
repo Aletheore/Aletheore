@@ -44,7 +44,7 @@ jobs:
       GITHUB_WEBHOOK_SECRET: test-webhook-secret
       GITHUB_CLIENT_ID: test-client-id
       GITHUB_CLIENT_SECRET: test-client-secret
-      SESSION_SECRET: test-session-secret
+      SESSION_SECRET: test-session-secret-at-least-32-characters-long
       PUBLIC_BASE_URL: http://test
 
     steps:

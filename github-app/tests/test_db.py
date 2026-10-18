@@ -29,6 +29,7 @@ from app_server.db import (
     get_session,
     insert_repo_history,
     is_installation_member,
+    reconcile_installation_member_identity,
     list_api_tokens,
     list_health_check_targets,
     list_installation_member_emails,
@@ -36,6 +37,7 @@ from app_server.db import (
     remove_health_check_target,
     remove_installation_member,
     revoke_api_token,
+    revoke_api_tokens_created_by,
     record_llm_spend,
     set_installation_plan,
     set_webhook_url,
@@ -185,6 +187,33 @@ async def test_webhook_url_and_token_lifecycle(pool):
     assert await get_installation_by_token_hash(pool, "hash1") is None
 
 
+@pytest.mark.asyncio
+async def test_revoke_api_tokens_created_by_only_revokes_that_creators_tokens(pool):
+    # Regression test for a real bug (2026-10-12 Strix security review):
+    # a token authenticates purely by hash + revoked_at IS NULL, with
+    # nothing tying its continued validity to its creator still being an
+    # installation member - removing someone used to leave every token
+    # they'd personally created fully usable indefinitely. This is the DB
+    # primitive remove_member now calls to close that.
+    await upsert_installation(pool, 101, "octocat")
+    await create_api_token(pool, 101, "alice-hash-1", "alice-laptop", "alice")
+    await create_api_token(pool, 101, "alice-hash-2", "alice-ci", "alice")
+    await create_api_token(pool, 101, "bob-hash-1", "bob-laptop", "bob")
+
+    revoked_count = await revoke_api_tokens_created_by(pool, 101, "alice")
+
+    assert revoked_count == 2
+    assert await get_installation_by_token_hash(pool, "alice-hash-1") is None
+    assert await get_installation_by_token_hash(pool, "alice-hash-2") is None
+    # Bob was not removed - his own token must keep working.
+    assert (await get_installation_by_token_hash(pool, "bob-hash-1"))["installation_id"] == 101
+
+
+@pytest.mark.asyncio
+async def test_revoke_api_tokens_created_by_is_a_noop_for_a_login_with_no_tokens(pool):
+    await upsert_installation(pool, 102, "octocat")
+    revoked_count = await revoke_api_tokens_created_by(pool, 102, "nobody")
+    assert revoked_count == 0
 
 
 @pytest.mark.asyncio
@@ -303,6 +332,73 @@ async def test_installation_member_lifecycle(pool):
     await remove_installation_member(pool, 600, "octocat")
     assert await is_installation_member(pool, 600, "octocat") is False
     assert await count_installation_members(pool, 600) == 0
+
+
+@pytest.mark.asyncio
+async def test_reconcile_installation_member_identity_binds_an_unbound_row(pool):
+    # A row granted before this reconciliation existed (or before this
+    # login's holder ever logged in) has no github_user_id yet - the first
+    # login under that login string is trusted to bind it, since a login
+    # string is the only identity admin.py's add_member had to begin with.
+    await upsert_installation(pool, 700, "octocat")
+    await add_installation_member(pool, 700, "octocat", "octocat")
+
+    await reconcile_installation_member_identity(pool, "octocat", 99001)
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT github_user_id FROM installation_members WHERE installation_id = $1 AND github_login = $2",
+            700,
+            "octocat",
+        )
+    assert row["github_user_id"] == 99001
+    # Still a member - binding must not evict the legitimate first holder.
+    assert await is_installation_member(pool, 700, "octocat") is True
+
+
+@pytest.mark.asyncio
+async def test_reconcile_installation_member_identity_evicts_a_reassigned_login(pool):
+    # Real gap this closes: "octocat" was already bound to user 99001 (the
+    # original member). The login is later abandoned and claimed by a
+    # different real GitHub account (99002) - that new account logging in
+    # must not inherit the original member's seat just by sharing the login
+    # string.
+    await upsert_installation(pool, 701, "octocat")
+    await add_installation_member(pool, 701, "octocat", "octocat")
+    await reconcile_installation_member_identity(pool, "octocat", 99001)
+    assert await is_installation_member(pool, 701, "octocat") is True
+
+    await reconcile_installation_member_identity(pool, "octocat", 99002)
+
+    assert await is_installation_member(pool, 701, "octocat") is False
+
+
+@pytest.mark.asyncio
+async def test_reconcile_installation_member_identity_is_a_noop_for_the_same_user(pool):
+    await upsert_installation(pool, 702, "octocat")
+    await add_installation_member(pool, 702, "octocat", "octocat")
+    await reconcile_installation_member_identity(pool, "octocat", 99001)
+
+    # The original member logging in again, repeatedly, must not evict
+    # their own seat.
+    await reconcile_installation_member_identity(pool, "octocat", 99001)
+    await reconcile_installation_member_identity(pool, "octocat", 99001)
+
+    assert await is_installation_member(pool, 702, "octocat") is True
+
+
+@pytest.mark.asyncio
+async def test_reconcile_installation_member_identity_only_touches_the_matching_login(pool):
+    await upsert_installation(pool, 703, "octocat")
+    await add_installation_member(pool, 703, "octocat", "octocat")
+    await add_installation_member(pool, 703, "otheruser", "octocat")
+    await reconcile_installation_member_identity(pool, "octocat", 99001)
+    await reconcile_installation_member_identity(pool, "otheruser", 99003)
+
+    await reconcile_installation_member_identity(pool, "octocat", 99002)
+
+    assert await is_installation_member(pool, 703, "octocat") is False
+    assert await is_installation_member(pool, 703, "otheruser") is True
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -92,6 +93,7 @@ from scan_worker.db import (
     get_evidence_by_head_sha,
     get_evidence_by_id,
     get_latest_evidence,
+    get_llm_review_spend_this_month,
     get_llm_spend_this_month,
     get_seconds_since_last_health_check,
     insert_audit_report,
@@ -114,6 +116,7 @@ from scan_worker.db import (
     list_paid_repos_due_for_wiki_catchup,
     list_recent_endpoint_incidents,
     list_repos_for_installation,
+    get_wiki_overview,
     list_wiki_subsystems,
     mark_flash_review_finding_comment_resolved,
     record_digest_sent,
@@ -398,6 +401,22 @@ def _url_without_credentials(url: str) -> str:
     return urlunsplit(parts._replace(netloc=parts.hostname))
 
 
+# The userinfo may itself contain "@" (an unescaped one in a password): the class excludes only whitespace and
+# "/", so the match runs to the LAST "@" before the first "/" and the whole userinfo is redacted.
+_CREDENTIALED_URL_RE = re.compile(r"(https?://)[^\s/]+:[^\s/]+@")
+
+
+def _scrub_credentialed_urls(text: str) -> str:
+    """Redacts the userinfo (x-access-token:TOKEN@...) from any URL found in
+    free-form text. Unlike _url_without_credentials (one known URL, parsed
+    exactly) this is a best-effort regex over text whose shape isn't known
+    in advance - git's own fatal-error output, which can embed the
+    credentialed remote it read out of .git/config (see
+    _ensure_persistent_checkout's docstring) even on an invocation whose own
+    argv never mentioned a URL at all, e.g. a bare `git fetch`."""
+    return _CREDENTIALED_URL_RE.sub(r"\1", text)
+
+
 _GIT_PATH: str | None = None
 
 
@@ -408,21 +427,32 @@ def _git_path() -> str:
     the ollama/sh fixes elsewhere in this codebase: a bare name re-
     resolves PATH again at execution time, which could pick up a
     different binary than the one a security review of PATH would have
-    checked). Falls back to the bare name only if git genuinely isn't on
-    PATH - every function here that shells out to git already assumes
-    it's installed and lets the subprocess call fail naturally if it
-    isn't, so there's no new "git missing" handling to add; this only
-    changes which path component runs, the same already-accepted failure
-    mode either way.
+    checked). Raises FileNotFoundError if git isn't on PATH instead of falling
+    back to the bare name (which would be re-resolved against PATH inside
+    the untrusted checkout) - the same exception the bare call would have
+    raised, so callers need no new handling.
     """
     global _GIT_PATH
     if _GIT_PATH is None:
-        _GIT_PATH = shutil.which("git") or "git"
+        # Resolved to an absolute path, not just whatever which() returns
+        # as-is: this value is cached for the worker process's whole
+        # lifetime and reused across many different repos' checkout dirs as
+        # cwd, so a relative PATH entry would let ANY later-scanned
+        # (untrusted) repo shadow it with its own same-named executable -
+        # not just the repo scanned at the moment of first resolution
+        # (Strix security review, 2026-10-15).
+        found = shutil.which("git")
+        if not found:
+            # Never fall back to the bare name: it would be re-resolved against PATH inside whatever repo
+            # checkout is the cwd. FileNotFoundError is what the bare call would have raised anyway.
+            raise FileNotFoundError("git was not found on PATH")
+        _GIT_PATH = os.path.abspath(found)
     return _GIT_PATH
 
 
 def _run_git(args: list[str], **kwargs) -> None:
-    """subprocess.run wrapper for git invocations whose argv may embed a
+    """subprocess.run wrapper for git invocations whose argv - or whose
+    configured remote (see _ensure_persistent_checkout) - may embed a
     credentialed clone URL (see _clone_url). A failing git command raises
     CalledProcessError, whose __str__ includes the full argv verbatim -
     unredacted, that string is what logging_config.log_job both writes to
@@ -433,19 +463,54 @@ def _run_git(args: list[str], **kwargs) -> None:
     parses as a URL with embedded credentials before letting the error
     propagate.
 
+    Also captures stdout/stderr (rather than letting the child inherit this
+    process's real file descriptors) and scrubs the same credential shape
+    out of both before re-raising. Argv alone isn't the only place a token
+    can surface: git's own fatal-error text echoes the remote URL it read
+    out of .git/config on a fetch/checkout/clean failure, even when the
+    failing command's own argv never mentioned a URL at all - real audit
+    found every caller that ran such a command via a bare subprocess.run
+    streamed that text straight to the worker's real stdout/stderr, reaching
+    a log aggregator before this function's scrub ever got a chance to run.
+
     Also resolves a leading bare "git" to _git_path() - the one
     chokepoint nearly every git invocation in this module goes through,
     so this alone fixes every ["git", ...] call site that uses it.
     """
     if args and args[0] == "git":
         args = [_git_path(), *args[1:]]
+    # This function is the redaction chokepoint, so a caller cannot opt out of the capture-and-scrub path:
+    # capture_output is forced on and any stdout/stderr redirect (which would conflict with it) is dropped.
+    # Flash Review catch: dropping those kwargs with no signal at all left a caller's own
+    # stdout=/stderr= redirect silently ignored - logging it keeps the override from being a surprise.
+    if "stdout" in kwargs or "stderr" in kwargs:
+        logging.getLogger("scan_worker.jobs").warning(
+            "_run_git: caller-supplied stdout/stderr kwargs are ignored; output is always captured "
+            "and credential-scrubbed instead"
+        )
+    kwargs.pop("stdout", None)
+    kwargs.pop("stderr", None)
+    kwargs["capture_output"] = True
+    kwargs.setdefault("text", True)
     try:
-        subprocess.run(args, check=True, **kwargs)
+        result = subprocess.run(args, check=True, **kwargs)
+        # Captured output of a successful command is not shown, but a worker debugging a slow or partly failing
+        # job still gets it at debug level, with credentials scrubbed.
+        stdout = getattr(result, "stdout", None)
+        if isinstance(stdout, str) and stdout.strip():
+            logging.getLogger("scan_worker.jobs").debug("git stdout: %s", _scrub_credentialed_urls(stdout.strip()))
+        stderr = getattr(result, "stderr", None)
+        if isinstance(stderr, str) and stderr.strip():
+            logging.getLogger("scan_worker.jobs").debug("git stderr: %s", _scrub_credentialed_urls(stderr.strip()))
     except subprocess.CalledProcessError as exc:
         exc.cmd = [
             _url_without_credentials(arg) if isinstance(arg, str) and urlsplit(arg).username else arg
             for arg in exc.cmd
         ]
+        if isinstance(exc.stdout, str):
+            exc.stdout = _scrub_credentialed_urls(exc.stdout)
+        if isinstance(exc.stderr, str):
+            exc.stderr = _scrub_credentialed_urls(exc.stderr)
         raise
 
 
@@ -474,16 +539,12 @@ def _checkout_sha(dest: Path, sha: str, pr_number: int | None, *, force: bool = 
     """
     args = [_git_path(), "checkout", "-q", *(["-f"] if force else []), sha]
     try:
-        subprocess.run(args, cwd=dest, check=True)
+        _run_git(args, cwd=dest)
     except subprocess.CalledProcessError:
         if pr_number is None:
             raise
-        subprocess.run(
-            [_git_path(), "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"], cwd=dest, check=True
-        )
-        subprocess.run(
-            [_git_path(), "checkout", "-q", *(["-f"] if force else []), "FETCH_HEAD"], cwd=dest, check=True
-        )
+        _run_git(["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"], cwd=dest)
+        _run_git(["git", "checkout", "-q", *(["-f"] if force else []), "FETCH_HEAD"], cwd=dest)
 
 
 def _fetch_and_checkout(dest: Path, sha: str, pr_number: int | None) -> None:
@@ -514,16 +575,12 @@ def _fetch_and_checkout(dest: Path, sha: str, pr_number: int | None) -> None:
     small as `--depth 1`, which isn't safe for any current caller.
     """
     try:
-        subprocess.run([_git_path(), "fetch", "-q", "origin", sha], cwd=dest, check=True)
+        _run_git(["git", "fetch", "-q", "origin", sha], cwd=dest)
     except subprocess.CalledProcessError:
         if pr_number is None:
             raise
-        subprocess.run(
-            [_git_path(), "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
-            cwd=dest,
-            check=True,
-        )
-    subprocess.run([_git_path(), "checkout", "-q", "FETCH_HEAD"], cwd=dest, check=True)
+        _run_git(["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"], cwd=dest)
+    _run_git(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest)
 
 
 def _clone_ref(url: str, ref: str, dest: Path, pr_number: int | None = None) -> None:
@@ -567,11 +624,7 @@ def _clone_ref(url: str, ref: str, dest: Path, pr_number: int | None = None) -> 
         _fetch_and_checkout(dest, ref, pr_number)
     finally:
         if (dest / ".git").exists():
-            subprocess.run(
-                [_git_path(), "remote", "set-url", "origin", _url_without_credentials(url)],
-                cwd=dest,
-                check=True,
-            )
+            _run_git(["git", "remote", "set-url", "origin", _url_without_credentials(url)], cwd=dest)
 
 
 # Root for persistent, reused-across-scans checkouts (see
@@ -581,10 +634,36 @@ _REPO_CHECKOUT_ROOT_ENV = "ALETHEORE_REPO_CHECKOUT_ROOT"
 _DEFAULT_REPO_CHECKOUT_ROOT = "/data/aletheore-repo-checkouts"
 
 
+class _CheckoutPathEscapeError(ValueError):
+    """repo_full_name resolved outside its own installation's checkout
+    root - see _persistent_checkout_dir's docstring."""
+
+
 def _persistent_checkout_dir(installation_id: int, repo_full_name: str) -> Path:
+    """The on-disk checkout path for one repo under one installation.
+
+    Containment is enforced here, not left to each caller (real gap fixed
+    2026-10-12, Strix security review): this only ever replaced "/"
+    characters in repo_full_name, so a bare ".." segment (no slash to
+    replace) passed straight through and could resolve outside the
+    installation's own directory - purge_repo_checkout_job already
+    independently re-checked containment before deleting anything, but
+    _prepare_head_checkout/_ensure_persistent_checkout (which create and
+    write to this path) did not, an inconsistency between two call sites
+    of the same function rather than a deliberate choice. Raising here
+    instead protects every caller at the source: _prepare_head_checkout's
+    existing try/except already falls back to a safe ephemeral clone on
+    any exception, and purge_repo_checkout_job's own try/except (below)
+    just logs and refuses, matching its prior behavior exactly."""
     root = Path(os.environ.get(_REPO_CHECKOUT_ROOT_ENV, _DEFAULT_REPO_CHECKOUT_ROOT))
     safe_name = repo_full_name.replace("/", "__")
-    return root / str(installation_id) / safe_name
+    candidate = root / str(installation_id) / safe_name
+    installation_root = (root / str(installation_id)).resolve()
+    if candidate.resolve().parent != installation_root:
+        raise _CheckoutPathEscapeError(
+            f"repo_full_name {repo_full_name!r} resolves outside installation {installation_id}'s checkout root"
+        )
+    return candidate
 
 
 def _installation_checkout_root(installation_id: int) -> Path:
@@ -618,12 +697,13 @@ def purge_repo_checkout_job(installation_id: int, repo_full_name: str) -> None:
     (see handle_installation_event).
 
     shutil.rmtree on a path that escaped this installation's own directory
-    would delete other installations' source, so anything that doesn't
-    resolve to a direct child of this installation's root is refused.
+    would delete other installations' source - _persistent_checkout_dir
+    itself now refuses to build such a path (see its docstring), so this
+    just has to not delete anything if that refusal fires.
     """
-    installation_root = _installation_checkout_root(installation_id).resolve()
-    target = _persistent_checkout_dir(installation_id, repo_full_name)
-    if target.resolve().parent != installation_root:
+    try:
+        target = _persistent_checkout_dir(installation_id, repo_full_name)
+    except _CheckoutPathEscapeError:
         logging.getLogger("scan_worker.jobs").warning(
             "refusing to purge checkout for installation %s: %r is not a direct child of its checkout root",
             installation_id, repo_full_name,
@@ -674,15 +754,11 @@ def _ensure_persistent_checkout(
     if (checkout_dir / ".git").exists():
         _run_git(["git", "remote", "set-url", "origin", url], cwd=checkout_dir)
         try:
-            subprocess.run([_git_path(), "fetch", "-q", "origin"], cwd=checkout_dir, check=True)
+            _run_git(["git", "fetch", "-q", "origin"], cwd=checkout_dir)
             _checkout_sha(checkout_dir, checkout_sha, pr_number, force=True)
-            subprocess.run([_git_path(), "clean", "-q", "-fdx"], cwd=checkout_dir, check=True)
+            _run_git(["git", "clean", "-q", "-fdx"], cwd=checkout_dir)
         finally:
-            subprocess.run(
-                [_git_path(), "remote", "set-url", "origin", credential_free_url],
-                cwd=checkout_dir,
-                check=True,
-            )
+            _run_git(["git", "remote", "set-url", "origin", credential_free_url], cwd=checkout_dir)
     else:
         checkout_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -690,11 +766,7 @@ def _ensure_persistent_checkout(
             _checkout_sha(checkout_dir, checkout_sha, pr_number)
         finally:
             if (checkout_dir / ".git").exists():
-                subprocess.run(
-                    [_git_path(), "remote", "set-url", "origin", credential_free_url],
-                    cwd=checkout_dir,
-                    check=True,
-                )
+                _run_git(["git", "remote", "set-url", "origin", credential_free_url], cwd=checkout_dir)
 
 
 def _prepare_head_checkout(
@@ -1779,15 +1851,34 @@ def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
         # same gap the Paddle subscription.created wiki-build trigger
         # closed for brand-new upgrades. AIR-exclusive, not "any paid
         # plan" - the flash plan doesn't include AIRview/Docs at all.
+        #
+        # Enqueued as their own jobs, not called inline: both builds make
+        # a long series of LLM calls and get LIVE_WIKI_FULL_BUILD_JOB_
+        # TIMEOUT_SECONDS everywhere else they run (the Paddle trigger's
+        # per-repo fan-out, the catch-up sweeps), but this job's own
+        # enqueue timeout is 300s - an inline build on a larger repo hit
+        # that limit mid LLM call and failed the whole initial scan job
+        # (Sentry ALETHEORE-5), which the ops monitor then escalated.
         if installation is not None and installation["plan"] == "air":
-            try:
-                run_live_wiki_full_build_job(installation_id, repo_full_name)
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                run_live_docs_full_build_job(installation_id, repo_full_name)
-            except Exception:  # noqa: BLE001
-                pass
+            queue = _scans_queue(settings.redis_url)
+            for build_job in (
+                "scan_worker.jobs.run_live_wiki_full_build_job",
+                "scan_worker.jobs.run_live_docs_full_build_job",
+            ):
+                try:
+                    queue.enqueue(
+                        build_job,
+                        job_timeout=LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS,
+                        installation_id=installation_id,
+                        repo_full_name=repo_full_name,
+                    )
+                except Exception:  # noqa: BLE001
+                    # One build failing to enqueue must not fail the scan that already finished, and must not
+                    # stop the other build from being enqueued - but it must leave a trace.
+                    logging.getLogger("scan_worker.jobs").warning(
+                        "could not enqueue %s for installation=%s repo=%s",
+                        build_job, installation_id, repo_full_name, exc_info=True,
+                    )
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("scan_worker.jobs").warning(
             "initial scan job failed for installation=%s repo=%s (%s)",
@@ -1962,19 +2053,11 @@ def _clone_pr_head(url: str, pr_number: int, dest: Path) -> None:
     try:
         _run_git(["git", "init", "-q", str(dest)])
         _run_git(["git", "remote", "add", "origin", url], cwd=dest)
-        subprocess.run(
-            [_git_path(), "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
-            cwd=dest,
-            check=True,
-        )
-        subprocess.run([_git_path(), "checkout", "-q", "FETCH_HEAD"], cwd=dest, check=True)
+        _run_git(["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"], cwd=dest)
+        _run_git(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest)
     finally:
         if (dest / ".git").exists():
-            subprocess.run(
-                [_git_path(), "remote", "set-url", "origin", _url_without_credentials(url)],
-                cwd=dest,
-                check=True,
-            )
+            _run_git(["git", "remote", "set-url", "origin", _url_without_credentials(url)], cwd=dest)
 
 
 def _git_rev_parse_head(repo_dir: Path) -> str | None:
@@ -2416,18 +2499,26 @@ def run_flash_review_job(
     # How much of reserved_spend was drawn from purchased top-up credit, so a
     # release (the true-up refund or the failure path below) goes back there.
     reserved_topup: dict = {}
+    # Captured once and threaded through every reserve/release call below -
+    # a job that runs long enough to straddle a month boundary must release
+    # against the same row it reserved, not whichever month happens to be
+    # current when release runs (confirmed real bug, 2026-10-12 Strix review:
+    # release used to recompute "now()" independently and could decrement a
+    # legitimate new-month reservation instead of the stale old-month one).
+    reservation_month = datetime.now(timezone.utc).date().replace(day=1)
     if is_free_tier:
         # Not recorded to history - always free tier here, and
         # _record_review_outcome no-ops for free tier anyway (see its own
         # docstring: the read route 404s free installs).
         if not reserve_flash_review_count(
-            settings.database_url, installation_id, MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH
+            settings.database_url, installation_id, MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH,
+            month=reservation_month,
         ):
             return
     else:
         # Paid plans have no review-count cap (limit=None still counts the
         # review); the dollar reservation below is what bounds them.
-        reserve_flash_review_count(settings.database_url, installation_id, None)
+        reserve_flash_review_count(settings.database_url, installation_id, None, month=reservation_month)
         # reserve_llm_spend rejects the WHOLE reservation when the combined
         # balance is below the requested amount (its `>= %(reserve)s` WHERE
         # clause - deliberately untouched, that atomicity is what stops two
@@ -2454,7 +2545,7 @@ def run_flash_review_job(
             settings.database_url, installation_id, reserved_spend, feature="flash_review",
             topup_out=reserved_topup,
         ):
-            release_flash_review_count_reservation(settings.database_url, installation_id)
+            release_flash_review_count_reservation(settings.database_url, installation_id, month=reservation_month)
             _record_review_outcome(
                 settings, installation_id, repo_full_name, pr_number,
                 "skipped", skip_reason="AI credit exhausted",
@@ -2526,7 +2617,7 @@ def run_flash_review_job(
         # actually used - see release_flash_review_count_reservation and
         # release_llm_spend_reservation.
         if not review_ran:
-            release_flash_review_count_reservation(settings.database_url, installation_id)
+            release_flash_review_count_reservation(settings.database_url, installation_id, month=reservation_month)
             if reserved_spend and not reservation_state["settled"]:
                 _release_spend(
                     settings.database_url, installation_id, reserved_spend,
@@ -5374,6 +5465,7 @@ def run_weekly_digest_sweep_job() -> None:
                 "plan": installation["plan"],
                 "scans_this_week": count_repo_scans_since(dsn, installation_id, since),
                 "llm_spend_month_to_date": get_llm_spend_this_month(dsn, installation_id),
+                "llm_spend_reviews_month_to_date": get_llm_review_spend_this_month(dsn, installation_id),
                 "flash_reviews_month_to_date": get_flash_review_count_this_month(dsn, installation_id),
             }
             endpoint_summary = get_endpoint_health_summary(dsn, installation_id)
@@ -6139,6 +6231,41 @@ def _regenerate_wiki_overview(
     )
 
 
+# An incremental update (one push) used to re-narrate the whole repo's
+# overview every time: its input is every subsystem's name and description
+# (~30K tokens on an 85-subsystem repo), so it was the single biggest call
+# in a push, about 55% of the push's AIRview spend, to refresh a page one
+# changed subsystem rarely alters. Subsystem pages themselves stay current on
+# every push; only the repo-level overview is allowed to lag.
+WIKI_OVERVIEW_MIN_REGEN_INTERVAL_SECONDS = 6 * 3600
+
+
+def _wiki_overview_needs_regeneration(
+    dsn: str, installation_id: int, repo_full_name: str, subsystem_ids_before: set[str]
+) -> bool:
+    """Whether an incremental update should re-run the overview. Yes when
+    there is no overview yet, when the last attempt left the "unavailable"
+    placeholder (retry on the next push rather than keep it for hours), when
+    the set of subsystems changed (one was added or pruned, which the
+    overview's narrative and diagram should reflect right away), or when it
+    is older than WIKI_OVERVIEW_MIN_REGEN_INTERVAL_SECONDS. Full builds
+    (run_live_wiki_full_build_job) call _regenerate_wiki_overview directly
+    and are not debounced.
+
+    Must be called with wiki_write_lock held, after the subsystem records
+    were stored, like _regenerate_wiki_overview itself."""
+    overview = get_wiki_overview(dsn, installation_id, repo_full_name)
+    if overview is None or overview["description"] == live_wiki.OVERVIEW_UNAVAILABLE_DESCRIPTION:
+        return True
+    subsystem_ids_after = {
+        r["subsystem_id"] for r in list_wiki_subsystems(dsn, installation_id, repo_full_name)
+    }
+    if subsystem_ids_after != subsystem_ids_before:
+        return True
+    age_seconds = (datetime.now(timezone.utc) - overview["updated_at"]).total_seconds()
+    return age_seconds >= WIKI_OVERVIEW_MIN_REGEN_INTERVAL_SECONDS
+
+
 def _store_wiki_generation(
     dsn: str,
     installation_id: int,
@@ -6164,11 +6291,15 @@ def _store_wiki_generation(
     corrupting the invariant this lock exists to protect.
     """
     with wiki_write_lock(dsn, installation_id, repo_full_name):
+        subsystem_ids_before = {
+            r["subsystem_id"] for r in list_wiki_subsystems(dsn, installation_id, repo_full_name)
+        }
         _store_wiki_subsystem_records(dsn, installation_id, repo_full_name, evidence, fresh_records, source_commit)
-        _regenerate_wiki_overview(
-            dsn, installation_id, repo_full_name, evidence, writing_adapter, source_commit,
-            fetch_line_count=fetch_line_count,
-        )
+        if _wiki_overview_needs_regeneration(dsn, installation_id, repo_full_name, subsystem_ids_before):
+            _regenerate_wiki_overview(
+                dsn, installation_id, repo_full_name, evidence, writing_adapter, source_commit,
+                fetch_line_count=fetch_line_count,
+            )
 
 
 # Every cluster gets an LLM call in a full build (naming + subsystem

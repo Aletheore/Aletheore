@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import subprocess
 import time
@@ -350,7 +351,7 @@ def test_ensure_persistent_checkout_does_not_leave_a_live_token_on_disk(tmp_path
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:2] == ["git", "clone"]:
             dest = args[-1]
@@ -380,7 +381,7 @@ def test_ensure_persistent_checkout_strips_credentials_on_reuse_path_too(tmp_pat
     calls = []
     monkeypatch.setattr(
         "scan_worker.jobs.subprocess.run",
-        lambda args, cwd=None, check=None: calls.append(args) or subprocess.CompletedProcess(args, 0),
+        lambda args, cwd=None, check=None, **kwargs: calls.append(args) or subprocess.CompletedProcess(args, 0),
     )
 
     credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
@@ -390,6 +391,38 @@ def test_ensure_persistent_checkout_strips_credentials_on_reuse_path_too(tmp_pat
     assert len(set_url_calls) == 2  # once with the live token to fetch, once to strip it
     assert set_url_calls[0][-1] == credentialed_url
     assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
+
+
+def test_ensure_persistent_checkout_captures_output_on_every_git_invocation(tmp_path, monkeypatch):
+    # Real gap found via audit: the reuse path's fetch/checkout/clean calls
+    # ran via a bare subprocess.run with no capture_output, so anything git
+    # wrote - including a fatal message echoing the credentialed remote it
+    # reads out of .git/config, which these commands' own argv never
+    # mentions at all - streamed straight to the worker's real
+    # stdout/stderr, reaching a log aggregator before the _run_git scrub
+    # (which only ever saw argv, not that text) got a chance to run. Every
+    # invocation here must go through _run_git, which captures by default.
+    from scan_worker.jobs import _ensure_persistent_checkout
+
+    checkout_dir = tmp_path / "existing"
+    (checkout_dir / ".git").mkdir(parents=True)
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None, **kwargs):
+        calls.append(kwargs)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    _ensure_persistent_checkout(
+        "https://x-access-token:livetoken@github.com/org/repo.git", "somesha", checkout_dir
+    )
+
+    assert calls, "expected at least one subprocess invocation"
+    assert all(kw.get("capture_output") is True for kw in calls), (
+        "every git invocation on the reuse path must capture output, not inherit the real streams"
+    )
 
 
 def test_clone_ref_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch):
@@ -409,7 +442,7 @@ def test_clone_ref_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch):
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
@@ -439,7 +472,7 @@ def test_clone_ref_scrubs_the_token_even_when_the_fetch_fails(tmp_path, monkeypa
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
@@ -473,7 +506,7 @@ def test_checkout_sha_falls_back_to_pr_ref_when_direct_checkout_fails(tmp_path, 
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:3] == ["git", "checkout", "-q"] and args[-1] == "deadsha":
             raise subprocess.CalledProcessError(128, args)
@@ -496,7 +529,7 @@ def test_checkout_sha_reraises_when_no_pr_number_to_fall_back_to(tmp_path, monke
     # doesn't apply here.
     from scan_worker.jobs import _checkout_sha
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         if args[:2] == ["git", "checkout"]:
             raise subprocess.CalledProcessError(128, args)
         return subprocess.CompletedProcess(args, 0)
@@ -517,7 +550,7 @@ def test_clone_ref_recovers_a_deleted_branchs_head_via_the_pr_ref(tmp_path, monk
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
@@ -556,7 +589,7 @@ def test_clone_ref_scrubs_the_token_even_when_remote_add_is_interrupted(tmp_path
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
@@ -585,7 +618,7 @@ def test_clone_ref_does_not_attempt_a_scrub_when_init_never_created_a_git_dir(tm
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:2] == ["git", "init"]:
             raise subprocess.CalledProcessError(1, args)
@@ -608,7 +641,7 @@ def test_clone_pr_head_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
@@ -633,7 +666,7 @@ def test_clone_pr_head_scrubs_the_token_even_when_remote_add_is_interrupted(tmp_
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:2] == ["git", "init"]:
             os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
@@ -661,7 +694,7 @@ def test_clone_pr_head_does_not_attempt_a_scrub_when_init_never_created_a_git_di
 
     calls = []
 
-    def fake_run(args, cwd=None, check=None):
+    def fake_run(args, cwd=None, check=None, **kwargs):
         calls.append(args)
         if args[:2] == ["git", "init"]:
             raise subprocess.CalledProcessError(1, args)
@@ -4542,7 +4575,7 @@ def test_flash_review_job_reserves_the_free_tier_monthly_count_atomically(monkey
     # with the right cap.
     reserve_calls = []
 
-    def _reserve_flash_review_count(dsn, installation_id, limit):
+    def _reserve_flash_review_count(dsn, installation_id, limit, **kwargs):
         reserve_calls.append((installation_id, limit))
         return True
 
@@ -4899,7 +4932,7 @@ def test_flash_review_job_has_no_review_count_cap_on_paid_plans(monkeypatch, pla
     count_limits = []
     monkeypatch.setattr(
         "scan_worker.jobs.reserve_flash_review_count",
-        lambda dsn, installation_id, limit: count_limits.append(limit) or False,
+        lambda dsn, installation_id, limit, **kwargs: count_limits.append(limit) or False,
     )
     spend_reserve_called = []
     monkeypatch.setattr(
@@ -5891,7 +5924,7 @@ def test_flash_review_job_reserves_the_cap_before_running_the_review(monkeypatch
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
     monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: {})
 
-    def _reserve_flash_review_count(dsn, iid, limit):
+    def _reserve_flash_review_count(dsn, iid, limit, **kwargs):
         call_order.append("reserve_count")
         return True
 
@@ -9666,6 +9699,111 @@ def test_run_initial_scan_job_syncs_code_graph_while_still_holding_repo_checkout
     assert call_order == ["lock_enter", "sync_git", "sync_code", "lock_exit"]
 
 
+def test_run_initial_scan_job_enqueues_air_builds_instead_of_running_them_inline(
+    bare_repo_with_two_commits, monkeypatch
+):
+    # Sentry ALETHEORE-5: the AIRview and Docs full builds ran inline inside
+    # this job's 300s job_timeout and hit it mid LLM call on a larger repo.
+    # They must be separate jobs carrying the full-build timeout.
+    from scan_worker.jobs import LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS, run_initial_scan_job
+
+    bare_path, _base_sha, head_sha = bare_repo_with_two_commits
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True
+    )
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_github_api_client", lambda *a, **k: object())
+    monkeypatch.setattr("scan_worker.jobs.fetch_default_branch_head_sha", lambda *a, **k: head_sha)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs._sync_persistent_git_graph",
+        lambda *a, **k: a[3] if len(a) > 3 else k.get("evidence"),
+    )
+    monkeypatch.setattr("scan_worker.jobs._sync_code_graph", lambda *a, **k: None)
+
+    def _no_inline_build(*args, **kwargs):
+        raise AssertionError("full build must not run inline in the initial scan job")
+
+    monkeypatch.setattr("scan_worker.jobs.run_live_wiki_full_build_job", _no_inline_build)
+    monkeypatch.setattr("scan_worker.jobs.run_live_docs_full_build_job", _no_inline_build)
+
+    enqueued: list[tuple] = []
+
+    class _FakeQueue:
+        def enqueue(self, func, **kwargs):
+            enqueued.append((func, kwargs))
+
+    monkeypatch.setattr("scan_worker.jobs._scans_queue", lambda redis_url: _FakeQueue())
+
+    run_initial_scan_job(1, "octocat/hello-world")
+
+    assert [func for func, _ in enqueued] == [
+        "scan_worker.jobs.run_live_wiki_full_build_job",
+        "scan_worker.jobs.run_live_docs_full_build_job",
+    ]
+    for _func, kwargs in enqueued:
+        assert kwargs == {
+            "job_timeout": LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS,
+            "installation_id": 1,
+            "repo_full_name": "octocat/hello-world",
+        }
+
+
+
+def test_run_initial_scan_job_logs_a_failed_air_enqueue_and_still_enqueues_the_other_build(
+    bare_repo_with_two_commits, monkeypatch, caplog
+):
+    # One build failing to enqueue must not fail the finished scan or skip the other build, and must be logged.
+    from scan_worker.jobs import LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS, run_initial_scan_job
+
+    bare_path, _base_sha, head_sha = bare_repo_with_two_commits
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True
+    )
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_github_api_client", lambda *a, **k: object())
+    monkeypatch.setattr("scan_worker.jobs.fetch_default_branch_head_sha", lambda *a, **k: head_sha)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs._sync_persistent_git_graph",
+        lambda *a, **k: a[3] if len(a) > 3 else k.get("evidence"),
+    )
+    monkeypatch.setattr("scan_worker.jobs._sync_code_graph", lambda *a, **k: None)
+
+    def _no_inline_build(*args, **kwargs):
+        raise AssertionError("full build must not run inline in the initial scan job")
+
+    monkeypatch.setattr("scan_worker.jobs.run_live_wiki_full_build_job", _no_inline_build)
+    monkeypatch.setattr("scan_worker.jobs.run_live_docs_full_build_job", _no_inline_build)
+
+    enqueued: list[str] = []
+
+    class _FlakyQueue:
+        def enqueue(self, func, **kwargs):
+            if func.endswith("run_live_wiki_full_build_job"):
+                raise ConnectionError("redis went away")
+            enqueued.append(func)
+
+    monkeypatch.setattr("scan_worker.jobs._scans_queue", lambda redis_url: _FlakyQueue())
+
+    with caplog.at_level("WARNING", logger="scan_worker.jobs"):
+        run_initial_scan_job(1, "octocat/hello-world")
+
+    assert enqueued == ["scan_worker.jobs.run_live_docs_full_build_job"]
+    assert any("could not enqueue scan_worker.jobs.run_live_wiki_full_build_job" in r.getMessage() for r in caplog.records)
+
 def test_run_push_scan_job_syncs_code_graph_while_still_holding_repo_checkout_lock(
     bare_repo_with_two_commits, monkeypatch
 ):
@@ -12465,6 +12603,49 @@ def test_run_git_scrubs_credentialed_url_from_a_failed_clone_error(tmp_path):
     assert "https://github.com/acme/does-not-exist.git" in exc_info.value.cmd
 
 
+def test_run_git_captures_output_instead_of_letting_the_child_inherit_real_streams(monkeypatch):
+    # The mechanism behind the fix: a child git process's own stdout/stderr
+    # must be captured, not inherited from this process, so nothing it
+    # writes can reach a real log stream before _run_git's scrub runs.
+    from scan_worker import jobs
+
+    captured = {}
+    monkeypatch.setattr(
+        jobs.subprocess, "run", lambda args, **kw: captured.update(kw) or subprocess.CompletedProcess(args, 0)
+    )
+
+    jobs._run_git(["git", "status"], cwd="/tmp")
+
+    assert captured["capture_output"] is True
+    assert captured["text"] is True
+
+
+def test_run_git_scrubs_a_credentialed_url_found_in_raw_stdout_or_stderr(monkeypatch):
+    # Real gap found via audit: a failing command's own argv doesn't always
+    # mention a URL (e.g. `git fetch origin`, `git clean -fdx`) - git can
+    # still echo the credentialed remote it read out of .git/config in its
+    # own diagnostic text. The pre-existing scrub only ever rewrote
+    # exc.cmd; it never touched exc.stdout/exc.stderr, so that text reached
+    # callers (and whatever logs the resulting exception) unredacted.
+    from scan_worker import jobs
+
+    def fake_run(args, **kwargs):
+        raise subprocess.CalledProcessError(
+            128,
+            args,
+            output="fatal: unable to access 'https://x-access-token:supersecrettoken@github.com/acme/repo.git/'\n",
+            stderr="remote.origin.url was https://x-access-token:supersecrettoken@github.com/acme/repo.git\n",
+        )
+
+    monkeypatch.setattr(jobs.subprocess, "run", fake_run)
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        jobs._run_git(["git", "fetch", "-q", "origin"], cwd="/tmp")
+
+    assert "supersecrettoken" not in exc_info.value.stdout
+    assert "supersecrettoken" not in exc_info.value.stderr
+
+
 def test_run_git_resolves_the_bare_git_name_to_its_shutil_which_path(monkeypatch):
     # Bandit B607: a bare "git" string re-resolves PATH again at execution
     # time, which could pick up a different binary than a security review
@@ -12488,13 +12669,95 @@ def test_run_git_resolves_the_bare_git_name_to_its_shutil_which_path(monkeypatch
     assert captured["kwargs"]["check"] is True
 
 
-def test_git_path_falls_back_to_the_bare_name_when_git_is_not_on_path(monkeypatch):
+def test_git_path_refuses_to_fall_back_to_the_bare_name_when_git_is_not_on_path(monkeypatch):
     from scan_worker import jobs
 
     monkeypatch.setattr(jobs.shutil, "which", lambda name: None)
     jobs._GIT_PATH = None
 
-    assert jobs._git_path() == "git"
+    with pytest.raises(FileNotFoundError):
+        jobs._git_path()
+
+
+def test_run_git_forces_capture_even_when_a_caller_asks_for_inherited_streams(monkeypatch):
+    from scan_worker import jobs
+
+    captured = {}
+    monkeypatch.setattr(jobs.subprocess, "run", lambda args, **kw: captured.update(kwargs=kw))
+
+    jobs._run_git(["/usr/bin/git", "fetch"], cwd="/tmp", capture_output=False, stdout=None, stderr=None)
+
+    assert captured["kwargs"]["capture_output"] is True
+    assert "stdout" not in captured["kwargs"] and "stderr" not in captured["kwargs"]
+
+
+def test_run_git_warns_when_a_callers_stdout_or_stderr_redirect_is_dropped(monkeypatch, caplog):
+    # Flash Review catch: dropping a caller's stdout=/stderr= kwarg with no
+    # signal at all left the override silently invisible - a caller that
+    # asked to suppress or redirect git's output had no way to know its
+    # request was ignored.
+    from scan_worker import jobs
+
+    monkeypatch.setattr(jobs.subprocess, "run", lambda args, **kw: subprocess.CompletedProcess(args, 0))
+    with caplog.at_level(logging.WARNING, logger="scan_worker.jobs"):
+        jobs._run_git(["/usr/bin/git", "status"], cwd="/tmp", stdout=subprocess.DEVNULL)
+
+    assert any("ignored" in record.message for record in caplog.records)
+
+
+def test_run_git_does_not_warn_when_no_caller_supplied_stdout_or_stderr(monkeypatch, caplog):
+    from scan_worker import jobs
+
+    monkeypatch.setattr(jobs.subprocess, "run", lambda args, **kw: subprocess.CompletedProcess(args, 0))
+    with caplog.at_level(logging.WARNING, logger="scan_worker.jobs"):
+        jobs._run_git(["/usr/bin/git", "status"], cwd="/tmp")
+
+    assert not any("ignored" in record.message for record in caplog.records)
+
+
+def test_run_git_logs_successful_stdout_at_debug_level_not_just_stderr(monkeypatch, caplog):
+    # Flash Review catch: a successful command's stdout was captured (so it
+    # no longer streamed to the worker's real stdout) but never logged
+    # anywhere, unlike stderr - silently dropping diagnostic output (fetch
+    # warnings, LFS progress) that used to be visible in job logs.
+    from scan_worker import jobs
+
+    monkeypatch.setattr(
+        jobs.subprocess, "run",
+        lambda args, **kw: subprocess.CompletedProcess(args, 0, stdout="some diagnostic output\n", stderr=""),
+    )
+    with caplog.at_level(logging.DEBUG, logger="scan_worker.jobs"):
+        jobs._run_git(["/usr/bin/git", "status"], cwd="/tmp")
+
+    assert any("some diagnostic output" in record.message for record in caplog.records)
+
+
+def test_scrub_credentialed_urls_redacts_a_userinfo_that_contains_an_at_sign():
+    from scan_worker.jobs import _scrub_credentialed_urls
+
+    text = "fatal: unable to access 'https://x-access-token:p@ss@github.com/o/r.git/'"
+    assert "p@ss" not in _scrub_credentialed_urls(text)
+    assert "github.com/o/r.git" in _scrub_credentialed_urls(text)
+
+
+def test_git_path_resolves_a_relative_which_result_to_an_absolute_path(monkeypatch):
+    # Real gap found by an independent Strix pentest pass (2026-10-15):
+    # _GIT_PATH is cached once per process and reused across every
+    # subsequent git invocation's cwd=<checkout dir> - a different,
+    # untrusted cloned repo on every later scan. If shutil.which() ever
+    # returned a path relative to a relative PATH entry, ANY repo scanned
+    # later in this worker's lifetime (not just the one scanned when
+    # _GIT_PATH was first resolved) could shadow it with its own
+    # same-named executable.
+    from scan_worker import jobs
+
+    monkeypatch.setattr(jobs.shutil, "which", lambda name: "relative/git" if name == "git" else None)
+    jobs._GIT_PATH = None
+
+    resolved = jobs._git_path()
+
+    assert os.path.isabs(resolved)
+    assert resolved != "relative/git"
 
 
 def test_run_scan_resolves_the_bare_aletheore_cli_name(tmp_path, monkeypatch):
@@ -13098,6 +13361,81 @@ def test_purge_repo_checkout_job_never_deletes_outside_the_repos_own_directory(
     assert (other_installation / "secret.py").exists()
 
 
+@pytest.mark.parametrize("bad_name", ["..", "."])
+def test_persistent_checkout_dir_refuses_to_build_a_path_outside_its_installation_root(
+    tmp_path, monkeypatch, bad_name
+):
+    # Regression test for a real bug (2026-10-12 Strix security review):
+    # this only ever replaced "/" characters, so a bare ".." or "."
+    # (neither contains a "/" for replace() to touch) passed straight
+    # through untouched and resolved outside the installation's own
+    # directory. purge_repo_checkout_job already independently re-checked
+    # containment before deleting anything (see the parametrized test
+    # above), but the function that actually CREATES and writes to this
+    # path did not - an inconsistency between two callers of the same path
+    # builder, not a deliberate choice. The check now lives in the builder
+    # itself so every caller gets it, not just the one that happened to
+    # add its own.
+    from scan_worker.jobs import _CheckoutPathEscapeError, _persistent_checkout_dir
+
+    monkeypatch.setenv("ALETHEORE_REPO_CHECKOUT_ROOT", str(tmp_path))
+    with pytest.raises(_CheckoutPathEscapeError):
+        _persistent_checkout_dir(7, bad_name)
+
+
+@pytest.mark.parametrize("name", ["org/widgets", "../8", "org/.."])
+def test_persistent_checkout_dir_stays_contained_once_a_slash_is_present(tmp_path, monkeypatch, name):
+    # Any "/" in repo_full_name gets replaced with "__" before the path is
+    # built, which neutralizes ".." as a real path component even when the
+    # string visually looks like a traversal attempt ("../8", "org/..") -
+    # only a bare ".."/"." with no slash at all reaches the filesystem
+    # unescaped (see the test above). Real GitHub repo_full_name values are
+    # always "owner/repo", so this is the common, expected shape.
+    from scan_worker.jobs import _persistent_checkout_dir
+
+    monkeypatch.setenv("ALETHEORE_REPO_CHECKOUT_ROOT", str(tmp_path))
+    path = _persistent_checkout_dir(7, name)
+    assert path.parent == (tmp_path / "7").resolve()
+
+
+def test_prepare_head_checkout_falls_back_to_ephemeral_instead_of_using_an_escaped_path(
+    tmp_path, monkeypatch
+):
+    # The actual real-world path the fix closes: _prepare_head_checkout is
+    # what CREATES and writes to a persistent checkout dir (unlike
+    # purge_repo_checkout_job, which only ever deletes). Before this fix,
+    # a malicious/malformed repo_full_name reaching this function could
+    # have git-cloned into a path outside the installation's own
+    # directory. Now _persistent_checkout_dir raises, and this function's
+    # existing try/except (there for any persistent-storage failure, not
+    # written for this specifically) catches it and safely falls back to
+    # the ephemeral clone-and-delete path instead.
+    from scan_worker.jobs import _prepare_head_checkout
+
+    monkeypatch.setenv("ALETHEORE_REPO_CHECKOUT_ROOT", str(tmp_path))
+
+    clone_ref_calls = []
+
+    def fake_clone_ref(url, ref, dest, pr_number=None):
+        clone_ref_calls.append((url, ref, dest, pr_number))
+        dest.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr("scan_worker.jobs._clone_ref", fake_clone_ref)
+
+    fallback_dir = tmp_path / "ephemeral-fallback"
+    result = _prepare_head_checkout(
+        "https://github.com/org/repo.git", "somesha", 7, "..", fallback_dir
+    )
+
+    assert result == fallback_dir
+    assert len(clone_ref_calls) == 1
+    # The escape attempt (installation 7, repo_full_name "..") would have
+    # resolved to tmp_path itself (the checkout root) rather than
+    # tmp_path/7 - confirm nothing was ever created there except the one
+    # fallback directory this test itself created.
+    assert set(p.name for p in tmp_path.iterdir()) == {"ephemeral-fallback"}
+
+
 def test_incremental_spend_budget_persists_one_reservation_row_per_thread(monkeypatch):
     # The persisted crash-sweep row mirrors a thread's own pending amount.
     # If threads shared one key, each upsert would overwrite the previous
@@ -13562,3 +13900,73 @@ def test_incremental_review_after_a_merge_is_limited_to_the_prs_own_files(monkey
     assert "own change" in handed_to_review["diff_text"]
     assert "from_base_branch.py" not in handed_to_review["diff_text"]
     assert "merged in" not in handed_to_review["diff_text"]
+
+
+def _run_store_wiki_generation_with_overview_state(
+    monkeypatch, *, overview, ids_before, ids_after
+):
+    """Runs _store_wiki_generation with the DB layer stubbed and returns how
+    many times the (LLM-calling) overview regeneration ran."""
+    from datetime import datetime, timedelta, timezone
+
+    from scan_worker.jobs import _store_wiki_generation
+
+    now = datetime.now(timezone.utc)
+    if overview is not None and "age_hours" in overview:
+        overview = {
+            "description": overview["description"],
+            "updated_at": now - timedelta(hours=overview["age_hours"]),
+        }
+    listed = iter([[{"subsystem_id": i} for i in ids_before], [{"subsystem_id": i} for i in ids_after]])
+    monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: next(listed))
+    monkeypatch.setattr("scan_worker.jobs.get_wiki_overview", lambda *a, **k: overview)
+    monkeypatch.setattr("scan_worker.jobs._store_wiki_subsystem_records", lambda *a, **k: None)
+    regenerations = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._regenerate_wiki_overview", lambda *a, **k: regenerations.append(1)
+    )
+
+    _store_wiki_generation("postgresql://unused", 1, "octocat/hello-world", {}, [], object(), "sha")
+    return len(regenerations)
+
+
+def test_store_wiki_generation_skips_overview_regeneration_when_recent_and_subsystems_unchanged(
+    monkeypatch,
+):
+    # The overview call re-narrates every subsystem (~30K tokens on a repo
+    # with 85) and was ~55% of a push's AIRview spend.
+    assert _run_store_wiki_generation_with_overview_state(
+        monkeypatch,
+        overview={"description": "A real overview.", "age_hours": 1},
+        ids_before=["1", "2"],
+        ids_after=["1", "2"],
+    ) == 0
+
+
+@pytest.mark.parametrize(
+    "overview, ids_before, ids_after",
+    [
+        pytest.param(None, ["1"], ["1"], id="no-overview-yet"),
+        pytest.param(
+            {"description": "A real overview.", "age_hours": 6.5}, ["1"], ["1"], id="older-than-6h"
+        ),
+        pytest.param(
+            {"description": "A real overview.", "age_hours": 1}, ["1"], ["1", "2"], id="subsystem-added"
+        ),
+        pytest.param(
+            {"description": "A real overview.", "age_hours": 1}, ["1", "2"], ["1"], id="subsystem-pruned"
+        ),
+        pytest.param(
+            {"description": "Overview description unavailable.", "age_hours": 1},
+            ["1"],
+            ["1"],
+            id="placeholder-is-retried",
+        ),
+    ],
+)
+def test_store_wiki_generation_regenerates_overview_when_needed(
+    monkeypatch, overview, ids_before, ids_after
+):
+    assert _run_store_wiki_generation_with_overview_state(
+        monkeypatch, overview=overview, ids_before=ids_before, ids_after=ids_after
+    ) == 1
