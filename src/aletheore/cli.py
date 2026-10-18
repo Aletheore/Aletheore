@@ -2292,6 +2292,33 @@ def healthcheck(
 config_app = typer.Typer(help="manage local CLI preferences")
 app.add_typer(config_app, name="config")
 
+hook_app = typer.Typer(help="commands for coding-agent hooks")
+app.add_typer(hook_app, name="hook")
+
+
+@hook_app.command(
+    "pre-read",
+    help="PreToolUse hook for Read: denies a full re-read of a file that is unchanged on disk "
+    "since the agent already read it in full this session. Opt-in via ALETHEORE_READ_GUARD=1; "
+    "silent and a no-op otherwise, and never fails.",
+)
+def hook_pre_read() -> None:
+    from aletheore.read_guard import main_pre as hook_main
+
+    hook_main()
+
+
+@hook_app.command(
+    "post-read",
+    help="PostToolUse hook for Read: records a file's current on-disk hash after a full read so "
+    "a later identical read can be recognized as redundant. Opt-in via ALETHEORE_READ_GUARD=1; "
+    "silent and a no-op otherwise, and never fails.",
+)
+def hook_post_read() -> None:
+    from aletheore.read_guard import main_post as hook_main
+
+    hook_main()
+
 
 @config_app.command(
     "crash-reporting",
