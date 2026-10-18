@@ -171,3 +171,78 @@ Two capabilities explicitly deferred out of the original build (flagged in the f
   - `DELETE /v1/personal-tokens` — revokes exactly the token that authenticated the request (sets `revoked_at = now()` on that one row, identified by its hash, not by "the newest" or any other inference).
   - `DELETE /v1/personal-tokens/all` — revokes every non-revoked token for the resolved identity.
 - This is independent of, and doesn't replace, the existing rotate-oldest-on-overflow cap — revocation is the deliberate, user-initiated path; rotation remains the automatic fallback for an account that's never explicitly logged out.
+
+## Follow-up: The Curated Catalog at Scale (search, shelves, companion files)
+
+Added 2026-10-19, when the bundled catalog grew from two hand-written samples to 1,122 vetted
+skills (plus the two samples). The original design assumed a handful of skills a human could
+list; at this size three things had to change, and one thing had to be learned by testing.
+
+### What the catalog is
+
+- **1,124 skills** under `src/aletheore/skills/<category>/<skill>/`, 28 categories on six shelves:
+  Build, Quality, Ship & Operate, AI & Agents, Product & Design, Content & Media. The shelf is a
+  `shelf:` key in each skill's frontmatter. MIT or Apache-2.0 only.
+- Each `SKILL.md` carries the keys the loader requires (`skill_id`, `title`, `description`,
+  `source_url`, `license`) plus `shelf` and an `aletheore:` provenance mapping (pinned origin
+  commit, license, quality, what the skill `requires`: subagents, an MCP server, a browser, a
+  script, an outside tool; the vetting result). Companion files (references, scripts,
+  templates) sit beside it unchanged.
+- `NOTICE.md` (generated) credits every skill's author, license and exact source commit.
+  `_index.json` (generated) is the prebuilt metadata index; see "Index" below.
+- Skills that failed the package's own vetting were left out, not waved through: six held back at
+  export (three flagged by the instruction-text patterns, one by `curl | bash`, two by the
+  secrets scan of their scripts). The list is in `docs/skill-hub-curation/vetting_held.json`
+  (local). No exemption mechanism exists yet; adding one is a separate decision.
+
+### Interfaces added or changed
+
+- `aletheore_list_skills(category=None)`: with no argument returns the shelves, their
+  categories and skill counts (what the original spec described, and the only form that works
+  at this size); with a category returns its skills compactly (id, title, description trimmed to
+  160 characters, license, requirements). `custom` is a category for the user's own skills.
+- `aletheore_search_skills(query, category=None, limit=8)` (new): ranked keyword search over
+  name, category and description. Offline, deterministic, no model: words are crudely stemmed
+  and weighted by rarity so "security" outranks "code". Custom skills match on name.
+- `aletheore_get_skill(skill_id)`: now also returns `shelf`, `requires`, and `files` (up to 200
+  companion file paths) with `files_total`.
+- `aletheore_get_skill_file(skill_id, path)` (new): one companion file as text. The path is
+  confined to the skill's folder (no absolute paths, `..`, NUL bytes, or symlinks leading
+  outside); binary files are refused; files over 400,000 bytes are truncated with a note.
+  Custom skills are a single file and have none.
+- CLI (`aletheore hallbook`): `categories`, `search`, `files`, `get-file` and `snippet` added to
+  `list`, `get`, `add`, `remove`.
+
+### Index
+
+Parsing 1,124 YAML frontmatters costs about 1.6 seconds on a cold start, almost all of it the
+YAML parser. The package ships `_index.json` and the loader reads it when present (0.05 seconds),
+falling back to scanning the folders when it is missing or unreadable. A test fails if the file
+disagrees with the skills on disk. After adding, removing or editing a bundled skill, regenerate
+it: `python -c "from aletheore import skill_hub; skill_hub.rebuild_bundled_index()"`.
+
+### Making agents use it (tested, and not automatic)
+
+The tools being connected is not enough. In a real agent session (OpenCode, MCP server attached,
+the same debugging task each time):
+
+| Setup | Result |
+|---|---|
+| GLM 5.3 Flash, tools connected, no guidance | Never called a Hallbook tool |
+| GLM 5.3 Flash, one-line instruction in `AGENTS.md` | Never called a Hallbook tool |
+| DeepSeek V4 Flash, tools connected, no guidance | Never called a Hallbook tool |
+| DeepSeek V4 Flash, one-line instruction in `AGENTS.md` | Searched, loaded `debugging/debugging-and-error-recovery`, followed it |
+
+So the server instructions and tool descriptions do not reliably trigger use on their own, and a
+smaller model may ignore even an explicit instruction. `aletheore hallbook snippet` prints the
+instruction that worked, for the user to paste into `AGENTS.md` or `CLAUDE.md`. Aletheore does
+not write it into a project; that would reintroduce the file-distribution model this design
+rejects. Limits of this evidence: one agent, two models, one small task that the agent could
+solve unaided both ways. It shows the delivery path works. It does not show the skill improved
+the result.
+
+### Size
+
+The wheel grows from about 1.7 MB to about 24 MB (7,915 skill files). If that is too much, the
+levers are: drop the `references/` files and keep `SKILL.md` plus scripts (about half the
+size, since reference documents are the bulk), or ship the catalog as one compressed archive. Neither is done.

@@ -3794,3 +3794,50 @@ def test_login_does_not_print_sync_disclosure_when_personal_token_mint_fails(tmp
     assert result.exit_code == 0, result.output
     assert "hallbook personal login unavailable" in result.output.lower()
     assert "sync to your Aletheore account" not in result.output
+
+
+def test_hallbook_categories_lists_shelves_with_counts():
+    result = runner.invoke(app, ["hallbook", "categories"])
+    assert result.exit_code == 0
+    assert "Quality (" in result.stdout
+    assert "  debugging  " in result.stdout
+
+
+def test_hallbook_search_finds_a_skill_and_accepts_unquoted_words():
+    result = runner.invoke(app, ["hallbook", "search", "flaky", "test", "debugging", "--limit", "5"])
+    assert result.exit_code == 0
+    assert "debugging/systematic-debugging" in result.stdout
+
+
+def test_hallbook_search_with_no_match_says_so_and_exits_cleanly():
+    result = runner.invoke(app, ["hallbook", "search", "zzzzqqqq"])
+    assert result.exit_code == 0
+    assert "No skills matched" in result.stdout
+
+
+def test_hallbook_files_and_get_file_round_trip():
+    listing = runner.invoke(app, ["hallbook", "files", "debugging/systematic-debugging"])
+    assert listing.exit_code == 0
+    assert "condition-based-waiting.md" in listing.stdout
+    content = runner.invoke(
+        app, ["hallbook", "get-file", "debugging/systematic-debugging", "condition-based-waiting.md"]
+    )
+    assert content.exit_code == 0
+    assert len(content.stdout) > 100
+
+
+def test_hallbook_get_file_refuses_path_escapes_and_unknown_skills():
+    escape = runner.invoke(app, ["hallbook", "get-file", "debugging/systematic-debugging", "../../../etc/passwd"])
+    assert escape.exit_code == 1
+    assert "invalid file path" in escape.output
+    unknown = runner.invoke(app, ["hallbook", "get-file", "nope/nothing", "x.md"])
+    assert unknown.exit_code == 1
+    assert runner.invoke(app, ["hallbook", "files", "nope/nothing"]).exit_code == 1
+
+
+def test_hallbook_snippet_prints_the_agent_instruction_and_names_real_tools():
+    result = runner.invoke(app, ["hallbook", "snippet"])
+    assert result.exit_code == 0
+    assert result.stdout == skill_hub.AGENT_INSTRUCTION_SNIPPET
+    for tool in ("aletheore_search_skills", "aletheore_get_skill", "aletheore_get_skill_file"):
+        assert tool in result.stdout

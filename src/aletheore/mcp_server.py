@@ -185,6 +185,16 @@ aletheore_layer_violations). Reach for aletheore_search_codebase/ \
 aletheore_answer only for open-ended "how does this work" questions the \
 exact tools can't answer directly.
 
+Hallbook (skills): Aletheore also carries Hallbook, a library of over a \
+thousand vetted agent skills - specialist instructions for debugging, code \
+review, testing, planning, security, API and platform integrations, SEO, \
+design and more - plus any custom skills the user has saved. Before starting \
+a task that a specialist skill might cover, call aletheore_search_skills with \
+a short description of the task, then aletheore_get_skill on the best match \
+and follow it; if the instructions point at other files, fetch them with \
+aletheore_get_skill_file. Skills are bundled with Aletheore, work offline and \
+need no login. If nothing fits, carry on without one.
+
 If a tool call fails unexpectedly, returns results that are clearly wrong \
 or incomplete against the codebase's actual state, or a capability \
 described above doesn't work as documented - and the cause isn't \
@@ -915,6 +925,23 @@ def _register_overview_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
         return _toon_result(find_repo_overview(evidence))
 
 
+_SKILL_SUMMARY_DESCRIPTION_CHARS = 160
+
+
+def _skill_summary(meta: skill_hub.SkillMeta) -> dict:
+    """A skill as it appears in search and browse results: compact enough that a page of
+    results costs little context. The full text comes from aletheore_get_skill."""
+    description = " ".join(meta.description.split())
+    if len(description) > _SKILL_SUMMARY_DESCRIPTION_CHARS:
+        description = description[: _SKILL_SUMMARY_DESCRIPTION_CHARS - 1].rstrip() + "…"
+    summary = {"skill_id": meta.skill_id, "title": meta.title, "description": description}
+    if meta.license:
+        summary["license"] = meta.license
+    if meta.requires:
+        summary["requires"] = meta.requires
+    return summary
+
+
 def _register_skill_hub_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
     # Skills (curated + local custom) aren't repo-scoped - unlike every other
     # tool group in this file, neither of these two ever touches repo_path or
@@ -924,25 +951,59 @@ def _register_skill_hub_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
     # unconditionally rather than gated through TOOL_REQUIRED_EFFECTS -
     # aletheore_add_custom_skill is the one skill-hub tool that writes, and is
     # registered separately, gated on the write and network effects, below.
+    @mcp_instance.tool(name="aletheore_search_skills", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_search_skills(query: str, category: str | None = None, limit: int = 8) -> str:
+        """Searches Hallbook, Aletheore's library of vetted agent skills (over a
+        thousand bundled skills plus your own custom ones), by what you are
+        about to do, e.g. 'flaky test', 'stripe webhooks', 'write a plan',
+        'review a pull request for security'. Call this BEFORE starting a task
+        that a specialist skill might cover (debugging, code review, testing,
+        planning, an API or platform integration, SEO, design...). Returns the
+        best matches with skill_id, title, description, license and what the
+        skill requires; load one with aletheore_get_skill. Offline, no login."""
+        results = skill_hub.search_skills(query, category=category, limit=max(1, min(limit, 25)))
+        return _toon_result([_skill_summary(meta) for meta in results])
+
     @mcp_instance.tool(name="aletheore_list_skills", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_list_skills(category: str | None = None) -> str:
-        """Lists available skills (bundled/curated plus local custom skills),
-        optionally filtered to one category. Each entry has a skill_id
-        (e.g. 'code-review/security-focused' or 'custom/my-review'),
-        category, title, and description. Call this before aletheore_get_skill
-        to find a valid skill_id."""
-        metas = [dataclasses.asdict(meta) for meta in skill_hub.list_skills(category)]
-        return _toon_result(metas)
+        """Browses Hallbook. With no argument, returns the shape of the library:
+        its shelves (Build, Quality, Ship & Operate, AI & Agents, Product &
+        Design, Content & Media, plus 'Your skills' if you have saved any), the
+        categories on each, and how many skills each holds. With a category
+        (e.g. 'debugging', 'security', 'marketing', or 'custom' for your own),
+        returns the skills in it with skill_id, title, description, license and
+        requirements. To find a skill by task rather than by browsing, use
+        aletheore_search_skills."""
+        if category is None:
+            return _toon_result(skill_hub.list_overview())
+        return _toon_result([_skill_summary(meta) for meta in skill_hub.list_skills(category)])
 
     @mcp_instance.tool(name="aletheore_get_skill", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_get_skill(skill_id: str) -> str:
-        """Fetches one skill's full content by its skill_id (from
-        aletheore_list_skills), including its title, description, and body."""
+        """Fetches one skill by its skill_id (from aletheore_search_skills or
+        aletheore_list_skills): its title, description, license, source_url,
+        what it requires of the agent (e.g. subagents, an MCP server, a
+        browser), and the full instructions in `content`. If the instructions
+        refer to other files (references, scripts, templates), `files` lists
+        them; fetch each one with aletheore_get_skill_file."""
         try:
             skill = skill_hub.get_skill(skill_id)
         except skill_hub.SkillNotFoundError:
             return f"Skill '{skill_id}' not found."
         return _toon_result(dataclasses.asdict(skill))
+
+    @mcp_instance.tool(name="aletheore_get_skill_file", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_get_skill_file(skill_id: str, path: str) -> str:
+        """Fetches one companion file of a bundled skill (a reference document,
+        script, template or data file) by its path relative to the skill, as
+        listed in the `files` field of aletheore_get_skill. Text files only;
+        custom skills are a single SKILL.md and have no companion files."""
+        try:
+            return skill_hub.read_skill_file(skill_id, path)
+        except skill_hub.SkillNotFoundError:
+            return f"Skill '{skill_id}' not found."
+        except skill_hub.SkillFileError as exc:
+            return str(exc)
 
 
 def _register_add_custom_skill_tool(mcp_instance: MCPServer, repo_path: Path) -> None:

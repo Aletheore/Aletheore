@@ -2470,6 +2470,68 @@ def skill_hub_get(skill_id: str) -> None:
     typer.echo(skill.content, nl=not skill.content.endswith("\n"))
 
 
+@skill_hub_app.command("categories", help="show the shelves and categories, with skill counts")
+def skill_hub_categories() -> None:
+    for shelf in skill_hub.list_overview():
+        typer.echo(f"{shelf['title']} ({shelf['skills']})")
+        for entry in shelf["categories"]:
+            typer.echo(f"  {entry['category']}  {entry['skills']}")
+
+
+@skill_hub_app.command("search", help="find skills by what you are about to do, e.g. 'flaky test'")
+def skill_hub_search(
+    query: list[str] = typer.Argument(..., help="words describing the task"),
+    category: Optional[str] = typer.Option(None, "--category", help="only search this category"),
+    limit: int = typer.Option(10, "--limit", min=1, max=50, help="maximum results"),
+) -> None:
+    results = skill_hub.search_skills(" ".join(query), category=category, limit=limit)
+    if not results:
+        typer.echo("No skills matched. Try fewer or different words, or run 'aletheore hallbook categories'.")
+        return
+    for meta in results:
+        typer.echo(f"{meta.skill_id}  {meta.title}")
+        description = " ".join(meta.description.split())
+        if description:
+            typer.echo(f"    {description[:140]}{'...' if len(description) > 140 else ''}")
+
+
+@skill_hub_app.command(
+    "snippet", help="print the short instruction to paste into AGENTS.md / CLAUDE.md so your agent uses Hallbook"
+)
+def skill_hub_snippet() -> None:
+    typer.echo(skill_hub.AGENT_INSTRUCTION_SNIPPET, nl=False)
+
+
+@skill_hub_app.command("files", help="list a skill's companion files (references, scripts, templates)")
+def skill_hub_files(skill_id: str) -> None:
+    try:
+        skill_hub.get_skill(skill_id)
+    except skill_hub.SkillNotFoundError as exc:
+        console.print(f"[bold red]error:[/bold red] skill not found: {exc}")
+        raise typer.Exit(code=1) from exc
+    files, total = skill_hub.list_skill_files(skill_id)
+    if not files:
+        typer.echo("No companion files.")
+        return
+    for rel in files:
+        typer.echo(rel)
+    if total > len(files):
+        typer.echo(f"... and {total - len(files)} more (showing the first {len(files)}).")
+
+
+@skill_hub_app.command("get-file", help="print one companion file of a skill")
+def skill_hub_get_file(skill_id: str, path: str) -> None:
+    try:
+        text = skill_hub.read_skill_file(skill_id, path)
+    except skill_hub.SkillNotFoundError as exc:
+        console.print(f"[bold red]error:[/bold red] skill not found: {exc}")
+        raise typer.Exit(code=1) from exc
+    except skill_hub.SkillFileError as exc:
+        console.print(f"[bold red]error:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+    typer.echo(text, nl=not text.endswith("\n"))
+
+
 @skill_hub_app.command("add", help="add a custom skill from a local file")
 def skill_hub_add(name: str, file: Path) -> None:
     content = file.read_text(encoding="utf-8")
