@@ -32,6 +32,7 @@ module landing first.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -138,8 +139,47 @@ def check_bundled_scripts(skill_dir: Path) -> list[VettingFailure]:
     return failures
 
 
+EXEMPTIONS_FILE = "_vetting_exemptions.json"
+
+
+def load_exemptions(skills_root: Path) -> dict[str, list[dict]]:
+    """Hand-reviewed exemptions, keyed by skill id (``category/name``). A missing or unreadable file means none.
+
+    Each entry clears ONE finding on ONE skill: it names the rule (``reason``), the text that must appear in the
+    finding's detail (``detail_contains``) and why a person cleared it (``why``). An exemption without all three is
+    ignored, so it can never act as a blanket pass.
+    """
+    try:
+        data = json.loads((skills_root / EXEMPTIONS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    out: dict[str, list[dict]] = {}
+    for skill_id, entries in (data.get("exemptions") or {}).items():
+        valid = [e for e in entries if isinstance(e, dict) and all(isinstance(e.get(k), str) and e[k].strip() for k in ("reason", "detail_contains", "why"))]
+        if valid:
+            out[skill_id] = valid
+    return out
+
+
+def split_exempted(skill_dir: Path, failures: list[VettingFailure]) -> tuple[list[VettingFailure], list[VettingFailure]]:
+    """Split ``failures`` into (still failing, cleared by a hand-reviewed exemption) for a skill inside a skills tree."""
+    skill_id = f"{skill_dir.parent.name}/{skill_dir.name}"
+    entries = load_exemptions(skill_dir.parent.parent).get(skill_id, [])
+    failing: list[VettingFailure] = []
+    cleared: list[VettingFailure] = []
+    for failure in failures:
+        if any(e["reason"] == failure.reason and e["detail_contains"] in failure.detail for e in entries):
+            cleared.append(failure)
+        else:
+            failing.append(failure)
+    return failing, cleared
+
+
 def vet_skill_directory(skill_dir: Path) -> list[VettingFailure]:
     """Run every vetting check against a skill directory.
+
+    Findings that a person cleared by hand in ``_vetting_exemptions.json`` (next to the skills, one exact finding per
+    entry, with the reason written down) are not returned; everything else is.
 
     Reads and parses ``SKILL.md``'s frontmatter to find the declared
     license; any read/parse failure (missing file, missing/malformed
@@ -173,4 +213,4 @@ def vet_skill_directory(skill_dir: Path) -> list[VettingFailure]:
     failures.extend(check_instruction_text(body))
     failures.extend(check_bundled_scripts(skill_dir))
 
-    return failures
+    return split_exempted(skill_dir, failures)[0]

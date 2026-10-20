@@ -287,7 +287,7 @@ def test_overview_adds_a_your_skills_shelf_only_when_custom_skills_exist(tmp_pat
         ("flaky test debugging", "debugging/systematic-debugging"),
         ("stripe webhooks", "platforms/stripe-integration"),
         ("write a plan before coding", "planning/writing-plans"),
-        ("review a pull request for security", "security/security-review"),
+        ("review a pull request for security", "security/security-and-hardening"),  # security-review is its collapsed alternate
         ("kubernetes deployment", "devops/kubernetes-specialist"),
     ],
 )
@@ -324,6 +324,42 @@ def test_search_includes_custom_skills_by_name(tmp_path, monkeypatch):
     assert "custom/quarterly-report" not in [
         m.skill_id for m in skill_hub.search_skills("quarterly report", category="debugging")
     ]
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        ("My agent keeps forgetting which files it edited in long sessions", "agent-workflows/context-compression"),
+        ("Our long chats get slower and pricier as they grow", "agent-workflows/context-optimization"),
+        ("How do I get two agents to work on separate parts of the same feature at once", "agent-workflows/dispatching-parallel-agents"),
+        ("The agent keeps ignoring our project conventions and inventing APIs", "agent-workflows/context-engineering"),
+        ("Write a summary doc the next agent can pick up tomorrow", "agent-workflows/handoff"),
+        ("Stripe webhooks", "platforms/stripe-integration"),
+    ],
+)
+def test_search_finds_known_skills_in_the_top_three(query, expected):
+    top = [meta.skill_id for meta in skill_hub.search_skills(query, limit=3)]
+    assert expected in top, top
+
+
+def test_search_returns_nothing_for_unknown_gibberish():
+    assert skill_hub.search_skills("zzzzq xylophonic flibbertigibbet") == []
+
+
+def test_search_scored_returns_the_same_ranking_with_scores():
+    plain = skill_hub.search_skills("flaky test debugging", limit=5)
+    scored = skill_hub.search_skills_scored("flaky test debugging", limit=5)
+    assert [meta.skill_id for meta, _ in scored] == [meta.skill_id for meta in plain]
+    assert all(isinstance(score, float) for _, score in scored)
+
+
+def test_index_rebuild_is_deterministic(tmp_path):
+    _write_bundled_skill(tmp_path, "cat", "alpha", body="# Alpha\nrun tests")
+    _write_bundled_skill(tmp_path, "cat", "beta", body="# Beta\ndeploy slowly")
+    skill_hub.rebuild_bundled_index(tmp_path)
+    first = (tmp_path / "_index.json").read_bytes()
+    skill_hub.rebuild_bundled_index(tmp_path)
+    assert (tmp_path / "_index.json").read_bytes() == first
 
 
 def test_list_skills_carries_shelf_license_and_requirements():
@@ -453,3 +489,242 @@ def test_every_bundled_skill_is_under_an_allowed_license_and_has_a_source():
     for meta in skill_hub.list_bundled_skills():
         assert meta.license in ALLOWED_LICENSES, meta.skill_id
         assert skill_hub.get_bundled_skill(meta.skill_id).source_url.startswith("https://"), meta.skill_id
+
+
+# --- find_skill: one call, confident or move on ---------------------------------
+
+
+@pytest.mark.parametrize(
+    "task, expected",
+    [
+        ("The agent keeps ignoring our project conventions and hallucinating APIs it shouldn't know about",
+         "agent-workflows/context-engineering"),
+        ("I need a launch brief that keeps a coding agent on task for days without drifting.",
+         "agent-workflows/long-horizon-prompting"),
+        ("Break down this big feature into smaller pieces my agent team can work on in parallel, with dependencies between them",
+         "agent-workflows/task-coordination-strategies"),
+        ("Add a small dashboard widget to my server that renders inline in the chat when the tool runs",
+         "ai-engineering/build-mcp-app"),
+        ("Build me a boilerplate Go MCP service with a couple of tools, tests, and instructions for running it",
+         "ai-engineering/go-mcp-server-generator"),
+    ],
+)
+def test_find_skill_is_high_confidence_for_clear_benchmark_tasks(task, expected):
+    result = skill_hub.find_skill(task)
+    assert result["confidence"] == "high"
+    assert result["top"]["skill_id"] == expected
+    assert result["skill"]["skill_id"] == expected
+    assert result["note"] == skill_hub.FIND_SKILL_HIGH_NOTE
+
+
+def test_find_skill_returns_none_for_gibberish():
+    result = skill_hub.find_skill("zzzzq xylophonic flibbertigibbet")
+    assert result["confidence"] == "none"
+    assert result["note"] == skill_hub.FIND_SKILL_NONE_NOTE
+    assert "skill" not in result
+
+
+def test_find_skill_returns_low_for_a_vague_request():
+    result = skill_hub.find_skill("help me")
+    assert result["confidence"] == "low"
+    assert result["candidates"]
+    assert result["note"] == skill_hub.FIND_SKILL_LOW_NOTE
+
+
+def test_find_skill_caps_long_content_and_says_how_to_fetch_the_rest(monkeypatch):
+    top = skill_hub.SkillMeta(skill_id="cat/long", category="cat", title="Long", description="long one")
+    runner_up = skill_hub.SkillMeta(skill_id="cat/other", category="cat", title="Other", description="other")
+    monkeypatch.setattr(
+        skill_hub, "search_skills_scored", lambda *args, **kwargs: [(top, 100.0), (runner_up, 1.0)]
+    )
+    long_skill = skill_hub.Skill(
+        skill_id="cat/long", title="Long", description="long one", content="z" * 20_000,
+        source_url=None, license="MIT",
+    )
+    monkeypatch.setattr(skill_hub, "get_skill", lambda skill_id: long_skill)
+
+    result = skill_hub.find_skill("anything")
+
+    assert result["confidence"] == "high"
+    assert len(result["skill"]["content"]) == skill_hub.FIND_SKILL_MAX_CONTENT_CHARS
+    assert result["skill"]["truncated"] is True
+    assert "aletheore_get_skill" in result["skill"]["truncated_note"]
+
+
+def test_agent_instruction_snippet_points_at_find_skill():
+    snippet = skill_hub.AGENT_INSTRUCTION_SNIPPET
+    assert "aletheore_find_skill" in snippet
+    assert "aletheore_get_skill_file" in snippet
+    assert len(snippet.strip().splitlines()) <= 6
+
+
+HOOK_HIGH_CONFIDENCE_QUERIES = (
+    "Rewrite this blog post intro to feel more human and less stiff.",
+    "I'm worried about injection flaws in our Python backend — trace the user input flows and flag anything exploitable.",
+    "We need reusable IaC modules for our AWS setup with proper versioning — can you build them out?",
+)
+
+
+@pytest.mark.parametrize("query", HOOK_HIGH_CONFIDENCE_QUERIES)
+def test_hook_suggestion_hints_for_a_clear_high_confidence_prompt(query):
+    # Guard: these are real high-confidence queries from data/queries_stage4.jsonl.
+    assert skill_hub.find_skill(query)["confidence"] == "high"
+
+    suggestion = skill_hub.hook_suggestion(query)
+
+    assert suggestion is not None
+    assert suggestion.startswith("Hallbook skill that fits this task: ")
+    assert "aletheore_get_skill" in suggestion
+    assert suggestion.count("\n") <= 2
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "thanks",
+        "ok continue",
+        "/review this code now",
+        "zzzzq xylophonic flibbertigibbet",
+        "help me",
+    ],
+)
+def test_hook_suggestion_is_silent_for_prompts_not_worth_a_skill(prompt):
+    assert skill_hub.hook_suggestion(prompt) is None
+
+
+def test_hook_suggestion_accepts_every_mode():
+    assert skill_hub.HOOK_MODES == ("hint", "inject")
+
+
+def test_hook_suggestion_inject_contains_the_skill_content():
+    query = HOOK_HIGH_CONFIDENCE_QUERIES[0]
+    result = skill_hub.find_skill(query)
+    content = result["skill"]["content"]
+
+    suggestion = skill_hub.hook_suggestion(query, mode="inject")
+
+    assert suggestion is not None
+    assert suggestion.startswith(
+        f"Hallbook skill for this task ({result['top']['skill_id']}), "
+        "apply it to this project and ignore parts that do not fit:"
+    )
+    assert content[:200] in suggestion
+
+
+def test_hook_suggestion_uses_only_the_head_of_a_pasted_log(monkeypatch):
+    seen = {}
+
+    def fake_search_skills_scored(task, category=None, limit=10, min_matches=1, prefix=True, phrase=True):
+        seen["task"] = task
+        return []
+
+    monkeypatch.setattr(skill_hub, "search_skills_scored", fake_search_skills_scored)
+
+    skill_hub.hook_suggestion("x " * 20_000)
+
+    assert len(seen["task"]) <= skill_hub.HOOK_TRUNCATE_CHARS
+
+
+def test_hook_suggestion_medium_tier_names_two_skills():
+    prompt = "can you look at why my login test is flaky"
+
+    # Guard: this is a real prompt the strict find_skill tier leaves at "low".
+    assert skill_hub.find_skill(prompt)["confidence"] != "high"
+
+    suggestion = skill_hub.hook_suggestion(prompt)
+
+    assert suggestion is not None
+    assert suggestion.startswith("Hallbook may have a skill for this: ")
+    assert "testing/e2e-testing-patterns" in suggestion
+    assert "browser-automation/playwright-expert" in suggestion
+    assert suggestion.count(" or ") == 1
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "thanks",
+        "rename this variable",
+        "what does this function do",
+        "can you explain this line",
+        "why is this here",
+        "sounds good",
+    ],
+)
+def test_hook_suggestion_medium_stays_silent_for_non_task_prompts(prompt):
+    assert skill_hub.hook_suggestion(prompt) is None
+
+
+def test_hallbook_hook_module_runs_via_python_m():
+    import json
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-m", "aletheore.hallbook_hook", "--mode", "hint"],
+        input=json.dumps({"prompt": "can you look at why my login test is flaky"}),
+        text=True,
+        capture_output=True,
+        env={**os.environ, "PYTHONPATH": str(src)},
+        timeout=60,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.startswith("Hallbook may have a skill for this: ")
+
+
+def test_hallbook_hook_module_is_silent_on_broken_input():
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-m", "aletheore.hallbook_hook", "--mode", "hint"],
+        input="{not json",
+        text=True,
+        capture_output=True,
+        env={**os.environ, "PYTHONPATH": str(src)},
+        timeout=60,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+
+
+# ---- curation of overlapping skills (_curation.json) ----
+def test_curation_file_is_consistent():
+    redirect, alternates_of = skill_hub._curation(str(skill_hub.bundled_skills_dir()))
+    ids = {meta.skill_id for meta in skill_hub.list_bundled_skills()}
+    assert redirect, "the curation file should load"
+    for skill_id, canonical in redirect.items():
+        assert skill_id in ids and canonical in ids
+        assert canonical not in redirect, "a canonical skill must not itself be redirected (no chains)"
+    assert all(set(v) <= set(redirect) for v in alternates_of.values())
+
+
+def test_hidden_duplicate_is_not_returned_but_still_loadable():
+    redirect, _ = skill_hub._curation(str(skill_hub.bundled_skills_dir()))
+    hidden = "code-review/code-review-phuryn"
+    assert hidden in redirect
+    results = [meta.skill_id for meta in skill_hub.search_skills("code review pull request", limit=25)]
+    assert hidden not in results
+    assert skill_hub.get_skill(hidden).skill_id == hidden  # still loadable by id
+
+
+def test_collapsed_alternates_appear_under_their_canonical_skill():
+    results = skill_hub.search_skills("review my code before merging", limit=10)
+    canonical = next(meta for meta in results if meta.skill_id == "code-review/code-review")
+    assert "code-review/code-review-and-quality" in canonical.alternates
+    ids = [meta.skill_id for meta in results]
+    assert "code-review/code-review-and-quality" not in ids and len(ids) == len(set(ids))
+
+
+def test_search_results_have_no_duplicate_ids_after_collapsing():
+    for query in ("debug a failing test", "write a commit message", "security review of my code", "plan the work"):
+        ids = [meta.skill_id for meta in skill_hub.search_skills(query, limit=10)]
+        assert len(ids) == len(set(ids))

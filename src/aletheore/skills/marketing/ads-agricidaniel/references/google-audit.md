@@ -1,0 +1,194 @@
+# Google Ads audit control catalog
+
+<!-- Catalog IDs preserved from the legacy runtime; current platform facts require dated source or account evidence. -->
+
+## Runtime evaluation contract
+
+- Start with objective, geography, account type, campaign type, data window, conversion lag, sample size, and feature access.
+- Return `not_applicable` when the surface or requirement does not apply and `unknown` when the required evidence is absent.
+- A conditional control can affect health only when current account evidence, owner-defined economics, and an applicable official source establish the expectation.
+- Product adoption, availability, beta access, announcement awareness, and vendor-reported performance are not health controls. Record them only as unscored discovery.
+- Do not use fixed platform-wide thresholds, broad benchmarks, launch dates, sunset dates, or universal network, bidding, budget, audience, creative, or attribution rules from this catalog.
+- Validate mutable facts at run time. A confirmed policy, support-state, or migration requirement needs its own current claim coverage before it can create a finding.
+
+## Source coverage boundary
+
+The registered sources below cover only the measurement, API, and import foundations stated in the claim ledger. They do not support every named product or control in this catalog. Until a narrower current claim exists, treat those names as routing labels and gather fresh official or in-account evidence.
+
+## Official evidence
+
+- `google-ads-api-official`: [Google Ads API documentation](https://developers.google.com/google-ads/api/docs/start)
+- `google-ads-conversion-goals-official`: [Google Ads conversion goals](https://support.google.com/google-ads/answer/10995103)
+- `google-ads-enhanced-conversions-official`: [Google Ads enhanced conversions](https://support.google.com/google-ads/answer/9888656)
+- `google-ads-dsa-ad-rank-official`: [About Dynamic Search Ads, Ad Rank, and performance](https://support.google.com/google-ads/answer/7018712)
+- `google-ads-keyword-prioritization-official`: [About ad group and asset group prioritization within a Google Ads account](https://support.google.com/google-ads/answer/2756257)
+- `google-ads-dsa-targets-official`: [About targets for Dynamic Search Ads](https://support.google.com/google-ads/answer/7334472)
+- `google-ads-negative-keywords-official`: [About negative keywords](https://support.google.com/google-ads/answer/2453972)
+- `google-ads-api-shared-sets-official`: [Google Ads API shared sets](https://developers.google.com/google-ads/api/docs/targeting/shared-sets)
+- `google-ads-api-deprecations-official`: [Google Ads API deprecations](https://developers.google.com/google-ads/api/docs/deprecations)
+- `google-ads-api-release-notes-official`: [Google Ads API release notes](https://developers.google.com/google-ads/api/docs/release-notes)
+- `google-ads-api-developer-token-official`: [Developer token and API access levels](https://developers.google.com/google-ads/api/docs/api-policy/developer-token)
+- `google-ads-demand-gen-min-budget-official`: [Minimum budget requirement for Demand Gen](https://ads-developers.googleblog.com/2026/02/minimum-budget-requirement-for-demand.html)
+- `google-ads-call-ads-transition-official`: [Transition from call ads to call assets](https://support.google.com/google-ads/answer/16619010)
+- `google-ads-vac-demand-gen-upgrade-official`: [Video Action Campaigns are being upgraded to Demand Gen](https://support.google.com/google-ads/answer/15110871)
+- `google-ads-dsa-ai-max-timeline-official`: [Dynamic Search Ads upgrade to AI Max timeline](https://blog.google/products/ads-commerce/dsa-upgrade-to-ai-max-2026/)
+
+## Current API changes verified 2026-10-12
+
+- From 2026-09-23, the API no longer creates Smart Campaigns. Existing Smart
+  Campaigns can continue serving and can still be updated or reported. Do not
+  describe the whole Smart Campaign surface as removed. For migration, API
+  `v25.2` (2026-09-23) adds `SmartCampaignSettingService.GeneratePMaxDraftCampaign`,
+  which generates a paused, incomplete Performance Max draft campaign from an
+  existing Smart campaign and supports `validate_only` (`CLM-0223`). It is a
+  migration path, not an automatic conversion, and some of its flags are not yet
+  supported.
+- From September 2026, manual `CampaignCriterion.language` is no longer supported
+  for Search, AI Max for Search, or the Google Search portion of Performance Max.
+  Google's deprecations page gives the month only. Its own metadata reads
+  2026-09-30 as the last-updated date, which is not a confirmed effective day, so
+  cite September 2026. Search mutations fail; Performance Max requests do not fail
+  because the setting can still apply to other channels. Preserve that channel
+  distinction (`CLM-0215`).
+- Developer tokens were sunset on 2026-09-09. Access levels now attach to the
+  Google Cloud project that owns the OAuth credentials or service account, and a
+  developer-token header is optional and ignored. A Test-access project that calls
+  a production account fails with `CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION` on
+  API `v25` (older versions return `ACTION_NOT_PERMITTED`). Do not treat a
+  developer token as the access credential or its absence as a finding
+  (`CLM-0222`).
+- Since 2026-04-01 the API enforces a minimum daily budget for Demand Gen
+  campaigns and returns `BUDGET_BELOW_DAILY_MINIMUM` on `v21` and above. Existing
+  campaigns already below the floor keep serving. This is an enforcement
+  minimum, not a budget recommendation (`CLM-0226`).
+- Call-only ads: Google's help center says creation options were removed in
+  February 2026 and existing call-only ads stop receiving impressions in
+  February 2027. The API `v23` release notes (2026-01-28) record removal of call
+  ad support in the API. Google directs advertisers to responsive search ads with
+  call assets (`CLM-0227`).
+- Video Action Campaigns: Google states that they were automatically upgraded to
+  Demand Gen, with the final campaigns upgraded by April 2026. Original campaigns
+  remain in the account as removed or paused and keep their historical reporting,
+  while the upgraded Demand Gen campaign does not count spend made in the original
+  (`CLM-0224`). G-DG2 is therefore a historical reporting continuity control, not
+  a check for a surviving legacy campaign state.
+- Dynamic Search Ads to AI Max: Google's post (updated 2026-06-11) says the
+  Dynamic Search Ads sunset and automatic upgrade will begin in February 2027
+  instead of September 2026, while upgrades for Automatically Created Assets and
+  campaign-level broad match continue starting September 2026 (`CLM-0225`). Use
+  this timing for G-AI1 and G95. Help-center pages may still show the earlier
+  date, so cite the dated post and label any conflict.
+
+## Keyword evidence
+
+Before evaluating G03, G14, G15, G17, G18, G20 through G25, G-KW1, G-KW2,
+G-WS1, or G97, build the separate positive and negative inventories in
+`gaql-notes.md`. Count and recommend on positive keywords only. Apply the scoped,
+match-type-aware conflict rules and plausibility guards before reporting a
+self-blocking or zero-impression finding.
+
+## Control registry
+
+| ID | Audit intent | Runtime disposition |
+|---|---|---|
+| G42 | Conversion actions defined | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G43 | Enhanced conversions applicability and status | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G44 | Server-side tracking | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G45 | Consent signals and regional requirements | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G46 | Conversion window appropriate | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G47 | Micro vs macro separation | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G48 | Attribution model | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G49 | Conversion value assignment | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G-CT1 | No duplicate counting | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G-CT2 | GA4 linked and flowing | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G-CT3 | Google Tag firing | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G13 | Search term audit recency | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G14 | Negative-keyword governance | Conditional evidence control: inventory negatives by scope separately from positives and report self-blocking only when an in-scope negative matches a positive's text under the negative's match type, per `gaql-notes.md`; otherwise return `unknown` or `not_applicable`. |
+| G15 | Account-level negatives applied | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G16 | Material irrelevant search-term spend | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G17 | Broad-match control | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G18 | Close variant pollution | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G19 | Search term visibility | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G-WS1 | Zero-conversion keyword investigation | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G01 | Campaign naming convention | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G02 | Ad group naming convention | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G03 | Ad-group theme coherence | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G04 | Campaign fragmentation | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G05 | Brand vs Non-Brand separation | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G06 | Performance Max applicability | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G07 | Search + PMax overlap | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G08 | Budget allocation matches priority | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G09 | Budget pacing | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G10 | Ad schedule configured | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G11 | Geographic targeting accuracy | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G12 | Network settings | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G20 | Average Quality Score | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G21 | Critical QS keywords | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G22 | Expected CTR component | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G23 | Ad relevance component | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G24 | Landing page experience | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G25 | Top keyword QS | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G-KW1 | Zero-impression keywords | Conditional evidence control: evaluate only the positive inventory joined to impression evidence for the same window and status scope; negatives never enter the count, per `gaql-notes.md`; otherwise return `unknown` or `not_applicable`. |
+| G-KW2 | Keyword-to-ad relevance | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G26 | RSA per ad group | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G27 | RSA headline count | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G28 | RSA description count | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G29 | RSA Ad Strength | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G30 | RSA pinning strategy | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G31 | PMax asset coverage | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G32 | PMax video assets present | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G33 | PMax asset group count | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G34 | PMax final URL expansion | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G35 | Ad copy relevance to keywords | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G-AD1 | Ad freshness | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G-AD2 | CTR context | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G50 | Sitelink extensions | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G51 | Callout extensions | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G52 | Structured snippets | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G53 | Image extensions | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G54 | Call extensions | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G55 | Lead form extensions | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G56 | Audience segments applied | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G57 | Customer Match lists | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G58 | Placement exclusions | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G59 | Landing page mobile speed | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G60 | Landing page relevance | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G61 | Landing page schema markup | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G-PM1 | Audience signals configured | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G-PM2 | PMax Ad Strength | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G-PM3 | Brand incrementality review | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G-PM4 | Search themes | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G-PM5 | Negative keywords | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G-PM6 | PMax negative-keyword applicability | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G-AI1 | AI Max for Search evaluation | Unscored source-refresh discovery: verify current official availability, account eligibility, and governance need; non-adoption is never a failure. |
+| G-DG1 | Demand Gen image assets | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G-DG2 | Video Action Campaign upgrade reporting continuity | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G-DG3 | Demand Gen frequency capping loss | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G-CTV1 | CTV Floodlight tracking limitation | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G36 | Smart bidding strategy active | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G37 | Target CPA/ROAS reasonableness | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G38 | Learning phase status | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G39 | Budget constrained campaigns | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G40 | Manual CPC justification | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G41 | Portfolio bid strategies | Conditional evidence control: establish applicability and evaluate from current account evidence; otherwise return `unknown` or `not_applicable`. |
+| G81 | Ask Advisor governance | Unscored source-refresh discovery: verify current official availability, account eligibility, and governance need; non-adoption is never a failure. |
+| G82 | Business Agent for Leads eligibility | Unscored source-refresh discovery: verify current official availability, account eligibility, and governance need; non-adoption is never a failure. |
+| G83 | Direct Offers expansion | Unscored source-refresh discovery: verify current official availability, account eligibility, and governance need; non-adoption is never a failure. |
+| G84 | AI Mode ad-format readiness | Unscored source-refresh discovery: verify current official availability, account eligibility, and governance need; non-adoption is never a failure. |
+| G85 | Journey-aware bidding | Unscored source-refresh discovery: verify current official availability, account eligibility, and governance need; non-adoption is never a failure. |
+| G86 | Smart Bidding Exploration on PMax + Shopping | Unscored source-refresh discovery: verify current official availability, account eligibility, and governance need; non-adoption is never a failure. |
+| G87 | Campaign total budgets | Unscored source-refresh discovery: verify current official availability, account eligibility, and governance need; non-adoption is never a failure. |
+| G88 | Demand-led pacing | Unscored source-refresh discovery: verify current official availability, account eligibility, and governance need; non-adoption is never a failure. |
+| G89 | Meridian measurement applicability | Unscored source-refresh discovery: verify current official availability, account eligibility, and governance need; non-adoption is never a failure. |
+| G90 | Qualified Future Conversions | Unscored source-refresh discovery: verify current official availability, account eligibility, and governance need; non-adoption is never a failure. |
+| G91 | Attributed Branded Searches | Unscored source-refresh discovery: verify current official availability, account eligibility, and governance need; non-adoption is never a failure. |
+| G92 | Asset Studio Gemini Omni readiness | Unscored source-refresh discovery: verify current official availability, account eligibility, and governance need; non-adoption is never a failure. |
+| G93 | Demand Gen feature stack | Unscored source-refresh discovery: verify current official availability, account eligibility, and governance need; non-adoption is never a failure. |
+| G94 | Ads Advisor safety features | Unscored source-refresh discovery: verify current official availability, account eligibility, and governance need; non-adoption is never a failure. |
+| G95 | DSA migration-readiness evidence | Unscored source-refresh discovery: verify current official availability, account eligibility, and governance need; non-adoption is never a failure. |
+| G96 | Same-campaign Search plus DSA overlap | Conditional evidence control: establish applicability from current account evidence (an enabled Dynamic Search Ads ad group and enabled keyword-targeted ad groups in the same campaign, the dynamic ad target scope such as all webpages versus supplied URLs, and the search terms each ad group served), then evaluate whether the DSA ad group is serving terms the campaign's keywords also cover and whether the owner intends that routing; verify the current official keyword-versus-DSA selection rule (`google-ads-dsa-ad-rank-official`, `google-ads-keyword-prioritization-official`) at run time and do not describe the overlap as auction self-competition or Ad Rank dilution unless current evidence supports it; otherwise return `unknown` or `not_applicable`. |
+| G97 | Cross-campaign keyword duplication | Conditional evidence control: establish applicability from current account evidence (identical keyword text and match type enabled in more than one campaign of the same account, including shared-budget, near-dormant, and geo-split campaigns), then evaluate which campaign actually triggers from search-term and impression evidence and whether the duplication is intentional; verify the current official in-account keyword prioritization rule (`google-ads-keyword-prioritization-official`) at run time and do not report duplication as self-bidding or inflated cost unless current evidence supports it; otherwise return `unknown` or `not_applicable`. |
+
+## Recommendation boundary
+
+A recommendation must identify the observed evidence, account-specific baseline or owner threshold, expected mechanism, confidence, reversible next step, measurement window, and rollback condition. Do not infer a recommendation from the control name alone.

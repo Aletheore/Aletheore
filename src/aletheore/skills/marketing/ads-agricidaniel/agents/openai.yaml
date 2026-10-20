@@ -1,0 +1,4 @@
+interface:
+  display_name: "Claude Ads"
+  short_description: "Source-grounded paid media operations"
+  default_prompt: "Use $ads to audit my paid-media accounts and produce a source-grounded action plan."

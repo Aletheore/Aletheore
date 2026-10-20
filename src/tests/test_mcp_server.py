@@ -272,6 +272,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_find_evidence_for_symbol",
         "aletheore_find_evidence_for_dependency",
         "aletheore_list_skills",
+        "aletheore_find_skill",
         "aletheore_search_skills",
         "aletheore_get_skill",
         "aletheore_get_skill_file",
@@ -279,7 +280,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_remove_custom_skill",
     }
     assert expected.issubset(names)
-    assert len(names) == 43
+    assert len(names) == 44
     assert "aletheore_answer" not in names
 
 
@@ -2268,6 +2269,26 @@ async def test_aletheore_search_skills_tool_finds_a_skill_by_task(tmp_path):
     assert all({"skill_id", "title", "description"} <= set(entry) for entry in entries)
     # Compact by construction: a page of results must not cost a page of skill text.
     assert all(len(entry["description"]) <= 160 for entry in entries)
+    # License stays in get_skill; repeating it on every search row is wasted context.
+    assert all("license" not in entry for entry in entries)
+
+
+@pytest.mark.asyncio
+async def test_aletheore_find_skill_tool_returns_a_skill_or_says_to_move_on(tmp_path):
+    server = build_server(tmp_path)
+
+    found = await server.call_tool(
+        "aletheore_find_skill",
+        {"task": "Break down this big feature into smaller pieces my agent team can work on in parallel, with dependencies between them"},
+    )
+    body = tool_result_body(found)["result"]
+    assert body["confidence"] == "high"
+    assert body["top"]["skill_id"] == "agent-workflows/task-coordination-strategies"
+    assert body["skill"]["skill_id"] == body["top"]["skill_id"]
+    assert len(body["alternatives"]) <= 3
+
+    none = await server.call_tool("aletheore_find_skill", {"task": "zzzzq xylophonic flibbertigibbet"})
+    assert tool_result_body(none)["result"]["confidence"] == "none"
 
 
 @pytest.mark.asyncio
@@ -2323,5 +2344,6 @@ def test_server_instructions_tell_agents_to_search_hallbook_before_specialist_ta
     from aletheore.mcp_server import SERVER_INSTRUCTIONS
 
     assert "Hallbook" in SERVER_INSTRUCTIONS
+    assert "aletheore_find_skill" in SERVER_INSTRUCTIONS
     assert "aletheore_search_skills" in SERVER_INSTRUCTIONS
     assert "aletheore_get_skill_file" in SERVER_INSTRUCTIONS

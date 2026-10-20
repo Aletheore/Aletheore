@@ -15,6 +15,26 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
+
+def _fast_hallbook_suggest(argv: list[str]) -> int | None:
+    """Run `hallbook suggest` without importing the rest of the CLI.
+
+    This command runs on every user prompt, so its budget is Python start plus a few
+    milliseconds of search. Importing the full CLI (uvicorn, evidence, the scanners)
+    alone costs about a second; handling the one hook command here keeps it cheap.
+    Returns None when this is not that command, otherwise the exit code.
+    """
+    if len(argv) < 2 or argv[0] != "hallbook" or argv[1] != "suggest":
+        return None
+    from aletheore.hallbook_hook import main
+
+    return main(argv[2:])
+
+
+_fast_suggest_exit = _fast_hallbook_suggest(sys.argv[1:])
+if _fast_suggest_exit is not None:
+    raise SystemExit(_fast_suggest_exit)
+
 import click
 import tomli_w
 import typer
@@ -2500,6 +2520,40 @@ def skill_hub_search(
 )
 def skill_hub_snippet() -> None:
     typer.echo(skill_hub.AGENT_INSTRUCTION_SNIPPET, nl=False)
+
+
+@skill_hub_app.command(
+    "suggest", help="suggest a Hallbook skill for a UserPromptSubmit hook (reads JSON on stdin)"
+)
+def skill_hub_suggest(
+    mode: str = typer.Option("hint", "--mode", help="hint or inject"),
+) -> None:
+    # One implementation for the Typer command and the fast pre-import path.
+    from aletheore.hallbook_hook import main
+
+    main(["--mode", mode])
+
+
+@skill_hub_app.command(
+    "hook", help="print the Claude Code UserPromptSubmit settings snippet to paste"
+)
+def skill_hub_hook(
+    mode: str = typer.Option("hint", "--mode", help="hint or inject"),
+) -> None:
+    executable = sys.executable
+    if " " in executable:
+        executable = f'"{executable}"'
+    command = f"{executable} -m aletheore.hallbook_hook --mode {mode}"
+    settings = {
+        "hooks": {
+            "UserPromptSubmit": [{"hooks": [{"type": "command", "command": command}]}]
+        }
+    }
+    typer.echo(json.dumps(settings, ensure_ascii=False))
+    typer.echo(
+        "Paste this into .claude/settings.json (project) or ~/.claude/settings.json (user).",
+        err=True,
+    )
 
 
 @skill_hub_app.command("files", help="list a skill's companion files (references, scripts, templates)")

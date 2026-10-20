@@ -1,0 +1,18 @@
+{
+ "b": 0.75,
+ "body": 0.7,
+ "category": 2.1,
+ "coverage": 3.92,
+ "description": 2.94,
+ "headings": 0.6,
+ "intents": 4.9,
+ "k1": 1.2,
+ "name": 3.0,
+ "name_cov": 2.0,
+ "name_hit": 2.8,
+ "phrase": 1.26,
+ "prefix": 0.6,
+ "quality": 0.07,
+ "title": 1.08,
+ "use_synonyms": false
+}

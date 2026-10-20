@@ -1,0 +1,28 @@
+{
+ "target_precision": 0.85,
+ "min_dev_precision": 0.8765,
+ "chosen": {
+  "t1": 34.0,
+  "gap": 10.0,
+  "ratio": 1.3
+ },
+ "dev": {
+  "n": 1027,
+  "high": 470,
+  "coverage": 0.45764362220058424,
+  "precision": 0.8765957446808511
+ },
+ "test": {
+  "n": 1110,
+  "high": 524,
+  "coverage": 0.4720720720720721,
+  "precision": 0.8874045801526718
+ },
+ "heldout": {
+  "n": 994,
+  "high": 171,
+  "coverage": 0.1720321931589537,
+  "precision": 0.8538011695906432
+ },
+ "pilot": false
+}

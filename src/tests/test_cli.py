@@ -3841,3 +3841,32 @@ def test_hallbook_snippet_prints_the_agent_instruction_and_names_real_tools():
     assert result.stdout == skill_hub.AGENT_INSTRUCTION_SNIPPET
     for tool in ("aletheore_search_skills", "aletheore_get_skill", "aletheore_get_skill_file"):
         assert tool in result.stdout
+
+
+def test_hallbook_suggest_reads_json_stdin_and_prints_the_hint():
+    query = "Rewrite this blog post intro to feel more human and less stiff."
+    payload = json.dumps({"prompt": query, "session_id": "s", "cwd": "."})
+
+    result = runner.invoke(app, ["hallbook", "suggest"], input=payload)
+
+    assert result.exit_code == 0
+    assert result.stdout.startswith("Hallbook skill that fits this task: ")
+    assert "documentation/avoid-ai-writing" in result.stdout
+
+
+def test_hallbook_suggest_exits_zero_and_prints_nothing_on_broken_input():
+    result = runner.invoke(app, ["hallbook", "suggest"], input="{not json")
+
+    assert result.exit_code == 0
+    assert result.stdout == ""
+
+
+def test_hallbook_hook_prints_valid_settings_json_with_the_hook_module():
+    result = runner.invoke(app, ["hallbook", "hook"])
+
+    assert result.exit_code == 0
+    settings = json.loads(result.stdout)
+    hook = settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]
+    assert hook["type"] == "command"
+    assert sys.executable in hook["command"]
+    assert "-m aletheore.hallbook_hook --mode hint" in hook["command"]

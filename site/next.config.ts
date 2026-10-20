@@ -26,6 +26,12 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  // Local review only: the Hallbook demo asks the real Python ranking (python3 docs/skill-hub-curation/site-local/server.py).
+  // In production there is no such server, so the page falls back to its recorded examples.
+  async rewrites() {
+    const api = process.env.HALLBOOK_API ?? (process.env.NODE_ENV === "production" ? "" : "http://127.0.0.1:8780");
+    return api ? [{ source: "/api/hallbook/:path*", destination: `${api}/api/:path*` }] : [];
+  },
   async redirects() {
     return [
       { source: "/index.html", destination: "/", permanent: true },

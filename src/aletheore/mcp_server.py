@@ -188,12 +188,14 @@ exact tools can't answer directly.
 Hallbook (skills): Aletheore also carries Hallbook, a library of over a \
 thousand vetted agent skills - specialist instructions for debugging, code \
 review, testing, planning, security, API and platform integrations, SEO, \
-design and more - plus any custom skills the user has saved. Before starting \
-a task that a specialist skill might cover, call aletheore_search_skills with \
-a short description of the task, then aletheore_get_skill on the best match \
-and follow it; if the instructions point at other files, fetch them with \
-aletheore_get_skill_file. Skills are bundled with Aletheore, work offline and \
-need no login. If nothing fits, carry on without one.
+design and more - plus any custom skills the user has saved. For a non-trivial \
+task that a specialist skill might cover, call aletheore_find_skill once with a \
+one-sentence description of the task. If it returns a skill, follow it and adapt \
+it to this project; if the match is low or none, carry on without one and do \
+not keep searching. Skip it for trivial edits. Fetch files the skill points at \
+with aletheore_get_skill_file. aletheore_search_skills remains available when \
+you want to browse keyword matches. Skills are bundled with Aletheore, work offline \
+and need no login.
 
 If a tool call fails unexpectedly, returns results that are clearly wrong \
 or incomplete against the codebase's actual state, or a capability \
@@ -935,10 +937,10 @@ def _skill_summary(meta: skill_hub.SkillMeta) -> dict:
     if len(description) > _SKILL_SUMMARY_DESCRIPTION_CHARS:
         description = description[: _SKILL_SUMMARY_DESCRIPTION_CHARS - 1].rstrip() + "…"
     summary = {"skill_id": meta.skill_id, "title": meta.title, "description": description}
-    if meta.license:
-        summary["license"] = meta.license
     if meta.requires:
         summary["requires"] = meta.requires
+    if getattr(meta, "alternates", None):
+        summary["alternates"] = meta.alternates  # same job from other sources; load any by id with aletheore_get_skill
     return summary
 
 
@@ -951,16 +953,28 @@ def _register_skill_hub_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
     # unconditionally rather than gated through TOOL_REQUIRED_EFFECTS -
     # aletheore_add_custom_skill is the one skill-hub tool that writes, and is
     # registered separately, gated on the write and network effects, below.
+    @mcp_instance.tool(name="aletheore_find_skill", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_find_skill(task: str, category: str | None = None) -> str:
+        """Finds the right Hallbook skill in one call, or says to move on.
+
+        Call this ONCE per task, early, with one sentence describing what you
+        are about to do (the technology and the kind of work), e.g. 'add Stripe
+        webhook handling to a Django app'. Skip it for trivial edits and simple
+        questions. If confidence is low or none, just carry on without a skill
+        and do not keep searching for the same need."""
+        return _toon_result(skill_hub.find_skill(task, category=category))
+
     @mcp_instance.tool(name="aletheore_search_skills", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_search_skills(query: str, category: str | None = None, limit: int = 8) -> str:
         """Searches Hallbook, Aletheore's library of vetted agent skills (over a
         thousand bundled skills plus your own custom ones), by what you are
         about to do, e.g. 'flaky test', 'stripe webhooks', 'write a plan',
-        'review a pull request for security'. Call this BEFORE starting a task
-        that a specialist skill might cover (debugging, code review, testing,
-        planning, an API or platform integration, SEO, design...). Returns the
-        best matches with skill_id, title, description, license and what the
-        skill requires; load one with aletheore_get_skill. Offline, no login."""
+        'review a pull request for security'. aletheore_find_skill is the usual
+        first call for a task: it returns the best skill directly when it is
+        confident. Use this keyword search when you want to see more matches.
+        Returns skill_id, title and a description of at most 160 characters, plus
+        what each skill requires; load one with aletheore_get_skill. Offline, no
+        login."""
         results = skill_hub.search_skills(query, category=category, limit=max(1, min(limit, 25)))
         return _toon_result([_skill_summary(meta) for meta in results])
 
@@ -971,9 +985,9 @@ def _register_skill_hub_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
         Design, Content & Media, plus 'Your skills' if you have saved any), the
         categories on each, and how many skills each holds. With a category
         (e.g. 'debugging', 'security', 'marketing', or 'custom' for your own),
-        returns the skills in it with skill_id, title, description, license and
+        returns the skills in it with skill_id, title, description and
         requirements. To find a skill by task rather than by browsing, use
-        aletheore_search_skills."""
+        aletheore_find_skill or aletheore_search_skills."""
         if category is None:
             return _toon_result(skill_hub.list_overview())
         return _toon_result([_skill_summary(meta) for meta in skill_hub.list_skills(category)])
