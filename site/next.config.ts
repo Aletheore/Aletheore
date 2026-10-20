@@ -26,6 +26,12 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  // Optional, for local review: point HALLBOOK_API at `python3 scripts/hallbook-dev-api.py` to make the Hallbook page's search
+  // use the real ranking. Without it the page answers from its recorded examples.
+  async rewrites() {
+    const api = process.env.HALLBOOK_API;
+    return api ? [{ source: "/api/hallbook/:path*", destination: `${api}/api/:path*` }] : [];
+  },
   async redirects() {
     return [
       { source: "/index.html", destination: "/", permanent: true },

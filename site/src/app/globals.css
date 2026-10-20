@@ -74,3 +74,56 @@ body {
 .legal a { color: var(--color-ink); text-decoration: underline; text-underline-offset: 3px; }
 .legal a:hover { color: var(--color-stamp); }
 .legal code { font-family: var(--font-mono); font-size: 0.9em; background: var(--color-raised); border: 1px solid var(--color-line); padding: 0.05em 0.35em; border-radius: 3px; color: var(--color-ink); }
+
+/* ---------- Hallbook page ---------- */
+.hb-count { font-size: clamp(96px, 17vw, 190px); line-height: 1; letter-spacing: -0.045em; margin-top: 10px; font-variant-numeric: tabular-nums; }
+.hb-odo { display: inline-flex; align-items: flex-end; }
+.hb-odo-digit { display: inline-block; height: 1em; overflow: hidden; position: relative; }
+.hb-odo-digit i { display: block; font-style: normal; transition: transform 1.5s cubic-bezier(0.16, 1, 0.3, 1); }
+.hb-odo-digit s { display: block; height: 1em; line-height: 1; text-decoration: none; }
+.hb-odo-comma { padding-bottom: 0.04em; margin: 0 -0.04em; }
+.hb-stamp { position: absolute; right: 0; top: 18%; transform: rotate(-9deg); padding: 9px 20px; border: 4px solid var(--color-stamp); border-radius: 8px;
+  color: var(--color-stamp); font: 700 clamp(26px, 4.4vw, 48px)/1 var(--font-display); letter-spacing: 0.12em; opacity: 0; mix-blend-mode: multiply; }
+.hb-stamp small { display: block; margin-top: 6px; font: 500 10.5px/1.4 var(--font-display); letter-spacing: 0.16em; }
+.hb-stamp--hit { animation: hb-thunk 0.55s cubic-bezier(0.2, 1.6, 0.4, 1) forwards; }
+@keyframes hb-thunk { 0% { opacity: 0; transform: rotate(-24deg) scale(2.6); } 55% { opacity: 0.95; transform: rotate(-9deg) scale(0.94); } 100% { opacity: 0.9; transform: rotate(-9deg) scale(1); } }
+.hb-gauge { opacity: 0; transform: translateY(8px); transition: opacity 0.5s, transform 0.5s; }
+.hb-gauge--on { opacity: 1; transform: none; }
+.hb-needle { position: absolute; top: -6px; bottom: -6px; width: 4px; border-radius: 2px; background: var(--color-stamp); transition: left 0.8s cubic-bezier(0.2, 1.5, 0.35, 1); }
+.hb-needle::after { content: ""; position: absolute; top: -6px; left: -5px; border: 7px solid transparent; border-top-color: var(--color-stamp); }
+.hb-card { position: relative; display: block; min-height: 172px; padding: 15px 15px 34px; background: var(--color-raised); border: 1px solid var(--color-line-strong); border-radius: 3px;
+  opacity: 0; transform: translateY(-28px) rotate(var(--r, 0deg)); animation: hb-slide 0.6s cubic-bezier(0.2, 1.1, 0.3, 1) forwards; animation-delay: calc(var(--i, 0) * 90ms); transition: box-shadow 0.25s, border-color 0.25s; }
+.hb-card:hover { border-color: var(--color-ink); box-shadow: 0 10px 24px -16px rgba(22, 20, 15, 0.45); }
+@keyframes hb-slide { to { opacity: 1; transform: translateY(0) rotate(var(--r, 0deg)); } }
+.hb-card::after { content: ""; position: absolute; left: 50%; bottom: 9px; width: 11px; height: 11px; margin-left: -5px; border: 1.3px solid var(--color-line-strong); border-radius: 50%; background: var(--color-paper); }
+.hb-call { margin-bottom: 9px; padding-bottom: 6px; border-bottom: 1px solid var(--color-line); font: 500 11px var(--font-display); letter-spacing: 0.06em; color: var(--color-stamp); }
+.hb-lic { position: absolute; right: 10px; bottom: 7px; padding: 1px 5px; font: 500 10px var(--font-display); color: var(--color-success); border: 1px solid var(--color-success); border-radius: 3px; transform: rotate(-4deg); }
+.hb-alt { position: absolute; left: 12px; bottom: 7px; font: 500 10.5px var(--font-display); color: var(--color-faint); letter-spacing: 0.04em; }
+.hb-card--top { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1.5fr; gap: 22px; padding-bottom: 40px; min-height: 0; }
+@media (max-width: 760px) { .hb-card--top { grid-template-columns: 1fr; } .hb-stamp { position: static; display: inline-block; margin-top: 8px; } }
+.hb-preview { margin: 0; max-height: 168px; overflow: hidden; white-space: pre-wrap; font: 12px/1.55 var(--font-mono); color: var(--color-muted); mask-image: linear-gradient(#000 68%, transparent); }
+.hb-cursor { display: inline-block; width: 8px; height: 15px; background: #e8e2d4; vertical-align: -2px; animation: hb-blink 1s steps(2) infinite; }
+@keyframes hb-blink { 50% { opacity: 0; } }
+.hb-sheet { position: relative; padding: 20px 20px 20px 16px; background: var(--color-raised); border: 1px solid var(--color-line-strong); overflow: hidden; font: 12px/1.85 var(--font-mono); }
+.hb-ln { display: block; position: relative; padding-left: 30px; white-space: pre-wrap; word-break: break-word; }
+.hb-mk { position: absolute; left: 0; top: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--color-stamp); color: var(--color-paper); font: 700 11px/20px var(--font-display); text-align: center; transform: scale(0); transition: transform 0.5s cubic-bezier(0.2, 1.8, 0.4, 1); }
+.hb-sheet--on .hb-mk { transform: scale(1); }
+.hb-hl { background: linear-gradient(transparent 62%, rgba(163, 51, 39, 0.16) 62%); }
+@media (prefers-reduced-motion: reduce) {
+  .hb-card { animation: none; opacity: 1; transform: rotate(var(--r, 0deg)); }
+  .hb-stamp { opacity: 0.9; animation: none; }
+  .hb-odo-digit i, .hb-needle, .hb-mk, .hb-gauge { transition: none; }
+  .hb-mk { transform: scale(1); }
+}
+
+.hb-marker { background-image: linear-gradient(transparent 56%, rgba(163, 51, 39, 0.22) 56%); background-repeat: no-repeat; background-size: 0% 100%; transition: background-size 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) 0.15s; padding: 0 0.1em; margin: 0 -0.1em; }
+.hb-marker--on { background-size: 100% 100%; }
+.hb-line { stroke-width: 1.3; stroke-dasharray: 260; stroke-dashoffset: 260; transition: stroke-dashoffset 0.9s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.hb-line--tangle { stroke: var(--color-line-strong); }
+.hb-line--hub { stroke: var(--color-stamp); stroke-width: 2; }
+.hb-diagram--on .hb-line { stroke-dashoffset: 0; }
+.hb-hub { opacity: 0; transform-origin: 885px 165px; transform: scale(0.9); transition: opacity 0.6s 0.7s, transform 0.7s 0.7s cubic-bezier(0.2, 1.4, 0.4, 1); }
+.hb-diagram--on .hb-hub { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) { .hb-line { stroke-dashoffset: 0; transition: none; } .hb-hub { opacity: 1; transform: none; transition: none; } .hb-marker { background-size: 100% 100%; transition: none; } }
+.hb-step { position: relative; padding-left: 74px; }
+.hb-step-n { position: absolute; left: 0; top: -6px; font: 700 54px/1 var(--font-display); color: var(--color-stamp); opacity: 0.9; }
