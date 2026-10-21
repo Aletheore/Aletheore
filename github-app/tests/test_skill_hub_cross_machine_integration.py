@@ -213,7 +213,7 @@ async def test_add_on_one_machine_appears_after_login_on_another(
     monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
 
     _mock_fixed_github_identity(monkeypatch)
-    monkeypatch.setattr(skill_hub_sync, "DEFAULT_API_BASE_URL", live_skill_hub_server)
+    monkeypatch.setenv("ALETHEORE_API_URL", live_skill_hub_server)
 
     # ---------------------------------------------------------------
     # "Machine A": configure skill_hub/credentials to use machine_a's
@@ -322,7 +322,7 @@ async def test_add_remove_then_relogin_does_not_resurrect_the_skill(
     monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
 
     _mock_fixed_github_identity(monkeypatch)
-    monkeypatch.setattr(skill_hub_sync, "DEFAULT_API_BASE_URL", live_skill_hub_server)
+    monkeypatch.setenv("ALETHEORE_API_URL", live_skill_hub_server)
 
     machine = tmp_path_factory.mktemp("resurrect_machine")
     monkeypatch.setattr(skill_hub, "user_home", lambda: machine)
