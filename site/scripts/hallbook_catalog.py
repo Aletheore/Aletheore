@@ -4,6 +4,10 @@ import collections
 import re
 from aletheore import skill_hub as sh
 
+# The page shows the bundled catalogue only. A developer's own custom skills must never rank into the snapshot
+# (it would differ per machine and could crash the build on an id that is not in CAT).
+sh.list_custom_skill_names = lambda: []
+
 ROOT = sh.bundled_skills_dir()
 SHELF_NAMES = {"build": "Build", "quality": "Quality", "ship-operate": "Ship & Operate", "ai-agents": "AI & Agents",
                "product-design": "Product & Design", "content-media": "Content & Media"}
@@ -30,7 +34,7 @@ def find(query):
         return {"confidence": "none", "note": "Describe the task in a few words."}
     r = sh.find_skill(query)
     out = {"confidence": r.get("confidence"), "note": r.get("note", "")}
-    if r.get("top"):
+    if r.get("top") and r["top"]["skill_id"] in CAT:
         out["top"] = card(r["top"]["skill_id"])
     for key in ("alternatives", "candidates"):
         if r.get(key):

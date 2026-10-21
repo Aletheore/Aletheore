@@ -62,16 +62,23 @@ export function Hero() {
         await new Promise((r) => setTimeout(r, 1500));
         for (let c = t.length; c >= 0 && alive && !stop.current; c--) { setTyped(t.slice(0, c)); await new Promise((r) => setTimeout(r, 14)); }
       }
+      // The user started typing mid-animation: leave a whole example as the placeholder, never a half-typed one.
+      if (alive) setTyped(ASKS[0]);
     })();
     return () => { alive = false; };
   }, [reduced]);
 
   async function run(text: string) {
     const my = ++seq.current;
-    if (text.trim().length < 3) { setRes(null); return; }
+    if (text.trim().length < 3) { setRes(null); setStatus(STATUS_RECORDED); return; }
     setStatus(LIVE ? "asking…" : STATUS_RECORDED);
-    const out = await lookup(text, LIVE);
-    if (my === seq.current) { setRes(out.res); setStatus(out.status); }
+    try {
+      const out = await lookup(text, LIVE);
+      if (my === seq.current) { setRes(out.res); setStatus(out.status); }
+    } catch {
+      // A failed lookup must not leave "asking…" on screen.
+      if (my === seq.current) { setRes(null); setStatus(STATUS_RECORDED); }
+    }
   }
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   function onType(v: string) { stop.current = true; setQ(v); clearTimeout(timer.current); timer.current = setTimeout(() => run(v), 160); }
@@ -93,7 +100,7 @@ export function Hero() {
         Skills your agent can read <span className="text-stamp">right now.</span>
       </h1>
       <p className="mt-4 max-w-[62ch] text-[15.5px] leading-[1.7] text-muted">
-        <Mark>No download, no sign-in, no network call.</Mark> Hallbook lives inside Aletheore&apos;s MCP server. Your agent describes the task once and gets the right skill back, or an honest &ldquo;nothing here fits&rdquo;. {LIVE ? "This box runs the real ranking." : "This box replays recorded answers from the real ranking."}
+        <Mark>Searching the catalogue needs no download, no sign-in and no network call.</Mark> Hallbook lives inside Aletheore&apos;s MCP server. Your agent describes the task once and gets the right skill back, or an honest &ldquo;nothing here fits&rdquo;. {LIVE ? "This box runs the real ranking." : "This box replays recorded answers from the real ranking."}
       </p>
 
       <div className="crop-marks mt-9 max-w-[860px] bg-raised p-5">

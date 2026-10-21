@@ -11,7 +11,7 @@ import { hallbook, receipts as r } from "@/data/hallbook";
 
 export const metadata: Metadata = {
   title: "Hallbook: curated agent skills, read locally",
-  description: "A library of curated agent skills bundled with Aletheore's MCP server. Your agent asks once and gets the right skill, or an honest answer that nothing fits. No download, no sign-in, no network call.",
+  description: "A library of curated agent skills bundled with Aletheore's MCP server. Your agent asks once and gets the right skill, or an honest answer that nothing fits. Searching the catalogue needs no download, no sign-in and no network call.",
   alternates: { canonical: "/hallbook" },
   // Not indexed until Hallbook ships: remove this line (and add the page to public/sitemap.xml and llms.txt) at launch.
   robots: { index: false, follow: false },
@@ -72,7 +72,7 @@ export default function HallbookPage() {
             </li>
           ))}
         </ol>
-        <p className="mt-5 max-w-[68ch] text-[13px] leading-[1.7] text-faint">Custom skills show up in search and in the one-call lookup next to the {hallbook.stats.total.toLocaleString("en-US")} catalogue ones, with ids like custom/deploy-checklist. They are stored on your machine, and are only sent to your account if you sign in.</p>
+        <p className="mt-5 max-w-[68ch] text-[13px] leading-[1.7] text-faint">Custom skills show up in search and in the one-call lookup next to the {hallbook.stats.total.toLocaleString("en-US")} catalogue ones, with ids like custom/deploy-checklist. They are stored on your machine. Once you sign in, each one you add or change is also sent to your Aletheore account, stored there as plain text, and synced to your other machines, so keep secrets out of them.</p>
       </Section>
 
       <Section id="shelves" eyebrow="4" title="Six shelves" intro="Chosen for work that agents actually do. Counts are read from the catalogue.">

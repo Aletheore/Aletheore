@@ -1,12 +1,12 @@
 {
  "stats": {
-  "total": 1124,
+  "total": 1129,
   "categories": 29,
   "shelves": [
    {
     "key": "build",
     "name": "Build",
-    "count": 526,
+    "count": 528,
     "top": [
      "platforms",
      "backend",
@@ -17,7 +17,7 @@
    {
     "key": "ai-agents",
     "name": "AI & Agents",
-    "count": 137,
+    "count": 139,
     "top": [
      "ai-engineering",
      "agent-workflows",
@@ -36,6 +36,16 @@
     ]
    },
    {
+    "key": "content-media",
+    "name": "Content & Media",
+    "count": 115,
+    "top": [
+     "marketing",
+     "video-media",
+     "documents"
+    ]
+   },
+   {
     "key": "quality",
     "name": "Quality",
     "count": 114,
@@ -44,16 +54,6 @@
      "testing",
      "refactoring",
      "code-review"
-    ]
-   },
-   {
-    "key": "content-media",
-    "name": "Content & Media",
-    "count": 114,
-    "top": [
-     "marketing",
-     "video-media",
-     "documents"
     ]
    },
    {
@@ -69,11 +69,11 @@
   "licenses": [
    [
     "MIT",
-    829
+    831
    ],
    [
     "Apache-2.0",
-    295
+    298
    ]
   ]
  },
