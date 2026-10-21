@@ -6,6 +6,7 @@
 # contain, so they always need an owner review (enable "Require review from
 # Code Owners" in branch protection for this to be enforced).
 /src/aletheore/skill_vetting.py @ArihantK15
+/src/aletheore/skill_hub.py @ArihantK15
 /src/aletheore/skills/_vetting_exemptions.json @ArihantK15
 /src/tests/test_skill_vetting*.py @ArihantK15
 /.github/workflows/skill-vetting.yml @ArihantK15

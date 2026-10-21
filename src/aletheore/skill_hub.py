@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import re
+import time
 from collections import Counter, defaultdict
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -1057,6 +1058,22 @@ def hook_suggestion(prompt: str, mode: str = "hint") -> str | None:
     )
 
 
+def unique_backup_path(name: str, kind: str) -> Path:
+    """A fresh, never-overwritten backup path next to a custom skill: <name>.md.<kind>-<timestamp>.bak.
+
+    Backups made by sync and by remove must not clobber one another (a second conflict on the same skill would
+    otherwise destroy the first backup), so each gets its own name. `kind` is e.g. "server", "synced", "deleted".
+    """
+    directory = custom_skills_dir()
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    path = directory / f"{name}.md.{kind}-{stamp}.bak"
+    counter = 2
+    while path.exists():
+        path = directory / f"{name}.md.{kind}-{stamp}-{counter}.bak"
+        counter += 1
+    return path
+
+
 def add_custom_skill(name: str, content: str) -> str:
     # Local-only safety net, separate from skill_hub_sync's pull-merge
     # backup: if a skill already exists under this name (a user re-adding it,
@@ -1097,7 +1114,7 @@ def remove_custom_skill(name: str) -> bool:
     if existed:
         # Keep a copy: the server delete below cannot be undone from here, and
         # an agent can call this through MCP.
-        (custom_skills_dir() / f"{safe}.md.deleted.bak").write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        unique_backup_path(safe, "deleted").write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
         path.unlink()
     # Local import: skill_hub_sync imports this module, so a top-level import
     # here would be circular. Called unconditionally, even when nothing was

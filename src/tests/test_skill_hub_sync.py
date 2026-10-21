@@ -327,7 +327,7 @@ def test_pull_merge_local_edited_since_last_sync_pushes_even_if_server_also_move
     skill_hub.write_custom_skill_file("edited-skill", "newly edited content")
     skill_hub_sync.pull_merge_custom_skills()  # must not raise regardless of outcome
     assert fake_server_with_newer_updated_at.pushed_content == "newly edited content"
-    assert (tmp_path / "edited-skill.md.server.bak").read_text(encoding="utf-8") == "edit made on another machine"
+    assert [p.read_text(encoding="utf-8") for p in tmp_path.glob("edited-skill.md.server-*.bak")] == ["edit made on another machine"]
 
 
 def test_pull_merge_does_not_overwrite_a_server_copy_it_could_not_back_up(tmp_path, monkeypatch):
@@ -362,8 +362,8 @@ def test_pull_merge_server_changed_since_last_sync_pulls_and_backs_up(
     skill_hub.write_custom_skill_file("synced-skill", "old synced content")
     skill_hub_sync.pull_merge_custom_skills()
     assert skill_hub.read_custom_skill_file("synced-skill") == "new content from another machine"
-    backup_path = tmp_path / "synced-skill.md.bak"
-    assert backup_path.read_text(encoding="utf-8") == "old synced content"
+    backups = list(tmp_path.glob("synced-skill.md.synced-*.bak"))
+    assert [b.read_text(encoding="utf-8") for b in backups] == ["old synced content"]
 
 
 def test_pull_merge_server_changed_since_last_sync_logs_visible_notice(
@@ -625,7 +625,7 @@ def test_pull_merge_mirrors_a_delete_made_on_another_machine(tmp_path, monkeypat
     # Not re-uploaded: the other machine's delete wins, with a local backup kept.
     assert puts == {}
     assert skill_hub.read_custom_skill_file("gone-elsewhere") is None
-    assert (tmp_path / "gone-elsewhere.md.deleted.bak").read_text(encoding="utf-8") == "same content"
+    assert [p.read_text(encoding="utf-8") for p in tmp_path.glob("gone-elsewhere.md.deleted-*.bak")] == ["same content"]
     assert "gone-elsewhere" not in json.loads((tmp_path / ".sync_state.json").read_text(encoding="utf-8"))
 
 
@@ -739,3 +739,50 @@ def test_same_account_login_leaves_local_skills_alone(tmp_path, monkeypatch):
     skill_hub_sync.pull_merge_custom_skills()
     assert skill_hub.read_custom_skill_file("mine") == "x"
     assert len(puts) == 1  # never synced from here before, so it is uploaded as before
+
+
+def test_repeated_conflicts_never_overwrite_an_earlier_backup(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    first = skill_hub.unique_backup_path("demo", "server")
+    first.write_text("one", encoding="utf-8")
+    second = skill_hub.unique_backup_path("demo", "server")
+    second.write_text("two", encoding="utf-8")
+    assert first != second
+    assert first.read_text(encoding="utf-8") == "one" and second.read_text(encoding="utf-8") == "two"
+
+
+def test_removing_a_synced_skill_while_logged_out_leaves_a_tombstone_so_login_does_not_restore_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    skill_hub.write_custom_skill_file("was-synced", "content")
+    state = {"was-synced": {"synced_at": "2026-01-01T00:00:00+00:00", "content_hash": skill_hub_sync._content_hash("content")}}
+    (tmp_path / ".sync_state.json").write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: None)  # logged out
+    skill_hub.remove_custom_skill("was-synced")
+    assert "was-synced" in skill_hub_sync._load_pending_deletes()
+
+    # next login: the server still lists it, the tombstone is flushed first and it is not pulled back
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
+    deleted = []
+    server = {"skills": [{"name": "was-synced", "updated_at": "2026-01-01T00:00:00+00:00"}]}
+
+    def _get(url, **kwargs):
+        return _resp("GET", url, **server)
+
+    def _delete(url, **kwargs):
+        deleted.append(url.rsplit("/", 1)[-1])
+        server["skills"] = []
+        return _resp("DELETE", url, status=204)
+
+    monkeypatch.setattr(skill_hub_sync.httpx, "get", _get)
+    monkeypatch.setattr(skill_hub_sync.httpx, "delete", _delete)
+    skill_hub_sync.pull_merge_custom_skills()
+    assert deleted == ["was-synced"]
+    assert skill_hub.read_custom_skill_file("was-synced") is None
+
+
+def test_removing_a_never_synced_skill_while_logged_out_leaves_no_tombstone(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    skill_hub.write_custom_skill_file("local-only", "content")
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: None)
+    skill_hub.remove_custom_skill("local-only")
+    assert skill_hub_sync._load_pending_deletes() == set()

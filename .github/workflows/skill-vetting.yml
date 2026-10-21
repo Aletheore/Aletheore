@@ -10,6 +10,7 @@ on:
     paths:
       - "src/aletheore/skills/**"
       - "src/aletheore/skill_vetting.py"
+      - "src/aletheore/skill_hub.py"
       - "src/tests/test_skill_vetting*.py"
       - ".github/workflows/skill-vetting.yml"
   push:
@@ -17,6 +18,7 @@ on:
     paths:
       - "src/aletheore/skills/**"
       - "src/aletheore/skill_vetting.py"
+      - "src/aletheore/skill_hub.py"
       - "src/tests/test_skill_vetting*.py"
       - ".github/workflows/skill-vetting.yml"
 

@@ -5,7 +5,7 @@ import re
 import secrets
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app_server import admin as _admin
 from app_server.admin import TokenLabel, _bearer_github_token, _fetch_github_user
@@ -50,6 +50,14 @@ class CreatePersonalTokenRequest(BaseModel):
 
 class PutCustomSkillRequest(BaseModel):
     content: str = Field(max_length=MAX_CUSTOM_SKILL_CONTENT_CHARS)
+
+    @field_validator("content")
+    @classmethod
+    def _no_nul_bytes(cls, value: str) -> str:
+        # Postgres text cannot hold a NUL byte: it would surface as a 500 that the client retries on every sync.
+        if "\x00" in value:
+            raise ValueError("content must not contain NUL bytes")
+        return value
 
 
 def _github_token_issued_to_aletheore(github_token: str) -> bool:

@@ -3957,3 +3957,37 @@ def test_launcher_hands_everything_else_to_the_cli(monkeypatch):
     monkeypatch.setattr("aletheore.cli.main", lambda: called.append(True))
     _launcher.main()
     assert called == [True]
+
+
+def test_logout_all_devices_treats_an_already_revoked_token_as_done(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    credentials.save_api_token("aletheore-personal", "dead-token", creds_path)
+
+    def revoked(token, **kwargs):
+        request = httpx.Request("DELETE", "https://app.aletheore.com/v1/personal-tokens/all")
+        raise httpx.HTTPStatusError("401", request=request, response=httpx.Response(401, request=request))
+
+    with patch("aletheore.device_auth.revoke_personal_token", revoked):
+        result = runner.invoke(app, ["logout", "--all-devices"])
+
+    assert result.exit_code == 0
+    assert not credentials.has_api_key("ALETHEORE_PERSONAL_TOKEN", "aletheore-personal", credentials_path=creds_path)
+
+
+def test_logout_all_devices_with_only_a_managed_audit_token_says_it_was_left_alone(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    credentials.save_api_token("aletheore-managed-audit", "tok1", creds_path)
+
+    result = runner.invoke(app, ["logout", "--all-devices"])
+
+    assert "nothing to revoke" in result.stdout.lower()
+    assert "left as it is" in result.stdout
+    assert credentials.has_api_key("UNUSED_ENV", "aletheore-managed-audit", credentials_path=creds_path)

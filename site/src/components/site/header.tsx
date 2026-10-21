@@ -30,7 +30,7 @@ export function Header() {
     >
       <nav aria-label="Main" className="mx-auto flex max-w-[1080px] items-center justify-between px-8 py-[18px]">
         <Logo />
-        <div className="hidden items-center gap-[22px] text-[13.5px] min-[1060px]:flex">
+        <div className="hidden items-center gap-[26px] text-[13.5px] md:flex">
           {navLinks.map((l) =>
             l.external ? (
               <a key={l.href} href={l.href} className="text-muted hover:text-ink" rel="noopener">{l.label}</a>
@@ -43,7 +43,7 @@ export function Header() {
         </div>
         <Dialog open={menuOpen} onOpenChange={setMenuOpen}>
           <DialogTrigger asChild>
-            <button className="inline-flex size-10 items-center justify-center rounded-[4px] border border-line min-[1060px]:hidden" aria-label="Open menu">
+            <button className="inline-flex size-10 items-center justify-center rounded-[4px] border border-line md:hidden" aria-label="Open menu">
               <Menu className="size-5" aria-hidden="true" />
             </button>
           </DialogTrigger>

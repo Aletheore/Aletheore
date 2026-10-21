@@ -2626,7 +2626,11 @@ def login() -> None:
         console.print("Waiting for authorization...")
         github_token = poll_for_access_token(code)
 
-        label = f"{socket.gethostname()} (device flow)"
+        # Hostname plus a short machine id: two machines that share a hostname must not replace each other's token
+        # (the server treats an identical label as "the same machine logging in again").
+        import uuid
+
+        label = f"{socket.gethostname()}-{uuid.getnode() & 0xFFFF:04x} (device flow)"
 
         # Mint and save a personal token before any installation lookup.
         # This has no dependency on an Aletheore GitHub App installation, so
@@ -2727,6 +2731,29 @@ def login() -> None:
         raise typer.Exit(code=1) from exc
 
 
+def _logout_revoke_failed(exc: Exception, all_devices: bool) -> None:
+    """The server-side revoke did not go through. For --all-devices that is an error (keep the token so the user can
+    retry); for a plain logout it is a warning and the local token is still removed."""
+    if all_devices:
+        # The user asked to revoke every token. Removing the only local token now would leave nothing to
+        # authenticate a retry with, and the other tokens would stay valid. Keep it.
+        console.print(
+            "[bold red]error:[/bold red] couldn't revoke your personal tokens on the "
+            f"server ({type(exc).__name__}). You are still logged in on this machine; "
+            "retry `aletheore logout --all-devices` when you are online."
+        )
+        raise typer.Exit(code=1) from exc
+    # A plain offline logout must still log the user out locally;
+    # the server-side revoke failing is a warning, not a blocker.
+    console.print(
+        "[bold yellow]warning:[/bold yellow] couldn't revoke the personal "
+        f"token on the server ({type(exc).__name__}) - it was removed from "
+        "this machine, but it has no expiry and stays valid on the server "
+        "until it is revoked. To revoke it, log in again and run "
+        "`aletheore logout --all-devices`."
+    )
+
+
 @app.command(help="clear the locally saved managed-audit and Hallbook tokens")
 def logout(
     all_devices: bool = typer.Option(
@@ -2759,32 +2786,22 @@ def logout(
 
         try:
             revoke_personal_token(personal_token, all_devices=all_devices)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 401:
+                _logout_revoke_failed(exc, all_devices)
+            # 401: the server already revoked this token (for example by an earlier logout elsewhere), so there is
+            # nothing left to revoke; fall through and clear the dead token from this machine.
         except Exception as exc:  # noqa: BLE001 - best-effort by design
-            if all_devices:
-                # The user asked to revoke every token. Removing the only
-                # local token now would leave nothing to authenticate a retry
-                # with, and the other tokens would stay valid. Keep it.
-                console.print(
-                    "[bold red]error:[/bold red] couldn't revoke your personal tokens on the "
-                    f"server ({type(exc).__name__}). You are still logged in on this machine; "
-                    "retry `aletheore logout --all-devices` when you are online."
-                )
-                raise typer.Exit(code=1) from exc
-            # A plain offline logout must still log the user out locally;
-            # the server-side revoke failing is a warning, not a blocker.
-            console.print(
-                "[bold yellow]warning:[/bold yellow] couldn't revoke the personal "
-                f"token on the server ({type(exc).__name__}) - it was removed from "
-                "this machine, but it has no expiry and stays valid on the server "
-                "until it is revoked. To revoke it, log in again and run "
-                "`aletheore logout --all-devices`."
-            )
+            _logout_revoke_failed(exc, all_devices)
     elif all_devices:
         # --all-devices needs a personal token to authenticate the revoke-all
         # call. With none saved (even if a managed-audit token is), there is
         # nothing to authenticate with, so say so instead of silently logging
         # out locally and skipping the revoke the user explicitly asked for.
-        console.print("Not logged in to Hallbook - nothing to revoke.")
+        console.print(
+            "Not logged in to Hallbook - nothing to revoke. Any managed-audit login on this machine was left as it is; "
+            "run `aletheore logout` (without --all-devices) to remove that too."
+        )
         return
 
     removed_any = False

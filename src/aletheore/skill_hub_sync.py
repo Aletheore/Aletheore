@@ -193,6 +193,10 @@ def delete_custom_skill_best_effort(name: str, timeout: float = 5.0) -> None:
     in the meantime."""
     token = _personal_token()
     if token is None:
+        # Logged out: nothing can reach the server now, but a skill that was synced before must not be pulled
+        # back from the account at the next login, so leave a tombstone for it.
+        if name in _load_sync_state():
+            _record_pending_delete(name)
         return
     try:
         response = httpx.delete(
@@ -247,13 +251,13 @@ def _backup_server_copy(name: str, local_content: str, headers: dict, timeout: f
     server_content = _fetch_skill_content(name, headers, timeout)
     if server_content == local_content:
         return
-    backup_path = skill_hub.custom_skills_dir() / f"{name}.md.server.bak"
+    backup_path = skill_hub.unique_backup_path(name, "server")
     backup_path.write_text(server_content, encoding="utf-8")
     logger.warning(
         "custom skill '%s' was also changed on your account (another machine); "
-        "your local version is being pushed over it - the account copy was saved to %s.md.server.bak",
+        "your local version is being pushed over it - the account copy was saved to %s",
         name,
-        name,
+        backup_path.name,
     )
 
 
@@ -261,16 +265,16 @@ def _drop_locally_deleted_elsewhere(name: str, local_content: str, sync_state: d
     """The server no longer lists `name`, this machine last synced it, and the
     local copy is unchanged since: it was deleted from another machine. Mirror
     that delete here (keeping a .md.bak) instead of re-uploading it."""
-    backup_path = skill_hub.custom_skills_dir() / f"{name}.md.deleted.bak"
+    backup_path = skill_hub.unique_backup_path(name, "deleted")
     backup_path.write_text(local_content, encoding="utf-8")
     skill_hub.custom_skills_dir().joinpath(f"{name}.md").unlink(missing_ok=True)
     sync_state.pop(name, None)
     _save_sync_state(sync_state)
     logger.warning(
         "custom skill '%s' was deleted from your account on another machine - "
-        "removed it here too (copy kept at %s.md.deleted.bak)",
+        "removed it here too (copy kept at %s)",
         name,
-        name,
+        backup_path.name,
     )
 
 
@@ -327,13 +331,13 @@ def _merge_one_server_skill(
         # that overwrites existing local content with something
         # that arrived over the network, so harden it: back up the
         # current content first and log a visible notice.
-        backup_path = skill_hub.custom_skills_dir() / f"{name}.md.bak"
+        backup_path = skill_hub.unique_backup_path(name, "synced")
         backup_path.write_text(local_content, encoding="utf-8")
         logger.warning(
             "custom skill '%s' was updated from your account (synced from "
-            "another machine) - previous local content saved to %s.md.bak",
+            "another machine) - previous local content saved to %s",
             name,
-            name,
+            backup_path.name,
         )
         content = _fetch_skill_content(name, headers, timeout)
         skill_hub.write_custom_skill_file(name, content)

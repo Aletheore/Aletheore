@@ -147,25 +147,18 @@ def check_bundled_scripts(skill_dir: Path) -> list[VettingFailure]:
     return failures
 
 
-COMPANION_TEXT_SUFFIXES = {".md", ".txt", ".yaml", ".yml", ".rst"}
-
-
 def check_companion_text(skill_dir: Path) -> list[VettingFailure]:
-    """Run the same text lint over a skill's companion documents (references, templates).
+    """Run the same text lint over every other file a skill ships.
 
-    ``SKILL.md`` is linted on its own; a skill's other text files are loaded on demand through
-    ``aletheore_get_skill_file`` and can hold instructions too. ``scripts/`` is covered by the secrets scan, not
-    this lint. A file that is not valid UTF-8 text is skipped here (it is not instruction text).
+    The top-level ``SKILL.md`` is linted on its own (its body, after the frontmatter). Everything else is served on
+    demand through ``aletheore_get_skill_file`` and can hold instructions too, so it is linted whatever its name or
+    suffix: nested ``SKILL.md`` files, files under ``scripts/``, ``.html``, ``.json``, extensionless files. A file
+    that is not valid UTF-8 text is skipped (it is not instruction text); ``scripts/`` also gets the secrets scan.
     """
     failures: list[VettingFailure] = []
     for path in sorted(skill_dir.rglob("*")):
         relative = path.relative_to(skill_dir)
-        if (
-            not path.is_file()
-            or path.name == "SKILL.md"
-            or "scripts" in relative.parts
-            or path.suffix.lower() not in COMPANION_TEXT_SUFFIXES
-        ):
+        if not path.is_file() or relative.as_posix() == "SKILL.md":
             continue
         try:
             text = path.read_text(encoding="utf-8")

@@ -737,7 +737,7 @@ def test_remove_custom_skill_keeps_a_backup_copy(tmp_path, monkeypatch):
     monkeypatch.setattr(skill_hub_sync, "delete_custom_skill_best_effort", lambda name, **kw: None)
     skill_hub.add_custom_skill("my-review", "precious content")
     skill_hub.remove_custom_skill("my-review")
-    assert (tmp_path / "my-review.md.deleted.bak").read_text(encoding="utf-8") == "precious content"
+    assert [p.read_text(encoding="utf-8") for p in tmp_path.glob("my-review.md.deleted-*.bak")] == ["precious content"]
 
 
 def test_custom_skill_matched_by_name_never_reaches_high_confidence(tmp_path, monkeypatch):

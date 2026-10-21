@@ -483,3 +483,9 @@ async def test_custom_skill_listing_carries_the_account_id(test_app, personal_to
     response = await test_app.get("/v1/custom-skills", headers=personal_token_header)
     assert response.status_code == 200
     assert response.json()["account_id"]
+
+
+@pytest.mark.asyncio
+async def test_put_custom_skill_rejects_nul_bytes_instead_of_500(test_app, personal_token_header):
+    response = await test_app.put("/v1/custom-skills/nul-skill", headers=personal_token_header, json={"content": "before\u0000after"})
+    assert response.status_code == 422
