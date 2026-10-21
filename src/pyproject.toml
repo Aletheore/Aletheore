@@ -110,7 +110,7 @@ Repository = "https://github.com/Aletheore/Aletheore"
 Issues = "https://github.com/Aletheore/Aletheore/issues"
 
 [project.scripts]
-aletheore = "aletheore.cli:main"
+aletheore = "aletheore._launcher:main"
 
 [build-system]
 requires = ["setuptools>=68"]

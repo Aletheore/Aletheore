@@ -1088,6 +1088,9 @@ def remove_custom_skill(name: str) -> bool:
     path = custom_skills_dir() / f"{safe}.md"
     existed = path.is_file()
     if existed:
+        # Keep a copy: the server delete below cannot be undone from here, and
+        # an agent can call this through MCP.
+        (custom_skills_dir() / f"{safe}.md.deleted.bak").write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
         path.unlink()
     # Local import: skill_hub_sync imports this module, so a top-level import
     # here would be circular. Called unconditionally, even when nothing was

@@ -1057,14 +1057,18 @@ def _register_remove_custom_skill_tool(mcp_instance: MCPServer, repo_path: Path)
     # `network` effects.
     @mcp_instance.tool(
         name="aletheore_remove_custom_skill",
-        # Matches aletheore_add_custom_skill's annotations - see
-        # test_effectful_tools_are_distinguishable_from_read_only_ones.
+        # Destructive: it deletes the local file (a .md.deleted.bak copy is kept) and
+        # the account copy on the server when signed in, which cannot be
+        # undone from here. Otherwise matches aletheore_add_custom_skill's
+        # annotations - see test_effectful_tools_are_distinguishable_from_read_only_ones.
         annotations=ToolAnnotations(
-            readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
+            readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True
         ),
     )
     def aletheore_remove_custom_skill(name: str) -> str:
-        """Deletes a local custom skill by name. Returns a clean message
+        """Deletes a custom skill by name: the local file (a <name>.md.deleted.bak
+        copy is kept next to it) and, when signed in, the copy on your
+        account, which is removed for every machine. Returns a clean message
         either way - deleting a name that was never added (or already
         removed) is not an error. name must contain only letters, digits,
         '-', and '_' (no path separators)."""

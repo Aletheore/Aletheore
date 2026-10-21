@@ -3870,3 +3870,88 @@ def test_hallbook_hook_prints_valid_settings_json_with_the_hook_module():
     assert hook["type"] == "command"
     assert sys.executable in hook["command"]
     assert "-m aletheore.hallbook_hook --mode hint" in hook["command"]
+
+
+def test_logout_all_devices_keeps_the_token_when_the_revoke_fails(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    credentials.save_api_token("aletheore-personal", "tok2", creds_path)
+
+    def failing_revoke(token, **kwargs):
+        raise httpx.ConnectError("down")
+
+    with patch("aletheore.device_auth.revoke_personal_token", failing_revoke):
+        result = runner.invoke(app, ["logout", "--all-devices"])
+
+    # The user asked to revoke everywhere: deleting the only local token would
+    # leave nothing to retry with and the other tokens would stay valid.
+    assert result.exit_code == 1
+    assert credentials.has_api_key(
+        "ALETHEORE_PERSONAL_TOKEN", "aletheore-personal", credentials_path=creds_path
+    )
+    assert "retry" in result.stdout.lower()
+
+
+def test_plain_logout_warning_does_not_claim_the_token_expires(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    credentials.save_api_token("aletheore-personal", "tok2", creds_path)
+
+    def failing_revoke(token, **kwargs):
+        raise httpx.ConnectError("down")
+
+    with patch("aletheore.device_auth.revoke_personal_token", failing_revoke):
+        result = runner.invoke(app, ["logout"])
+
+    assert result.exit_code == 0
+    assert "until it expires" not in result.stdout
+    assert "no expiry" in result.stdout
+
+
+def test_importing_the_cli_never_exits_even_for_the_hook_command(monkeypatch):
+    # The prompt-hook fast path lives in the console-script launcher, not at
+    # import time, so importing aletheore.cli must not read argv or exit.
+    import importlib
+    import sys
+
+    import aletheore.cli as cli_module
+
+    monkeypatch.setattr(sys, "argv", ["aletheore", "hallbook", "suggest"])
+    importlib.reload(cli_module)  # would raise SystemExit if the old import-time hook were back
+
+
+def test_launcher_runs_the_hook_without_importing_the_cli(monkeypatch):
+    import sys
+
+    from aletheore import _launcher
+
+    seen = {}
+
+    def fake_hook_main(argv):
+        seen["argv"] = argv
+        return 0
+
+    monkeypatch.setattr(sys, "argv", ["aletheore", "hallbook", "suggest", "--mode", "hint"])
+    monkeypatch.setattr("aletheore.hallbook_hook.main", fake_hook_main)
+    with pytest.raises(SystemExit) as excinfo:
+        _launcher.main()
+    assert excinfo.value.code == 0
+    assert seen["argv"] == ["--mode", "hint"]
+
+
+def test_launcher_hands_everything_else_to_the_cli(monkeypatch):
+    import sys
+
+    from aletheore import _launcher
+
+    called = []
+    monkeypatch.setattr(sys, "argv", ["aletheore", "status"])
+    monkeypatch.setattr("aletheore.cli.main", lambda: called.append(True))
+    _launcher.main()
+    assert called == [True]

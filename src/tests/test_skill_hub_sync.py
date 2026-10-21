@@ -175,6 +175,14 @@ def fake_server_with_newer_updated_at(tmp_path, monkeypatch):
             return _resp(
                 "GET", url, skills=[{"name": "edited-skill", "updated_at": "2026-06-01T00:00:00+00:00"}]
             )
+        if url.endswith("/v1/custom-skills/edited-skill"):
+            return _resp(
+                "GET",
+                url,
+                name="edited-skill",
+                content="edit made on another machine",
+                updated_at="2026-06-01T00:00:00+00:00",
+            )
         raise AssertionError(f"unexpected content GET {url}")
 
     def _put(url, **kwargs):
@@ -313,11 +321,34 @@ def test_pull_merge_local_edited_since_last_sync_pushes_even_if_server_also_move
     # this case: local changed since the sidecar's last recorded hash, so
     # local wins and gets pushed - this is what makes the merge decision
     # survive a git checkout or file copy that only touches mtime, never content.
+    # The server also moved on, so its copy is saved before it is overwritten.
     monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
     monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
     skill_hub.write_custom_skill_file("edited-skill", "newly edited content")
     skill_hub_sync.pull_merge_custom_skills()  # must not raise regardless of outcome
     assert fake_server_with_newer_updated_at.pushed_content == "newly edited content"
+    assert (tmp_path / "edited-skill.md.server.bak").read_text(encoding="utf-8") == "edit made on another machine"
+
+
+def test_pull_merge_does_not_overwrite_a_server_copy_it_could_not_back_up(tmp_path, monkeypatch):
+    # If the account copy cannot be fetched, the local-wins push is skipped
+    # for this skill rather than destroying what we could not save.
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
+    state = {"edited-skill": {"synced_at": "2026-01-01T00:00:00+00:00", "content_hash": skill_hub_sync._content_hash("old")}}
+    (tmp_path / ".sync_state.json").write_text(json.dumps(state), encoding="utf-8")
+    skill_hub.write_custom_skill_file("edited-skill", "local edit")
+    puts = []
+
+    def _get(url, **kwargs):
+        if url.endswith("/v1/custom-skills"):
+            return _resp("GET", url, skills=[{"name": "edited-skill", "updated_at": "2026-06-01T00:00:00+00:00"}])
+        return _resp("GET", url, status=500, detail="boom")
+
+    monkeypatch.setattr(skill_hub_sync.httpx, "get", _get)
+    monkeypatch.setattr(skill_hub_sync.httpx, "put", lambda *a, **k: puts.append(a))
+    skill_hub_sync.pull_merge_custom_skills()
+    assert puts == []
 
 
 def test_pull_merge_server_changed_since_last_sync_pulls_and_backs_up(
@@ -553,3 +584,84 @@ def test_record_and_clear_pending_delete_round_trip(tmp_path, monkeypatch):
     skill_hub_sync._clear_pending_delete("a-skill")
     assert "a-skill" not in skill_hub_sync._load_pending_deletes()
     skill_hub_sync._clear_pending_delete("never-there")  # must not raise
+
+
+# --- deletes made on another machine, and per-skill failure isolation --------
+
+
+def _server_listing(monkeypatch, skills, contents=None, puts=None, fail_fetch=()):
+    contents = contents or {}
+
+    def _get(url, **kwargs):
+        if url.endswith("/v1/custom-skills"):
+            return _resp("GET", url, skills=skills)
+        name = url.rsplit("/", 1)[-1]
+        if name in fail_fetch:
+            raise httpx.ConnectError("flaky")
+        return _resp("GET", url, name=name, content=contents[name], updated_at="2026-06-01T00:00:00+00:00")
+
+    def _put(url, **kwargs):
+        name = url.rsplit("/", 1)[-1]
+        if puts is not None:
+            puts[name] = kwargs.get("json", {}).get("content")
+        return _resp("PUT", url, name=name, content="x", updated_at="2026-06-02T00:00:00+00:00")
+
+    monkeypatch.setattr(skill_hub_sync.httpx, "get", _get)
+    monkeypatch.setattr(skill_hub_sync.httpx, "put", _put)
+    monkeypatch.setattr(skill_hub_sync.httpx, "delete", lambda *a, **k: _resp("DELETE", a[0], status=204))
+
+
+def test_pull_merge_mirrors_a_delete_made_on_another_machine(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
+    skill_hub.write_custom_skill_file("gone-elsewhere", "same content")
+    state = {"gone-elsewhere": {"synced_at": "2026-01-01T00:00:00+00:00", "content_hash": skill_hub_sync._content_hash("same content")}}
+    (tmp_path / ".sync_state.json").write_text(json.dumps(state), encoding="utf-8")
+    puts = {}
+    _server_listing(monkeypatch, skills=[], puts=puts)
+
+    skill_hub_sync.pull_merge_custom_skills()
+
+    # Not re-uploaded: the other machine's delete wins, with a local backup kept.
+    assert puts == {}
+    assert skill_hub.read_custom_skill_file("gone-elsewhere") is None
+    assert (tmp_path / "gone-elsewhere.md.deleted.bak").read_text(encoding="utf-8") == "same content"
+    assert "gone-elsewhere" not in json.loads((tmp_path / ".sync_state.json").read_text(encoding="utf-8"))
+
+
+def test_pull_merge_keeps_a_local_edit_made_after_a_remote_delete(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
+    skill_hub.write_custom_skill_file("edited-after-delete", "edited here since the last sync")
+    state = {"edited-after-delete": {"synced_at": "2026-01-01T00:00:00+00:00", "content_hash": skill_hub_sync._content_hash("older")}}
+    (tmp_path / ".sync_state.json").write_text(json.dumps(state), encoding="utf-8")
+    puts = {}
+    _server_listing(monkeypatch, skills=[], puts=puts)
+
+    skill_hub_sync.pull_merge_custom_skills()
+
+    assert puts == {"edited-after-delete": "edited here since the last sync"}
+    assert skill_hub.read_custom_skill_file("edited-after-delete") == "edited here since the last sync"
+
+
+def test_pull_merge_one_failing_skill_does_not_abort_the_rest(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
+    skill_hub.write_custom_skill_file("offline-added", "added while offline")
+    puts = {}
+    _server_listing(
+        monkeypatch,
+        skills=[
+            {"name": "flaky-one", "updated_at": "2026-06-01T00:00:00+00:00"},
+            {"name": "fine-two", "updated_at": "2026-06-01T00:00:00+00:00"},
+        ],
+        contents={"fine-two": "good content"},
+        puts=puts,
+        fail_fetch=("flaky-one",),
+    )
+
+    skill_hub_sync.pull_merge_custom_skills()
+
+    assert skill_hub.read_custom_skill_file("flaky-one") is None
+    assert skill_hub.read_custom_skill_file("fine-two") == "good content"
+    assert puts == {"offline-added": "added while offline"}

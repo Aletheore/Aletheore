@@ -234,6 +234,116 @@ def _push_and_record(name: str, content: str, headers: dict, timeout: float, syn
     _save_sync_state(sync_state)
 
 
+def _backup_server_copy(name: str, local_content: str, headers: dict, timeout: float) -> None:
+    """Save the server's current copy of `name` next to the local file before
+    a local-wins push overwrites it, so a push never silently destroys an edit
+    made on another machine. Raises if the server copy cannot be fetched, which
+    stops the push: better to skip one skill this run than overwrite what we
+    could not back up. Nothing is written when the two copies already match."""
+    server_content = _fetch_skill_content(name, headers, timeout)
+    if server_content == local_content:
+        return
+    backup_path = skill_hub.custom_skills_dir() / f"{name}.md.server.bak"
+    backup_path.write_text(server_content, encoding="utf-8")
+    logger.warning(
+        "custom skill '%s' was also changed on your account (another machine); "
+        "your local version is being pushed over it - the account copy was saved to %s.md.server.bak",
+        name,
+        name,
+    )
+
+
+def _drop_locally_deleted_elsewhere(name: str, local_content: str, sync_state: dict) -> None:
+    """The server no longer lists `name`, this machine last synced it, and the
+    local copy is unchanged since: it was deleted from another machine. Mirror
+    that delete here (keeping a .md.bak) instead of re-uploading it."""
+    backup_path = skill_hub.custom_skills_dir() / f"{name}.md.deleted.bak"
+    backup_path.write_text(local_content, encoding="utf-8")
+    skill_hub.custom_skills_dir().joinpath(f"{name}.md").unlink(missing_ok=True)
+    sync_state.pop(name, None)
+    _save_sync_state(sync_state)
+    logger.warning(
+        "custom skill '%s' was deleted from your account on another machine - "
+        "removed it here too (copy kept at %s.md.deleted.bak)",
+        name,
+        name,
+    )
+
+
+def _merge_one_server_skill(
+    name: str, entry: dict, still_pending: set, sync_state: dict, headers: dict, timeout: float
+) -> None:
+    """Merge one skill the server lists. See the branch comments below."""
+    server_updated_at = entry.get("updated_at")
+    local_content = skill_hub.read_custom_skill_file(name)
+    state_entry = sync_state.get(name)
+
+    if local_content is None:
+        if name in still_pending:
+            # This machine deleted it locally and the delete still
+            # hasn't reached the server (the flush above just
+            # retried and failed again) - the server's list still
+            # contains it, but pulling it back down now would
+            # silently undo the user's own `remove`. Skip branch 1
+            # for this name for the rest of this run.
+            return
+        # Branch 1: local content missing entirely - pull.
+        content = _fetch_skill_content(name, headers, timeout)
+        skill_hub.write_custom_skill_file(name, content)
+        sync_state[name] = {
+            "synced_at": server_updated_at,
+            "content_hash": _content_hash(content),
+        }
+        _save_sync_state(sync_state)
+        return
+
+    if state_entry is None:
+        # Branch 2: present locally but never synced from this
+        # machine before - local predates any sync relationship,
+        # so it wins (after saving the account copy if it differs).
+        _backup_server_copy(name, local_content, headers, timeout)
+        _push_and_record(name, local_content, headers, timeout, sync_state)
+        return
+
+    if _content_hash(local_content) != state_entry.get("content_hash"):
+        # Branch 3: local was edited since the last sync (by `add`,
+        # by hand, whatever) - the content-hash check, not a
+        # timestamp comparison, is what decides this: local wins
+        # and gets pushed regardless of what the server's
+        # updated_at says. If the server also moved on, save its copy
+        # first so the push never silently destroys another machine's edit.
+        if _is_newer(server_updated_at, state_entry.get("synced_at")):
+            _backup_server_copy(name, local_content, headers, timeout)
+        _push_and_record(name, local_content, headers, timeout, sync_state)
+        return
+
+    if _is_newer(server_updated_at, state_entry.get("synced_at")):
+        # Branch 4: the server changed since we last synced and we
+        # haven't touched our copy - pull. This is the one branch
+        # that overwrites existing local content with something
+        # that arrived over the network, so harden it: back up the
+        # current content first and log a visible notice.
+        backup_path = skill_hub.custom_skills_dir() / f"{name}.md.bak"
+        backup_path.write_text(local_content, encoding="utf-8")
+        logger.warning(
+            "custom skill '%s' was updated from your account (synced from "
+            "another machine) - previous local content saved to %s.md.bak",
+            name,
+            name,
+        )
+        content = _fetch_skill_content(name, headers, timeout)
+        skill_hub.write_custom_skill_file(name, content)
+        sync_state[name] = {
+            "synced_at": server_updated_at,
+            "content_hash": _content_hash(content),
+        }
+        _save_sync_state(sync_state)
+        return
+
+    # Branch 5: hash matches and the server isn't newer - already
+    # in sync, no-op.
+
+
 def pull_merge_custom_skills(timeout: float = 10.0) -> None:
     """Run once at login. Requires a saved personal token - returns
     immediately (no network call) without one, since login's caller only
@@ -270,80 +380,32 @@ def pull_merge_custom_skills(timeout: float = 10.0) -> None:
                 logger.warning("skill hub sync: ignoring unsafe skill name from server: %r", name)
                 continue
             seen_names.add(name)
-            server_updated_at = entry.get("updated_at")
-            local_content = skill_hub.read_custom_skill_file(name)
-            state_entry = sync_state.get(name)
-
-            if local_content is None:
-                if name in still_pending:
-                    # This machine deleted it locally and the delete still
-                    # hasn't reached the server (the flush above just
-                    # retried and failed again) - the server's list still
-                    # contains it, but pulling it back down now would
-                    # silently undo the user's own `remove`. Skip branch 1
-                    # for this name for the rest of this run.
-                    continue
-                # Branch 1: local content missing entirely - pull.
-                content = _fetch_skill_content(name, headers, timeout)
-                skill_hub.write_custom_skill_file(name, content)
-                sync_state[name] = {
-                    "synced_at": server_updated_at,
-                    "content_hash": _content_hash(content),
-                }
-                _save_sync_state(sync_state)
-                continue
-
-            if state_entry is None:
-                # Branch 2: present locally but never synced from this
-                # machine before - local predates any sync relationship,
-                # so it wins.
-                _push_and_record(name, local_content, headers, timeout, sync_state)
-                continue
-
-            if _content_hash(local_content) != state_entry.get("content_hash"):
-                # Branch 3: local was edited since the last sync (by `add`,
-                # by hand, whatever) - the content-hash check, not a
-                # timestamp comparison, is what decides this: local wins
-                # and gets pushed regardless of what the server's
-                # updated_at says.
-                _push_and_record(name, local_content, headers, timeout, sync_state)
-                continue
-
-            if _is_newer(server_updated_at, state_entry.get("synced_at")):
-                # Branch 4: the server changed since we last synced and we
-                # haven't touched our copy - pull. This is the one branch
-                # that overwrites existing local content with something
-                # that arrived over the network, so harden it: back up the
-                # current content first and log a visible notice.
-                backup_path = skill_hub.custom_skills_dir() / f"{name}.md.bak"
-                backup_path.write_text(local_content, encoding="utf-8")
-                logger.warning(
-                    "custom skill '%s' was updated from your account (synced from "
-                    "another machine) - previous local content saved to %s.md.bak",
-                    name,
-                    name,
-                )
-                content = _fetch_skill_content(name, headers, timeout)
-                skill_hub.write_custom_skill_file(name, content)
-                sync_state[name] = {
-                    "synced_at": server_updated_at,
-                    "content_hash": _content_hash(content),
-                }
-                _save_sync_state(sync_state)
-                continue
-
-            # Branch 5: hash matches and the server isn't newer - already
-            # in sync, no-op.
-
+            try:
+                _merge_one_server_skill(name, entry, still_pending, sync_state, headers, timeout)
+            except Exception:
+                # One skill failing (a bad fetch, a disk error) must not skip
+                # the rest of the merge or the offline-push loop below.
+                logger.warning("skill hub sync: could not merge custom skill '%s'", name, exc_info=True)
         # Any local custom skill the server's list didn't contain at all -
         # added locally while fully offline, never pushed. Same
         # push-and-record-state logic as the "never synced" branch above.
         for name in skill_hub.list_custom_skill_names():
             if name in seen_names:
                 continue
-            local_content = skill_hub.read_custom_skill_file(name)
-            if local_content is None:
-                continue
-            _push_and_record(name, local_content, headers, timeout, sync_state)
+            try:
+                local_content = skill_hub.read_custom_skill_file(name)
+                if local_content is None:
+                    continue
+                state_entry = sync_state.get(name)
+                if state_entry is not None and _content_hash(local_content) == state_entry.get("content_hash"):
+                    # Synced here before, unchanged since, and the server no
+                    # longer lists it: it was deleted from another machine.
+                    # Mirror the delete rather than re-uploading it.
+                    _drop_locally_deleted_elsewhere(name, local_content, sync_state)
+                    continue
+                # Never synced, or edited here after the remote delete: push.
+                _push_and_record(name, local_content, headers, timeout, sync_state)
+            except Exception:
+                logger.warning("skill hub sync: could not merge custom skill '%s'", name, exc_info=True)
     except Exception:
         logger.warning("skill hub pull-merge failed", exc_info=True)

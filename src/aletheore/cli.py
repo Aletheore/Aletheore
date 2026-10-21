@@ -16,25 +16,6 @@ from pathlib import Path
 from typing import Optional
 
 
-def _fast_hallbook_suggest(argv: list[str]) -> int | None:
-    """Run `hallbook suggest` without importing the rest of the CLI.
-
-    This command runs on every user prompt, so its budget is Python start plus a few
-    milliseconds of search. Importing the full CLI (uvicorn, evidence, the scanners)
-    alone costs about a second; handling the one hook command here keeps it cheap.
-    Returns None when this is not that command, otherwise the exit code.
-    """
-    if len(argv) < 2 or argv[0] != "hallbook" or argv[1] != "suggest":
-        return None
-    from aletheore.hallbook_hook import main
-
-    return main(argv[2:])
-
-
-_fast_suggest_exit = _fast_hallbook_suggest(sys.argv[1:])
-if _fast_suggest_exit is not None:
-    raise SystemExit(_fast_suggest_exit)
-
 import click
 import tomli_w
 import typer
@@ -2774,13 +2755,24 @@ def logout(
         try:
             revoke_personal_token(personal_token, all_devices=all_devices)
         except Exception as exc:  # noqa: BLE001 - best-effort by design
-            # An offline logout must still log the user out locally;
+            if all_devices:
+                # The user asked to revoke every token. Removing the only
+                # local token now would leave nothing to authenticate a retry
+                # with, and the other tokens would stay valid. Keep it.
+                console.print(
+                    "[bold red]error:[/bold red] couldn't revoke your personal tokens on the "
+                    f"server ({type(exc).__name__}). You are still logged in on this machine; "
+                    "retry `aletheore logout --all-devices` when you are online."
+                )
+                raise typer.Exit(code=1) from exc
+            # A plain offline logout must still log the user out locally;
             # the server-side revoke failing is a warning, not a blocker.
             console.print(
                 "[bold yellow]warning:[/bold yellow] couldn't revoke the personal "
                 f"token on the server ({type(exc).__name__}) - it was removed from "
-                "this machine, but may still work elsewhere until it expires or "
-                "is revoked."
+                "this machine, but it has no expiry and stays valid on the server "
+                "until it is revoked. To revoke it, log in again and run "
+                "`aletheore logout --all-devices`."
             )
     elif all_devices:
         # --all-devices needs a personal token to authenticate the revoke-all

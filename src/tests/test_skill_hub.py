@@ -728,3 +728,13 @@ def test_search_results_have_no_duplicate_ids_after_collapsing():
     for query in ("debug a failing test", "write a commit message", "security review of my code", "plan the work"):
         ids = [meta.skill_id for meta in skill_hub.search_skills(query, limit=10)]
         assert len(ids) == len(set(ids))
+
+
+def test_remove_custom_skill_keeps_a_backup_copy(tmp_path, monkeypatch):
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "delete_custom_skill_best_effort", lambda name, **kw: None)
+    skill_hub.add_custom_skill("my-review", "precious content")
+    skill_hub.remove_custom_skill("my-review")
+    assert (tmp_path / "my-review.md.deleted.bak").read_text(encoding="utf-8") == "precious content"
