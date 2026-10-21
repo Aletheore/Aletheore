@@ -53,9 +53,9 @@ Record each result in the table at the bottom.
 | 4 | B | `aletheore login` (same GitHub account) | The demo skill appears: `aletheore hallbook list` on B shows `custom/demo-skill`. |
 | 5 | B | `aletheore hallbook remove demo-skill` | Removed locally; a `demo-skill.md.deleted-<time>.bak` is kept next to it. |
 | 6 | A | `aletheore login` again | A's token is replaced (same label); the skill is now gone from A too, with a `.deleted-<time>.bak` copy; Terminal 1 has a "deleted from your account on another machine" log line on A's side. |
-| 7 | A | Add `keep-skill`, then `aletheore logout --all-devices` | Exit 0, "Logged out". |
-| 8 | B | `aletheore hallbook add b-skill /tmp/demo.md` | Succeeds locally; the push fails quietly (token revoked); a later `aletheore login` re-authenticates and uploads it. |
-| 9 | B | While logged out (`aletheore logout`), `aletheore hallbook remove b-skill`, then `aletheore login` | b-skill is NOT pulled back from the account. |
+| 7 | A | Add `keep-skill` (`aletheore hallbook add keep-skill /tmp/keep.md`), then `aletheore logout --all-devices` | Exit 0, "Logged out". This revokes every token for the account, including B's. |
+| 8 | B | `aletheore hallbook add b-skill /tmp/demo.md`, then `aletheore login` | `add` succeeds locally and prints "push ... failed: ... run `aletheore login`" (B's token was revoked). After login, both `custom/keep-skill` (pulled) and `custom/b-skill` (uploaded) are listed. |
+| 9 | B | `aletheore logout`, `aletheore hallbook remove keep-skill`, `aletheore login` | `keep-skill` does NOT come back; the database lists only `b-skill`. |
 | 10 | A | `aletheore logout --all-devices` when already logged out | "Not logged in to Hallbook - nothing to revoke." and says any managed-audit login was left alone. |
 | 11 | A | (optional, needs a second GitHub account) log in as the other account | A's custom skills move to `~/.config/aletheore/custom_skills-other-account-<time>.bak/`; none are uploaded to the other account. |
 | 12 | A | Check nothing reached production: the yellow banner showed on every login, and `aletheore status` shows your normal state in your real HOME (open a fresh terminal) | No change to your real credentials. |
