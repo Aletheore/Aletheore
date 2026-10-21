@@ -28,11 +28,14 @@ describe("hallbook launch switch", () => {
     expect(internalPaths).toContain("/hallbook");
   });
 
-  it("the sitemap and llms.txt do not list the page before launch", async () => {
+  it("the sitemap and llms.txt list the page exactly when it has launched", async () => {
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
+    const { HALLBOOK_LAUNCHED } = await import("@/data/launch");
     for (const f of ["public/sitemap.xml", "public/llms.txt"]) {
-      expect(readFileSync(join(__dirname, "..", f), "utf8")).not.toMatch(/hallbook/i);
+      const text = readFileSync(join(__dirname, "..", f), "utf8");
+      if (HALLBOOK_LAUNCHED) expect(text).toMatch(/hallbook/i);
+      else expect(text).not.toMatch(/hallbook/i);
     }
   });
 

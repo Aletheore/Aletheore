@@ -30,7 +30,8 @@ describe("hallbook search without a live API", () => {
   });
 
   it("next.config only turns the flag on when HALLBOOK_API is set", () => {
-    expect(process.env.HALLBOOK_API).toBeUndefined();
-    expect((nextConfig.env as Record<string, string>).NEXT_PUBLIC_HALLBOOK_LIVE).toBe("");
+    // Holds whatever the developer's environment is: the flag mirrors the variable.
+    const expected = process.env.HALLBOOK_API ? "1" : "";
+    expect((nextConfig.env as Record<string, string>).NEXT_PUBLIC_HALLBOOK_LIVE).toBe(expected);
   });
 });

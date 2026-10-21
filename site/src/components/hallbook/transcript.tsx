@@ -6,7 +6,8 @@ const Q = "plan a zero downtime database migration";
 
 /** A recorded call: the answer is the real one from the catalogue (data/hallbook.json), typed out when scrolled into view. */
 export function Transcript() {
-  const d = hallbook.examples[Q];
+  // A missing recording (a regenerated snapshot without this query) renders as a no-answer rather than crashing the page.
+  const d = hallbook.examples[Q] ?? { confidence: "none" as const };
   const lines: { who?: "you" | "agent"; text: string; typed?: boolean }[] = [
     { who: "you", text: `Use the Aletheore skills available to you. ${Q}.`, typed: true },
     { who: "agent", text: `aletheore_find_skill("${Q}")`, typed: true },

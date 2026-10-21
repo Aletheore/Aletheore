@@ -16,6 +16,6 @@ EXAMPLES = ["plan a zero downtime database migration", "create a stripe webhook 
             "design a REST API for invoices", "fix the thing"]
 out = {"stats": hc.stats(), "skill": hc.skill_head("debugging/systematic-debugging"), "examples": {q: hc.find(q) for q in EXAMPLES}}
 path = os.path.join(os.path.dirname(__file__), "..", "src", "data", "hallbook.json")
-with open(path, "w") as fh:
+with open(path, "w", encoding="utf-8") as fh:
     json.dump(out, fh, indent=1)
 print("wrote src/data/hallbook.json:", out["stats"]["total"], "skills,", len(EXAMPLES), "examples")
