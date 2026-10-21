@@ -19,6 +19,7 @@ from typing import Optional
 import click
 import tomli_w
 import typer
+import typer.rich_utils as _typer_rich_utils
 import uvicorn
 from rich.console import Console, Group
 from rich.panel import Panel
@@ -142,13 +143,17 @@ KNOWN_ADAPTERS = [
 
 MANUAL_DIR = str(Path(__file__).resolve().parent / "manual")
 
-console = Console()
+_typer_rich_utils.COLOR_SYSTEM = None  # monochrome --help as well
+for _name in ("STYLE_OPTION", "STYLE_SWITCH", "STYLE_NEGATIVE_OPTION", "STYLE_NEGATIVE_SWITCH", "STYLE_METAVAR", "STYLE_USAGE", "STYLE_COMMANDS_TABLE_FIRST_COLUMN"):
+    if hasattr(_typer_rich_utils, _name):
+        setattr(_typer_rich_utils, _name, "bold")
+console = Console(color_system=None)  # black and white: bold, dim and reverse only, on any terminal theme
 # Crash-reporting notices only (main()'s first-run notice and "this was
 # reported" line) - never for command output. Final-review finding:
 # `aletheore mcp` uses stdout as a JSON-RPC protocol channel (see its own
 # comment below), and `diff`/`--format sarif` output is routinely
 # redirected or piped - an unrelated line on stdout would corrupt either.
-_stderr_console = Console(stderr=True)
+_stderr_console = Console(stderr=True, color_system=None)
 
 # Grouped rather than flat because this list is the CLI's only map of what
 # `query` can actually do - every kind printed as one comma-separated run is
@@ -225,6 +230,47 @@ def _checked_dir(path: str) -> str:
         console.print(f"[bold red]error:[/bold red] path is not a directory: {p}")
         raise typer.Exit(code=1)
     return path
+
+
+_YES_OPTION = typer.Option(
+    False,
+    "--yes",
+    "-y",
+    help="don't ask before using a folder that doesn't look like a project (your home folder, Desktop, ...)",
+)
+
+
+def _workspace_guard(path: str, yes: bool) -> None:
+    """Stop and ask before a scan (or a config write) lands in a folder that is clearly not a project.
+
+    Running `aletheore` from your Desktop or home folder would read everything in it. Flagged only for the file
+    system root, your home folder and its standard personal folders, and only when no project files are present, so
+    real repositories (even ones under Documents) are never questioned. In a terminal it asks; without one it
+    refuses with a message, unless --yes or ALETHEORE_ASSUME_YES=1 is given.
+    """
+    from aletheore import ui
+
+    reason = ui.broad_directory_reason(path)
+    if reason is None or yes or os.environ.get("ALETHEORE_ASSUME_YES"):
+        return
+    resolved = Path(path).expanduser().resolve()
+    _stderr_console.print(
+        f"[bold]{resolved}[/bold] is {reason}, not a project: no .git, package.json, pyproject.toml or other "
+        "project files were found there. Using it would read everything inside."
+    )
+    hint = "Pass the project's path instead, for example `aletheore scan ~/code/my-project`."
+    if ui.is_interactive():
+        try:
+            answer = input("Use this folder anyway? [y/N] ").strip().lower()
+        except EOFError:
+            answer = ""
+        if answer in ("y", "yes"):
+            return
+        _stderr_console.print(f"Cancelled. {hint}")
+        raise typer.Exit(code=1)
+    _stderr_console.print(f"{hint} Or add --yes to use this folder anyway.")
+    raise typer.Exit(code=2)
+
 
 
 def _confirm(prompt: str) -> bool:
@@ -369,14 +415,14 @@ def _banner_panel() -> Panel:
     # left edge - Rich only hanging-indents wrapped text inside a cell, not
     # inside a flat Text blob built from literal "\n"s.
     commands = Table.grid(padding=(0, 2, 0, 0))
-    commands.add_column(style="bold green", no_wrap=True)
+    commands.add_column(style="bold", no_wrap=True)
     commands.add_column()
     for name, desc in _COMMAND_SUMMARIES:
         commands.add_row(f"  {name}", desc)
 
     footer = Text()
     footer.append("Run ")
-    footer.append("aletheore <command> --help", style="bold cyan")
+    footer.append("aletheore <command> --help", style="bold")
     footer.append(" for details on any command.\n")
     footer.append("https://github.com/Aletheore/Aletheore", style="dim underline")
     footer.append("\nIssues or suggestions? ")
@@ -384,9 +430,8 @@ def _banner_panel() -> Panel:
 
     return Panel(
         Group(intro, commands, Text(""), footer),
-        title="[bold cyan]ALETHEORE[/bold cyan]",
+        title="[bold]ALETHEORE[/bold]",
         title_align="left",
-        border_style="cyan",
         width=78,
     )
 
@@ -1781,6 +1826,125 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit(code=0)
 
 
+def _run_cli(args: list[str]) -> int:
+    """Run one of this CLI's own commands from the menu, exactly as if it had been typed."""
+    from typer.main import get_command
+
+    try:
+        get_command(app).main(args=args, prog_name="aletheore", standalone_mode=False)
+        return 0
+    except click.exceptions.Exit as exc:
+        return exc.exit_code
+    except click.ClickException as exc:
+        exc.show()
+        return exc.exit_code
+    except click.Abort:
+        console.print("Cancelled.")
+        return 1
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else 1
+
+
+def _menu_header() -> Text:
+    from aletheore import ui
+
+    header = Text()
+    # The block-letter wordmark needs about 28 rows with the menu; on a short window (or a narrow one) show the
+    # plain name instead, so the menu is never cropped by the terminal.
+    art = ui.wordmark_lines(console.width) if console.height >= 28 else ["ALETHEORE"]
+    for line in art:
+        header.append(line + "\n", style="bold")
+    header.append("\n" + ui.TAGLINE + "\n", style="dim")
+    version = _installed_version()
+    folder = Path.cwd()
+    shown = str(folder)
+    home = str(Path.home())
+    if shown == home:
+        shown = "~"
+    elif shown.startswith(home + os.sep):
+        shown = "~" + shown[len(home):]
+    header.append(f"\nversion {version}   folder {shown}", style="dim")
+    reason = ui.broad_directory_reason(folder)
+    if reason:
+        header.append(f"   ({reason}, not a project)", style="bold")
+    return header
+
+
+def _pause() -> None:
+    console.print("\n[dim]Press any key to return to the menu[/dim]")
+    try:
+        click.getchar()
+    except (KeyboardInterrupt, EOFError):
+        pass
+
+
+_MAIN_MENU = [
+    ("scan", "Scan this folder", "build the evidence, no LLM call"),
+    ("query", "Explore the evidence", "see what you can ask about the code"),
+    ("audit", "Audit with an agent", "scan, then a grounded written report"),
+    ("skills", "Find a Hallbook skill", "curated skills your agent can use"),
+    ("connect", "Connect your coding agent", "Claude Code, Codex, Cursor, Antigravity, ..."),
+    ("dashboard", "Open the dashboard", "a live local view"),
+    ("account", "Account", "sign in, sign out, status"),
+    ("commands", "All commands", "the full list"),
+    ("quit", "Quit", ""),
+]
+
+
+def _run_menu(read_key=None, pause=None) -> None:
+    """The arrow-key home screen shown by a bare `aletheore` in a terminal."""
+    from aletheore import ui
+
+    kwargs = {"read_key": read_key} if read_key is not None else {}
+    pause = _pause if pause is None else pause
+    items = [ui.MenuItem(*row) for row in _MAIN_MENU]
+    start = 0
+    while True:
+        picked = ui.choose(items, console, header=_menu_header(), start=start, **kwargs)
+        if picked is None or picked.key == "quit":
+            return
+        start = [i.key for i in items].index(picked.key)
+        if picked.key == "scan":
+            _run_cli(["scan", "."])
+        elif picked.key == "query":
+            _run_cli(["query"])
+        elif picked.key == "audit":
+            _run_cli(["audit", "."])
+        elif picked.key == "skills":
+            try:
+                wanted = typer.prompt("What are you about to do? (for example: flaky test)", default="", show_default=False)
+            except (click.Abort, EOFError):
+                wanted = ""
+            if wanted.strip():
+                _run_cli(["hallbook", "search", wanted.strip()])
+            else:
+                continue
+        elif picked.key == "connect":
+            targets = [*_MCP_CLIENT_CONFIGS.keys(), "codex-cli", "claude-desktop"]
+            sub = [ui.MenuItem("all", "All of them", "write config for every agent above")]
+            sub += [ui.MenuItem(name, name) for name in targets]
+            sub.append(ui.MenuItem("back", "Back"))
+            choice = ui.choose(sub, console, header=Text("Connect which coding agent to this folder?", style="bold"), **kwargs)
+            if choice is None or choice.key == "back":
+                continue
+            _run_cli(["mcp-install", "."] if choice.key == "all" else ["mcp-install", ".", "--target", choice.key])
+        elif picked.key == "dashboard":
+            _run_cli(["dashboard", "."])
+        elif picked.key == "account":
+            sub = [ui.MenuItem("status", "Status", "version and sign-in state"),
+                   ui.MenuItem("login", "Sign in", "with your GitHub account"),
+                   ui.MenuItem("logout", "Sign out", ""),
+                   ui.MenuItem("back", "Back")]
+            choice = ui.choose(sub, console, header=Text("Account", style="bold"), **kwargs)
+            if choice is None or choice.key == "back":
+                continue
+            _run_cli([choice.key])
+        elif picked.key == "commands":
+            console.print(_banner_panel())
+        pause()
+
+
+
 @app.callback(invoke_without_command=True)
 def _main_callback(
     ctx: typer.Context,
@@ -1793,6 +1957,12 @@ def _main_callback(
     ),
 ) -> None:
     if ctx.invoked_subcommand is None:
+        from aletheore import ui
+
+        if ui.is_interactive():
+            _print_update_notice_if_available()
+            _run_menu()
+            raise typer.Exit(code=0)
         console.print(_banner_panel())
         _print_update_notice_if_available()
         raise typer.Exit(code=0)
@@ -1802,6 +1972,7 @@ def _main_callback(
 def audit(
     path: str = typer.Argument(".", help="repository path"),
     path_option: Optional[str] = _PATH_OPTION,
+    yes: bool = _YES_OPTION,
     agent: Optional[str] = typer.Option(
         None, "--agent", help="force a specific agent adapter by name (ignored with --managed)"
     ),
@@ -1867,6 +2038,7 @@ def audit(
 ) -> None:
     path = _resolve_path(path, path_option)
     _checked_dir(path)
+    _workspace_guard(path, yes)
     if managed:
         if agent is not None:
             console.print(
@@ -1904,6 +2076,7 @@ def audit(
 def scan(
     path: str = typer.Argument(".", help="repository path"),
     path_option: Optional[str] = _PATH_OPTION,
+    yes: bool = _YES_OPTION,
     check_vulnerabilities: Optional[bool] = typer.Option(
         None,
         "--check-vulnerabilities/--no-check-vulnerabilities",
@@ -1956,6 +2129,7 @@ def scan(
 ) -> None:
     path = _resolve_path(path, path_option)
     _checked_dir(path)
+    _workspace_guard(path, yes)
     exit_code, _evidence, _evidence_path = _scan(
         path, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints, map_schema,
         check_static_analysis, check_bearer, check_joern,
@@ -1971,6 +2145,7 @@ def scan(
 def watch(
     path: str = typer.Argument(".", help="repository path"),
     path_option: Optional[str] = _PATH_OPTION,
+    yes: bool = _YES_OPTION,
     debounce: float = typer.Option(
         WATCH_DEBOUNCE_SECONDS,
         "--debounce",
@@ -1980,6 +2155,7 @@ def watch(
 ) -> None:
     path = _resolve_path(path, path_option)
     _checked_dir(path)
+    _workspace_guard(path, yes)
     raise typer.Exit(code=_watch(path, debounce))
 
 
@@ -1987,9 +2163,11 @@ def watch(
 def init(
     path: str = typer.Argument(".", help="repository path"),
     path_option: Optional[str] = _PATH_OPTION,
+    yes: bool = _YES_OPTION,
 ) -> None:
     path = _resolve_path(path, path_option)
     _checked_dir(path)
+    _workspace_guard(path, yes)
     config_path = Path(path) / ".aletheore.json"
     if config_path.exists():
         console.print(f"[bold red]error:[/bold red] {config_path} already exists - not overwriting it.")
@@ -2287,6 +2465,7 @@ def verify(
 def mcp(
     path: str = typer.Argument(".", help="repository path"),
     path_option: Optional[str] = _PATH_OPTION,
+    yes: bool = _YES_OPTION,
     agent: Optional[str] = typer.Option(None, "--agent", help="provider for the aletheore_answer tool"),
     no_watch: bool = typer.Option(
         False,
@@ -2310,6 +2489,7 @@ def mcp(
         raise typer.Exit(code=2)
     path = _resolve_path(path, path_option)
     _checked_dir(path)
+    _workspace_guard(path, yes)
     # Real audit finding (Flash Review): `--profile nav` silently disabled
     # watching with no indication - --no-watch's own help text describes
     # watching as the default, and nothing said choosing nav also turns it
@@ -2331,6 +2511,7 @@ def mcp(
 def mcp_install(
     path: str = typer.Argument(".", help="repository path"),
     path_option: Optional[str] = _PATH_OPTION,
+    yes: bool = _YES_OPTION,
     target: list[str] = typer.Option(
         [],
         "--target",
@@ -2342,6 +2523,7 @@ def mcp_install(
 ) -> None:
     path = _resolve_path(path, path_option)
     _checked_dir(path)
+    _workspace_guard(path, yes)
     raise typer.Exit(code=_mcp_install(path, target))
 
 
@@ -2349,10 +2531,12 @@ def mcp_install(
 def dashboard(
     path: str = typer.Argument(".", help="repository path"),
     path_option: Optional[str] = _PATH_OPTION,
+    yes: bool = _YES_OPTION,
     port: int = typer.Option(8420, "--port", help="port to serve the dashboard on"),
 ) -> None:
     path = _resolve_path(path, path_option)
     _checked_dir(path)
+    _workspace_guard(path, yes)
     raise typer.Exit(code=_dashboard(path, port))
 
 
