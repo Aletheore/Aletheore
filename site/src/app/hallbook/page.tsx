@@ -69,7 +69,7 @@ export default function HallbookPage() {
             </li>
           ))}
         </ol>
-        <p className="mt-5 max-w-[68ch] text-[13px] leading-[1.7] text-faint">Custom skills show up in search and in the one-call lookup next to the 1,124 vetted ones, with ids like custom/deploy-checklist. They are stored on your machine, and are only sent to your account if you sign in.</p>
+        <p className="mt-5 max-w-[68ch] text-[13px] leading-[1.7] text-faint">Custom skills show up in search and in the one-call lookup next to the {hallbook.stats.total.toLocaleString("en-US")} vetted ones, with ids like custom/deploy-checklist. They are stored on your machine, and are only sent to your account if you sign in.</p>
       </Section>
 
       <Section id="shelves" eyebrow="4" title="Six shelves" intro="Chosen for work that agents actually do. Counts are read from the catalogue.">
