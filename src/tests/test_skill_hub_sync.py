@@ -793,3 +793,12 @@ def test_the_hallbook_api_url_can_be_pointed_at_a_staging_server(monkeypatch):
     assert skill_hub_sync._api_base_url() == "https://app.aletheore.com"
     monkeypatch.setenv(skill_hub_sync.API_URL_ENV, "http://127.0.0.1:8010/")
     assert skill_hub_sync._api_base_url() == "http://127.0.0.1:8010"
+
+
+def test_push_401_tells_the_user_to_log_in_again(tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "revoked")
+    monkeypatch.setattr(skill_hub_sync.httpx, "put", lambda url, **k: _resp("PUT", url, status=401, detail="invalid or revoked token"))
+    with caplog.at_level("WARNING"):
+        skill_hub_sync.push_custom_skill_best_effort("b-skill", "content")
+    assert any("aletheore login" in r.message for r in caplog.records)

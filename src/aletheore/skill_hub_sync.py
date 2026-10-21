@@ -175,6 +175,13 @@ def push_custom_skill_best_effort(name: str, content: str, timeout: float = 5.0)
             timeout=timeout,
         )
         if response.status_code // 100 != 2:
+            if response.status_code == 401:
+                logger.warning(
+                    "push of custom skill '%s' failed: your Hallbook login is no longer valid (revoked or replaced). "
+                    "Saved locally; run `aletheore login` and it will sync.",
+                    name,
+                )
+                return
             logger.warning(
                 "push of custom skill '%s' failed: server returned %s",
                 name,
