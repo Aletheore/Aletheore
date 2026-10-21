@@ -1,13 +1,18 @@
 "use client";
 import { useEffect, useState } from "react";
+import { useReducedMotion } from "@/components/scenes/use-reduced-motion";
 
 /** The skill count rolls up digit by digit. Reduced motion lands on the number at once. */
 export function Odometer({ value }: { value: number }) {
-  const [ready, setReady] = useState(false);
+  const [started, setStarted] = useState(false);
+  const reduced = useReducedMotion();
+  const ready = started || reduced;
   useEffect(() => {
-    const id = requestAnimationFrame(() => requestAnimationFrame(() => setReady(true)));
-    return () => cancelAnimationFrame(id);
-  }, []);
+    if (reduced) return;
+    let inner = 0;
+    const outer = requestAnimationFrame(() => { inner = requestAnimationFrame(() => setStarted(true)); });
+    return () => { cancelAnimationFrame(outer); cancelAnimationFrame(inner); };
+  }, [reduced]);
   const chars = value.toLocaleString("en-US").split("");
   return (
     <span className="hb-odo" aria-label={value.toLocaleString("en-US")} role="img">

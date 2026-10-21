@@ -1,9 +1,16 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { exampleQueries, hallbook, receipts } from "@/data/hallbook";
+import { EXAMPLE_LABEL, exampleQueries, hallbook, receipts } from "@/data/hallbook";
 
 describe("hallbook data snapshot", () => {
+  it("has the shape the page reads: the skill head, and every labelled example", () => {
+    expect(typeof hallbook.skill.id).toBe("string");
+    expect(hallbook.skill.head.length).toBeGreaterThan(0);
+    for (const q of Object.keys(EXAMPLE_LABEL)) expect(hallbook.examples[q], q).toBeDefined();
+    expect(hallbook.examples["plan a zero downtime database migration"].top?.id).toBeTruthy();
+  });
+
   it("shelf counts add up to the total", () => {
     const sum = hallbook.stats.shelves.reduce((n, s) => n + s.count, 0);
     expect(sum).toBe(hallbook.stats.total);
@@ -28,6 +35,8 @@ describe("hallbook data snapshot", () => {
     const head = hallbook.skill.head;
     expect(head).toMatch(/^source_url:/m);
     expect(head).toMatch(/^license:/m);
+    expect(head).toMatch(/^aletheore:/m);
+    expect(head).toMatch(/^---\n[\s\S]*?\n---\n[\s\S]*?^#/m);
   });
 });
 
@@ -59,13 +68,15 @@ describe("hallbook receipts", () => {
 });
 
 describe("hallbook page copy", () => {
-  const read = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8");
+  const read = (rel: string) => readFileSync(fileURLToPath(new URL(`../${rel}`, import.meta.url)), "utf8");
 
   it("the page does not hardcode a measured figure; they come from the sourced receipts", () => {
     const page = read("src/app/hallbook/page.tsx");
-    // Percentages and the old hardcoded counts must live in src/data/hallbook.ts, next to their source.
-    expect(page).not.toMatch(/\b\d{1,3}(\.\d)?\s?%/);
-    expect(page).not.toMatch(/\b1,1\d\d\b/);
+    // Percentages and counts must live in src/data/hallbook.ts, next to their source. Styling values (className, style) are not figures.
+    const prose = page.replace(/(className|style)=("[^"]*"|\{[^}]*\})/g, "");
+    expect(prose).not.toMatch(/\b\d{1,3}(\.\d)?\s?%/);
+    expect(prose).not.toMatch(/\b1,1\d\d\b/);
+    expect(prose).not.toMatch(/\b\d+\s+(hits|held back|candidates|skills)\b/);
   });
 
   it("the catalogue snapshot only lists allowlisted licences", () => {

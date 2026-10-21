@@ -27,7 +27,7 @@ export function ConnectDiagram() {
         {/* LEFT: the usual way */}
         <text x="0" y="14" className="fill-faint" fontSize="12" letterSpacing="1.5">THE USUAL WAY</text>
         {AGENTS.map((a, i) => SKILLS.map((_, j) => (
-          <line key={`${i}-${j}`} x1="130" y1={ay(i)} x2="330" y2={sy(j) + 12} className="hb-line hb-line--tangle" style={{ transitionDelay: `${(i * 6 + j) * 28}ms` }} />
+          <line key={`${i}-${j}`} x1="130" y1={ay(i)} x2="330" y2={sy(j) + 12} pathLength="1" className="hb-line hb-line--tangle" style={{ transitionDelay: `${(i * 6 + j) * 28}ms` }} />
         )))}
         {AGENTS.map((a, i) => (
           <g key={a}><rect x="0" y={ay(i) - 18} width="130" height="36" rx="4" className="fill-raised stroke-line-strong" strokeWidth="1.2" />
@@ -42,7 +42,7 @@ export function ConnectDiagram() {
         {/* RIGHT: with Hallbook */}
         <text x="540" y="14" className="fill-stamp" fontSize="12" letterSpacing="1.5">WITH HALLBOOK</text>
         {AGENTS.map((a, i) => (
-          <line key={`h${i}`} x1="670" y1={ay(i)} x2="770" y2="165" className="hb-line hb-line--hub" style={{ transitionDelay: `${i * 140 + 300}ms` }} />
+          <line key={`h${i}`} x1="670" y1={ay(i)} x2="770" y2="165" pathLength="1" className="hb-line hb-line--hub" style={{ transitionDelay: `${i * 140 + 300}ms` }} />
         ))}
         {AGENTS.map((a, i) => (
           <g key={`ha${i}`}><rect x="540" y={ay(i) - 18} width="130" height="36" rx="4" className="fill-raised stroke-line-strong" strokeWidth="1.2" />

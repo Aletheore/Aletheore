@@ -8,6 +8,7 @@ Without it the page falls back to its recorded examples. Never deployed: the sit
 import json
 import os
 import sys
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -20,16 +21,21 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         url = urlparse(self.path)
         q = parse_qs(url.query).get("q", [""])[0]
-        if url.path == "/api/find":
-            body = hc.find(q)
-        elif url.path == "/api/search":
-            body = [hc.card(m.skill_id, s) for m, s in sh.search_skills_scored(q, limit=8) if m.skill_id in hc.CAT]
-        else:
-            self.send_response(404)
-            self.end_headers()
-            return
+        status = 200
+        try:
+            if url.path == "/api/find":
+                body = hc.find(q)
+            elif url.path == "/api/search":
+                body = [hc.card(m.skill_id, s) for m, s in sh.search_skills_scored(q, limit=8) if m.skill_id in hc.CAT]
+            else:
+                self.send_response(404)
+                self.end_headers()
+                return
+        except Exception as e:  # a broken ranking should show up in the page as a failure, not a dropped connection
+            traceback.print_exc()
+            status, body = 500, {"error": f"{type(e).__name__}: {e}"}
         data = json.dumps(body).encode()
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()

@@ -1,18 +1,19 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { hallbook } from "@/data/hallbook";
+import { hallbook, type HbFind } from "@/data/hallbook";
 
 const Q = "plan a zero downtime database migration";
 
 /** A recorded call: the answer is the real one from the catalogue (data/hallbook.json), typed out when scrolled into view. */
 export function Transcript() {
   // A missing recording (a regenerated snapshot without this query) renders as a no-answer rather than crashing the page.
-  const d = hallbook.examples[Q] ?? { confidence: "none" as const };
+  // Every field the lines below read is present, so the fallback never prints "undefined".
+  const d: HbFind = hallbook.examples[Q] ?? { confidence: "none", chars: 0 };
   const lines: { who?: "you" | "agent"; text: string; typed?: boolean }[] = [
     { who: "you", text: `Use the Aletheore skills available to you. ${Q}.`, typed: true },
     { who: "agent", text: `aletheore_find_skill("${Q}")`, typed: true },
     { text: `  confidence: ${d.confidence}` },
-    { text: `  top: ${d.top?.id}  (${d.top?.license})` },
+    { text: `  top: ${d.top ? `${d.top.id}  (${d.top.license})` : "none"}` },
     { text: `  skill: ${(d.chars ?? 0).toLocaleString()} characters, in this same response` },
     { who: "agent", text: "Following the skill. Adapting it to this project.", typed: true },
   ];
@@ -24,6 +25,8 @@ export function Transcript() {
     const el = box.current;
     if (!el) return;
     const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let alive = true;
+    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
     const go = async () => {
       if (started.current) return;
       started.current = true;
@@ -31,15 +34,16 @@ export function Transcript() {
       for (const l of lines) {
         const prefix = l.who === "you" ? "you     " : l.who === "agent" ? "agent   " : "";
         if (l.typed && !reduced) {
-          for (let i = 1; i <= l.text.length; i++) { setShown([...out, prefix + l.text.slice(0, i)]); await new Promise((r) => setTimeout(r, 14)); }
+          for (let i = 1; i <= l.text.length; i++) { if (!alive) return; setShown([...out, prefix + l.text.slice(0, i)]); await wait(14); }
         }
+        if (!alive) return;
         out.push(prefix + l.text); setShown([...out]);
-        if (!reduced) await new Promise((r) => setTimeout(r, l.typed ? 380 : 260));
+        if (!reduced) await wait(l.typed ? 380 : 260);
       }
     };
     const io = new IntersectionObserver((es) => { if (es[0].isIntersecting) { go(); io.disconnect(); } }, { threshold: 0.3 });
     io.observe(el);
-    return () => io.disconnect();
+    return () => { alive = false; io.disconnect(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

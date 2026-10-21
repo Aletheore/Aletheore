@@ -101,7 +101,7 @@ body {
 .hb-alt { position: absolute; left: 12px; bottom: 7px; font: 500 10.5px var(--font-display); color: var(--color-faint); letter-spacing: 0.04em; }
 .hb-card--top { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1.5fr; gap: 22px; padding-bottom: 40px; min-height: 0; }
 @media (max-width: 760px) { .hb-card--top { grid-template-columns: 1fr; } .hb-stamp { position: static; display: inline-block; margin-top: 8px; } }
-.hb-preview { margin: 0; max-height: 168px; overflow: hidden; white-space: pre-wrap; font: 12px/1.55 var(--font-mono); color: var(--color-muted); mask-image: linear-gradient(#000 68%, transparent); }
+.hb-preview { margin: 0; max-height: 168px; overflow: hidden; white-space: pre-wrap; font: 12px/1.55 var(--font-mono); color: var(--color-muted); -webkit-mask-image: linear-gradient(#000 68%, transparent); mask-image: linear-gradient(#000 68%, transparent); }
 .hb-cursor { display: inline-block; width: 8px; height: 15px; background: #e8e2d4; vertical-align: -2px; animation: hb-blink 1s steps(2) infinite; }
 @keyframes hb-blink { 50% { opacity: 0; } }
 .hb-sheet { position: relative; padding: 20px 20px 20px 16px; background: var(--color-raised); border: 1px solid var(--color-line-strong); overflow: hidden; font: 12px/1.85 var(--font-mono); }
@@ -118,7 +118,7 @@ body {
 
 .hb-marker { background-image: linear-gradient(transparent 56%, rgba(163, 51, 39, 0.22) 56%); background-repeat: no-repeat; background-size: 0% 100%; transition: background-size 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) 0.15s; padding: 0 0.1em; margin: 0 -0.1em; }
 .hb-marker--on { background-size: 100% 100%; }
-.hb-line { stroke-width: 1.3; stroke-dasharray: 260; stroke-dashoffset: 260; transition: stroke-dashoffset 0.9s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.hb-line { stroke-width: 1.3; stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset 0.9s cubic-bezier(0.2, 0.8, 0.2, 1); }
 .hb-line--tangle { stroke: var(--color-line-strong); }
 .hb-line--hub { stroke: var(--color-stamp); stroke-width: 2; }
 .hb-diagram--on .hb-line { stroke-dashoffset: 0; }

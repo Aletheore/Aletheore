@@ -11,7 +11,7 @@ export function Mark({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const el = ref.current;
     if (!el || reduced) return;
-    const io = new IntersectionObserver((es) => { if (es[0].isIntersecting) { setSeen(true); io.disconnect(); } }, { threshold: 0.6 });
+    const io = new IntersectionObserver((es) => { if (es[0].isIntersecting) { setSeen(true); io.disconnect(); } }, { threshold: 0.25 });
     io.observe(el);
     return () => io.disconnect();
   }, [reduced]);

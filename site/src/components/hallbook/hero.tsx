@@ -43,6 +43,7 @@ export function Hero() {
   const [status, setStatus] = useState(STATUS_RECORDED);
   const [stamped, setStamped] = useState(false);
   const stop = useRef(false);
+  const [round, setRound] = useState(0);
   const seq = useRef(0);
   const reduced = useReducedMotion();
 
@@ -66,7 +67,7 @@ export function Hero() {
       if (alive) setTyped(ASKS[0]);
     })();
     return () => { alive = false; };
-  }, [reduced]);
+  }, [reduced, round]);
 
   async function run(text: string) {
     const my = ++seq.current;
@@ -82,7 +83,11 @@ export function Hero() {
   }
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
-  function onType(v: string) { stop.current = true; setQ(v); clearTimeout(timer.current); timer.current = setTimeout(() => run(v), 160); }
+  function onType(v: string) {
+    // Emptying the box hands the placeholder back to the typing animation.
+    if (v === "" && stop.current) { stop.current = false; setRound((n) => n + 1); } else if (v !== "") stop.current = true;
+    setQ(v); clearTimeout(timer.current); timer.current = setTimeout(() => run(v), 160);
+  }
 
   const c = res?.confidence;
   const cards = c === "high" ? res?.alternatives ?? [] : c === "low" ? res?.candidates ?? [] : [];

@@ -6,6 +6,7 @@ from aletheore import skill_hub as sh
 
 # The page shows the bundled catalogue only. A developer's own custom skills must never rank into the snapshot
 # (it would differ per machine and could crash the build on an id that is not in CAT).
+assert hasattr(sh, "list_custom_skill_names"), "skill_hub no longer has list_custom_skill_names: update the override below"
 sh.list_custom_skill_names = lambda: []
 
 ROOT = sh.bundled_skills_dir()
@@ -22,6 +23,7 @@ for _m in sh.list_bundled_skills():
 def card(skill_id, score=None):
     c = dict(CAT[skill_id])
     c["description"] = c["description"][:240]
+    # skill_hub has no public accessor for the alternates map; _curation is the only source, so a changed shape must fail loudly.
     c["alternates"] = sorted(sh._curation(str(ROOT))[1].get(skill_id, []))
     if score is not None:
         c["score"] = round(score, 1)

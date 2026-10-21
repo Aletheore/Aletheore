@@ -24,11 +24,14 @@ export function AnnotatedSkill() {
     else if (fm >= 2 && /^#/.test(l) && !marks[3]) marks[3] = i;
   });
   const at = Object.fromEntries(Object.entries(marks).map(([k, v]) => [v, Number(k)]));
+  // Pop in by line order, so the marks appear top to bottom whatever their numbers; the label counts the marks actually found.
+  const order = Object.keys(at).map(Number).sort((a, b) => a - b);
+  const found = order.length;
   return (
-    <div ref={ref} className={`hb-sheet${on ? " hb-sheet--on" : ""}`} role="img" aria-label={`Header of the ${hallbook.skill.id} skill file with four checks marked`}>
+    <div ref={ref} className={`hb-sheet${on ? " hb-sheet--on" : ""}`} role="img" aria-label={`Header of the ${hallbook.skill.id} skill file with ${found} checks marked`}>
       {lines.map((l, i) => (
         <span key={i} className={`hb-ln${at[i] ? " hb-hl" : ""}`}>
-          {at[i] ? <b className="hb-mk" style={{ transitionDelay: `${at[i] * 260 + 400}ms` }}>{at[i]}</b> : null}
+          {at[i] ? <b className="hb-mk" style={{ transitionDelay: `${order.indexOf(i) * 260 + 400}ms` }}>{at[i]}</b> : null}
           {(l.length > 92 ? l.slice(0, 92) + "…" : l) || " "}
         </span>
       ))}
