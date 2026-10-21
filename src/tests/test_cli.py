@@ -1215,6 +1215,8 @@ def test_mcp_install_codex_only_target_still_prints_its_own_guidance(tmp_path):
     assert result.exit_code == 0
     assert (tmp_path / ".codex" / "config.toml").exists()
     assert "wrote .codex/config.toml" in result.stdout
+    assert "codex mcp add aletheore --" in result.stdout  # the trust-independent alternative
+    assert "silently not loaded" in result.stdout
     assert "PyCharm" not in result.stdout
 
 

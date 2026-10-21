@@ -1635,9 +1635,14 @@ def _mcp_install(path: str, targets: list[str]) -> int:
     if "codex-cli" in selected:
         console.print(
             "[bold]OpenAI Codex CLI:[/bold] wrote .codex/config.toml, but Codex only reads "
-            "project-scoped MCP config for projects it already trusts - if the tools don't show up, "
-            "check Codex's own trust prompt for this directory. Also note: writing this file "
-            "reformats it - any hand-written comments in an existing config.toml are not preserved."
+            "project-scoped MCP config for projects it already trusts (in an untrusted project the "
+            "server is silently not loaded) - accept Codex's trust prompt for this directory, or "
+            "register it for every project instead:"
+        )
+        console.print(f"  codex mcp add aletheore -- {_aletheore_command()} mcp {repo_path}", soft_wrap=True)
+        console.print(
+            "Also note: writing .codex/config.toml reformats it - any hand-written comments in an "
+            "existing config.toml are not preserved."
         )
     if "claude-desktop" in selected:
         if _claude_desktop_config_path() is None:
