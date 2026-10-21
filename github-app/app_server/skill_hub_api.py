@@ -7,7 +7,9 @@ import secrets
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app_server import admin as _admin
 from app_server.admin import TokenLabel, _bearer_github_token, _fetch_github_user
+from app_server.config import get_settings
 from app_server.db import (
     create_personal_token_within_limit,
     delete_custom_skill,
@@ -50,6 +52,29 @@ class PutCustomSkillRequest(BaseModel):
     content: str = Field(max_length=MAX_CUSTOM_SKILL_CONTENT_CHARS)
 
 
+def _github_token_issued_to_aletheore(github_token: str) -> bool:
+    """True only if this GitHub token was issued to the Aletheore app itself.
+
+    `/user` answers for any valid GitHub token, including a leaked personal
+    access token or a token from an unrelated OAuth app. Minting a
+    non-expiring Aletheore token from one of those would let whoever holds it
+    write custom skills into the victim's account. GitHub's "check a token"
+    endpoint reports which app a user token belongs to, so we require it to be
+    ours.
+    """
+    settings = get_settings()
+    response = _admin._github_http_client().post(
+        f"/applications/{settings.github_client_id}/token",
+        auth=(settings.github_client_id, settings.github_client_secret),
+        json={"access_token": github_token},
+        headers={"Accept": "application/vnd.github+json"},
+    )
+    if response.status_code != 200:
+        return False
+    app = response.json().get("app") or {}
+    return app.get("client_id") == settings.github_client_id
+
+
 @skill_hub_router.post("/v1/personal-tokens")
 async def mint_personal_token(request: Request, body: CreatePersonalTokenRequest):
     # Deliberately independent of any Aletheore installation: this mints an
@@ -58,6 +83,8 @@ async def mint_personal_token(request: Request, body: CreatePersonalTokenRequest
     # administered, paid installation. No installation lookup and no plan
     # check belong anywhere in this path.
     github_token = _bearer_github_token(request)
+    if not await asyncio.to_thread(_github_token_issued_to_aletheore, github_token):
+        raise HTTPException(status_code=401, detail="that GitHub token was not issued to Aletheore - run `aletheore login`")
     user = await asyncio.to_thread(_fetch_github_user, github_token)
 
     try:
@@ -135,7 +162,9 @@ async def revoke_all_personal_tokens_route(request: Request):
 async def list_custom_skills_route(request: Request):
     identity = await _authenticate_personal_token(request)
     skills = await list_custom_skills(request.app.state.db_pool, identity["id"])
-    return {"skills": skills}
+    # account_id lets a client notice that this machine was last synced with a
+    # different Aletheore account (it must not delete or upload across them).
+    return {"skills": skills, "account_id": str(identity["id"])}
 
 
 @skill_hub_router.get("/v1/custom-skills/{name}")

@@ -825,7 +825,10 @@ def search_skills_scored(
         for name in custom_names:
             name_tokens = _tokens(name.replace("-", " ").replace("_", " "))
             matched = {token for token in query_tokens if token in name_tokens}
-            score = 20.0 * len(matched)
+            # A custom skill is the user's own, unvetted text. It can be found by
+            # name, but its score is capped under the "high confidence" bar so it
+            # is never handed over as a confident answer or injected by the hook.
+            score = min(20.0 * len(matched), FIND_SKILL_MIN_SCORE - 1.0)
             if score:
                 skill_id = f"{_CUSTOM_PREFIX}{name}"
                 scored.append(
@@ -1072,6 +1075,10 @@ def add_custom_skill(name: str, content: str) -> str:
     # unaffected by whether the sync succeeded.
     from aletheore import skill_hub_sync
 
+    # Re-adding a name the user removed offline: the remove left a pending
+    # server delete behind, and that must not fire at the next login and then
+    # make the sync treat the re-added skill as deleted elsewhere.
+    skill_hub_sync._clear_pending_delete(sanitize_skill_name(name))
     skill_hub_sync.push_custom_skill_best_effort(name, content)
     return f"{_CUSTOM_PREFIX}{name}"
 

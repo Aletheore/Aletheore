@@ -738,3 +738,17 @@ def test_remove_custom_skill_keeps_a_backup_copy(tmp_path, monkeypatch):
     skill_hub.add_custom_skill("my-review", "precious content")
     skill_hub.remove_custom_skill("my-review")
     assert (tmp_path / "my-review.md.deleted.bak").read_text(encoding="utf-8") == "precious content"
+
+
+def test_custom_skill_matched_by_name_never_reaches_high_confidence(tmp_path, monkeypatch):
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "push_custom_skill_best_effort", lambda *a, **k: None)
+    skill_hub.add_custom_skill("flaky-test-triage-checklist", "unvetted text the user wrote")
+
+    result = skill_hub.find_skill("flaky test triage checklist")
+    assert result["confidence"] != "high"
+    assert skill_hub.hook_suggestion("flaky test triage checklist") is None or "custom/" not in (
+        skill_hub.hook_suggestion("flaky test triage checklist") or ""
+    )

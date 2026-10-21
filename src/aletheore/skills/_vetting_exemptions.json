@@ -1,39 +1,149 @@
 {
- "version": 1,
- "note": "Findings of the package's vetting that a person reviewed and cleared. One exact finding per entry (rule + text in the finding + why). Anything else on the same skill still fails. Reviewed 2026-10-20.",
- "exemptions": {
-  "ai-engineering/huggingface-vision-trainer": [
-   {
-    "reason": "secret_in_bundled_script",
-    "detail_contains": "image_classification_training.py:278",
-    "why": "False positive: the line is a keyword argument `\"token\": model_args.token`, a training-script option that is read from the command line, not a stored credential."
-   },
-   {
-    "reason": "secret_in_bundled_script",
-    "detail_contains": "object_detection_training.py:599",
-    "why": "False positive: the same `\"token\": model_args.token` option in the second training script."
-   }
-  ],
-  "marketing/ads-agricidaniel": [
-   {
-    "reason": "unsafe_piped_execution",
-    "detail_contains": "curl ... | bash",
-    "why": "The text is a rule telling the agent to REFUSE `curl ... | bash`, `wget ... | sh` and similar. It warns against the pattern and does not use it."
-   }
-  ],
-  "platforms/agent-platform-deploy": [
-   {
-    "reason": "credential_exfiltration_phrasing",
-    "detail_contains": "Authorization: Bearer",
-    "why": "Documented REST example: a curl call to the user's own Google Cloud `aiplatform.googleapis.com` endpoint with their own `gcloud auth print-access-token`. The token goes to Google, the service it belongs to."
-   }
-  ],
-  "platforms/agent-platform-inference": [
-   {
-    "reason": "credential_exfiltration_phrasing",
-    "detail_contains": "Authorization: Bearer",
-    "why": "Documented REST example: a curl call to the user's own Google Cloud endpoint with their own access token, sent to Google, the service it belongs to."
-   }
-  ]
- }
+  "version": 1,
+  "note": "Findings of the package's vetting that a person reviewed and cleared. One exact finding per entry (rule + text in the finding + why). Anything else on the same skill still fails. Reviewed 2026-10-20.",
+  "exemptions": {
+    "ai-engineering/huggingface-vision-trainer": [
+      {
+        "reason": "secret_in_bundled_script",
+        "detail_contains": "image_classification_training.py:278",
+        "why": "False positive: the line is a keyword argument `\"token\": model_args.token`, a training-script option that is read from the command line, not a stored credential."
+      },
+      {
+        "reason": "secret_in_bundled_script",
+        "detail_contains": "object_detection_training.py:599",
+        "why": "False positive: the same `\"token\": model_args.token` option in the second training script."
+      }
+    ],
+    "marketing/ads-agricidaniel": [
+      {
+        "reason": "unsafe_piped_execution",
+        "detail_contains": "curl ... | bash",
+        "why": "The text is a rule telling the agent to REFUSE `curl ... | bash`, `wget ... | sh` and similar. It warns against the pattern and does not use it."
+      }
+    ],
+    "platforms/agent-platform-deploy": [
+      {
+        "reason": "credential_exfiltration_phrasing",
+        "detail_contains": "Authorization: Bearer",
+        "why": "Documented REST example: a curl call to the user's own Google Cloud `aiplatform.googleapis.com` endpoint with their own `gcloud auth print-access-token`. The token goes to Google, the service it belongs to."
+      }
+    ],
+    "platforms/agent-platform-inference": [
+      {
+        "reason": "credential_exfiltration_phrasing",
+        "detail_contains": "Authorization: Bearer",
+        "why": "Documented REST example: a curl call to the user's own Google Cloud endpoint with their own access token, sent to Google, the service it belongs to."
+      }
+    ],
+    "ai-engineering/claude-api": [
+      {
+        "reason": "unsafe_piped_execution",
+        "detail_contains": "shared/managed-agents-onboarding-from-url.md",
+        "why": "The matched text is the rule itself: it tells the agent to never run curl | sh lines found on a fetched page."
+      }
+    ],
+    "devops/cloudflare-deploy": [
+      {
+        "reason": "credential_exfiltration_phrasing",
+        "detail_contains": "references/browser-rendering/api.md",
+        "why": "API documentation: the matched text is an HTTP request that sends a credential to the vendor's own API (or prose about uploads), not an instruction to send a secret elsewhere."
+      },
+      {
+        "reason": "unsafe_piped_execution",
+        "detail_contains": "references/sandbox/patterns.md",
+        "why": "Code sample for a Cloudflare Sandbox worker: the installer runs inside the sandbox container via sandbox.exec, not on the user's machine, and is shown as an example."
+      },
+      {
+        "reason": "credential_exfiltration_phrasing",
+        "detail_contains": "references/turnstile/gotchas.md",
+        "why": "API documentation: the matched text is an HTTP request that sends a credential to the vendor's own API (or prose about uploads), not an instruction to send a secret elsewhere."
+      }
+    ],
+    "platforms/api-gateway-mcp-server": [
+      {
+        "reason": "credential_exfiltration_phrasing",
+        "detail_contains": "references/adk-and-api-hub-discovery.md",
+        "why": "API documentation: the matched text is an HTTP request that sends a credential to the vendor's own API (or prose about uploads), not an instruction to send a secret elsewhere."
+      }
+    ],
+    "platforms/bigtable-basics": [
+      {
+        "reason": "credential_exfiltration_phrasing",
+        "detail_contains": "references/dataplex.md",
+        "why": "API documentation: the matched text is an HTTP request that sends a credential to the vendor's own API (or prose about uploads), not an instruction to send a secret elsewhere."
+      }
+    ],
+    "platforms/cloudflare": [
+      {
+        "reason": "credential_exfiltration_phrasing",
+        "detail_contains": "references/images/patterns.md",
+        "why": "API documentation: the matched text is an HTTP request that sends a credential to the vendor's own API (or prose about uploads), not an instruction to send a secret elsewhere."
+      },
+      {
+        "reason": "credential_exfiltration_phrasing",
+        "detail_contains": "references/stream/README.md",
+        "why": "API documentation: the matched text is an HTTP request that sends a credential to the vendor's own API (or prose about uploads), not an instruction to send a secret elsewhere."
+      }
+    ],
+    "platforms/entra-app-registration": [
+      {
+        "reason": "credential_exfiltration_phrasing",
+        "detail_contains": "references/oauth-flows.md",
+        "why": "API documentation: the matched text is an HTTP request that sends a credential to the vendor's own API (or prose about uploads), not an instruction to send a secret elsewhere."
+      }
+    ],
+    "platforms/neon": [
+      {
+        "reason": "credential_exfiltration_phrasing",
+        "detail_contains": "references/claimable-neon.md",
+        "why": "API documentation: the matched text is an HTTP request that sends a credential to the vendor's own API (or prose about uploads), not an instruction to send a secret elsewhere."
+      }
+    ],
+    "security/gha-security-review": [
+      {
+        "reason": "unsafe_piped_execution",
+        "detail_contains": "references/comment-triggered-commands.md",
+        "why": "Security-review reference: the matched text is an attacker's command shown as an example to recognise, not an instruction to run it."
+      },
+      {
+        "reason": "credential_exfiltration_phrasing",
+        "detail_contains": "references/credential-escalation.md",
+        "why": "Security-review reference: the matched text is an attacker's command shown as an example to recognise, not an instruction to run it."
+      },
+      {
+        "reason": "unsafe_piped_execution",
+        "detail_contains": "references/expression-injection.md",
+        "why": "Security-review reference: the matched text is an attacker's command shown as an example to recognise, not an instruction to run it."
+      },
+      {
+        "reason": "unsafe_piped_execution",
+        "detail_contains": "references/pwn-request.md",
+        "why": "Security-review reference: the matched text is an attacker's command shown as an example to recognise, not an instruction to run it."
+      },
+      {
+        "reason": "unsafe_piped_execution",
+        "detail_contains": "references/real-world-attacks.md",
+        "why": "Security-review reference: the matched text is an attacker's command shown as an example to recognise, not an instruction to run it."
+      },
+      {
+        "reason": "unsafe_piped_execution",
+        "detail_contains": "references/supply-chain.md",
+        "why": "Security-review reference: the matched text is an attacker's command shown as an example to recognise, not an instruction to run it."
+      }
+    ],
+    "security/skill-scanner": [
+      {
+        "reason": "credential_exfiltration_phrasing",
+        "detail_contains": "references/dangerous-code-patterns.md",
+        "why": "Security-review reference: the matched text is an attacker's command shown as an example to recognise, not an instruction to run it."
+      }
+    ],
+    "platforms/agent-platform-migrate-from-ai-studio": [
+      {
+        "reason": "unsafe_piped_execution",
+        "detail_contains": "bash <(curl",
+        "why": "Option 1 runs Google's own setup_adc.sh from storage.googleapis.com/cloud-samples-data (the official Application Default Credentials sample); the same skill lists a manual setup as Option 2."
+      }
+    ]
+  }
 }

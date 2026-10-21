@@ -745,3 +745,21 @@ async def test_list_installation_member_emails_only_includes_members_who_have_lo
     emails = await list_installation_member_emails(pool, 700)
 
     assert emails == ["alice@example.com"]
+
+
+@pytest.mark.asyncio
+async def test_relogin_from_the_same_machine_replaces_its_own_token_only(pool):
+    # Repeated logins on one laptop must not pile up and push the cap, which
+    # would silently revoke a different machine's token.
+    identity = await get_or_create_personal_identity(pool, 70002, "octocat2")
+    other = await create_personal_token_within_limit(pool, identity["id"], "hash-other", "desktop (device flow)", limit=3)
+    first = await create_personal_token_within_limit(pool, identity["id"], "hash-l1", "laptop (device flow)", limit=3)
+    second = await create_personal_token_within_limit(pool, identity["id"], "hash-l2", "laptop (device flow)", limit=3)
+    third = await create_personal_token_within_limit(pool, identity["id"], "hash-l3", "laptop (device flow)", limit=3)
+
+    rows = {r["id"]: r["revoked_at"] for r in await pool.fetch(
+        "SELECT id, revoked_at FROM personal_api_tokens WHERE personal_identity_id = $1", identity["id"]
+    )}
+    assert rows[other] is None  # the other machine is untouched
+    assert rows[first] is not None and rows[second] is not None
+    assert rows[third] is None

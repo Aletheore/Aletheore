@@ -8,14 +8,42 @@ from httpx import ASGITransport, AsyncClient
 from app_server.main import app
 
 
-def _mock_github_user(monkeypatch, github_login: str = "octocat", github_user_id: int = 12345):
+def _mock_github_user(
+    monkeypatch, github_login: str = "octocat", github_user_id: int = 12345, issued_to_aletheore: bool = True
+):
+    from app_server.config import get_settings
+
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/applications/") and request.url.path.endswith("/token"):
+            # GitHub's "check a token": 404 for a token this app didn't issue.
+            if not issued_to_aletheore:
+                return httpx.Response(404, json={"message": "Not Found"})
+            return httpx.Response(200, json={"app": {"client_id": get_settings().github_client_id}})
         return httpx.Response(200, json={"id": github_user_id, "login": github_login})
 
     monkeypatch.setattr(
         "app_server.admin._github_http_client",
         lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
     )
+
+
+@pytest.mark.asyncio
+async def test_personal_token_endpoint_rejects_a_github_token_not_issued_to_aletheore(pool, monkeypatch):
+    # A leaked PAT, or a token from some unrelated OAuth app, is a valid GitHub
+    # token but must not be exchangeable for a non-expiring Aletheore token.
+    _mock_github_user(monkeypatch, issued_to_aletheore=False)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/personal-tokens",
+            headers={"Authorization": "Bearer someone-elses-pat"},
+            json={"label": "x"},
+        )
+
+    assert response.status_code == 401
+    assert await pool.fetchval("SELECT count(*) FROM personal_identities") == 0
 
 
 @pytest.mark.asyncio
@@ -77,7 +105,9 @@ async def test_app(pool):
         yield client
 
 
-async def _mint_personal_token_header(test_app, monkeypatch, github_login: str, github_user_id: int) -> dict:
+async def _mint_personal_token_header(
+    test_app, monkeypatch, github_login: str, github_user_id: int, label: str = "test"
+) -> dict:
     # Mints a real personal token through the real, already-tested
     # POST /v1/personal-tokens flow (see test_personal_token_endpoint_mints_
     # for_new_identity above) rather than inserting a token/identity row
@@ -87,7 +117,7 @@ async def _mint_personal_token_header(test_app, monkeypatch, github_login: str, 
     response = await test_app.post(
         "/v1/personal-tokens",
         headers={"Authorization": "Bearer fake-github-token"},
-        json={"label": "test"},
+        json={"label": label},
     )
     assert response.status_code == 200
     raw_token = response.json()["token"]
@@ -109,7 +139,7 @@ async def second_personal_token_header_same_identity(test_app, monkeypatch):
     # Same github_login/github_user_id as personal_token_header - mints a
     # SECOND, distinct token for the SAME underlying identity, unlike
     # other_personal_token_header which uses a different identity entirely.
-    return await _mint_personal_token_header(test_app, monkeypatch, github_login="octocat", github_user_id=12345)
+    return await _mint_personal_token_header(test_app, monkeypatch, github_login="octocat", github_user_id=12345, label="second machine")
 
 
 @pytest.mark.asyncio
@@ -446,3 +476,10 @@ async def test_revoke_all_does_not_affect_other_identity(test_app, personal_toke
     await test_app.delete("/v1/personal-tokens/all", headers=personal_token_header)
     response = await test_app.get("/v1/custom-skills", headers=other_personal_token_header)
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_custom_skill_listing_carries_the_account_id(test_app, personal_token_header):
+    response = await test_app.get("/v1/custom-skills", headers=personal_token_header)
+    assert response.status_code == 200
+    assert response.json()["account_id"]

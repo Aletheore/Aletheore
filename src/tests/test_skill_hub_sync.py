@@ -665,3 +665,76 @@ def test_pull_merge_one_failing_skill_does_not_abort_the_rest(tmp_path, monkeypa
     assert skill_hub.read_custom_skill_file("flaky-one") is None
     assert skill_hub.read_custom_skill_file("fine-two") == "good content"
     assert puts == {"offline-added": "added while offline"}
+
+
+# --- account switches and re-adding a removed skill ---------------------------
+
+
+def test_adding_a_skill_back_clears_its_pending_server_delete(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: None)  # no network in this test
+    skill_hub_sync._record_pending_delete("comeback")
+    skill_hub.add_custom_skill("comeback", "back again")
+    assert "comeback" not in skill_hub_sync._load_pending_deletes()
+
+
+def test_readded_skill_survives_the_next_login(tmp_path, monkeypatch):
+    # remove offline (server unreachable -> pending delete), add the same name
+    # back, then log in: the skill must still be on disk afterwards.
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
+    state = {"comeback": {"synced_at": "2026-01-01T00:00:00+00:00", "content_hash": skill_hub_sync._content_hash("v1")}}
+    (tmp_path / ".sync_state.json").write_text(json.dumps(state), encoding="utf-8")
+    skill_hub_sync._record_pending_delete("comeback")
+    skill_hub.write_custom_skill_file("comeback", "v1")  # re-added with the same content
+    skill_hub_sync._clear_pending_delete("comeback")  # what add_custom_skill now does
+    puts = {}
+    _server_listing(monkeypatch, skills=[{"name": "comeback", "updated_at": "2026-01-01T00:00:00+00:00"}], puts=puts)
+    skill_hub_sync.pull_merge_custom_skills()
+    assert skill_hub.read_custom_skill_file("comeback") == "v1"
+
+
+def test_login_with_a_different_account_moves_local_skills_aside(tmp_path, monkeypatch):
+    base = tmp_path / "custom-skills"
+    base.mkdir()
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: base)
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
+    (base / ".sync_account").write_text("account-A", encoding="utf-8")
+    skill_hub.write_custom_skill_file("a-only", "belongs to account A")
+    state = {"a-only": {"synced_at": "2026-01-01T00:00:00+00:00", "content_hash": skill_hub_sync._content_hash("belongs to account A")}}
+    (base / ".sync_state.json").write_text(json.dumps(state), encoding="utf-8")
+    puts = {}
+
+    def _get(url, **kwargs):
+        if url.endswith("/v1/custom-skills"):
+            return _resp("GET", url, skills=[], account_id="account-B")
+        raise AssertionError(f"unexpected GET {url}")
+
+    monkeypatch.setattr(skill_hub_sync.httpx, "get", _get)
+    monkeypatch.setattr(skill_hub_sync.httpx, "put", lambda url, **k: puts.update({url: k}) or _resp("PUT", url, updated_at="x"))
+
+    skill_hub_sync.pull_merge_custom_skills()
+
+    # Neither uploaded into account B nor deleted as "deleted elsewhere": kept in a backup folder.
+    assert puts == {}
+    assert skill_hub.read_custom_skill_file("a-only") is None
+    backup = tmp_path / "custom-skills-account-account-A.bak"
+    assert (backup / "a-only.md").read_text(encoding="utf-8") == "belongs to account A"
+    assert (base / ".sync_account").read_text(encoding="utf-8") == "account-B"
+
+
+def test_same_account_login_leaves_local_skills_alone(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
+    (tmp_path / ".sync_account").write_text("account-A", encoding="utf-8")
+    skill_hub.write_custom_skill_file("mine", "x")
+    puts = {}
+
+    def _get(url, **kwargs):
+        return _resp("GET", url, skills=[], account_id="account-A")
+
+    monkeypatch.setattr(skill_hub_sync.httpx, "get", _get)
+    monkeypatch.setattr(skill_hub_sync.httpx, "put", lambda url, **k: puts.update({url: k}) or _resp("PUT", url, updated_at="x"))
+    skill_hub_sync.pull_merge_custom_skills()
+    assert skill_hub.read_custom_skill_file("mine") == "x"
+    assert len(puts) == 1  # never synced from here before, so it is uploaded as before

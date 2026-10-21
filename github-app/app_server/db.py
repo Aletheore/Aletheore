@@ -2152,6 +2152,18 @@ async def create_personal_token_within_limit(
                 PERSONAL_TOKEN_LOCK_NAMESPACE,
                 personal_identity_id,
             )
+            # A re-login from the same machine (same label, e.g. "<hostname> (device
+            # flow)") replaces that machine's previous token instead of piling up
+            # beside it, so repeated logins on one laptop cannot push the cap and
+            # evict a different machine's token.
+            await conn.execute(
+                """
+                UPDATE personal_api_tokens SET revoked_at = now()
+                WHERE personal_identity_id = $1 AND revoked_at IS NULL AND label = $2
+                """,
+                personal_identity_id,
+                label,
+            )
             count = await conn.fetchval(
                 """
                 SELECT count(*) FROM personal_api_tokens

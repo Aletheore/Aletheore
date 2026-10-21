@@ -75,7 +75,15 @@ def check_license(license_id: str | None) -> VettingFailure | None:
 SUSPICIOUS_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "unsafe_piped_execution",
-        re.compile(r"\b(curl|wget)\b[^\n|]{0,200}\|\s*(sh|bash|zsh|python3?|perl|ruby)\b", re.IGNORECASE),
+        re.compile(
+            r"\b(curl|wget)\b[^\n|]{0,200}\|\s*(?:sudo\s+(?:-\S+\s+)*)?(sh|bash|zsh|python3?|perl|ruby)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        # bash <(curl ...), sh -c "$(curl ...)": the same download-and-run, without a pipe.
+        "unsafe_piped_execution",
+        re.compile(r"\b(sh|bash|zsh)\b\s+(?:-c\s+)?[\"']?\$?\(?<?\(\s*(curl|wget)\b", re.IGNORECASE),
     ),
     (
         "credential_exfiltration_phrasing",
@@ -139,6 +147,35 @@ def check_bundled_scripts(skill_dir: Path) -> list[VettingFailure]:
     return failures
 
 
+COMPANION_TEXT_SUFFIXES = {".md", ".txt", ".yaml", ".yml", ".rst"}
+
+
+def check_companion_text(skill_dir: Path) -> list[VettingFailure]:
+    """Run the same text lint over a skill's companion documents (references, templates).
+
+    ``SKILL.md`` is linted on its own; a skill's other text files are loaded on demand through
+    ``aletheore_get_skill_file`` and can hold instructions too. ``scripts/`` is covered by the secrets scan, not
+    this lint. A file that is not valid UTF-8 text is skipped here (it is not instruction text).
+    """
+    failures: list[VettingFailure] = []
+    for path in sorted(skill_dir.rglob("*")):
+        relative = path.relative_to(skill_dir)
+        if (
+            not path.is_file()
+            or path.name == "SKILL.md"
+            or "scripts" in relative.parts
+            or path.suffix.lower() not in COMPANION_TEXT_SUFFIXES
+        ):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for failure in check_instruction_text(text):
+            failures.append(VettingFailure(reason=failure.reason, detail=f"{relative.as_posix()}: {failure.detail}"))
+    return failures
+
+
 EXEMPTIONS_FILE = "_vetting_exemptions.json"
 
 
@@ -194,14 +231,14 @@ def vet_skill_directory(skill_dir: Path) -> list[VettingFailure]:
 
     skill_md = skill_dir / "SKILL.md"
     try:
-        text = skill_md.read_text()
+        text = skill_md.read_text(encoding="utf-8")
         match = _FRONTMATTER.match(text)
         if match is not None:
             frontmatter = yaml.safe_load(match.group(1))
             body = match.group(2)
             if isinstance(frontmatter, dict):
                 license_id = frontmatter.get("license")
-    except (OSError, yaml.YAMLError):
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
         pass
 
     failures: list[VettingFailure] = []
@@ -211,6 +248,7 @@ def vet_skill_directory(skill_dir: Path) -> list[VettingFailure]:
         failures.append(license_failure)
 
     failures.extend(check_instruction_text(body))
+    failures.extend(check_companion_text(skill_dir))
     failures.extend(check_bundled_scripts(skill_dir))
 
     return split_exempted(skill_dir, failures)[0]

@@ -41,6 +41,7 @@ import pytest
 import uvicorn
 
 from aletheore import credentials, device_auth, skill_hub, skill_hub_sync
+from app_server.config import get_settings
 from app_server.main import app
 
 # Both "machines" in this test resolve to this one fake GitHub identity -
@@ -63,6 +64,8 @@ def _mock_fixed_github_identity(monkeypatch) -> None:
     """
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/applications/") and request.url.path.endswith("/token"):
+            return httpx.Response(200, json={"app": {"client_id": get_settings().github_client_id}})
         return httpx.Response(
             200, json={"id": _FAKE_GITHUB_USER_ID, "login": _FAKE_GITHUB_LOGIN}
         )

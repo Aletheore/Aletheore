@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_API_BASE_URL = "https://app.aletheore.com"
 _SYNC_STATE_FILENAME = ".sync_state.json"
 _PENDING_DELETES_FILENAME = ".pending_deletes.json"
+_SYNC_ACCOUNT_FILENAME = ".sync_account"
 
 
 def _personal_token() -> str | None:
@@ -118,6 +119,8 @@ def _record_pending_delete(name: str) -> None:
 
 def _clear_pending_delete(name: str) -> None:
     names = _load_pending_deletes()
+    if name not in names:
+        return
     names.discard(name)
     _save_pending_deletes(names)
 
@@ -344,6 +347,39 @@ def _merge_one_server_skill(
     # in sync, no-op.
 
 
+def _handle_account_switch(account_id: str | None) -> None:
+    """Custom skills on a machine belong to one Aletheore account at a time.
+
+    If this machine was last synced with a different account, uploading its
+    skills into the new account or deleting them because the new account's
+    list lacks them would both be wrong. Move them to a backup folder, drop
+    the sync bookkeeping, and start clean with the new account's skills.
+    Servers that do not send an account id leave things as they were.
+    """
+    if not account_id:
+        return
+    account_path = skill_hub.custom_skills_dir() / _SYNC_ACCOUNT_FILENAME
+    try:
+        previous = account_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        previous = ""
+    if previous and previous != account_id:
+        directory = skill_hub.custom_skills_dir()
+        backup_dir = directory.parent / f"{directory.name}-account-{previous}.bak"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        for entry in list(directory.iterdir()):
+            if entry.is_file() and entry.name != _SYNC_ACCOUNT_FILENAME:
+                entry.replace(backup_dir / entry.name)
+        logger.warning(
+            "this machine's custom skills were synced with a different Aletheore account - "
+            "they were moved to %s and were not uploaded to the account you just logged in with",
+            backup_dir,
+        )
+    directory = skill_hub.custom_skills_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    account_path.write_text(account_id, encoding="utf-8")
+
+
 def pull_merge_custom_skills(timeout: float = 10.0) -> None:
     """Run once at login. Requires a saved personal token - returns
     immediately (no network call) without one, since login's caller only
@@ -355,20 +391,31 @@ def pull_merge_custom_skills(timeout: float = 10.0) -> None:
     if token is None:
         return
     try:
-        # Flush pending deletes first, before even listing the server's
-        # skills - a name that still fails to delete here must not have
-        # branch 1 below pull it back down this run, even though the
-        # server's list (fetched next) still contains it.
-        for pending_name in _load_pending_deletes():
+        headers = {"Authorization": f"Bearer {token}"}
+
+        def _list_server() -> dict:
+            listed = httpx.get(
+                f"{DEFAULT_API_BASE_URL}/v1/custom-skills", headers=headers, timeout=timeout
+            )
+            listed.raise_for_status()
+            return listed.json()
+
+        # Learn which account this token belongs to before touching anything:
+        # pending deletes and sync bookkeeping from a previous account must not
+        # be applied to this one.
+        listing = _list_server()
+        _handle_account_switch(listing.get("account_id"))
+
+        # Flush pending deletes before merging - a name that still fails to
+        # delete here must not have branch 1 below pull it back down this run,
+        # even though the server's list still contains it.
+        pending_before = _load_pending_deletes()
+        for pending_name in pending_before:
             delete_custom_skill_best_effort(pending_name, timeout=timeout)
         still_pending = _load_pending_deletes()
-
-        headers = {"Authorization": f"Bearer {token}"}
-        response = httpx.get(
-            f"{DEFAULT_API_BASE_URL}/v1/custom-skills", headers=headers, timeout=timeout
-        )
-        response.raise_for_status()
-        server_skills = response.json().get("skills", [])
+        if pending_before:
+            listing = _list_server()  # the flush changed what the server holds
+        server_skills = listing.get("skills", [])
         sync_state = _load_sync_state()
         seen_names = set()
 
