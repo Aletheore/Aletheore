@@ -1,0 +1,35 @@
+[
+ {
+  "model": "indierouter/deepseek-v4.1-flash",
+  "pairs": 21,
+  "ask_wins": 6,
+  "ask_losses": 4,
+  "ties": 11,
+  "order_flips": 0,
+  "identical_pairs_not_tied": 0,
+  "judge": "nim:openai/gpt-oss-20b",
+  "per_task": {
+   "t02": 0.0,
+   "t03": -1.0,
+   "t04": 0.5,
+   "t05": 0.0,
+   "t06": 0.0,
+   "t08": 1.0,
+   "t09": 0.5,
+   "t10": 0.0,
+   "t11": 0.5,
+   "t12": 0.5,
+   "t13": 1.0,
+   "t14": 0.0,
+   "t15": 0.0,
+   "t17": 0.0,
+   "t18": 0.0,
+   "t19": 0.0,
+   "t20": -0.5,
+   "t21": -1.0,
+   "t22": 0.0,
+   "t23": -0.5,
+   "t24": 0.0
+  }
+ }
+]
