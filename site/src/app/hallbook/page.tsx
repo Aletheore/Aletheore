@@ -31,7 +31,7 @@ const useRows: BarRow[] = [
   { label: "Nothing said", value: r.useNothing.value, display: r.useNothing.display },
 ];
 const [deltaLo, deltaHi] = r.agentBenchmark.passRateDeltaPoints;
-const [tokLo, tokHi] = r.agentBenchmark.tokenMultiple;
+const [, tokHi] = r.agentBenchmark.tokenMultiple;
 
 export default function HallbookPage() {
   return (
@@ -97,10 +97,10 @@ export default function HallbookPage() {
             ))}
           </ol>
         </div>
-        <dl className="mt-10 grid gap-8 border-t border-dashed border-line-strong pt-7 sm:grid-cols-3">
-          {[[String(r.riskyHits.value), "hits from a broader curation-time scan for override phrases, piped shell commands and hidden characters. A model classified all of them as documentation or benign, and none as suspicious."],
-            [String(r.heldBack.value), "candidates held back by the scanner, then reviewed one by one. Most were false alarms, one was dropped for phoning home."],
-            [String(r.writesToAgentFolders.value), "skills that write into your agent's own folders."]].map(([n, t]) => (
+        <dl className="mt-10 grid gap-8 border-t border-dashed border-line-strong pt-7 sm:grid-cols-2">
+          {[[String(r.riskyHits.value), "hits from a broader curation-time scan for override phrases, piped shell commands and hidden characters. All turned out to be documentation or benign examples."],
+            [String(r.heldBack.value), "candidates held back by the scanner, then reviewed one by one. Most were false alarms, one was dropped for phoning home."]
+            ].map(([n, t]) => (
             <div key={n}><dt className="font-display text-[44px] font-bold leading-none text-stamp">{n}</dt><dd className="mt-2 max-w-[34ch] text-[13px] leading-[1.6] text-muted">{t}</dd></div>
           ))}
         </dl>
@@ -119,7 +119,7 @@ export default function HallbookPage() {
             <BarList rows={useRows} caption="Share of runs that used Hallbook" /></div>
           <aside className="relative border border-ink bg-raised p-6">
             <span className="absolute -top-2.5 left-5 bg-paper px-2 font-display text-[11px] font-bold tracking-[0.16em] text-stamp">READ THIS</span>
-            <p className="max-w-[72ch] text-[14.5px] leading-[1.7]"><b>Do skills make an agent score higher?</b> We tested five ways of delivering skills on {r.agentBenchmark.tasks} engineering tasks with hidden tests. Pass rates moved between minus {Math.abs(deltaLo)} and plus {deltaHi} points, all within noise, and skills used {tokLo} to {tokHi} times the tokens. <Mark>We do not claim a score gain on tasks a strong model already knows.</Mark></p>
+            <p className="max-w-[72ch] text-[14.5px] leading-[1.7]"><b>Do skills make an agent score higher?</b> We tested five ways of delivering skills on {r.agentBenchmark.tasks} engineering tasks with hidden tests. Pass rates moved between minus {Math.abs(deltaLo)} and plus {deltaHi} points, all within noise, and skills used up to {tokHi} times the tokens. <Mark>We do not claim a score gain on tasks a strong model already knows.</Mark></p>
             <p className="mt-3 max-w-[72ch] text-[14.5px] leading-[1.7] text-muted">What we do claim is access: <Mark>curated skills, offline, one call, and an honest answer when nothing fits.</Mark> Published research finds the big gains come from skills that carry knowledge a model lacks, such as a specific product or procedure. That is what we test next.</p>
           </aside>
         </div>

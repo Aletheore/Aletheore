@@ -31,7 +31,7 @@ describe("hallbook data snapshot", () => {
 
 describe("hallbook receipts", () => {
   const metrics = [receipts.findFirst, receipts.findTopFive, receipts.confidentPrecision, receipts.useSaid, receipts.useAgentsMd, receipts.useNothing];
-  const all = [...metrics, receipts.heldoutQueries, receipts.riskyHits, receipts.heldBack, receipts.writesToAgentFolders, receipts.agentBenchmark];
+  const all = [...metrics, receipts.heldoutQueries, receipts.riskyHits, receipts.heldBack, receipts.agentBenchmark];
 
   it("every number carries a source, and unverified ones say so", () => {
     for (const r of all) {
