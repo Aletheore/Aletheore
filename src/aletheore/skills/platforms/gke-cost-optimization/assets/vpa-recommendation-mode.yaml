@@ -1,0 +1,15 @@
+# VerticalPodAutoscaler in recommendation-only mode (updateMode: "Off") —
+# collects rightsizing recommendations without evicting/restarting pods.
+# Replace {deployment_name}. Read results after 24+ hours:
+#   kubectl get vpa {deployment_name}-vpa -o jsonpath='{.status.recommendation}'
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: "{deployment_name}-vpa"
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: "{deployment_name}"
+  updatePolicy:
+    updateMode: "Off"

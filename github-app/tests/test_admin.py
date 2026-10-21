@@ -106,10 +106,12 @@ async def _async_false(*args, **kwargs) -> bool:
     return False
 
 
-async def _mock_github_installations(monkeypatch, installation_ids: list[int], github_login: str = "octocat"):
+async def _mock_github_installations(
+    monkeypatch, installation_ids: list[int], github_login: str = "octocat", github_user_id: int = 12345
+):
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/user":
-            return httpx.Response(200, json={"login": github_login})
+            return httpx.Response(200, json={"id": github_user_id, "login": github_login})
         return httpx.Response(
             200,
             json={
@@ -2495,3 +2497,27 @@ async def test_repo_installation_id_returns_none_when_truly_unresolvable(pool):
     # caller doesn't administer are indistinguishable (see
     # test_admin_page_rejects_an_unadministered_installation_with_the_same_404_as_a_nonexistent_repo).
     assert await _repo_installation_id(pool, "no-such-account", "no-such-repo") is None
+
+
+def test_fetch_github_user_returns_id_and_login(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": 12345, "login": "octocat"})
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    assert admin._fetch_github_user("fake-token") == {"id": 12345, "login": "octocat"}
+
+
+def test_fetch_github_login_still_returns_just_login(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": 12345, "login": "octocat"})
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    assert admin._fetch_github_login("fake-token") == "octocat"

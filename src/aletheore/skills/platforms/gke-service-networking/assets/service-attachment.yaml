@@ -1,0 +1,15 @@
+---
+apiVersion: networking.gke.io/v1
+kind: ServiceAttachment
+metadata:
+  name: my-attachment # Replace with your ServiceAttachment name
+  namespace: default # Replace with your namespace
+spec:
+  connectionPreference: ACCEPT_AUTOMATIC
+  natSubnets:
+    - my-psc-nat-subnet # Replace with the subnet dedicated for PSC NAT
+  resourceRef:
+    kind: Service
+    # Replace with your internal passthrough LB Service (type: LoadBalancer
+    # with the networking.gke.io/load-balancer-type: "Internal" annotation).
+    name: my-service

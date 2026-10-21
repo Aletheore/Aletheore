@@ -1,0 +1,7 @@
+name: projects/{project_number}/locations/{region}/agentGateways/agw-tools-a2a
+protocols:
+  - MCP
+googleManaged:
+  governedAccessPath: AGENT_TO_ANYWHERE
+registries:
+  - "//agentregistry.googleapis.com/projects/{project_number}/locations/{region}"

@@ -1,0 +1,14 @@
+{
+  "bindings": [
+    {
+      "role": "roles/iap.egressor",
+      "members": [
+        "principal://agents.global.org-12345.system.id.goog/resources/aiplatform/projects/{project_number}/locations/{region}/reasoningEngines/{agent_engine_id}"
+      ],
+      "condition": {
+        "title": "Allow Tool Access with CEL",
+        "expression": "iap.googleapis.com/mcp.toolName == 'get_account_balance' && iap.googleapis.com/mcp.tool.isReadOnly == true"
+      }
+    }
+  ]
+}

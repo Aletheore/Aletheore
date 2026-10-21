@@ -1,0 +1,37 @@
+[
+  {
+    "createSurface": {
+      "id": "trace-surface-7b2c01",
+      "title": "Trace: /v1/orders/submit",
+      "components": [
+        {
+          "id": "trace-summary-card",
+          "component": "Card",
+          "title": "Trace Summary",
+          "children": [
+            {
+              "component": "Table",
+              "headers": ["Property", "Value"],
+              "rows": [
+                ["Trace ID", "7b2c0199e4f5a3e10c55a29811d0bb3e"],
+                ["Total Duration", "1000ms"],
+                ["Spans", "4"]
+              ]
+            }
+          ]
+        },
+        {
+          "id": "trace-spans-table",
+          "component": "Table",
+          "headers": ["Span Name", "Start Offset", "Duration", "Timeline", "Status"],
+          "rows": [
+            ["/v1/orders/submit", "0ms", "1000ms", "[====================]", "OK"],
+            ["/auth/verify", "0ms", "200ms", "[====................]", "OK"],
+            ["/db.Query", "200ms", "700ms", "[....==============..]", "OK"],
+            ["/notify/queue", "900ms", "100ms", "[..................==]", "OK"]
+          ]
+        }
+      ]
+    }
+  }
+]

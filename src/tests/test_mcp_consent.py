@@ -346,3 +346,60 @@ async def test_every_tool_is_either_gated_or_provably_inert(tmp_path):
         assert tool.annotations.open_world_hint is False, (
             f"{tool.name} is not gated but declares open-world access"
         )
+
+
+# --- aletheore_add_custom_skill: write AND network -------------------------
+#
+# Real gap (final Skill Hub review): skill_hub.add_custom_skill also pushes
+# the skill to the user's Skill Hub account whenever a personal token is
+# saved, so the tool reaches the network, not just the local filesystem. An
+# operator permitting writes but not network must not get that call.
+
+
+def test_add_custom_skill_declares_both_write_and_network():
+    assert TOOL_REQUIRED_EFFECTS["aletheore_add_custom_skill"] == frozenset({EFFECT_WRITE, EFFECT_NETWORK})
+
+
+@pytest.mark.asyncio
+async def test_write_only_posture_withholds_add_custom_skill(tmp_path):
+    names = await tool_names(make_repo(tmp_path), allow=frozenset({EFFECT_WRITE}))
+
+    assert "aletheore_add_custom_skill" not in names
+
+
+@pytest.mark.asyncio
+async def test_default_posture_still_registers_add_custom_skill(tmp_path, monkeypatch):
+    monkeypatch.delenv("ALETHEORE_MCP_ALLOW", raising=False)
+
+    names = await tool_names(make_repo(tmp_path))
+
+    assert "aletheore_add_custom_skill" in names
+
+
+# --- aletheore_remove_custom_skill: write AND network -----------------------
+#
+# Same gating as aletheore_add_custom_skill: it writes locally and also makes
+# a best-effort network call (skill_hub_sync.delete_custom_skill_best_effort),
+# so an operator permitting writes but not network must not get it either.
+
+
+def test_remove_custom_skill_declares_both_write_and_network():
+    assert TOOL_REQUIRED_EFFECTS["aletheore_remove_custom_skill"] == frozenset(
+        {EFFECT_WRITE, EFFECT_NETWORK}
+    )
+
+
+@pytest.mark.asyncio
+async def test_write_only_posture_withholds_remove_custom_skill(tmp_path):
+    names = await tool_names(make_repo(tmp_path), allow=frozenset({EFFECT_WRITE}))
+
+    assert "aletheore_remove_custom_skill" not in names
+
+
+@pytest.mark.asyncio
+async def test_default_posture_still_registers_remove_custom_skill(tmp_path, monkeypatch):
+    monkeypatch.delenv("ALETHEORE_MCP_ALLOW", raising=False)
+
+    names = await tool_names(make_repo(tmp_path))
+
+    assert "aletheore_remove_custom_skill" in names

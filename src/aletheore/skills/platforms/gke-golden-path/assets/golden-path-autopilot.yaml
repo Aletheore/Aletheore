@@ -1,0 +1,158 @@
+# Golden Path Autopilot Configuration (cluster-level policy settings only)
+# Condensed from `gcloud container clusters describe` export.
+#
+# Autopilot manages all node pools, node config, and provisioning defaults
+# automatically. Only cluster-level policy decisions are shown here.
+
+# --- Addons ---
+addonsConfig:
+  dnsCacheConfig:
+    enabled: true
+  gcePersistentDiskCsiDriverConfig:
+    enabled: true
+  gcpFilestoreCsiDriverConfig:
+    enabled: true
+  gcsFuseCsiDriverConfig:
+    enabled: true
+  gkeBackupAgentConfig: {}
+  httpLoadBalancing: {}
+  kubernetesDashboard:
+    disabled: true
+  networkPolicyConfig:
+    disabled: true                      # Calico addon not needed: Dataplane V2
+                                        # (ADVANCED_DATAPATH) enforces
+                                        # NetworkPolicy natively
+  parallelstoreCsiDriverConfig:
+    enabled: true
+  rayOperatorConfig: {}
+  statefulHaConfig:
+    enabled: true
+
+# --- Cluster Mode ---
+autopilot:
+  enabled: true
+
+# --- Autoscaling ---
+autoscaling:
+  autoscalingProfile: OPTIMIZE_UTILIZATION
+  enableNodeAutoprovisioning: true
+  resourceLimits:
+  - maximum: '1000000000'
+    resourceType: cpu
+  - maximum: '1000000000'
+    resourceType: memory
+  - maximum: '1000000000'
+    resourceType: nvidia-tesla-t4
+  - maximum: '1000000000'
+    resourceType: nvidia-tesla-a100
+
+# --- Security ---
+binaryAuthorization:
+  evaluationMode: DISABLED              # Optional hardening, off by default in
+                                        # this golden path; enable for supply-
+                                        # chain attestation — see the
+                                        # gke-platform-security skill
+controlPlaneEndpointsConfig:
+  dnsEndpointConfig:
+    allowExternalTraffic: true          # Customer-configurable
+  ipEndpointsConfig:
+    authorizedNetworksConfig:
+      privateEndpointEnforcementEnabled: true
+masterAuthorizedNetworksConfig:
+  privateEndpointEnforcementEnabled: true
+privateClusterConfig:
+  enablePrivateNodes: true
+rbacBindingConfig:
+  enableInsecureBindingSystemAuthenticated: false
+  enableInsecureBindingSystemUnauthenticated: false
+secretManagerConfig:
+  enabled: true
+  rotationConfig:
+    enabled: true
+    rotationInterval: 120s
+shieldedNodes:
+  enabled: true
+workloadIdentityConfig:
+  workloadPool: <PROJECT_ID>.svc.id.goog
+
+# --- Networking ---
+networkConfig:
+  datapathProvider: ADVANCED_DATAPATH
+  defaultEnablePrivateNodes: true
+  dnsConfig:
+    clusterDns: CLOUD_DNS
+    clusterDnsDomain: cluster.local
+    clusterDnsScope: CLUSTER_SCOPE
+  enableIntraNodeVisibility: true
+  gatewayApiConfig:
+    channel: CHANNEL_STANDARD
+
+# --- IP Allocation ---
+ipAllocationPolicy:
+  autoIpamConfig:
+    enabled: true                       # Customer-configurable
+  createSubnetwork: true                # Customer-configurable
+  stackType: IPV4
+  useIpAliases: true
+defaultMaxPodsConstraint:
+  maxPodsPerNode: '48'                  # This golden path's chosen value —
+                                        # halves per-node IP consumption (/25
+                                        # instead of /24). Not a GKE default
+                                        # (Standard: 110, Autopilot: 32).
+                                        # Customer-configurable.
+
+# --- Logging ---
+loggingConfig:
+  componentConfig:
+    enableComponents:
+    - SYSTEM_COMPONENTS
+    - WORKLOADS
+
+# --- Monitoring ---
+monitoringConfig:
+  advancedDatapathObservabilityConfig:
+    enableMetrics: true
+  componentConfig:
+    enableComponents:
+    - SYSTEM_COMPONENTS
+    - STORAGE
+    - POD
+    - DEPLOYMENT
+    - STATEFULSET
+    - DAEMONSET
+    - HPA
+    - JOBSET
+    - CADVISOR
+    - KUBELET
+    - DCGM
+    - APISERVER
+    - SCHEDULER
+    - CONTROLLER_MANAGER
+  managedPrometheusConfig:
+    enabled: true
+
+# --- Maintenance ---
+# Default control: release channel + a recurring maintenance window.
+# Use targeted maintenance exclusions only for critical freezes, and keep them
+# under ~6 months — see the gke-upgrades skill for exclusion scopes and limits.
+maintenancePolicy:
+  window:
+    recurringWindow:
+      recurrence: FREQ=WEEKLY;BYDAY=SA,SU   # Customer-configurable schedule
+      window:
+        startTime: <START_TIME>             # e.g. 2026-01-01T04:00:00Z
+        endTime: <END_TIME>                 # e.g. 2026-01-01T12:00:00Z
+
+# --- Upgrades ---
+releaseChannel:
+  channel: REGULAR
+
+# --- Scaling ---
+verticalPodAutoscaling:
+  enabled: true
+
+# --- Node Config & Pools ---
+# Autopilot manages all node pools, node config (disk, machine type, shielded
+# instances, gvnic, gcfs, workload metadata mode), and upgrade strategy
+# automatically. These are not user-configurable in Autopilot mode.
+# Run `gcloud container clusters describe` on a live cluster for the full output.

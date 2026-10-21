@@ -1,0 +1,11 @@
+Trace ID: a1d38200f73c6821e90b8f411aa509de
+
+[ /v2/items/batch_get ] (ID: a1b2c3d4e5f6a7b8, 800ms, ERROR)
+   │
+   ├───> [ /cache/read ] (ID: b2c3d4e5f6a7b8c9, 350ms, OK)
+   │
+   ├───> [ /service/fetch ] (ID: c3d4e5f6a7b8c9d0, 400ms, ERROR)
+   │        │
+   │        └───> [ /db.Query ] (ID: d4e5f6a7b8c9d0e1, 300ms, ERROR)
+   │
+   └───> [ /render/json ] (ID: e5f6a7b8c9d0e1f2, 50ms, OK)

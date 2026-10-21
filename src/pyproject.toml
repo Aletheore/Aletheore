@@ -110,7 +110,7 @@ Repository = "https://github.com/Aletheore/Aletheore"
 Issues = "https://github.com/Aletheore/Aletheore/issues"
 
 [project.scripts]
-aletheore = "aletheore.cli:main"
+aletheore = "aletheore._launcher:main"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -128,10 +128,15 @@ aletheore = [
     "data/*.json",
     "static_analysis/semgrep_rules/*.yaml",
     "static_analysis/joern_queries/*.sc",
+    "skills/**/*",
 ]
 
 [tool.pytest.ini_options]
 addopts = ["-p", "no:randomly"]
+# Collect only Aletheore's own tests. The bundled skills (aletheore/skills) ship vendored upstream scripts and
+# their own test files; importing those at collection time needs each skill's own dependencies (and some call sys.exit).
+testpaths = ["tests"]
+norecursedirs = ["aletheore/skills", ".git", "node_modules", "build", "dist", "*.egg-info", ".venv", "venv"]
 # Real incident: PR #792's pytest-windows job silently ate its entire 30-minute
 # job timeout with zero diagnostic output - pytest's own progress showed 44% and
 # then nothing until the job was killed, so the failure carried no information

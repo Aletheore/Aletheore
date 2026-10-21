@@ -1,0 +1,12 @@
+{
+  "bindings": [
+    {
+      "role": "roles/iap.egressor",
+      "members": [
+        "principal://agents.global.org-12345.system.id.goog/resources/aiplatform/projects/{project_number}/locations/us-east4/reasoningEngines/{marketing_agent_id}",
+        "principal://agents.global.org-12345.system.id.goog/resources/aiplatform/projects/{project_number}/locations/us-east4/reasoningEngines/{sales_agent_id}",
+        "principal://agents.global.org-12345.system.id.goog/resources/aiplatform/projects/{project_number}/locations/us-east4/reasoningEngines/{support_agent_id}"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: my-gateway # Replace with your Gateway name
+  namespace: default # Replace with your namespace
+spec:
+  # GKE managed global external Application Load Balancer.
+  # Regional classes (gke-l7-regional-external-managed, gke-l7-rilb)
+  # additionally require a REGIONAL_MANAGED_PROXY subnet in the region.
+  gatewayClassName: gke-l7-global-external-managed
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80

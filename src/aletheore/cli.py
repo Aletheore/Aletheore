@@ -15,6 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
+
 import click
 import tomli_w
 import typer
@@ -47,6 +48,7 @@ from aletheore.preferences import (
     mark_crash_reporting_notice_shown,
     set_crash_reporting_enabled,
 )
+from aletheore import skill_hub
 from aletheore.sentry_reporting import init_cli_sentry
 from aletheore.evidence import (
     IncompatibleEvidenceVersionError,
@@ -748,10 +750,12 @@ def _print_update_notice_if_available() -> None:
 
 def _fetch_whoami(
     token: str,
-    api_base_url: str = "https://app.aletheore.com",
+    api_base_url: str | None = None,
     http_client: httpx.Client | None = None,
 ) -> dict | None:
-    client = http_client or httpx.Client(base_url=api_base_url)
+    from aletheore.device_auth import _resolved_api_base_url
+
+    client = http_client or httpx.Client(base_url=api_base_url or _resolved_api_base_url())
     try:
         response = client.get(
             "/v1/whoami", headers={"Authorization": f"Bearer {token}"}, timeout=5.0
@@ -1633,9 +1637,14 @@ def _mcp_install(path: str, targets: list[str]) -> int:
     if "codex-cli" in selected:
         console.print(
             "[bold]OpenAI Codex CLI:[/bold] wrote .codex/config.toml, but Codex only reads "
-            "project-scoped MCP config for projects it already trusts - if the tools don't show up, "
-            "check Codex's own trust prompt for this directory. Also note: writing this file "
-            "reformats it - any hand-written comments in an existing config.toml are not preserved."
+            "project-scoped MCP config for projects it already trusts (in an untrusted project the "
+            "server is silently not loaded) - accept Codex's trust prompt for this directory, or "
+            "register it for every project instead:"
+        )
+        console.print(f"  codex mcp add aletheore -- {_aletheore_command()} mcp {repo_path}", soft_wrap=True)
+        console.print(
+            "Also note: writing .codex/config.toml reformats it - any hand-written comments in an "
+            "existing config.toml are not preserved."
         )
     if "claude-desktop" in selected:
         if _claude_desktop_config_path() is None:
@@ -2437,12 +2446,165 @@ def config_crash_reporting(
     console.print(f"[bold green]Crash reporting turned {normalized}.[/bold green]")
 
 
+skill_hub_app = typer.Typer(help="browse and manage Aletheore Hallbook, the skill hub")
+app.add_typer(skill_hub_app, name="hallbook")
+# The feature was called "skill-hub" before the rename to Hallbook. Kept as a
+# hidden alias so existing scripts keep working without a second name in --help.
+app.add_typer(skill_hub_app, name="skill-hub", hidden=True)
+
+
+@skill_hub_app.command("list", help="list curated and custom skills")
+def skill_hub_list(
+    category: Optional[str] = typer.Option(None, "--category", help="filter to one category"),
+) -> None:
+    # typer.echo, not console.print: titles come from skill frontmatter (or a
+    # custom skill's file name) and must not be parsed as Rich markup.
+    for meta in skill_hub.list_skills(category):
+        typer.echo(f"{meta.skill_id}  {meta.title}")
+
+
+@skill_hub_app.command("get", help="print a skill's content")
+def skill_hub_get(skill_id: str) -> None:
+    try:
+        skill = skill_hub.get_skill(skill_id)
+    except skill_hub.SkillNotFoundError as exc:
+        console.print(f"[bold red]error:[/bold red] skill not found: {exc}")
+        raise typer.Exit(code=1) from exc
+    # Raw write, not console.print: Rich would parse the body as markup
+    # (deleting bracketed text like "[borkweb/skills]", or raising
+    # MarkupError on a stray "[/x]") and hard-wrap long lines. The output
+    # must be the skill body byte for byte, so no extra newline either when
+    # the body already ends with one.
+    typer.echo(skill.content, nl=not skill.content.endswith("\n"))
+
+
+@skill_hub_app.command("categories", help="show the shelves and categories, with skill counts")
+def skill_hub_categories() -> None:
+    for shelf in skill_hub.list_overview():
+        typer.echo(f"{shelf['title']} ({shelf['skills']})")
+        for entry in shelf["categories"]:
+            typer.echo(f"  {entry['category']}  {entry['skills']}")
+
+
+@skill_hub_app.command("search", help="find skills by what you are about to do, e.g. 'flaky test'")
+def skill_hub_search(
+    query: list[str] = typer.Argument(..., help="words describing the task"),
+    category: Optional[str] = typer.Option(None, "--category", help="only search this category"),
+    limit: int = typer.Option(10, "--limit", min=1, max=50, help="maximum results"),
+) -> None:
+    results = skill_hub.search_skills(" ".join(query), category=category, limit=limit)
+    if not results:
+        typer.echo("No skills matched. Try fewer or different words, or run 'aletheore hallbook categories'.")
+        return
+    for meta in results:
+        typer.echo(f"{meta.skill_id}  {meta.title}")
+        description = " ".join(meta.description.split())
+        if description:
+            typer.echo(f"    {description[:140]}{'...' if len(description) > 140 else ''}")
+
+
+@skill_hub_app.command(
+    "snippet", help="print the short instruction to paste into AGENTS.md / CLAUDE.md so your agent uses Hallbook"
+)
+def skill_hub_snippet() -> None:
+    typer.echo(skill_hub.AGENT_INSTRUCTION_SNIPPET, nl=False)
+
+
+@skill_hub_app.command(
+    "suggest", help="suggest a Hallbook skill for a UserPromptSubmit hook (reads JSON on stdin)"
+)
+def skill_hub_suggest(
+    mode: str = typer.Option("hint", "--mode", help="hint or inject"),
+) -> None:
+    # One implementation for the Typer command and the fast pre-import path.
+    from aletheore.hallbook_hook import main
+
+    main(["--mode", mode])
+
+
+@skill_hub_app.command(
+    "hook", help="print the Claude Code UserPromptSubmit settings snippet to paste"
+)
+def skill_hub_hook(
+    mode: str = typer.Option("hint", "--mode", help="hint or inject"),
+) -> None:
+    executable = sys.executable
+    if " " in executable:
+        executable = f'"{executable}"'
+    command = f"{executable} -m aletheore.hallbook_hook --mode {mode}"
+    settings = {
+        "hooks": {
+            "UserPromptSubmit": [{"hooks": [{"type": "command", "command": command}]}]
+        }
+    }
+    typer.echo(json.dumps(settings, ensure_ascii=False))
+    typer.echo(
+        "Paste this into .claude/settings.json (project) or ~/.claude/settings.json (user).",
+        err=True,
+    )
+
+
+@skill_hub_app.command("files", help="list a skill's companion files (references, scripts, templates)")
+def skill_hub_files(skill_id: str) -> None:
+    try:
+        skill_hub.get_skill(skill_id)
+    except skill_hub.SkillNotFoundError as exc:
+        console.print(f"[bold red]error:[/bold red] skill not found: {exc}")
+        raise typer.Exit(code=1) from exc
+    files, total = skill_hub.list_skill_files(skill_id)
+    if not files:
+        typer.echo("No companion files.")
+        return
+    for rel in files:
+        typer.echo(rel)
+    if total > len(files):
+        typer.echo(f"... and {total - len(files)} more (showing the first {len(files)}).")
+
+
+@skill_hub_app.command("get-file", help="print one companion file of a skill")
+def skill_hub_get_file(skill_id: str, path: str) -> None:
+    try:
+        text = skill_hub.read_skill_file(skill_id, path)
+    except skill_hub.SkillNotFoundError as exc:
+        console.print(f"[bold red]error:[/bold red] skill not found: {exc}")
+        raise typer.Exit(code=1) from exc
+    except skill_hub.SkillFileError as exc:
+        console.print(f"[bold red]error:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+    typer.echo(text, nl=not text.endswith("\n"))
+
+
+@skill_hub_app.command("add", help="add a custom skill from a local file")
+def skill_hub_add(name: str, file: Path) -> None:
+    content = file.read_text(encoding="utf-8")
+    try:
+        skill_id = skill_hub.add_custom_skill(name, content)
+    except ValueError as exc:
+        console.print(f"[bold red]error:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print(f"[bold green]Added custom skill[/bold green] {skill_id}")
+
+
+@skill_hub_app.command("remove", help="remove a custom skill")
+def skill_hub_remove(name: str) -> None:
+    try:
+        existed = skill_hub.remove_custom_skill(name)
+    except ValueError as exc:
+        console.print(f"[bold red]error:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+    if existed:
+        console.print(f"[bold green]Removed custom skill[/bold green] custom/{name}")
+    else:
+        console.print(f"custom/{name} was not present - nothing to remove.")
+
+
 @app.command(help="authenticate with GitHub via device flow and save a personal API token")
 def login() -> None:
     from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, has_api_key, save_api_token
     from aletheore.device_auth import (
         DeviceFlowError,
         mint_cli_token,
+        mint_personal_token,
         poll_for_access_token,
         request_device_code,
         resolve_installation,
@@ -2458,6 +2620,14 @@ def login() -> None:
     ):
         console.print("A token is already saved locally - continuing will replace it.\n")
 
+    import os as _os
+
+    if _os.environ.get("ALETHEORE_API_URL"):
+        console.print(
+            f"[yellow]Using ALETHEORE_API_URL={_os.environ['ALETHEORE_API_URL']} instead of app.aletheore.com "
+            "(for testing against your own server).[/yellow]\n"
+        )
+
     try:
         code = request_device_code()
         console.print("First, authenticate with GitHub:")
@@ -2466,35 +2636,104 @@ def login() -> None:
         console.print("Waiting for authorization...")
         github_token = poll_for_access_token(code)
 
-        resolved = resolve_installation(github_token)
-        if isinstance(resolved, dict):
-            installation = resolved
-        else:
-            console.print("Multiple paid installations found - pick one:")
-            for index, candidate in enumerate(resolved, start=1):
-                console.print(f"  {index}. {candidate['account_login']}")
-            while True:
-                try:
-                    raw = input(f"Enter a number [1-{len(resolved)}]: ").strip()
-                except EOFError:
-                    console.print("[bold red]error:[/bold red] no interactive input to choose an installation")
-                    raise typer.Exit(code=1)
-                if raw.isdigit() and 1 <= int(raw) <= len(resolved):
-                    installation = resolved[int(raw) - 1]
-                    break
-                console.print(
-                    f"[bold red]error:[/bold red] enter a number between 1 and {len(resolved)}"
-                )
+        # Hostname plus a short machine id: two machines that share a hostname must not replace each other's token
+        # (the server treats an identical label as "the same machine logging in again").
+        import uuid
 
-        label = f"{socket.gethostname()} (device flow)"
-        token = mint_cli_token(github_token, installation["installation_id"], label)
-        save_api_token("aletheore-managed-audit", token)
-        console.print(
-            f"[bold green]Logged in.[/bold green] Token saved for "
-            f"[bold]{installation['account_login']}[/bold]. "
-            "This replaces any previously saved token."
-        )
-        console.print(HOSTED_EMBEDDINGS_DISCLOSURE)
+        # ALETHEORE_LOGIN_LABEL lets two test "machines" on one computer log in without replacing each other.
+        label = _os.environ.get("ALETHEORE_LOGIN_LABEL") or f"{socket.gethostname()}-{uuid.getnode() & 0xFFFF:04x} (device flow)"
+
+        # Mint and save a personal token before any installation lookup.
+        # This has no dependency on an Aletheore GitHub App installation, so
+        # it is what lets an account with zero installations still log in
+        # for Hallbook purposes. It is best-effort, though: a Hallbook
+        # failure (network error, the endpoint 404ing before it is deployed,
+        # a timeout, the per-account token cap or rate limit) must never
+        # block a paid user's managed-audit login below, so any failure here
+        # is a warning and the installation block still runs.
+        personal_token_saved = False
+        try:
+            personal_token = mint_personal_token(github_token, label)
+            save_api_token("aletheore-personal", personal_token)
+            personal_token_saved = True
+        except Exception as exc:  # noqa: BLE001 - best-effort by design
+            console.print(
+                "[bold yellow]warning:[/bold yellow] Hallbook personal login unavailable "
+                f"right now ({type(exc).__name__}) - continuing without it."
+            )
+
+        if personal_token_saved:
+            console.print(
+                "[dim]Custom skills you add sync to your Aletheore account and are available on your other machines.[/dim]"
+            )
+            # Pull-merge custom skills from the server now that a personal
+            # token exists. Never raises (see skill_hub_sync), so it cannot
+            # affect the login outcome. Skipped without a personal token:
+            # there is nothing to pull or push with.
+            from aletheore import skill_hub_sync
+
+            skill_hub_sync.pull_merge_custom_skills()
+
+        # Installation resolution (for the managed-audit token) is
+        # best-effort from here on: a GitHub account with no Aletheore
+        # installation must not make the whole command exit non-zero
+        # when the personal token above already satisfies login. Only
+        # the specific "no installations found" DeviceFlowError is
+        # downgraded to a warning here - any other failure in this block
+        # (a genuine network error, a bad response, etc.) still propagates
+        # to the outer handlers below exactly as before.
+        installation_account_login: str | None = None
+        try:
+            resolved = resolve_installation(github_token)
+            if isinstance(resolved, dict):
+                installation = resolved
+            else:
+                console.print("Multiple paid installations found - pick one:")
+                for index, candidate in enumerate(resolved, start=1):
+                    console.print(f"  {index}. {candidate['account_login']}")
+                while True:
+                    try:
+                        raw = input(f"Enter a number [1-{len(resolved)}]: ").strip()
+                    except EOFError:
+                        console.print("[bold red]error:[/bold red] no interactive input to choose an installation")
+                        raise typer.Exit(code=1)
+                    if raw.isdigit() and 1 <= int(raw) <= len(resolved):
+                        installation = resolved[int(raw) - 1]
+                        break
+                    console.print(
+                        f"[bold red]error:[/bold red] enter a number between 1 and {len(resolved)}"
+                    )
+
+            token = mint_cli_token(github_token, installation["installation_id"], label)
+            save_api_token("aletheore-managed-audit", token)
+            installation_account_login = installation["account_login"]
+        except DeviceFlowError:
+            if not personal_token_saved:
+                # Neither token was saved, so nothing about this login
+                # succeeded - say so instead of claiming a Hallbook login.
+                console.print(
+                    "[bold red]error:[/bold red] No Aletheore GitHub App installation "
+                    "found, and Hallbook login is unavailable right now - nothing "
+                    "was saved. Retry in a moment."
+                )
+                raise typer.Exit(code=1)
+            console.print(
+                "[bold yellow]warning:[/bold yellow] No Aletheore GitHub App "
+                "installation found - install it for the full feature set; "
+                "you're logged in for Hallbook."
+            )
+
+        if installation_account_login is not None:
+            console.print(
+                f"[bold green]Logged in.[/bold green] Token saved for "
+                f"[bold]{installation_account_login}[/bold]. "
+                "This replaces any previously saved token."
+            )
+            console.print(HOSTED_EMBEDDINGS_DISCLOSURE)
+        else:
+            console.print(
+                "[bold green]Logged in.[/bold green] Personal token saved for Hallbook."
+            )
     except DeviceFlowError as exc:
         console.print(f"[bold red]error:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
@@ -2503,16 +2742,85 @@ def login() -> None:
         raise typer.Exit(code=1) from exc
 
 
-@app.command(help="clear the locally saved managed-audit API token")
-def logout() -> None:
+def _logout_revoke_failed(exc: Exception, all_devices: bool) -> None:
+    """The server-side revoke did not go through. For --all-devices that is an error (keep the token so the user can
+    retry); for a plain logout it is a warning and the local token is still removed."""
+    if all_devices:
+        # The user asked to revoke every token. Removing the only local token now would leave nothing to
+        # authenticate a retry with, and the other tokens would stay valid. Keep it.
+        console.print(
+            "[bold red]error:[/bold red] couldn't revoke your personal tokens on the "
+            f"server ({type(exc).__name__}). You are still logged in on this machine; "
+            "retry `aletheore logout --all-devices` when you are online."
+        )
+        raise typer.Exit(code=1) from exc
+    # A plain offline logout must still log the user out locally;
+    # the server-side revoke failing is a warning, not a blocker.
+    console.print(
+        "[bold yellow]warning:[/bold yellow] couldn't revoke the personal "
+        f"token on the server ({type(exc).__name__}) - it was removed from "
+        "this machine, but it has no expiry and stays valid on the server "
+        "until it is revoked. To revoke it, log in again and run "
+        "`aletheore logout --all-devices`."
+    )
+
+
+@app.command(help="clear the locally saved managed-audit and Hallbook tokens")
+def logout(
+    all_devices: bool = typer.Option(
+        False, "--all-devices", help="also revoke every personal token on the server, not just this one"
+    ),
+) -> None:
     import aletheore.credentials as credentials
 
-    removed = credentials.clear_api_key(
-        "aletheore-managed-audit",
+    # Both slots: the managed-audit token and the Hallbook personal token.
+    # status() reports them independently, and a user running logout
+    # expects to be logged out of both.
+    personal_slot = "aletheore-personal"
+    # Revoke server-side first, while the token still exists locally. Same
+    # guarded read status() uses: never prompts, since logout is not an
+    # interactive ask-for-a-token moment.
+    personal_token: str | None = None
+    if credentials.has_api_key(
+        "ALETHEORE_PERSONAL_TOKEN",
+        personal_slot,
         credentials_path=credentials.DEFAULT_CREDENTIALS_PATH,
-    )
-    if removed:
-        console.print("[bold green]Logged out.[/bold green] Saved token removed.")
+    ):
+        personal_token = credentials.get_api_key(
+            "ALETHEORE_PERSONAL_TOKEN",
+            personal_slot,
+            credentials_path=credentials.DEFAULT_CREDENTIALS_PATH,
+            prompt_fn=lambda _msg: "",
+        )
+    if personal_token:
+        from aletheore.device_auth import revoke_personal_token
+
+        try:
+            revoke_personal_token(personal_token, all_devices=all_devices)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 401:
+                _logout_revoke_failed(exc, all_devices)
+            # 401: the server already revoked this token (for example by an earlier logout elsewhere), so there is
+            # nothing left to revoke; fall through and clear the dead token from this machine.
+        except Exception as exc:  # noqa: BLE001 - best-effort by design
+            _logout_revoke_failed(exc, all_devices)
+    elif all_devices:
+        # --all-devices needs a personal token to authenticate the revoke-all
+        # call. With none saved (even if a managed-audit token is), there is
+        # nothing to authenticate with, so say so instead of silently logging
+        # out locally and skipping the revoke the user explicitly asked for.
+        console.print(
+            "Not logged in to Hallbook - nothing to revoke. Any managed-audit login on this machine was left as it is; "
+            "run `aletheore logout` (without --all-devices) to remove that too."
+        )
+        return
+
+    removed_any = False
+    for slot in ("aletheore-managed-audit", personal_slot):
+        if credentials.clear_api_key(slot, credentials_path=credentials.DEFAULT_CREDENTIALS_PATH):
+            removed_any = True
+    if removed_any:
+        console.print("[bold green]Logged out.[/bold green] Saved tokens removed.")
     else:
         console.print("Not logged in - nothing to clear.")
 
@@ -2542,21 +2850,35 @@ def status() -> None:
         credentials_path=credentials.DEFAULT_CREDENTIALS_PATH,
     ):
         console.print("Not logged in - run [bold]aletheore login[/bold]")
-        return
-
-    token = credentials.get_api_key(
-        "ALETHEORE_API_TOKEN",
-        "aletheore-managed-audit",
-        credentials_path=credentials.DEFAULT_CREDENTIALS_PATH,
-        prompt_fn=lambda _msg: "",
-    )
-    who = _fetch_whoami(token)
-    if who is None:
-        console.print("A token is saved locally, but it couldn't be verified right now.")
     else:
-        console.print(
-            f"Logged in as: [bold]{who.get('account_login', '?')}[/bold] ({who.get('plan', '?')} plan)"
+        token = credentials.get_api_key(
+            "ALETHEORE_API_TOKEN",
+            "aletheore-managed-audit",
+            credentials_path=credentials.DEFAULT_CREDENTIALS_PATH,
+            prompt_fn=lambda _msg: "",
         )
+        who = _fetch_whoami(token)
+        if who is None:
+            console.print("A token is saved locally, but it couldn't be verified right now.")
+        else:
+            console.print(
+                f"Logged in as: [bold]{who.get('account_login', '?')}[/bold] ({who.get('plan', '?')} plan)"
+            )
+
+    # Independent of the managed-audit/installation check above: Hallbook
+    # login only needs the personal token slot, which login() now always
+    # saves regardless of whether any Aletheore GitHub App installation
+    # was found. No network round-trip here (unlike the whoami call
+    # above) - there is no installation-scoped identity endpoint for a
+    # bare personal token, so this is a purely local presence check.
+    if credentials.has_api_key(
+        "ALETHEORE_PERSONAL_TOKEN",
+        "aletheore-personal",
+        credentials_path=credentials.DEFAULT_CREDENTIALS_PATH,
+    ):
+        console.print("Hallbook: logged in")
+    else:
+        console.print("Hallbook: not logged in - run [bold]aletheore login[/bold]")
 
 
 def main() -> None:

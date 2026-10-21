@@ -893,6 +893,8 @@ SCAN_SLOT_LOCK_NAMESPACE = 1
 HEALTH_CHECK_TARGET_LOCK_NAMESPACE = 4
 API_TOKEN_LOCK_NAMESPACE = 5
 SEAT_LOCK_NAMESPACE = 6
+# 7 and 8 are claimed by scan_worker/db.py (wiki-write, check-run creation).
+PERSONAL_TOKEN_LOCK_NAMESPACE = 9
 ADVISORY_LOCK_TIMEOUT = "5s"
 
 
@@ -2084,6 +2086,190 @@ async def get_installation_by_token_hash(pool: asyncpg.Pool, token_hash: str) ->
         token_hash,
     )
     return dict(row) if row else None
+
+
+async def get_or_create_personal_identity(pool: asyncpg.Pool, github_user_id: int, github_login: str) -> dict:
+    """Upserts on the GitHub user id (the stable identifier) - a login
+    rename lands as an UPDATE of the existing row's github_login, never a
+    second row for the same GitHub account.
+    """
+    row = await pool.fetchrow(
+        """
+        INSERT INTO personal_identities (github_user_id, github_login)
+        VALUES ($1, $2)
+        ON CONFLICT (github_user_id) DO UPDATE SET github_login = EXCLUDED.github_login
+        RETURNING id, github_user_id, github_login
+        """,
+        github_user_id, github_login,
+    )
+    return dict(row)
+
+
+# Flat cap on active personal (Skill Hub) tokens per GitHub identity. A v1
+# constant, unlike installation tokens' per-installation max_api_tokens
+# column: personal identities have no plan or settings row to read a limit
+# from. Every `aletheore login` mints one token, so this is the number of
+# machines/logins one account can have live at once.
+MAX_PERSONAL_TOKENS_PER_IDENTITY = 10
+
+
+async def create_personal_token_within_limit(
+    pool: asyncpg.Pool,
+    personal_identity_id: int,
+    token_hash: str,
+    label: str,
+    limit: int = MAX_PERSONAL_TOKENS_PER_IDENTITY,
+) -> int:
+    """Keyed on the personal identity instead of an installation, but unlike
+    create_api_token_within_limit this never rejects: `aletheore login`
+    mints a brand new personal token on every single login, and before the
+    revoke_personal_token/revoke_all_personal_tokens endpoints existed
+    nothing ever revoked one, so a cap-and-reject-at-`limit` design
+    permanently locked out any identity that had logged in `limit`+ times,
+    with no recovery path short of a manual DB edit.
+
+    Instead, once the identity is already at `limit` non-revoked tokens,
+    this revokes the single OLDEST one (by created_at, id as a deterministic
+    tiebreak) to make room before inserting the new one. That keeps a
+    rolling window of the `limit` most-recently-created tokens always valid
+    - multi-machine sync keeps working for up to `limit` concurrent
+    machines, and a login can never 409.
+
+    Stays inside the same advisory-xact-lock scope create_api_token_within_limit
+    uses (mirrored here, keyed on personal_identity_id instead of
+    installation_id): the count check, the eviction, and the insert all run
+    serialized against any other concurrent call for this identity, so two
+    near-simultaneous logins at the cap can't both see "room", double-evict
+    the same row, or leave the identity over `limit`.
+
+    Returns the new token's id.
+    """
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('lock_timeout', $1, true)", ADVISORY_LOCK_TIMEOUT)
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock($1, $2)",
+                PERSONAL_TOKEN_LOCK_NAMESPACE,
+                personal_identity_id,
+            )
+            # A re-login from the same machine (same label, e.g. "<hostname> (device
+            # flow)") replaces that machine's previous token instead of piling up
+            # beside it, so repeated logins on one laptop cannot push the cap and
+            # evict a different machine's token.
+            await conn.execute(
+                """
+                UPDATE personal_api_tokens SET revoked_at = now()
+                WHERE personal_identity_id = $1 AND revoked_at IS NULL AND label = $2
+                """,
+                personal_identity_id,
+                label,
+            )
+            count = await conn.fetchval(
+                """
+                SELECT count(*) FROM personal_api_tokens
+                WHERE personal_identity_id = $1 AND revoked_at IS NULL
+                """,
+                personal_identity_id,
+            )
+            if count >= limit:
+                await conn.execute(
+                    """
+                    UPDATE personal_api_tokens SET revoked_at = now()
+                    WHERE id = (
+                        SELECT id FROM personal_api_tokens
+                        WHERE personal_identity_id = $1 AND revoked_at IS NULL
+                        ORDER BY created_at ASC, id ASC
+                        LIMIT 1
+                    )
+                    """,
+                    personal_identity_id,
+                )
+            row = await conn.fetchrow(
+                """
+                INSERT INTO personal_api_tokens (personal_identity_id, token_hash, label)
+                VALUES ($1, $2, $3)
+                RETURNING id
+                """,
+                personal_identity_id,
+                token_hash,
+                label,
+            )
+    return row["id"]
+
+
+async def get_personal_identity_by_token_hash(pool: asyncpg.Pool, token_hash: str) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT p.id, p.github_user_id, p.github_login
+        FROM personal_api_tokens t
+        JOIN personal_identities p ON p.id = t.personal_identity_id
+        WHERE t.token_hash = $1 AND t.revoked_at IS NULL
+        """,
+        token_hash,
+    )
+    return dict(row) if row else None
+
+
+async def revoke_personal_token(pool: asyncpg.Pool, token_hash: str) -> bool:
+    """True if a non-revoked row with that hash existed and was revoked,
+    False if it didn't exist or was already revoked - idempotent, never an
+    error either way (a retried request racing with itself must not 500).
+    """
+    result = await pool.execute(
+        "UPDATE personal_api_tokens SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL",
+        token_hash,
+    )
+    return result != "UPDATE 0"
+
+
+async def revoke_all_personal_tokens(pool: asyncpg.Pool, personal_identity_id: int) -> int:
+    """Count of rows revoked, 0 if none were active."""
+    result = await pool.execute(
+        "UPDATE personal_api_tokens SET revoked_at = now() WHERE personal_identity_id = $1 AND revoked_at IS NULL",
+        personal_identity_id,
+    )
+    # asyncpg execute() returns a string like "UPDATE 3"; the count is the
+    # second token, same shape already relied on by revoke_personal_token's
+    # own "UPDATE 0" check above.
+    return int(result.split()[-1])
+
+
+async def list_custom_skills(pool: asyncpg.Pool, personal_identity_id: int) -> list[dict]:
+    rows = await pool.fetch(
+        "SELECT skill_name AS name, updated_at FROM custom_skills WHERE personal_identity_id = $1 ORDER BY skill_name ASC",
+        personal_identity_id,
+    )
+    return [dict(row) for row in rows]
+
+
+async def get_custom_skill(pool: asyncpg.Pool, personal_identity_id: int, skill_name: str) -> dict | None:
+    row = await pool.fetchrow(
+        "SELECT skill_name AS name, content, updated_at FROM custom_skills WHERE personal_identity_id = $1 AND skill_name = $2",
+        personal_identity_id, skill_name,
+    )
+    return dict(row) if row else None
+
+
+async def upsert_custom_skill(pool: asyncpg.Pool, personal_identity_id: int, skill_name: str, content: str) -> dict:
+    row = await pool.fetchrow(
+        """
+        INSERT INTO custom_skills (personal_identity_id, skill_name, content)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (personal_identity_id, skill_name)
+        DO UPDATE SET content = EXCLUDED.content, updated_at = now()
+        RETURNING skill_name AS name, content, updated_at
+        """,
+        personal_identity_id, skill_name, content,
+    )
+    return dict(row)
+
+
+async def delete_custom_skill(pool: asyncpg.Pool, personal_identity_id: int, skill_name: str) -> bool:
+    result = await pool.execute(
+        "DELETE FROM custom_skills WHERE personal_identity_id = $1 AND skill_name = $2",
+        personal_identity_id, skill_name,
+    )
+    return result != "DELETE 0"
 
 
 async def touch_api_token(

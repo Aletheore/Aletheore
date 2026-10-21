@@ -1,0 +1,10 @@
+apiVersion: networkservices.cnrm.cloud.google.com/v1beta1
+kind: AuthzExtension
+metadata:
+  name: iap-authz-extension
+  namespace: default
+spec:
+  loadBalancingScheme: INTERNAL_MANAGED
+  service: https://iap-authz.internal.domain.corp/validate
+  timeout: 15s
+  failOpen: true

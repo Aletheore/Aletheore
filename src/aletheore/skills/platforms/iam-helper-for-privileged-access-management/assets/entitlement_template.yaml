@@ -1,0 +1,29 @@
+privilegedAccess:
+  gcpIamAccess:
+    resourceType: cloudresourcemanager.googleapis.com/Project
+    resource: //cloudresourcemanager.googleapis.com/projects/PROJECT_ID
+    # Examples for other resources:
+    # resourceType: cloudresourcemanager.googleapis.com/Folder
+    # resource: //cloudresourcemanager.googleapis.com/folders/FOLDER_ID
+    # resourceType: cloudresourcemanager.googleapis.com/Organization
+    # resource: //cloudresourcemanager.googleapis.com/organizations/ORG_ID
+    roleBindings:
+    - role: ROLE_NAME
+      # conditionExpression: "request.time < timestamp('2027-01-01T00:00:00Z')"
+maxRequestDuration: "14400s"  # Maximum duration a requester can ask for (e.g. 14400s / 4 hours default, or custom like 28800s / 8 hours)
+requesterJustificationConfig:
+  unstructured: {}
+eligibleUsers:
+- principals:
+  - user:user@example.com
+# Optional: Manual Approval Workflow Configuration
+# approvalWorkflow:
+#   manualApprovals:
+#     requireApproverJustification: true
+#     steps:
+#     - approvalsNeeded: 1
+#       approverEmailRecipients:
+#       - approver@example.com
+#       approvers:
+#       - principals:
+#         - user:approver@example.com # or group:approvers@example.com

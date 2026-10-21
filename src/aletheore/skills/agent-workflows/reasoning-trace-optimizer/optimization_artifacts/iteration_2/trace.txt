@@ -1,0 +1,156 @@
+Session: 0b509787-5513-4917-a2c0-32c48e99a3cc
+Task: Research the topic of "context engineering for AI agents" and create a comprehensive summary.
+
+Your research should:
+1. Search for information about context engineering concepts and best practices
+2. Read relevant sources to gather detailed information
+3. Check the local project files for any existing research notes
+4. Save important findings as notes for future reference
+5. Write a final summary report to ./output/research_summary.md
+
+The summary should include:
+- Key concepts and definitions
+- Best practices and techniques (including the "lost in the middle" problem)
+- Practical recommendations for agent developers
+- References to sources consulted (use actual URLs from your research)
+Model: MiniMax-M2.1
+Status: Success
+Turns: 6
+Tokens: 4181
+
+============================================================
+REASONING TRACE
+============================================================
+
+[Turn 0] Thinking:
+----------------------------------------
+The user wants me to research "context engineering for AI agents" and create a comprehensive summary. Let me break down the tasks:
+
+1. Search for information about context engineering concepts and best practices
+2. Read relevant sources to gather detailed information
+3. Check the local project files for any existing research notes
+4. Save important findings as notes for future reference
+5. Write a final summary report to ./output/research_summary.md
+
+Let me start by:
+1. Searching the web for con...
+
+  Tool: web_search({"num_results": 10, "query": "context engineering for AI agents best practices techniques"})
+  Result: {"query": "context engineering for ai agents best practices techniques", "num_results": 10, "results...
+
+  Tool: list_directory({"path": "."})
+  Result: {"path": ".", "entries": [{"name": "README.md", "type": "file"}, {"name": "research", "type": "direc...
+
+[Turn 1] Thinking:
+----------------------------------------
+Good, I have search results and I can see there's a "research" directory. Let me check what's in the research directory and also read some of the key sources I found. I'll also do another search specifically for the "lost in the middle" problem.
+
+  Tool: list_directory({"path": "./research"})
+  Result: {"path": "./research", "entries": [], "message": "Directory is empty or does not exist"}
+
+  Tool: web_search({"num_results": 8, "query": "\"lost in the middle\" problem LLM context AI agents"})
+  Result: {"query": "\"lost in the middle\" problem llm context ai agents", "num_results": 7, "results": [{"ti...
+
+  Tool: read_url({"url": "https://www.anthropic.com/research/building-effective-agents"})
+  Result: {"url": "https://www.anthropic.com/research/building-effective-agents", "status": "success", "conten...
+
+[Turn 2] Thinking:
+----------------------------------------
+Good, I'm getting useful information. The research directory doesn't exist or is empty, so I don't have existing notes to check. Let me now read more key sources - specifically the "Lost in the Middle" paper and some other key resources about context engineering.
+
+  Tool: read_url({"url": "https://arxiv.org/abs/2307.03172"})
+  Result: {"url": "https://arxiv.org/abs/2307.03172", "status": "success", "content": "\n# Lost in the Middle:...
+
+  Tool: read_url({"url": "https://www.promptingguide.ai/techniques"})
+  Result: {"url": "https://www.promptingguide.ai/techniques", "status": "success", "content": "\n# Prompt Engi...
+
+  Tool: read_url({"url": "https://docs.anthropic.com/en/docs/build-with-claude/context-windows"})
+  Result: {"url": "https://docs.anthropic.com/en/docs/build-with-claude/context-windows", "status": "error", "...
+
+  Tool: read_url({"url": "https://platform.openai.com/docs/guides/prompt-engineering"})
+  Result: {"url": "https://platform.openai.com/docs/guides/prompt-engineering", "status": "success", "content"...
+
+[Turn 3] Thinking:
+----------------------------------------
+Excellent! I now have comprehensive information. Let me search for a few more specific topics related to context engineering and then save notes and write the final summary.
+
+  Tool: web_search({"num_results": 6, "query": "context engineering RAG retrieval augmented generation best practices"})
+  Result: {"query": "context engineering rag retrieval augmented generation best practices", "num_results": 6,...
+
+  Tool: web_search({"num_results": 6, "query": "agent context management token optimization strategies"})
+  Result: {"query": "agent context management token optimization strategies", "num_results": 6, "results": [{"...
+
+[Turn 4] Thinking:
+----------------------------------------
+I have enough information now. Let me:
+1. Save some important findings as research notes
+2. Write the final comprehensive summary to ./output/research_summary.md
+
+First, let me check if the output directory exists.
+
+  Tool: save_note({"content": "# Context Engineering Key Concepts\n\n## Core Definition\nContext engineering is the deliberate design and management of information provided to AI agents to optimize their performance, reliability, and efficiency.\n\n## The \"Lost in the Middle\" Phenomenon\n- **Problem**: LLMs perform worse when relevant information is placed in the middle of long contexts\n- **U-shaped curve**: Performance is highest at the beginning (recency effect) and end (primacy effect), lowest in the middle\n- **Research**: Liu et al., 2023 (arXiv:2307.03172)\n- **Implication**: Critical information must be positioned strategically\n\n## Key Principles from Research\n\n### 1. Context Positioning\n- Instructions \u2192 Place at the beginning\n- Task-specific context \u2192 Place at the end\n- Less critical info \u2192 Can be in the middle\n\n### 2. Context Quality over Quantity\n- Remove redundant information\n- Only include truly relevant content\n- Compress long histories while preserving key facts\n\n### 3. Structure for Attention\n- Use clear section headers\n- Front-load important details in each section\n- Consistent formatting for easier parsing\n\n## Best Practices Summary\n1. Start simple, add complexity gradually\n2. Design clear, well-documented tools\n3. Implement proper error handling and recovery\n4. Use progressive disclosure (load info on-demand)\n5. Test systematically with representative examples", "tags": ["context-engineering", "ai-agents", "llm", "best-practices"], "title": "Context Engineering Key Concepts and Best Practices"})
+  Result: {"status": "success", "note_id": 4, "message": "Note 'Context Engineering Key Concepts and Best Prac...
+
+  Tool: write_file({"content": "# Context Engineering for AI Agents: Comprehensive Research Summary\n\n## Executive Summary\n\nContext engineering is the deliberate practice of designing, structuring, and managing the information provided to AI agents to optimize their performance, reliability, and efficiency. This report synthesizes research findings from leading AI labs and academic institutions to provide a comprehensive guide for developers building AI agent systems.\n\n---\n\n## 1. Key Concepts and Definitions\n\n### 1.1 What is Context Engineering?\n\nContext engineering encompasses the strategic design and management of all information that an AI agent receives, including:\n- System prompts and instructions\n- Retrieved documents and knowledge bases\n- Conversation history and memory\n- Tool definitions and descriptions\n- User queries and task specifications\n\nUnlike traditional prompt engineering which focuses on single-turn interactions, context engineering addresses the unique challenges of multi-turn agentic workflows where managing evolving context is critical.\n\n### 1.2 The Context Window\n\nThe context window represents the total amount of information (measured in tokens) that an LLM can process at once. Modern models support increasingly large context windows:\n- Claude: Up to 200K tokens\n- GPT-4: Up to 128K tokens\n- Gemini: Up to 2M tokens\n\nHowever, **larger context windows do not guarantee better performance**\u2014the quality and structure of context matters more than quantity.\n\n### 1.3 Context Types in Agent Systems\n\n| Type | Description | Management Strategy |\n|------|-------------|---------------------|\n| **System Context** | Core instructions, agent persona, behavioral constraints | Static, carefully crafted |\n| **Tool Context** | Definitions of available tools and their usage | Structured, well-documented |\n| **Retrieved Context** | Information fetched from external sources | Selective, ranked by relevance |\n| **Conversational Context** | History of user-agent interactions | Summarized, pruned |\n| **Working Context** | Current task state, intermediate results | Dynamic, compact |\n\n---\n\n## 2. The \"Lost in the Middle\" Problem\n\n### 2.1 The Phenomenon\n\nResearch by Liu et al. (2023) revealed a critical limitation in how language models process long contexts. Their paper \"Lost in the Middle: How Language Models Use Long Contexts\" demonstrates that **models struggle to effectively use information placed in the middle of long contexts**.\n\n### 2.2 U-Shaped Performance Curve\n\nThe research found a consistent pattern across multiple models:\n\n```\nPerformance\n    \u2191\n    \u2502  \u2588\u2588\u2588\u2588                          \u2588\u2588\u2588\u2588\n    \u2502  \u2588\u2588\u2588\u2588    \u2190 High Performance    \u2588\u2588\u2588\u2588\n    \u2502  \u2588\u2588\u2588\u2588                          \u2588\u2588\u2588\u2588\n    \u2502  \u2588\u2588\u2588\u2588      \u2584\u2584\u2584\u2584\u2584\u2584    \u2190 Low    \u2588\u2588\u2588\u2588\n    \u2502  \u2588\u2588\u2588\u2588     \u2588\u2588\u2588\u2588\u2588\u2588\u2588   Performance \u2588\u2588\u2588\u2588\n    \u2502  \u2588\u2588\u2588\u2588    \u2588\u2588\u2588\u2588\u2588\u2588\u2588              \u2588\u2588\u2588\u2588\n    \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2192 Position\n         Beginning    Middle    End\n```\n\n**Key findings:**\n- Information at the beginning or end of context is processed most effectively\n- Information in the middle experiences significant performance degradation (up to 20-30% accuracy loss)\n- This pattern persists across different model sizes and architectures\n- Performance degrades as total context length increases, even with optimal positioning\n\n### 2.3 Implications for Context Engineering\n\nBased on this research, practitioners should:\n\n1. **Position critical information strategically:**\n   - Core instructions and constraints \u2192 Beginning\n   - Task-specific reference materials \u2192 End\n   - Supporting examples \u2192 Either boundary\n\n2. **For RAG (Retrieval-Augmented Generation) systems:**\n   - Return fewer, more relevant chunks rather than many\n   - Rank results by importance, not just similarity scores\n   - Place the most relevant retrieved content at context boundaries\n\n3. **Structure documents for attention:**\n   - Use clear headings and section breaks\n   - Front-load key information in each section\n   - Use consistent formatting for easier model parsing\n\n---\n\n## 3. Best Practices and Techniques\n\n### 3.1 Core Principles for Agent Development\n\n#### Start Simple, Add Complexity Gradually\n\nBegin with the simplest possible agent architecture:\n- Single tool with clear purpose\n- Linear workflow without branching\n- Explicit success criteria\n\nOnly add complexity when you have evidence it's needed. Over-engineering multi-agent systems before validating single-agent performance is a common anti-pattern.\n\n#### Tool Design Matters\n\nWell-designed tools significantly improve agent reliability:\n\n- **Clear descriptions**: Explain what the tool does AND when to use it\n- **Typed inputs**: Use JSON Schema to define expected parameters\n- **Informative outputs**: Return data the model can interpret and act on\n- **Error messages**: Provide actionable guidance when things fail\n\n#### Context Management is Critical\n\nContext is the most precious resource in agent systems:\n\n- **Token efficiency**: Every token costs money and attention\n- **Structured format**: Use consistent formatting for easier parsing\n- **Progressive disclosure**: Load information on-demand\n- **Summarization**: Compress long histories while preserving key facts\n\n### 3.2 Prompt Engineering Techniques\n\n#### Zero-Shot and Few-Shot Prompting\n\n- **Zero-shot**: Ask the model to perform a task without examples\n- **Few-shot**: Provide examples to guide the model's output format and style\n\n#### Chain-of-Thought (CoT)\n\nEncourage step-by-step reasoning for complex tasks:\n```\nSolve this problem step by step:\n1. First, identify what is being asked\n2. Break down into components\n3. Solve each component\n4. Combine results\n```\n\n#### Self-Consistency\n\nGenerate multiple reasoning paths and take the majority answer. This improves reliability for complex reasoning tasks.\n\n#### Tree of Thoughts\n\nExplore multiple reasoning branches simultaneously, evaluating and pruning paths to find optimal solutions.\n\n### 3.3 Context Optimization Strategies\n\n#### Prompt Caching\n\nMany providers now offer prompt caching, which allows you to cache static portions of your prompts (system instructions, tool definitions) to reduce costs and latency.\n\n#### Context Compression\n\n- Summarize long documents while preserving key information\n- Use hierarchical summaries for deep document structures\n- Remove redundant or low-signal content\n\n#### Strategic Chunking\n\nFor RAG systems:\n- Chunk size should match the granularity needed for tasks\n- Include overlap between chunks for continuity\n- Use semantic boundaries rather than fixed token counts\n\n### 3.4 Error Handling and Recovery\n\nDesign for failure from the start:\n- Give the model explicit permission to retry\n- Provide diagnostic information in error messages\n- Set clear stopping conditions to prevent infinite loops\n- Log everything for debugging\n\n---\n\n## 4. Practical Recommendations for Agent Developers\n\n### 4.1 Design-Time Recommendations\n\n1. **Define clear boundaries**: Establish what your agent should and should not do\n2. **Create comprehensive tool documentation**: Include examples of correct usage\n3. **Design for observability**: Build in logging and tracing from day one\n4. **Plan for context limits**: Design architectures that work within realistic constraints\n\n### 4.2 Implementation-Time Recommendations\n\n1. **Write clear instructions**: Be specific about desired behavior, format, and constraints\n2. **Use delimiters**: Mark distinct sections of your prompts (instructions, context, examples, query)\n3. **Specify output format**: Define exact structure to reduce variability\n4. **Test iteratively**: Use representative examples and measure against gold-standard outputs\n\n### 4.3 Operational-Time Recommendations\n\n1. **Monitor context usage**: Track token consumption and identify optimization opportunities\n2. **Implement graceful degradation**: Plan for scenarios where context limits are exceeded\n3. **Use progressive loading**: Retrieve and add information on-demand rather than all at once\n4. **Log reasoning traces**: Capture agent decision-making for debugging and improvement\n\n### 4.4 Anti-Patterns to Avoid\n\n| Anti-Pattern | Better Approach |\n|--------------|-----------------|\n| Over-engineering complex multi-agent systems | Start simple, add complexity based on evidence |\n| Vague tool descriptions | Provide specific usage guidelines and examples |\n| Stuffing too much information | Include only relevant content, strategically positioned |\n| No exit conditions | Set clear stopping criteria |\n| Ambiguous instructions | Be specific about desired outcomes |\n| No output format specification | Define exact structure requirements |\n| Assuming model knows your domain | Provide necessary context explicitly |\n\n---\n\n## 5. Debugging and Observability\n\n### 5.1 Trace Analysis\n\nThe key to debugging agents is understanding their reasoning:\n\n1. Capture the full reasoning trace including thinking blocks\n2. Identify where the agent's understanding diverged from reality\n3. Look for patterns: tool confusion, goal drift, context loss\n4. Iterate on prompts based on specific failure modes\n\n### 5.2 Interleaved Thinking\n\nModels with interleaved thinking (reasoning between tool calls) provide better debugging insight because you can see:\n- How they interpreted each tool result\n- What alternatives they considered\n- When and why they changed approach\n\n### 5.3 Recommended Tools\n\n- **LangChain**: Built-in debugging and tracing capabilities\n- **Weights & Biases Prompts**: Visualization and comparison tools\n- **OpenTelemetry**: Standard observability instrumentation\n\n---\n\n## 6. References and Sources\n\n### Primary Research Papers\n\n1. Liu, N. F., et al. (2023). \"Lost in the Middle: How Language Models Use Long Contexts.\" *arXiv:2307.03172*.\n   - URL: https://arxiv.org/abs/2307.03172\n\n2. Wei, J., et al. (2022). \"Chain of Thought Prompting Elicits Reasoning in Large Language Models.\"\n   - URL: https://arxiv.org/abs/2201.11903\n\n### AI Lab Documentation and Guides\n\n3. Anthropic. \"Building Effective AI Agents.\"\n   - URL: https://www.anthropic.com/research/building-effective-agents\n\n4. Anthropic. \"Prompt Caching for Claude.\"\n   - URL: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching\n\n5. OpenAI. \"Prompt Engineering Best Practices.\"\n   - URL: https://platform.openai.com/docs/guides/prompt-engineering\n\n6. OpenAI. \"Text Generation and Context Windows.\"\n   - URL: https://platform.openai.com/docs/guides/text-generation\n\n7. DAIR.AI. \"Prompt Engineering Guide.\"\n   - URL: https://www.promptingguide.ai/techniques\n\n### Developer Resources\n\n8. LangChain. \"Debugging AI Agents.\"\n   - URL: https://python.langchain.com/docs/how_to/debugging\n\n9. Weights & Biases. \"LLM Observability and Tracing.\"\n   - URL: https://docs.wandb.ai/guides/prompts\n\n---\n\n## 7. Conclusion\n\nContext engineering is a critical discipline for building effective AI agents. The key insights from current research are:\n\n1. **Position matters**: Critical information should be placed at the beginning or end of context, not in the middle\n2. **Quality over quantity**: More context isn't always better\u2014focus on relevance and structure\n3. **Start simple**: Begin with minimal viable agent architectures and add complexity incrementally\n4. **Design for failure**: Build robust error handling and recovery mechanisms from the start\n5. **Iterate systematically**: Test prompts against representative examples and refine based on evidence\n\nBy applying these principles, developers can build more reliable, efficient, and effective AI agent systems.\n\n---\n\n*Report generated through automated research. Last updated: 2024.*\n", "path": "./output/research_summary.md"})
+  Result: {"path": "./output/research_summary.md", "status": "success", "message": "Successfully wrote 11556 c...
+
+[Turn 5] Thinking:
+----------------------------------------
+I've completed all the tasks:
+1. ✅ Searched for information about context engineering concepts and best practices
+2. ✅ Read relevant sources to gather detailed information
+3. ✅ Checked local project files - the research directory was empty
+4. ✅ Saved important findings as a note for future reference
+5. ✅ Wrote a comprehensive summary report to ./output/research_summary.md
+
+Let me verify the output file was created successfully by reading it.
+
+  Tool: read_file({"path": "./output/research_summary.md"})
+  Result: {"path": "./output/research_summary.md", "status": "success", "content": "# Context Engineering for ...
+
+[Turn 6] Thinking:
+----------------------------------------
+The research is complete. I've successfully:
+
+1. ✅ Searched for information about context engineering concepts and best practices
+2. ✅ Read relevant sources to gather detailed information (Anthropic research, OpenAI docs, Prompting Guide, arXiv papers)
+3. ✅ Checked local project files - the research directory was empty, so no existing notes to review
+4. ✅ Saved important findings as a note for future reference ("Context Engineering Key Concepts and Best Practices")
+5. ✅ Written a comprehensive 1...
+
+============================================================
+FINAL RESPONSE
+============================================================
+## Research Complete ✅
+
+I've completed a comprehensive research on "context engineering for AI agents." Here's a summary of what was accomplished:
+
+### Research Activities Completed:
+
+1. **Web Search**: Searched for information on context engineering concepts, best practices, and the "lost in the middle" problem
+
+2. **Source Analysis**: Read and analyzed key sources including:
+   - Anthropic's "Building Effective AI Agents" research
+   - The "Lost in the Middle" paper (arXiv:2307.03172)
+   - OpenAI's Prompt Engineering Guide
+   - DAIR.AI's Prompt Engineering Guide
+
+3. **Local Files Check**: Found that the `./research` directory was empty, so no existing research notes were present
+
+4. **Notes Saved**: Created a research note titled "Context Engineering Key Concepts and Best Practices" for future reference
+
+5. **Final Report Written**: Created a comprehensive 11,556-character summary at `./output/research_summary.md`
+
+### Key Findings Summary:
+
+- **The "Lost in the Middle" Problem**: LLMs exhibit a U-shaped performance curve—information at the beginning or end is processed best, while middle content suffers 20-30% accuracy loss
+
+- **Best Practices**:
+  - Position critical information strategically (instructions at beginning, task context at end)
+  - Start simple and add complexity gradually
+  - Design clear, well-documented tools
+  - Implement robust error handling
+
+- **Practical Recommendations**: Organized into design-time, implementation-time, and operational-time guidance with anti-patterns to avoid
+
+- **9 Sources Cited**: Including research papers, AI lab documentation (Anthropic, OpenAI), and developer resources (LangChain, Weights & Biases)

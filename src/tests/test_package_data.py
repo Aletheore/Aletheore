@@ -50,3 +50,7 @@ def test_every_declared_package_data_pattern_matches_something():
     dead = [pattern for pattern in _declared_patterns() if not list(PACKAGE_ROOT.glob(pattern))]
 
     assert not dead, f"package-data patterns that match no file: {dead}"
+
+
+def test_skills_directory_covered_by_package_data():
+    assert "skills/**/*" in _declared_patterns()

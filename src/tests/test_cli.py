@@ -30,6 +30,7 @@ from aletheore.cli import (
     _write_toml_mcp_client_config,
     app,
 )
+from aletheore import skill_hub
 from aletheore.device_auth import DeviceFlowError
 from aletheore.preferences import is_crash_reporting_enabled, set_crash_reporting_enabled
 from aletheore.evidence import EVIDENCE_VERSION
@@ -45,6 +46,15 @@ from aletheore.report import (
 )
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _no_network_pull_merge(monkeypatch):
+    # login() now runs a best-effort skill-hub pull-merge over the network;
+    # keep every test offline by default. The pull-merge test overrides this.
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub_sync, "pull_merge_custom_skills", lambda *a, **k: None)
 
 
 def test_print_query_result_falls_back_to_json_on_encoding_failure(capsys, monkeypatch):
@@ -1205,6 +1215,8 @@ def test_mcp_install_codex_only_target_still_prints_its_own_guidance(tmp_path):
     assert result.exit_code == 0
     assert (tmp_path / ".codex" / "config.toml").exists()
     assert "wrote .codex/config.toml" in result.stdout
+    assert "codex mcp add aletheore --" in result.stdout  # the trust-independent alternative
+    assert "silently not loaded" in result.stdout
     assert "PyCharm" not in result.stdout
 
 
@@ -2221,6 +2233,7 @@ def test_login_saves_token_when_installation_auto_resolved(tmp_path, monkeypatch
 
     with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
          patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.mint_personal_token") as mock_mint_personal, \
          patch("aletheore.device_auth.resolve_installation") as mock_resolve, \
          patch("aletheore.device_auth.mint_cli_token") as mock_mint:
         mock_request_code.return_value = MagicMock(
@@ -2228,6 +2241,7 @@ def test_login_saves_token_when_installation_auto_resolved(tmp_path, monkeypatch
             user_code="ABCD-1234",
         )
         mock_poll.return_value = "gho_faketoken"
+        mock_mint_personal.return_value = "personal-token-value"
         mock_resolve.return_value = {"installation_id": 100, "account_login": "acme"}
         mock_mint.return_value = "aletheore-tok-xyz"
 
@@ -2256,6 +2270,7 @@ def test_login_acknowledges_an_already_saved_token_before_replacing_it(tmp_path,
 
     with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
          patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.mint_personal_token") as mock_mint_personal, \
          patch("aletheore.device_auth.resolve_installation") as mock_resolve, \
          patch("aletheore.device_auth.mint_cli_token") as mock_mint:
         mock_request_code.return_value = MagicMock(
@@ -2263,6 +2278,7 @@ def test_login_acknowledges_an_already_saved_token_before_replacing_it(tmp_path,
             user_code="ABCD-1234",
         )
         mock_poll.return_value = "gho_faketoken"
+        mock_mint_personal.return_value = "personal-token-value"
         mock_resolve.return_value = {"installation_id": 100, "account_login": "acme"}
         mock_mint.return_value = "aletheore-tok-new"
 
@@ -2282,6 +2298,7 @@ def test_login_prompts_when_installation_ambiguous(tmp_path, monkeypatch):
 
     with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
          patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.mint_personal_token") as mock_mint_personal, \
          patch("aletheore.device_auth.resolve_installation") as mock_resolve, \
          patch("aletheore.device_auth.mint_cli_token") as mock_mint:
         mock_request_code.return_value = MagicMock(
@@ -2289,6 +2306,7 @@ def test_login_prompts_when_installation_ambiguous(tmp_path, monkeypatch):
             user_code="ABCD-1234",
         )
         mock_poll.return_value = "gho_faketoken"
+        mock_mint_personal.return_value = "personal-token-value"
         mock_resolve.return_value = [
             {"installation_id": 100, "account_login": "acme"},
             {"installation_id": 200, "account_login": "other"},
@@ -2319,6 +2337,124 @@ def test_login_prints_error_and_exits_nonzero_on_device_flow_error():
     assert "denied" in result.output
 
 
+def test_login_succeeds_with_zero_installations(tmp_path, monkeypatch):
+    # Regression: an account with no Aletheore GitHub App installation
+    # anywhere used to make the whole command exit 1. Skill Hub has no
+    # installation dependency, so login must still succeed.
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+
+    with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
+         patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.mint_personal_token") as mock_mint_personal, \
+         patch("aletheore.device_auth.resolve_installation") as mock_resolve, \
+         patch("aletheore.device_auth.mint_cli_token") as mock_mint:
+        mock_request_code.return_value = MagicMock(
+            verification_uri="https://github.com/login/device",
+            user_code="ABCD-1234",
+        )
+        mock_poll.return_value = "gho_faketoken"
+        mock_mint_personal.return_value = "personal-token-value"
+        mock_resolve.side_effect = DeviceFlowError("no paid Aletheore installations found")
+
+        result = runner.invoke(app, ["login"])
+
+    mock_mint.assert_not_called()
+    assert result.exit_code == 0
+    assert "logged in" in result.output.lower()
+    assert "no aletheore github app installation" in result.output.lower()
+
+
+def test_login_saves_personal_token_slot(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+
+    with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
+         patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.mint_personal_token") as mock_mint_personal, \
+         patch("aletheore.device_auth.resolve_installation") as mock_resolve, \
+         patch("aletheore.device_auth.mint_cli_token") as mock_mint:
+        mock_request_code.return_value = MagicMock(
+            verification_uri="https://github.com/login/device",
+            user_code="ABCD-1234",
+        )
+        mock_poll.return_value = "gho_faketoken"
+        mock_mint_personal.return_value = "personal-token-value"
+        mock_resolve.side_effect = DeviceFlowError("no paid Aletheore installations found")
+
+        runner.invoke(app, ["login"])
+
+    assert credentials.has_api_key(
+        "ALETHEORE_PERSONAL_TOKEN", "aletheore-personal", credentials_path=creds_path
+    )
+    saved = json.loads(creds_path.read_text())
+    assert saved["aletheore-personal"] == "personal-token-value"
+
+
+def test_login_triggers_pull_merge(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+    from aletheore import skill_hub_sync
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    calls = []
+    monkeypatch.setattr(skill_hub_sync, "pull_merge_custom_skills", lambda **kw: calls.append(True))
+
+    with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
+         patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.mint_personal_token") as mock_mint_personal, \
+         patch("aletheore.device_auth.resolve_installation") as mock_resolve, \
+         patch("aletheore.device_auth.mint_cli_token") as mock_mint:
+        mock_request_code.return_value = MagicMock(
+            verification_uri="https://github.com/login/device",
+            user_code="ABCD-1234",
+        )
+        mock_poll.return_value = "gho_faketoken"
+        mock_mint_personal.return_value = "personal-token-value"
+        mock_resolve.side_effect = DeviceFlowError("no paid Aletheore installations found")
+
+        runner.invoke(app, ["login"])
+
+    assert calls == [True]
+
+
+def test_login_still_fails_on_genuine_installation_lookup_error(tmp_path, monkeypatch):
+    # A real network error resolving installations (as opposed to "no
+    # installations found") must NOT be swallowed into a warning - it
+    # should still surface as a login failure.
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+
+    with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
+         patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.mint_personal_token") as mock_mint_personal, \
+         patch("aletheore.device_auth.resolve_installation") as mock_resolve:
+        mock_request_code.return_value = MagicMock(
+            verification_uri="https://github.com/login/device",
+            user_code="ABCD-1234",
+        )
+        mock_poll.return_value = "gho_faketoken"
+        mock_mint_personal.return_value = "personal-token-value"
+        mock_resolve.side_effect = httpx.ConnectError("boom")
+
+        result = runner.invoke(app, ["login"])
+
+    assert result.exit_code == 1
+    assert "boom" in result.output
+    # The personal token must still have been saved before the
+    # installation-resolution failure - that step has no installation
+    # dependency and should not be rolled back by a later failure.
+    assert credentials.has_api_key(
+        "ALETHEORE_PERSONAL_TOKEN", "aletheore-personal", credentials_path=creds_path
+    )
+
+
 def test_logout_clears_saved_token(tmp_path, monkeypatch):
     import aletheore.credentials as credentials
 
@@ -2334,6 +2470,123 @@ def test_logout_clears_saved_token(tmp_path, monkeypatch):
     )
 
 
+def _invoke_login_with_mocks(*, mint_personal_side_effect=None, resolve_side_effect=None, resolve_return=None):
+    with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
+         patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.mint_personal_token") as mock_mint_personal, \
+         patch("aletheore.device_auth.resolve_installation") as mock_resolve, \
+         patch("aletheore.device_auth.mint_cli_token") as mock_mint:
+        mock_request_code.return_value = MagicMock(
+            verification_uri="https://github.com/login/device",
+            user_code="ABCD-1234",
+        )
+        mock_poll.return_value = "gho_faketoken"
+        mock_mint_personal.return_value = "personal-token-value"
+        if mint_personal_side_effect is not None:
+            mock_mint_personal.side_effect = mint_personal_side_effect
+        if resolve_side_effect is not None:
+            mock_resolve.side_effect = resolve_side_effect
+        else:
+            mock_resolve.return_value = resolve_return
+        mock_mint.return_value = "managed-token-value"
+        return runner.invoke(app, ["login"])
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        httpx.ConnectError("skill hub down"),
+        httpx.HTTPStatusError(
+            "404 Not Found",
+            request=httpx.Request("POST", "https://api.aletheore.com/v1/personal-tokens"),
+            response=httpx.Response(404),
+        ),
+        httpx.ReadTimeout("slow"),
+    ],
+)
+def test_login_succeeds_for_paid_user_when_personal_token_mint_fails(tmp_path, monkeypatch, failure):
+    # Regression: a failing Skill Hub personal-token mint (network error, a
+    # 404 before the endpoint is deployed, a timeout) used to abort the whole
+    # login, blocking a paid user's normal managed-audit login.
+    import aletheore.credentials as credentials
+    from aletheore import skill_hub_sync
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    pull_calls = []
+    monkeypatch.setattr(skill_hub_sync, "pull_merge_custom_skills", lambda **kw: pull_calls.append(True))
+
+    result = _invoke_login_with_mocks(
+        mint_personal_side_effect=failure,
+        resolve_return={"installation_id": 7, "account_login": "acme"},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "hallbook personal login unavailable" in result.output.lower()
+    assert "acme" in result.output
+    saved = json.loads(creds_path.read_text())
+    assert saved["aletheore-managed-audit"] == "managed-token-value"
+    assert "aletheore-personal" not in saved
+    # No personal token, so nothing to pull-merge with.
+    assert pull_calls == []
+
+
+def test_login_with_personal_mint_failure_and_no_installation_fails_honestly(tmp_path, monkeypatch):
+    # Nothing was saved at all (no personal token, no installation token),
+    # so login must not claim success or a Skill Hub login.
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+
+    result = _invoke_login_with_mocks(
+        mint_personal_side_effect=httpx.ConnectError("down"),
+        resolve_side_effect=DeviceFlowError("no paid Aletheore installations found"),
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "hallbook personal login unavailable" in result.output.lower()
+    assert "nothing was saved" in result.output.lower()
+    assert "you're logged in for hallbook" not in result.output.lower()
+    assert not credentials.has_api_key(
+        "ALETHEORE_PERSONAL_TOKEN", "aletheore-personal", credentials_path=creds_path
+    )
+
+
+def test_logout_clears_the_skill_hub_personal_slot_too(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    credentials.save_api_token("aletheore-managed-audit", "tok-123", creds_path)
+    credentials.save_api_token("aletheore-personal", "personal-123", creds_path)
+
+    result = runner.invoke(app, ["logout"])
+
+    assert result.exit_code == 0
+    assert not credentials.has_api_key(
+        "ALETHEORE_PERSONAL_TOKEN", "aletheore-personal", credentials_path=creds_path
+    )
+    assert not credentials.has_api_key(
+        "UNUSED_ENV", "aletheore-managed-audit", credentials_path=creds_path
+    )
+
+
+def test_logout_with_only_a_personal_token_saved_reports_logged_out(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    credentials.save_api_token("aletheore-personal", "personal-123", creds_path)
+
+    result = runner.invoke(app, ["logout"])
+
+    assert result.exit_code == 0
+    assert "logged out" in result.stdout.lower()
+    assert "not logged in" not in result.stdout.lower()
+
+
 def test_logout_when_not_logged_in_says_so(tmp_path, monkeypatch):
     import aletheore.credentials as credentials
 
@@ -2344,6 +2597,111 @@ def test_logout_when_not_logged_in_says_so(tmp_path, monkeypatch):
 
     assert result.exit_code == 0
     assert "not logged in" in result.stdout.lower()
+
+
+def test_logout_revokes_personal_token_then_clears_both_slots(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    credentials.save_api_token("aletheore-managed-audit", "tok1", creds_path)
+    credentials.save_api_token("aletheore-personal", "tok2", creds_path)
+    calls = []
+
+    def fake_revoke(token, **kwargs):
+        calls.append((token, kwargs.get("all_devices", False)))
+
+    with patch("aletheore.device_auth.revoke_personal_token", fake_revoke):
+        result = runner.invoke(app, ["logout"])
+
+    assert result.exit_code == 0
+    assert calls == [("tok2", False)]
+    assert not credentials.has_api_key(
+        "ALETHEORE_PERSONAL_TOKEN", "aletheore-personal", credentials_path=creds_path
+    )
+    assert not credentials.has_api_key(
+        "UNUSED_ENV", "aletheore-managed-audit", credentials_path=creds_path
+    )
+
+
+def test_logout_still_clears_locally_when_revoke_fails(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    credentials.save_api_token("aletheore-personal", "tok2", creds_path)
+
+    def failing_revoke(token, **kwargs):
+        raise httpx.ConnectError("down")
+
+    with patch("aletheore.device_auth.revoke_personal_token", failing_revoke):
+        result = runner.invoke(app, ["logout"])
+
+    # Best-effort: offline logout still logs out locally.
+    assert result.exit_code == 0
+    assert not credentials.has_api_key(
+        "ALETHEORE_PERSONAL_TOKEN", "aletheore-personal", credentials_path=creds_path
+    )
+
+
+def test_logout_all_devices_passes_the_flag_through(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    credentials.save_api_token("aletheore-personal", "tok2", creds_path)
+    calls = []
+
+    def fake_revoke(token, **kwargs):
+        calls.append(kwargs.get("all_devices", False))
+
+    with patch("aletheore.device_auth.revoke_personal_token", fake_revoke):
+        runner.invoke(app, ["logout", "--all-devices"])
+
+    assert calls == [True]
+
+
+def test_logout_all_devices_with_no_token_reports_plainly(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+
+    with patch("aletheore.device_auth.revoke_personal_token") as mock_revoke:
+        result = runner.invoke(app, ["logout", "--all-devices"])
+
+    assert result.exit_code == 0
+    assert "not logged in" in result.stdout.lower()
+    assert "nothing to revoke" in result.stdout.lower()
+    mock_revoke.assert_not_called()
+
+
+def test_logout_all_devices_without_personal_token_does_not_silently_log_out(tmp_path, monkeypatch):
+    # Real gap: a saved managed-audit token but no personal token. The user
+    # asked for a server-side revoke-all that cannot happen; logout must say so
+    # (not print "Logged out" as if it had done what was asked) and must not
+    # touch the managed-audit credential.
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    credentials.save_api_token("aletheore-managed-audit", "tok1", creds_path)
+
+    with patch("aletheore.device_auth.revoke_personal_token") as mock_revoke:
+        result = runner.invoke(app, ["logout", "--all-devices"])
+
+    assert result.exit_code == 0
+    assert "nothing to revoke" in result.stdout.lower()
+    assert "logged out" not in result.stdout.lower()
+    mock_revoke.assert_not_called()
+    assert credentials.has_api_key(
+        "UNUSED_ENV", "aletheore-managed-audit", credentials_path=creds_path
+    )
 
 
 def test_init_writes_aletheore_json_with_defaults(tmp_path):
@@ -2499,6 +2857,44 @@ def test_status_reports_unverifiable_token(tmp_path, monkeypatch):
 
     assert result.exit_code == 0
     assert "couldn't be verified" in result.output
+
+
+def test_status_shows_skill_hub_login_state_independent_of_installation(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    monkeypatch.delenv("ALETHEORE_API_TOKEN", raising=False)
+    credentials.save_api_token("aletheore-personal", "tok", creds_path)
+
+    with patch("aletheore.cli._check_for_update", return_value="up to date"), \
+         patch("aletheore.cli._fetch_whoami") as mock_whoami:
+        result = runner.invoke(app, ["status"])
+
+    # No managed-audit token was saved, so the existing installation check
+    # is untouched - it still reports "not logged in" and never calls
+    # whoami - while the new Skill Hub line independently reports logged
+    # in from the separate "aletheore-personal" slot.
+    mock_whoami.assert_not_called()
+    assert result.exit_code == 0
+    assert "not logged in" in result.output.lower()
+    assert "hallbook" in result.output.lower()
+    assert "hallbook: not logged in" not in result.output.lower()
+
+
+def test_status_shows_skill_hub_not_logged_in(monkeypatch):
+    import aletheore.credentials as credentials
+
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    monkeypatch.delenv("ALETHEORE_API_TOKEN", raising=False)
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", Path("/nonexistent/creds.json"))
+
+    with patch("aletheore.cli._check_for_update", return_value="up to date"):
+        result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "hallbook: not logged in" in result.output.lower()
 
 
 def test_main_query_imports_prints_result(tmp_path):
@@ -3252,3 +3648,346 @@ def test_managed_audit_reports_network_error_instead_of_traceback(tmp_path):
 
     assert result.exit_code == 1
     assert "Evidence is still available" in result.output
+
+
+def test_skill_hub_list_shows_curated_skill():
+    result = runner.invoke(app, ["skill-hub", "list"])
+    assert result.exit_code == 0
+    assert "code-review/security-focused" in result.stdout
+
+
+def test_hallbook_is_the_named_group_and_skill_hub_stays_a_hidden_alias():
+    # The feature was renamed from "skill-hub" to "hallbook". The old name must
+    # keep working for existing scripts, but --help should show only one name.
+    new = runner.invoke(app, ["hallbook", "list"])
+    old = runner.invoke(app, ["skill-hub", "list"])
+    assert new.exit_code == 0
+    assert old.exit_code == 0
+    assert new.stdout == old.stdout
+    help_out = runner.invoke(app, ["--help"]).output
+    assert "hallbook" in help_out
+    assert "skill-hub" not in help_out
+
+
+def test_skill_hub_get_prints_content():
+    result = runner.invoke(app, ["skill-hub", "get", "code-review/security-focused"])
+    assert result.exit_code == 0
+    assert "security" in result.stdout.lower()
+
+
+def test_skill_hub_get_output_is_byte_identical_to_the_skill_body():
+    # Real bug: `console.print(skill.content)` ran the body through Rich's
+    # markup parser and line wrapper, which silently deleted bracketed text
+    # like the "[borkweb/skills]" attribution link in this exact skill and
+    # hard-wrapped every line past 80 columns. The output must be the raw
+    # SKILL.md body, unchanged.
+    import re
+
+    skill_path = skill_hub.bundled_skills_dir() / "code-review" / "security-focused" / "SKILL.md"
+    body = re.match(r"\A---\n.*?\n---\n(.*)\Z", skill_path.read_text(encoding="utf-8"), re.DOTALL).group(1)
+    assert "[borkweb/skills]" in body  # guard: the test case still exercises the bug
+
+    result = runner.invoke(app, ["skill-hub", "get", "code-review/security-focused"])
+
+    assert result.exit_code == 0
+    assert result.stdout == body
+
+
+def test_skill_hub_get_does_not_crash_on_markup_shaped_content(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    (tmp_path / "weird.md").write_text("close tag with no opener: [/bold] and [red]x\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["skill-hub", "get", "custom/weird"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "close tag with no opener: [/bold] and [red]x\n"
+
+
+def test_skill_hub_list_prints_titles_without_markup_interpretation(monkeypatch):
+    fake = [skill_hub.SkillMeta(skill_id="custom/x", category="custom", title="[/bold] [vendor/repo] title", description="")]
+    monkeypatch.setattr(skill_hub, "list_skills", lambda category=None: fake)
+
+    result = runner.invoke(app, ["skill-hub", "list"])
+
+    assert result.exit_code == 0
+    assert "custom/x  [/bold] [vendor/repo] title" in result.stdout
+
+
+def test_skill_hub_get_unknown_id_nonzero_exit():
+    result = runner.invoke(app, ["skill-hub", "get", "custom/nope"])
+    assert result.exit_code != 0
+
+
+def test_skill_hub_add_then_get(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    skill_file = tmp_path / "input.md"
+    skill_file.write_text("my steps")
+    result = runner.invoke(app, ["skill-hub", "add", "my-review", str(skill_file)])
+    assert result.exit_code == 0
+    result = runner.invoke(app, ["skill-hub", "get", "custom/my-review"])
+    assert "my steps" in result.stdout
+
+
+def test_skill_hub_add_rejects_unsafe_name(tmp_path):
+    skill_file = tmp_path / "input.md"
+    skill_file.write_text("x")
+    result = runner.invoke(app, ["skill-hub", "add", "../escape", str(skill_file)])
+    assert result.exit_code != 0
+
+
+def test_skill_hub_remove_deletes_and_reports(tmp_path, monkeypatch):
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "delete_custom_skill_best_effort", lambda name, **kw: None)
+    skill_file = tmp_path / "input.md"
+    skill_file.write_text("x")
+    runner.invoke(app, ["skill-hub", "add", "my-review", str(skill_file)])
+    result = runner.invoke(app, ["skill-hub", "remove", "my-review"])
+    assert result.exit_code == 0
+    assert skill_hub.read_custom_skill_file("my-review") is None
+
+
+def test_skill_hub_remove_unknown_name_clean_message_not_crash(tmp_path, monkeypatch):
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "delete_custom_skill_best_effort", lambda name, **kw: None)
+    result = runner.invoke(app, ["skill-hub", "remove", "never-existed"])
+    assert result.exit_code == 0  # not an error - "already gone" is a fine outcome for a delete
+
+
+def test_skill_hub_remove_rejects_unsafe_name(tmp_path):
+    result = runner.invoke(app, ["skill-hub", "remove", "../escape"])
+    assert result.exit_code != 0
+
+
+def test_login_prints_sync_disclosure_when_personal_token_saved(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+    from aletheore import skill_hub_sync
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.setattr(skill_hub_sync, "pull_merge_custom_skills", lambda **kw: None)
+
+    result = _invoke_login_with_mocks(
+        resolve_return={"installation_id": 7, "account_login": "acme"},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "sync to your Aletheore account" in result.output
+    saved = json.loads(creds_path.read_text())
+    assert saved["aletheore-personal"] == "personal-token-value"
+
+
+def test_login_does_not_print_sync_disclosure_when_personal_token_mint_fails(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+    from aletheore import skill_hub_sync
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.setattr(skill_hub_sync, "pull_merge_custom_skills", lambda **kw: None)
+
+    result = _invoke_login_with_mocks(
+        mint_personal_side_effect=httpx.ConnectError("skill hub down"),
+        resolve_return={"installation_id": 7, "account_login": "acme"},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "hallbook personal login unavailable" in result.output.lower()
+    assert "sync to your Aletheore account" not in result.output
+
+
+def test_hallbook_categories_lists_shelves_with_counts():
+    result = runner.invoke(app, ["hallbook", "categories"])
+    assert result.exit_code == 0
+    assert "Quality (" in result.stdout
+    assert "  debugging  " in result.stdout
+
+
+def test_hallbook_search_finds_a_skill_and_accepts_unquoted_words():
+    result = runner.invoke(app, ["hallbook", "search", "flaky", "test", "debugging", "--limit", "5"])
+    assert result.exit_code == 0
+    assert "debugging/systematic-debugging" in result.stdout
+
+
+def test_hallbook_search_with_no_match_says_so_and_exits_cleanly():
+    result = runner.invoke(app, ["hallbook", "search", "zzzzqqqq"])
+    assert result.exit_code == 0
+    assert "No skills matched" in result.stdout
+
+
+def test_hallbook_files_and_get_file_round_trip():
+    listing = runner.invoke(app, ["hallbook", "files", "debugging/systematic-debugging"])
+    assert listing.exit_code == 0
+    assert "condition-based-waiting.md" in listing.stdout
+    content = runner.invoke(
+        app, ["hallbook", "get-file", "debugging/systematic-debugging", "condition-based-waiting.md"]
+    )
+    assert content.exit_code == 0
+    assert len(content.stdout) > 100
+
+
+def test_hallbook_get_file_refuses_path_escapes_and_unknown_skills():
+    escape = runner.invoke(app, ["hallbook", "get-file", "debugging/systematic-debugging", "../../../etc/passwd"])
+    assert escape.exit_code == 1
+    assert "invalid file path" in escape.output
+    unknown = runner.invoke(app, ["hallbook", "get-file", "nope/nothing", "x.md"])
+    assert unknown.exit_code == 1
+    assert runner.invoke(app, ["hallbook", "files", "nope/nothing"]).exit_code == 1
+
+
+def test_hallbook_snippet_prints_the_agent_instruction_and_names_real_tools():
+    result = runner.invoke(app, ["hallbook", "snippet"])
+    assert result.exit_code == 0
+    assert result.stdout == skill_hub.AGENT_INSTRUCTION_SNIPPET
+    for tool in ("aletheore_search_skills", "aletheore_get_skill", "aletheore_get_skill_file"):
+        assert tool in result.stdout
+
+
+def test_hallbook_suggest_reads_json_stdin_and_prints_the_hint():
+    query = "Rewrite this blog post intro to feel more human and less stiff."
+    payload = json.dumps({"prompt": query, "session_id": "s", "cwd": "."})
+
+    result = runner.invoke(app, ["hallbook", "suggest"], input=payload)
+
+    assert result.exit_code == 0
+    assert result.stdout.startswith("Hallbook skill that fits this task: ")
+    assert "documentation/avoid-ai-writing" in result.stdout
+
+
+def test_hallbook_suggest_exits_zero_and_prints_nothing_on_broken_input():
+    result = runner.invoke(app, ["hallbook", "suggest"], input="{not json")
+
+    assert result.exit_code == 0
+    assert result.stdout == ""
+
+
+def test_hallbook_hook_prints_valid_settings_json_with_the_hook_module():
+    result = runner.invoke(app, ["hallbook", "hook"])
+
+    assert result.exit_code == 0
+    settings = json.loads(result.stdout)
+    hook = settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]
+    assert hook["type"] == "command"
+    assert sys.executable in hook["command"]
+    assert "-m aletheore.hallbook_hook --mode hint" in hook["command"]
+
+
+def test_logout_all_devices_keeps_the_token_when_the_revoke_fails(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    credentials.save_api_token("aletheore-personal", "tok2", creds_path)
+
+    def failing_revoke(token, **kwargs):
+        raise httpx.ConnectError("down")
+
+    with patch("aletheore.device_auth.revoke_personal_token", failing_revoke):
+        result = runner.invoke(app, ["logout", "--all-devices"])
+
+    # The user asked to revoke everywhere: deleting the only local token would
+    # leave nothing to retry with and the other tokens would stay valid.
+    assert result.exit_code == 1
+    assert credentials.has_api_key(
+        "ALETHEORE_PERSONAL_TOKEN", "aletheore-personal", credentials_path=creds_path
+    )
+    assert "retry" in result.stdout.lower()
+
+
+def test_plain_logout_warning_does_not_claim_the_token_expires(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    credentials.save_api_token("aletheore-personal", "tok2", creds_path)
+
+    def failing_revoke(token, **kwargs):
+        raise httpx.ConnectError("down")
+
+    with patch("aletheore.device_auth.revoke_personal_token", failing_revoke):
+        result = runner.invoke(app, ["logout"])
+
+    assert result.exit_code == 0
+    assert "until it expires" not in result.stdout
+    assert "no expiry" in result.stdout
+
+
+def test_importing_the_cli_never_exits_even_for_the_hook_command(monkeypatch):
+    # The prompt-hook fast path lives in the console-script launcher, not at
+    # import time, so importing aletheore.cli must not read argv or exit.
+    import importlib
+    import sys
+
+    import aletheore.cli as cli_module
+
+    monkeypatch.setattr(sys, "argv", ["aletheore", "hallbook", "suggest"])
+    importlib.reload(cli_module)  # would raise SystemExit if the old import-time hook were back
+
+
+def test_launcher_runs_the_hook_without_importing_the_cli(monkeypatch):
+    import sys
+
+    from aletheore import _launcher
+
+    seen = {}
+
+    def fake_hook_main(argv):
+        seen["argv"] = argv
+        return 0
+
+    monkeypatch.setattr(sys, "argv", ["aletheore", "hallbook", "suggest", "--mode", "hint"])
+    monkeypatch.setattr("aletheore.hallbook_hook.main", fake_hook_main)
+    with pytest.raises(SystemExit) as excinfo:
+        _launcher.main()
+    assert excinfo.value.code == 0
+    assert seen["argv"] == ["--mode", "hint"]
+
+
+def test_launcher_hands_everything_else_to_the_cli(monkeypatch):
+    import sys
+
+    from aletheore import _launcher
+
+    called = []
+    monkeypatch.setattr(sys, "argv", ["aletheore", "status"])
+    monkeypatch.setattr("aletheore.cli.main", lambda: called.append(True))
+    _launcher.main()
+    assert called == [True]
+
+
+def test_logout_all_devices_treats_an_already_revoked_token_as_done(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    credentials.save_api_token("aletheore-personal", "dead-token", creds_path)
+
+    def revoked(token, **kwargs):
+        request = httpx.Request("DELETE", "https://app.aletheore.com/v1/personal-tokens/all")
+        raise httpx.HTTPStatusError("401", request=request, response=httpx.Response(401, request=request))
+
+    with patch("aletheore.device_auth.revoke_personal_token", revoked):
+        result = runner.invoke(app, ["logout", "--all-devices"])
+
+    assert result.exit_code == 0
+    assert not credentials.has_api_key("ALETHEORE_PERSONAL_TOKEN", "aletheore-personal", credentials_path=creds_path)
+
+
+def test_logout_all_devices_with_only_a_managed_audit_token_says_it_was_left_alone(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    credentials.save_api_token("aletheore-managed-audit", "tok1", creds_path)
+
+    result = runner.invoke(app, ["logout", "--all-devices"])
+
+    assert "nothing to revoke" in result.stdout.lower()
+    assert "left as it is" in result.stdout
+    assert credentials.has_api_key("UNUSED_ENV", "aletheore-managed-audit", credentials_path=creds_path)

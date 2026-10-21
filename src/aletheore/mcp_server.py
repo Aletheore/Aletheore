@@ -1,3 +1,4 @@
+import dataclasses
 import functools
 import json
 from datetime import datetime
@@ -58,6 +59,7 @@ from aletheore.search_index import (
     search_index,
 )
 from aletheore.code_locator import locate_report
+from aletheore import skill_hub
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.watch import EVIDENCE_WRITE_LOCK, BackgroundWatcher, start_background_watch
 
@@ -182,6 +184,18 @@ aletheore_licenses, aletheore_dead_code, aletheore_hotspots, \
 aletheore_layer_violations). Reach for aletheore_search_codebase/ \
 aletheore_answer only for open-ended "how does this work" questions the \
 exact tools can't answer directly.
+
+Hallbook (skills): Aletheore also carries Hallbook, a library of over a \
+thousand vetted agent skills - specialist instructions for debugging, code \
+review, testing, planning, security, API and platform integrations, SEO, \
+design and more - plus any custom skills the user has saved. For a non-trivial \
+task that a specialist skill might cover, call aletheore_find_skill once with a \
+one-sentence description of the task. If it returns a skill, follow it and adapt \
+it to this project; if the match is low or none, carry on without one and do \
+not keep searching. Skip it for trivial edits. Fetch files the skill points at \
+with aletheore_get_skill_file. aletheore_search_skills remains available when \
+you want to browse keyword matches. Skills are bundled with Aletheore, work offline \
+and need no login.
 
 If a tool call fails unexpectedly, returns results that are clearly wrong \
 or incomplete against the codebase's actual state, or a capability \
@@ -458,7 +472,7 @@ def _stop_search_process(process) -> None:
 #      the tool list and cannot be called at all.
 # ---------------------------------------------------------------------------
 
-EFFECT_WRITE = "write"  # writes files under the repo
+EFFECT_WRITE = "write"  # writes files: under the repo (.aletheore/ evidence) or the user's home config dir (custom skills)
 EFFECT_NETWORK = "network"  # outbound requests (OSV, registries, health probes, embeddings)
 EFFECT_EXTERNAL = "external"  # transmits repository evidence to a third-party service
 
@@ -911,6 +925,160 @@ def _register_overview_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
         call this before anything else on an unfamiliar repository."""
         evidence = read_evidence(repo_path)
         return _toon_result(find_repo_overview(evidence))
+
+
+_SKILL_SUMMARY_DESCRIPTION_CHARS = 160
+
+
+def _skill_summary(meta: skill_hub.SkillMeta) -> dict:
+    """A skill as it appears in search and browse results: compact enough that a page of
+    results costs little context. The full text comes from aletheore_get_skill."""
+    description = " ".join(meta.description.split())
+    if len(description) > _SKILL_SUMMARY_DESCRIPTION_CHARS:
+        description = description[: _SKILL_SUMMARY_DESCRIPTION_CHARS - 1].rstrip() + "…"
+    summary = {"skill_id": meta.skill_id, "title": meta.title, "description": description}
+    if meta.requires:
+        summary["requires"] = meta.requires
+    if getattr(meta, "alternates", None):
+        summary["alternates"] = meta.alternates  # same job from other sources; load any by id with aletheore_get_skill
+    return summary
+
+
+def _register_skill_hub_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
+    # Skills (curated + local custom) aren't repo-scoped - unlike every other
+    # tool group in this file, neither of these two ever touches repo_path or
+    # evidence, so there's no read_evidence call and no
+    # _guard_evidence_read_errors wrapper to apply. Both are pure reads, so
+    # (like aletheore_list/aletheore_overview) they're registered
+    # unconditionally rather than gated through TOOL_REQUIRED_EFFECTS -
+    # aletheore_add_custom_skill is the one skill-hub tool that writes, and is
+    # registered separately, gated on the write and network effects, below.
+    @mcp_instance.tool(name="aletheore_find_skill", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_find_skill(task: str, category: str | None = None) -> str:
+        """Finds the right Hallbook skill in one call, or says to move on.
+
+        Call this ONCE per task, early, with one sentence describing what you
+        are about to do (the technology and the kind of work), e.g. 'add Stripe
+        webhook handling to a Django app'. Skip it for trivial edits and simple
+        questions. If confidence is low or none, just carry on without a skill
+        and do not keep searching for the same need."""
+        return _toon_result(skill_hub.find_skill(task, category=category))
+
+    @mcp_instance.tool(name="aletheore_search_skills", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_search_skills(query: str, category: str | None = None, limit: int = 8) -> str:
+        """Searches Hallbook, Aletheore's library of vetted agent skills (over a
+        thousand bundled skills plus your own custom ones), by what you are
+        about to do, e.g. 'flaky test', 'stripe webhooks', 'write a plan',
+        'review a pull request for security'. aletheore_find_skill is the usual
+        first call for a task: it returns the best skill directly when it is
+        confident. Use this keyword search when you want to see more matches.
+        Returns skill_id, title and a description of at most 160 characters, plus
+        what each skill requires; load one with aletheore_get_skill. Offline, no
+        login."""
+        results = skill_hub.search_skills(query, category=category, limit=max(1, min(limit, 25)))
+        return _toon_result([_skill_summary(meta) for meta in results])
+
+    @mcp_instance.tool(name="aletheore_list_skills", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_list_skills(category: str | None = None) -> str:
+        """Browses Hallbook. With no argument, returns the shape of the library:
+        its shelves (Build, Quality, Ship & Operate, AI & Agents, Product &
+        Design, Content & Media, plus 'Your skills' if you have saved any), the
+        categories on each, and how many skills each holds. With a category
+        (e.g. 'debugging', 'security', 'marketing', or 'custom' for your own),
+        returns the skills in it with skill_id, title, description and
+        requirements. To find a skill by task rather than by browsing, use
+        aletheore_find_skill or aletheore_search_skills."""
+        if category is None:
+            return _toon_result(skill_hub.list_overview())
+        return _toon_result([_skill_summary(meta) for meta in skill_hub.list_skills(category)])
+
+    @mcp_instance.tool(name="aletheore_get_skill", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_get_skill(skill_id: str) -> str:
+        """Fetches one skill by its skill_id (from aletheore_search_skills or
+        aletheore_list_skills): its title, description, license, source_url,
+        what it requires of the agent (e.g. subagents, an MCP server, a
+        browser), and the full instructions in `content`. If the instructions
+        refer to other files (references, scripts, templates), `files` lists
+        them; fetch each one with aletheore_get_skill_file."""
+        try:
+            skill = skill_hub.get_skill(skill_id)
+        except skill_hub.SkillNotFoundError:
+            return f"Skill '{skill_id}' not found."
+        return _toon_result(dataclasses.asdict(skill))
+
+    @mcp_instance.tool(name="aletheore_get_skill_file", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_get_skill_file(skill_id: str, path: str) -> str:
+        """Fetches one companion file of a bundled skill (a reference document,
+        script, template or data file) by its path relative to the skill, as
+        listed in the `files` field of aletheore_get_skill. Text files only;
+        custom skills are a single SKILL.md and have no companion files."""
+        try:
+            return skill_hub.read_skill_file(skill_id, path)
+        except skill_hub.SkillNotFoundError:
+            return f"Skill '{skill_id}' not found."
+        except skill_hub.SkillFileError as exc:
+            return str(exc)
+
+
+def _register_add_custom_skill_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+    # Writes under the user's home config directory (not under repo_path -
+    # custom skills are local-user-scoped, not repo-scoped), but it's still a
+    # filesystem write an agent could trigger unprompted, and when a Skill
+    # Hub personal token is saved it also pushes the skill over the network,
+    # so it's gated the same way aletheore_scan/aletheore_index are: behind
+    # the `write` and `network` effects, absent (not merely refusing) unless
+    # both are permitted.
+    @mcp_instance.tool(
+        name="aletheore_add_custom_skill",
+        # Matches aletheore_scan's annotations: every gated (effectful) tool in
+        # this file declares openWorldHint=True, not just the network-reaching
+        # ones - see test_effectful_tools_are_distinguishable_from_read_only_ones.
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
+        ),
+    )
+    def aletheore_add_custom_skill(name: str, content: str) -> str:
+        """Saves a local custom skill under the given name, so it can later be
+        fetched via aletheore_get_skill('custom/<name>') and shows up in
+        aletheore_list_skills. name must contain only letters, digits, '-',
+        and '_' (no path separators)."""
+        try:
+            skill_id = skill_hub.add_custom_skill(name, content)
+        except ValueError as exc:
+            return str(exc)
+        return f"Saved custom skill as '{skill_id}'."
+
+
+def _register_remove_custom_skill_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+    # Same gating as _register_add_custom_skill_tool above: this also writes
+    # under the user's home config directory and makes a best-effort network
+    # call (skill_hub_sync.delete_custom_skill_best_effort) when a Hallbook
+    # personal token is saved, so it's gated behind the same `write` and
+    # `network` effects.
+    @mcp_instance.tool(
+        name="aletheore_remove_custom_skill",
+        # Destructive: it deletes the local file (a <name>.md.deleted-<time>.bak copy is kept) and
+        # the account copy on the server when signed in, which cannot be
+        # undone from here. Otherwise matches aletheore_add_custom_skill's
+        # annotations - see test_effectful_tools_are_distinguishable_from_read_only_ones.
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True
+        ),
+    )
+    def aletheore_remove_custom_skill(name: str) -> str:
+        """Deletes a custom skill by name: the local file (a <name>.md.deleted-<time>.bak
+        copy is kept next to it) and, when signed in, the copy on your
+        account, which is removed for every machine. Returns a clean message
+        either way - deleting a name that was never added (or already
+        removed) is not an error. name must contain only letters, digits,
+        '-', and '_' (no path separators)."""
+        try:
+            existed = skill_hub.remove_custom_skill(name)
+        except ValueError as exc:
+            return str(exc)
+        if existed:
+            return f"Removed custom skill custom/{name}."
+        return f"custom/{name} was not present - nothing to remove."
 
 
 def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
@@ -1428,6 +1596,13 @@ TOOL_REQUIRED_EFFECTS: dict[str, frozenset[str]] = {
     "aletheore_index": frozenset({EFFECT_WRITE, EFFECT_NETWORK}),
     "aletheore_answer": frozenset({EFFECT_NETWORK}),
     "aletheore_managed_audit": frozenset({EFFECT_EXTERNAL, EFFECT_NETWORK}),
+    # Network too: skill_hub.add_custom_skill pushes the skill to the user's
+    # Hallbook account whenever a personal token is saved.
+    "aletheore_add_custom_skill": frozenset({EFFECT_WRITE, EFFECT_NETWORK}),
+    # Same reasoning: skill_hub.remove_custom_skill also makes a best-effort
+    # network call (skill_hub_sync.delete_custom_skill_best_effort) whenever a
+    # personal token is saved.
+    "aletheore_remove_custom_skill": frozenset({EFFECT_WRITE, EFFECT_NETWORK}),
 }
 
 
@@ -1524,6 +1699,7 @@ def build_server(
     _register_symbol_path_tool(mcp_instance, repo_path)
     _register_list_tool(mcp_instance, repo_path)
     _register_overview_tool(mcp_instance, repo_path)
+    _register_skill_hub_tools(mcp_instance, repo_path)
     _register_search_tool(mcp_instance, repo_path)
     _register_ast_pattern_tool(mcp_instance, repo_path)
     _register_symbol_source_tool(mcp_instance, repo_path)
@@ -1562,6 +1738,10 @@ def build_server(
         _register_search_codebase_tool(mcp_instance, repo_path, effects)
     if permitted("aletheore_managed_audit"):
         _register_managed_audit_tool(mcp_instance, repo_path)
+    if permitted("aletheore_add_custom_skill"):
+        _register_add_custom_skill_tool(mcp_instance, repo_path)
+    if permitted("aletheore_remove_custom_skill"):
+        _register_remove_custom_skill_tool(mcp_instance, repo_path)
     if answer_adapter is not None and permitted("aletheore_answer"):
         _register_answer_tool(mcp_instance, repo_path, answer_adapter, effects)
 

@@ -36,6 +36,7 @@
   ],
   "ignored_paths": [
     "src/tests",
+    "src/aletheore/skills",
     "github-app/tests",
     "docs/superpowers/plans",
     "benchmarks/security-scanner-benchmark/secrets/cases",

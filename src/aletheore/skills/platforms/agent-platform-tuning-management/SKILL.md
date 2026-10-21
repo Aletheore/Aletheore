@@ -1,0 +1,192 @@
+---
+name: agent-platform-tuning-management
+metadata:
+  version: 1.0.1
+  category: AiAndMachineLearning
+description: Manages GenAI tuning jobs in Agent Platform. Use this to list, get, or cancel ongoing model tuning jobs. Don't use for fine-tuning models (use `agent-platform-tuning`), deploying models to endpoints (use `agent-platform-deploy`), or managing serving endpoints (use `agent-platform-endpoint-management`).
+skill_id: platforms/agent-platform-tuning-management
+title: Agent Platform Tuning Management
+source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/agent-platform-tuning-management
+license: Apache-2.0
+shelf: build
+aletheore: {"id": "platforms/agent-platform-tuning-management", "shelf": "build", "category": "platforms", "origin": "https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/agent-platform-tuning-management", "license": "Apache-2.0", "license_source": "LICENSE", "upstream_commit": "e86adb9e2b80220a593c2be9a68627171fd17afb", "quality": 4, "curation_note": "official Google Cloud", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 0, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}
+---
+
+# Agent Platform Tuning Management
+
+This skill provides instructions on how to manage GenAI Tuning Jobs using the
+Agent Platform Python SDK. Use this skill when a user wants to check the status
+of their tuning runs, find an active tuning job, or cancel a job that is running
+too long.
+
+## Safety & Confirmation Tiers (CRITICAL)
+
+Before executing any commands on behalf of the user, you MUST adhere to the
+following safety tiers based on the action requested:
+
+1.  **Tier R: Read-only (`list`, `get`)**
+    *   **Rule**: No confirmation needed. You may execute these commands
+        immediately to gather information for the user.
+2.  **Tier D: Destructive & Interruptive (`cancel`)**
+    *   **Rule**: Cancellation is a Tier D action requiring **explicit typed
+        confirmation** (e.g. "I confirm" or "Yes, cancel it").
+    *   **Required Fields in Dry-Run Confirmation Card**: Before cancelling a
+        tuning job, you MUST present a dry-run confirmation preview clearly
+        listing:
+        *   **Target Resource**: The full tuning job resource name or ID (e.g.
+            `projects/<PROJECT_ID>/locations/<REGION>/tuningJobs/<JOB_ID>`).
+        *   **Command / Script**: The exact cancellation command or Python code
+            to be executed.
+        *   **Expected Effect**: Stops the ongoing tuning job; any in-progress
+            training will be halted and cannot be resumed.
+        *   Ask the user to explicitly confirm (e.g., "Do you confirm? Please
+            reply with 'I confirm' or 'Yes, cancel it'.").
+    *   **Same-turn restriction**: NEVER execute the cancellation in the same
+        turn as presenting the preview card. Stop immediately and wait for the
+        user to confirm in a new turn. Even if the user provided pre-emptive
+        confirmation (e.g. "Yes, I confirm, cancel tuning job ...") or provides
+        a corrected job ID, you MUST present the dry-run preview for that
+        specific job ID and wait for confirmation in a separate turn before
+        issuing the cancellation.
+
+## Phase 0: Environment Setup
+
+**CRITICAL**: Before running any of the Python snippets below, you MUST ensure
+the environment is correctly initialized by following these steps:
+
+1.  **Google Cloud Authentication**: Authenticate with your Google Cloud account
+    and configure active Application Default Credentials (ADC) for Agent
+    Platform access:
+
+    ```bash
+    gcloud auth login
+    gcloud auth application-default login
+    ```
+
+2.  **Python Dependencies**: This skill needs `google-cloud-aiplatform`. Do
+    **not** create a virtual environment — it starts empty and hides packages
+    the environment already provides, forcing a redundant install. Probe, and
+    install only what is missing:
+
+    ```bash
+    python3 -c "import vertexai" || pip install google-cloud-aiplatform
+    ```
+
+3.  **Execution**: Run Python snippets with a plain `python3`. There is no
+    environment to activate first.
+
+## Workflow Decision Tree
+
+1.  **Information Gathering**: Do you have a Project ID and Region?
+
+    *   **No** -> You **MUST** ask the user for the missing Project ID and
+        Region in plain text, or advise them to check their gcloud
+        configuration. If neither location has this information, then ask the
+        user to provide it. Do not attempt to search random regions on your own.
+    *   **Yes** -> Proceed to Step 2.
+
+2.  **Task Type**: What does the user want to do?
+
+    *   **Find or List Jobs** -> Use the Python SDK to list tuning jobs. (Tier
+        R)
+    *   **Check Status / Inspect a Specific Job** -> Use the Python SDK to get
+        tuning job details. (Tier R)
+    *   **Cancel a Job** -> Ask for confirmation, then use the Python SDK to
+        cancel the tuning job. (Tier D)
+
+## Using the Python SDK
+
+> [!NOTE]
+>
+> **Resource Verification & Missing Projects/Jobs:** If the execution of the
+> Python snippet fails with an error (such as `403 Permission Denied`, `404 Not
+> Found`, `INVALID_ARGUMENT`, or indicating a dummy/missing project or job ID),
+> you **MUST** inform the user that the project or tuning job does not exist or
+> cannot be accessed. You **MUST** prompt the user to provide a valid Project ID
+> or Job ID, and stop tool execution immediately to wait for their response. Do
+> **NOT** retry or loop, do **NOT** assume the resource is valid, and do **NOT**
+> execute further scripts before receiving valid details from the user.
+
+### 1. Listing Tuning Jobs (Tier R)
+
+If the user asks "What tuning jobs do I have running?" or wants to find a
+specific job ID:
+
+```python
+from google.cloud import aiplatform_v1
+
+project_id = "YOUR_PROJECT_ID"
+region = "YOUR_REGION"
+parent = f"projects/{project_id}/locations/{region}"
+
+client = aiplatform_v1.GenAiTuningServiceClient(
+    client_options={"api_endpoint": f"{region}-aiplatform.googleapis.com"}
+)
+
+jobs = client.list_tuning_jobs(parent=parent)
+for job in jobs:
+    print(f"Name: {job.name}")
+    print(f"Base Model: {job.base_model}")
+    print(f"State: {job.state}")
+```
+
+`list_tuning_jobs` takes no `page_size` keyword. To set one, pass the request:
+`client.list_tuning_jobs(request={"parent": parent, "page_size": 50})`.
+
+### 2. Getting Details for a Specific Job (Tier R)
+
+If the user provides a Tuning Job ID and asks for its status:
+
+```python
+from google.cloud import aiplatform_v1
+
+project_id = "YOUR_PROJECT_ID"
+region = "YOUR_REGION"
+job_id = "YOUR_JOB_ID"  # 19-digit ID
+name = f"projects/{project_id}/locations/{region}/tuningJobs/{job_id}"
+
+client = aiplatform_v1.GenAiTuningServiceClient(
+    client_options={"api_endpoint": f"{region}-aiplatform.googleapis.com"}
+)
+
+job = client.get_tuning_job(name=name)
+print(f"Name: {job.name}")
+print(f"Base Model: {job.base_model}")
+print(f"State: {job.state}")
+print(f"Tuning Model: {job.tuned_model_display_name}")
+```
+
+### 3. Canceling a Job (Tier D)
+
+If the user explicitly requests to stop, abort, or cancel a running tuning job:
+
+**Safety Check**: **Action requires explicit typed confirmation before
+proceeding.** You MUST present a dry-run confirmation card listing the Target
+Resource, Command/Script, and Expected Effect, and ask the user to type "I
+confirm" or "Yes, cancel it". Even if the user provided confirming language
+pre-emptively or is providing a corrected/new job ID, you MUST present the
+preview card for that specific job ID and wait for their explicit approval in a
+new turn.
+
+> [!IMPORTANT]
+>
+> **NEVER pre-emptively execute any cancellation code or command before
+> receiving the user's response in a new turn.** You must never speculate or
+> assume that confirmation will be given. Executing cancellation in the same
+> turn as presenting the preview card is a severe safety violation.
+
+```python
+from google.cloud import aiplatform_v1
+
+project_id = "YOUR_PROJECT_ID"
+region = "YOUR_REGION"
+job_id = "YOUR_JOB_ID"  # 19-digit ID
+name = f"projects/{project_id}/locations/{region}/tuningJobs/{job_id}"
+
+client = aiplatform_v1.GenAiTuningServiceClient(
+    client_options={"api_endpoint": f"{region}-aiplatform.googleapis.com"}
+)
+
+client.cancel_tuning_job(name=name)
+print(f"Successfully requested cancellation for {name}")
+```

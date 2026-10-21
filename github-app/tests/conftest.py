@@ -42,10 +42,19 @@ MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 # test_credit_topup_purchase_is_idempotent_on_replayed_transaction relies on
 # a clean slate to tell a genuine first credit from a stale row left by a
 # previous run.
+# personal_identities is listed for the same "no FK to installations" reason
+# - it's keyed on github_user_id, entirely independent of the installation
+# tree - truncating just this one row covers personal_api_tokens and
+# custom_skills too, since both have an ON DELETE CASCADE FK to
+# personal_identities (see 074_skill_hub_personal_identity.sql). Without it,
+# a fixed test github_user_id (e.g. 12345 for "octocat") upserts onto the
+# same identity row test after test within one pytest session, so
+# custom_skills rows written by an earlier test keep showing up in a later,
+# unrelated test's list/get assertions.
 _TRUNCATE_SQL = (
     "TRUNCATE installations, sessions, cli_telemetry_events, "
     "github_user_emails, sent_emails, data_deletion_log, webhook_deliveries, affiliates, "
-    "processed_paddle_transactions CASCADE"
+    "processed_paddle_transactions, personal_identities CASCADE"
 )
 
 
@@ -197,6 +206,10 @@ def _no_real_auth_rate_limiting(monkeypatch):
     # that specifically exercise the 429 path patch is_rate_limited back
     # to something real (or fake it directly) within their own test body.
     monkeypatch.setattr("app_server.auth.is_rate_limited", lambda *a, **k: False)
+    # Same reasoning for POST /v1/personal-tokens' per-GitHub-account limit:
+    # many tests mint tokens for the same fixed test user id. The 429 tests
+    # in test_skill_hub_api.py patch the real limiter back in.
+    monkeypatch.setattr("app_server.skill_hub_api.is_rate_limited", lambda *a, **k: False)
 
 
 @pytest.fixture(scope="session")

@@ -1,0 +1,52 @@
+[
+  {
+    "createSurface": {
+      "id": "traces-heatmap-surface",
+      "title": "Traces Heat Map",
+      "components": [
+        {
+          "id": "traces-heatmap-chart",
+          "component": "ScatterPlot",
+          "xAxis": {"label": "Time", "type": "time"},
+          "yAxis": {"label": "Latency (ms)", "type": "linear"},
+          "series": [
+            {
+              "name": "Success",
+              "color": "green",
+              "data": [
+                ["2026-07-14T12:00:00Z", 2200, "Trace 1"],
+                ["2026-07-14T12:05:00Z", 2500, "Trace 2"],
+                ["2026-07-14T12:10:00Z", 2100, "Trace 4"],
+                ["2026-07-14T12:00:00Z", 1100, "Trace 5"],
+                ["2026-07-14T12:15:00Z", 1000, "Trace 7"]
+              ]
+            },
+            {
+              "name": "Error",
+              "color": "red",
+              "data": [
+                ["2026-07-14T12:10:00Z", 3200, "Trace 3"],
+                ["2026-07-14T12:05:00Z", 1200, "Trace 6"]
+              ]
+            }
+          ]
+        },
+        {
+          "id": "traces-heatmap-key",
+          "component": "Table",
+          "title": "Trace Key",
+          "headers": ["Label", "Trace ID", "Latency", "Status"],
+          "rows": [
+            ["Trace 1", "7b2c0199e4f5a3e10c55a29811d0bb3e", "2.2s", "OK"],
+            ["Trace 2", "a1d38200f73c6821e90b8f411aa509de", "2.5s", "OK"],
+            ["Trace 3", "ee901a88b502c31049ddc784f1a233b2", "3.2s", "ERROR"],
+            ["Trace 4", "9b8c7d6e5f4e3d2c1b0a9f8e7d6c5b4a", "2.1s", "OK"],
+            ["Trace 5", "3f2e1d0c9b8a7f6e5d4c3b2a1e0d9c8b", "1.1s", "OK"],
+            ["Trace 6", "5c4b3a210f9e8d7c6b5a4f3e2d1c0b9a", "1.2s", "ERROR"],
+            ["Trace 7", "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d", "1.0s", "OK"]
+          ]
+        }
+      ]
+    }
+  }
+]

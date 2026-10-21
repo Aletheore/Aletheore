@@ -9,6 +9,7 @@ import pytest
 import toon
 from mcp.server.mcpserver.exceptions import ToolError
 
+from aletheore import skill_hub
 from aletheore.mcp_server import build_server
 from aletheore.search_index import IndexNotFoundError
 from aletheore.schema_map import skipped_schema
@@ -270,9 +271,16 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_find_evidence_for_endpoint",
         "aletheore_find_evidence_for_symbol",
         "aletheore_find_evidence_for_dependency",
+        "aletheore_list_skills",
+        "aletheore_find_skill",
+        "aletheore_search_skills",
+        "aletheore_get_skill",
+        "aletheore_get_skill_file",
+        "aletheore_add_custom_skill",
+        "aletheore_remove_custom_skill",
     }
     assert expected.issubset(names)
-    assert len(names) == 37
+    assert len(names) == 44
     assert "aletheore_answer" not in names
 
 
@@ -2133,3 +2141,209 @@ async def test_symbol_source_max_lines_zero_returns_everything(tmp_path):
     result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "foo", "max_lines": 0})
 
     assert "x199 = 199" in result.content[0].text and "more lines" not in result.content[0].text
+
+
+# --- skill hub (aletheore_list_skills / _get_skill / _add_custom_skill) ----
+
+
+@pytest.mark.asyncio
+async def test_aletheore_list_skills_tool_returns_catalog(tmp_path):
+    server = build_server(tmp_path)
+
+    # No argument returns the shape of the library, not a thousand entries.
+    overview = tool_result_body(await server.call_tool("aletheore_list_skills", {}))["result"]
+    shelves = {shelf["shelf"]: shelf for shelf in overview}
+    assert {"build", "quality", "ship-operate", "ai-agents", "product-design", "content-media"} <= set(shelves)
+    quality_categories = {entry["category"]: entry["skills"] for entry in shelves["quality"]["categories"]}
+    assert quality_categories["code-review"] >= 1
+    assert "skill_id" not in shelves["quality"]
+
+    # A category returns its skills, compactly.
+    result = await server.call_tool("aletheore_list_skills", {"category": "code-review"})
+    entries = tool_result_body(result)["result"]
+    assert "code-review/security-focused" in [entry["skill_id"] for entry in entries]
+    assert all({"skill_id", "title", "description"} <= set(entry) for entry in entries)
+
+
+@pytest.mark.asyncio
+async def test_aletheore_get_skill_tool_returns_content(tmp_path):
+    server = build_server(tmp_path)
+
+    result = await server.call_tool(
+        "aletheore_get_skill", {"skill_id": "code-review/security-focused"}
+    )
+
+    body = tool_result_body(result)["result"]
+    assert "security" in body["content"].lower()
+
+
+@pytest.mark.asyncio
+async def test_aletheore_get_skill_tool_unknown_id_is_clear_error(tmp_path):
+    server = build_server(tmp_path)
+
+    result = await server.call_tool("aletheore_get_skill", {"skill_id": "custom/nope"})
+
+    assert "not found" in result.content[0].text.lower()
+
+
+@pytest.mark.asyncio
+async def test_aletheore_add_custom_skill_tool_then_list_shows_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path / "custom_skills")
+    server = build_server(tmp_path)
+
+    await server.call_tool(
+        "aletheore_add_custom_skill", {"name": "my-review", "content": "steps"}
+    )
+    result = await server.call_tool("aletheore_list_skills", {"category": "custom"})
+
+    skill_ids = [meta["skill_id"] for meta in tool_result_body(result)["result"]]
+    assert "custom/my-review" in skill_ids
+
+    overview = tool_result_body(await server.call_tool("aletheore_list_skills", {}))["result"]
+    assert "Your skills" in [shelf["title"] for shelf in overview]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_add_custom_skill_tool_unsafe_name_is_clear_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path / "custom_skills")
+    server = build_server(tmp_path)
+
+    result = await server.call_tool(
+        "aletheore_add_custom_skill", {"name": "../escape", "content": "steps"}
+    )
+
+    assert "invalid" in result.content[0].text.lower()
+
+
+@pytest.mark.asyncio
+async def test_aletheore_remove_custom_skill_tool(tmp_path, monkeypatch):
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path / "custom_skills")
+    monkeypatch.setattr(skill_hub_sync, "delete_custom_skill_best_effort", lambda name, **kw: None)
+    server = build_server(tmp_path)
+
+    await server.call_tool("aletheore_add_custom_skill", {"name": "my-review", "content": "x"})
+    result = await server.call_tool("aletheore_remove_custom_skill", {"name": "my-review"})
+
+    assert "removed" in result.content[0].text.lower() or "deleted" in result.content[0].text.lower()
+    assert skill_hub.read_custom_skill_file("my-review") is None
+
+
+@pytest.mark.asyncio
+async def test_aletheore_remove_custom_skill_tool_unsafe_name_is_clear_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path / "custom_skills")
+    server = build_server(tmp_path)
+
+    result = await server.call_tool(
+        "aletheore_remove_custom_skill", {"name": "../escape"}
+    )
+
+    assert "invalid" in result.content[0].text.lower()
+
+
+@pytest.mark.asyncio
+async def test_aletheore_remove_custom_skill_tool_already_gone_is_clean_not_error(tmp_path, monkeypatch):
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path / "custom_skills")
+    monkeypatch.setattr(skill_hub_sync, "delete_custom_skill_best_effort", lambda name, **kw: None)
+    server = build_server(tmp_path)
+
+    result = await server.call_tool("aletheore_remove_custom_skill", {"name": "never-existed"})
+
+    assert "not present" in result.content[0].text.lower() or "nothing to remove" in result.content[0].text.lower()
+
+
+# --- Hallbook: search, companion files, and how agents are told about it ----
+
+
+@pytest.mark.asyncio
+async def test_aletheore_search_skills_tool_finds_a_skill_by_task(tmp_path):
+    server = build_server(tmp_path)
+
+    result = await server.call_tool("aletheore_search_skills", {"query": "flaky test debugging"})
+
+    entries = tool_result_body(result)["result"]
+    assert "debugging/systematic-debugging" in [entry["skill_id"] for entry in entries]
+    assert all({"skill_id", "title", "description"} <= set(entry) for entry in entries)
+    # Compact by construction: a page of results must not cost a page of skill text.
+    assert all(len(entry["description"]) <= 160 for entry in entries)
+    # License stays in get_skill; repeating it on every search row is wasted context.
+    assert all("license" not in entry for entry in entries)
+
+
+@pytest.mark.asyncio
+async def test_aletheore_find_skill_tool_returns_a_skill_or_says_to_move_on(tmp_path):
+    server = build_server(tmp_path)
+
+    found = await server.call_tool(
+        "aletheore_find_skill",
+        {"task": "Break down this big feature into smaller pieces my agent team can work on in parallel, with dependencies between them"},
+    )
+    body = tool_result_body(found)["result"]
+    assert body["confidence"] == "high"
+    assert body["top"]["skill_id"] == "agent-workflows/task-coordination-strategies"
+    assert body["skill"]["skill_id"] == body["top"]["skill_id"]
+    assert len(body["alternatives"]) <= 3
+
+    none = await server.call_tool("aletheore_find_skill", {"task": "zzzzq xylophonic flibbertigibbet"})
+    assert tool_result_body(none)["result"]["confidence"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_aletheore_search_skills_tool_clamps_limit_and_handles_no_match(tmp_path):
+    server = build_server(tmp_path)
+
+    many = await server.call_tool("aletheore_search_skills", {"query": "test", "limit": 1000})
+    assert len(tool_result_body(many)["result"]) <= 25
+    one = await server.call_tool("aletheore_search_skills", {"query": "test", "limit": 0})
+    assert len(tool_result_body(one)["result"]) == 1
+    none = await server.call_tool("aletheore_search_skills", {"query": "zzzzqqqq"})
+    assert tool_result_body(none)["result"] == []
+
+
+@pytest.mark.asyncio
+async def test_aletheore_get_skill_tool_lists_companion_files_and_requirements(tmp_path):
+    server = build_server(tmp_path)
+
+    result = await server.call_tool("aletheore_get_skill", {"skill_id": "debugging/systematic-debugging"})
+
+    body = tool_result_body(result)["result"]
+    assert "condition-based-waiting.md" in body["files"]
+    assert body["files_total"] >= len(body["files"])
+    assert "subagents" in body["requires"]
+    assert body["license"] == "MIT"
+
+
+@pytest.mark.asyncio
+async def test_aletheore_get_skill_file_tool_returns_text_or_a_clear_error(tmp_path):
+    server = build_server(tmp_path)
+
+    ok = await server.call_tool(
+        "aletheore_get_skill_file",
+        {"skill_id": "debugging/systematic-debugging", "path": "condition-based-waiting.md"},
+    )
+    assert len(ok.content[0].text) > 100
+
+    escape = await server.call_tool(
+        "aletheore_get_skill_file",
+        {"skill_id": "debugging/systematic-debugging", "path": "../../../etc/passwd"},
+    )
+    assert "invalid file path" in escape.content[0].text
+    assert "root:" not in escape.content[0].text
+
+    missing_skill = await server.call_tool("aletheore_get_skill_file", {"skill_id": "nope/nothing", "path": "x.md"})
+    assert "not found" in missing_skill.content[0].text.lower()
+
+    custom = await server.call_tool("aletheore_get_skill_file", {"skill_id": "custom/x", "path": "x.md"})
+    assert "no companion files" in custom.content[0].text
+
+
+def test_server_instructions_tell_agents_to_search_hallbook_before_specialist_tasks():
+    from aletheore.mcp_server import SERVER_INSTRUCTIONS
+
+    assert "Hallbook" in SERVER_INSTRUCTIONS
+    assert "aletheore_find_skill" in SERVER_INSTRUCTIONS
+    assert "aletheore_search_skills" in SERVER_INSTRUCTIONS
+    assert "aletheore_get_skill_file" in SERVER_INSTRUCTIONS

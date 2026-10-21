@@ -1,0 +1,22 @@
+# Stateless Deployment targeting Spot capacity directly via nodeSelector
+# (Autopilot or Standard with Spot node pools). Spot preemption gives ~30s
+# notice: keep terminationGracePeriodSeconds + preStop within that window and
+# run replicas >= 2. Replace {image_name}.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stateless-spot-app
+spec:
+  replicas: 2
+  template:
+    spec:
+      nodeSelector:
+        cloud.google.com/gke-spot: "true"
+      terminationGracePeriodSeconds: 25  # Spot preemption gives ~30s notice — keep graceful shutdown within it
+      containers:
+      - name: app
+        image: {image_name}
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 5"]

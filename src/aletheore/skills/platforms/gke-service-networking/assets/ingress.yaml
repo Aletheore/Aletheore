@@ -1,0 +1,21 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: my-ingress # Replace with your Ingress name
+  namespace: default # Replace with your namespace
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    # For a Google-managed certificate, also add:
+    # networking.gke.io/managed-certificates: my-certificate
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: my-service # Replace with your Service name
+                port:
+                  number: 80

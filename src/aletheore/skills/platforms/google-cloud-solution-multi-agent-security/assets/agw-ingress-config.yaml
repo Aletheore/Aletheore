@@ -1,0 +1,8 @@
+name: projects/{project_number}/locations/{region}/agentGateways/agw-client-c2a
+protocols:
+  - HTTP
+  - MCP
+googleManaged:
+  governedAccessPath: CLIENT_TO_AGENT
+registries:
+  - "//agentregistry.googleapis.com/projects/{project_number}/locations/{region}"
