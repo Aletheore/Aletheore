@@ -1,0 +1,170 @@
+[
+  {
+    "id": "t01",
+    "shelf_hint": "ship-operate",
+    "prompt": "Write a single commit message for the diff below. Use the repository's conventional-commit style and explain the user-visible effect, not the mechanics.\n\n```diff\ndiff --git a/src/http_client.py b/src/http_client.py\n--- a/src/http_client.py\n+++ b/src/http_client.py\n@@ -1,12 +1,24 @@\n import time\n import httpx\n \n-def fetch(url: str) -> dict:\n-    response = httpx.get(url, timeout=10)\n-    response.raise_for_status()\n-    return response.json()\n+def fetch(url: str, attempts: int = 4) -> dict:\n+    last_error = None\n+    for attempt in range(attempts):\n+        try:\n+            response = httpx.get(url, timeout=10)\n+            response.raise_for_status()\n+            return response.json()\n+        except (httpx.TimeoutException, httpx.HTTPStatusError) as exc:\n+            last_error = exc\n+            if attempt == attempts - 1:\n+                break\n+            time.sleep(2 ** attempt)\n+    raise RuntimeError(f\"fetch failed after {attempts} attempts\") from last_error\n```\n\nThe change was made because the status endpoint intermittently returns 503 during deploys.\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["git-workflow"],
+    "expected_skill_ids": ["git-workflow/conventional-commit", "git-workflow/git-commit", "git-workflow/commit-message-storyteller"]
+  },
+  {
+    "id": "t02",
+    "shelf_hint": "quality",
+    "prompt": "Review this Flask code for security problems and rank them by severity. Give the concrete fix for each.\n\n```python\n@app.route(\"/download\")\ndef download():\n    name = request.args.get(\"file\", \"\")\n    path = os.path.join(\"/srv/reports\", name)\n    with open(path, \"rb\") as fh:\n        data = fh.read()\n    return Response(data, mimetype=\"application/octet-stream\")\n\n@app.route(\"/user/<user_id>\")\ndef user(user_id):\n    row = db.execute(f\"SELECT id, email, role FROM users WHERE id = {user_id}\").fetchone()\n    return jsonify(dict(row))\n```\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["security"],
+    "expected_skill_ids": ["security/security-review", "security/security-reviewer", "security/secure-code-guardian"]
+  },
+  {
+    "id": "t03",
+    "shelf_hint": "build",
+    "prompt": "Plan a zero-downtime Postgres migration that adds a required `tenant_id` column (uuid, foreign key to tenants.id) to the `orders` table. The table has 40 million rows, is read and written continuously, and the deploy must not lock writes for more than a second.\n\nCurrent schema:\n```sql\nCREATE TABLE orders (\n  id bigserial PRIMARY KEY,\n  customer_id bigint NOT NULL REFERENCES customers(id),\n  total_cents integer NOT NULL,\n  created_at timestamptz NOT NULL DEFAULT now()\n);\nCREATE INDEX orders_customer_id_idx ON orders (customer_id);\n```\n\nGive the ordered steps, the exact SQL for each, how the backfill is throttled, how you verify correctness, and the rollback plan.\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["data", "planning"],
+    "expected_skill_ids": ["data/database-migration", "data/postgresql-table-design", "planning/create-implementation-plan"]
+  },
+  {
+    "id": "t04",
+    "shelf_hint": "build",
+    "prompt": "Design the REST endpoints for listing and creating invoices in a FastAPI service. Requirements: filter by status and customer, cursor pagination, amounts in integer cents, idempotent creation via an Idempotency-Key header, and a 409 when the invoice number already exists. Give the URLs, methods, request and response JSON, status codes, validation rules, and a short route signature sketch.\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["backend"],
+    "expected_skill_ids": ["backend/openapi-spec-generation", "backend/fastapi-expert", "backend/python-pro"]
+  },
+  {
+    "id": "t05",
+    "shelf_hint": "quality",
+    "prompt": "Write unit tests for this function. Cover normal input, boundary values, and malformed input. Use pytest and do not change the function.\n\n```python\ndef parse_duration(text: str) -> int:\n    \"\"\"Parse '90s', '5m', '2h' or '1d' into seconds.\"\"\"\n    unit = text[-1]\n    value = int(text[:-1])\n    return value * {\"s\": 1, \"m\": 60, \"h\": 3600, \"d\": 86400}[unit]\n```\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["testing"],
+    "expected_skill_ids": ["testing/python-testing-patterns", "testing/tdd", "testing/javascript-testing-patterns"]
+  },
+  {
+    "id": "t06",
+    "shelf_hint": "quality",
+    "prompt": "This Postgres query takes 8 seconds on a 5 million row table. Explain why, rewrite it, and list the indexes you would add. Show the expected plan change.\n\n```sql\nSELECT c.id, c.email, count(o.id) AS order_count, sum(o.total_cents) AS revenue\nFROM customers c\nLEFT JOIN orders o ON o.customer_id = c.id\nWHERE lower(c.email) LIKE '%@example.com'\n  AND o.created_at >= now() - interval '90 days'\nGROUP BY c.id, c.email\nORDER BY revenue DESC\nLIMIT 50;\n```\n\nExisting indexes: customers(id), orders(customer_id), orders(created_at).\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["data", "performance"],
+    "expected_skill_ids": ["data/sql-optimization", "data/postgresql-optimization", "data/database-optimizer", "performance/performance-optimization"]
+  },
+  {
+    "id": "t07",
+    "shelf_hint": "ship-operate",
+    "prompt": "Set up CI for a Python 3.12 project that uses `pyproject.toml`, pytest and ruff. Requirements: run on pull requests and pushes to main, cache pip, run `ruff check` and a format check, run pytest with coverage, fail if coverage drops below 85%, and use least-privilege permissions. Give the complete GitHub Actions workflow.\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["devops"],
+    "expected_skill_ids": ["devops/ci-cd-and-automation", "devops/github-actions-templates", "devops/python-packaging"]
+  },
+  {
+    "id": "t08",
+    "shelf_hint": "content-media",
+    "prompt": "Write an SEO title (max 60 characters) and meta description (max 155 characters) for this product page, plus two alternatives for each.\n\nProduct: LedgerLite. Invoicing and expense tracking for freelance designers in the UK. Automatic bank reconciliation, VAT-ready reports, and a mobile app. GBP 12 per month with no per-invoice fees. The page targets the query 'invoicing software for freelancers'.\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["marketing"],
+    "expected_skill_ids": ["marketing/ai-seo", "marketing/seo-content-brief", "marketing/copywriting"]
+  },
+  {
+    "id": "t09",
+    "shelf_hint": "content-media",
+    "prompt": "Write landing-page hero copy for this product. Give a headline, a subheadline, one primary CTA, and three supporting proof points. Keep it concrete and avoid generic AI-sounding phrases.\n\nProduct: Shelfwise turns a team's scattered Notion pages into a searchable internal handbook. It syncs nightly, keeps existing permissions, and answers questions with citations. Buyers are operations leads at 50-300 person companies. Main objection: 'we already have Notion search'.\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["marketing", "design"],
+    "expected_skill_ids": ["marketing/copywriting", "marketing/ads-landing", "design/brand-landingpage"]
+  },
+  {
+    "id": "t10",
+    "shelf_hint": "ship-operate",
+    "prompt": "Write reference documentation for this module: a short purpose statement, then each public function with parameters, return value, exceptions, and one usage example. Do not restate the code line by line.\n\n```python\nimport hashlib\nfrom pathlib import Path\n\nCHUNK = 1 << 20\n\ndef digest(path: Path, algorithm: str = \"sha256\") -> str:\n    h = hashlib.new(algorithm)\n    with path.open(\"rb\") as fh:\n        while chunk := fh.read(CHUNK):\n            h.update(chunk)\n    return h.hexdigest()\n\ndef same_file(a: Path, b: Path) -> bool:\n    if a.stat().st_size != b.stat().st_size:\n        return False\n    return digest(a) == digest(b)\n```\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["documentation"],
+    "expected_skill_ids": ["documentation/code-documenter", "documentation/documentation-writer", "documentation/lean-comments"]
+  },
+  {
+    "id": "t11",
+    "shelf_hint": "quality",
+    "prompt": "Refactor this function for readability without changing behaviour. Name the specific problems, show the refactored version, and list the tests you would keep or add.\n\n```python\ndef process_orders(orders, users, flag=False):\n    out = []\n    for o in orders:\n        if o.get('status') == 'paid' or flag:\n            u = None\n            for x in users:\n                if x['id'] == o['user_id']:\n                    u = x\n            if u is not None:\n                if o['total'] > 100:\n                    if u.get('vip'):\n                        out.append({'id': o['id'], 'discount': o['total'] * 0.2, 'email': u['email']})\n                    else:\n                        out.append({'id': o['id'], 'discount': o['total'] * 0.1, 'email': u['email']})\n                else:\n                    if o['total'] > 50:\n                        out.append({'id': o['id'], 'discount': o['total'] * 0.05, 'email': u['email']})\n                    else:\n                        out.append({'id': o['id'], 'discount': 0, 'email': u['email']})\n    return out\n```\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["refactoring"],
+    "expected_skill_ids": ["refactoring/refactor", "refactoring/code-simplification", "refactoring/safe-refactor"]
+  },
+  {
+    "id": "t12",
+    "shelf_hint": "ship-operate",
+    "prompt": "Improve this HTTP client with retries and backoff. Requirements: retry only transient failures (timeouts, connection errors, 429, 502, 503, 504), exponential backoff with jitter, respect Retry-After, enforce a total deadline, and never retry non-idempotent POSTs unless the caller opts in. Show the revised code.\n\n```python\nimport httpx\n\ndef get_json(url: str) -> dict:\n    response = httpx.get(url, timeout=10)\n    response.raise_for_status()\n    return response.json()\n```\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["reliability"],
+    "expected_skill_ids": ["reliability/python-resilience", "reliability/error-handling-patterns", "backend/python-error-handling"]
+  },
+  {
+    "id": "t13",
+    "shelf_hint": "build",
+    "prompt": "Write a Stripe webhook handler in FastAPI. It must verify the signature, handle `checkout.session.completed` and `invoice.payment_failed`, be idempotent across duplicate deliveries, return 200 quickly, and move slow work to a background task. Show the code and explain the failure modes.\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["backend"],
+    "expected_skill_ids": ["backend/billing-automation", "backend/fastapi-expert", "backend/auth-implementation-patterns"]
+  },
+  {
+    "id": "t14",
+    "shelf_hint": "ship-operate",
+    "prompt": "Write a production Dockerfile for this Flask app. Use a multi-stage build, a non-root user, a pinned slim Python base, no build tools in the final image, a healthcheck, and gunicorn with 2 workers. The app reads `DATABASE_URL` and listens on port 8000.\n\nProject files: `app.py`, `requirements.txt` (flask, gunicorn, psycopg[binary]), `templates/`, `static/`. Explain each stage.\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["devops", "infrastructure"],
+    "expected_skill_ids": ["devops/multi-stage-dockerfile", "devops/devops-engineer", "devops/ci-cd-and-automation"]
+  },
+  {
+    "id": "t15",
+    "shelf_hint": "ship-operate",
+    "prompt": "Write Terraform for a private S3 bucket used for application backups. Requirements: versioning on, SSE-KMS with a customer-managed key, all public access blocked, TLS-only bucket policy, lifecycle rule moving objects to Glacier after 30 days and deleting after 365, and tags for owner and environment. Use variables and outputs.\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["infrastructure"],
+    "expected_skill_ids": ["infrastructure/terraform-engineer", "infrastructure/terraform-module-library", "infrastructure/import-infrastructure-as-code"]
+  },
+  {
+    "id": "t16",
+    "shelf_hint": "build",
+    "prompt": "Build an accessible React modal dialog component. Requirements: labelled title, focus trap, Escape to close, focus restored to the trigger, `aria-modal`, inert background, no keyboard traps, and a close button with an accessible name. Show the component and explain the accessibility decisions.\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["frontend", "design"],
+    "expected_skill_ids": ["frontend/accessibility-compliance", "frontend/wcag-audit-patterns", "frontend/react-expert"]
+  },
+  {
+    "id": "t17",
+    "shelf_hint": "build",
+    "prompt": "Write a SwiftUI screen that lists invoices grouped by month. Each row shows the customer name, amount and status with a coloured status badge. Requirements: pull to refresh, loading and empty states, navigation to a detail screen, and Dynamic Type support. Use async/await and a simple observable view model.\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["mobile"],
+    "expected_skill_ids": ["mobile/swift-expert", "mobile/write-swift", "mobile/mobile-ios-design"]
+  },
+  {
+    "id": "t18",
+    "shelf_hint": "ai-agents",
+    "prompt": "Write a prompt for an LLM that classifies customer support tickets into exactly one of: Billing, Bug, Feature Request, Account Access, Other. Requirements: return JSON with `category` and `confidence`, include two few-shot examples, define tie-breaking rules, and say what to do when the ticket is ambiguous. Then give three test tickets and the expected labels.\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["ai-engineering"],
+    "expected_skill_ids": ["ai-engineering/prompt-engineer", "ai-engineering/prompt-engineering-patterns", "ai-engineering/prompt-optimizer"]
+  },
+  {
+    "id": "t19",
+    "shelf_hint": "ai-agents",
+    "prompt": "Write a Playwright (Python, sync API) script that scrapes job listings from a page with this structure. It must paginate until there is no next link, wait for the list to load, extract title, company, location and URL, dismiss a cookie banner, and save the results to JSON. Include error handling and a polite delay.\n\n```html\n<div class=\"cookie-banner\"><button>Accept</button></div>\n<ul id=\"jobs\">\n  <li class=\"job\"><a class=\"title\" href=\"/jobs/1\">Backend Engineer</a><span class=\"company\">Acme</span><span class=\"location\">Remote</span></li>\n</ul>\n<a rel=\"next\" href=\"/jobs?page=2\">Next</a>\n```\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["browser-automation"],
+    "expected_skill_ids": ["browser-automation/playwright", "browser-automation/playwright-expert", "browser-automation/playwright-cli"]
+  },
+  {
+    "id": "t20",
+    "shelf_hint": "product-design",
+    "prompt": "Write a one-page product requirements document for a feature that lets team admins export an audit log as CSV. Include the problem, goals and non-goals, user stories, requirements, acceptance criteria, success metrics, rollout plan and open questions. The product is a B2B SaaS dashboard used by 2,000 companies.\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["product"],
+    "expected_skill_ids": ["product/create-prd", "product/prd", "product/user-stories"]
+  },
+  {
+    "id": "t21",
+    "shelf_hint": "quality",
+    "prompt": "Debug this intermittent error. About 1 in 500 requests fails with `httpx.ReadTimeout` after 10 seconds, only under load, and never in staging. Give a ranked list of likely causes, the evidence you would collect for each, and the next three experiments. Do not propose a fix before narrowing the cause.\n\n```python\nasync def call_partner(payload: dict) -> dict:\n    async with httpx.AsyncClient(timeout=10) as client:\n        response = await client.post(PARTNER_URL, json=payload)\n        response.raise_for_status()\n        return response.json()\n\n@app.post(\"/orders\")\nasync def create_order(order: Order):\n    result = await call_partner(order.dict())\n    return {\"partner_id\": result[\"id\"]}\n```\n\nLogs show p99 latency of 9.8 seconds at the partner during peaks, and our connection pool is shared with three other endpoints.\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["debugging"],
+    "expected_skill_ids": ["debugging/systematic-debugging", "debugging/debugging-strategies", "debugging/diagnosing-bugs"]
+  },
+  {
+    "id": "t22",
+    "shelf_hint": "quality",
+    "prompt": "An engineer says: 'I fixed the duplicate-charge bug by adding a unique index on payments(order_id) and the tests pass, so it is done.' Describe exactly how you would verify the fix before agreeing. Cover the failure mode, the reproduction, the test that would have caught it, the production check, and the evidence you would require.\n\nContext: payments are inserted by a worker that retries on timeout, and the old code did a read-then-insert with no transaction.\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["verification"],
+    "expected_skill_ids": ["verification/verification-before-completion", "verification/doublecheck", "verification/verify-agent-action"]
+  },
+  {
+    "id": "t23",
+    "shelf_hint": "build",
+    "prompt": "Clean this pandas dataframe. Show the code and the resulting rows. Handle inconsistent column names, whitespace, missing emails, duplicate customer ids (keep the latest signup), dates in two formats, invalid dates, negative amounts, and a currency column with mixed symbols. Explain each step.\n\n```python\nimport pandas as pd\ndf = pd.DataFrame({\n    \"Customer ID\": [1, 2, 2, 3, 4, None],\n    \" email \": [\"a@x.com\", \" b@x.com\", \"b@x.com\", \"\", \"d@x.com\", \"e@x.com\"],\n    \"signup\": [\"2024-01-05\", \"05/02/2024\", \"2024-02-05\", \"2024-13-01\", \"2024-03-01\", \"2024-03-02\"],\n    \"amount\": [\"$10.00\", \"-5.00\", \"5.00\", \"EUR 7,50\", \"0\", \"12.00\"],\n})\n```\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["data"],
+    "expected_skill_ids": ["data/pandas-pro", "data/data-quality-frameworks", "data/jupyter-notebook"]
+  },
+  {
+    "id": "t24",
+    "shelf_hint": "build",
+    "prompt": "Explain this unfamiliar codebase to a new engineer. Cover the architecture, the request flow, the three most important files, the conventions to follow, and the first three places to read. Point out one risk you notice.\n\n```\nsrc/\n  api/          FastAPI routes, one module per resource\n  domain/       pure business logic, no I/O\n  adapters/     Postgres, Stripe, email clients\n  workers/      Celery tasks\n  config.py     pydantic settings\n  main.py       app factory, dependency wiring\ntests/          unit tests mirror src/, integration tests in tests/integration/\n```\n\n`api/orders.py` imports `adapters.stripe_client` directly and also calls `domain.pricing`; `workers/charge.py` duplicates the retry loop from `adapters/stripe_client.py`; `config.py` reads 14 environment variables at import time.\n\nAnswer in text. Do not create or edit files.",
+    "expected_categories": ["codebase-exploration"],
+    "expected_skill_ids": ["codebase-exploration/acquire-codebase-knowledge", "codebase-exploration/code-tour", "codebase-exploration/scan"]
+  }
+]
