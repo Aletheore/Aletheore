@@ -68,7 +68,7 @@ export default function HallbookPage() {
             <li key={t} className="hb-step relative bg-paper">
               <span className="hb-step-n" aria-hidden="true">{i + 1}</span>
               <h3 className="font-display text-[16px] font-bold leading-[1.25]">{t}</h3>
-              <pre className="mt-3 overflow-x-auto whitespace-pre-wrap rounded-[3px] bg-ink px-3 py-2.5 font-display text-[12px] leading-[1.6] text-[#e8e2d4]">{cmd}</pre>
+              <pre className="mt-3 overflow-x-auto whitespace-pre-wrap rounded-[3px] bg-ink px-3 py-2.5 font-display text-[12px] leading-[1.6] text-[#e8e2d4]">{HALLBOOK_LAUNCHED ? cmd : "Available with the next Aletheore release."}</pre>
               <p className="mt-3 text-[13px] leading-[1.6] text-muted">{note}</p>
             </li>
           ))}
@@ -100,7 +100,7 @@ export default function HallbookPage() {
         </div>
         <dl className="mt-10 grid gap-8 border-t border-dashed border-line-strong pt-7 sm:grid-cols-3">
           {[[String(r.riskyHits.value), "hits from a broader curation-time scan for override phrases, piped shell commands and hidden characters. All turned out to be documentation or benign examples."],
-            [String(r.heldBack.value), "candidates held back by the scanner, then reviewed one by one. Most were false alarms, one was dropped for phoning home."],
+            [String(r.heldBack.value), "candidates held back by the scanner, then reviewed one by one. Most were false alarms. One was left out because its bundled script sends usage events to a third-party analytics service."],
             [String(r.writesToAgentFolders.value), "skills Aletheore writes into your agent's folders. You read them through the MCP tool or the CLI, and the AGENTS.md line and hook config are printed for you to paste."]].map(([n, t]) => (
             <div key={n}><dt className="font-display text-[44px] font-bold leading-none text-stamp">{n}</dt><dd className="mt-2 max-w-[34ch] text-[13px] leading-[1.6] text-muted">{t}</dd></div>
           ))}

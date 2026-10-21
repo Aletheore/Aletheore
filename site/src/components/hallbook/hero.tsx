@@ -81,6 +81,7 @@ export function Hero() {
     }
   }
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
   function onType(v: string) { stop.current = true; setQ(v); clearTimeout(timer.current); timer.current = setTimeout(() => run(v), 160); }
 
   const c = res?.confidence;
@@ -113,7 +114,7 @@ export function Hero() {
         <p className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-faint">
           <span>try:</span>
           {exampleQueries.map((e) => (
-            <button key={e} type="button" onClick={() => { stop.current = true; setQ(e); run(e); }} className="underline decoration-dotted underline-offset-4 hover:text-stamp">
+            <button key={e} type="button" onClick={() => { stop.current = true; clearTimeout(timer.current); setQ(e); run(e); }} className="underline decoration-dotted underline-offset-4 hover:text-stamp">
               {EXAMPLE_LABEL[e] ?? e}
             </button>
           ))}
