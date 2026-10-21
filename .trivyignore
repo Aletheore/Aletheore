@@ -88,3 +88,13 @@ github-app-token
 CVE-2026-78667
 CVE-2026-78669
 CVE-2026-97031
+
+# gosec 2.29.0 (the newest release as of 2026-10-21) is built with a Go standard
+# library that Trivy flags for CVE-2026-111943 (crypto/x509 mitigation, fixed in
+# Go 1.26.10 and 1.27.3). Accepted for the same reason as above: gosec is a
+# one-shot local process that scans files and exits, and it makes no TLS
+# connections on behalf of anything untrusted.
+#
+# Revisit when gosec ships a release built on Go >= 1.27.3: bump the pin in
+# Dockerfile.scan-worker (with its checksum) and delete this line.
+CVE-2026-111943
