@@ -97,10 +97,10 @@ export default function HallbookPage() {
             ))}
           </ol>
         </div>
-        <dl className="mt-10 grid gap-8 border-t border-dashed border-line-strong pt-7 sm:grid-cols-2">
+        <dl className="mt-10 grid gap-8 border-t border-dashed border-line-strong pt-7 sm:grid-cols-3">
           {[[String(r.riskyHits.value), "hits from a broader curation-time scan for override phrases, piped shell commands and hidden characters. All turned out to be documentation or benign examples."],
-            [String(r.heldBack.value), "candidates held back by the scanner, then reviewed one by one. Most were false alarms, one was dropped for phoning home."]
-            ].map(([n, t]) => (
+            [String(r.heldBack.value), "candidates held back by the scanner, then reviewed one by one. Most were false alarms, one was dropped for phoning home."],
+            [String(r.writesToAgentFolders.value), "skills Aletheore writes into your agent's folders. You read them through the MCP tool or the CLI, and the AGENTS.md line and hook config are printed for you to paste."]].map(([n, t]) => (
             <div key={n}><dt className="font-display text-[44px] font-bold leading-none text-stamp">{n}</dt><dd className="mt-2 max-w-[34ch] text-[13px] leading-[1.6] text-muted">{t}</dd></div>
           ))}
         </dl>
