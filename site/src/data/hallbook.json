@@ -1,0 +1,572 @@
+{
+ "stats": {
+  "total": 1129,
+  "categories": 29,
+  "shelves": [
+   {
+    "key": "build",
+    "name": "Build",
+    "count": 528,
+    "top": [
+     "platforms",
+     "backend",
+     "frontend",
+     "mobile"
+    ]
+   },
+   {
+    "key": "ai-agents",
+    "name": "AI & Agents",
+    "count": 139,
+    "top": [
+     "ai-engineering",
+     "agent-workflows",
+     "browser-automation"
+    ]
+   },
+   {
+    "key": "ship-operate",
+    "name": "Ship & Operate",
+    "count": 137,
+    "top": [
+     "devops",
+     "documentation",
+     "git-workflow",
+     "reliability"
+    ]
+   },
+   {
+    "key": "content-media",
+    "name": "Content & Media",
+    "count": 115,
+    "top": [
+     "marketing",
+     "video-media",
+     "documents"
+    ]
+   },
+   {
+    "key": "quality",
+    "name": "Quality",
+    "count": 114,
+    "top": [
+     "security",
+     "testing",
+     "refactoring",
+     "code-review"
+    ]
+   },
+   {
+    "key": "product-design",
+    "name": "Product & Design",
+    "count": 96,
+    "top": [
+     "product",
+     "design"
+    ]
+   }
+  ],
+  "licenses": [
+   [
+    "MIT",
+    831
+   ],
+   [
+    "Apache-2.0",
+    298
+   ]
+  ]
+ },
+ "skill": {
+  "id": "debugging/systematic-debugging",
+  "head": "---\nname: systematic-debugging\ndescription: Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes\nskill_id: debugging/systematic-debugging\ntitle: Systematic Debugging\nsource_url: https://github.com/obra/superpowers/tree/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/systematic-debugging\nlicense: MIT\nshelf: quality\naletheore: {\"id\": \"debugging/systematic-debugging\", \"shelf\": \"quality\", \"category\": \"debugging\", \"origin\": \"https://github.com/obra/superpowers/tree/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/systematic-debugging\", \"license\": \"MIT\", \"license_source\": \"LICENSE\", \"upstream_commit\": \"bb92a77741419a4ab5f06e711a283343f1ada0c3\", \"quality\": 5, \"curation_note\": \"four-phase root cause, 10 companion refs; adapt: superpowers: skill refs\", \"needs_tool\": null, \"vet\": {\"injection_pattern_hits\": [], \"portability_flags\": [\"skill-ref\"], \"companion_files\": 10, \"has_scripts\": false}, \"curated_on\": \"2026-10-18\", \"requires\": [\"subagents\"], \"adapted\": {\"path\": 1}, \"status\": \"ready\", \"mentions_agents\": []}\n---\n\n# Systematic Debugging\n\n## Overview\n\n**Core principle:** ALWAYS find root cause before attempting fixes. Symptom fixes are failure.\n\n**Violating the letter of this process is violating the spirit of debugging.**\n\n## The Iron Law\n\n```\nNO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST\n```\n\nIf you haven't completed Phase 1, you cannot propose fixes.\n\n## When to Use\n\nUse for ANY technical issue:\n- Test failures\n- Bugs in production\n- Unexpected behavior\n- Performance problems"
+ },
+ "examples": {
+  "plan a zero downtime database migration": {
+   "confidence": "high",
+   "note": "Apply this guidance to the current project. Examples use sample values; do not copy them blindly. Skip steps that do not apply.",
+   "top": {
+    "id": "data/database-migration",
+    "title": "Database Migration",
+    "description": "Execute database migrations across ORMs and platforms with zero-downtime strategies, data transformation, and rollback procedures. Use when migrating databases, changing schemas, performing data transformations, or implementing zero-downtim",
+    "category": "data",
+    "shelf": "build",
+    "license": "MIT",
+    "quality": 4,
+    "source": "https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/framework-migration/skills/database-migration",
+    "alternates": []
+   },
+   "alternatives": [
+    {
+     "id": "platforms/qdrant-model-migration",
+     "title": "Qdrant Model Migration",
+     "description": "Guides embedding model migration in Qdrant without downtime. Use when someone asks 'how to switch embedding models', 'how to migrate vectors', 'how to update to a new model', 'zero-downtime model change', 'how to re-embed my data', or 'can ",
+     "category": "platforms",
+     "shelf": "build",
+     "license": "MIT",
+     "quality": 3,
+     "source": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/qdrant-model-migration",
+     "alternates": []
+    },
+    {
+     "id": "refactoring/deprecation-and-migration",
+     "title": "Deprecation And Migration",
+     "description": "Manages deprecation and migration. Use when removing old systems, APIs, or features. Use when migrating users from one implementation to another. Use when migrating a database schema in production, such as renaming or dropping a column with",
+     "category": "refactoring",
+     "shelf": "quality",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/addyosmani/agent-skills/tree/aeac41d4d005999432bb7312f7ff06383a91d59d/skills/deprecation-and-migration",
+     "alternates": []
+    },
+    {
+     "id": "data/planning-oracle-to-postgres-migration-integration-testing",
+     "title": "Planning Oracle To Postgres Migration Integration Testing",
+     "description": "Creates an integration testing plan for .NET data access artifacts during Oracle-to-PostgreSQL database migrations. Analyzes a single project to identify repositories, DAOs, and service layers that interact with the database, then produces ",
+     "category": "data",
+     "shelf": "build",
+     "license": "MIT",
+     "quality": 3,
+     "source": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/planning-oracle-to-postgres-migration-integration-testing",
+     "alternates": []
+    }
+   ],
+   "chars": 7844,
+   "preview": "\n# Database Migration\n\nMaster database schema and data migrations across ORMs (Sequelize, TypeORM, Prisma), including rollback strategies and zero-downtime deployments.\n\n## When to Use This Skill\n\n- Migrating between different ORMs\n- Performing schema transformations\n- Moving data between databases\n- Implementing rollback procedures\n- Zero-downtime deployments\n- Database version upgrades\n- Data model refactoring\n\n## ORM Migrations\n\n### Sequelize Migrations\n\n```javascript\n// migrations/20231201-create-users.js\nmodule.exports = {\n  up: async (queryInterface, Sequelize) => {\n    await queryInterface.createTable(\"users\", {\n      id: {\n        type: Sequelize.INTEGER,\n        primaryKey: true,\n  "
+  },
+  "create a stripe webhook handler": {
+   "confidence": "low",
+   "note": "No clear match. If none of these fits, continue without a skill and do not search again for the same need.",
+   "top": {
+    "id": "platforms/stripe-integration",
+    "title": "Stripe Integration",
+    "description": "Implement Stripe payment processing for robust, PCI-compliant payment flows including checkout, subscriptions, and webhooks. Use when integrating Stripe payments, building subscription systems, or implementing secure checkout flows.",
+    "category": "platforms",
+    "shelf": "build",
+    "license": "MIT",
+    "quality": 3,
+    "source": "https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/payment-processing/skills/stripe-integration",
+    "alternates": []
+   },
+   "alternatives": [
+    {
+     "id": "platforms/stripe-best-practices",
+     "title": "Stripe Best Practices",
+     "description": "Guides Stripe integration decisions across development and test environment planning (separate sandboxes vs the shared test mode sandbox), API selection (Checkout Sessions vs PaymentIntents), Connect platform setup (Accounts v2, controller ",
+     "category": "platforms",
+     "shelf": "build",
+     "license": "MIT",
+     "quality": 5,
+     "source": "https://github.com/stripe/ai/tree/24947f1632ee3440ba9f27f92404beea164517b9/providers/cursor/plugin/skills/stripe-best-practices",
+     "alternates": []
+    },
+    {
+     "id": "platforms/upgrade-stripe",
+     "title": "Upgrade Stripe",
+     "description": "Guide for upgrading Stripe API versions, webhook endpoints, server-side SDKs, Stripe.js, and mobile SDKs",
+     "category": "platforms",
+     "shelf": "build",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/stripe/ai/tree/24947f1632ee3440ba9f27f92404beea164517b9/providers/cursor/plugin/skills/upgrade-stripe",
+     "alternates": []
+    },
+    {
+     "id": "platforms/stripe-apps",
+     "title": "Stripe Apps",
+     "description": "Build, modify, or review Stripe Apps and extensions using the relevant documentation and reference guides. Use for custom Stripe Dashboard UI, stripe-app.yaml, @stripe/ui-extension-sdk, @stripe/extensibility-sdk, script extensions, extensio",
+     "category": "platforms",
+     "shelf": "build",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/stripe/ai/tree/24947f1632ee3440ba9f27f92404beea164517b9/providers/cursor/plugin/skills/stripe-apps",
+     "alternates": []
+    }
+   ],
+   "candidates": [
+    {
+     "id": "platforms/stripe-integration",
+     "title": "Stripe Integration",
+     "description": "Implement Stripe payment processing for robust, PCI-compliant payment flows including checkout, subscriptions, and webhooks. Use when integrating Stripe payments, building subscription systems, or implementing secure checkout flows.",
+     "category": "platforms",
+     "shelf": "build",
+     "license": "MIT",
+     "quality": 3,
+     "source": "https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/payment-processing/skills/stripe-integration",
+     "alternates": []
+    },
+    {
+     "id": "platforms/stripe-best-practices",
+     "title": "Stripe Best Practices",
+     "description": "Guides Stripe integration decisions across development and test environment planning (separate sandboxes vs the shared test mode sandbox), API selection (Checkout Sessions vs PaymentIntents), Connect platform setup (Accounts v2, controller ",
+     "category": "platforms",
+     "shelf": "build",
+     "license": "MIT",
+     "quality": 5,
+     "source": "https://github.com/stripe/ai/tree/24947f1632ee3440ba9f27f92404beea164517b9/providers/cursor/plugin/skills/stripe-best-practices",
+     "alternates": []
+    },
+    {
+     "id": "platforms/upgrade-stripe",
+     "title": "Upgrade Stripe",
+     "description": "Guide for upgrading Stripe API versions, webhook endpoints, server-side SDKs, Stripe.js, and mobile SDKs",
+     "category": "platforms",
+     "shelf": "build",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/stripe/ai/tree/24947f1632ee3440ba9f27f92404beea164517b9/providers/cursor/plugin/skills/upgrade-stripe",
+     "alternates": []
+    },
+    {
+     "id": "platforms/stripe-apps",
+     "title": "Stripe Apps",
+     "description": "Build, modify, or review Stripe Apps and extensions using the relevant documentation and reference guides. Use for custom Stripe Dashboard UI, stripe-app.yaml, @stripe/ui-extension-sdk, @stripe/extensibility-sdk, script extensions, extensio",
+     "category": "platforms",
+     "shelf": "build",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/stripe/ai/tree/24947f1632ee3440ba9f27f92404beea164517b9/providers/cursor/plugin/skills/stripe-apps",
+     "alternates": []
+    },
+    {
+     "id": "platforms/neon-functions",
+     "title": "Neon Functions",
+     "description": "Long-running, serverless Node.js HTTP functions deployed onto your Neon branch, with DATABASE_URL injected automatically and compute that runs next to your data. Use when a user wants to host an API, an AI agent with long streaming response",
+     "category": "platforms",
+     "shelf": "build",
+     "license": "Apache-2.0",
+     "quality": 4,
+     "source": "https://github.com/neondatabase/agent-skills/tree/51c7d594c0568d52a15eede61cc43f9f1227607a/plugins/neon-postgres/skills/neon-functions",
+     "alternates": []
+    }
+   ]
+  },
+  "write a good git commit message": {
+   "confidence": "low",
+   "note": "No clear match. If none of these fits, continue without a skill and do not search again for the same need.",
+   "top": {
+    "id": "git-workflow/git-commit",
+    "title": "Git Commit",
+    "description": "Execute git commit with conventional commit message analysis, intelligent staging, and message generation. Use when user asks to commit changes, create a git commit, or mentions \"/commit\". Supports: (1) Auto-detecting type and scope from ch",
+    "category": "git-workflow",
+    "shelf": "ship-operate",
+    "license": "MIT",
+    "quality": 4,
+    "source": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/git-commit",
+    "alternates": [
+     "git-workflow/conventional-commit",
+     "git-workflow/gitmoji"
+    ]
+   },
+   "alternatives": [
+    {
+     "id": "git-workflow/git-workflow-and-versioning",
+     "title": "Git Workflow And Versioning",
+     "description": "Structures git workflow practices. Use when making any code change. Use when committing, branching, resolving conflicts, splitting uncommitted work in a messy working tree into clean atomic commits, opening or reviewing a pull request (PR),",
+     "category": "git-workflow",
+     "shelf": "ship-operate",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/addyosmani/agent-skills/tree/aeac41d4d005999432bb7312f7ff06383a91d59d/skills/git-workflow-and-versioning",
+     "alternates": []
+    },
+    {
+     "id": "git-workflow/git-advanced-workflows",
+     "title": "Git Advanced Workflows",
+     "description": "Master advanced Git workflows including rebasing, cherry-picking, bisect, worktrees, and reflog to maintain clean history and recover from any situation. Use when managing complex Git histories, collaborating on feature branches, or trouble",
+     "category": "git-workflow",
+     "shelf": "ship-operate",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/developer-essentials/skills/git-advanced-workflows",
+     "alternates": []
+    },
+    {
+     "id": "git-workflow/changelog-automation",
+     "title": "Changelog Automation",
+     "description": "Automate changelog generation from commits, PRs, and releases following Keep a Changelog format. Use when setting up release workflows, generating release notes, or standardizing commit conventions.",
+     "category": "git-workflow",
+     "shelf": "ship-operate",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/documentation-generation/skills/changelog-automation",
+     "alternates": []
+    }
+   ],
+   "candidates": [
+    {
+     "id": "git-workflow/git-commit",
+     "title": "Git Commit",
+     "description": "Execute git commit with conventional commit message analysis, intelligent staging, and message generation. Use when user asks to commit changes, create a git commit, or mentions \"/commit\". Supports: (1) Auto-detecting type and scope from ch",
+     "category": "git-workflow",
+     "shelf": "ship-operate",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/git-commit",
+     "alternates": [
+      "git-workflow/conventional-commit",
+      "git-workflow/gitmoji"
+     ]
+    },
+    {
+     "id": "git-workflow/git-workflow-and-versioning",
+     "title": "Git Workflow And Versioning",
+     "description": "Structures git workflow practices. Use when making any code change. Use when committing, branching, resolving conflicts, splitting uncommitted work in a messy working tree into clean atomic commits, opening or reviewing a pull request (PR),",
+     "category": "git-workflow",
+     "shelf": "ship-operate",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/addyosmani/agent-skills/tree/aeac41d4d005999432bb7312f7ff06383a91d59d/skills/git-workflow-and-versioning",
+     "alternates": []
+    },
+    {
+     "id": "git-workflow/git-advanced-workflows",
+     "title": "Git Advanced Workflows",
+     "description": "Master advanced Git workflows including rebasing, cherry-picking, bisect, worktrees, and reflog to maintain clean history and recover from any situation. Use when managing complex Git histories, collaborating on feature branches, or trouble",
+     "category": "git-workflow",
+     "shelf": "ship-operate",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/developer-essentials/skills/git-advanced-workflows",
+     "alternates": []
+    },
+    {
+     "id": "git-workflow/changelog-automation",
+     "title": "Changelog Automation",
+     "description": "Automate changelog generation from commits, PRs, and releases following Keep a Changelog format. Use when setting up release workflows, generating release notes, or standardizing commit conventions.",
+     "category": "git-workflow",
+     "shelf": "ship-operate",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/documentation-generation/skills/changelog-automation",
+     "alternates": []
+    },
+    {
+     "id": "documentation/write",
+     "title": "Write",
+     "description": "Rewrites and polishes Chinese or English prose, technical instructions, and product copy. Use when drafting, editing, localizing, or cutting AI tone. Not for code comments or commit messages.",
+     "category": "documentation",
+     "shelf": "ship-operate",
+     "license": "MIT",
+     "quality": 3,
+     "source": "https://github.com/tw93/Waza/tree/840f926af48c98e0b36a3a64658a9ddc4cf7e716/plugins/waza/skills/write",
+     "alternates": []
+    }
+   ]
+  },
+  "design a REST API for invoices": {
+   "confidence": "low",
+   "note": "No clear match. If none of these fits, continue without a skill and do not search again for the same need.",
+   "top": {
+    "id": "architecture/api-and-interface-design",
+    "title": "Api And Interface Design",
+    "description": "Guides stable API and interface design. Use when designing APIs, module boundaries, or any public interface. Use when creating REST or GraphQL endpoints, defining type contracts between modules, or establishing boundaries between frontend a",
+    "category": "architecture",
+    "shelf": "build",
+    "license": "MIT",
+    "quality": 4,
+    "source": "https://github.com/addyosmani/agent-skills/tree/aeac41d4d005999432bb7312f7ff06383a91d59d/skills/api-and-interface-design",
+    "alternates": []
+   },
+   "alternatives": [
+    {
+     "id": "backend/spring-boot-engineer",
+     "title": "Spring Boot Engineer",
+     "description": "Generates Spring Boot 3.x configurations, creates REST controllers, implements Spring Security 6 authentication flows, sets up Spring Data JPA repositories, and configures reactive WebFlux endpoints. Use when building Spring Boot 3.x applic",
+     "category": "backend",
+     "shelf": "build",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/spring-boot-engineer",
+     "alternates": []
+    },
+    {
+     "id": "architecture/api-design-principles",
+     "title": "Api Design Principles",
+     "description": "Master REST and GraphQL API design principles to build intuitive, scalable, and maintainable APIs that delight developers. Use when designing new APIs, reviewing API specifications, or establishing API design standards.",
+     "category": "architecture",
+     "shelf": "build",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/backend-development/skills/api-design-principles",
+     "alternates": []
+    },
+    {
+     "id": "architecture/api-designer",
+     "title": "Api Designer",
+     "description": "Use when designing REST or GraphQL APIs, creating OpenAPI specifications, or planning API architecture. Invoke for resource modeling, versioning strategies, pagination patterns, error handling standards.",
+     "category": "architecture",
+     "shelf": "build",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/api-designer",
+     "alternates": []
+    }
+   ],
+   "candidates": [
+    {
+     "id": "architecture/api-and-interface-design",
+     "title": "Api And Interface Design",
+     "description": "Guides stable API and interface design. Use when designing APIs, module boundaries, or any public interface. Use when creating REST or GraphQL endpoints, defining type contracts between modules, or establishing boundaries between frontend a",
+     "category": "architecture",
+     "shelf": "build",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/addyosmani/agent-skills/tree/aeac41d4d005999432bb7312f7ff06383a91d59d/skills/api-and-interface-design",
+     "alternates": []
+    },
+    {
+     "id": "backend/spring-boot-engineer",
+     "title": "Spring Boot Engineer",
+     "description": "Generates Spring Boot 3.x configurations, creates REST controllers, implements Spring Security 6 authentication flows, sets up Spring Data JPA repositories, and configures reactive WebFlux endpoints. Use when building Spring Boot 3.x applic",
+     "category": "backend",
+     "shelf": "build",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/spring-boot-engineer",
+     "alternates": []
+    },
+    {
+     "id": "architecture/api-design-principles",
+     "title": "Api Design Principles",
+     "description": "Master REST and GraphQL API design principles to build intuitive, scalable, and maintainable APIs that delight developers. Use when designing new APIs, reviewing API specifications, or establishing API design standards.",
+     "category": "architecture",
+     "shelf": "build",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/backend-development/skills/api-design-principles",
+     "alternates": []
+    },
+    {
+     "id": "architecture/api-designer",
+     "title": "Api Designer",
+     "description": "Use when designing REST or GraphQL APIs, creating OpenAPI specifications, or planning API architecture. Invoke for resource modeling, versioning strategies, pagination patterns, error handling standards.",
+     "category": "architecture",
+     "shelf": "build",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/api-designer",
+     "alternates": []
+    },
+    {
+     "id": "platforms/api-gateway-mcp-server",
+     "title": "Api Gateway Mcp Server",
+     "description": "Configures Google Cloud API Gateway to act as a remote Model Context Protocol (MCP) server (Public Preview) that exposes REST APIs as agent tools over HTTP (POST /mcp). Use when migrating OpenAPI 2.0 specs to OpenAPI 3.x for MCP, annotating",
+     "category": "platforms",
+     "shelf": "build",
+     "license": "Apache-2.0",
+     "quality": 4,
+     "source": "https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/api-gateway-mcp-server",
+     "alternates": []
+    }
+   ]
+  },
+  "fix the thing": {
+   "confidence": "low",
+   "note": "No clear match. If none of these fits, continue without a skill and do not search again for the same need.",
+   "top": {
+    "id": "testing/tdd",
+    "title": "Tdd",
+    "description": "Test-driven development. Use when the user wants to build features or fix bugs test-first, mentions \"red-green-refactor\", or wants integration tests.",
+    "category": "testing",
+    "shelf": "quality",
+    "license": "MIT",
+    "quality": 5,
+    "source": "https://github.com/mattpocock/skills/tree/49dd158d1076134a641b33efb035946536778336/skills/engineering/tdd",
+    "alternates": []
+   },
+   "alternatives": [
+    {
+     "id": "design/redesign-existing-projects",
+     "title": "Redesign Existing Projects",
+     "description": "Upgrades existing websites and apps to premium quality. Audits current design, identifies generic AI patterns, and applies high-end design standards without breaking functionality. Works with any CSS framework or vanilla CSS.",
+     "category": "design",
+     "shelf": "product-design",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/Leonxlnx/taste-skill/tree/f624f37a8c650b9cc550253104925efe4c8de246/skills/redesign-skill",
+     "alternates": []
+    },
+    {
+     "id": "ai-engineering/langchain-architecture",
+     "title": "Langchain Architecture",
+     "description": "Design LLM applications using LangChain 1.x and LangGraph for agents, memory, and tool integration. Use when building LangChain applications, implementing AI agents, or creating complex LLM workflows.",
+     "category": "ai-engineering",
+     "shelf": "ai-agents",
+     "license": "MIT",
+     "quality": 3,
+     "source": "https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/llm-application-dev/skills/langchain-architecture",
+     "alternates": []
+    },
+    {
+     "id": "codebase-exploration/acquire-codebase-knowledge",
+     "title": "Acquire Codebase Knowledge",
+     "description": "Use this skill when the user explicitly asks to map, document, or onboard into an existing codebase. Trigger for prompts like \"map this codebase\", \"document this architecture\", \"onboard me to this repo\", or \"create codebase docs\". Do not tr",
+     "category": "codebase-exploration",
+     "shelf": "build",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/acquire-codebase-knowledge",
+     "alternates": []
+    }
+   ],
+   "candidates": [
+    {
+     "id": "testing/tdd",
+     "title": "Tdd",
+     "description": "Test-driven development. Use when the user wants to build features or fix bugs test-first, mentions \"red-green-refactor\", or wants integration tests.",
+     "category": "testing",
+     "shelf": "quality",
+     "license": "MIT",
+     "quality": 5,
+     "source": "https://github.com/mattpocock/skills/tree/49dd158d1076134a641b33efb035946536778336/skills/engineering/tdd",
+     "alternates": []
+    },
+    {
+     "id": "design/redesign-existing-projects",
+     "title": "Redesign Existing Projects",
+     "description": "Upgrades existing websites and apps to premium quality. Audits current design, identifies generic AI patterns, and applies high-end design standards without breaking functionality. Works with any CSS framework or vanilla CSS.",
+     "category": "design",
+     "shelf": "product-design",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/Leonxlnx/taste-skill/tree/f624f37a8c650b9cc550253104925efe4c8de246/skills/redesign-skill",
+     "alternates": []
+    },
+    {
+     "id": "ai-engineering/langchain-architecture",
+     "title": "Langchain Architecture",
+     "description": "Design LLM applications using LangChain 1.x and LangGraph for agents, memory, and tool integration. Use when building LangChain applications, implementing AI agents, or creating complex LLM workflows.",
+     "category": "ai-engineering",
+     "shelf": "ai-agents",
+     "license": "MIT",
+     "quality": 3,
+     "source": "https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/llm-application-dev/skills/langchain-architecture",
+     "alternates": []
+    },
+    {
+     "id": "codebase-exploration/acquire-codebase-knowledge",
+     "title": "Acquire Codebase Knowledge",
+     "description": "Use this skill when the user explicitly asks to map, document, or onboard into an existing codebase. Trigger for prompts like \"map this codebase\", \"document this architecture\", \"onboard me to this repo\", or \"create codebase docs\". Do not tr",
+     "category": "codebase-exploration",
+     "shelf": "build",
+     "license": "MIT",
+     "quality": 4,
+     "source": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/acquire-codebase-knowledge",
+     "alternates": []
+    },
+    {
+     "id": "ai-engineering/ai-prompt-engineering-safety-review",
+     "title": "Ai Prompt Engineering Safety Review",
+     "description": "Comprehensive AI prompt engineering safety review and improvement prompt. Analyzes prompts for safety, bias, security vulnerabilities, and effectiveness while providing detailed improvement recommendations with extensive frameworks, testing",
+     "category": "ai-engineering",
+     "shelf": "ai-agents",
+     "license": "MIT",
+     "quality": 3,
+     "source": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/ai-prompt-engineering-safety-review",
+     "alternates": []
+    }
+   ]
+  }
+ }
+}

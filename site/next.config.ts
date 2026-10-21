@@ -4,6 +4,8 @@ const PAGES = "pricing|developers|benchmarks|dogfooding|status|changelog|privacy
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // Live Hallbook search is a local-review feature: the page only fetches when HALLBOOK_API is set at build time.
+  env: { NEXT_PUBLIC_HALLBOOK_LIVE: process.env.HALLBOOK_API ? "1" : "" },
   poweredByHeader: false,
   // A stray package-lock.json in the home directory (outside this repo) was
   // making Turbopack infer the workspace root as the home directory itself,
@@ -25,6 +27,12 @@ const nextConfig: NextConfig = {
         ],
       },
     ];
+  },
+  // Optional, for local review: point HALLBOOK_API at `python3 scripts/hallbook-dev-api.py` to make the Hallbook page's search
+  // use the real ranking. Without it the page answers from its recorded examples.
+  async rewrites() {
+    const api = process.env.HALLBOOK_API;
+    return api ? [{ source: "/api/hallbook/:path*", destination: `${api}/api/:path*` }] : [];
   },
   async redirects() {
     return [
