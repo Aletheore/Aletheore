@@ -18,6 +18,7 @@ regardless of what touched the file's mtime.
 import hashlib
 import json
 import logging
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -28,7 +29,17 @@ from aletheore import credentials, skill_hub
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_API_BASE_URL = "https://app.aletheore.com"
+_PRODUCTION_API_BASE_URL = "https://app.aletheore.com"
+API_URL_ENV = "ALETHEORE_API_URL"
+
+
+def _api_base_url() -> str:
+    """The Aletheore account API used by login and Hallbook sync. Production unless ALETHEORE_API_URL points at a
+    staging or local server you run yourself (for testing sign-in and sync end to end)."""
+    return (os.environ.get(API_URL_ENV) or _PRODUCTION_API_BASE_URL).rstrip("/")
+
+
+DEFAULT_API_BASE_URL = _PRODUCTION_API_BASE_URL  # kept for importers; call _api_base_url() for the live value
 _SYNC_STATE_FILENAME = ".sync_state.json"
 _PENDING_DELETES_FILENAME = ".pending_deletes.json"
 _SYNC_ACCOUNT_FILENAME = ".sync_account"
@@ -158,7 +169,7 @@ def push_custom_skill_best_effort(name: str, content: str, timeout: float = 5.0)
         return
     try:
         response = httpx.put(
-            f"{DEFAULT_API_BASE_URL}/v1/custom-skills/{name}",
+            f"{_api_base_url()}/v1/custom-skills/{name}",
             json={"content": content},
             headers={"Authorization": f"Bearer {token}"},
             timeout=timeout,
@@ -200,7 +211,7 @@ def delete_custom_skill_best_effort(name: str, timeout: float = 5.0) -> None:
         return
     try:
         response = httpx.delete(
-            f"{DEFAULT_API_BASE_URL}/v1/custom-skills/{name}",
+            f"{_api_base_url()}/v1/custom-skills/{name}",
             headers={"Authorization": f"Bearer {token}"},
             timeout=timeout,
         )
@@ -223,7 +234,7 @@ def delete_custom_skill_best_effort(name: str, timeout: float = 5.0) -> None:
 
 def _fetch_skill_content(name: str, headers: dict, timeout: float) -> str:
     response = httpx.get(
-        f"{DEFAULT_API_BASE_URL}/v1/custom-skills/{name}", headers=headers, timeout=timeout
+        f"{_api_base_url()}/v1/custom-skills/{name}", headers=headers, timeout=timeout
     )
     response.raise_for_status()
     return response.json()["content"]
@@ -231,7 +242,7 @@ def _fetch_skill_content(name: str, headers: dict, timeout: float) -> str:
 
 def _push_and_record(name: str, content: str, headers: dict, timeout: float, sync_state: dict) -> None:
     response = httpx.put(
-        f"{DEFAULT_API_BASE_URL}/v1/custom-skills/{name}",
+        f"{_api_base_url()}/v1/custom-skills/{name}",
         json={"content": content},
         headers=headers,
         timeout=timeout,
@@ -401,7 +412,7 @@ def pull_merge_custom_skills(timeout: float = 10.0) -> None:
 
         def _list_server() -> dict:
             listed = httpx.get(
-                f"{DEFAULT_API_BASE_URL}/v1/custom-skills", headers=headers, timeout=timeout
+                f"{_api_base_url()}/v1/custom-skills", headers=headers, timeout=timeout
             )
             listed.raise_for_status()
             return listed.json()

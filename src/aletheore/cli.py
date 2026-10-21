@@ -750,10 +750,12 @@ def _print_update_notice_if_available() -> None:
 
 def _fetch_whoami(
     token: str,
-    api_base_url: str = "https://app.aletheore.com",
+    api_base_url: str | None = None,
     http_client: httpx.Client | None = None,
 ) -> dict | None:
-    client = http_client or httpx.Client(base_url=api_base_url)
+    from aletheore.device_auth import _resolved_api_base_url
+
+    client = http_client or httpx.Client(base_url=api_base_url or _resolved_api_base_url())
     try:
         response = client.get(
             "/v1/whoami", headers={"Authorization": f"Bearer {token}"}, timeout=5.0
@@ -2618,6 +2620,14 @@ def login() -> None:
     ):
         console.print("A token is already saved locally - continuing will replace it.\n")
 
+    import os as _os
+
+    if _os.environ.get("ALETHEORE_API_URL"):
+        console.print(
+            f"[yellow]Using ALETHEORE_API_URL={_os.environ['ALETHEORE_API_URL']} instead of app.aletheore.com "
+            "(for testing against your own server).[/yellow]\n"
+        )
+
     try:
         code = request_device_code()
         console.print("First, authenticate with GitHub:")
@@ -2630,7 +2640,8 @@ def login() -> None:
         # (the server treats an identical label as "the same machine logging in again").
         import uuid
 
-        label = f"{socket.gethostname()}-{uuid.getnode() & 0xFFFF:04x} (device flow)"
+        # ALETHEORE_LOGIN_LABEL lets two test "machines" on one computer log in without replacing each other.
+        label = _os.environ.get("ALETHEORE_LOGIN_LABEL") or f"{socket.gethostname()}-{uuid.getnode() & 0xFFFF:04x} (device flow)"
 
         # Mint and save a personal token before any installation lookup.
         # This has no dependency on an Aletheore GitHub App installation, so

@@ -786,3 +786,10 @@ def test_removing_a_never_synced_skill_while_logged_out_leaves_no_tombstone(tmp_
     monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: None)
     skill_hub.remove_custom_skill("local-only")
     assert skill_hub_sync._load_pending_deletes() == set()
+
+
+def test_the_hallbook_api_url_can_be_pointed_at_a_staging_server(monkeypatch):
+    monkeypatch.delenv(skill_hub_sync.API_URL_ENV, raising=False)
+    assert skill_hub_sync._api_base_url() == "https://app.aletheore.com"
+    monkeypatch.setenv(skill_hub_sync.API_URL_ENV, "http://127.0.0.1:8010/")
+    assert skill_hub_sync._api_base_url() == "http://127.0.0.1:8010"

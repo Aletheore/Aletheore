@@ -87,12 +87,19 @@ def poll_for_access_token(
     raise DeviceFlowError("timed out waiting for authorization")
 
 
+def _resolved_api_base_url() -> str:
+    # Local import: skill_hub_sync imports modules that import this one.
+    from aletheore.skill_hub_sync import _api_base_url
+
+    return _api_base_url()
+
+
 def fetch_my_installations(
     github_token: str,
-    api_base_url: str = "https://app.aletheore.com",
+    api_base_url: str | None = None,
     http_client: httpx.Client | None = None,
 ) -> list[dict]:
-    client = http_client or httpx.Client(base_url=api_base_url)
+    client = http_client or httpx.Client(base_url=api_base_url or _resolved_api_base_url())
     response = client.get(
         "/v1/my-installations",
         headers={"Authorization": f"Bearer {github_token}"},
@@ -105,10 +112,10 @@ def mint_cli_token(
     github_token: str,
     installation_id: int,
     label: str,
-    api_base_url: str = "https://app.aletheore.com",
+    api_base_url: str | None = None,
     http_client: httpx.Client | None = None,
 ) -> str:
-    client = http_client or httpx.Client(base_url=api_base_url)
+    client = http_client or httpx.Client(base_url=api_base_url or _resolved_api_base_url())
     response = client.post(
         "/v1/cli-tokens",
         headers={"Authorization": f"Bearer {github_token}"},
@@ -121,10 +128,10 @@ def mint_cli_token(
 def mint_personal_token(
     github_token: str,
     label: str,
-    api_base_url: str = "https://app.aletheore.com",
+    api_base_url: str | None = None,
     http_client: httpx.Client | None = None,
 ) -> str:
-    client = http_client or httpx.Client(base_url=api_base_url)
+    client = http_client or httpx.Client(base_url=api_base_url or _resolved_api_base_url())
     response = client.post(
         "/v1/personal-tokens",
         headers={"Authorization": f"Bearer {github_token}"},
@@ -137,10 +144,10 @@ def mint_personal_token(
 def revoke_personal_token(
     personal_token: str,
     all_devices: bool = False,
-    api_base_url: str = "https://app.aletheore.com",
+    api_base_url: str | None = None,
     http_client: httpx.Client | None = None,
 ) -> None:
-    client = http_client or httpx.Client(base_url=api_base_url)
+    client = http_client or httpx.Client(base_url=api_base_url or _resolved_api_base_url())
     path = "/v1/personal-tokens/all" if all_devices else "/v1/personal-tokens"
     response = client.delete(path, headers={"Authorization": f"Bearer {personal_token}"})
     response.raise_for_status()
@@ -204,7 +211,7 @@ def infer_repo_full_name_from_cwd_git_remote(
 
 def resolve_installation(
     github_token: str,
-    api_base_url: str = "https://app.aletheore.com",
+    api_base_url: str | None = None,
     http_client: httpx.Client | None = None,
     run_fn: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> dict | list[dict]:
