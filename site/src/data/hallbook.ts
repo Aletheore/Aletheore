@@ -37,5 +37,13 @@ export const receipts = {
   riskyHits: { value: 53, source: "search-lab/data/triage.md and triage.jsonl: 53 hits, 48 SAFE_DOC, 5 SAFE_BENIGN, 0 SUSPICIOUS (classified by a model, deepseek-v4-flash)" } as Sourced & { value: number },
   heldBack: { value: 6, source: "docs/superpowers/specs/2026-10-18-aletheore-skill-hub-design.md: six held back at export (3 instruction patterns, 1 curl | bash, 2 secrets scan). The 'dropped for phoning home' detail is not in that file." } as Sourced & { value: number },
   writesToAgentFolders: { value: 0, source: "src/aletheore/cli.py, the `aletheore hallbook` commands: list, get, search, categories, files, get-file only read; snippet and hook print text for the user to paste; add and remove touch only Aletheore's own custom-skills folder. Bundled skill scripts were checked for writes into agent folders; the one that did (skill-creator's run_eval.py) was adjusted to run in a throwaway project directory." } as Sourced & { value: number },
+  agentUse: {
+    source: "hallbook/search-lab branch, receipts/agents/CROSS_AGENT_RESULTS.md: six tasks per condition (twelve for Codex, run twice); Antigravity and Codex from logged tool calls, Claude from subagents reporting their own tool use",
+    rows: [
+      { agent: "Claude Code (subagents)", nothing: [0, 6], snippet: [5, 6], say: [5, 6] },
+      { agent: "Antigravity CLI", nothing: [0, 6], snippet: [5, 6], say: [6, 6] },
+      { agent: "Codex CLI", nothing: [0, 12], snippet: [3, 12], say: [2, 12] },
+    ] as { agent: string; nothing: [number, number]; snippet: [number, number]; say: [number, number] }[],
+  } as Sourced & { rows: { agent: string; nothing: [number, number]; snippet: [number, number]; say: [number, number] }[] },
   agentBenchmark: { tasks: 30, passRateDeltaPoints: [-4.5, 5] as [number, number], tokenMultiple: [1, 1.6] as [number, number], source: `hallbook/search-lab branch, receipts/quick_paired.py on stage6.jsonl: DeepSeek V4 Flash, fixtures f11 to f40, paired against no skills. Pass-rate change: hallbook +1.7, hint +5.0, inject +3.3, oracle +2.2, ask -4.5 points, every 95% interval includes zero. Tokens: 0.99 (inject) to 1.64 (ask) times` } as Sourced & { tasks: number; passRateDeltaPoints: [number, number]; tokenMultiple: [number, number] },
 };

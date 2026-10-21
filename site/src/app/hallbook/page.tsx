@@ -117,7 +117,18 @@ export default function HallbookPage() {
             <BarList rows={preciseRows} caption="Precision of a confident answer" /></div>
           <div><h3 className="mb-1 font-display text-[16px] font-bold">Getting your agent to use it</h3>
             <p className="mb-4 text-[13px] text-muted">Share of runs that called Hallbook. &ldquo;Say it&rdquo; means one line in your prompt: <b className="text-ink">Use the Aletheore skills available to you.</b></p>
-            <BarList rows={useRows} caption="Share of runs that used Hallbook" /></div>
+            <BarList rows={useRows} caption="Share of runs that used Hallbook" />
+            <p className="mb-2 mt-8 text-[13px] text-muted">The same question on other agents, counted in runs that called Hallbook. Small samples, so read the direction, not the decimals. &ldquo;Snippet&rdquo; is the one line in the agent&apos;s own instructions file.</p>
+            <div className="overflow-x-auto">
+              <table className="w-full max-w-[640px] border-collapse text-left text-[13px]">
+                <thead><tr className="border-b border-ink font-display text-[11px] tracking-[0.12em] text-muted"><th className="py-2 pr-4 font-bold">AGENT</th><th className="py-2 pr-4 font-bold">NOTHING SAID</th><th className="py-2 pr-4 font-bold">SNIPPET</th><th className="py-2 font-bold">SAY IT</th></tr></thead>
+                <tbody>
+                  {r.agentUse.rows.map((a) => (
+                    <tr key={a.agent} className="border-b border-dashed border-line-strong"><td className="py-2 pr-4 font-bold">{a.agent}</td><td className="py-2 pr-4">{a.nothing[0]} of {a.nothing[1]}</td><td className="py-2 pr-4">{a.snippet[0]} of {a.snippet[1]}</td><td className="py-2">{a.say[0]} of {a.say[1]}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div></div>
           <aside className="relative border border-ink bg-raised p-6">
             <span className="absolute -top-2.5 left-5 bg-paper px-2 font-display text-[11px] font-bold tracking-[0.16em] text-stamp">READ THIS</span>
             <p className="max-w-[72ch] text-[14.5px] leading-[1.7]"><b>Do skills make an agent score higher?</b> We tested five ways of delivering skills on {r.agentBenchmark.tasks} engineering tasks with hidden tests. Pass rates moved between minus {Math.abs(deltaLo)} and plus {deltaHi} points, all within noise, and skills used up to {tokHi} times the tokens. <Mark>We do not claim a score gain on tasks a strong model already knows.</Mark></p>
@@ -138,7 +149,7 @@ export default function HallbookPage() {
           <Command text="Use the Aletheore skills available to you for this task." />
           <p className="mb-1 mt-6 font-display text-[11.5px] tracking-[0.08em] text-[#e8e2d490]">3 · OR MAKE IT AUTOMATIC (CLAUDE CODE PROMPT HOOK)</p>
           <Command text="aletheore hallbook hook" />
-          <p className="mt-6 max-w-[64ch] text-[13px] leading-[1.7] text-[#e8e2d4a0]">Built on MCP, so any MCP agent can call it. Tested with OpenCode so far. Your own skills can be added once and used everywhere. Every skill credits its author and links to its source.</p>
+          <p className="mt-6 max-w-[64ch] text-[13px] leading-[1.7] text-[#e8e2d4a0]">Built on MCP, so any MCP agent can call it. We have tried it with OpenCode, Antigravity CLI, Codex CLI and Claude Code subagents. Agents rarely reach for it on their own, so add the line from step 2 or 3 to your agent&apos;s instructions file; most runs on Antigravity and Claude used it that way, and fewer on Codex. Your own skills can be added once and used everywhere. Every skill credits its author and links to its source.</p>
             </>
           ) : (
             <p className="mt-8 max-w-[64ch] text-[14.5px] leading-[1.7] text-[#e8e2d4c0]">Hallbook arrives with the next Aletheore release. The install and setup commands appear here when it is out; until then they would not work.</p>

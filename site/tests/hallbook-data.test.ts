@@ -33,7 +33,7 @@ describe("hallbook data snapshot", () => {
 
 describe("hallbook receipts", () => {
   const metrics = [receipts.findFirst, receipts.findTopFive, receipts.confidentPrecision, receipts.useSaid, receipts.useAgentsMd, receipts.useNothing];
-  const all = [...metrics, receipts.heldoutQueries, receipts.riskyHits, receipts.heldBack, receipts.writesToAgentFolders, receipts.agentBenchmark];
+  const all = [...metrics, receipts.heldoutQueries, receipts.riskyHits, receipts.heldBack, receipts.writesToAgentFolders, receipts.agentUse, receipts.agentBenchmark];
 
   it("every number carries a source, and unverified ones say so", () => {
     for (const r of all) {
@@ -77,5 +77,21 @@ describe("hallbook page copy", () => {
     const page = read("src/app/hallbook/page.tsx");
     expect(page).toMatch(/plain text/);
     expect(page).not.toMatch(/No download, no sign-in, no network call\./);
+  });
+});
+
+describe("cross-agent counts", () => {
+  it("every count is a plausible used-of-total pair", () => {
+    for (const a of receipts.agentUse.rows) {
+      for (const [used, total] of [a.nothing, a.snippet, a.say]) {
+        expect(total).toBeGreaterThan(0);
+        expect(used).toBeGreaterThanOrEqual(0);
+        expect(used).toBeLessThanOrEqual(total);
+      }
+    }
+  });
+
+  it("nothing-said never beats the instruction line (the page's claim is that you must add it)", () => {
+    for (const a of receipts.agentUse.rows) expect(a.nothing[0] / a.nothing[1]).toBeLessThan(a.snippet[0] / a.snippet[1]);
   });
 });
