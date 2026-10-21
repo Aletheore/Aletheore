@@ -852,6 +852,11 @@ def search_skills_scored(
     return [(meta, score) for score, _, meta in scored[:limit]]
 
 
+def skill_alternates(skill_id: str) -> list[str]:
+    """Ids of the skills collapsed under this canonical skill (empty when it has none)."""
+    return sorted(_curation(str(bundled_skills_dir()))[1].get(skill_id, []))
+
+
 def search_skills(query: str, category: str | None = None, limit: int = 10) -> list[SkillMeta]:
     """Ranked search over name, title, description, intents, headings and body opening.
 
