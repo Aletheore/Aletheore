@@ -1,3 +1,5 @@
+import { HALLBOOK_LAUNCHED } from "./launch";
+
 export type SiteLink = { label: string; href: string; external?: boolean };
 
 export const internalPaths = [
@@ -15,7 +17,8 @@ export const installGitHubAppHref = "https://github.com/apps/aletheore/installat
 export const navLinks: SiteLink[] = [
   { label: "Pricing", href: "/pricing" },
   { label: "Developers", href: "/developers" },
-  { label: "Hallbook", href: "/hallbook" },
+  // Only linked once Hallbook has shipped (see data/launch.ts); the page itself stays reachable by URL, noindex.
+  ...(HALLBOOK_LAUNCHED ? [{ label: "Hallbook", href: "/hallbook" }] : []),
   { label: "Benchmarks", href: "/benchmarks" },
   { label: "Proof", href: "/dogfooding" },
   { label: "Changelog", href: "/changelog" },

@@ -1,3 +1,4 @@
+import { HALLBOOK_LAUNCHED } from "@/data/launch";
 import type { Metadata } from "next";
 import { AnnotatedSkill } from "@/components/hallbook/annotated-skill";
 import { Command } from "@/components/hallbook/command";
@@ -13,8 +14,8 @@ export const metadata: Metadata = {
   title: "Hallbook: curated agent skills, read locally",
   description: "A library of curated agent skills bundled with Aletheore's MCP server. Your agent asks once and gets the right skill, or an honest answer that nothing fits. Searching the catalogue needs no download, no sign-in and no network call.",
   alternates: { canonical: "/hallbook" },
-  // Not indexed until Hallbook ships: remove this line (and add the page to public/sitemap.xml and llms.txt) at launch.
-  robots: { index: false, follow: false },
+  // Not indexed until Hallbook ships (see data/launch.ts for the launch steps).
+  ...(HALLBOOK_LAUNCHED ? {} : { robots: { index: false, follow: false } }),
 };
 
 const maxShelf = Math.max(...hallbook.stats.shelves.map((s) => s.count));
@@ -129,6 +130,8 @@ export default function HallbookPage() {
         <div className="mx-auto max-w-[1080px] px-8">
           <p className="font-display text-[12.5px] text-[#e8e2d499]">Use it</p>
           <h2 className="mt-3 max-w-[24ch] text-balance font-display text-[clamp(26px,3.6vw,40px)] font-bold leading-[1.1] tracking-[-0.02em]">Install it. Then just ask your agent to use the skills.</h2>
+          {HALLBOOK_LAUNCHED ? (
+            <>
           <p className="mb-1 mt-8 font-display text-[11.5px] tracking-[0.08em] text-[#e8e2d490]">1 · INSTALL AND START THE SERVER</p>
           <Command text="pip install aletheore" /><Command text="aletheore mcp ." />
           <p className="mb-1 mt-6 font-display text-[11.5px] tracking-[0.08em] text-[#e8e2d490]">2 · SAY IT</p>
@@ -136,6 +139,10 @@ export default function HallbookPage() {
           <p className="mb-1 mt-6 font-display text-[11.5px] tracking-[0.08em] text-[#e8e2d490]">3 · OR MAKE IT AUTOMATIC (CLAUDE CODE PROMPT HOOK)</p>
           <Command text="aletheore hallbook hook" />
           <p className="mt-6 max-w-[64ch] text-[13px] leading-[1.7] text-[#e8e2d4a0]">Built on MCP, so any MCP agent can call it. Tested with OpenCode so far. Your own skills can be added once and used everywhere. Every skill credits its author and links to its source.</p>
+            </>
+          ) : (
+            <p className="mt-8 max-w-[64ch] text-[14.5px] leading-[1.7] text-[#e8e2d4c0]">Hallbook arrives with the next Aletheore release. The install and setup commands appear here when it is out; until then they would not work.</p>
+          )}
         </div>
       </section>
     </>
