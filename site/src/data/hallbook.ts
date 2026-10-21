@@ -4,11 +4,43 @@ export type HbCard = { alternates?: string[]; id: string; title: string; descrip
 export type HbFind = { confidence: "none" | "low" | "high"; note?: string; top?: HbCard; alternatives?: HbCard[]; candidates?: HbCard[]; chars?: number; preview?: string };
 export type HbShelf = { key: string; name: string; count: number; top: string[] };
 
-export const hallbook = raw as unknown as {
+type HallbookData = {
   stats: { total: number; categories: number; shelves: HbShelf[]; licenses: [string, number][] };
   skill: { id: string; head: string };
   examples: Record<string, HbFind>;
 };
+
+const isCard = (c: unknown): c is HbCard => {
+  const o = c as Partial<HbCard> | null;
+  return !!o && typeof o.id === "string" && typeof o.title === "string" && typeof o.license === "string";
+};
+
+/** The JSON is written by scripts/build-hallbook-data.py. Check its shape when the page is built, so a changed
+ *  export fails the build instead of rendering a broken page. */
+function parseHallbook(data: unknown): HallbookData {
+  const d = data as Partial<HallbookData> | null;
+  const ok =
+    !!d &&
+    typeof d.stats?.total === "number" &&
+    typeof d.stats.categories === "number" &&
+    Array.isArray(d.stats.shelves) &&
+    d.stats.shelves.every((x) => typeof x.key === "string" && typeof x.name === "string" && typeof x.count === "number" && Array.isArray(x.top)) &&
+    Array.isArray(d.stats.licenses) &&
+    typeof d.skill?.id === "string" &&
+    typeof d.skill.head === "string" &&
+    !!d.examples &&
+    Object.values(d.examples).every(
+      (e) =>
+        ["none", "low", "high"].includes(e.confidence) &&
+        (e.top === undefined || isCard(e.top)) &&
+        (e.candidates ?? []).every(isCard) &&
+        (e.alternatives ?? []).every(isCard),
+    );
+  if (!ok) throw new Error("src/data/hallbook.json does not match the shape the Hallbook page expects; rerun scripts/build-hallbook-data.py");
+  return d as HallbookData;
+}
+
+export const hallbook = parseHallbook(raw);
 
 export const exampleQueries = Object.keys(hallbook.examples);
 export const EXAMPLE_LABEL: Record<string, string> = {
@@ -35,7 +67,7 @@ export const receipts = {
   useAgentsMd: { value: 28, display: "12 to 54%", source: `hallbook/search-lab branch, receipts/stage5.jsonl: one line in AGENTS.md, three models that ran it: DeepSeek V4 Flash 4 of 24, DeepSeek V4.1 Flash (free) 3 of 24, GLM 5.3 Flash (free) 13 of 24 coding tasks; the bar is the pooled 20 of 72` } as Metric,
   useNothing: { value: 2, display: "0 to 4%", source: `hallbook/search-lab branch, receipts/stage5.jsonl: nothing said, DeepSeek V4 Flash 0 of 24 and V4.1 Flash 1 of 24` } as Metric,
   riskyHits: { value: 53, source: "search-lab/data/triage.md and triage.jsonl: 53 hits, 48 SAFE_DOC, 5 SAFE_BENIGN, 0 SUSPICIOUS (classified by a model, deepseek-v4-flash)" } as Sourced & { value: number },
-  heldBack: { value: 6, source: "docs/superpowers/specs/2026-10-18-aletheore-skill-hub-design.md: six held back at export (3 instruction patterns, 1 curl | bash, 2 secrets scans). A person reviewed each; the findings cleared as false positives are recorded in src/aletheore/skills/_vetting_exemptions.json. The one left out is video-media/media-use, one of the two secrets-scan holds (receipts/vetting/vetting_held.json flags scripts/lib/telemetry.mjs:12), and on review that script posts usage events to PostHog (account-linked after sign-in, opt-out by environment variable); see hallbook/search-lab branch, receipts/vetting/media-use-held.md" } as Sourced & { value: number },
+  heldBack: { value: 6, source: "docs/superpowers/specs/2026-10-18-aletheore-skill-hub-design.md: six held back at export (3 instruction patterns, 1 curl | bash, 2 secrets scans). A person reviewed each: five were cleared as false positives and are in the catalogue (each finding is recorded with its reason in src/aletheore/skills/_vetting_exemptions.json), one stays out. The one left out is video-media/media-use, one of the two secrets-scan holds (receipts/vetting/vetting_held.json flags scripts/lib/telemetry.mjs:12), and on review that script posts usage events to PostHog (account-linked after sign-in, opt-out by environment variable); see hallbook/search-lab branch, receipts/vetting/media-use-held.md" } as Sourced & { value: number },
   writesToAgentFolders: { value: 0, source: "src/aletheore/cli.py, the `aletheore hallbook` commands: list, get, search, categories, files, get-file only read; snippet and hook print text for the user to paste; add and remove touch only Aletheore's own custom-skills folder. Bundled skill scripts were checked for writes into agent folders; the one that did (skill-creator's run_eval.py) was adjusted to run in a throwaway project directory." } as Sourced & { value: number },
   agentUse: {
     source: "hallbook/search-lab branch, receipts/agents/CROSS_AGENT_RESULTS.md: six tasks per condition (twelve for Codex, run twice); Antigravity and Codex from logged tool calls, Claude from subagents reporting their own tool use",

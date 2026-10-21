@@ -1,4 +1,8 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const read = (rel: string) => readFileSync(fileURLToPath(new URL(`../${rel}`, import.meta.url)), "utf8");
 
 async function load() {
   vi.resetModules();
@@ -29,22 +33,18 @@ describe("hallbook launch switch", () => {
   });
 
   it("the sitemap and llms.txt list the page exactly when it has launched", async () => {
-    const { readFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
     const { HALLBOOK_LAUNCHED } = await import("@/data/launch");
     for (const f of ["public/sitemap.xml", "public/llms.txt"]) {
-      const text = readFileSync(join(__dirname, "..", f), "utf8");
+      const text = read(f);
       if (HALLBOOK_LAUNCHED) expect(text).toMatch(/hallbook/i);
       else expect(text).not.toMatch(/hallbook/i);
     }
   });
 
   it("the page says the commands arrive with the release, and the flag is read from one place", async () => {
-    const { readFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
-    const page = readFileSync(join(__dirname, "..", "src/app/hallbook/page.tsx"), "utf8");
+    const page = read("src/app/hallbook/page.tsx");
     expect(page).toMatch(/arrives with the next Aletheore release/);
     expect(page).toMatch(/HALLBOOK_LAUNCHED/);
-    expect(readFileSync(join(__dirname, "..", "src/data/launch.ts"), "utf8")).toMatch(/NEXT_PUBLIC_HALLBOOK_LAUNCHED/);
+    expect(read("src/data/launch.ts")).toMatch(/NEXT_PUBLIC_HALLBOOK_LAUNCHED/);
   });
 });

@@ -23,8 +23,7 @@ for _m in sh.list_bundled_skills():
 def card(skill_id, score=None):
     c = dict(CAT[skill_id])
     c["description"] = c["description"][:240]
-    # skill_hub has no public accessor for the alternates map; _curation is the only source, so a changed shape must fail loudly.
-    c["alternates"] = sorted(sh._curation(str(ROOT))[1].get(skill_id, []))
+    c["alternates"] = sh.skill_alternates(skill_id)
     if score is not None:
         c["score"] = round(score, 1)
     return c
