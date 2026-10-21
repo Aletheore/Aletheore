@@ -63,7 +63,7 @@ AGENT_INSTRUCTION_SNIPPET = (
     "matches. Fetch files the skill points at with `aletheore_get_skill_file`.\n"
 )
 
-# find_skill confidence thresholds, calibrated by search-lab/calibrate_confidence.py on the DEV
+# find_skill confidence thresholds, calibrated by search-lab/calibrate_confidence.py (on the hallbook/search-lab branch) on the DEV
 # half of data/queries_stage4.jsonl (skill ids whose md5 hash is even). A top result is "high"
 # only when its score clears FIND_SKILL_MIN_SCORE and it is clearly ahead of the runner-up, by
 # either an absolute gap or a ratio. These values measured 87.7% top-1 precision (target or an
@@ -83,7 +83,7 @@ HOOK_TRUNCATE_CHARS = 800
 # 180 characters, so a plausible second-place match is worth showing. The score floor drops
 # near-zero keyword accidents; 1.05 is the smallest non-vacuous runner-up guard (at 1.0 the
 # second result can tie or nearly tie and the comparison says nothing). Calibrated by
-# search-lab/calibrate_hint.py on the DEV half of data/queries_stage4.jsonl: hit@2 82.4% at an
+# search-lab/calibrate_hint.py (on the hallbook/search-lab branch) on the DEV half of data/queries_stage4.jsonl: hit@2 82.4% at an
 # 86.1% fire rate, with 10% of the non-task chatty prompts firing.
 HINT_MIN_SCORE = 10.0
 HINT_MIN_RATIO = 1.05
@@ -560,7 +560,7 @@ def _tokens(text: str) -> list[str]:
 
 _SEARCH_FIELDS = ("name", "title", "description", "intents", "headings", "body", "category")
 
-# Tuned by coordinate ascent on the DEV half of the benchmark in search-lab/lab_rankers.py.
+# Tuned by coordinate ascent on the DEV half of the benchmark in search-lab/lab_rankers.py (on the hallbook/search-lab branch).
 _RANK_WEIGHTS = {
     "name": 3.0,
     "title": 1.08,
