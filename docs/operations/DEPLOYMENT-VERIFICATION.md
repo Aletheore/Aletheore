@@ -4,8 +4,36 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-10-15
-**Snapshot Freshness:** CURRENT as of 2026-10-15 - `app-server`, both scan workers, `health-worker` and `scheduler` run
+**Last Updated:** 2026-10-21
+**Snapshot Freshness:** CURRENT as of 2026-10-21 - `app-server` runs `master` at commit `8ffc8602` (tag
+`github-app-deploy-2026-10-21`). The scan workers, `health-worker` and `scheduler` were deliberately not rebuilt and
+still run `4adddf55` from the 2026-10-15 deploy, and `jina-embed` still runs `e3182a9f`: the change is the Hallbook
+account backend, which lives entirely in `app_server`. Migrations 073 and 074 were applied by `app-server`'s start
+command (`scripts/migrate.py`), after a database backup (`backups/aletheore_app_2026-10-21T17-40-39Z.dump`, 54 MB).
+
+2026-10-21 deploy (`8ffc8602`, tag `github-app-deploy-2026-10-21`), `app-server` only:
+
+- Hallbook account backend (#1070): personal API tokens (`/v1/personal-tokens`, issued only to tokens that GitHub says
+  belong to the Aletheore GitHub App) and per-account custom skills (`/v1/custom-skills`), with migration
+  `074_skill_hub_personal_identity.sql` (tables `personal_identities`, `personal_api_tokens`, `custom_skills`).
+  Migration `073_installation_members_github_user_id.sql` had not been applied in production before and ran in the
+  same start. `app-server` logged `applied 073...`, `applied 074...`, `applied 2 migration(s)`.
+- `certifi` 2026.7.22 to 2026.10.19 in the lock files (#1084, GHSA-6q48-6c7w-9gw2), the trivy bump in the scan-worker
+  image, and a `.trivyignore` entry for CVE-2026-111943 in `gosec` (the newest release is still built on a Go standard
+  library with that CVE; the entry is removed when a fixed `gosec` ships). The worker images were not rebuilt, so the
+  `certifi` fix reaches them at their next rebuild.
+- Everything else merged since 2026-10-15 that lives in the `aletheore` package (the CLI changes, the new menu, the
+  Hallbook catalogue) is in `app-server`'s image but is not released to PyPI and not announced: the Hallbook launch is
+  held, and the `/hallbook` page stays out of the site navigation until `NEXT_PUBLIC_HALLBOOK_LAUNCHED` is set.
+
+Verified live: `https://app.aletheore.com/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`;
+`POST /v1/personal-tokens` and `GET /v1/custom-skills` without a token return 401 (not 404); the three new tables
+exist; the `app-server` container is `healthy` and its log since the restart has no error or traceback lines; every
+other container was untouched and still `healthy` (`redis` and `caddy` define no health check). Not verified: a real
+`aletheore login` against production (the same flow passed against a local server with real GitHub; the production run
+is left to the pre-launch review).
+
+Previous: CURRENT as of 2026-10-15 - `app-server`, both scan workers, `health-worker` and `scheduler` run
 `master` at commit `4adddf55` (tag `github-app-deploy-2026-10-15`); `jina-embed` still runs `e3182a9f` and was not
 rebuilt (it is idle: 38 hours of its logs held health checks and one embed request, and it stays as the rollback for the
 DeepInfra embedder). No migration, no Dockerfile or compose change. One deploy, preceded by a database backup
