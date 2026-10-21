@@ -18,6 +18,7 @@ regardless of what touched the file's mtime.
 import hashlib
 import json
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -365,7 +366,8 @@ def _handle_account_switch(account_id: str | None) -> None:
         previous = ""
     if previous and previous != account_id:
         directory = skill_hub.custom_skills_dir()
-        backup_dir = directory.parent / f"{directory.name}-account-{previous}.bak"
+        # Named by time, not by account id: the id is only used to detect the switch.
+        backup_dir = directory.parent / f"{directory.name}-other-account-{int(time.time())}.bak"
         backup_dir.mkdir(parents=True, exist_ok=True)
         for entry in list(directory.iterdir()):
             if entry.is_file() and entry.name != _SYNC_ACCOUNT_FILENAME:

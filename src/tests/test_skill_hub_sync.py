@@ -718,8 +718,9 @@ def test_login_with_a_different_account_moves_local_skills_aside(tmp_path, monke
     # Neither uploaded into account B nor deleted as "deleted elsewhere": kept in a backup folder.
     assert puts == {}
     assert skill_hub.read_custom_skill_file("a-only") is None
-    backup = tmp_path / "custom-skills-account-account-A.bak"
-    assert (backup / "a-only.md").read_text(encoding="utf-8") == "belongs to account A"
+    backups = list(tmp_path.glob("custom-skills-other-account-*.bak"))
+    assert len(backups) == 1
+    assert (backups[0] / "a-only.md").read_text(encoding="utf-8") == "belongs to account A"
     assert (base / ".sync_account").read_text(encoding="utf-8") == "account-B"
 
 
