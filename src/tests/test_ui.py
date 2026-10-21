@@ -162,9 +162,10 @@ def test_scan_in_the_desktop_without_a_terminal_refuses_with_a_hint(fake_home, m
     monkeypatch.setattr(ui, "is_interactive", lambda: False)
     result = runner.invoke(app, ["scan", str(fake_home / "Desktop")])
     assert result.exit_code == 2
-    assert "your Desktop folder" in result.output
-    assert "--yes" in result.output
-    assert "aletheore scan ~/code/my-project" in result.output
+    output = " ".join(result.output.split())  # the hint wraps at the terminal width, which differs by OS
+    assert "your Desktop folder" in output
+    assert "--yes" in output
+    assert "aletheore scan ~/code/my-project" in output
 
 
 def test_yes_flag_and_env_var_skip_the_question(fake_home, monkeypatch):
