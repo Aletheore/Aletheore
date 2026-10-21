@@ -1,0 +1,12 @@
+[
+ {
+  "id": "video-media/media-use",
+  "origin": "https://github.com/heygen-com/hyperframes/tree/76ba031dccef188a133c0f47806483c661151d68/skills/media-use",
+  "failures": [
+   {
+    "reason": "secret_in_bundled_script",
+    "detail": "lib/telemetry.mjs:12 matched pattern 'generic_credential_assignment'"
+   }
+  ]
+ }
+]
