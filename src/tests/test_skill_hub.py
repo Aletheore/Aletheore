@@ -716,6 +716,11 @@ def test_hidden_duplicate_is_not_returned_but_still_loadable():
     assert skill_hub.get_skill(hidden).skill_id == hidden  # still loadable by id
 
 
+def test_skill_alternates_is_the_public_view_of_the_collapsed_alternates():
+    assert "code-review/code-review-and-quality" in skill_hub.skill_alternates("code-review/code-review")
+    assert skill_hub.skill_alternates("no-such/skill") == []
+
+
 def test_collapsed_alternates_appear_under_their_canonical_skill():
     results = skill_hub.search_skills("review my code before merging", limit=10)
     canonical = next(meta for meta in results if meta.skill_id == "code-review/code-review")
