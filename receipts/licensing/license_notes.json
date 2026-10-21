@@ -1,0 +1,12 @@
+{
+ "ai-engineering/pinecone-rag": "Declared Apache-2.0 in the skill's own frontmatter (third-party author); the upstream repository's only licence text is MIT (Copyright GitHub, Inc.), shipped here as LICENSE.upstream. No Apache-2.0 text exists upstream for this skill.",
+ "platforms/phoenix-cli": "Declared Apache-2.0 in the skill's own frontmatter (author arize-ai); the upstream repository's only licence text is MIT (Copyright GitHub, Inc.), shipped here as LICENSE.upstream.",
+ "platforms/phoenix-evals": "Declared Apache-2.0 in the skill's own frontmatter (author arize-ai); the upstream repository's only licence text is MIT (Copyright GitHub, Inc.), shipped here as LICENSE.upstream.",
+ "platforms/phoenix-tracing": "Declared Apache-2.0 in the skill's own frontmatter (author arize-ai); the upstream repository's only licence text is MIT (Copyright GitHub, Inc.), shipped here as LICENSE.upstream.",
+ "frontend/ui-styling": "Upstream is inconsistent: the skill's SKILL.md and the repository root say MIT (Copyright (c) 2024 Next Level Builder, shipped as LICENSE.upstream), while the skill's own folder ships an Apache-2.0 LICENSE.txt. Both texts are included.",
+ "frontend/vercel-composition-patterns": "Upstream states MIT in its README and in the skill's frontmatter but ships no licence file and names no copyright holder.",
+ "frontend/vercel-react-best-practices": "Upstream states MIT in its README and in the skill's frontmatter but ships no licence file and names no copyright holder.",
+ "frontend/vercel-react-view-transitions": "Upstream states MIT in its README and in the skill's frontmatter but ships no licence file and names no copyright holder.",
+ "mobile/vercel-react-native-skills": "Upstream states MIT in its README and in the skill's frontmatter but ships no licence file and names no copyright holder.",
+ "video-media/talking-head-recut": "Apache-2.0 (repository root); the skill's NOTICE.md also keeps an MIT notice for adapted third-party material."
+}
