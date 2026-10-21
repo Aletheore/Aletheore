@@ -2,9 +2,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useReducedMotion } from "@/components/scenes/use-reduced-motion";
 import { EXAMPLE_LABEL, exampleQueries, hallbook, type HbCard, type HbFind } from "@/data/hallbook";
+import { liveSearchEnabled, lookup, STATUS_RECORDED } from "@/data/hallbook-search";
 import { Mark } from "./mark";
 import { Odometer } from "./odometer";
 
+const LIVE = liveSearchEnabled();
 const POS = { none: "16.6%", low: "49.8%", high: "83%" } as const;
 const NOTE = {
   none: ["NONE", "Nothing relevant. A good agent carries on without a skill."],
@@ -38,7 +40,7 @@ export function Hero() {
   const [q, setQ] = useState("");
   const [typed, setTyped] = useState("");
   const [res, setRes] = useState<HbFind | null>(null);
-  const [status, setStatus] = useState("live · local");
+  const [status, setStatus] = useState(STATUS_RECORDED);
   const [stamped, setStamped] = useState(false);
   const stop = useRef(false);
   const seq = useRef(0);
@@ -67,18 +69,9 @@ export function Hero() {
   async function run(text: string) {
     const my = ++seq.current;
     if (text.trim().length < 3) { setRes(null); return; }
-    const known = hallbook.examples[text];
-    setStatus("asking…");
-    try {
-      const r = await fetch(`/api/hallbook/find?q=${encodeURIComponent(text)}`);
-      if (!r.ok) throw new Error("api");
-      const d = (await r.json()) as HbFind;
-      if (my === seq.current) { setRes(d); setStatus("live · local"); }
-    } catch {
-      if (my !== seq.current) return;
-      if (known) { setRes(known); setStatus("recorded answer"); }
-      else { setRes(null); setStatus("live search needs the local Hallbook server"); }
-    }
+    setStatus(LIVE ? "asking…" : STATUS_RECORDED);
+    const out = await lookup(text, LIVE);
+    if (my === seq.current) { setRes(out.res); setStatus(out.status); }
   }
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   function onType(v: string) { stop.current = true; setQ(v); clearTimeout(timer.current); timer.current = setTimeout(() => run(v), 160); }
@@ -87,20 +80,20 @@ export function Hero() {
   const cards = c === "high" ? res?.alternatives ?? [] : c === "low" ? res?.candidates ?? [] : [];
   return (
     <header className="mx-auto max-w-[1080px] px-8 pb-6 pt-14 md:pt-16">
-      <p className="eyebrow">A library of vetted agent skills, bundled with Aletheore</p>
+      <p className="eyebrow">A library of curated agent skills, bundled with Aletheore</p>
       <div className="relative">
         <div className="hb-count font-display font-bold" aria-hidden="false">
           <Odometer value={hallbook.stats.total} />
         </div>
         <div className={`hb-stamp${stamped ? " hb-stamp--hit" : ""}`} aria-hidden="true">
-          VETTED<small>LICENSE · SOURCE · SCANNED</small>
+          CHECKED<small>LICENSE ALLOWLIST · PINNED SOURCE</small>
         </div>
       </div>
       <h1 className="mt-6 max-w-[24ch] text-balance font-display text-[clamp(26px,3.6vw,42px)] font-bold leading-[1.1] tracking-[-0.02em]">
         Skills your agent can read <span className="text-stamp">right now.</span>
       </h1>
       <p className="mt-4 max-w-[62ch] text-[15.5px] leading-[1.7] text-muted">
-        <Mark>No download, no sign-in, no network call.</Mark> Hallbook lives inside Aletheore&apos;s MCP server. Your agent describes the task once and gets the right skill back, or an honest &ldquo;nothing here fits&rdquo;. This box runs the real ranking.
+        <Mark>No download, no sign-in, no network call.</Mark> Hallbook lives inside Aletheore&apos;s MCP server. Your agent describes the task once and gets the right skill back, or an honest &ldquo;nothing here fits&rdquo;. {LIVE ? "This box runs the real ranking." : "This box replays recorded answers from the real ranking."}
       </p>
 
       <div className="crop-marks mt-9 max-w-[860px] bg-raised p-5">

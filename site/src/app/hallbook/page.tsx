@@ -7,11 +7,11 @@ import { Hero } from "@/components/hallbook/hero";
 import { Transcript } from "@/components/hallbook/transcript";
 import { BarList, type BarRow } from "@/components/site/bar-list";
 import { Section } from "@/components/site/section";
-import { hallbook } from "@/data/hallbook";
+import { hallbook, receipts as r } from "@/data/hallbook";
 
 export const metadata: Metadata = {
-  title: "Hallbook: vetted agent skills, read locally",
-  description: "A library of vetted agent skills bundled with Aletheore's MCP server. Your agent asks once and gets the right skill, or an honest answer that nothing fits. No download, no sign-in, no network call.",
+  title: "Hallbook: curated agent skills, read locally",
+  description: "A library of curated agent skills bundled with Aletheore's MCP server. Your agent asks once and gets the right skill, or an honest answer that nothing fits. No download, no sign-in, no network call.",
   alternates: { canonical: "/hallbook" },
   // Not indexed until Hallbook ships: remove this line (and add the page to public/sitemap.xml and llms.txt) at launch.
   robots: { index: false, follow: false },
@@ -19,16 +19,19 @@ export const metadata: Metadata = {
 
 const maxShelf = Math.max(...hallbook.stats.shelves.map((s) => s.count));
 const shelfRows: BarRow[] = hallbook.stats.shelves.map((s) => ({ label: s.name, value: s.count, display: String(s.count), note: s.top.join(" · ") }));
+const withBefore = (label: string, m: typeof r.findFirst): BarRow => ({ label, value: m.value, display: m.display, ours: true, other: m.before ? { label: "before", ...m.before } : undefined });
 const findRows: BarRow[] = [
-  { label: "First result is the right skill", value: 45, display: "45%", ours: true, other: { label: "before", value: 9, display: "9%" } },
-  { label: "Right skill in the top five", value: 73, display: "73%", ours: true, other: { label: "before", value: 21, display: "21%" } },
+  withBefore("First result is the right skill", r.findFirst),
+  withBefore("Right skill in the top five", r.findTopFive),
 ];
-const preciseRows: BarRow[] = [{ label: "Confident answer is right", value: 87, display: "85 to 89%", ours: true }];
+const preciseRows: BarRow[] = [{ label: "Confident answer is right", value: r.confidentPrecision.value, display: r.confidentPrecision.display, ours: true }];
 const useRows: BarRow[] = [
-  { label: "You say it in the prompt", value: 98, display: "96 to 100%", ours: true },
-  { label: "One line in AGENTS.md", value: 22, display: "17 to 28%" },
-  { label: "Nothing said", value: 2, display: "0 to 4%" },
+  { label: "You say it in the prompt", value: r.useSaid.value, display: r.useSaid.display, ours: true },
+  { label: "One line in AGENTS.md", value: r.useAgentsMd.value, display: r.useAgentsMd.display },
+  { label: "Nothing said", value: r.useNothing.value, display: r.useNothing.display },
 ];
+const [deltaLo, deltaHi] = r.agentBenchmark.passRateDeltaPoints;
+const [tokLo, tokHi] = r.agentBenchmark.tokenMultiple;
 
 export default function HallbookPage() {
   return (
@@ -69,23 +72,23 @@ export default function HallbookPage() {
             </li>
           ))}
         </ol>
-        <p className="mt-5 max-w-[68ch] text-[13px] leading-[1.7] text-faint">Custom skills show up in search and in the one-call lookup next to the {hallbook.stats.total.toLocaleString("en-US")} vetted ones, with ids like custom/deploy-checklist. They are stored on your machine, and are only sent to your account if you sign in.</p>
+        <p className="mt-5 max-w-[68ch] text-[13px] leading-[1.7] text-faint">Custom skills show up in search and in the one-call lookup next to the {hallbook.stats.total.toLocaleString("en-US")} catalogue ones, with ids like custom/deploy-checklist. They are stored on your machine, and are only sent to your account if you sign in.</p>
       </Section>
 
       <Section id="shelves" eyebrow="4" title="Six shelves" intro="Chosen for work that agents actually do. Counts are read from the catalogue.">
         <BarList rows={shelfRows} max={maxShelf} caption="Skills per shelf" />
       </Section>
 
-      <Section id="vetting" eyebrow="5" title="Every skill is checked before it ships"
-        intro="A skill is instructions your agent will follow, so a bad one is a real risk. This is a real skill file from the catalogue, with what we check.">
+      <Section id="vetting" eyebrow="5" title="What we check before a skill ships"
+        intro="A skill is instructions your agent will follow, so a bad one is a real risk. This is a real skill file from the catalogue. The list is what our checks cover, and where they stop.">
         <div className="grid gap-9 lg:grid-cols-[1.25fr_1fr]">
           <AnnotatedSkill />
           <ol className="grid content-start gap-5 text-[14px] leading-[1.6] text-muted">
             {[
               ["Pinned source", "The exact repository and commit it came from, and the author is credited. Nothing is fetched from the network at read time."],
               ["Its own licence", "Each skill carries its licence. Only permissive ones (MIT, Apache-2.0, BSD, ISC and similar) are accepted."],
-              ["Instruction scan", "Text that tries to override your agent or pipe a remote script into a shell is flagged. We hand-reviewed every hit."],
-              ["Curation record", "Shelf, quality score and the outcome of our scans sit next to the skill. Bundled scripts are scanned for credentials and risky patterns, and skills that fail are held back until reviewed by hand."],
+              ["Instruction pattern lint", "Instruction text is matched against two known-bad shapes: a download piped straight into a shell (curl or wget into sh, bash and similar), and phrasing that asks to send a secret or credential to a URL. It is a lint, not a general prompt-injection detector, and a clean result is not a security review."],
+              ["Curation record and bundled scripts", "Shelf, quality score and the vetting result sit next to the skill. A bundled scripts/ folder is run through our secrets scanner, and only that: the pattern lint above reads the instruction text, not the scripts. A skill that fails any check is held back, and a person reviews each finding before it is cleared."],
             ].map(([t, b], i) => (
               <li key={t} className="relative pl-10">
                 <span className="absolute left-0 top-0 grid size-[26px] place-items-center rounded-full bg-stamp font-display text-[12px] font-bold text-paper">{i + 1}</span>
@@ -95,9 +98,9 @@ export default function HallbookPage() {
           </ol>
         </div>
         <dl className="mt-10 grid gap-8 border-t border-dashed border-line-strong pt-7 sm:grid-cols-3">
-          {[["53", "risky-looking phrases found across the catalogue. All 53 turned out to be warnings or documentation, none were live instructions."],
-            ["6", "candidates held back by the scanner, then reviewed one by one. Most were false alarms, one was dropped for phoning home."],
-            ["0", "skills that write into your agent's own folders."]].map(([n, t]) => (
+          {[[String(r.riskyHits.value), "hits from a broader curation-time scan for override phrases, piped shell commands and hidden characters. A model classified all of them as documentation or benign, and none as suspicious."],
+            [String(r.heldBack.value), "candidates held back by the scanner, then reviewed one by one. Most were false alarms, one was dropped for phoning home."],
+            [String(r.writesToAgentFolders.value), "skills that write into your agent's own folders."]].map(([n, t]) => (
             <div key={n}><dt className="font-display text-[44px] font-bold leading-none text-stamp">{n}</dt><dd className="mt-2 max-w-[34ch] text-[13px] leading-[1.6] text-muted">{t}</dd></div>
           ))}
         </dl>
@@ -106,7 +109,7 @@ export default function HallbookPage() {
       <Section id="receipts" eyebrow="6" title="Receipts" intro="We measured it, including the parts that did not go our way. These are our own tests on this catalogue, October 2026.">
         <div className="grid gap-12">
           <div><h3 className="mb-1 font-display text-[16px] font-bold">Finding the right skill from a vague request</h3>
-            <p className="mb-4 text-[13px] text-muted">994 requests written by a different model, in the voice of someone who does not know the skill names.</p>
+            <p className="mb-4 text-[13px] text-muted">{r.heldoutQueries.value} requests written by a different model, in the voice of someone who does not know the skill names.</p>
             <BarList rows={findRows} caption="Finding the right skill from a vague request" /></div>
           <div><h3 className="mb-1 font-display text-[16px] font-bold">When it says &ldquo;high&rdquo;, it is right</h3>
             <p className="mb-4 text-[13px] text-muted">The lookup only hands over a skill when confident. Otherwise it gives short candidates, or says nothing fits.</p>
@@ -116,8 +119,8 @@ export default function HallbookPage() {
             <BarList rows={useRows} caption="Share of runs that used Hallbook" /></div>
           <aside className="relative border border-ink bg-raised p-6">
             <span className="absolute -top-2.5 left-5 bg-paper px-2 font-display text-[11px] font-bold tracking-[0.16em] text-stamp">READ THIS</span>
-            <p className="max-w-[72ch] text-[14.5px] leading-[1.7]"><b>Do skills make an agent score higher?</b> We tested five ways of delivering skills on 30 engineering tasks with hidden tests. Pass rates moved between minus 4.5 and plus 5 points, all within noise, and skills used 1.3 to 1.6 times the tokens. <Mark>We do not claim a score gain on tasks a strong model already knows.</Mark></p>
-            <p className="mt-3 max-w-[72ch] text-[14.5px] leading-[1.7] text-muted">What we do claim is access: <Mark>vetted skills, offline, one call, and an honest answer when nothing fits.</Mark> Published research finds the big gains come from skills that carry knowledge a model lacks, such as a specific product or procedure. That is what we test next.</p>
+            <p className="max-w-[72ch] text-[14.5px] leading-[1.7]"><b>Do skills make an agent score higher?</b> We tested five ways of delivering skills on {r.agentBenchmark.tasks} engineering tasks with hidden tests. Pass rates moved between minus {Math.abs(deltaLo)} and plus {deltaHi} points, all within noise, and skills used {tokLo} to {tokHi} times the tokens. <Mark>We do not claim a score gain on tasks a strong model already knows.</Mark></p>
+            <p className="mt-3 max-w-[72ch] text-[14.5px] leading-[1.7] text-muted">What we do claim is access: <Mark>curated skills, offline, one call, and an honest answer when nothing fits.</Mark> Published research finds the big gains come from skills that carry knowledge a model lacks, such as a specific product or procedure. That is what we test next.</p>
           </aside>
         </div>
       </Section>

@@ -4,6 +4,8 @@ const PAGES = "pricing|developers|benchmarks|dogfooding|status|changelog|privacy
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // Live Hallbook search is a local-review feature: the page only fetches when HALLBOOK_API is set at build time.
+  env: { NEXT_PUBLIC_HALLBOOK_LIVE: process.env.HALLBOOK_API ? "1" : "" },
   poweredByHeader: false,
   // A stray package-lock.json in the home directory (outside this repo) was
   // making Turbopack infer the workspace root as the home directory itself,

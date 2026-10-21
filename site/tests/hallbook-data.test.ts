@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { exampleQueries, hallbook } from "@/data/hallbook";
+import { exampleQueries, hallbook, receipts } from "@/data/hallbook";
 
 describe("hallbook data snapshot", () => {
   it("shelf counts add up to the total", () => {
@@ -26,5 +26,32 @@ describe("hallbook data snapshot", () => {
     const head = hallbook.skill.head;
     expect(head).toMatch(/^source_url:/m);
     expect(head).toMatch(/^license:/m);
+  });
+});
+
+describe("hallbook receipts", () => {
+  const metrics = [receipts.findFirst, receipts.findTopFive, receipts.confidentPrecision, receipts.useSaid, receipts.useAgentsMd, receipts.useNothing];
+  const all = [...metrics, receipts.heldoutQueries, receipts.riskyHits, receipts.heldBack, receipts.writesToAgentFolders, receipts.agentBenchmark];
+
+  it("every number carries a source, and unverified ones say so", () => {
+    for (const r of all) {
+      expect(r.source.length).toBeGreaterThan(10);
+      if (r.unverified !== undefined) expect(r.unverified).toBe(true);
+    }
+  });
+
+  it("metrics are percentages with a display string, and 'before' sits below ours", () => {
+    for (const m of metrics) {
+      expect(m.value).toBeGreaterThanOrEqual(0);
+      expect(m.value).toBeLessThanOrEqual(100);
+      expect(m.display.length).toBeGreaterThan(0);
+    }
+    for (const m of [receipts.findFirst, receipts.findTopFive]) expect(m.before!.value).toBeLessThan(m.value);
+  });
+
+  it("the verified counts match the files they cite", () => {
+    expect(receipts.heldoutQueries.value).toBe(994);
+    expect(receipts.riskyHits.value).toBe(53);
+    expect(receipts.heldBack.value).toBe(6);
   });
 });
