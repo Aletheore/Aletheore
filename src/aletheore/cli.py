@@ -2737,7 +2737,7 @@ def logout(
     # Revoke server-side first, while the token still exists locally. Same
     # guarded read status() uses: never prompts, since logout is not an
     # interactive ask-for-a-token moment.
-    personal_token = ""
+    personal_token: str | None = None
     if credentials.has_api_key(
         "ALETHEORE_PERSONAL_TOKEN",
         personal_slot,
