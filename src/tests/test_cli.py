@@ -4184,6 +4184,7 @@ def _login_mint_raises(error):
 
 def test_login_409_shows_server_detail_and_dashboard_hint(tmp_path, monkeypatch):
     import aletheore.credentials as credentials
+    from aletheore.device_auth import DASHBOARD_URL
 
     monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", tmp_path / "creds.json")
     result = _login_mint_raises(_status_error(409, {"detail": "token limit reached (3)"}))
@@ -4192,7 +4193,7 @@ def test_login_409_shows_server_detail_and_dashboard_hint(tmp_path, monkeypatch)
     assert result.exit_code == 1
     assert "token limit reached (3)" in output
     assert "limit of active CLI tokens" in output
-    assert "aletheore.com" in output.split("dashboard at ")[1].split()[0]
+    assert f"dashboard at {DASHBOARD_URL}" in output
     assert "aletheore login" in output
     assert "check your connection" not in output
     assert "HTTPStatusError" not in output
