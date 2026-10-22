@@ -5,6 +5,50 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+**Added: a skills browser in the home menu**
+
+"Find a Hallbook skill" is now a small submenu instead of a prompt followed by a wall of text. "Search by what you are
+doing" asks for the task and shows the best matches in an arrow-key list. "Browse by shelf" goes from the shelves (with
+their skill counts) to the categories to the skills, each level with a Back row. Every skill row shows its id and title
+with the description trimmed to one line of your terminal's width. Enter opens a detail view with the title, shelf and
+category, license, the upstream source link, the full description, the files the skill ships and "Read SKILL.md", which
+opens the file in your pager so a long skill does not flood the terminal. Back returns to the same row of the same list.
+
+**Added: "All commands" is a picker**
+
+The static list is replaced by an arrow-key picker, grouped by task: Scan and explore, Agents and skills, Dashboard and
+watch, Account. Each row carries the command's one-line description, taken from the same table as the plain `aletheore`
+banner so the two cannot drift. Enter runs commands that need nothing (`scan`, `status`, `login`, ...), reuses the
+Explore, Connect, Audit and Hallbook flows, asks for the arguments `diff` (two evidence files), `verify` and `healthcheck` need,
+and shows the `--help` text for `mcp`, `watch` and `config`. The plain `aletheore`, `aletheore --help` and
+`ALETHEORE_NO_MENU=1` output is unchanged.
+
+**Fixed: `aletheore hallbook search` wrapped and left a stray ".." after every result**
+
+Each result's description was cut at a fixed 140 characters, so on a wide terminal the line wrapped and left a row of
+dots. Results now take two lines each, the id and title and then one line of description, cut with an ellipsis at the
+terminal's width (100 columns when there is no terminal). `hallbook list` is cut the same way in a terminal and is
+unchanged when piped. Exit codes and the absence of color are unchanged.
+
+**Changed: every menu row fits the terminal, and long lists scroll**
+
+Menu labels and hints are cut with an ellipsis at the terminal's width instead of wrapping, and a list taller than the
+window scrolls around the highlighted row with "more above" and "more below" markers. The home screen also shortens a
+deep folder path from the left, so the version line no longer wraps.
+
+**Changed: the screen is cleared before the home menu is drawn again**
+
+After an action and "Press any key to return to the menu", the earlier output used to stay stacked above a new logo.
+The screen is now cleared first, in a real terminal only; a pipe, a log or CI never receives clear-screen codes. The
+"All commands" picker returns to the home menu after a command for the same reason.
+
+**Fixed: `aletheore audit` offered "ollama" when no coding agent was installed**
+
+The provider list showed Ollama whenever something answered on its local port, even with no `ollama` command and no
+coding agent installed. Only usable providers are offered now: an agent CLI must be on your `PATH`, and Ollama also needs
+its command installed. With none, the audit prints one message saying no coding agent was found and how to install or
+configure one, keeps the evidence it just wrote, and exits with code 1 as before. `--agent NAME` is unchanged.
+
 ## 0.10.2 - 2026-10-22
 
 Fixes for signing in and out, found by logging in again after logging out. Replacing a machine's earlier token on a
