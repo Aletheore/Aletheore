@@ -5,11 +5,38 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
-- Changed the local dashboard so that, if its scan file is missing or removed while it is running, the page says "No scan found for this folder" and refreshes itself when a scan appears, instead of the API answering 500.
-- Changed crash reporting to drop h11's `LocalProtocolError` ("state=CLOSED"), which the local dashboard logs when a client drops a connection and is not a crash of Aletheore.
-- Fixed `aletheore dashboard` showing a blank page (the API answered 500) for a folder that is not a git repository or a repository with no commits yet. The Git activity card now says there is no git history to read.
-- Changed the home menu's "Connect your coding agent" list so Enter on the first row configures one agent (Claude Code), not all eight. "All of them" is now below the agents and says it also writes Claude Desktop's global config, which lives outside the folder.
-- Fixed `aletheore dashboard` (and the home menu's dashboard entry) opening an empty dashboard with no explanation when the folder has never been scanned. It now says there is no scan and, in a terminal, offers to scan first; with no terminal it prints the `aletheore scan` command to run and exits 1.
+## 0.10.1 - 2026-10-22
+
+Fixes for the local dashboard and the home menu, found by trying 0.10.0 in fresh folders.
+
+**Fixed: the dashboard opened empty, with no explanation, when the folder had never been scanned (#1102)**
+
+`aletheore dashboard`, and the home menu's "Open the dashboard", started the server and opened a blank page. It now
+says there is no scan for the folder and, in a terminal, asks "Scan it now?" and scans first. Answering no prints the
+`aletheore scan` command to run, and Ctrl-C aborts as it does at any prompt (#1103). With no terminal (a pipe or CI)
+it prints the command and exits 1 without starting the server.
+
+**Fixed: the dashboard showed a blank page for a folder with no git history (#1103)**
+
+A folder that is not a git repository, or a repository with no commits yet, scans without any history fields, and
+the dashboard's API answered 500 on them. The page now loads, and the Git activity card says there is no git
+history to read.
+
+**Changed: the dashboard says so when its scan file goes missing (#1104)**
+
+If the scan is removed while the dashboard is running, the API now answers 404 with a message instead of 500, and
+the page shows "No scan found for this folder" and refreshes by itself when a scan appears.
+
+**Changed: Enter on the first row of the home menu's "Connect your coding agent" configures one agent (#1103)**
+
+"All of them" was pre-selected, so a single Enter wrote the MCP config for all eight agents, including Claude
+Desktop's global config outside the folder. The agents are listed first (Claude Code on top), and "All of them" now
+sits below them and says it includes that global config.
+
+**Changed: crash reporting no longer sends a closed-connection error from the dashboard server (#1104)**
+
+h11's `LocalProtocolError` ("state=CLOSED"), which the local dashboard logs when a client drops a connection, is
+not a crash of Aletheore and is no longer reported. Every other error is still reported.
 
 ## 0.10.0 - 2026-10-22
 
