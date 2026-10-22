@@ -2,7 +2,7 @@
 name: pdf
 description: Use when tasks involve reading, creating, or reviewing PDF files where rendering and layout matter; prefer visual checks by rendering pages (Poppler) and use Python tools such as `reportlab`, `pdfplumber`, and `pypdf` for generation and extraction.
 skill_id: documents/pdf
-title: Pdf
+title: PDF
 source_url: https://github.com/openai/skills/tree/49f948faa9258a0c61caceaf225e179651397431/skills/.curated/pdf
 license: Apache-2.0
 shelf: content-media

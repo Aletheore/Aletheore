@@ -6,7 +6,7 @@ title: Webapp Testing
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/webapp-testing
 license: MIT
 shelf: quality
-aletheore: {"id": "testing/webapp-testing-github", "shelf": "quality", "category": "testing", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/webapp-testing", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 3, "curation_note": "Playwright webapp testing", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 1, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["mcp:playwright"], "adapted": {}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "testing/webapp-testing-github", "shelf": "quality", "category": "testing", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/webapp-testing", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 3, "curation_note": "Playwright webapp testing", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 1, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["mcp:playwright", "scripts"], "adapted": {}, "status": "ready", "mentions_agents": []}
 ---
 
 # Web Application Testing

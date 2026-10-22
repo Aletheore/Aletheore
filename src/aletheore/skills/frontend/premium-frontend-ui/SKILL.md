@@ -5,7 +5,7 @@ metadata:
   author: Utkarsh Patrikar
   author_url: https://github.com/utkarsh232005
 skill_id: frontend/premium-frontend-ui
-title: Premium Frontend Ui
+title: Premium Frontend UI
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/premium-frontend-ui
 license: MIT
 shelf: build

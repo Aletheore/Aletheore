@@ -5,7 +5,7 @@ metadata:
   category: DevOps
 description: Onboarding entrypoint for agents-cli in Agent Platform. It should be used when the user wants to "create a new agent", "develop an agent", "build an agent using ADK", "run the agent locally", "debug agent code", "test an agent", "evaluate an agent", "deploy an agent", "publish an agent", "monitor an agent", or needs the ADK (Agent Development Kit) development lifecycle.
 skill_id: platforms/google-agents-cli-onboarding
-title: Google Agents Cli Onboarding
+title: Google Agents CLI Onboarding
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/google-agents-cli-onboarding
 license: Apache-2.0
 shelf: build

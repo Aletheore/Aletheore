@@ -5,7 +5,7 @@ metadata:
   version: 1.1.0
 description: Diagnoses GKE persistent-storage failures — volume attach/mount errors (Regional PD on optimized VMs, fsGroup mount timeouts), disk-performance and node storage-pressure issues, slow-disk Pod-creation failures, volume-expansion problems, Local SSD / Hyperdisk Storage Pool creation errors, and Cloud Storage FUSE OOM. Use when Pods are stuck in ContainerCreating, volumes fail to attach or mount, or nodes report storage pressure. Don't use for routine storage provisioning or StorageClass/PVC authoring (see the gke-storage skill).
 skill_id: platforms/gke-storage-troubleshooting
-title: Gke Storage Troubleshooting
+title: GKE Storage Troubleshooting
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/gke-storage-troubleshooting
 license: Apache-2.0
 shelf: build

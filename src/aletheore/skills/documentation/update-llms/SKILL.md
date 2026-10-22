@@ -2,7 +2,7 @@
 name: update-llms
 description: Update the llms.txt file in the root folder to reflect changes in documentation or specifications following the llms.txt specification at https://llmstxt.org/
 skill_id: documentation/update-llms
-title: Update Llms
+title: Update LLMs
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/update-llms
 license: MIT
 shelf: ship-operate

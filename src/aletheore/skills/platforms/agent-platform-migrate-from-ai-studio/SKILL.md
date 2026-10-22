@@ -5,7 +5,7 @@ metadata:
   category: AiAndMachineLearning
 description: Guides agents and users through migrating from Gemini API in Google AI Studio to Gemini Enterprise Agent Platform (formerly Vertex AI). Use this skill when moving applications to Google Cloud, to leverage Cloud credits, or to unify inferencing with other Cloud infrastructure (IAM, billing, telemetry).
 skill_id: platforms/agent-platform-migrate-from-ai-studio
-title: Agent Platform Migrate From Ai Studio
+title: Agent Platform Migrate from AI Studio
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/agent-platform-migrate-from-ai-studio
 license: Apache-2.0
 shelf: build

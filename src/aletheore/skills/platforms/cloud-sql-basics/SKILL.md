@@ -9,7 +9,7 @@ description: 'This file generates or explains Cloud SQL resources. Use this file
 
   Cloud SQL handles backups, high availability, and secure connectivity for relational database workloads.'
 skill_id: platforms/cloud-sql-basics
-title: Cloud Sql Basics
+title: Cloud SQL Basics
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/cloud-sql-basics
 license: Apache-2.0
 shelf: build

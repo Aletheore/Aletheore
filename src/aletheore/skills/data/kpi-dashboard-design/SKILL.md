@@ -2,7 +2,7 @@
 name: kpi-dashboard-design
 description: Design effective KPI dashboards with metrics selection, visualization best practices, and real-time monitoring patterns. Use this skill when building an executive SaaS metrics dashboard tracking MRR, churn, and LTV/CAC ratios; designing an operations center with live service health and request throughput; creating a cohort retention analysis view for a product team; or debugging a dashboard where metrics contradict each other due to inconsistent calculation methodology.
 skill_id: data/kpi-dashboard-design
-title: Kpi Dashboard Design
+title: KPI Dashboard Design
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/business-analytics/skills/kpi-dashboard-design
 license: MIT
 shelf: build

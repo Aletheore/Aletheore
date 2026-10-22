@@ -4,7 +4,7 @@ description: When the user wants help with paid advertising campaigns on Google 
 metadata:
   version: 2.6.1
 skill_id: marketing/ads
-title: Ads
+title: Paid Ads Campaigns
 source_url: https://github.com/coreyhaines31/marketingskills/tree/365b412152b9542499ca1439426f7fc3cc92bb65/skills/ads
 license: MIT
 shelf: content-media

@@ -2,7 +2,7 @@
 name: typescript-advanced-types
 description: Master TypeScript's advanced type system including generics, conditional types, mapped types, template literals, and utility types for building type-safe applications. Use when implementing complex type logic, creating reusable type utilities, or ensuring compile-time type safety in TypeScript projects.
 skill_id: backend/typescript-advanced-types
-title: Typescript Advanced Types
+title: TypeScript Advanced Types
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/javascript-typescript/skills/typescript-advanced-types
 license: MIT
 shelf: build

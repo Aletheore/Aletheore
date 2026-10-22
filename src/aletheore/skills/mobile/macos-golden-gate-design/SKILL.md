@@ -3,7 +3,7 @@ name: macos-golden-gate-design
 description: 'Design, implement, review, or refactor native macOS 27 Golden Gate interfaces in SwiftUI or AppKit. Use when a Mac app must match Apple''s current macOS 27 UI kit and restrained Liquid Glass language: integrated windows, full-height sidebars, native toolbars, flat lists, tables, and forms, clear pane boundaries, accessible materials, and removal of unnecessary nested cards, framed panels, or glassmorphism. Also use for Figma macOS 27 design-to-code work and audits of interfaces that feel too boxed.'
 license: MIT
 skill_id: mobile/macos-golden-gate-design
-title: Macos Golden Gate Design
+title: macOS Golden Gate Design
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/macos-golden-gate-design
 shelf: build
 aletheore: {"id": "mobile/macos-golden-gate-design", "shelf": "build", "category": "mobile", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/macos-golden-gate-design", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 3, "curation_note": "macOS SwiftUI design", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 3, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

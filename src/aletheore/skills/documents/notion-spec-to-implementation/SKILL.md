@@ -4,7 +4,7 @@ description: Turn Notion specs into implementation plans, tasks, and progress tr
 metadata:
   short-description: Turn Notion specs into implementation plans, tasks, and progress tracking
 skill_id: documents/notion-spec-to-implementation
-title: Notion Spec To Implementation
+title: Notion Spec to Implementation
 source_url: https://github.com/openai/skills/tree/49f948faa9258a0c61caceaf225e179651397431/skills/.curated/notion-spec-to-implementation
 license: MIT
 shelf: content-media

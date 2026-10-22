@@ -2,7 +2,7 @@
 name: api-and-interface-design
 description: Guides stable API and interface design. Use when designing APIs, module boundaries, or any public interface. Use when creating REST or GraphQL endpoints, defining type contracts between modules, or establishing boundaries between frontend and backend.
 skill_id: architecture/api-and-interface-design
-title: Api And Interface Design
+title: API and Interface Design
 source_url: https://github.com/addyosmani/agent-skills/tree/aeac41d4d005999432bb7312f7ff06383a91d59d/skills/api-and-interface-design
 license: MIT
 shelf: build

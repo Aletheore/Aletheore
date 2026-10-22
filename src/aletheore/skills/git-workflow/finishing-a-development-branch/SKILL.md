@@ -2,7 +2,7 @@
 name: finishing-a-development-branch
 description: Use when implementation is complete, all tests pass, and you need to decide how to integrate the work
 skill_id: git-workflow/finishing-a-development-branch
-title: Finishing A Development Branch
+title: Finishing a Development Branch
 source_url: https://github.com/obra/superpowers/tree/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/finishing-a-development-branch
 license: MIT
 shelf: ship-operate

@@ -5,7 +5,7 @@ metadata:
   version: 1.0.1
   category: Security
 skill_id: platforms/iam-helper-for-policy-simulator
-title: Iam Helper For Policy Simulator
+title: IAM Helper for Policy Simulator
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/iam-helper-for-policy-simulator
 license: Apache-2.0
 shelf: build

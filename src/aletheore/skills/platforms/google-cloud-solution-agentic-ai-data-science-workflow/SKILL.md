@@ -5,7 +5,7 @@ metadata:
   category: MultiProductSolutions
 description: Designs a tailored multi-product agentic data science architecture on Google Cloud that incorporates opinionated best practices. Use when architecting multi-product solutions for agent-based data analytics or ML workloads. Don't use for simple queries, non-agentic pipelines, general cloud reviews, or writing agent code.
 skill_id: platforms/google-cloud-solution-agentic-ai-data-science-workflow
-title: Google Cloud Solution Agentic Ai Data Science Workflow
+title: Google Cloud Solution Agentic AI Data Science Workflow
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/google-cloud-solution-agentic-ai-data-science-workflow
 license: Apache-2.0
 shelf: build

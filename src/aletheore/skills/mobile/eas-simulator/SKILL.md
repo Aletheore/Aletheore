@@ -5,7 +5,7 @@ version: 1.0.0
 license: MIT
 allowed-tools: Bash(npx *eas-cli@*), Bash(npx *agent-device@*), Bash(npx expo *), Bash(eas *), Bash(expo *), Bash(xcodebuild*), Bash(pod*), Bash(argent *), Bash(ffmpeg*)
 skill_id: mobile/eas-simulator
-title: Eas Simulator
+title: EAS Simulator
 source_url: https://github.com/expo/skills/tree/7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1/plugins/expo/skills/eas-simulator
 shelf: build
 aletheore: {"id": "mobile/eas-simulator", "shelf": "build", "category": "mobile", "origin": "https://github.com/expo/skills/tree/7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1/plugins/expo/skills/eas-simulator", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1", "quality": 4, "curation_note": "official Expo/EAS skill", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 5, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["mcp:argent"], "mentions": ["claude", "agents"], "adapted": {}, "status": "ready", "mentions_agents": ["Claude Code", "Codex"]}

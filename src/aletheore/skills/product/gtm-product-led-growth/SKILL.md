@@ -6,7 +6,7 @@ metadata:
   author: Smit Patel (https://linkedin.com/in/smitkpatel)
   source: https://github.com/beingsmit/technical-product-gtm
 skill_id: product/gtm-product-led-growth
-title: Gtm Product Led Growth
+title: GTM Product Led Growth
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/gtm-product-led-growth
 shelf: product-design
 aletheore: {"id": "product/gtm-product-led-growth", "shelf": "product-design", "category": "product", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/gtm-product-led-growth", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 3, "curation_note": "GTM operating frameworks", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 0, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

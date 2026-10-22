@@ -2,7 +2,7 @@
 name: devops-rollout-plan
 description: Generate comprehensive rollout plans with preflight checks, step-by-step deployment, verification signals, rollback procedures, and communication plans for infrastructure and application changes
 skill_id: devops/devops-rollout-plan
-title: Devops Rollout Plan
+title: DevOps Rollout Plan
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/devops-rollout-plan
 license: MIT
 shelf: ship-operate

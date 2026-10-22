@@ -2,7 +2,7 @@
 name: brainstorm-okrs
 description: Brainstorm team-level OKRs aligned with company objectives — qualitative objectives with measurable key results. Use when setting quarterly OKRs, aligning team goals with company strategy, drafting objectives, or learning how to write effective OKRs.
 skill_id: product/brainstorm-okrs
-title: Brainstorm Okrs
+title: Brainstorm OKRs
 source_url: https://github.com/phuryn/pm-skills/tree/07b34f64ee828df08953f505b7f747aef85ae7c6/pm-execution/skills/brainstorm-okrs
 license: MIT
 shelf: product-design

@@ -5,7 +5,7 @@ version: 1.0.0
 license: MIT
 allowed-tools: Bash(npx expo *), Bash(npx *eas-cli@*), Bash(eas *)
 skill_id: mobile/eas-update
-title: Eas Update
+title: EAS Update
 source_url: https://github.com/expo/skills/tree/7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1/plugins/expo/skills/eas-update
 shelf: build
 aletheore: {"id": "mobile/eas-update", "shelf": "build", "category": "mobile", "origin": "https://github.com/expo/skills/tree/7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1/plugins/expo/skills/eas-update", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1", "quality": 4, "curation_note": "official Expo/EAS skill", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 1, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

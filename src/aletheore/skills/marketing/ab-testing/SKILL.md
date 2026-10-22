@@ -4,7 +4,7 @@ description: When the user wants to plan, design, or implement an A/B test or ex
 metadata:
   version: 2.0.2
 skill_id: marketing/ab-testing
-title: Ab Testing
+title: A/B Testing
 source_url: https://github.com/coreyhaines31/marketingskills/tree/365b412152b9542499ca1439426f7fc3cc92bb65/skills/ab-testing
 license: MIT
 shelf: content-media

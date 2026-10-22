@@ -5,6 +5,24 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+Cleanup of the bundled Hallbook skill catalogue, from a QA pass over 0.10.2. The count stays 1,129 skills across the same six shelves.
+
+**Fixed: garbled characters and broken code fences in bundled skills**
+
+Four files carried a corrupted character (the Unicode replacement character): three section headings in `data/postgresql-optimization`, a line in `devops/cloudflare-deploy`'s Cache Reserve notes, and the emoji example in `design/break-ui`. The headings lost the broken glyph, the Cache Reserve line has its arrow back, and the `break-ui` example now writes it as an escape sequence. Five skills (`data/data-quality-frameworks`, `platforms/cloud-monitoring-chart-generation`, `planning/update-specification`, `infrastructure/az-cost-optimize`, `reliability/azure-resource-health-diagnose`) had a code fence that never closed and swallowed the rest of the page. In `data/data-quality-frameworks` the cut-off end of a code sample had also been left in the skill body; it is back in `references/details.md` where it belongs. Every change is recorded in the skill's `adapted` provenance.
+
+**Fixed: complete metadata for the two seed skills, and accurate script flags**
+
+`brainstorming/open-ended` and `code-review/security-focused` now carry `name` and `shelf` like every other skill, and link to the upstream file at a pinned commit instead of `main`. Twenty-five skills that ship script files (for example `debugging/systematic-debugging` and `ai-engineering/claude-api`) were marked as having none, and two marked as having scripts had none; `has_scripts` and the matching `scripts` entry in `requires` now follow the files. Three one-line descriptions (`git-workflow/pr`, `documentation/create-readme`, `planning/structured-autonomy-plan`) now say what the skill does.
+
+**Changed: readable skill titles**
+
+Titles are written out of the skill name, and acronyms and product names came out as plain words. 380 titles now read as intended: "SQL Code Review", "API Breaking Change Detector", "ASP.NET Core", "GitHub Actions Security Review", "MCP Implementation Security Review", "Oracle to Postgres". Skill ids, names and search ranking are unchanged.
+
+**Changed: fewer near-identical results in Hallbook search**
+
+Seven of the eight Oracle-to-PostgreSQL migration skills now sit under `data/creating-oracle-to-postgres-master-migration-plan`, five Qdrant data-volume skills that duplicate sections of `platforms/qdrant-scaling` sit under it, and `marketing/marketing-ideas-phuryn` sits under `marketing/marketing-ideas`. They are listed as alternates of the main skill and can still be loaded by id.
+
 ## 0.10.2 - 2026-10-22
 
 Fixes for signing in and out, found by logging in again after logging out. Replacing a machine's earlier token on a

@@ -4,7 +4,7 @@ description: When the user wants to audit or optimize an App Store or Google Pla
 metadata:
   version: 2.0.2
 skill_id: marketing/aso
-title: Aso
+title: ASO
 source_url: https://github.com/coreyhaines31/marketingskills/tree/365b412152b9542499ca1439426f7fc3cc92bb65/skills/aso
 license: MIT
 shelf: content-media

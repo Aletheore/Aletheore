@@ -9,7 +9,7 @@ metadata:
   version: 2.4.2
   category: seo
 skill_id: marketing/seo-plan
-title: Seo Plan
+title: SEO Plan
 source_url: https://github.com/AgriciDaniel/claude-seo/tree/4b99de2f7de7e7d5247042e5fb5b4ea9368ef734/skills/seo-plan
 shelf: content-media
 aletheore: {"id": "marketing/seo-plan", "shelf": "content-media", "category": "marketing", "origin": "https://github.com/AgriciDaniel/claude-seo/tree/4b99de2f7de7e7d5247042e5fb5b4ea9368ef734/skills/seo-plan", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "4b99de2f7de7e7d5247042e5fb5b4ea9368ef734", "quality": 4, "curation_note": "page analysis and SEO plan", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 7, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["mcp"], "adapted": {}, "status": "ready", "mentions_agents": []}

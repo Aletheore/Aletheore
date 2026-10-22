@@ -4,7 +4,7 @@ description: When the user wants to optimize content for AI search engines, get 
 metadata:
   version: 2.9.0
 skill_id: marketing/ai-seo
-title: Ai Seo
+title: AI SEO
 source_url: https://github.com/coreyhaines31/marketingskills/tree/365b412152b9542499ca1439426f7fc3cc92bb65/skills/ai-seo
 license: MIT
 shelf: content-media

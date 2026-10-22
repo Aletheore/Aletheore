@@ -3,7 +3,7 @@ name: pick-ui-library
 description: Pick the right library for a given frontend task from a curated, opinionated list — numbers, OTP inputs, charts, command menus, virtualization, drag and drop, toasts, state, styling, and more. Only runs when explicitly invoked; it does not trigger on its own.
 disable-model-invocation: true
 skill_id: frontend/pick-ui-library
-title: Pick Ui Library
+title: Pick UI Library
 source_url: https://github.com/emilkowalski/skills/tree/2d228630ba1446365f614a108cb8252f1feda202/skills/pick-ui-library
 license: MIT
 shelf: build

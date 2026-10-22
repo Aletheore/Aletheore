@@ -2,7 +2,7 @@
 name: pr-to-video
 description: 'Turn a GitHub pull request (a PR URL, owner/repo#N, or ''this PR'' in a checked-out repo) into a code-change explainer video — changelog, feature reveal, fix, or refactor walkthrough built from the diff, commits, and files: the input is a code change, not a website. Not a product promo (/product-launch-video) or a no-PR topic explainer (/faceless-explainer). Unclear → /hyperframes.'
 skill_id: video-media/pr-to-video
-title: Pr To Video
+title: PR to Video
 source_url: https://github.com/heygen-com/hyperframes/tree/76ba031dccef188a133c0f47806483c661151d68/skills/pr-to-video
 license: Apache-2.0
 shelf: content-media

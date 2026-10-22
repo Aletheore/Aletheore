@@ -5,7 +5,7 @@ metadata:
   version: 1.1.0
   category: Networking
 skill_id: platforms/gke-service-networking
-title: Gke Service Networking
+title: GKE Service Networking
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/gke-service-networking
 license: Apache-2.0
 shelf: build

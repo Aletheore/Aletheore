@@ -2,7 +2,7 @@
 name: github-actions-templates
 description: Create production-ready GitHub Actions workflows for automated testing, building, and deploying applications. Use when setting up CI/CD with GitHub Actions, automating development workflows, or creating reusable workflow templates.
 skill_id: devops/github-actions-templates
-title: Github Actions Templates
+title: GitHub Actions Templates
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/cicd-automation/skills/github-actions-templates
 license: MIT
 shelf: ship-operate

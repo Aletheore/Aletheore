@@ -2,7 +2,7 @@
 name: planning-and-task-breakdown
 description: Breaks work into ordered tasks. Use when you have a spec or clear requirements and need to break work into implementable tasks. Use when a task feels too large to start, when you need to estimate scope, or when parallel work is possible.
 skill_id: planning/planning-and-task-breakdown
-title: Planning And Task Breakdown
+title: Planning and Task Breakdown
 source_url: https://github.com/addyosmani/agent-skills/tree/aeac41d4d005999432bb7312f7ff06383a91d59d/skills/planning-and-task-breakdown
 license: MIT
 shelf: build

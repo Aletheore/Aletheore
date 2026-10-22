@@ -2,7 +2,7 @@
 name: sql-optimization-patterns
 description: Master SQL query optimization, indexing strategies, and EXPLAIN analysis to dramatically improve database performance and eliminate slow queries. Use when debugging slow queries, designing database schemas, or optimizing application performance.
 skill_id: data/sql-optimization-patterns
-title: Sql Optimization Patterns
+title: SQL Optimization Patterns
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/developer-essentials/skills/sql-optimization-patterns
 license: MIT
 shelf: build

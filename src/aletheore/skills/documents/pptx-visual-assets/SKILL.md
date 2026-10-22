@@ -2,7 +2,7 @@
 name: pptx-visual-assets
 description: Use when selecting and placing approved supporting icons, images, SVGs, diagrams, or infographics in an editable PPTX deck.
 skill_id: documents/pptx-visual-assets
-title: Pptx Visual Assets
+title: PPTX Visual Assets
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/pptx-deck-creation/skills/pptx-visual-assets
 license: MIT
 shelf: content-media

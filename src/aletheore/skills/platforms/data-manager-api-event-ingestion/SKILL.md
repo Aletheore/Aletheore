@@ -5,7 +5,7 @@ metadata:
   version: 1.2.0
   category: GoogleAds
 skill_id: platforms/data-manager-api-event-ingestion
-title: Data Manager Api Event Ingestion
+title: Data Manager API Event Ingestion
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/ads/data-manager-api-event-ingestion
 license: Apache-2.0
 shelf: build

@@ -5,7 +5,7 @@ metadata:
   category: ApplicationDevelopment
 description: Clones, analyzes, plans, and migrates legacy codebases (C++, Fortran, Java, Python, C, Shell) from a GitHub URL or local directory to a modern, high-performance, deterministic, 100% Safe Rust architecture, tracking live telemetry across every task bucket, test failure/fix cycle, and Profile-Guided Optimization (PGO) stage, and producing a first-person AI storytelling report and interactive HTML infographic. Use when migrating a GitHub repository or local codebase to Rust, porting legacy C++, Fortran, Python, or Java workloads to memory-safe Rust, designing Struct-of-Arrays (SoA) or SIMD Rust architectures, or optimizing Rust ports with LLVM PGO. Don't use for unrelated non-Rust refactoring or single-line syntax questions.
 skill_id: platforms/migrate-to-rust
-title: Migrate To Rust
+title: Migrate to Rust
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/developers/migrate-to-rust
 license: Apache-2.0
 shelf: build

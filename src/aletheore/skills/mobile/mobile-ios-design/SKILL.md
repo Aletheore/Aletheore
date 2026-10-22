@@ -2,7 +2,7 @@
 name: mobile-ios-design
 description: Master iOS Human Interface Guidelines and SwiftUI patterns for building native iOS apps. Use when designing iOS interfaces, implementing SwiftUI views, or ensuring apps follow Apple's design principles.
 skill_id: mobile/mobile-ios-design
-title: Mobile Ios Design
+title: Mobile iOS Design
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/ui-design/skills/mobile-ios-design
 license: MIT
 shelf: build

@@ -7,7 +7,7 @@ metadata:
   author: arize-ai
   version: 3.3.0
 skill_id: platforms/phoenix-cli
-title: Phoenix Cli
+title: Phoenix CLI
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/phoenix-cli
 shelf: build
 aletheore: {"id": "platforms/phoenix-cli", "shelf": "build", "category": "platforms", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/phoenix-cli", "license": "Apache-2.0", "license_source": "frontmatter", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 3, "curation_note": "Phoenix LLM observability", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 2, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

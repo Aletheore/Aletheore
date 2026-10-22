@@ -2,7 +2,7 @@
 name: grpo-rlvr-training
 description: Train reasoning and verifiable-task behavior with GRPO and reinforcement learning from verifiable rewards (RLVR). Use when task success is algorithmically checkable (math, code, tool calls, structured output), when designing GRPO reward functions, or when a GRPO run diverges or reward-hacks.
 skill_id: ai-engineering/grpo-rlvr-training
-title: Grpo Rlvr Training
+title: GRPO RLVR Training
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/llm-finetuning/skills/grpo-rlvr-training
 license: MIT
 shelf: ai-agents

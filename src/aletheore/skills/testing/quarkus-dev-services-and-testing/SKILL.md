@@ -2,7 +2,7 @@
 name: quarkus-dev-services-and-testing
 description: 'Quarkus Dev Services and testing: zero-config containers, @QuarkusTest, @QuarkusIntegrationTest, test resources, RestAssured, @InjectMock, profiles and continuous testing. Use when writing or fixing tests in a Quarkus project.'
 skill_id: testing/quarkus-dev-services-and-testing
-title: Quarkus Dev Services And Testing
+title: Quarkus Dev Services and Testing
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/quarkus-dev-services-and-testing
 license: MIT
 shelf: quality

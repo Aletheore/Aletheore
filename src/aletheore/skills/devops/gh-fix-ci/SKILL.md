@@ -2,7 +2,7 @@
 name: gh-fix-ci
 description: Use when a user asks to debug or fix failing GitHub PR checks that run in GitHub Actions; use `gh` to inspect checks and logs, summarize failure context, draft a fix plan, and implement only after explicit approval. Treat external providers (for example Buildkite) as out of scope and report only the details URL.
 skill_id: devops/gh-fix-ci
-title: Gh Fix Ci
+title: GitHub Fix CI
 source_url: https://github.com/openai/skills/tree/49f948faa9258a0c61caceaf225e179651397431/skills/.curated/gh-fix-ci
 license: Apache-2.0
 shelf: ship-operate

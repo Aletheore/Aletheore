@@ -4,7 +4,7 @@ description: Build production RAG pipelines and persistent agent memory using Pi
 license: Apache-2.0
 compatibility: pinecone>=6.0.0, Python 3.10+
 skill_id: ai-engineering/pinecone-rag
-title: Pinecone Rag
+title: Pinecone RAG
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/pinecone-rag
 shelf: ai-agents
 aletheore: {"id": "ai-engineering/pinecone-rag", "shelf": "ai-agents", "category": "ai-engineering", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/pinecone-rag", "license": "Apache-2.0", "license_source": "frontmatter", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 3, "curation_note": "Pinecone RAG", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 0, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

@@ -5,7 +5,7 @@ version: 1.0.0
 license: MIT
 allowed-tools: Bash(node *expo-ui/scripts/list-components.js *)
 skill_id: mobile/expo-ui
-title: Expo Ui
+title: Expo UI
 source_url: https://github.com/expo/skills/tree/7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1/plugins/expo/skills/expo-ui
 shelf: build
 aletheore: {"id": "mobile/expo-ui", "shelf": "build", "category": "mobile", "origin": "https://github.com/expo/skills/tree/7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1/plugins/expo/skills/expo-ui", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1", "quality": 4, "curation_note": "official Expo skill", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 6, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["scripts", "subagents"], "adapted": {}, "status": "ready", "mentions_agents": []}

@@ -2,7 +2,7 @@
 name: vision-sft
 description: Fine-tune vision-language models (VLMs) with supervised learning on image+text data. Use when adapting a VLM to a visual domain or task, configuring frozen-vision-tower LoRA, or debugging a VLM fine-tune that trains without learning.
 skill_id: ai-engineering/vision-sft
-title: Vision Sft
+title: Vision SFT
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/llm-finetuning/skills/vision-sft
 license: MIT
 shelf: ai-agents
