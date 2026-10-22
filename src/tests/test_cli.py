@@ -3826,6 +3826,53 @@ def test_hallbook_search_with_no_match_says_so_and_exits_cleanly():
     assert "No skills matched" in result.stdout
 
 
+def _fake_width(monkeypatch, columns):
+    import os
+    import shutil
+
+    monkeypatch.setattr(shutil, "get_terminal_size", lambda fallback=(100, 24): os.terminal_size((columns, 24)))
+
+
+@pytest.mark.parametrize("columns", [60, 100, 150, 200])
+def test_hallbook_search_never_wraps_or_leaves_stray_dots_at_any_width(monkeypatch, columns):
+    _fake_width(monkeypatch, columns)
+    long = "Use when a very long description keeps going and going " * 8 + "and ends... with dots..."
+    metas = [skill_hub.SkillMeta(f"testing/skill-{i}", "testing", f"Skill Number {i}", long) for i in range(5)]
+    monkeypatch.setattr(skill_hub, "search_skills", lambda *a, **k: metas)
+    result = runner.invoke(app, ["hallbook", "search", "anything"])
+    lines = result.stdout.splitlines()
+    assert result.exit_code == 0 and len(lines) == 10  # exactly two lines per hit
+    assert all(len(line) <= columns for line in lines)
+    assert not any(".." in line for line in lines)
+    assert "\x1b[" not in result.stdout  # no colour codes
+    for first, second in zip(lines[0::2], lines[1::2]):
+        assert first.startswith("testing/skill-") and "  Skill Number" in first  # id and title share a line
+        assert second.startswith("    Use when") and second.endswith("…")
+
+
+def test_hallbook_search_without_a_terminal_uses_a_hundred_columns(monkeypatch):
+    monkeypatch.delenv("COLUMNS", raising=False)
+    long = "word " * 100
+    monkeypatch.setattr(skill_hub, "search_skills",
+                        lambda *a, **k: [skill_hub.SkillMeta("testing/x", "testing", "X", long)])
+    lines = runner.invoke(app, ["hallbook", "search", "x"]).stdout.splitlines()
+    assert max(len(line) for line in lines) <= 100 and lines[1].endswith("…")
+
+
+def test_hallbook_search_keeps_a_short_description_whole_and_skips_an_empty_one(monkeypatch):
+    _fake_width(monkeypatch, 80)
+    metas = [skill_hub.SkillMeta("a/one", "a", "One", "Short and sweet."), skill_hub.SkillMeta("a/two", "a", "Two", "")]
+    monkeypatch.setattr(skill_hub, "search_skills", lambda *a, **k: metas)
+    assert runner.invoke(app, ["hallbook", "search", "x"]).stdout.splitlines() == [
+        "a/one  One", "    Short and sweet.", "a/two  Two"]
+
+
+def test_hallbook_list_is_one_whole_line_per_skill_when_piped():
+    result = runner.invoke(app, ["hallbook", "list", "--category", "debugging"])
+    assert result.exit_code == 0
+    assert "debugging/systematic-debugging  Systematic Debugging" in result.stdout.splitlines()
+
+
 def test_hallbook_files_and_get_file_round_trip():
     listing = runner.invoke(app, ["hallbook", "files", "debugging/systematic-debugging"])
     assert listing.exit_code == 0

@@ -3,6 +3,7 @@ import os
 import sys
 
 import pytest
+from rich.cells import cell_len
 from rich.console import Console
 from typer.testing import CliRunner
 
@@ -84,6 +85,116 @@ def test_render_menu_uses_the_arrow_pointer_when_unicode_works():
     console = _console()
     console.print(ui.render_menu(ITEMS, 0, unicode_ok=True))
     assert "❯ First" in console.file.getvalue()
+
+
+# --- truncate and width-aware menus --------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text,width,unicode_ok,expected",
+    [
+        ("short", 20, True, "short"),
+        ("  lots   of\n whitespace\t here ", 40, True, "lots of whitespace here"),
+        ("abcdefghij", 10, True, "abcdefghij"),
+        ("abcdefghijk", 10, True, "abcdefghi…"),
+        ("abcdefghijk", 10, False, "abcdefg..."),
+        ("a sentence. And more of it", 12, True, "a sentence…"),
+        ("a sentence. And more of it", 14, False, "a sentence..."),
+        ("anything", 0, True, ""),
+        ("anything", 1, True, "…"),
+        ("anything", 2, False, ""),
+    ],
+)
+def test_truncate_fits_one_line_and_marks_the_cut(text, width, unicode_ok, expected):
+    out = ui.truncate(text, width, unicode_ok=unicode_ok)
+    assert out == expected
+    assert "\n" not in out and cell_len(out) <= width
+
+
+def test_truncate_never_leaves_a_dangling_stop_or_space_before_the_mark():
+    text = "Reads files. Then writes files. And so on, for a long while"
+    for width in range(6, 40):
+        unicode_out = ui.truncate(text, width, unicode_ok=True)
+        assert ".." not in unicode_out and ".…" not in unicode_out and " …" not in unicode_out
+        ascii_out = ui.truncate(text, width, unicode_ok=False)
+        assert "...." not in ascii_out and " ..." not in ascii_out
+
+
+def test_truncate_counts_wide_characters_by_their_cell_width():
+    out = ui.truncate("日本語のテキストです", 9, unicode_ok=True)
+    assert cell_len(out) <= 9 and out.endswith("…")
+
+
+WIDE_ITEMS = [
+    ui.MenuItem("a", "A short label", "a perfectly ordinary hint"),
+    ui.MenuItem("b", "testing/a-very-long-skill-identifier-that-goes-on  A Very Long Skill Title Indeed",
+                "Use when you want to " + "do something quite involved " * 12),
+    ui.MenuItem("c", "Back"),
+]
+
+
+def _render(items, selected, width, height=None, unicode_ok=True):
+    console = Console(file=io.StringIO(), width=500, force_terminal=False, color_system=None)
+    console.print(ui.render_menu(items, selected, unicode_ok=unicode_ok, width=width, height=height))
+    return console.file.getvalue().splitlines()
+
+
+@pytest.mark.parametrize("width", [40, 60, 80, 120, 200])
+@pytest.mark.parametrize("selected", [0, 1, 2])
+def test_render_menu_fits_every_row_to_the_width(width, selected):
+    lines = _render(WIDE_ITEMS, selected, width)
+    assert lines and all(cell_len(line) <= width for line in lines)
+    assert any("A short label" in line for line in lines)
+
+
+def test_render_menu_at_60_columns_cuts_the_long_label_and_hint_with_an_ellipsis():
+    lines = _render(WIDE_ITEMS, 0, 60)
+    long_row = next(line for line in lines if "testing/" in line)
+    assert "…" in long_row and "A Very Long Skill Title Indeed" not in long_row
+    assert len([line for line in lines if line.strip().startswith(("A short", "testing/", "Back", "❯"))]) == 3  # no wraps
+
+
+def test_render_menu_at_200_columns_keeps_whole_labels_and_a_long_hint():
+    lines = _render(WIDE_ITEMS, 0, 200)
+    long_row = next(line for line in lines if "testing/" in line)
+    assert "A Very Long Skill Title Indeed" in long_row and "Use when you want to" in long_row
+    assert cell_len(long_row) <= 200
+
+
+def test_render_menu_ascii_marks_the_cut_with_three_dots_and_no_double_dots():
+    lines = _render(WIDE_ITEMS, 1, 60, unicode_ok=False)
+    assert all(cell_len(line) <= 60 for line in lines)
+    assert any(line.rstrip().endswith("...") for line in lines)
+    assert not any(".." in line.replace("...", "") for line in lines)
+
+
+def test_render_menu_without_a_width_is_unchanged():
+    lines = _render(WIDE_ITEMS, 0, None)
+    assert any("do something quite involved" in line and len(line) > 200 for line in lines)
+
+
+def test_a_long_list_scrolls_inside_the_screen_height_and_keeps_the_selection_visible():
+    items = [ui.MenuItem(str(i), f"skill-{i:03d}", "hint") for i in range(100)]
+    for selected in (0, 40, 99):
+        lines = _render(items, selected, 80, height=20)
+        assert len(lines) <= 20
+        assert any(f"skill-{selected:03d}" in line and line.lstrip().startswith("❯") for line in lines)
+    middle = _render(items, 50, 80, height=20)
+    assert any("more" in line and "↑" in line for line in middle) and any("more" in line and "↓" in line for line in middle)
+
+
+def test_a_short_list_is_not_windowed():
+    lines = _render(ITEMS, 0, 80, height=20)
+    assert not any("more" in line for line in lines)
+
+
+def test_choose_reaches_a_row_far_down_a_long_list_and_can_turn_off_digit_picks():
+    items = [ui.MenuItem(str(i), f"row {i}") for i in range(30)]
+    console = Console(file=io.StringIO(), width=80, height=12, force_terminal=False, color_system=None)
+    picked = ui.choose(items, console, read_key=_keys(*([DOWN] * 25), ENTER), numbers=False)
+    assert picked.key == "25"
+    assert ui.choose(items, console, read_key=_keys("5", ENTER), numbers=False).key == "0"
+    assert ui.choose(items, console, read_key=_keys("5")).key == "4"
 
 
 # --- when is the terminal interactive -----------------------------------------------------------------------------
@@ -263,6 +374,159 @@ def test_account_submenu_runs_status_login_or_logout(monkeypatch):
     account = [i[0] for i in cli._MAIN_MENU].index("account")
     cli._run_menu(read_key=_keys(*((DOWN,) * account), ENTER, ENTER, "q"), pause=lambda: None)
     assert ran == [["status"]]
+
+
+# --- the "All commands" picker ------------------------------------------------------------------------------------
+
+
+def _commands_menu_position():
+    return [i[0] for i in cli._MAIN_MENU].index("commands")
+
+
+def _pick_command(group, row):
+    """Keys that open "All commands", go to a group and a row in it, and press enter on that row."""
+    return (*((DOWN,) * _commands_menu_position()), ENTER, *((DOWN,) * group), ENTER, *((DOWN,) * row), ENTER)
+
+
+def _group_row(name):
+    for group, (_, names) in enumerate(cli._COMMAND_GROUPS):
+        if name in names:
+            return group, names.index(name)
+    raise AssertionError(name)
+
+
+def test_every_banner_command_is_in_the_picker_exactly_once_with_the_banner_description():
+    grouped = [name for _, names in cli._COMMAND_GROUPS for name in names]
+    assert sorted(grouped) == sorted([n for n, _ in cli._COMMAND_SUMMARIES] + [n for n, _ in cli._PICKER_ONLY_SUMMARIES])
+    assert len(grouped) == len(set(grouped))
+    for name, description in cli._COMMAND_SUMMARIES:
+        assert cli._COMMAND_DESCRIPTIONS[name] == description
+    assert [title for title, _ in cli._COMMAND_GROUPS] == [
+        "Scan and explore", "Agents and skills", "Dashboard and watch", "Account"]
+
+
+def test_every_picker_command_has_an_action():
+    for _, names in cli._COMMAND_GROUPS:
+        for name in names:
+            assert (name in cli._COMMAND_RUNS or name in cli._COMMAND_PROMPTS or name in cli._COMMAND_HELP
+                    or name in ("mcp-install", "hallbook")), name
+
+
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("scan", ["scan", "."]),
+        ("query", ["query"]),
+        ("audit", ["audit", "."]),
+        ("dashboard", ["dashboard", "."]),
+        ("init", ["init", "."]),
+        ("login", ["login"]),
+        ("logout", ["logout"]),
+        ("status", ["status"]),
+    ],
+)
+def test_enter_on_a_command_that_needs_nothing_runs_it_directly(monkeypatch, name, expected):
+    ran = []
+    monkeypatch.setattr(cli, "_run_cli", lambda args: ran.append(args) or 0)
+    cli._run_menu(read_key=_keys(*_pick_command(*_group_row(name)), "q"), pause=lambda: None)
+    assert ran == [expected]
+
+
+@pytest.mark.parametrize(
+    "name,answers,expected",
+    [
+        ("diff", ["old.json", "new.json"], ["diff", "old.json", "new.json"]),
+        ("verify", ["report.md"], ["verify", "report.md"]),
+        ("healthcheck", ["http://localhost:8000"], ["healthcheck", ".", "--base-url", "http://localhost:8000"]),
+    ],
+)
+def test_commands_with_one_required_argument_ask_for_it_and_pass_it_on(monkeypatch, name, answers, expected):
+    ran, asked = [], []
+    typed = iter(answers)
+    monkeypatch.setattr(cli, "_run_cli", lambda args: ran.append(args) or 0)
+    monkeypatch.setattr(cli, "_ask", lambda question: asked.append(question) or next(typed))
+    cli._run_menu(read_key=_keys(*_pick_command(*_group_row(name)), "q"), pause=lambda: None)
+    assert ran == [expected] and len(asked) == len(answers)
+
+
+def test_an_empty_answer_cancels_the_command_instead_of_running_it(monkeypatch):
+    ran = []
+    monkeypatch.setattr(cli, "_run_cli", lambda args: ran.append(args) or 0)
+    monkeypatch.setattr(cli, "_ask", lambda question: "")
+    # the empty answer drops back to the group's list, where q goes back to the groups and q again to the menu
+    cli._run_menu(read_key=_keys(*_pick_command(*_group_row("diff")), "q", "q", "q"), pause=lambda: None)
+    assert ran == []
+
+
+@pytest.mark.parametrize("name", ["mcp", "watch", "config"])
+def test_the_remaining_commands_show_their_own_help(monkeypatch, name):
+    ran = []
+    monkeypatch.setattr(cli, "_run_cli", lambda args: ran.append(args) or 0)
+    cli._run_menu(read_key=_keys(*_pick_command(*_group_row(name)), "q"), pause=lambda: None)
+    assert ran == [[name, "--help"]]
+
+
+def test_mcp_install_in_the_picker_is_the_connect_flow_and_hallbook_the_skills_submenu(monkeypatch):
+    ran, skills = [], []
+    monkeypatch.setattr(cli, "_run_cli", lambda args: ran.append(args) or 0)
+    monkeypatch.setattr(cli, "_skills_flow", lambda kwargs: skills.append(True))
+    group, row = _group_row("mcp-install")
+    # the first agent in the Connect list is chosen: one agent, never "all of them"
+    cli._run_menu(read_key=_keys(*_pick_command(group, row), ENTER, "q"), pause=lambda: None)
+    assert ran == [["mcp-install", ".", "--target", "claude-code"]]
+    group, row = _group_row("hallbook")
+    cli._run_menu(read_key=_keys(*_pick_command(group, row), "q", "q", "q"), pause=lambda: None)
+    assert skills == [True]
+
+
+def test_back_leaves_the_picker_and_the_menu_comes_back_without_running_anything(monkeypatch):
+    ran = []
+    monkeypatch.setattr(cli, "_run_cli", lambda args: ran.append(args) or 0)
+    back = len(cli._COMMAND_GROUPS)  # the Back row sits under the groups
+    cli._run_menu(read_key=_keys(*((DOWN,) * _commands_menu_position()), ENTER, *((DOWN,) * back), ENTER, "q"),
+                  pause=lambda: None)
+    assert ran == []
+
+
+def test_the_picker_rows_carry_the_banner_descriptions(capsys):
+    console = Console(file=io.StringIO(), width=120, height=40, force_terminal=False, color_system=None)
+    names = cli._COMMAND_GROUPS[0][1]
+    rows = [ui.MenuItem(n, n, cli._COMMAND_DESCRIPTIONS[n]) for n in names]
+    console.print(ui.render_menu(rows, 0, unicode_ok=True, width=120))
+    out = console.file.getvalue()
+    for name in names:
+        assert name in out and cli._COMMAND_DESCRIPTIONS[name] in out
+
+
+# --- clearing the screen --------------------------------------------------------------------------------------------
+
+
+def test_the_screen_is_cleared_only_in_a_real_interactive_terminal(monkeypatch):
+    live = Console(file=io.StringIO(), width=80, force_terminal=True, color_system=None)
+    monkeypatch.setattr(cli, "console", live)
+    monkeypatch.setattr(ui, "is_interactive", lambda: True)
+    cli._clear_screen()
+    assert "\x1b[2J" in live.file.getvalue()
+
+    plain = Console(file=io.StringIO(), width=80, force_terminal=False, color_system=None)
+    monkeypatch.setattr(cli, "console", plain)
+    cli._clear_screen()
+    assert plain.file.getvalue() == ""
+
+    monkeypatch.setattr(cli, "console", live)
+    live.file.truncate(0)
+    live.file.seek(0)
+    monkeypatch.setattr(ui, "is_interactive", lambda: False)
+    cli._clear_screen()
+    assert live.file.getvalue() == ""
+
+
+def test_the_menu_clears_before_it_is_redrawn_but_not_the_first_time(monkeypatch):
+    events = []
+    monkeypatch.setattr(cli, "_run_cli", lambda args: events.append("run") or 0)
+    monkeypatch.setattr(cli, "_clear_screen", lambda: events.append("clear"))
+    cli._run_menu(read_key=_keys(ENTER, "q"), pause=lambda: events.append("pause"))
+    assert events == ["run", "pause", "clear"]
 
 
 # --- black and white ----------------------------------------------------------------------------------------------
