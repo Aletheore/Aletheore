@@ -128,8 +128,18 @@ def check_pmd(repo_path: Path, timeout: int | None = None) -> dict:
             "findings": [],
         }
 
+    # PMD prints a JSON report on every real run (checked live: even an input with no files yields one).
+    # Empty stdout means it died before that, so parsing it as {} reported a clean scan for a scanner
+    # that did not run.
+    if not result.stdout.strip():
+        return {
+            "checked": False,
+            "reason": f"pmd exited {result.returncode} without any output: {(result.stderr or '')[-500:]}",
+            "findings": [],
+        }
+
     try:
-        payload = json.loads(result.stdout or "{}")
+        payload = json.loads(result.stdout)
     except json.JSONDecodeError:
         return {
             "checked": False,

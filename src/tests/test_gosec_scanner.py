@@ -166,3 +166,21 @@ def test_check_gosec_excludes_ignored_directories(tmp_path):
         result = check_gosec(tmp_path)
 
     assert [f["path"] for f in result["findings"]] == ["main.go"]
+
+
+def test_check_gosec_does_not_report_a_crash_as_a_clean_scan(tmp_path):
+    # Exit 1 is also gosec's "issues found" code, so a crash with empty stdout used to be parsed as {} and
+    # reported as a clean scan. gosec prints a JSON report on every real run.
+    (tmp_path / "main.go").write_text("package main\n")
+
+    for returncode in (0, 1):
+        mock_result = _mock_run(returncode, stdout="", stderr="panic: runtime error")
+
+        with patch("aletheore.static_analysis.gosec_scanner.shutil.which", return_value="/usr/bin/gosec"), \
+             patch("aletheore.static_analysis.gosec_scanner.subprocess.run", return_value=mock_result):
+            result = check_gosec(tmp_path)
+
+        assert result["checked"] is False
+        assert result["findings"] == []
+        assert "without any output" in result["reason"]
+        assert "panic: runtime error" in result["reason"]

@@ -222,6 +222,36 @@ def test_check_semgrep_treats_a_fatal_exit_code_as_a_real_failure(tmp_path):
     assert "fatal config error" in result["reason"]
 
 
+def test_check_semgrep_does_not_report_a_crash_as_a_clean_scan(tmp_path):
+    # Real bug found live (2026-10-22): a Semgrep that dies on import (a Python traceback, here from an
+    # mcp 2.x install that removed FastMCP) exits 1 with empty stdout. Exit 1 means "findings present",
+    # and the empty output used to be parsed as {}, so the crash was reported as checked:True with no findings.
+    traceback = "ModuleNotFoundError: No module named 'mcp.server.fastmcp'"
+    for returncode in (0, 1):
+        mock_result = _mock_run(returncode, stdout="", stderr=traceback)
+
+        with patch("aletheore.static_analysis.semgrep_scanner.shutil.which", return_value="/usr/bin/semgrep"), \
+             patch("aletheore.static_analysis.semgrep_scanner.subprocess.run", return_value=mock_result):
+            result = check_semgrep(tmp_path)
+
+        assert result["checked"] is False
+        assert result["findings"] == []
+        assert "without any output" in result["reason"]
+        assert "mcp.server.fastmcp" in result["reason"]
+
+
+def test_check_semgrep_still_accepts_a_real_empty_result_document(tmp_path):
+    # The guard above must not turn a genuine clean scan (a JSON document with no results) into a failure.
+    mock_result = _mock_run(0, stdout=json.dumps({"results": [], "errors": []}))
+
+    with patch("aletheore.static_analysis.semgrep_scanner.shutil.which", return_value="/usr/bin/semgrep"), \
+         patch("aletheore.static_analysis.semgrep_scanner.subprocess.run", return_value=mock_result):
+        result = check_semgrep(tmp_path)
+
+    assert result["checked"] is True
+    assert result["findings"] == []
+
+
 def test_check_semgrep_reports_timeout(tmp_path):
     with patch("aletheore.static_analysis.semgrep_scanner.shutil.which", return_value="/usr/bin/semgrep"), \
          patch(

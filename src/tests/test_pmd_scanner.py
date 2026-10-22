@@ -288,3 +288,22 @@ def test_check_pmd_exit_code_5_still_reports_findings_from_files_that_did_parse(
     assert result["checked"] is True
     assert len(result["findings"]) == 1
     assert result["findings"][0]["rule_id"] == "NullAssignment"
+
+
+def test_check_pmd_does_not_report_a_crash_as_a_clean_scan(tmp_path):
+    # PMD prints a JSON report on every real run (checked live, even for input with no files), so empty
+    # stdout with an accepted exit code (0, 4, 5) means it died first; it used to be parsed as {} and
+    # reported as a clean scan.
+    (tmp_path / "App.java").write_text("public class App {}\n")
+
+    for returncode in (0, 4, 5):
+        mock_result = _mock_run(returncode, stdout="", stderr="java.lang.OutOfMemoryError")
+
+        with patch("aletheore.static_analysis.pmd_scanner.shutil.which", return_value="/usr/local/bin/pmd"), \
+             patch("aletheore.static_analysis.pmd_scanner.subprocess.run", return_value=mock_result):
+            result = check_pmd(tmp_path)
+
+        assert result["checked"] is False
+        assert result["findings"] == []
+        assert "without any output" in result["reason"]
+        assert "OutOfMemoryError" in result["reason"]

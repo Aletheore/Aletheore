@@ -184,8 +184,19 @@ def check_semgrep(repo_path: Path, timeout: int | None = None) -> dict:
             "findings": [],
         }
 
+    # With --json, Semgrep prints a JSON document on every real run (exit 0 or 1). Empty stdout
+    # means it never got that far: a crash on import exits 1 with a traceback on stderr, which
+    # the exit-code check above reads as "findings present". Treating that as {} reported a
+    # clean scan for a scanner that did not run.
+    if not result.stdout.strip():
+        return {
+            "checked": False,
+            "reason": f"semgrep exited {result.returncode} without any output: {(result.stderr or '')[-500:]}",
+            "findings": [],
+        }
+
     try:
-        payload = json.loads(result.stdout or "{}")
+        payload = json.loads(result.stdout)
     except json.JSONDecodeError:
         return {
             "checked": False,

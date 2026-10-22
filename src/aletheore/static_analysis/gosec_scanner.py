@@ -87,8 +87,17 @@ def check_gosec(repo_path: Path, timeout: int | None = None) -> dict:
             "findings": [],
         }
 
+    # gosec prints a JSON report on every real run. Empty stdout means it died before that (exit 1 is
+    # also its "issues found" code), so parsing it as {} reported a clean scan for a scanner that did not run.
+    if not result.stdout.strip():
+        return {
+            "checked": False,
+            "reason": f"gosec exited {result.returncode} without any output: {(result.stderr or '')[-500:]}",
+            "findings": [],
+        }
+
     try:
-        payload = json.loads(result.stdout or "{}")
+        payload = json.loads(result.stdout)
     except json.JSONDecodeError:
         return {
             "checked": False,
