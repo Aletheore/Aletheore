@@ -1,7 +1,7 @@
 """Writes src/data/mcp-tools.json from the installed aletheore package.
 
 Run with the release you want to describe on PYTHONPATH, e.g.
-    PYTHONPATH=/path/to/unzipped-0.9.21 python3 scripts/build-mcp-data.py
+    PYTHONPATH=../src python3 scripts/build-mcp-data.py   # from site/, in a checkout of the release
 """
 import asyncio, json, pathlib, tempfile
 
@@ -10,6 +10,13 @@ from aletheore.cli import QUERY_KIND_GROUPS
 from aletheore.mcp_server import build_server
 
 repo = pathlib.Path(tempfile.mkdtemp())
+
+
+class _StubAnswerAdapter:
+    """Stands in for a coding-agent adapter so the opt-in aletheore_answer tool is listed. build_server only reads
+    requires_consent; the tool is never called here."""
+
+    requires_consent = False
 
 
 def tools_of(**kw):
@@ -22,7 +29,7 @@ def names(**kw):
 
 
 default = names()
-everything = names(answer_adapter=object(), allow=frozenset({"external", "network", "write"}))
+everything = names(answer_adapter=_StubAnswerAdapter(), allow=frozenset({"external", "network", "write"}))
 optional = [n for n in everything if n not in default]
 
 query_groups = {group: list(kinds) for group, kinds in QUERY_KIND_GROUPS.items()}
@@ -40,7 +47,7 @@ def first_sentence(text):
     return out.replace(" - ", ": ").replace("`", "")
 
 
-described = {t.name: first_sentence(t.description) for t in tools_of(answer_adapter=object(), allow=frozenset({"external", "network", "write"}))}
+described = {t.name: first_sentence(t.description) for t in tools_of(answer_adapter=_StubAnswerAdapter(), allow=frozenset({"external", "network", "write"}))}
 
 # Category per tool: the query group when the tool wraps a query kind, otherwise a role name.
 group_of = {}
@@ -54,6 +61,10 @@ group_of.update({
     "aletheore_overview": "Navigate", "aletheore_list": "Navigate", "aletheore_neighborhood": "Navigate",
     "aletheore_get_blast_radius": "Navigate", "aletheore_symbol_path": "Navigate", "aletheore_search": "Search", "aletheore_search_codebase": "Search",
     "aletheore_symbol_source": "Search", "aletheore_verify_citations": "Evidence", "aletheore_ast_pattern": "Search",
+    "aletheore_locate": "Search",
+    "aletheore_find_skill": "Hallbook", "aletheore_search_skills": "Hallbook", "aletheore_list_skills": "Hallbook",
+    "aletheore_get_skill": "Hallbook", "aletheore_get_skill_file": "Hallbook",
+    "aletheore_add_custom_skill": "Hallbook", "aletheore_remove_custom_skill": "Hallbook",
 })
 tool_info = [
     {"name": n, "group": group_of.get(n, "Other"), "description": described.get(n, "")}
