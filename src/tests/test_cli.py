@@ -4051,3 +4051,22 @@ def test_offer_scan_reports_failure_when_the_scan_fails(tmp_path):
         "aletheore.cli.typer.confirm", return_value=True
     ), patch("aletheore.cli._scan", return_value=(1, {}, tmp_path)):
         assert cli._offer_scan_before_dashboard(tmp_path) is False
+
+
+def test_offer_scan_lets_ctrl_c_abort_but_treats_closed_input_as_no(tmp_path):
+    import click
+
+    from aletheore import cli
+
+    with patch("aletheore.ui.is_interactive", return_value=True), patch(
+        "aletheore.cli.typer.confirm", side_effect=click.Abort()
+    ), patch("aletheore.cli._scan") as mock_scan:
+        with pytest.raises(click.Abort):
+            cli._offer_scan_before_dashboard(tmp_path)
+    mock_scan.assert_not_called()
+
+    with patch("aletheore.ui.is_interactive", return_value=True), patch(
+        "aletheore.cli.typer.confirm", side_effect=EOFError()
+    ), patch("aletheore.cli._scan") as mock_scan:
+        assert cli._offer_scan_before_dashboard(tmp_path) is False
+    mock_scan.assert_not_called()

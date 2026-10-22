@@ -1767,7 +1767,7 @@ def _offer_scan_before_dashboard(repo: Path) -> bool:
         return False
     try:
         scan_now = typer.confirm("Scan it now?", default=True)
-    except (click.Abort, EOFError):
+    except EOFError:  # input closed: treated as "no". Ctrl-C (click.Abort) is left to abort as it does at any prompt.
         scan_now = False
     if not scan_now:
         console.print(f"Run this when you are ready, then open the dashboard again:\n\n  {hint}\n")
