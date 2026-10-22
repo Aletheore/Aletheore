@@ -136,6 +136,13 @@ NAV_INSTRUCTIONS = (
     "aletheore_symbol_source returns one function or class; aletheore_search is a literal or regex search."
 )
 
+ROUTER_INSTRUCTIONS = (
+    "Aletheore code evidence through one tool. Call aletheore_ask with a plain question (and a file path as target "
+    "when you have one): what breaks if I change a file, which tests cover it, who owns it, what changes most, where "
+    "something is defined, what the repo is. It picks the right query, runs it and says which one it ran. When it "
+    "answers 'no clear match', carry on without it instead of rephrasing."
+)
+
 SERVER_INSTRUCTIONS = """Aletheore is a deterministic, evidence-grounded code intelligence tool for \
 this repository - every result cites a real file:line, nothing is invented.
 
@@ -944,6 +951,29 @@ def _skill_summary(meta: skill_hub.SkillMeta) -> dict:
     return summary
 
 
+def _register_ask_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+    @mcp_instance.tool(name="aletheore_ask", annotations=READ_ONLY_ANNOTATIONS)
+    @_guard_evidence_read_errors
+    def aletheore_ask(question: str, target: str | None = None) -> str:
+        """One entry point for code evidence. Ask a plain question and it runs the right query.
+
+        Handles: what breaks if a file changes, which tests cover a file, who owns it, what changes most or
+        together, where something is defined, secrets, vulnerabilities, dead code, layer violations, endpoints,
+        environment variables, database, infrastructure, licenses, and a repo overview. Pass `target` (a file
+        path as it appears in the scan) when the question is about one file. The reply says which query it ran
+        (routed_to) and how sure it is (confidence). If confidence is low it names what is missing instead of
+        guessing; if it says 'no clear match', carry on without it and do not rephrase the same question."""
+        from aletheore import tool_router
+
+        evidence = read_evidence(repo_path)
+        result = tool_router.answer(question, target, evidence, repo_path)
+        text = _toon_result(result)
+        if len(text) > tool_router.ANSWER_MAX_CHARS:
+            routed = result.get("routed_to") or "the specific tool"
+            text = text[: tool_router.ANSWER_MAX_CHARS] + f"\n... truncated; call {routed} directly for the full result"
+        return text
+
+
 def _register_skill_hub_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
     # Skills (curated + local custom) aren't repo-scoped - unlike every other
     # tool group in this file, neither of these two ever touches repo_path or
@@ -1635,8 +1665,8 @@ def build_server(
     also needs the `write` effect, the same permission aletheore_scan needs to
     rewrite .aletheore/, so an operator who withheld write gets no watcher.
     """
-    if profile not in ("full", "nav"):
-        raise ValueError(f"unknown MCP profile {profile!r}; choose full or nav")
+    if profile not in ("full", "nav", "router"):
+        raise ValueError(f"unknown MCP profile {profile!r}; choose full, nav or router")
     effects = allowed_effects(os.environ.get(_ALLOW_ENV_VAR)) if allow is None else allow
     # A per-server copy, not the module-level TOOL_REQUIRED_EFFECTS directly:
     # aletheore_answer only needs `external` added when the selected adapter
@@ -1667,7 +1697,8 @@ def build_server(
         # it doesn't need.
         required_effects["aletheore_scan"] = required_effects["aletheore_scan"] | {EFFECT_EXTERNAL}
 
-    mcp_instance = MCPServer("aletheore", instructions=NAV_INSTRUCTIONS if profile == "nav" else SERVER_INSTRUCTIONS)
+    mcp_instance = MCPServer("aletheore", instructions={"nav": NAV_INSTRUCTIONS, "router": ROUTER_INSTRUCTIONS}.get(profile, SERVER_INSTRUCTIONS),
+    )
     # A tool that returns a string would otherwise also send a JSON-wrapped structured copy, and the model is shown
     # that copy with every quote and newline escaped again. One text result per call.
     #
@@ -1684,6 +1715,11 @@ def build_server(
         return register_tool(*args, **kwargs)
 
     mcp_instance.tool = tool_without_structured_copy
+    if profile == "router":
+        # One tool: the point is a single definition in the agent's context. aletheore_ask routes to the same
+        # queries the full profile exposes one by one.
+        _register_ask_tool(mcp_instance, repo_path)
+        return mcp_instance
     if profile == "nav":
         # Three tools, small enough to load up front instead of behind a search step: find code, read one symbol,
         # or search literally. Everything else needs the full profile.
@@ -1691,6 +1727,7 @@ def build_server(
         _register_symbol_source_tool(mcp_instance, repo_path)
         _register_search_tool(mcp_instance, repo_path)
         return mcp_instance
+    _register_ask_tool(mcp_instance, repo_path)
     _register_locate_tool(mcp_instance, repo_path)
     _register_query_wrapper_tools(mcp_instance, repo_path)
     _register_changes_tool(mcp_instance, repo_path)

@@ -1,0 +1,722 @@
+[
+ {
+  "question": "What breaks if I change the signature of create_order?",
+  "target": "src/api/orders.py",
+  "intent": "impact",
+  "paths_known": true
+ },
+ {
+  "question": "who calls this? want to rename it",
+  "target": "app/services/billing_service.rb",
+  "intent": "impact",
+  "paths_known": true
+ },
+ {
+  "question": "Is it safe to delete lib/utils/date_helpers.js or is something still depending on it?",
+  "target": null,
+  "intent": "impact",
+  "paths_known": false
+ },
+ {
+  "question": "blast radius for src/core/auth/session.go",
+  "target": "src/core/auth/session.go",
+  "intent": "impact",
+  "paths_known": true
+ },
+ {
+  "question": "I'm about to refactor the cache wrapper, what downstream code will I disturb?",
+  "target": "internal/cache/wrapper.go",
+  "intent": "impact",
+  "paths_known": true
+ },
+ {
+  "question": "dependents of UserSerializer pls",
+  "target": "app/serializers/user_serializer.rb",
+  "intent": "impact",
+  "paths_known": true
+ },
+ {
+  "question": "Which tests cover this file?",
+  "target": "src/api/orders.py",
+  "intent": "tests",
+  "paths_known": true
+ },
+ {
+  "question": "what tests should i run after editing app/models/user.rb",
+  "target": null,
+  "intent": "tests",
+  "paths_known": false
+ },
+ {
+  "question": "Is there any test for the payment retry logic?",
+  "target": null,
+  "intent": "tests",
+  "paths_known": false
+ },
+ {
+  "question": "test coverage for pkg/parser/lexer.go",
+  "target": "pkg/parser/lexer.go",
+  "intent": "tests",
+  "paths_known": true
+ },
+ {
+  "question": "I changed the invoice PDF renderer, which specs do I need to rerun before pushing?",
+  "target": "app/services/invoice_pdf.rb",
+  "intent": "tests",
+  "paths_known": true
+ },
+ {
+  "question": "are there unit tests guarding this module",
+  "target": "src/lib/retry.ts",
+  "intent": "tests",
+  "paths_known": true
+ },
+ {
+  "question": "Who owns src/payments/refunds.py?",
+  "target": "src/payments/refunds.py",
+  "intent": "owner",
+  "paths_known": true
+ },
+ {
+  "question": "who wrote the webhook handler",
+  "target": null,
+  "intent": "owner",
+  "paths_known": false
+ },
+ {
+  "question": "Who should review my change to the auth middleware?",
+  "target": "src/middleware/auth.ts",
+  "intent": "owner",
+  "paths_known": true
+ },
+ {
+  "question": "whos the main person for the search indexing code",
+  "target": null,
+  "intent": "owner",
+  "paths_known": false
+ },
+ {
+  "question": "Which engineer knows the most about app/jobs/sync_job.rb?",
+  "target": "app/jobs/sync_job.rb",
+  "intent": "owner",
+  "paths_known": true
+ },
+ {
+  "question": "Who do I ask before touching the billing area?",
+  "target": null,
+  "intent": "owner",
+  "paths_known": false
+ },
+ {
+  "question": "What are the most frequently changed files?",
+  "target": null,
+  "intent": "hotspot",
+  "paths_known": false
+ },
+ {
+  "question": "show churn hotspots",
+  "target": null,
+  "intent": "hotspot",
+  "paths_known": false
+ },
+ {
+  "question": "which files are fragile and keep getting patched",
+  "target": null,
+  "intent": "hotspot",
+  "paths_known": false
+ },
+ {
+  "question": "Files that are always edited together with src/api/orders.py",
+  "target": "src/api/orders.py",
+  "intent": "hotspot",
+  "paths_known": true
+ },
+ {
+  "question": "where do bugs keep coming back? I want the files with the most commits lately",
+  "target": null,
+  "intent": "hotspot",
+  "paths_known": false
+ },
+ {
+  "question": "top 10 high-churn modules",
+  "target": null,
+  "intent": "hotspot",
+  "paths_known": false
+ },
+ {
+  "question": "Are there any hardcoded API keys in this repo?",
+  "target": null,
+  "intent": "secrets",
+  "paths_known": false
+ },
+ {
+  "question": "scan for leaked credentials",
+  "target": null,
+  "intent": "secrets",
+  "paths_known": false
+ },
+ {
+  "question": "did anyone commit a token or password?",
+  "target": null,
+  "intent": "secrets",
+  "paths_known": false
+ },
+ {
+  "question": "any AWS keys checked in",
+  "target": null,
+  "intent": "secrets",
+  "paths_known": false
+ },
+ {
+  "question": "Check config/settings.py for secrets left in plain text",
+  "target": "config/settings.py",
+  "intent": "secrets",
+  "paths_known": true
+ },
+ {
+  "question": "Which of my dependencies have known CVEs?",
+  "target": null,
+  "intent": "vulnerabilities",
+  "paths_known": false
+ },
+ {
+  "question": "outdated packages with security advisories",
+  "target": null,
+  "intent": "vulnerabilities",
+  "paths_known": false
+ },
+ {
+  "question": "is lodash vulnerable in our lockfile",
+  "target": null,
+  "intent": "vulnerabilities",
+  "paths_known": false
+ },
+ {
+  "question": "any npm audit style issues?",
+  "target": null,
+  "intent": "vulnerabilities",
+  "paths_known": false
+ },
+ {
+  "question": "Do we ship any library with a critical advisory I should bump before release?",
+  "target": null,
+  "intent": "vulnerabilities",
+  "paths_known": false
+ },
+ {
+  "question": "Show me semgrep findings",
+  "target": null,
+  "intent": "static_analysis",
+  "paths_known": false
+ },
+ {
+  "question": "what did bandit flag?",
+  "target": null,
+  "intent": "static_analysis",
+  "paths_known": false
+ },
+ {
+  "question": "Run down the static analysis results for src/api/upload.py",
+  "target": "src/api/upload.py",
+  "intent": "static_analysis",
+  "paths_known": true
+ },
+ {
+  "question": "list lint and security scan warnings, highest severity first",
+  "target": null,
+  "intent": "static_analysis",
+  "paths_known": false
+ },
+ {
+  "question": "any SQL injection or XSS patterns found by the scanners?",
+  "target": null,
+  "intent": "static_analysis",
+  "paths_known": false
+ },
+ {
+  "question": "Find unused functions",
+  "target": null,
+  "intent": "dead_code",
+  "paths_known": false
+ },
+ {
+  "question": "what code is never called and can go?",
+  "target": null,
+  "intent": "dead_code",
+  "paths_known": false
+ },
+ {
+  "question": "dead files nobody imports",
+  "target": null,
+  "intent": "dead_code",
+  "paths_known": false
+ },
+ {
+  "question": "Is anything in utils/legacy_format.py unreachable?",
+  "target": "utils/legacy_format.py",
+  "intent": "dead_code",
+  "paths_known": true
+ },
+ {
+  "question": "help me cut the fat, what can I safely delete from this project",
+  "target": null,
+  "intent": "dead_code",
+  "paths_known": false
+ },
+ {
+  "question": "Are there any architecture layer violations?",
+  "target": null,
+  "intent": "layers",
+  "paths_known": false
+ },
+ {
+  "question": "does the controller layer import directly from the db layer anywhere",
+  "target": null,
+  "intent": "layers",
+  "paths_known": false
+ },
+ {
+  "question": "boundary violations between domain and infrastructure",
+  "target": null,
+  "intent": "layers",
+  "paths_known": false
+ },
+ {
+  "question": "show me where the layering rules are broken",
+  "target": null,
+  "intent": "layers",
+  "paths_known": false
+ },
+ {
+  "question": "ui code reaching into the persistence modules, how bad is it?",
+  "target": null,
+  "intent": "layers",
+  "paths_known": false
+ },
+ {
+  "question": "List all HTTP endpoints",
+  "target": null,
+  "intent": "endpoints",
+  "paths_known": false
+ },
+ {
+  "question": "what routes does the app expose",
+  "target": null,
+  "intent": "endpoints",
+  "paths_known": false
+ },
+ {
+  "question": "Which API URLs accept POST?",
+  "target": null,
+  "intent": "endpoints",
+  "paths_known": false
+ },
+ {
+  "question": "show me the REST api surface",
+  "target": null,
+  "intent": "endpoints",
+  "paths_known": false
+ },
+ {
+  "question": "what can an external client call on this service?",
+  "target": null,
+  "intent": "endpoints",
+  "paths_known": false
+ },
+ {
+  "question": "routes defined in app/controllers/orders_controller.rb",
+  "target": "app/controllers/orders_controller.rb",
+  "intent": "endpoints",
+  "paths_known": true
+ },
+ {
+  "question": "Which environment variables does the code read?",
+  "target": null,
+  "intent": "env",
+  "paths_known": false
+ },
+ {
+  "question": "list the env vars I need to set to run this",
+  "target": null,
+  "intent": "env",
+  "paths_known": false
+ },
+ {
+  "question": "where is DATABASE_URL used",
+  "target": null,
+  "intent": "env",
+  "paths_known": false
+ },
+ {
+  "question": "config keys required at startup",
+  "target": null,
+  "intent": "env",
+  "paths_known": false
+ },
+ {
+  "question": "What do I have to put in my .env before booting this thing?",
+  "target": null,
+  "intent": "env",
+  "paths_known": false
+ },
+ {
+  "question": "what tables exist in the database",
+  "target": null,
+  "intent": "database",
+  "paths_known": false
+ },
+ {
+  "question": "show the schema",
+  "target": null,
+  "intent": "database",
+  "paths_known": false
+ },
+ {
+  "question": "list migrations",
+  "target": null,
+  "intent": "database",
+  "paths_known": false
+ },
+ {
+  "question": "Which ORM models map to the users table?",
+  "target": null,
+  "intent": "database",
+  "paths_known": false
+ },
+ {
+  "question": "how is customer data persisted and what are the columns?",
+  "target": null,
+  "intent": "database",
+  "paths_known": false
+ },
+ {
+  "question": "What does the Dockerfile do?",
+  "target": null,
+  "intent": "infrastructure",
+  "paths_known": false
+ },
+ {
+  "question": "show terraform resources",
+  "target": null,
+  "intent": "infrastructure",
+  "paths_known": false
+ },
+ {
+  "question": "how is this deployed? CI pipeline details",
+  "target": null,
+  "intent": "infrastructure",
+  "paths_known": false
+ },
+ {
+  "question": "kubernetes manifests in this repo",
+  "target": null,
+  "intent": "infrastructure",
+  "paths_known": false
+ },
+ {
+  "question": "which github actions workflows run on push",
+  "target": null,
+  "intent": "infrastructure",
+  "paths_known": false
+ },
+ {
+  "question": "Where are exceptions swallowed?",
+  "target": null,
+  "intent": "errors",
+  "paths_known": false
+ },
+ {
+  "question": "find bare except clauses",
+  "target": null,
+  "intent": "errors",
+  "paths_known": false
+ },
+ {
+  "question": "How does this codebase handle errors? any empty catch blocks",
+  "target": null,
+  "intent": "errors",
+  "paths_known": false
+ },
+ {
+  "question": "places that catch Exception and just pass",
+  "target": null,
+  "intent": "errors",
+  "paths_known": false
+ },
+ {
+  "question": "error handling smells in src/workers/queue.py",
+  "target": "src/workers/queue.py",
+  "intent": "errors",
+  "paths_known": true
+ },
+ {
+  "question": "What licenses do our dependencies use?",
+  "target": null,
+  "intent": "licenses",
+  "paths_known": false
+ },
+ {
+  "question": "any GPL or copyleft packages?",
+  "target": null,
+  "intent": "licenses",
+  "paths_known": false
+ },
+ {
+  "question": "license compliance report",
+  "target": null,
+  "intent": "licenses",
+  "paths_known": false
+ },
+ {
+  "question": "can we ship this commercially given the libs we pull in",
+  "target": null,
+  "intent": "licenses",
+  "paths_known": false
+ },
+ {
+  "question": "list deps by license type",
+  "target": null,
+  "intent": "licenses",
+  "paths_known": false
+ },
+ {
+  "question": "What does src/api/orders.py import?",
+  "target": "src/api/orders.py",
+  "intent": "neighborhood",
+  "paths_known": true
+ },
+ {
+  "question": "what imports app/models/user.rb",
+  "target": "app/models/user.rb",
+  "intent": "neighborhood",
+  "paths_known": true
+ },
+ {
+  "question": "which module cluster does this file belong to",
+  "target": "src/billing/invoice.ts",
+  "intent": "neighborhood",
+  "paths_known": true
+ },
+ {
+  "question": "neighbors of lib/db/pool.js",
+  "target": "lib/db/pool.js",
+  "intent": "neighborhood",
+  "paths_known": true
+ },
+ {
+  "question": "show the import graph around cmd/server/main.go",
+  "target": "cmd/server/main.go",
+  "intent": "neighborhood",
+  "paths_known": true
+ },
+ {
+  "question": "List the functions in src/utils/strings.py",
+  "target": "src/utils/strings.py",
+  "intent": "symbols",
+  "paths_known": true
+ },
+ {
+  "question": "what classes are defined in app/models/order.rb",
+  "target": "app/models/order.rb",
+  "intent": "symbols",
+  "paths_known": true
+ },
+ {
+  "question": "symbols in this file",
+  "target": "src/components/Table.tsx",
+  "intent": "symbols",
+  "paths_known": true
+ },
+ {
+  "question": "outline of pkg/store/redis.go",
+  "target": "pkg/store/redis.go",
+  "intent": "symbols",
+  "paths_known": true
+ },
+ {
+  "question": "give me every method in the PaymentGateway class file",
+  "target": "src/payments/gateway.ts",
+  "intent": "symbols",
+  "paths_known": true
+ },
+ {
+  "question": "What is this repo?",
+  "target": null,
+  "intent": "overview",
+  "paths_known": false
+ },
+ {
+  "question": "give me an overview of the project",
+  "target": null,
+  "intent": "overview",
+  "paths_known": false
+ },
+ {
+  "question": "I'm new here, how is the code organised?",
+  "target": null,
+  "intent": "overview",
+  "paths_known": false
+ },
+ {
+  "question": "main modules and what they do",
+  "target": null,
+  "intent": "overview",
+  "paths_known": false
+ },
+ {
+  "question": "walk me through the architecture at a high level",
+  "target": null,
+  "intent": "overview",
+  "paths_known": false
+ },
+ {
+  "question": "tell me what I'm looking at before I start",
+  "target": null,
+  "intent": "overview",
+  "paths_known": false
+ },
+ {
+  "question": "Where is the login logic implemented?",
+  "target": null,
+  "intent": "locate",
+  "paths_known": false
+ },
+ {
+  "question": "find the code that handles file uploads",
+  "target": null,
+  "intent": "locate",
+  "paths_known": false
+ },
+ {
+  "question": "where's RateLimiter defined",
+  "target": null,
+  "intent": "locate",
+  "paths_known": false
+ },
+ {
+  "question": "which file sends the welcome email?",
+  "target": null,
+  "intent": "locate",
+  "paths_known": false
+ },
+ {
+  "question": "point me to retry/backoff handling",
+  "target": null,
+  "intent": "locate",
+  "paths_known": false
+ },
+ {
+  "question": "I need to find where invoices get totalled",
+  "target": null,
+  "intent": "locate",
+  "paths_known": false
+ },
+ {
+  "question": "how should I set up Stripe webhooks in Django?",
+  "target": null,
+  "intent": "skill",
+  "paths_known": false
+ },
+ {
+  "question": "best practices for JWT refresh tokens",
+  "target": null,
+  "intent": "skill",
+  "paths_known": false
+ },
+ {
+  "question": "how do I configure Postgres connection pooling with SQLAlchemy",
+  "target": null,
+  "intent": "skill",
+  "paths_known": false
+ },
+ {
+  "question": "Tips for writing idempotent Kafka consumers?",
+  "target": null,
+  "intent": "skill",
+  "paths_known": false
+ },
+ {
+  "question": "what's the right way to do pagination in GraphQL",
+  "target": null,
+  "intent": "skill",
+  "paths_known": false
+ },
+ {
+  "question": "what's the recommended way to do optimistic UI updates in React Query",
+  "target": null,
+  "intent": "skill",
+  "paths_known": false
+ },
+ {
+  "question": "hey, how are you today?",
+  "target": null,
+  "intent": "none",
+  "paths_known": false
+ },
+ {
+  "question": "write me a function that reverses a linked list",
+  "target": null,
+  "intent": "none",
+  "paths_known": false
+ },
+ {
+  "question": "run the test suite",
+  "target": null,
+  "intent": "none",
+  "paths_known": false
+ },
+ {
+  "question": "what's the weather in Bangalore",
+  "target": null,
+  "intent": "none",
+  "paths_known": false
+ },
+ {
+  "question": "thanks!",
+  "target": null,
+  "intent": "none",
+  "paths_known": false
+ },
+ {
+  "question": "deploy this to production now",
+  "target": null,
+  "intent": "none",
+  "paths_known": false
+ },
+ {
+  "question": "tell me a joke about programmers",
+  "target": null,
+  "intent": "none",
+  "paths_known": false
+ },
+ {
+  "question": "Fix the bug in checkout and commit it",
+  "target": null,
+  "intent": "none",
+  "paths_known": false
+ },
+ {
+  "question": "translate this README to French",
+  "target": null,
+  "intent": "none",
+  "paths_known": false
+ },
+ {
+  "question": "who won the cricket match last night",
+  "target": null,
+  "intent": "none",
+  "paths_known": false
+ },
+ {
+  "question": "install numpy and start the dev server",
+  "target": null,
+  "intent": "none",
+  "paths_known": false
+ },
+ {
+  "question": "write a cover letter for a backend engineer role",
+  "target": null,
+  "intent": "none",
+  "paths_known": false
+ }
+]

@@ -272,6 +272,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_find_evidence_for_symbol",
         "aletheore_find_evidence_for_dependency",
         "aletheore_list_skills",
+        "aletheore_ask",
         "aletheore_find_skill",
         "aletheore_search_skills",
         "aletheore_get_skill",
@@ -280,7 +281,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_remove_custom_skill",
     }
     assert expected.issubset(names)
-    assert len(names) == 44
+    assert len(names) == 45
     assert "aletheore_answer" not in names
 
 
@@ -2020,6 +2021,33 @@ async def test_nav_profile_instructions_are_short(tmp_path):
     # The instructions text is sent to the model on every session; the nav profile exists to keep that cost tiny.
     repo = make_repo_with_evidence(tmp_path)
     assert len(build_server(repo, profile="nav").instructions) < 600
+
+
+@pytest.mark.asyncio
+async def test_router_profile_exposes_one_tool_with_short_instructions(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo, profile="router")
+
+    assert {t.name for t in await server.list_tools()} == {"aletheore_ask"}
+    assert len(server.instructions) < 700
+
+
+@pytest.mark.asyncio
+async def test_aletheore_ask_routes_names_the_query_and_admits_no_match(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo, profile="router")
+
+    hit = tool_result_body(await server.call_tool("aletheore_ask", {"question": "what breaks if I change b.py"}))
+    assert hit["result"]["routed_to"] == "aletheore_get_blast_radius"
+    assert hit["result"]["confidence"] == "high"
+    assert hit["result"]["target"] == "b.py"
+
+    vague = tool_result_body(await server.call_tool("aletheore_ask", {"question": "is it safe to rename this"}))
+    assert vague["result"]["confidence"] == "low"
+
+    miss = tool_result_body(await server.call_tool("aletheore_ask", {"question": "tell me a joke"}))
+    assert miss["result"]["confidence"] == "none"
+    assert miss["result"]["try"]
 
 
 def test_an_unknown_profile_is_rejected(tmp_path):
