@@ -10,7 +10,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 Logging out only removed the token from your machine, so every login and logout cycle left one more active token on
 your installation until the token limit blocked the next login. `aletheore logout` now revokes the saved managed-audit
 token on the server as well. If that call fails (for example offline), the token is still removed locally and a
-one-line warning says it can be revoked in the dashboard at https://aletheore.com.
+one-line warning says it can be revoked in the dashboard at <https://aletheore.com>.
 
 **Fixed: logging in again from the same machine replaces its previous token**
 
