@@ -435,3 +435,24 @@ def test_cli_sentry_init_skips_auto_enabling_integrations(monkeypatch):
         sr.init_cli_sentry()
     assert init.call_args.kwargs["auto_enabling_integrations"] is False
     assert init.call_args.kwargs["before_send"] is sr._scrub_event
+
+
+def test_h11_connection_noise_is_dropped_but_other_errors_are_kept():
+    # The dashboard server logs h11's LocalProtocolError when a client drops mid-request (seen on Windows). It is not
+    # a crash of Aletheore, so it must not become a Sentry event.
+    noise = {
+        "exception": {
+            "values": [
+                {"type": "LocalProtocolError", "module": "h11._util",
+                 "value": "can't handle event type Response when role=SERVER and state=CLOSED"}
+            ]
+        }
+    }
+    assert _scrub_event(noise, {}) is None
+
+    real = {"exception": {"values": [{"type": "KeyError", "module": "builtins", "value": "'x'"}]}}
+    assert _scrub_event(real, {}) is real
+
+    # a LocalProtocolError from some other library is still reported
+    other = {"exception": {"values": [{"type": "LocalProtocolError", "module": "mylib", "value": "boom"}]}}
+    assert _scrub_event(other, {}) is other
