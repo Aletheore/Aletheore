@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed `aletheore dashboard` showing a blank page (the API answered 500) for a folder that is not a git repository or a repository with no commits yet. The Git activity card now says there is no git history to read.
+- Changed the home menu's "Connect your coding agent" list so Enter on the first row configures one agent (Claude Code), not all eight. "All of them" is now below the agents and says it also writes Claude Desktop's global config, which lives outside the folder.
 - Fixed `aletheore dashboard` (and the home menu's dashboard entry) opening an empty dashboard with no explanation when the folder has never been scanned. It now says there is no scan and, in a terminal, offers to scan first; with no terminal it prints the `aletheore scan` command to run and exits 1.
 
 ## 0.10.0 - 2026-10-22
