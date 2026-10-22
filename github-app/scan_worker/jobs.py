@@ -511,6 +511,16 @@ def _run_git(args: list[str], **kwargs) -> None:
             exc.stdout = _scrub_credentialed_urls(exc.stdout)
         if isinstance(exc.stderr, str):
             exc.stderr = _scrub_credentialed_urls(exc.stderr)
+            # CalledProcessError's str() is only the argv and exit status, so without this the
+            # reason git gave ("repository not found", "could not read Username") never reaches
+            # a log or Sentry now that the output is captured instead of inherited.
+            if exc.stderr.strip():
+                logging.getLogger("scan_worker.jobs").warning(
+                    "git %s failed (exit %s): %s",
+                    exc.cmd[1] if len(exc.cmd) > 1 else "",
+                    exc.returncode,
+                    exc.stderr.strip()[:2000],
+                )
         raise
 
 
