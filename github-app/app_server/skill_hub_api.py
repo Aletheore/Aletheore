@@ -22,6 +22,7 @@ from app_server.db import (
     upsert_custom_skill,
 )
 from app_server.ingest_limits import parse_validated_body_after_auth
+from app_server.paddle_ip_allowlist import client_ip_from_forwarded_for
 from app_server.rate_limit import is_rate_limited
 from app_server.redis_client import get_redis_client
 
@@ -43,6 +44,41 @@ MAX_CUSTOM_SKILL_CONTENT_CHARS = 256 * 1024
 # real logins, and still a hard stop on a minting loop.
 PERSONAL_TOKEN_RATE_LIMIT = 10
 PERSONAL_TOKEN_RATE_LIMIT_WINDOW_SECONDS = 3600
+
+
+# Per client IP, checked BEFORE the GitHub verification below. The per-account limit above
+# needs the verified GitHub user id, so it cannot protect that verification itself: each
+# request with a made-up bearer token costs one outbound call to GitHub's check-a-token
+# endpoint, which is authenticated with the app's own client credentials and shares the
+# app's rate limit with every real `aletheore login`. Generous for a shared office address
+# (a real login mints one token), a hard stop on a loop of garbage tokens.
+PERSONAL_TOKEN_IP_RATE_LIMIT = 30
+PERSONAL_TOKEN_IP_RATE_LIMIT_WINDOW_SECONDS = 3600
+
+
+async def _enforce_mint_ip_rate_limit(request: Request) -> None:
+    client_ip = client_ip_from_forwarded_for(
+        request.headers.get("x-forwarded-for"),
+        request.client.host if request.client else "",
+    )
+    try:
+        limited = await asyncio.to_thread(
+            is_rate_limited,
+            get_redis_client(),
+            f"ratelimit:personal-token-ip:{client_ip}",
+            PERSONAL_TOKEN_IP_RATE_LIMIT,
+            PERSONAL_TOKEN_IP_RATE_LIMIT_WINDOW_SECONDS,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Fails open like every other rate limit here: a Redis outage costs this throttle, not login.
+        logger.warning("personal token IP rate limit check failed (%s); allowing request", exc)
+        return
+    if limited:
+        raise HTTPException(
+            status_code=429,
+            detail="too many token requests - try again later",
+            headers={"Retry-After": str(PERSONAL_TOKEN_IP_RATE_LIMIT_WINDOW_SECONDS)},
+        )
 
 
 class CreatePersonalTokenRequest(BaseModel):
@@ -95,6 +131,7 @@ async def mint_personal_token(request: Request):
     # administered, paid installation. No installation lookup and no plan
     # check belong anywhere in this path.
     github_token = _bearer_github_token(request)
+    await _enforce_mint_ip_rate_limit(request)
     if not await asyncio.to_thread(_github_token_issued_to_aletheore, github_token):
         raise HTTPException(status_code=401, detail="that GitHub token was not issued to Aletheore - run `aletheore login`")
     user = await asyncio.to_thread(_fetch_github_user, github_token)
