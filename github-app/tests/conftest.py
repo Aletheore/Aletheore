@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -170,7 +171,14 @@ def _reset_git_path_cache(monkeypatch):
     # test body, which overrides this default the normal monkeypatch way.
     from scan_worker import jobs
 
-    monkeypatch.setattr(jobs.shutil, "which", lambda name: "git" if name == "git" else None)
+    # `jobs.shutil` is the process-wide shutil module, so this patch is also seen by
+    # aletheore.git_exec.git_executable() (used by git_intel and friends), which abspath()s the
+    # result: a bare "git" there becomes "<cwd>/git", which does not exist. Only the "git" answer
+    # for the real executable is therefore passed through; anything else stays faked as before.
+    real_which = shutil.which
+    monkeypatch.setattr(
+        jobs.shutil, "which", lambda name, *a, **kw: real_which(name, *a, **kw) if name == "git" else None
+    )
     jobs._GIT_PATH = "git"
     yield
     jobs._GIT_PATH = None

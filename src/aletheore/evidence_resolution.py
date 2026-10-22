@@ -325,7 +325,7 @@ def resolve_recent_commit(repo_path: Path, file_path: str, line: int | None = No
     sha_from_blame: str | None = None
     if line is not None:
         try:
-            blame_proc = subprocess.run(
+            blame_proc = subprocess.run(  # nosec B603 - argv[0] is git_executable()'s absolute path, args are fixed
                 [git_executable(), "blame", "-L", f"{line},{line}", "--porcelain", "HEAD", "--", file_path],
                 cwd=repo_path,
                 check=False,

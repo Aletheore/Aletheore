@@ -90,7 +90,7 @@ def _scan_root_prefix(repo_path: Path) -> str:
     # component), files must be re-relativized to it, and anything outside
     # it excluded, matching how the rest of the scanner treats repo_path as
     # the analysis root.
-    result = subprocess.run(
+    result = subprocess.run(  # nosec B603 - argv[0] is git_executable()'s absolute path, args are fixed
         [git_executable(), "rev-parse", "--show-prefix"], cwd=repo_path, capture_output=True, text=True, errors="ignore"
     )
     return result.stdout.strip() if result.returncode == 0 else ""
@@ -164,7 +164,7 @@ def stream_commit_touches(
     # block git and deadlock this process against it.
     stderr_file = tempfile.TemporaryFile(mode="w+", errors="ignore")
     try:
-        proc = subprocess.Popen(
+        proc = subprocess.Popen(  # nosec B603 - argv[0] is git_executable()'s absolute path, args are fixed
             [git_executable(), *args],
             cwd=repo_path,
             stdout=subprocess.PIPE,
@@ -262,7 +262,7 @@ def _root_commit_key(repo_path: Path) -> str:
     facts = history_facts(repo_path)
     if facts is not None:
         return facts.root_shas[0] if facts.root_shas else "no-commits"
-    roots_result = subprocess.run(
+    roots_result = subprocess.run(  # nosec B603 - argv[0] is git_executable()'s absolute path, args are fixed
         [git_executable(), "rev-list", "--max-parents=0", "HEAD"],
         cwd=repo_path,
         capture_output=True,
@@ -284,7 +284,7 @@ def compute_repo_key(repo_path: Path) -> str:
     """
     root_key = _root_commit_key(repo_path)
 
-    remote_result = subprocess.run(
+    remote_result = subprocess.run(  # nosec B603 - argv[0] is git_executable()'s absolute path, args are fixed
         [git_executable(), "remote", "get-url", "origin"],
         cwd=repo_path,
         capture_output=True,

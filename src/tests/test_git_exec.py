@@ -19,7 +19,8 @@ def test_resolves_to_an_absolute_path(tmp_path, monkeypatch):
     fake = _fake_git(tmp_path / "bin")
     monkeypatch.setenv("PATH", str(tmp_path / "bin"))
 
-    assert git_executable() == str(fake)
+    # shutil.which returns the PATHEXT spelling on Windows (git.BAT for git.bat), so compare case-folded there.
+    assert os.path.normcase(git_executable()) == os.path.normcase(str(fake))
     assert os.path.isabs(git_executable())
 
 
