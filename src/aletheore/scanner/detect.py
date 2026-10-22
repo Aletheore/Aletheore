@@ -301,7 +301,7 @@ def git_visible_paths(repo_path: Path) -> tuple[frozenset[str], frozenset[str]] 
     Cached for the life of the process like _nested_git_roots; scan_repository
     clears both at the start of every scan.
     """
-    import subprocess
+    import subprocess  # nosec B404 - runs git with a fixed argv
 
     from aletheore.git_exec import git_executable
 
