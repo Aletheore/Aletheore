@@ -349,6 +349,28 @@ async def test_personal_token_mint_rate_limited_per_github_account(test_app, mon
 
 
 @pytest.mark.asyncio
+async def test_put_custom_skill_authenticates_before_parsing_the_body(test_app):
+    # An invalid body (NUL byte, which the model rejects with a 422) must not be parsed for a
+    # caller who never authenticated: 401, not 422.
+    response = await test_app.put("/v1/custom-skills/whatever", json={"content": "a\u0000b"})
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_put_custom_skill_has_a_pre_routing_body_cap(test_app, personal_token_header):
+    from app_server.ingest_limits import CUSTOM_SKILL_MAX_BODY_BYTES
+
+    response = await test_app.put(
+        "/v1/custom-skills/big",
+        headers={**personal_token_header, "Content-Length": str(CUSTOM_SKILL_MAX_BODY_BYTES + 1)},
+        content=b"{}",
+    )
+
+    assert response.status_code == 413
+
+
+@pytest.mark.asyncio
 async def test_put_custom_skill_rejects_oversized_content(test_app, personal_token_header, pool):
     from app_server.skill_hub_api import MAX_CUSTOM_SKILL_CONTENT_CHARS
 

@@ -331,3 +331,22 @@ async def test_the_oversized_and_length_less_paths_return_distinct_codes(pool):
         )
 
     assert (length_less.status_code, oversized.status_code) == (411, 413)
+
+
+def test_a_path_parameter_route_is_capped_by_prefix_and_covers_put():
+    from app_server.ingest_limits import CUSTOM_SKILL_MAX_BODY_BYTES
+
+    check_declared_body_size("/v1/custom-skills/mine", "PUT", str(CUSTOM_SKILL_MAX_BODY_BYTES))
+    with pytest.raises(BodyTooLargeError):
+        check_declared_body_size("/v1/custom-skills/mine", "PUT", str(CUSTOM_SKILL_MAX_BODY_BYTES + 1))
+    with pytest.raises(MissingContentLengthError):
+        check_declared_body_size("/v1/custom-skills/mine", "PUT", None)
+    # A bodyless method on the same prefix is untouched.
+    check_declared_body_size("/v1/custom-skills/mine", "GET", None)
+
+
+def test_personal_token_mint_has_a_small_body_cap():
+    from app_server.ingest_limits import PERSONAL_TOKEN_MAX_BODY_BYTES
+
+    with pytest.raises(BodyTooLargeError):
+        check_declared_body_size("/v1/personal-tokens", "POST", str(PERSONAL_TOKEN_MAX_BODY_BYTES + 1))

@@ -65,6 +65,7 @@ from app_server.db import (
     record_admin_action,
     record_installation_access,
     remove_health_check_target,
+    reconcile_installation_member_identity,
     remove_installation_member,
     replace_endpoint_health_selection,
     revoke_api_token,
@@ -308,6 +309,23 @@ def _fetch_github_login(github_token: str) -> str:
     session-cookie route already does.
     """
     return _fetch_github_user(github_token)["login"]
+
+
+async def _reconciled_github_login(pool, github_token: str) -> str:
+    """The caller's GitHub login, after reconciling installation_members
+    against their numeric id (see db.reconcile_installation_member_identity).
+
+    The bearer-token routes authorize by login via `is_installation_member`
+    and never pass through the OAuth callback, which is the only other place
+    reconciliation runs. Without this, a login that was abandoned and
+    re-claimed by a different GitHub account would still match the old
+    holder's seat here. Unlike the callback this is NOT best-effort: it
+    gates a credential, so a failure fails the request instead of falling
+    back to an unreconciled login.
+    """
+    user = await asyncio.to_thread(_fetch_github_user, github_token)
+    await reconcile_installation_member_identity(pool, user["login"], user["id"])
+    return user["login"]
 
 
 _ADMINISTERED_INSTALLATIONS_CACHE_TTL_SECONDS = 30
@@ -1865,7 +1883,7 @@ async def my_installations(request: Request):
     # verification issue as /app/repos and /subscribe, just on the CLI's
     # own login path - filtered to installations this login is actually
     # seated on, or has real GitHub admin permission on.
-    github_login = await asyncio.to_thread(_fetch_github_login, github_token)
+    github_login = await _reconciled_github_login(pool, github_token)
     verified_ids = await _verify_installation_ids(pool, administered_ids, github_login)
     rows = await pool.fetch(
         """
@@ -1895,7 +1913,7 @@ async def create_cli_token(request: Request, body: CreateCliTokenRequest):
     # token against someone else's installation - not just view their data,
     # act as them. Same real-membership-or-admin bar as every other route
     # fixed alongside this one.
-    github_login = await asyncio.to_thread(_fetch_github_login, github_token)
+    github_login = await _reconciled_github_login(pool, github_token)
     if not await _is_real_installation_member_or_admin(pool, installation_id, github_login):
         raise HTTPException(status_code=403, detail="you do not administer this installation")
 
@@ -1911,7 +1929,7 @@ async def create_cli_token(request: Request, body: CreateCliTokenRequest):
     raw_token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
     token_id = await create_api_token_within_limit(
-        pool, installation_id, token_hash, body.label, installation["account_login"], max_tokens
+        pool, installation_id, token_hash, body.label, github_login, max_tokens
     )
     if token_id is None:
         raise HTTPException(status_code=409, detail=f"token limit reached ({max_tokens})")
