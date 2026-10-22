@@ -21,6 +21,7 @@ from app_server.db import (
     revoke_personal_token,
     upsert_custom_skill,
 )
+from app_server.ingest_limits import parse_validated_body_after_auth
 from app_server.rate_limit import is_rate_limited
 from app_server.redis_client import get_redis_client
 
@@ -87,7 +88,7 @@ def _github_token_issued_to_aletheore(github_token: str) -> bool:
 
 
 @skill_hub_router.post("/v1/personal-tokens")
-async def mint_personal_token(request: Request, body: CreatePersonalTokenRequest):
+async def mint_personal_token(request: Request):
     # Deliberately independent of any Aletheore installation: this mints an
     # identity token for ANY GitHub account, unlike the paid-only
     # /v1/cli-tokens flow (admin.py's create_cli_token), which requires an
@@ -113,6 +114,10 @@ async def mint_personal_token(request: Request, body: CreatePersonalTokenRequest
         rate_limited = False
     if rate_limited:
         raise HTTPException(status_code=429, detail="too many token requests - try again later")
+
+    # Parsed after the GitHub token check, not bound as a handler parameter, so an
+    # unauthenticated caller never pays for body parsing (see ingest_limits).
+    body = await parse_validated_body_after_auth(request, CreatePersonalTokenRequest)
 
     pool = request.app.state.db_pool
     identity = await get_or_create_personal_identity(pool, user["id"], user["login"])
@@ -188,13 +193,17 @@ async def get_custom_skill_route(request: Request, name: str):
 
 
 @skill_hub_router.put("/v1/custom-skills/{name}")
-async def put_custom_skill_route(request: Request, name: str, body: PutCustomSkillRequest):
+async def put_custom_skill_route(request: Request, name: str):
     identity = await _authenticate_personal_token(request)
     if not _SAFE_SKILL_NAME.fullmatch(name):
         raise HTTPException(
             status_code=400,
             detail="invalid skill name: use 1-128 letters, digits, '-' or '_'",
         )
+    # Parsed after auth, not bound as a handler parameter: a bound `body: Model` is parsed and
+    # validated before the first line of the handler runs, so an unauthenticated caller would
+    # pay for it (see ingest_limits.parse_validated_body_after_auth).
+    body = await parse_validated_body_after_auth(request, PutCustomSkillRequest)
     return await upsert_custom_skill(request.app.state.db_pool, identity["id"], name, body.content)
 
 

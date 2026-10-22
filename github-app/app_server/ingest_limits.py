@@ -43,13 +43,38 @@ GITHUB_WEBHOOK_MAX_BODY_BYTES = 25 * 1024 * 1024
 # verifies an HMAC signature, not a token, which also runs after buffering.
 PADDLE_WEBHOOK_MAX_BODY_BYTES = 1 * 1024 * 1024
 
+# A custom skill is capped at 256K characters of text (skill_hub_api); JSON can
+# escape a non-BMP character as a 12-byte surrogate pair, so 4 MiB is the
+# ceiling of a legitimate body with headroom. A personal-token request is a
+# label and nothing else.
+CUSTOM_SKILL_MAX_BODY_BYTES = 4 * 1024 * 1024
+PERSONAL_TOKEN_MAX_BODY_BYTES = 8 * 1024
+
 MAX_BODY_BYTES_BY_PATH = {
     "/v1/runtime-events": RUNTIME_EVENT_MAX_BODY_BYTES,
     "/v1/embeddings": EMBEDDINGS_MAX_BODY_BYTES,
     "/v1/managed-audit": MANAGED_AUDIT_MAX_BODY_BYTES,
     "/webhook": GITHUB_WEBHOOK_MAX_BODY_BYTES,
     "/webhooks/paddle": PADDLE_WEBHOOK_MAX_BODY_BYTES,
+    "/v1/personal-tokens": PERSONAL_TOKEN_MAX_BODY_BYTES,
 }
+
+# For routes with a path parameter, where an exact match can never hit.
+MAX_BODY_BYTES_BY_PREFIX = {
+    "/v1/custom-skills/": CUSTOM_SKILL_MAX_BODY_BYTES,
+}
+
+_BODY_CARRYING_METHODS = ("POST", "PUT")
+
+
+def _body_limit_for(path: str) -> int | None:
+    limit = MAX_BODY_BYTES_BY_PATH.get(path)
+    if limit is not None:
+        return limit
+    for prefix, prefix_limit in MAX_BODY_BYTES_BY_PREFIX.items():
+        if path.startswith(prefix):
+            return prefix_limit
+    return None
 
 
 class BodyTooLargeError(Exception):
@@ -71,9 +96,9 @@ def check_declared_body_size(path: str, method: str, content_length: str | None)
     webhook senders) always send one for a JSON body. Accepting a chunked
     request here would leave exactly the hole this module exists to close.
     """
-    if method != "POST":
+    if method not in _BODY_CARRYING_METHODS:
         return
-    limit = MAX_BODY_BYTES_BY_PATH.get(path)
+    limit = _body_limit_for(path)
     if limit is None:
         return
     if content_length is None:
