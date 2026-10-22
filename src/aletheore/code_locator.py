@@ -101,7 +101,7 @@ def _symbols_of(module: dict) -> list[Symbol]:
 
 def _git_files_containing(repo: Path, ident: str, candidates: set[str], timeout: float) -> list[str] | None:
     r = subprocess.run(
-        [git_executable(), "grep", "-l", "-w", "-F", "-e", ident], cwd=repo, capture_output=True, text=True, timeout=timeout
+        [git_executable(), "grep", "-l", "-w", "-F", "-e", ident], cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout
     )
     if r.returncode not in (0, 1):
         return None
