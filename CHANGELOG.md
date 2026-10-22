@@ -5,6 +5,69 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+**Fixed: an unreadable file no longer crashes a scan**
+
+The endpoint-mapping pass, the manifest and config readers, framework detection and the infrastructure detectors read
+files without handling a permission error, so one `chmod 000` file ended `aletheore scan` with a traceback and no
+evidence. Every stage now skips a file it cannot read or decode, and the skips are listed in the new
+`repository.unreadable_files` evidence field (the module graph's own skips stay in `unparseable_files`).
+
+**Fixed: workspace packages are connected in the dependency graph**
+
+A bare import that names an npm, yarn or pnpm workspace package (`import { b } from "@m/b"`) now resolves to that
+package's source through its `exports`, `module`, `main` or `src/index` entry, mapping a built entry such as
+`dist/index.js` back to `src/index.ts`. `dependents`, `imports`, `cycles` and `tests-for` see the edges. TypeScript
+`paths` aliases are not resolved yet.
+
+**Fixed: Go modules in a subdirectory and several Go modules in one repo**
+
+Go imports are resolved against every `go.mod` in the repository, by module path, instead of only a root `go.mod`. An
+import whose path merely starts with a module path (`example.com/g` and `example.com/gx`) no longer matches it.
+
+**Fixed: manifests at any depth are checked**
+
+The vulnerability check, the licence check and the unused-dependency check read only root-level manifests. They now
+cover `package.json`, `requirements.txt`, `pyproject.toml`, `go.mod`, `pom.xml`, `Gemfile`, `Cargo.toml` and the other
+supported manifests in any directory, skipping `node_modules`, vendored, build, fixture and ignored paths and capping
+the search at 200 manifest directories with a note. A dependency declared in several manifests is checked once. Findings
+gain a `manifests` list, unused dependencies in a nested manifest gain a `manifest` field, and each check reports the
+`manifest_dirs` it covered. An unused dependency is judged against the code under its own manifest's directory.
+
+**Fixed: monorepo detection**
+
+`monorepo.detected` is now true for a repo with project manifests in two or more directories, and for `go.work` and
+Lerna, Nx or pnpm workspaces. The new `monorepo.packages` lists every package root with its manifests, ecosystems and
+name, and `monorepo.reason` says why it was detected.
+
+**Fixed: `scan` honours `.gitignore`**
+
+In a git repository the scanned file set now comes from git itself (tracked files plus untracked files that no
+`.gitignore` ignores), so a file under an ignored `built/` or a nested `gen/` no longer appears in `modules` or as
+unreachable dead code. A tracked file is always scanned even if a pattern matches it. `.aletheore.json` `ignored_paths`
+and the built-in skips still apply. A folder that is not a git repository is scanned as before, and the secrets scan
+still looks at ignored files.
+
+**Fixed: a read-only folder gives a clear error**
+
+Scanning a folder that cannot be written to now raises `EvidenceWriteError` (an `OSError`) with the message "cannot
+write evidence to <path>/.aletheore: permission denied" instead of a raw `PermissionError`.
+
+**Fixed: an invalid `.aletheore.json` is reported**
+
+Malformed JSON, a non-object file, an unknown key, a wrong-typed value, a bad `severity_threshold` or
+`cluster_resolution` and an unknown `disabled_checks` value are each printed as a warning on stderr and recorded in the
+evidence as `config_warnings`. The scan still continues with the defaults, and valid settings such as `ignored_paths`
+keep working. A non-string entry in `disabled_checks` no longer raises.
+
+**Fixed: smaller evidence correctness gaps**
+
+A module's `imports` list no longer repeats a file (and the dependency graph no longer repeats the edge). A Python file
+with a syntax error is listed in `unparseable_files`. `static_analysis.tools_run` lists only the tools that ran; a tool
+with nothing to analyze, such as PMD in a repo with no Java, is listed under `tools_skipped`. The `git` section says
+why it is unavailable ("not a git repository" or "no commits yet"). The evidence has a new `cli_version` field next to
+`aletheore_version`, which remains the evidence schema version, and the incompatible-evidence message now says
+"evidence schema".
+
 **Added: a skills browser in the home menu**
 
 "Find a Hallbook skill" is now a small submenu instead of a prompt followed by a wall of text. "Search by what you are

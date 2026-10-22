@@ -21,6 +21,8 @@ from aletheore.scanner.graph import (
     _resolve_python_from_import,
 )
 
+from aletheore.safe_io import read_bytes_or_none
+
 _ROUTE_VERB_METHODS = {"get", "post", "put", "delete", "patch"}
 _DJANGO_ROUTE_FUNCS = {"path", "re_path"}
 _EXPRESS_ROUTE_METHODS = {"get", "post", "put", "delete", "patch", "all"}
@@ -1922,7 +1924,9 @@ def map_api_endpoints(
     for path in source_paths:
         if path.suffix != ".py":
             continue
-        source = path.read_bytes()
+        source = read_bytes_or_none(path)
+        if source is None:
+            continue
         tree = parsers["py"].parse(source)
         collected = _collect_fastapi_include_prefixes(
             tree.root_node, source, repo_path, path, python_source_roots
@@ -1959,7 +1963,9 @@ def map_api_endpoints(
         suffix = path.suffix
 
         if suffix == ".py":
-            source = path.read_bytes()
+            source = read_bytes_or_none(path)
+            if source is None:
+                continue
             tree = parsers["py"].parse(source)
             endpoints.extend(
                 _extract_flask_fastapi_routes(
@@ -1969,49 +1975,71 @@ def map_api_endpoints(
             if path.name == "urls.py":
                 endpoints.extend(_extract_django_routes(tree.root_node, source, rel_path))
         elif suffix in (".js", ".jsx"):
-            source = path.read_bytes()
+            source = read_bytes_or_none(path)
+            if source is None:
+                continue
             tree = parsers["js"].parse(source)
             endpoints.extend(_extract_express_routes(tree.root_node, source, rel_path))
         elif suffix == ".ts":
-            source = path.read_bytes()
+            source = read_bytes_or_none(path)
+            if source is None:
+                continue
             tree = parsers["ts"].parse(source)
             endpoints.extend(_extract_express_routes(tree.root_node, source, rel_path))
         elif suffix == ".tsx":
-            source = path.read_bytes()
+            source = read_bytes_or_none(path)
+            if source is None:
+                continue
             tree = parsers["tsx"].parse(source)
             endpoints.extend(_extract_express_routes(tree.root_node, source, rel_path))
         elif suffix == ".go":
-            source = path.read_bytes()
+            source = read_bytes_or_none(path)
+            if source is None:
+                continue
             tree = parsers["go"].parse(source)
             endpoints.extend(_extract_go_net_http_routes(tree.root_node, source, rel_path))
             endpoints.extend(_extract_gin_routes(tree.root_node, source, rel_path))
         elif suffix == ".rs":
-            source = path.read_bytes()
+            source = read_bytes_or_none(path)
+            if source is None:
+                continue
             tree = parsers["rs"].parse(source)
             endpoints.extend(_extract_axum_routes(tree.root_node, source, rel_path))
         elif suffix == ".java":
-            source = path.read_bytes()
+            source = read_bytes_or_none(path)
+            if source is None:
+                continue
             tree = parsers["java"].parse(source)
             endpoints.extend(_extract_spring_boot_routes(tree.root_node, source, rel_path))
         elif suffix == ".swift":
-            source = path.read_bytes()
+            source = read_bytes_or_none(path)
+            if source is None:
+                continue
             tree = parsers["swift"].parse(source)
             endpoints.extend(_extract_vapor_routes(tree.root_node, source, rel_path))
         elif suffix == ".rb" and path.name == "routes.rb":
-            source = path.read_bytes()
+            source = read_bytes_or_none(path)
+            if source is None:
+                continue
             tree = parsers["rb"].parse(source)
             endpoints.extend(_extract_rails_routes(tree.root_node, source, rel_path))
         elif suffix == ".php" and "routes" in Path(rel_path).parts:
-            source = path.read_bytes()
+            source = read_bytes_or_none(path)
+            if source is None:
+                continue
             tree = parsers["php"].parse(source)
             endpoints.extend(_extract_laravel_routes(tree.root_node, source, rel_path))
         elif suffix == ".cs":
-            source = path.read_bytes()
+            source = read_bytes_or_none(path)
+            if source is None:
+                continue
             tree = parsers["cs"].parse(source)
             endpoints.extend(_extract_aspnet_attribute_routes(tree.root_node, source, rel_path))
             endpoints.extend(_extract_aspnet_minimal_routes(tree.root_node, source, rel_path))
         elif suffix == ".kt":
-            source = path.read_bytes()
+            source = read_bytes_or_none(path)
+            if source is None:
+                continue
             tree = parsers["kt"].parse(source)
             endpoints.extend(_extract_ktor_routes(tree.root_node, source, rel_path))
 
