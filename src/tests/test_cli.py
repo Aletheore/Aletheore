@@ -3991,3 +3991,63 @@ def test_logout_all_devices_with_only_a_managed_audit_token_says_it_was_left_alo
     assert "nothing to revoke" in result.stdout.lower()
     assert "left as it is" in result.stdout
     assert credentials.has_api_key("UNUSED_ENV", "aletheore-managed-audit", credentials_path=creds_path)
+
+
+def test_dashboard_without_a_scan_says_so_and_does_not_start(tmp_path, capsys):
+    from aletheore.cli import _dashboard
+
+    with patch("aletheore.cli.webbrowser.open") as mock_open, patch("aletheore.dashboard.build_app") as mock_build:
+        exit_code = _dashboard(str(tmp_path), 8420)
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert exit_code == 1
+    assert "No scan found" in out and "aletheore scan" in out
+    mock_build.assert_not_called()
+    mock_open.assert_not_called()
+
+
+def test_dashboard_with_a_scan_does_not_ask(tmp_path):
+    from aletheore.cli import _dashboard
+
+    (tmp_path / ".aletheore").mkdir()
+    (tmp_path / ".aletheore" / "air.json").write_text("{}")
+    with patch("aletheore.cli._offer_scan_before_dashboard") as mock_offer, patch(
+        "aletheore.dashboard.build_app", side_effect=RuntimeError("stop here")
+    ):
+        with pytest.raises(RuntimeError, match="stop here"):
+            _dashboard(str(tmp_path), 8420)
+
+    mock_offer.assert_not_called()
+
+
+def test_offer_scan_in_a_terminal_scans_when_the_answer_is_yes(tmp_path):
+    from aletheore import cli
+
+    with patch("aletheore.ui.is_interactive", return_value=True), patch(
+        "aletheore.cli.typer.confirm", return_value=True
+    ), patch("aletheore.cli._scan", return_value=(0, {}, tmp_path)) as mock_scan:
+        assert cli._offer_scan_before_dashboard(tmp_path) is True
+
+    mock_scan.assert_called_once()
+    assert mock_scan.call_args.args[0] == str(tmp_path)
+
+
+def test_offer_scan_in_a_terminal_does_nothing_when_the_answer_is_no(tmp_path, capsys):
+    from aletheore import cli
+
+    with patch("aletheore.ui.is_interactive", return_value=True), patch(
+        "aletheore.cli.typer.confirm", return_value=False
+    ), patch("aletheore.cli._scan") as mock_scan:
+        assert cli._offer_scan_before_dashboard(tmp_path) is False
+
+    mock_scan.assert_not_called()
+    assert "aletheore scan" in " ".join(capsys.readouterr().out.split())
+
+
+def test_offer_scan_reports_failure_when_the_scan_fails(tmp_path):
+    from aletheore import cli
+
+    with patch("aletheore.ui.is_interactive", return_value=True), patch(
+        "aletheore.cli.typer.confirm", return_value=True
+    ), patch("aletheore.cli._scan", return_value=(1, {}, tmp_path)):
+        assert cli._offer_scan_before_dashboard(tmp_path) is False

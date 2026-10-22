@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Fixed `aletheore dashboard` (and the home menu's dashboard entry) opening an empty dashboard with no explanation when the folder has never been scanned. It now says there is no scan and, in a terminal, offers to scan first; with no terminal it prints the `aletheore scan` command to run and exits 1.
+
 ## 0.10.0 - 2026-10-22
 
 **Added: Hallbook, a bundled library of 1,129 vetted agent skills (#1070)**

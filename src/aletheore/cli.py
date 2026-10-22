@@ -1755,6 +1755,27 @@ def _watch(repo_path: str, debounce: float) -> int:
     return 0
 
 
+def _offer_scan_before_dashboard(repo: Path) -> bool:
+    """The dashboard only shows what a scan wrote, so with no scan it would open empty and say nothing. In a terminal
+    offer to scan first; anywhere else say what to run. True when there is now evidence to show."""
+    from aletheore import ui
+
+    hint = f"aletheore scan {repo}"
+    console.print(f"[bold]No scan found for {repo}.[/bold] The dashboard shows what a scan finds, so it would open empty.")
+    if not ui.is_interactive():
+        console.print(f"Run this first, then open the dashboard again:\n\n  {hint}\n")
+        return False
+    try:
+        scan_now = typer.confirm("Scan it now?", default=True)
+    except (click.Abort, EOFError):
+        scan_now = False
+    if not scan_now:
+        console.print(f"Run this when you are ready, then open the dashboard again:\n\n  {hint}\n")
+        return False
+    exit_code, _evidence, _evidence_path = _scan(str(repo), None, None)
+    return exit_code == 0
+
+
 def _dashboard(repo_path: str, port: int) -> int:
     from aletheore.dashboard import build_app
 
@@ -1778,6 +1799,10 @@ def _dashboard(repo_path: str, port: int) -> int:
             f"Pass --port to use a different one, or stop whatever's using {port}."
         )
         return 1
+
+    if not (repo / ".aletheore" / "air.json").exists():
+        if not _offer_scan_before_dashboard(repo):
+            return 1
 
     app = build_app(repo)
     url = f"http://{host}:{port}"
