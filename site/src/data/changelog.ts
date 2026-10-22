@@ -24,11 +24,77 @@ export type ChangelogEntry = {
  * Curated milestones, not an exhaustive commit log: every entry traces to a
  * real, verified merged PR (read via git log/git show, not paraphrased from
  * memory), covering this project's full history from 2026-07-26 through
- * 2026-10-09. Entries a real customer wouldn't notice or care about (an
+ * 2026-10-21. Entries a real customer wouldn't notice or care about (an
  * internal refactor, a flaky test fix, an internal audit tool) were left
  * out on purpose, even when the underlying commit was itself real.
  */
 export const changelogEntries: ChangelogEntry[] = [
+  {
+    date: "2026-10-21",
+    title:
+      "Hardened member removal, the dashboard, account deletion, and refund handling after a security review",
+    tags: ["security", "fix"],
+    body: "An independent security review of our own code turned up several gaps, and the fixes for the ones in the hosted app are now live. Removing a member from an installation now also revokes the API tokens that member created; before, those tokens stayed usable until someone revoked them by hand. Finding line numbers in the dashboard are now escaped the same way file paths already were, closing a stored cross-site-scripting path. The account-deletion confirmation code is no longer written to the server logs if the email provider is ever missing in production; the request now fails with an error instead. And when a refund is raised but not yet approved, an affiliate's commission is no longer reversed early; it is reversed when the refund is approved.",
+    link: { label: "Our security practices", href: "/security" },
+  },
+  {
+    date: "2026-10-21",
+    title: "Tightened request handling on public endpoints against abuse",
+    tags: ["security", "fix"],
+    body: "Three API endpoints (runtime events, embeddings, and managed audit) used to parse and validate a request body before checking who was calling; they now authenticate first, so an unauthenticated caller can no longer make the server do that work. The GitHub and Paddle webhook endpoints now reject oversized request bodies before reading them into memory. The comment command that triggers an audit from a pull request is now rate limited per commenter, so one account spamming it cannot use up the allowance of the maintainers who really use it. The server also now refuses to start with a session secret shorter than 32 characters.",
+    link: { label: "Our security practices", href: "/security" },
+  },
+  {
+    date: "2026-10-14",
+    title: "Flash Review no longer runs on dependency-bot and draft pull requests",
+    tags: ["feature"],
+    body: "Flash Review is no longer queued for pull requests opened by Dependabot, Renovate, pre-commit-ci or Snyk, for draft pull requests, for titles containing [skip review], [no review] or [skip aletheore], or for the labels skip-review and no-review. Before this, every dependency version bump triggered a review charged to your credit. The deterministic scan still runs on all of them. Marking a draft ready for review queues one review that covers everything since the last reviewed commit, and the aletheore-review label forces a review of any pull request.",
+    link: { label: "PR #1038 on GitHub", href: "https://github.com/Aletheore/Aletheore/pull/1038" },
+  },
+  {
+    date: "2026-10-14",
+    title: "aletheore index now tells you when it uploads source code",
+    tags: ["fix"],
+    body: "Saving an Aletheore token quietly switches aletheore index from the local embedder to our hosted embedding service, the one place the CLI sends source code anywhere. The CLI now says so: when you log in or enter a token, and once per run on stderr when an index build actually uploads code chunks, however few there are. Chunks are embedded and returned, not stored. Searching an index sends only your question and stays silent. Released in 0.9.27, which also makes the hosted service return 1024-dimension vectors, so run aletheore index once to rebuild an index you built with a token earlier.",
+    link: { label: "PR #1024 on GitHub", href: "https://github.com/Aletheore/Aletheore/pull/1024" },
+  },
+  {
+    date: "2026-10-13",
+    title: "Hosted code embeddings now run on DeepInfra, and the privacy policy says so",
+    tags: ["feature", "fix"],
+    body: "The embeddings behind Flash Review's similar-diff cache, AIRview's caches and the hosted search index now come from DeepInfra (Qwen3-Embedding-8B, 1024 dimensions) instead of our own Jina service. Embedding use is metered against your credit. Because the vector size changed, the Flash and AIRview caches started cold and AIR users' local search indexes rebuild once. The privacy policy and developers page were corrected in the same change: they used to say the CLI never uploads source code, which is true of a scan but not of aletheore index when logged in, and they now name DeepInfra as the embedding provider.",
+    link: { label: "What the privacy policy says today", href: "/privacy" },
+  },
+  {
+    date: "2026-10-13",
+    title: "Credit top-up minimum is now $6, and two Flash Review accuracy fixes",
+    tags: ["fix"],
+    body: "The dashboard top-up form still accepted $5 after the payment price's minimum was raised to $6, because the $0.15 service charge at that size no longer covers the payment processor's fee. The form, its hint text and its click-time check now all use $6. Separately, when Flash Review reuses a cached review for a similar diff, it now drops a finding whose quoted code has disappeared, which usually means the bug was fixed, instead of posting it again. The shared-state check also now recognizes work handed to threads through threading.Thread, run_in_executor and to_thread.",
+    link: { label: "PR #1019 on GitHub", href: "https://github.com/Aletheore/Aletheore/pull/1019" },
+  },
+  {
+    date: "2026-10-10",
+    title:
+      "Flash Review keeps more accurate findings, and the exception check stops flagging prose",
+    tags: ["fix"],
+    body: 'Flash Review used to drop a finding if the code it quoted was not within 8 lines of the line it cited. On 13 real pull requests that dropped 39 of 220 proposed findings, 32 of them accurate. A finding whose quote sits elsewhere in the file is now moved to the right line instead of dropped, and recall on that corpus rose from about 50% to 59%. The Python exception-mismatch check also no longer reads prose like "can raise an error" as an exception name, understands dotted and tuple handlers, and treats a bare Exception handler as covering everything: 4 of its 8 findings in that run were false positives, and none were afterwards.',
+    link: { label: "PR #1011 on GitHub", href: "https://github.com/Aletheore/Aletheore/pull/1011" },
+  },
+  {
+    date: "2026-10-10",
+    title:
+      "Fixed annual AIR subscribers seeing the wrong credit figure, and a pricing fallback that could overcharge",
+    tags: ["fix"],
+    body: "Annual AIR subscribers now see their annual credit figure on the dashboard and admin page instead of the monthly one. We also fixed how a model missing from our price table would have been billed: it fell back to the table's highest rate, about 200 times what a Flash Review actually costs, charged against your real credit balance. We found no case where this happened to a customer. It now falls back to the table's median and raises an error on our side so we notice and add the model.",
+    link: { label: "PR #1015 on GitHub", href: "https://github.com/Aletheore/Aletheore/pull/1015" },
+  },
+  {
+    date: "2026-10-10",
+    title: "Hardened payment webhook handling against crashes and retried deliveries",
+    tags: ["fix"],
+    body: "A payment-provider webhook with an absurdly large timestamp header used to crash the handler before its signature was checked; it is now rejected cleanly. A genuine webhook could also be refused if its timestamp had formatting such as a leading zero, because we hashed a normalized copy instead of the exact header value that was signed. Our check of the payment provider's allowed IP list no longer treats an empty or badly stale list as valid, and handles IPv4-mapped addresses and trailing commas in forwarded headers. Separately, a retried delivery arriving within the provider's three-day retry window could re-run a one-time Live Wiki build and spend LLM credit twice; that duplicate is now prevented.",
+    link: { label: "PR #1012 on GitHub", href: "https://github.com/Aletheore/Aletheore/pull/1012" },
+  },
   {
     date: "2026-10-09",
     title: "Fixed a packaging bug that could silently skip some scanner findings",
