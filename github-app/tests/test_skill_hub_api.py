@@ -319,6 +319,48 @@ async def test_personal_token_cap_is_per_identity_not_global(test_app, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_personal_token_mint_limits_by_ip_before_calling_github(test_app, monkeypatch, redis_conn):
+    # The per-account limit needs the verified user id, so garbage tokens must be stopped
+    # per IP before any outbound GitHub call is made.
+    import app_server.skill_hub_api as skill_hub_api_module
+    from app_server.rate_limit import is_rate_limited as real_is_rate_limited
+
+    monkeypatch.setattr(skill_hub_api_module, "is_rate_limited", real_is_rate_limited)
+    monkeypatch.setattr(skill_hub_api_module, "PERSONAL_TOKEN_IP_RATE_LIMIT", 2)
+    monkeypatch.setattr(skill_hub_api_module, "get_redis_client", lambda: redis_conn)
+
+    github_calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        github_calls.append(request.url.path)
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    statuses = []
+    for _ in range(4):
+        response = await test_app.post(
+            "/v1/personal-tokens",
+            headers={"Authorization": "Bearer made-up", "X-Forwarded-For": "203.0.113.9"},
+            json={"label": "x"},
+        )
+        statuses.append(response.status_code)
+
+    assert statuses == [401, 401, 429, 429]
+    assert len(github_calls) == 2  # the throttled requests never reached GitHub
+
+    other_ip = await test_app.post(
+        "/v1/personal-tokens",
+        headers={"Authorization": "Bearer made-up", "X-Forwarded-For": "203.0.113.10"},
+        json={"label": "x"},
+    )
+    assert other_ip.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_personal_token_mint_rate_limited_per_github_account(test_app, monkeypatch, redis_conn):
     # Mirrors test_auth.py's test_login_rate_limits_after_threshold: swap the
     # real limiter back in (conftest stubs it out suite-wide), point it at
