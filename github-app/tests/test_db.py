@@ -15,6 +15,7 @@ from app_server.db import (
     count_health_check_targets,
     count_installation_members,
     create_api_token,
+    create_api_token_replacing_label,
     create_api_token_within_limit,
     create_personal_token_within_limit,
     create_session,
@@ -23,6 +24,7 @@ from app_server.db import (
     get_extra_seats,
     get_installation_by_token_hash,
     get_installation,
+    revoke_api_token_by_hash,
     get_latest_evidence,
     get_llm_spend_this_month,
     get_or_create_personal_identity,
@@ -763,3 +765,54 @@ async def test_relogin_from_the_same_machine_replaces_its_own_token_only(pool):
     assert rows[other] is None  # the other machine is untouched
     assert rows[first] is not None and rows[second] is not None
     assert rows[third] is None
+
+
+@pytest.mark.asyncio
+async def test_create_api_token_replacing_label_revokes_same_label_and_keeps_count(pool):
+    await upsert_installation(pool, 620, "octocat")
+    first = await create_api_token_replacing_label(pool, 620, "h1", "laptop-ab12 (device flow)", "octocat", limit=3)
+    second = await create_api_token_replacing_label(pool, 620, "h2", "laptop-ab12 (device flow)", "octocat", limit=3)
+
+    assert first is not None and second is not None and first != second
+    assert await count_active_tokens(pool, 620) == 1
+    assert await get_installation_by_token_hash(pool, "h1") is None
+    assert await get_installation_by_token_hash(pool, "h2") is not None
+
+
+@pytest.mark.asyncio
+async def test_create_api_token_replacing_label_different_label_hits_cap_and_keeps_old_tokens(pool):
+    await upsert_installation(pool, 621, "octocat")
+    for index in range(3):
+        assert await create_api_token_replacing_label(pool, 621, f"h{index}", f"machine-{index}", "octocat", limit=3)
+
+    assert await create_api_token_replacing_label(pool, 621, "h-new", "machine-new", "octocat", limit=3) is None
+    assert await count_active_tokens(pool, 621) == 3
+
+    # A same-label relogin at the cap still succeeds (it frees its own slot).
+    assert await create_api_token_replacing_label(pool, 621, "h-again", "machine-1", "octocat", limit=3)
+    assert await count_active_tokens(pool, 621) == 3
+    assert await get_installation_by_token_hash(pool, "h1") is None
+
+
+@pytest.mark.asyncio
+async def test_create_api_token_replacing_label_rejected_login_does_not_revoke_same_label(pool):
+    # limit 0: nothing can ever be inserted, so the same-label revocation
+    # must be rolled back rather than costing the user a working token.
+    await upsert_installation(pool, 622, "octocat")
+    await create_api_token(pool, 622, "keep", "machine-a", "octocat")
+
+    assert await create_api_token_replacing_label(pool, 622, "new", "machine-a", "octocat", limit=0) is None
+    assert await get_installation_by_token_hash(pool, "keep") is not None
+
+
+@pytest.mark.asyncio
+async def test_revoke_api_token_by_hash_revokes_only_that_token(pool):
+    await upsert_installation(pool, 623, "octocat")
+    await create_api_token(pool, 623, "mine", "a", "octocat")
+    await create_api_token(pool, 623, "other", "b", "octocat")
+
+    assert await revoke_api_token_by_hash(pool, "mine") is True
+    assert await revoke_api_token_by_hash(pool, "mine") is False
+    assert await revoke_api_token_by_hash(pool, "nope") is False
+    assert await get_installation_by_token_hash(pool, "mine") is None
+    assert await get_installation_by_token_hash(pool, "other") is not None

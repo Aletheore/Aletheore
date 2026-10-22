@@ -5,6 +5,24 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+**Fixed: `aletheore logout` now revokes the CLI token on the server**
+
+Logging out only removed the token from your machine, so every login and logout cycle left one more active token on
+your installation until the token limit blocked the next login. `aletheore logout` now revokes the saved managed-audit
+token on the server as well. If that call fails (for example offline), the token is still removed locally and a
+one-line warning says it can be revoked in the dashboard at https://aletheore.com.
+
+**Fixed: logging in again from the same machine replaces its previous token**
+
+A repeat `aletheore login` from the same machine now revokes that machine's earlier token instead of adding another
+one beside it. Tokens from different machines still count toward the limit.
+
+**Fixed: `aletheore login` shows the server's reason when the token limit is reached**
+
+A refused login used to print an `HTTPStatusError` with a "check your connection" hint. It now shows the server's
+message, explains that you have reached the limit of active CLI tokens, and says to revoke old ones in the dashboard
+or log in from a machine where you are already logged in. The connection hint is kept for real connection errors.
+
 ## 0.10.1 - 2026-10-22
 
 Fixes for the local dashboard and the home menu, found by trying 0.10.0 in fresh folders.

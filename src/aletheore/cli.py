@@ -2949,6 +2949,13 @@ def login() -> None:
     except DeviceFlowError as exc:
         console.print(f"[bold red]error:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
+    except httpx.HTTPStatusError as exc:
+        # The server answered with an error status, so the connection is fine: show its reason instead of a
+        # misleading "check your connection" hint.
+        from aletheore.device_auth import describe_login_http_error
+
+        console.print(f"[bold red]error:[/bold red] {describe_login_http_error(exc)}", soft_wrap=True)
+        raise typer.Exit(code=1) from exc
     except (httpx.HTTPError, KeyError, ValueError) as exc:
         console.print(f"[bold red]error:[/bold red] login failed ({type(exc).__name__}: {exc}) - check your connection and retry")
         raise typer.Exit(code=1) from exc
@@ -2974,6 +2981,33 @@ def _logout_revoke_failed(exc: Exception, all_devices: bool) -> None:
         "this machine, but it has no expiry and stays valid on the server "
         "until it is revoked. To revoke it, log in again and run "
         "`aletheore logout --all-devices`."
+    )
+
+
+def _revoke_managed_audit_token_best_effort() -> None:
+    """Revokes the locally saved managed-audit token on the server so a login/logout cycle does not leak an active
+    token toward the installation's cap. Never blocks logout: any failure prints one line and the caller still clears
+    the local token. Only the token saved by `aletheore login` is revoked, never one supplied via ALETHEORE_API_TOKEN."""
+    import aletheore.credentials as credentials
+    from aletheore.device_auth import revoke_managed_audit_token
+
+    managed_token = credentials._load_saved_key("aletheore-managed-audit", credentials.DEFAULT_CREDENTIALS_PATH)
+    if not managed_token:
+        return
+    try:
+        revoke_managed_audit_token(managed_token)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 401:
+            return  # already revoked on the server; nothing left to do
+        reason = f"HTTP {exc.response.status_code}"
+    except Exception as exc:  # noqa: BLE001 - best-effort by design
+        reason = type(exc).__name__
+    else:
+        return
+    console.print(
+        f"[bold yellow]warning:[/bold yellow] couldn't revoke the CLI token on the server ({reason}) - it was "
+        "removed from this machine but may still count toward your token limit. You can revoke it in the "
+        "dashboard at https://aletheore.com."
     )
 
 
@@ -3026,6 +3060,8 @@ def logout(
             "run `aletheore logout` (without --all-devices) to remove that too."
         )
         return
+
+    _revoke_managed_audit_token_best_effort()
 
     removed_any = False
     for slot in ("aletheore-managed-audit", personal_slot):

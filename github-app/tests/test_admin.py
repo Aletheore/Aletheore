@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import socket
 import threading
 import time
@@ -2594,3 +2595,99 @@ def test_fetch_github_login_still_returns_just_login(monkeypatch):
     )
 
     assert admin._fetch_github_login("fake-token") == "octocat"
+
+
+async def _mint_cli_token(client, label, installation_id=100):
+    return await client.post(
+        "/v1/cli-tokens",
+        json={"installation_id": installation_id, "label": label},
+        headers={"Authorization": "Bearer gho_faketoken"},
+    )
+
+
+async def _seed_air_for_cli_tokens(pool, monkeypatch):
+    await upsert_installation(pool, 100, "acme")
+    await set_installation_plan(pool, 100, "air")
+    await insert_repo_history(
+        pool, 100, "acme/some-repo", datetime.now(timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "scanned_at": "x"},
+    )
+    await _mock_github_installations(monkeypatch, [100])
+
+
+def _hash(raw_token):
+    return hashlib.sha256(raw_token.encode()).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_create_cli_token_same_label_relogin_replaces_old_token(pool, monkeypatch):
+    await _seed_air_for_cli_tokens(pool, monkeypatch)
+    app.state.db_pool = pool
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first = await _mint_cli_token(client, "laptop-ab12 (device flow)")
+        second = await _mint_cli_token(client, "laptop-ab12 (device flow)")
+
+    assert first.status_code == 200 and second.status_code == 200
+    assert await get_installation_by_token_hash(pool, _hash(first.json()["token"])) is None
+    assert await get_installation_by_token_hash(pool, _hash(second.json()["token"])) is not None
+    assert await pool.fetchval(
+        "SELECT count(*) FROM api_tokens WHERE installation_id = 100 AND revoked_at IS NULL"
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_cli_token_different_labels_still_hit_the_cap(pool, monkeypatch):
+    await _seed_air_for_cli_tokens(pool, monkeypatch)
+    app.state.db_pool = pool
+    max_tokens = await get_max_tokens(pool, 100)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        for i in range(max_tokens):
+            assert (await _mint_cli_token(client, f"machine-{i} (device flow)")).status_code == 200
+        over = await _mint_cli_token(client, "another-machine (device flow)")
+        same = await _mint_cli_token(client, "machine-0 (device flow)")
+
+    assert over.status_code == 409
+    assert str(max_tokens) in over.json()["detail"]
+    assert same.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_cli_token_self_revoke_returns_204_and_token_is_unusable(pool, monkeypatch):
+    await _seed_air_for_cli_tokens(pool, monkeypatch)
+    app.state.db_pool = pool
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        raw = (await _mint_cli_token(client, "laptop (device flow)")).json()["token"]
+        revoked = await client.delete("/v1/cli-tokens/self", headers={"Authorization": f"Bearer {raw}"})
+        again = await client.delete("/v1/cli-tokens/self", headers={"Authorization": f"Bearer {raw}"})
+
+    assert revoked.status_code == 204
+    assert await get_installation_by_token_hash(pool, _hash(raw)) is None
+    assert again.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_cli_token_self_revoke_with_bad_token_returns_401_and_revokes_nothing(pool, monkeypatch):
+    await _seed_air_for_cli_tokens(pool, monkeypatch)
+    app.state.db_pool = pool
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        raw = (await _mint_cli_token(client, "laptop (device flow)")).json()["token"]
+        bad = await client.delete("/v1/cli-tokens/self", headers={"Authorization": "Bearer not-a-real-token"})
+        missing = await client.delete("/v1/cli-tokens/self")
+
+    assert bad.status_code == 401
+    assert missing.status_code == 401
+    assert await get_installation_by_token_hash(pool, _hash(raw)) is not None
+
+
+@pytest.mark.asyncio
+async def test_cli_token_self_revoke_cannot_revoke_another_token(pool, monkeypatch):
+    await _seed_air_for_cli_tokens(pool, monkeypatch)
+    app.state.db_pool = pool
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        mine = (await _mint_cli_token(client, "machine-a (device flow)")).json()["token"]
+        other = (await _mint_cli_token(client, "machine-b (device flow)")).json()["token"]
+        response = await client.delete("/v1/cli-tokens/self", headers={"Authorization": f"Bearer {mine}"})
+
+    assert response.status_code == 204
+    assert await get_installation_by_token_hash(pool, _hash(mine)) is None
+    assert await get_installation_by_token_hash(pool, _hash(other)) is not None
