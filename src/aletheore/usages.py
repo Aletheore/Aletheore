@@ -10,6 +10,7 @@ in one call, so it does not need to be re-derived with grep plus a read per hit.
 from __future__ import annotations
 
 import difflib
+import os
 import re
 import shutil
 import subprocess
@@ -72,6 +73,7 @@ def _git_grep_usages(repo_path: Path, symbol: str) -> list[tuple[str, int, str]]
     git = shutil.which("git")
     if not git:
         return None
+    git = os.path.abspath(git)
     try:
         result = subprocess.run(
             [git, "grep", "-n", "-w", "-I", "-F", "-z", "-e", symbol],

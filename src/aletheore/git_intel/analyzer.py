@@ -2,6 +2,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from aletheore.git_exec import git_executable
 from aletheore.git_intel.graph_store import FileChurnTotal, GraphSnapshot, RepoGraphStore
 from aletheore.git_intel.history_meta import cached_ahead_behind, history_facts
 from aletheore.git_intel.incremental import (
@@ -44,7 +45,7 @@ def _run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess:
     # commit's author name). A handful of unparseable bytes in one field
     # shouldn't take down the whole git analysis.
     return subprocess.run(
-        ["git", *args],
+        [git_executable(), *args],
         cwd=repo_path,
         capture_output=True,
         text=True,
