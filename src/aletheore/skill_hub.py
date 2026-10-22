@@ -1268,7 +1268,7 @@ def _backup_stem(name: str) -> str:
         return name
     import hashlib
 
-    return f"{name[:48]}~{hashlib.sha1(name.encode()).hexdigest()[:10]}"
+    return f"{name[:48]}~{hashlib.sha1(name.encode(), usedforsecurity=False).hexdigest()[:10]}"
 
 
 def _backup_regex(stem: str) -> re.Pattern:
