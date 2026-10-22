@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
+from aletheore.git_exec import git_executable
 from scan_worker.jobs import (
     GRAPH_BRANCH,
     GRAPH_COLD_SYNC_DEPTH_CAP,
@@ -28,6 +29,17 @@ async def _insert_installation(pool, installation_id: int, account_login: str, *
         f"INSERT INTO installations ({', '.join(columns)}) VALUES ({placeholders})",
         *params,
     )
+
+
+def test_git_executable_resolves_to_a_real_file_under_the_suite_fixtures():
+    # The autouse fixture in conftest fakes shutil.which for the jobs module's literal-argv tests.
+    # shutil is process-wide, so that fake also reaches aletheore.git_exec.git_executable(); if it
+    # ever answers a bare "git" again the helper returns "<cwd>/git" and every git_intel call in
+    # the persistent graph sync raises FileNotFoundError (swallowed into a warning).
+    resolved = git_executable()
+
+    assert os.path.isabs(resolved)
+    assert os.path.isfile(resolved)
 
 
 def _run(repo: Path, *args: str):

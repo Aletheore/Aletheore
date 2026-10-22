@@ -836,7 +836,7 @@ def test_history_facts_stay_exact_across_incremental_updates(tmp_path, monkeypat
     real_run = history_meta.subprocess.run
 
     def spy(args, *a, **k):
-        if args[:2] == ["git", "rev-list"]:
+        if args[1:2] == ["rev-list"]:
             walks.append(args[-1])
         return real_run(args, *a, **k)
 

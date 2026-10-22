@@ -9,6 +9,7 @@ import zlib
 from collections import Counter
 from pathlib import Path
 
+from aletheore.git_exec import git_executable
 from aletheore.repo_config import is_ignored, load_repo_config
 from aletheore.scanner.detect import IGNORED_DIRS
 
@@ -736,7 +737,7 @@ def find_secrets_in_history(
     # and returns whatever was gathered before the stall, flagged as
     # incomplete rather than presented as a full scan.
     accepted_keys = _baseline_keys(baseline)
-    args = ["git", "log", "-p", "--format=COMMIT_START\x1f%H\x1f%ad", "--date=iso-strict"]
+    args = [git_executable(), "log", "-p", "--format=COMMIT_START\x1f%H\x1f%ad", "--date=iso-strict"]
     if max_commits is not None:
         args += ["-n", str(max_commits)]
     process = subprocess.Popen(
