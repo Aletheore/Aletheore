@@ -12646,6 +12646,33 @@ def test_run_git_scrubs_a_credentialed_url_found_in_raw_stdout_or_stderr(monkeyp
     assert "supersecrettoken" not in exc_info.value.stderr
 
 
+def test_run_git_logs_the_scrubbed_stderr_when_a_command_fails(monkeypatch, caplog):
+    # str(CalledProcessError) is only argv + exit status, so once output is captured the reason
+    # git gave would otherwise never reach a log or Sentry.
+    import logging
+
+    from scan_worker import jobs
+
+    def fake_run(args, **kwargs):
+        raise subprocess.CalledProcessError(
+            128,
+            args,
+            output="",
+            stderr="fatal: repository 'https://x-access-token:supersecrettoken@github.com/acme/repo.git/' not found\n",
+        )
+
+    monkeypatch.setattr(jobs.subprocess, "run", fake_run)
+
+    with caplog.at_level(logging.WARNING, logger="scan_worker.jobs"):
+        with pytest.raises(subprocess.CalledProcessError):
+            jobs._run_git(["git", "fetch", "-q", "origin"], cwd="/tmp")
+
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    assert "not found" in logged
+    assert "exit 128" in logged
+    assert "supersecrettoken" not in logged
+
+
 def test_run_git_resolves_the_bare_git_name_to_its_shutil_which_path(monkeypatch):
     # Bandit B607: a bare "git" string re-resolves PATH again at execution
     # time, which could pick up a different binary than a security review
