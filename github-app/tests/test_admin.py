@@ -1416,6 +1416,79 @@ async def test_create_cli_token_mints_token_for_administered_paid_installation(p
     assert len(response.json()["token"]) > 20
 
 
+async def _seed_air_installation_with_member(pool, member_login, bound_user_id):
+    await upsert_installation(pool, 100, "acme")
+    await set_installation_plan(pool, 100, "air")
+    await insert_repo_history(
+        pool, 100, "acme/some-repo", datetime.now(timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "scanned_at": "x"},
+    )
+    await add_installation_member(pool, 100, member_login, "owner")
+    if bound_user_id is not None:
+        await pool.execute(
+            "UPDATE installation_members SET github_user_id = $1 WHERE github_login = $2",
+            bound_user_id,
+            member_login,
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_cli_token_does_not_honor_a_seat_bound_to_a_previous_holder_of_the_login(pool, monkeypatch):
+    # The seat was granted to GitHub user 1; the login "octocat" now belongs to user 999.
+    await _seed_air_installation_with_member(pool, "octocat", bound_user_id=1)
+    await _mock_github_installations(monkeypatch, [100], github_login="octocat", github_user_id=999)
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_false)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/cli-tokens",
+            json={"installation_id": 100, "label": "x"},
+            headers={"Authorization": "Bearer gho_faketoken"},
+        )
+
+    assert response.status_code == 403
+    assert not await is_installation_member(pool, 100, "octocat")
+
+
+@pytest.mark.asyncio
+async def test_my_installations_does_not_list_a_seat_bound_to_a_previous_holder_of_the_login(pool, monkeypatch):
+    await _seed_air_installation_with_member(pool, "octocat", bound_user_id=1)
+    await _mock_github_installations(monkeypatch, [100], github_login="octocat", github_user_id=999)
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_false)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/my-installations", headers={"Authorization": "Bearer gho_faketoken"})
+
+    assert response.status_code == 200
+    assert response.json()["installations"] == []
+
+
+@pytest.mark.asyncio
+async def test_create_cli_token_binds_an_unbound_seat_and_records_the_real_creator(pool, monkeypatch):
+    await _seed_air_installation_with_member(pool, "octocat", bound_user_id=None)
+    await _mock_github_installations(monkeypatch, [100], github_login="octocat", github_user_id=12345)
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_false)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/cli-tokens",
+            json={"installation_id": 100, "label": "laptop"},
+            headers={"Authorization": "Bearer gho_faketoken"},
+        )
+
+    assert response.status_code == 200
+    assert await pool.fetchval("SELECT github_user_id FROM installation_members WHERE github_login = 'octocat'") == 12345
+    # Recorded as the member who minted it (not the installation's account login), so removing
+    # that member revokes it.
+    assert await pool.fetchval("SELECT created_by_github_login FROM api_tokens WHERE id = $1", response.json()["id"]) == "octocat"
+
+
 @pytest.mark.asyncio
 async def test_create_cli_token_rejects_unadministered_installation(pool, monkeypatch):
     await upsert_installation(pool, 100, "acme")
