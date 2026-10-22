@@ -1,7 +1,8 @@
 {
   "source": "aletheore package build_server() and cli.QUERY_KIND_GROUPS",
-  "version": "0.9.21",
+  "version": "0.10.2",
   "default": [
+    "aletheore_add_custom_skill",
     "aletheore_ast_pattern",
     "aletheore_branch",
     "aletheore_changes",
@@ -10,10 +11,14 @@
     "aletheore_dead_code",
     "aletheore_endpoints",
     "aletheore_environment_variables",
+    "aletheore_error_handling",
     "aletheore_find_evidence_for_dependency",
     "aletheore_find_evidence_for_endpoint",
     "aletheore_find_evidence_for_symbol",
+    "aletheore_find_skill",
     "aletheore_get_blast_radius",
+    "aletheore_get_skill",
+    "aletheore_get_skill_file",
     "aletheore_healthcheck",
     "aletheore_hotspots",
     "aletheore_imported_by",
@@ -23,12 +28,16 @@
     "aletheore_layer_violations",
     "aletheore_licenses",
     "aletheore_list",
+    "aletheore_list_skills",
+    "aletheore_locate",
     "aletheore_neighborhood",
     "aletheore_overview",
     "aletheore_ownership",
+    "aletheore_remove_custom_skill",
     "aletheore_scan",
     "aletheore_search",
     "aletheore_search_codebase",
+    "aletheore_search_skills",
     "aletheore_secrets",
     "aletheore_static_analysis",
     "aletheore_symbol_path",
@@ -62,7 +71,8 @@
       "endpoints",
       "database",
       "infrastructure",
-      "environment-variables"
+      "environment-variables",
+      "error-handling"
     ],
     "History": [
       "branch",
@@ -82,6 +92,11 @@
     ]
   },
   "tools": [
+    {
+      "name": "aletheore_add_custom_skill",
+      "group": "Hallbook",
+      "description": "Saves a local custom skill under the given name, so it can later be fetched via aletheore_get_skill('custom/<name>') and shows up in aletheore_list_skills."
+    },
     {
       "name": "aletheore_answer",
       "group": "AI-assisted",
@@ -128,6 +143,11 @@
       "description": "Environment variables referenced in the codebase."
     },
     {
+      "name": "aletheore_error_handling",
+      "group": "Runtime",
+      "description": "Where the code defines, raises and catches errors: error types, raise or throw sites and catch handlers (file and line), plus per-type counts."
+    },
+    {
       "name": "aletheore_find_evidence_for_dependency",
       "group": "Evidence",
       "description": "Resolve a dependency or import to source evidence."
@@ -143,9 +163,24 @@
       "description": "Resolve a function or class symbol to source evidence."
     },
     {
+      "name": "aletheore_find_skill",
+      "group": "Hallbook",
+      "description": "Finds the right Hallbook skill in one call, or says to move on."
+    },
+    {
       "name": "aletheore_get_blast_radius",
       "group": "Navigate",
       "description": "Everything that would be affected by changing target (a file path): one call instead of manually chasing aletheore_imported_by recursively."
+    },
+    {
+      "name": "aletheore_get_skill",
+      "group": "Hallbook",
+      "description": "Fetches one skill by its skill_id (from aletheore_search_skills or aletheore_list_skills): its title, description, license, source_url, what it requires of the agent (e.g. subagents, an MCP server, a browser), and the full instructions in content."
+    },
+    {
+      "name": "aletheore_get_skill_file",
+      "group": "Hallbook",
+      "description": "Fetches one companion file of a bundled skill (a reference document, script, template or data file) by its path relative to the skill, as listed in the files field of aletheore_get_skill."
     },
     {
       "name": "aletheore_healthcheck",
@@ -193,6 +228,16 @@
       "description": "Lists the valid names/identifiers for one evidence collection, so other tools' exact-match target arguments can be filled in correctly."
     },
     {
+      "name": "aletheore_list_skills",
+      "group": "Hallbook",
+      "description": "Browses Hallbook."
+    },
+    {
+      "name": "aletheore_locate",
+      "group": "Search",
+      "description": "Find where something is defined and see the code, in one call."
+    },
+    {
       "name": "aletheore_managed_audit",
       "group": "Run",
       "description": "Run a full audit report using Aletheore's managed audit service."
@@ -213,6 +258,11 @@
       "description": "Code ownership derived from git blame history."
     },
     {
+      "name": "aletheore_remove_custom_skill",
+      "group": "Hallbook",
+      "description": "Deletes a custom skill by name: the local file (a <name>.md.deleted-<time>.bak copy is kept next to it) and, when signed in, the copy on your account, which is removed for every machine."
+    },
+    {
       "name": "aletheore_scan",
       "group": "Run",
       "description": "Run the deterministic Aletheore scanner and save evidence for this repository."
@@ -226,6 +276,11 @@
       "name": "aletheore_search_codebase",
       "group": "Search",
       "description": "Hybrid search (meaning + exact identifiers) over the repository's indexed code."
+    },
+    {
+      "name": "aletheore_search_skills",
+      "group": "Hallbook",
+      "description": "Searches Hallbook, Aletheore's library of vetted agent skills (over a thousand bundled skills plus your own custom ones), by what you are about to do, e.g. 'flaky test', 'stripe webhooks', 'write a plan', 'review a pull request for security'."
     },
     {
       "name": "aletheore_secrets",
