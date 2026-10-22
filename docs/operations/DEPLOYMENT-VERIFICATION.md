@@ -4,8 +4,43 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-10-21
-**Snapshot Freshness:** CURRENT as of 2026-10-21 - `app-server` runs `master` at commit `8ffc8602` (tag
+**Last Updated:** 2026-10-22
+**Snapshot Freshness:** CURRENT as of 2026-10-22 - `app-server`, both scan workers, `health-worker` and `scheduler`
+run `master` at commit `9fa87511` (tag `github-app-deploy-2026-10-22`); `jina-embed`, `postgres` and `redis` were not
+touched. No migration (the start log says `no pending migrations`). One deploy, after a database backup
+(`backups/aletheore_app_2026-10-22T06-24-04Z.dump`). All five changed images were built first and import-tested
+(`app-server` through `docker compose run` so it had its environment), then replaced with `--no-deps`: `app-server`,
+then `health-worker` and `scheduler`, then the scan workers one at a time once both RQ `scans` workers reported idle.
+
+2026-10-22 deploy (`9fa87511`, tag `github-app-deploy-2026-10-22`):
+
+- Seven audit fixes (#1090 to #1096): the CLI login routes reconcile the seat against the numeric GitHub id before
+  checking membership and record the real member on the CLI token they mint (so removing a member revokes it); the skill
+  hub PUT and token-mint routes authenticate before parsing the body, with size caps by method and path prefix; a failed
+  worker git command logs its credential-scrubbed stderr at WARNING; `git_executable()` resolves git to an absolute
+  path for commands that run inside a scanned repository; the read guard no longer records a partly shown file as read
+  in full; `usages.py` and the code locator decode git output as UTF-8; and the personal-token mint has a per-IP
+  limit (30 per hour, last `X-Forwarded-For` hop, fails open on a Redis error) that runs before the call to GitHub.
+- #1097: a 401, 403 or 5xx from GitHub's check-a-token call is logged at ERROR so it reaches Sentry; a 404 stays a
+  warning.
+- The scan workers, `health-worker` and `scheduler` now run everything merged since the 2026-10-15 build, which
+  includes the 2026-10-18 batch and the `certifi` 2026.10.19 lock file.
+- CLI tokens minted before #1090 are recorded under the account name. A production count showed 2 unrevoked tokens,
+  both the owner's own device-flow login, never used, so no customer has one.
+
+Verified live: `https://app.aletheore.com/healthz` returns 200 with database and Redis ok; `POST /v1/personal-tokens`
+without a token returns 401; all ten containers `Up`, the nine that define a health check `healthy`; no error or
+traceback lines in the first two minutes of any recreated container; and the new code is in the running containers
+(`aletheore.git_exec` resolves `/usr/bin/git` in all four worker-side containers; `app-server` has the ERROR-level
+branch, the per-IP limit and the reconcile call). Not verified: a real `aletheore login` against production.
+
+**Correction to the 2026-10-21 record below:** it says every other container was untouched. That was wrong.
+`postgres`, `redis` and `jina-embed` showed 13 hours of uptime the next morning, which matches the time of the
+`docker compose up -d --build app-server` run, so compose most likely recreated them as dependencies. The database
+reported healthy right after (`schema_migrations` held all 72 rows) and no data loss was seen, but the cause was not
+confirmed. The 2026-10-22 deploy used `--no-deps` so these containers were not touched.
+
+Previous: CURRENT as of 2026-10-21 - `app-server` runs `master` at commit `8ffc8602` (tag
 `github-app-deploy-2026-10-21`). The scan workers, `health-worker` and `scheduler` were deliberately not rebuilt and
 still run `4adddf55` from the 2026-10-15 deploy, and `jina-embed` still runs `e3182a9f`: the change is the Hallbook
 account backend, which lives entirely in `app_server`. Migrations 073 and 074 were applied by `app-server`'s start
