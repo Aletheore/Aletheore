@@ -22,6 +22,7 @@ _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 def build_evidence_summary(evidence: dict) -> dict:
+    git = evidence.get("git") or {}
     findings = evidence["security"]["secrets"]["findings"]
     real_findings = [
         f for f in findings if not f.get("likely_placeholder", False) and not f.get("accepted", False)
@@ -34,11 +35,14 @@ def build_evidence_summary(evidence: dict) -> dict:
             "module_count": len(evidence["repository"]["modules"]),
             "monorepo": evidence["repository"]["monorepo"],
         },
+        # A folder that is not a git repository, or a repository with no commits yet, scans to
+        # {"git": {"available": False}} with none of the history fields.
         "git_activity": {
-            "total_commits": evidence["git"]["total_commits"],
-            "commit_cadence": evidence["git"]["commit_cadence"],
-            "ownership": evidence["git"]["ownership"],
-            "branches": evidence["git"]["branches"],
+            "available": bool(git.get("available", "total_commits" in git)),
+            "total_commits": git.get("total_commits", 0),
+            "commit_cadence": git.get("commit_cadence") or {"trend": "n/a"},
+            "ownership": git.get("ownership", []),
+            "branches": git.get("branches", []),
         },
         "security": {
             "secrets": {
@@ -459,6 +463,10 @@ function renderRepoOverview(data) {
 
 function renderGitActivity(data) {
   const el = document.getElementById('git-activity');
+  if (!data.available) {
+    el.innerHTML = '<div class="stat-row"><span>No git history to read (not a git repository, or no commits yet)</span></div>';
+    return;
+  }
   const staleBranches = data.branches.filter(b => b.ahead_of_main > 0).length;
   el.innerHTML =
     '<div class="stat">' + data.total_commits + ' commits</div>' +

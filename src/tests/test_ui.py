@@ -247,12 +247,14 @@ def test_connect_submenu_passes_the_chosen_agent_and_all_means_no_target(monkeyp
     ran = []
     monkeypatch.setattr(cli, "_run_cli", lambda args: ran.append(args) or 0)
     connect = [i[0] for i in cli._MAIN_MENU].index("connect")
-    to_connect = (DOWN,) * connect
-    # "All of them" is first in the submenu; then the second entry is claude-code
-    # (the menu remembers its place, so the second visit starts on "Connect" already)
-    cli._run_menu(read_key=_keys(*to_connect, ENTER, ENTER, ENTER, DOWN, ENTER, "q"), pause=lambda: None)
-    assert ran[0] == ["mcp-install", "."]
-    assert ran[1][:3] == ["mcp-install", ".", "--target"]
+    agents = len(cli._MCP_CLIENT_CONFIGS) + 2  # plus codex-cli and claude-desktop
+    # Enter on the first row must pick ONE agent (claude-code), never fan out to all of them. "All of them" sits
+    # below the agents. The menu remembers its place, so the second visit starts on "Connect" already.
+    cli._run_menu(
+        read_key=_keys(*((DOWN,) * connect), ENTER, ENTER, ENTER, *((DOWN,) * agents), ENTER, "q"), pause=lambda: None
+    )
+    assert ran[0] == ["mcp-install", ".", "--target", "claude-code"]
+    assert ran[1] == ["mcp-install", "."]
 
 
 def test_account_submenu_runs_status_login_or_logout(monkeypatch):

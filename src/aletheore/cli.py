@@ -1946,8 +1946,11 @@ def _run_menu(read_key=None, pause=None) -> None:
                 continue
         elif picked.key == "connect":
             targets = [*_MCP_CLIENT_CONFIGS.keys(), "codex-cli", "claude-desktop"]
-            sub = [ui.MenuItem("all", "All of them", "write config for every agent above")]
-            sub += [ui.MenuItem(name, name) for name in targets]
+            # Single agents first: Enter on the first row must not fan out to every agent. Claude Desktop keeps one
+            # global config outside the folder, so say so.
+            sub = [ui.MenuItem(name, name, "global config, outside this folder" if name == "claude-desktop" else "")
+                   for name in targets]
+            sub.append(ui.MenuItem("all", "All of them", f"writes config for all {len(targets)} above, including Claude Desktop's global one"))
             sub.append(ui.MenuItem("back", "Back"))
             choice = ui.choose(sub, console, header=Text("Connect which coding agent to this folder?", style="bold"), **kwargs)
             if choice is None or choice.key == "back":
