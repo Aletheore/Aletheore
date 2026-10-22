@@ -4,7 +4,7 @@ import toon
 from aletheore.air_schema import validate_evidence
 from aletheore.evidence import EVIDENCE_VERSION, is_evidence_version_compatible
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from app_server.audit_signing import (
@@ -20,6 +20,7 @@ from app_server.db import (
     check_and_reserve_monthly_repo_scan_slot,
     get_audit_report_by_token,
     get_installation_by_token_hash,
+    revoke_api_token_by_hash,
     touch_api_token,
 )
 from app_server.evidence_limits import MAX_EVIDENCE_BYTES
@@ -92,6 +93,16 @@ async def _authenticate_token(request: Request) -> tuple[dict, str]:
     if installation is None:
         raise HTTPException(status_code=401, detail="invalid or revoked token")
     return installation, token_hash
+
+
+@managed_audit_router.delete("/v1/cli-tokens/self", status_code=204)
+async def revoke_own_cli_token(request: Request):
+    """`aletheore logout` calls this with the CLI's own Bearer token so a
+    login/logout cycle does not leak an active token. Authenticates first
+    and revokes only the calling token (by its hash), never any other."""
+    _installation, token_hash = await _authenticate_token(request)
+    await revoke_api_token_by_hash(request.app.state.db_pool, token_hash)
+    return Response(status_code=204)
 
 
 @managed_audit_router.post("/v1/managed-audit")

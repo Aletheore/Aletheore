@@ -2031,6 +2031,94 @@ async def create_api_token_within_limit(
     return row["id"] if row is not None else None
 
 
+async def create_api_token_replacing_label(
+    pool: asyncpg.Pool,
+    installation_id: int,
+    token_hash: str,
+    label: str,
+    created_by_github_login: str,
+    limit: int,
+) -> int | None:
+    """CLI login variant of create_api_token_within_limit: a re-login from
+    the same machine (same label, e.g. "<host>-<4 hex> (device flow)")
+    replaces that machine's previous token instead of piling up beside it,
+    mirroring create_personal_token_within_limit. Every still-active token
+    of this installation with the SAME label is revoked first, then the cap
+    is applied to what remains, all inside the same advisory-locked
+    transaction as the insert, so two concurrent logins cannot both see room.
+
+    A different label still counts against the cap. Returns the new token's
+    id, or None if the cap would be exceeded (in which case the same-label
+    revocation is rolled back, so a rejected login never costs the user a
+    working token).
+    """
+    try:
+        return await _create_api_token_replacing_label(
+            pool, installation_id, token_hash, label, created_by_github_login, limit
+        )
+    except _TokenCapReached:
+        return None
+
+
+class _TokenCapReached(Exception):
+    pass
+
+
+async def _create_api_token_replacing_label(
+    pool: asyncpg.Pool,
+    installation_id: int,
+    token_hash: str,
+    label: str,
+    created_by_github_login: str,
+    limit: int,
+) -> int:
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('lock_timeout', $1, true)", ADVISORY_LOCK_TIMEOUT)
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock($1, $2)",
+                API_TOKEN_LOCK_NAMESPACE,
+                installation_id,
+            )
+            await conn.execute(
+                """
+                UPDATE api_tokens SET revoked_at = now()
+                WHERE installation_id = $1 AND label = $2 AND revoked_at IS NULL
+                """,
+                installation_id,
+                label,
+            )
+            row = await conn.fetchrow(
+                """
+                INSERT INTO api_tokens (installation_id, token_hash, label, created_by_github_login)
+                SELECT $1, $2, $3, $4
+                WHERE (SELECT count(*) FROM api_tokens WHERE installation_id = $1 AND revoked_at IS NULL) < $5
+                RETURNING id
+                """,
+                installation_id,
+                token_hash,
+                label,
+                created_by_github_login,
+                limit,
+            )
+            if row is None:
+                # Over the cap: undo the same-label revocation above so the
+                # rejected login leaves every existing token usable.
+                raise _TokenCapReached()
+    return row["id"]
+
+
+async def revoke_api_token_by_hash(pool: asyncpg.Pool, token_hash: str) -> bool:
+    """Revokes exactly the one token with this hash (the caller's own, for
+    DELETE /v1/cli-tokens/self). Returns True if it was active and is now
+    revoked, False if no active token matched."""
+    result = await pool.execute(
+        "UPDATE api_tokens SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL",
+        token_hash,
+    )
+    return result == "UPDATE 1"
+
+
 async def revoke_api_token(pool: asyncpg.Pool, installation_id: int, token_id: int) -> None:
     await pool.execute(
         """

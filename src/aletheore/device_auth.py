@@ -153,6 +153,58 @@ def revoke_personal_token(
     response.raise_for_status()
 
 
+_REVOKE_TIMEOUT_SECONDS = 5.0
+
+DASHBOARD_URL = "https://aletheore.com"
+
+
+def revoke_managed_audit_token(
+    api_token: str,
+    api_base_url: str | None = None,
+    http_client: httpx.Client | None = None,
+) -> None:
+    """Revokes the CLI's own installation token (DELETE /v1/cli-tokens/self).
+
+    The server revokes only the token that authenticates the call. Raises
+    httpx.HTTPStatusError on any non-2xx (401 means it was already revoked,
+    which the caller treats as done) and httpx.HTTPError on network failure.
+    """
+    headers = {"Authorization": f"Bearer {api_token}"}
+    if http_client is not None:
+        http_client.delete("/v1/cli-tokens/self", headers=headers).raise_for_status()
+        return
+    with httpx.Client(base_url=api_base_url or _resolved_api_base_url(), timeout=_REVOKE_TIMEOUT_SECONDS) as client:
+        client.delete("/v1/cli-tokens/self", headers=headers).raise_for_status()
+
+
+def server_error_detail(exc: httpx.HTTPStatusError) -> str | None:
+    """The server's `detail` string from a JSON error body, or None."""
+    try:
+        body = exc.response.json()
+    except Exception:  # noqa: BLE001 - any non-JSON body just means no detail
+        return None
+    detail = body.get("detail") if isinstance(body, dict) else None
+    return detail if isinstance(detail, str) and detail.strip() else None
+
+
+def describe_login_http_error(exc: httpx.HTTPStatusError) -> str:
+    """Actionable text for a failed login whose server answered with an error status."""
+    status = exc.response.status_code
+    detail = server_error_detail(exc)
+    if status == 409:
+        reason = detail or "token limit reached"
+        return (
+            f"You have reached the limit of active CLI tokens for this installation ({reason}). "
+            f"Revoke old ones in the dashboard at {DASHBOARD_URL}, or log in from a machine where you "
+            "are already logged in, then run `aletheore login` again."
+        )
+    if status == 402:
+        return f"{detail or 'this feature requires the AIR plan'} (login needs a plan that includes managed audits)."
+    if detail:
+        return f"login failed (HTTP {status}): {detail}"
+    return f"login failed (HTTP {status})"
+
+
 _GITHUB_REMOTE_PREFIXES = (
     "git@github.com:",
     "ssh://git@github.com/",

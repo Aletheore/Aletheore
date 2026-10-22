@@ -57,6 +57,15 @@ def _no_network_pull_merge(monkeypatch):
     monkeypatch.setattr(skill_hub_sync, "pull_merge_custom_skills", lambda *a, **k: None)
 
 
+@pytest.fixture(autouse=True)
+def _no_network_managed_token_revoke(monkeypatch):
+    # logout now revokes the saved managed-audit token over the network;
+    # keep every test offline by default. The dedicated tests override this.
+    from aletheore import device_auth
+
+    monkeypatch.setattr(device_auth, "revoke_managed_audit_token", lambda *a, **k: None)
+
+
 def test_print_query_result_falls_back_to_json_on_encoding_failure(capsys, monkeypatch):
     from aletheore.toon_encoding import ToonEncodingError
 
@@ -4070,3 +4079,156 @@ def test_offer_scan_lets_ctrl_c_abort_but_treats_closed_input_as_no(tmp_path):
     ), patch("aletheore.cli._scan") as mock_scan:
         assert cli._offer_scan_before_dashboard(tmp_path) is False
     mock_scan.assert_not_called()
+
+
+def _status_error(status, body=None, content=None):
+    request = httpx.Request("POST", "https://app.aletheore.com/v1/cli-tokens")
+    response = httpx.Response(status, json=body, content=content, request=request)
+    return httpx.HTTPStatusError(f"Client error '{status}'", request=request, response=response)
+
+
+def _logout_with_managed_token(tmp_path, monkeypatch, revoke):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    monkeypatch.delenv("ALETHEORE_API_TOKEN", raising=False)
+    credentials.save_api_token("aletheore-managed-audit", "managed-secret", creds_path)
+    with patch("aletheore.device_auth.revoke_managed_audit_token", revoke):
+        result = runner.invoke(app, ["logout"])
+    cleared = not credentials.has_api_key(
+        "UNUSED_ENV", "aletheore-managed-audit", credentials_path=creds_path
+    )
+    return result, cleared
+
+
+def test_logout_revokes_the_managed_audit_token_on_the_server(tmp_path, monkeypatch):
+    calls = []
+    result, cleared = _logout_with_managed_token(tmp_path, monkeypatch, lambda token, **kw: calls.append(token))
+
+    assert result.exit_code == 0
+    assert calls == ["managed-secret"]
+    assert cleared
+    assert "couldn't revoke" not in result.output
+    assert "managed-secret" not in result.output
+
+
+def test_logout_clears_locally_and_points_to_dashboard_when_server_revoke_fails(tmp_path, monkeypatch):
+    def failing(token, **kw):
+        raise httpx.ConnectError("down")
+
+    result, cleared = _logout_with_managed_token(tmp_path, monkeypatch, failing)
+
+    assert result.exit_code == 0
+    assert cleared
+    assert "couldn't revoke the CLI token on the server" in result.output
+    assert "dashboard" in result.output
+    assert "managed-secret" not in result.output
+
+
+def test_logout_clears_locally_when_server_revoke_returns_500(tmp_path, monkeypatch):
+    def failing(token, **kw):
+        raise _status_error(500)
+
+    result, cleared = _logout_with_managed_token(tmp_path, monkeypatch, failing)
+
+    assert result.exit_code == 0
+    assert cleared
+    assert "HTTP 500" in result.output
+    assert "dashboard" in result.output
+
+
+def test_logout_treats_401_from_server_revoke_as_already_done(tmp_path, monkeypatch):
+    def already_revoked(token, **kw):
+        raise _status_error(401, {"detail": "invalid or revoked token"})
+
+    result, cleared = _logout_with_managed_token(tmp_path, monkeypatch, already_revoked)
+
+    assert result.exit_code == 0
+    assert cleared
+    assert "couldn't revoke" not in result.output
+
+
+def test_logout_does_not_call_managed_revoke_without_a_saved_managed_token(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    monkeypatch.delenv("ALETHEORE_PERSONAL_TOKEN", raising=False)
+    monkeypatch.setenv("ALETHEORE_API_TOKEN", "env-token-not-ours-to-revoke")
+    calls = []
+
+    with patch("aletheore.device_auth.revoke_managed_audit_token", lambda t, **kw: calls.append(t)):
+        result = runner.invoke(app, ["logout"])
+
+    assert result.exit_code == 0
+    assert calls == []
+
+
+def _login_mint_raises(error):
+    with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
+         patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.mint_personal_token") as mock_mint_personal, \
+         patch("aletheore.device_auth.resolve_installation") as mock_resolve, \
+         patch("aletheore.device_auth.mint_cli_token") as mock_mint:
+        mock_request_code.return_value = MagicMock(
+            verification_uri="https://github.com/login/device", user_code="ABCD-1234"
+        )
+        mock_poll.return_value = "gho_faketoken"
+        mock_mint_personal.return_value = "personal-token-value"
+        mock_resolve.return_value = {"installation_id": 7, "account_login": "acme"}
+        mock_mint.side_effect = error
+        return runner.invoke(app, ["login"])
+
+
+def test_login_409_shows_server_detail_and_dashboard_hint(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+    from aletheore.device_auth import DASHBOARD_URL
+
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", tmp_path / "creds.json")
+    result = _login_mint_raises(_status_error(409, {"detail": "token limit reached (3)"}))
+    output = " ".join(result.output.split())
+
+    assert result.exit_code == 1
+    assert "token limit reached (3)" in output
+    assert "limit of active CLI tokens" in output
+    assert f"dashboard at {DASHBOARD_URL}" in output
+    assert "aletheore login" in output
+    assert "check your connection" not in output
+    assert "HTTPStatusError" not in output
+
+
+def test_login_402_shows_the_servers_plan_requirement(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", tmp_path / "creds.json")
+    result = _login_mint_raises(_status_error(402, {"detail": "this feature requires the AIR plan"}))
+    output = " ".join(result.output.split())
+
+    assert result.exit_code == 1
+    assert "this feature requires the AIR plan" in output
+    assert "check your connection" not in output
+
+
+def test_login_http_error_without_json_detail_does_not_blame_the_connection(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", tmp_path / "creds.json")
+    result = _login_mint_raises(_status_error(502, content=b"<html>bad gateway</html>"))
+    output = " ".join(result.output.split())
+
+    assert result.exit_code == 1
+    assert "HTTP 502" in output
+    assert "check your connection" not in output
+
+
+def test_login_connection_error_still_shows_the_connection_hint(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", tmp_path / "creds.json")
+    result = _login_mint_raises(httpx.ConnectError("boom"))
+    output = " ".join(result.output.split())
+
+    assert result.exit_code == 1
+    assert "check your connection and retry" in output

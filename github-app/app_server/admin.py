@@ -42,6 +42,7 @@ from app_server.db import (
     add_installation_member_within_seat_limit,
     consume_deletion_otp_code,
     count_installation_members,
+    create_api_token_replacing_label,
     create_api_token_within_limit,
     create_deletion_otp_code,
     delete_session,
@@ -1928,7 +1929,11 @@ async def create_cli_token(request: Request, body: CreateCliTokenRequest):
     max_tokens = await get_max_tokens(pool, installation_id)
     raw_token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-    token_id = await create_api_token_within_limit(
+    # Replace-on-relogin: a same-label token (the same machine logging in
+    # again) is revoked first, so repeated logins from one laptop never
+    # accumulate toward the cap. The dashboard's token creation keeps
+    # create_api_token_within_limit.
+    token_id = await create_api_token_replacing_label(
         pool, installation_id, token_hash, body.label, github_login, max_tokens
     )
     if token_id is None:
