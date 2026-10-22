@@ -5,6 +5,12 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+## 0.10.2 - 2026-10-22
+
+Fixes for signing in and out, found by logging in again after logging out. Replacing a machine's earlier token on a
+repeat login is done by the server and already applies to every CLI version; the logout and error-message changes need
+this release.
+
 **Fixed: `aletheore logout` now revokes the CLI token on the server**
 
 Logging out only removed the token from your machine, so every login and logout cycle left one more active token on
