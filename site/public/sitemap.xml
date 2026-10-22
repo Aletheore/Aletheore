@@ -60,4 +60,10 @@
     <changefreq>daily</changefreq>
     <priority>0.4</priority>
   </url>
+  <url>
+    <loc>https://www.aletheore.com/hallbook</loc>
+    <lastmod>2026-10-22</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
 </urlset>
