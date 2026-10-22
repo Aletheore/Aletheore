@@ -25,6 +25,10 @@ on:
 permissions:
   contents: read
 
+# CI must never send crash reports to the production Sentry project.
+env:
+  ALETHEORE_CRASH_REPORTING: "0"
+
 jobs:
   vet-skills:
     runs-on: ubuntu-latest

@@ -656,3 +656,12 @@ def test_render_mcp_tools_escapes_name_and_description():
     # Guards against a regression back to the original unescaped shape:
     # `t.name` concatenated directly with no escapeHtml() wrapping it.
     assert "+ t.name +" not in body
+
+
+def test_evidence_routes_answer_404_with_a_message_when_there_is_no_scan(tmp_path):
+    client = TestClient(build_app(tmp_path), base_url="http://127.0.0.1")
+
+    for route in ("/api/evidence", "/api/graph"):
+        response = client.get(route)
+        assert response.status_code == 404
+        assert "aletheore scan" in response.json()["error"]

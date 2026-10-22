@@ -5,6 +5,9 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Changed the local dashboard so that, if its scan file is missing or removed while it is running, the page says "No scan found for this folder" and refreshes itself when a scan appears, instead of the API answering 500.
+- Changed crash reporting to drop h11's `LocalProtocolError` ("state=CLOSED"), which the local dashboard logs when a client drops a connection and is not a crash of Aletheore.
+
 - Fixed `aletheore dashboard` (and the home menu's dashboard entry) opening an empty dashboard with no explanation when the folder has never been scanned. It now says there is no scan and, in a terminal, offers to scan first; with no terminal it prints the `aletheore scan` command to run and exits 1.
 
 ## 0.10.0 - 2026-10-22

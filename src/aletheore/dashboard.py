@@ -219,15 +219,28 @@ def build_app(repo_path: Path) -> Starlette:
     async def index(request):
         return HTMLResponse(DASHBOARD_HTML)
 
+    def no_scan_response():
+        # The scan file can be missing or removed while the dashboard is up; say so instead of answering 500.
+        return JSONResponse(
+            {"error": "No scan found for this folder. Run 'aletheore scan' here, then reload this page."},
+            status_code=404,
+        )
+
     async def api_evidence(request):
-        evidence = read_evidence(repo_path)
+        try:
+            evidence = read_evidence(repo_path)
+        except FileNotFoundError:
+            return no_scan_response()
         return JSONResponse(build_evidence_summary(evidence))
 
     async def api_history(request):
         return JSONResponse(build_history_summary(repo_path))
 
     async def api_graph(request):
-        evidence = read_evidence(repo_path)
+        try:
+            evidence = read_evidence(repo_path)
+        except FileNotFoundError:
+            return no_scan_response()
         return JSONResponse(build_graph_summary(evidence))
 
     async def api_mcp_tools(request):
@@ -445,7 +458,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <script>
 async function fetchJSON(path) {
   const response = await fetch(path);
-  return response.json();
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || ('Request failed: HTTP ' + response.status));
+  return body;
 }
 
 function renderRepoOverview(data) {
@@ -1520,7 +1535,14 @@ function toggleTimezone() {
 }
 
 async function loadAll() {
-  const evidence = await fetchJSON('/api/evidence');
+  let evidence;
+  try {
+    evidence = await fetchJSON('/api/evidence');
+  } catch (err) {
+    // No scan yet (or it was removed): the page refreshes by itself when a scan appears.
+    document.getElementById('repo-overview').innerHTML = '<div class="stat-row"><span>' + err.message + '</span></div>';
+    return;
+  }
   lastScannedAtIso = evidence.scanned_at;
   renderScannedAt();
   renderRepoOverview(evidence.repo_overview);
