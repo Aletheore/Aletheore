@@ -337,6 +337,12 @@ def test_revoke_managed_audit_token_uses_the_api_url_override(monkeypatch):
         def __init__(self, **kwargs):
             seen.update(kwargs)
 
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            seen["closed"] = True
+
         def delete(self, path, headers):
             return httpx.Response(204, request=httpx.Request("DELETE", "http://localhost:9999" + path))
 
@@ -344,3 +350,4 @@ def test_revoke_managed_audit_token_uses_the_api_url_override(monkeypatch):
     revoke_managed_audit_token("managed-token")
     assert seen["base_url"].startswith("http://localhost:9999")
     assert seen["timeout"] <= 10
+    assert seen["closed"] is True  # the client is closed, not left to garbage collection

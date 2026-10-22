@@ -4192,7 +4192,7 @@ def test_login_409_shows_server_detail_and_dashboard_hint(tmp_path, monkeypatch)
     assert result.exit_code == 1
     assert "token limit reached (3)" in output
     assert "limit of active CLI tokens" in output
-    assert "https://aletheore.com" in output
+    assert "aletheore.com" in output.split("dashboard at ")[1].split()[0]
     assert "aletheore login" in output
     assert "check your connection" not in output
     assert "HTTPStatusError" not in output

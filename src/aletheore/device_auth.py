@@ -153,6 +153,11 @@ def revoke_personal_token(
     response.raise_for_status()
 
 
+_REVOKE_TIMEOUT_SECONDS = 5.0
+
+DASHBOARD_URL = "https://aletheore.com"
+
+
 def revoke_managed_audit_token(
     api_token: str,
     api_base_url: str | None = None,
@@ -164,16 +169,12 @@ def revoke_managed_audit_token(
     httpx.HTTPStatusError on any non-2xx (401 means it was already revoked,
     which the caller treats as done) and httpx.HTTPError on network failure.
     """
-    client = http_client or httpx.Client(
-        base_url=api_base_url or _resolved_api_base_url(), timeout=_REVOKE_TIMEOUT_SECONDS
-    )
-    response = client.delete("/v1/cli-tokens/self", headers={"Authorization": f"Bearer {api_token}"})
-    response.raise_for_status()
-
-
-_REVOKE_TIMEOUT_SECONDS = 5.0
-
-DASHBOARD_URL = "https://aletheore.com"
+    headers = {"Authorization": f"Bearer {api_token}"}
+    if http_client is not None:
+        http_client.delete("/v1/cli-tokens/self", headers=headers).raise_for_status()
+        return
+    with httpx.Client(base_url=api_base_url or _resolved_api_base_url(), timeout=_REVOKE_TIMEOUT_SECONDS) as client:
+        client.delete("/v1/cli-tokens/self", headers=headers).raise_for_status()
 
 
 def server_error_detail(exc: httpx.HTTPStatusError) -> str | None:
