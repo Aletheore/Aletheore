@@ -553,3 +553,27 @@ async def test_custom_skill_listing_carries_the_account_id(test_app, personal_to
 async def test_put_custom_skill_rejects_nul_bytes_instead_of_500(test_app, personal_token_header):
     response = await test_app.put("/v1/custom-skills/nul-skill", headers=personal_token_header, json={"content": "before\u0000after"})
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "status, expected_level",
+    [(404, "WARNING"), (401, "ERROR"), (403, "ERROR"), (500, "ERROR"), (502, "ERROR")],
+)
+def test_check_a_token_failures_are_errors_unless_the_token_is_simply_unknown(monkeypatch, caplog, status, expected_level):
+    # A 404 is what any foreign or made-up token gets. A rejected client secret or a GitHub outage breaks every
+    # login, so it must be an ERROR log (which Sentry turns into an event), not a quiet warning.
+    from app_server.skill_hub_api import _github_token_issued_to_aletheore
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(status, json={"message": "x"})),
+            base_url="https://api.github.com",
+        ),
+    )
+    with caplog.at_level("WARNING", logger="app_server.skill_hub_api"):
+        assert _github_token_issued_to_aletheore("some-token") is False
+
+    records = [r for r in caplog.records if "check-a-token" in r.getMessage()]
+    assert [r.levelname for r in records] == [expected_level]
+    assert "some-token" not in records[0].getMessage()

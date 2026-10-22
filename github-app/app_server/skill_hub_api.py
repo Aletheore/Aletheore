@@ -115,9 +115,12 @@ def _github_token_issued_to_aletheore(github_token: str) -> bool:
         headers={"Accept": "application/vnd.github+json"},
     )
     if response.status_code != 200:
-        # 404: GitHub does not know this token as one issued to this app. 401/403: our client id and secret were
-        # rejected (a misconfigured server), which would make every login fail. Status code only, never the token.
-        logger.warning("GitHub check-a-token returned %s for the personal-token mint", response.status_code)
+        # 404: GitHub does not know this token as one issued to this app, which is what any foreign or made-up token
+        # gets, so it stays a warning. Anything else (401/403: our client id and secret were rejected; 5xx: GitHub is
+        # failing) makes every login fail while looking like "not issued to Aletheore" to the user, so it is logged at
+        # ERROR to reach Sentry. Status code only, never the token.
+        level = logging.WARNING if response.status_code == 404 else logging.ERROR
+        logger.log(level, "GitHub check-a-token returned %s for the personal-token mint", response.status_code)
         return False
     app = response.json().get("app") or {}
     return app.get("client_id") == settings.github_client_id
