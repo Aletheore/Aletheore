@@ -1,5 +1,6 @@
 import dataclasses
 import functools
+import inspect
 import json
 from datetime import datetime
 import multiprocessing
@@ -11,6 +12,7 @@ import re
 import sys
 import threading
 from collections.abc import Callable
+from typing import Any
 from pathlib import Path, PurePath
 
 from mcp.server.mcpserver import MCPServer
@@ -144,7 +146,9 @@ evidence exists yet, run aletheore_scan once - the deterministic parse and \
 dependency-graph pass every other tool reads from. aletheore_search_codebase \
 and aletheore_answer additionally require aletheore_index to have run first \
 (builds the semantic index on top of scan evidence); every other tool works \
-straight off scan evidence alone.
+straight off scan evidence alone. aletheore_answer exists only when the server \
+was started with --agent <provider>; if it is not in your tool list, use \
+aletheore_search_codebase instead.
 
 Timing: aletheore_scan and aletheore_index both report live progress while \
 running, not a silent hang - a small repo finishes in seconds, a large \
@@ -208,6 +212,43 @@ Include the exact tool call, its output, and what you expected instead - \
 that's what turns a real gap into something the maintainers can actually \
 fix, instead of it silently recurring for every future user who hits the \
 same thing."""
+
+
+def _package_version() -> str:
+    import importlib.metadata
+
+    try:
+        return importlib.metadata.version("aletheore")
+    except importlib.metadata.PackageNotFoundError:
+        return "0.0.0"
+
+
+_ERROR_RESULT_PREFIXES = ("result:\n  error:", '{"result": {"error"')
+
+
+def _flag_error_results(tool_func: Callable[..., Any]) -> Callable[..., Any]:
+    """A tool reports an application failure as a result whose only content is an `error`. Return those as an MCP
+    error (isError=true) with the same text, so a client can tell "failed" from "found nothing"."""
+    from mcp.types import CallToolResult, TextContent
+
+    def flag(result: Any) -> Any:
+        if isinstance(result, str) and result.startswith(_ERROR_RESULT_PREFIXES):
+            return CallToolResult(content=[TextContent(type="text", text=result)], is_error=True)
+        return result
+
+    if inspect.iscoroutinefunction(tool_func):
+
+        @functools.wraps(tool_func)
+        async def async_wrapped(*args, **kwargs):
+            return flag(await tool_func(*args, **kwargs))
+
+        return async_wrapped
+
+    @functools.wraps(tool_func)
+    def wrapped(*args, **kwargs):
+        return flag(tool_func(*args, **kwargs))
+
+    return wrapped
 
 
 def _toon_result(data: object) -> str:
@@ -1085,6 +1126,8 @@ def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_search", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_search(pattern: str, regex: bool = False, path_glob: str | None = None) -> str:
         """Deterministic literal or regex search over the repository's source files."""
+        if not pattern or not pattern.strip():
+            return _toon_result({"error": "pattern must not be empty or whitespace-only"})
         if path_glob is not None and not path_glob.strip():
             return _toon_result({"error": "path_glob must not be empty"})
         if not regex:
@@ -1667,7 +1710,11 @@ def build_server(
         # it doesn't need.
         required_effects["aletheore_scan"] = required_effects["aletheore_scan"] | {EFFECT_EXTERNAL}
 
-    mcp_instance = MCPServer("aletheore", instructions=NAV_INSTRUCTIONS if profile == "nav" else SERVER_INSTRUCTIONS)
+    mcp_instance = MCPServer(
+        "aletheore",
+        instructions=NAV_INSTRUCTIONS if profile == "nav" else SERVER_INSTRUCTIONS,
+        version=_package_version(),
+    )
     # A tool that returns a string would otherwise also send a JSON-wrapped structured copy, and the model is shown
     # that copy with every quote and newline escaped again. One text result per call.
     #
@@ -1681,7 +1728,12 @@ def build_server(
 
     def tool_without_structured_copy(*args, **kwargs):
         kwargs.setdefault("structured_output", False)
-        return register_tool(*args, **kwargs)
+        decorator = register_tool(*args, **kwargs)
+
+        def register(fn):
+            return decorator(_flag_error_results(fn))
+
+        return register
 
     mcp_instance.tool = tool_without_structured_copy
     if profile == "nav":

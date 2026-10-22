@@ -67,7 +67,7 @@ def test_imports_and_imported_by_list_each_file_once():
 def test_under_limits_listing_to_a_directory(tmp_path: Path):
     g = {"pkg/a.py": ["pkg/b.py", "bench/x.py"], "pkg/b.py": [], "bench/x.py": []}
     text = dependents_report(_ev(g), tmp_path, "pkg/a.py", under=["pkg"])
-    assert "1 files import pkg/a.py" in text and "bench/x.py" not in text.split("\n\n")[0] and "1 more left out" in text
+    assert "1 file imports pkg/a.py" in text and "bench/x.py" not in text.split("\n\n")[0] and "1 more left out" in text
 
 
 def test_cli_dependents_end_to_end(tmp_path: Path):
@@ -86,7 +86,7 @@ def test_cli_dependents_end_to_end(tmp_path: Path):
 
 def test_under_accepts_dot_slash_and_dot(tmp_path: Path):
     g = {"pkg/a.py": ["pkg/b.py", "bench/x.py"], "pkg/b.py": [], "bench/x.py": []}
-    assert "1 files import pkg/a.py" in dependents_report(_ev(g), tmp_path, "pkg/a.py", under=["./pkg/"])
+    assert "1 file imports pkg/a.py" in dependents_report(_ev(g), tmp_path, "pkg/a.py", under=["./pkg/"])
     assert "2 files import pkg/a.py" in dependents_report(_ev(g), tmp_path, "pkg/a.py", under=["."])
 
 
@@ -117,7 +117,7 @@ def test_is_test_path_covers_common_conventions():
 def test_no_tests_drops_test_files_and_counts_them(tmp_path: Path):
     g = {"pkg/a.go": ["pkg/b.go", "pkg/b_test.go"], "pkg/b.go": [], "pkg/b_test.go": []}
     text = dependents_report(_ev(g), tmp_path, "pkg/a.go", no_tests=True)
-    assert "1 files import pkg/a.go" in text and "b_test.go" not in text.split("\n\n")[0] and "1 more left out" in text
+    assert "1 file imports pkg/a.go" in text and "b_test.go" not in text.split("\n\n")[0] and "1 more left out" in text
 
 
 def _go_ev():
@@ -155,5 +155,5 @@ def test_packages_mode_counts_left_out_packages_not_files(tmp_path: Path):
         "x/one.go": [], "x/two.go": [], "y/one.go": [], "z/one_test.go": [],
     }
     out = dependents_report(_ev(g), tmp_path, "pkg/a.go", under=["x"], packages=True)
-    assert out.startswith("1 packages (directories) import pkg/a.go")
+    assert out.startswith("1 package (directory) imports pkg/a.go")
     assert "(2 more left out" in out  # packages y and z, counted as packages

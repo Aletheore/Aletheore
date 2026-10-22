@@ -25,12 +25,12 @@ def test_locate_command_prints_the_header_and_raw_source(tmp_path):
     assert result.output == "a.py::foo L1-1\ndef foo(): return 1\n"
 
 
-def test_locate_command_says_when_nothing_matches_and_still_exits_cleanly(tmp_path):
+def test_locate_command_says_when_nothing_matches_and_exits_nonzero_like_usages(tmp_path):
     repo = _repo_with_foo(tmp_path)
 
     result = runner.invoke(app, ["locate", "no_such_identifier_anywhere", str(repo)])
 
-    assert result.exit_code == 0 and "no match" in result.output and "grep" in result.output
+    assert result.exit_code == 1 and "no match" in result.output and "grep" in result.output
 
 
 def test_locate_command_without_evidence_tells_the_user_to_scan(tmp_path):

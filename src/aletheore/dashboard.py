@@ -133,8 +133,12 @@ def build_history_summary(repo_path: Path) -> list[dict]:
                 "scanned_at": evidence["scanned_at"],
                 "module_count": len(evidence["repository"]["modules"]),
                 "secrets_findings": len(evidence["security"]["secrets"]["findings"]),
-                "vulnerability_findings": len(
-                    evidence["security"]["dependency_vulnerabilities"]["findings"]
+                # None, not 0, when the scan skipped the check: 0 would read as
+                # "all vulnerabilities fixed" in the trend chart.
+                "vulnerability_findings": (
+                    len(evidence["security"]["dependency_vulnerabilities"]["findings"])
+                    if evidence["security"]["dependency_vulnerabilities"].get("checked", True)
+                    else None
                 ),
             }
         except (KeyError, TypeError):
@@ -510,7 +514,9 @@ function renderBarChart(svgId, values, valueLabelId, noteId) {
   const svg = document.getElementById(svgId);
   const label = valueLabelId ? document.getElementById(valueLabelId) : null;
   const note = noteId ? document.getElementById(noteId) : null;
-  if (label) label.textContent = values.length > 0 ? String(values[values.length - 1]) : '-';
+  // null marks a scan that did not measure this (e.g. the vulnerability check was skipped): drawn as a gap.
+  const fmt = v => (v === null || v === undefined) ? '-' : String(v);
+  if (label) label.textContent = values.length > 0 ? fmt(values[values.length - 1]) : '-';
   if (note) note.textContent = '';
   if (values.length === 0) { svg.innerHTML = ''; return; }
 
@@ -529,7 +535,7 @@ function renderBarChart(svgId, values, valueLabelId, noteId) {
     note.textContent = 'Unchanged across the last ' + values.length + ' scans.';
   }
 
-  const max = Math.max(...displayValues, 1);
+  const max = Math.max(...displayValues.filter(v => v !== null && v !== undefined), 1);
   const barWidth = Math.max(2, (width / displayValues.length) - barGap);
 
   let content = '<line x1="0" y1="' + baseline + '" x2="' + width + '" y2="' + baseline +
@@ -538,6 +544,11 @@ function renderBarChart(svgId, values, valueLabelId, noteId) {
 
   displayValues.forEach((v, i) => {
     const x = i * (barWidth + barGap);
+    if (v === null || v === undefined) {
+      content += '<text x="' + x + '" y="' + (baseline - 2) + '" fill="#5a5a5a" font-size="9" font-family="monospace">' +
+        '-<title>not checked in this scan</title></text>';
+      return;
+    }
     const barHeight = Math.max(minBarHeight, (v / max) * (baseline - topPad));
     const y = baseline - barHeight;
     const isLast = i === displayValues.length - 1;

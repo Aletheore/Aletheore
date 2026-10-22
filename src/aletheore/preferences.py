@@ -55,10 +55,26 @@ def is_crash_reporting_enabled(preferences_path: Path | None = DEFAULT_PREFERENC
     return value if isinstance(value, bool) else True
 
 
+def crash_reporting_env_override() -> str | None:
+    """The raw ALETHEORE_CRASH_REPORTING value when it is set, else None.
+    When set it wins over the stored preference (is_crash_reporting_enabled)."""
+    return os.environ.get("ALETHEORE_CRASH_REPORTING")
+
+
+def stored_crash_reporting_enabled(
+    preferences_path: Path | None = DEFAULT_PREFERENCES_PATH,
+) -> bool:
+    """The saved preference alone, ignoring the environment override."""
+    value = _load_preferences(preferences_path).get(_CRASH_REPORTING_KEY)
+    return value if isinstance(value, bool) else True
+
+
 def set_crash_reporting_enabled(
     enabled: bool, preferences_path: Path | None = DEFAULT_PREFERENCES_PATH
-) -> None:
-    _save_preference(preferences_path, _CRASH_REPORTING_KEY, enabled)
+) -> bool:
+    """Persist the preference. Returns False when it could not be saved, so
+    the explicit `config crash-reporting` command can fail loudly."""
+    return _save_preference(preferences_path, _CRASH_REPORTING_KEY, enabled)
 
 
 def has_shown_crash_reporting_notice(
@@ -70,8 +86,8 @@ def has_shown_crash_reporting_notice(
 
 def mark_crash_reporting_notice_shown(
     preferences_path: Path | None = DEFAULT_PREFERENCES_PATH,
-) -> None:
-    _save_preference(preferences_path, _NOTICE_SHOWN_KEY, True)
+) -> bool:
+    return _save_preference(preferences_path, _NOTICE_SHOWN_KEY, True)
 
 
 def _load_preferences(preferences_path: Path | None) -> dict:
@@ -87,17 +103,20 @@ def _load_preferences(preferences_path: Path | None) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _save_preference(preferences_path: Path | None, key: str, value: bool) -> None:
+def _save_preference(preferences_path: Path | None, key: str, value: bool) -> bool:
+    """Best-effort write; returns whether it was persisted. Never raises:
+    implicit writers (the first-run notice) ignore the result, the explicit
+    `config crash-reporting` command turns False into an error."""
     if preferences_path is None:
         # No determinable home directory (see _default_home_dir) -
-        # nowhere to persist. Same "best effort, never crash" outcome as
-        # the OSError case below, just a different reason.
-        return
+        # nowhere to persist.
+        return False
     try:
         preferences_path.parent.mkdir(parents=True, exist_ok=True)
         data = _load_preferences(preferences_path)
         data[key] = value
         preferences_path.write_text(json.dumps(data, indent=2))
+        return True
     except OSError:
         # Best-effort: a read-only/unwritable HOME (sandboxed builds, some
         # CI, read-only containers) must never crash the CLI over a
@@ -105,4 +124,4 @@ def _save_preference(preferences_path: Path | None, key: str, value: bool) -> No
         # through this path via the first-run notice in main(). Silently
         # not persisting (the notice reprints next run; an explicit
         # toggle doesn't stick) is strictly better than bricking the tool.
-        pass
+        return False

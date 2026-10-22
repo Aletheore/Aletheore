@@ -11,7 +11,13 @@ import difflib
 from datetime import datetime
 from pathlib import Path
 
-from aletheore.scope_filter import in_scope, is_test_path, normalize_under  # noqa: F401  (is_test_path re-exported)
+from aletheore.scope_filter import (  # noqa: F401  (is_test_path re-exported)
+    in_scope,
+    is_test_path,
+    normalize_under,
+    plural,
+    runtime_import_examples,
+)
 
 
 class DependentsError(Exception):
@@ -97,20 +103,26 @@ def dependents_report(
         dropped = len({_dir_of(p) for p in allp}) - len(dirs)
     excl = f" ({dropped} more left out by --exclude/--under/--no-tests)" if dropped else ""
     if packages:
-        head = f"{len(dirs)} packages (directories) import {target}, directly or through other imports{excl}:"
+        head = (
+            f"{plural(len(dirs), 'package')} (director{'y' if len(dirs) == 1 else 'ies'}) "
+            f"{'imports' if len(dirs) == 1 else 'import'} {target}, directly or through other imports{excl}:"
+        )
         body = dirs
     else:
-        head = f"{len(shown)} files import {target}, directly or through other imports{excl}:"
+        head = (
+            f"{plural(len(shown), 'file')} {'imports' if len(shown) == 1 else 'import'} {target}, "
+            f"directly or through other imports{excl}:"
+        )
         body = shown
     what = "this file" if unit == "file" else f"this package ({len(seeds)} files)"
     lines = [
         head,
         *body,
         "",
-        f"Repo-wide {what} has {len(direct)} direct importers plus {len(allp) - len(direct)} that reach it through "
+        f"Repo-wide {what} has {plural(len(direct), 'direct importer')} plus {len(allp) - len(direct)} that reach it through "
         f"other files (before --under/--exclude), deduplicated. Coverage: static {language} imports only, "
         f"{len(modules)} modules indexed, {unparseable} unparseable; {fresh}. Not tracked: imports built at run time "
-        "(importlib, __import__, string-based plugin loading). For static imports this list does not need to be "
+        f"({runtime_import_examples({language})}). For static imports this list does not need to be "
         "re-derived with grep.",
     ]
     return "\n".join(lines)

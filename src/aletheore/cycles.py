@@ -14,6 +14,8 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
+from aletheore.scope_filter import runtime_import_examples
+
 CYCLES_MAX_GROUPS = 50
 CYCLE_MAX_CHAIN_LEN = 15
 
@@ -158,9 +160,13 @@ def cycles_report(
         extra = f", {', '.join(changed[:3])}{', ...' if len(changed) > 3 else ''}"
         fresh = f"STALE: {len(changed)} file(s) changed after the scan{extra}; re-scan before relying on this"
 
+    runtime = runtime_import_examples({m.get("language") or "" for m in evidence["repository"]["modules"]})
+
+    fresh = fresh[0].upper() + fresh[1:]  # always starts a sentence below
+
     if not groups:
         return (
-            "no circular import dependency found.\n\n"
+            "No circular import dependency found.\n\n"
             f"Coverage: static imports only, {len(adj)} modules considered. {fresh}."
         )
 
@@ -174,11 +180,10 @@ def cycles_report(
             if mine:
                 chain = _example_cycle(adj, group)
                 arrow = " -> ".join(chain[:CYCLE_MAX_CHAIN_LEN]) + (" -> ..." if len(chain) > CYCLE_MAX_CHAIN_LEN else "")
-                lines.append(f"group of {len(group)} file(s) repo-wide, {len(mine)} in scope; example cycle: {arrow}")
+                lines.append(f"Group of {len(group)} file(s) repo-wide, {len(mine)} in scope; example cycle: {arrow}")
         lines.append(
             f"\nCoverage: static imports only, {len(adj)} modules considered; cycles were found over the whole repo and "
-            f"only files matching --under/--exclude are listed. Not tracked: imports built at run time (importlib, "
-            f"__import__, string-based plugin loading). {fresh}. For static imports this list does not need to be "
+            f"only files matching --under/--exclude are listed. Not tracked: imports built at run time ({runtime}). {fresh}. For static imports this list does not need to be "
             "re-derived with grep or a script."
         )
         return "\n".join(lines)
@@ -197,7 +202,7 @@ def cycles_report(
         lines.append(f"\n... {truncated} more group(s) not shown")
     lines.append(
         f"\nCoverage: static imports only, {len(adj)} modules considered. Not tracked: imports built at run time "
-        f"(importlib, __import__, string-based plugin loading) - those cannot create a cycle this can see, and "
+        f"({runtime}) - those cannot create a cycle this can see, and "
         f"cannot be broken by fixing one this reports either. {fresh}."
     )
     return "\n".join(lines)

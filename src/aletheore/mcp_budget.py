@@ -277,6 +277,11 @@ def apply_budget(
     With `section` (a dotted path from the `sections` listing, '$' for a root list): returns one page of
     that list, after the optional case-insensitive `filter`, in a deterministic order.
     """
+    # Range errors first: with no section, a bad limit used to be reported as "pass section".
+    if limit is not None and limit < 1:
+        return {"error": f"limit must be at least 1, got {limit}"}
+    if offset < 0:
+        return {"error": f"offset must be at least 0, got {offset}"}
     lists = _find_lists(data)
     if section is None:
         if offset or limit is not None or filter:
@@ -284,6 +289,4 @@ def apply_budget(
         if size_of(data) <= budget_chars:
             return data
         return _overview(data, lists, size_of, budget_chars, sort_by) if lists else data
-    if limit is not None and limit < 1:
-        return {"error": "limit must be at least 1"}
     return _section_view(lists, section, offset, limit, filter, size_of, budget_chars, sort_by)
