@@ -152,8 +152,9 @@ def render_menu(items: Sequence[MenuItem], selected: int, *, unicode_ok: bool, h
         if len(items) > rows:
             windowed = True
             rows = max(rows - 2, 3)  # two more lines for the "more above / below" markers
-            first = min(max(selected - rows // 2, 0), len(items) - rows)
-            last = first + rows
+            # A window shorter than the list can still be taller than a very short menu: never start below row 0.
+            first = max(min(max(selected - rows // 2, 0), len(items) - rows), 0)
+            last = min(first + rows, len(items))
     arrow_up, arrow_down = ("↑", "↓") if unicode_ok else ("^", "v")
     if windowed:
         lines.append(Text(f"    {arrow_up} {first} more" if first else "", style="dim"))

@@ -548,3 +548,13 @@ def test_the_menu_header_drops_the_block_letters_on_a_short_window(monkeypatch):
     assert "ALETHEORE" in cli._menu_header().plain
     monkeypatch.setattr(cli, "console", Console(file=io.StringIO(), width=100, height=40, color_system=None))
     assert "██" in cli._menu_header().plain
+
+
+def test_a_window_taller_than_a_very_short_menu_never_starts_below_the_first_row():
+    from rich.text import Text
+
+    items = [ui.MenuItem("a", "A"), ui.MenuItem("b", "B")]
+    group = ui.render_menu(items, 1, unicode_ok=True, header=Text("h"), width=40, height=5)
+    shown = [str(r).strip() for r in group.renderables]
+    assert shown.count("A") == 1
+    assert shown.count("\u276f B") == 1  # the selected row, drawn once

@@ -1909,9 +1909,10 @@ def _menu_header() -> Text:
     lead = f"version {version}   folder "
     # A deep path would wrap and push the menu down: keep its tail, which is the part that names the project.
     room = console.width - len(lead) - len(note)
-    if len(shown) > room > 8:
-        mark = "…" if ui.supports_unicode(console.file) else "..."
-        shown = mark + shown[-(room - len(mark)):]
+    mark = "…" if ui.supports_unicode(console.file) else "..."
+    if len(shown) > room:
+        # Keep at least a few characters of the tail; on a terminal too narrow even for that, show only the mark.
+        shown = mark + shown[-(room - len(mark)):] if room > len(mark) + 2 else mark
     header.append("\n" + lead + shown, style="dim")
     if note:
         header.append(note, style="bold")

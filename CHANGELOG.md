@@ -19,7 +19,7 @@ opens the file in your pager so a long skill does not flood the terminal. Back r
 The static list is replaced by an arrow-key picker, grouped by task: Scan and explore, Agents and skills, Dashboard and
 watch, Account. Each row carries the command's one-line description, taken from the same table as the plain `aletheore`
 banner so the two cannot drift. Enter runs commands that need nothing (`scan`, `status`, `login`, ...), reuses the
-Explore, Connect, Audit and Hallbook flows, asks for the one required argument of `diff`, `verify` and `healthcheck`,
+Explore, Connect, Audit and Hallbook flows, asks for the arguments `diff` (two evidence files), `verify` and `healthcheck` need,
 and shows the `--help` text for `mcp`, `watch` and `config`. The plain `aletheore`, `aletheore --help` and
 `ALETHEORE_NO_MENU=1` output is unchanged.
 
