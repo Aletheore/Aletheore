@@ -50,6 +50,7 @@ from aletheore.preferences import (
     set_crash_reporting_enabled,
 )
 from aletheore import skill_hub
+from rich.markup import escape as escape_markup
 from aletheore.sentry_reporting import init_cli_sentry
 from aletheore.evidence import (
     IncompatibleEvidenceVersionError,
@@ -406,7 +407,7 @@ _COMMAND_SUMMARIES = [
 # Two commands the banner does not list but the "All commands" picker does. The banner (and so the plain `aletheore`
 # output) keeps its own list exactly as it was.
 _PICKER_ONLY_SUMMARIES = [
-    ("hallbook", "browse and search the library of vetted agent skills"),
+    ("hallbook", "browse, search and read the licences of the library of vetted agent skills"),
     ("config", "manage local CLI preferences, such as crash reporting"),
 ]
 _COMMAND_DESCRIPTIONS = dict(_COMMAND_SUMMARIES + _PICKER_ONLY_SUMMARIES)
@@ -2820,6 +2821,30 @@ app.add_typer(skill_hub_app, name="hallbook")
 app.add_typer(skill_hub_app, name="skill-hub", hidden=True)
 
 
+def _hallbook_error(message: str) -> None:
+    """Print `error: ...` the way every other command does (text escaped, never wrapped) and exit 1."""
+    from rich.markup import escape
+
+    console.print(f"[bold red]error:[/bold red] {escape(message)}", soft_wrap=True)
+    raise typer.Exit(code=1)
+
+
+def _check_category_or_exit(category: Optional[str]) -> None:
+    try:
+        skill_hub.check_category(category)
+    except ValueError as exc:
+        _hallbook_error(str(exc))
+
+
+def _skill_not_found(skill_id: str) -> None:
+    """`error: skill not found: x` with up to five ids it may have meant, then exit 1."""
+    message = f"skill not found: {skill_id}"
+    suggestions = skill_hub.suggest_skill_ids(skill_id)
+    if suggestions:
+        message += ". Did you mean: " + ", ".join(suggestions) + "?"
+    _hallbook_error(message)
+
+
 @skill_hub_app.command("list", help="list curated and custom skills")
 def skill_hub_list(
     category: Optional[str] = typer.Option(None, "--category", help="filter to one category"),
@@ -2828,6 +2853,7 @@ def skill_hub_list(
     # custom skill's file name) and must not be parsed as Rich markup.
     from aletheore import ui
 
+    _check_category_or_exit(category)
     # A pipe gets every line whole; a terminal gets lines cut to its width so none wraps.
     width = _plain_width() if sys.stdout.isatty() else None
     for meta in skill_hub.list_skills(category):
@@ -2840,8 +2866,7 @@ def skill_hub_get(skill_id: str) -> None:
     try:
         skill = skill_hub.get_skill(skill_id)
     except skill_hub.SkillNotFoundError as exc:
-        console.print(f"[bold red]error:[/bold red] skill not found: {exc}")
-        raise typer.Exit(code=1) from exc
+        _skill_not_found(str(exc))
     # Raw write, not console.print: Rich would parse the body as markup
     # (deleting bracketed text like "[borkweb/skills]", or raising
     # MarkupError on a stray "[/x]") and hard-wrap long lines. The output
@@ -2864,7 +2889,14 @@ def skill_hub_search(
     category: Optional[str] = typer.Option(None, "--category", help="only search this category"),
     limit: int = typer.Option(10, "--limit", min=1, max=50, help="maximum results"),
 ) -> None:
-    results = skill_hub.search_skills(" ".join(query), category=category, limit=limit)
+    _check_category_or_exit(category)
+    text = " ".join(query).strip()
+    if len(text) < 2 or not skill_hub._tokens(text):
+        _hallbook_error("the search needs at least 2 characters, or a few words describing the task (for example: flaky test)")
+    capped = skill_hub.cap_query(text)
+    if capped != text:
+        typer.echo(f"Note: the query was cut to its first {len(capped)} characters.", err=True)
+    results = skill_hub.search_skills(capped, category=category, limit=limit)
     if not results:
         typer.echo("No skills matched. Try fewer or different words, or run 'aletheore hallbook categories'.")
         return
@@ -2902,6 +2934,12 @@ def skill_hub_suggest(
 def skill_hub_hook(
     mode: str = typer.Option("hint", "--mode", help="hint or inject"),
 ) -> None:
+    if mode not in skill_hub.HOOK_MODES:
+        console.print(
+            f"[bold red]error:[/bold red] unknown mode '{escape_markup(mode)}'; use one of: {', '.join(skill_hub.HOOK_MODES)}",
+            soft_wrap=True,
+        )
+        raise typer.Exit(code=2)
     executable = sys.executable
     if " " in executable:
         executable = f'"{executable}"'
@@ -2923,8 +2961,7 @@ def skill_hub_files(skill_id: str) -> None:
     try:
         skill_hub.get_skill(skill_id)
     except skill_hub.SkillNotFoundError as exc:
-        console.print(f"[bold red]error:[/bold red] skill not found: {exc}")
-        raise typer.Exit(code=1) from exc
+        _skill_not_found(str(exc))
     files, total = skill_hub.list_skill_files(skill_id)
     if not files:
         typer.echo("No companion files.")
@@ -2940,36 +2977,143 @@ def skill_hub_get_file(skill_id: str, path: str) -> None:
     try:
         text = skill_hub.read_skill_file(skill_id, path)
     except skill_hub.SkillNotFoundError as exc:
-        console.print(f"[bold red]error:[/bold red] skill not found: {exc}")
-        raise typer.Exit(code=1) from exc
+        _skill_not_found(str(exc))
     except skill_hub.SkillFileError as exc:
-        console.print(f"[bold red]error:[/bold red] {exc}")
-        raise typer.Exit(code=1) from exc
+        _hallbook_error(str(exc))
     typer.echo(text, nl=not text.endswith("\n"))
 
 
-@skill_hub_app.command("add", help="add a custom skill from a local file")
-def skill_hub_add(name: str, file: Path) -> None:
-    content = file.read_text(encoding="utf-8")
+def _info_field(label: str, value: str, width: int) -> list[str]:
+    """`Label    value`, wrapped under the value; a long unbroken value (a URL) stays whole so it can be copied."""
+    import textwrap
+
+    head = f"{label:<11}"
+    return textwrap.wrap(
+        value, width=max(width, len(head) + 20), initial_indent=head, subsequent_indent=" " * len(head),
+        break_long_words=False, break_on_hyphens=False,
+    ) or [head.rstrip()]
+
+
+def _print_skill_info(info: dict, width: int) -> None:
+    from aletheore import ui
+
+    typer.echo(ui.truncate(info["title"], width))
+    typer.echo(info["skill_id"])
+    typer.echo("")
+    if info["custom"]:
+        typer.echo("This is a custom skill you added: its text is yours, it is not vetted by Aletheore,")
+        typer.echo("and there is no licence information for it.")
+        return
+    rows = [
+        ("Shelf", info["shelf_title"] or "none"),
+        ("Category", info["category"]),
+        ("License", info["license"] or "not recorded"),
+        ("Copyright", info["copyright"] or skill_hub.NOT_RECORDED),
+        ("Source", info["source_url"] or "not recorded"),
+        ("Needs", ", ".join(info["requires"]) or "nothing"),
+        ("Files", f"{info['files_total']} ({info['scripts']} {'script' if info['scripts'] == 1 else 'scripts'})"),
+    ]
+    for label, value in rows:
+        for line in _info_field(label, value, width):
+            typer.echo(line)
+    typer.echo("")
+    import textwrap
+
+    typer.echo(textwrap.fill(
+        f"Full licence text: aletheore hallbook info {info['skill_id']} --licence", width=max(width, 40),
+        break_long_words=False, break_on_hyphens=False,
+    ))
+
+
+def _print_catalogue_summary(width: int) -> None:
+    summary = skill_hub.catalogue_summary()
+    typer.echo(f"Hallbook catalogue: {summary['total']} skills")
+    typer.echo("")
+    typer.echo("Licences")
+    for licence, count in summary["licenses"]:
+        typer.echo(f"  {licence:<14}{count}")
+    typer.echo("")
+    typer.echo("Shelves")
+    for shelf in summary["shelves"]:
+        typer.echo(f"  {shelf['title']:<18}{shelf['skills']}")
+    typer.echo("")
+    typer.echo("Copyright holders and sources for every skill are in:")
+    typer.echo(summary["notice_path"] if summary["notice_present"] else f"{summary['notice_path']} (not found)")
+    typer.echo("")
+    typer.echo("Details of one skill: aletheore hallbook info SKILL")
+
+
+@skill_hub_app.command("info", help="show a skill's licence, copyright holder and source (no argument: the catalogue in numbers)")
+def skill_hub_info(
+    skill: Optional[str] = typer.Argument(
+        None, help="a skill id such as debugging/systematic-debugging, or its bare name if that is unambiguous"
+    ),
+    licence: bool = typer.Option(False, "--licence", "--license", help="print the skill's full licence text"),
+) -> None:
+    width = _plain_width()
+    if skill is None:
+        if licence:
+            _hallbook_error("--licence needs a skill: aletheore hallbook info SKILL --licence")
+        _print_catalogue_summary(width)
+        return
+    skill_id, suggestions = skill_hub.resolve_skill_id(skill)
+    if skill_id is None:
+        if suggestions and "/" not in skill and all(s.split("/", 1)[-1] == skill for s in suggestions):
+            _hallbook_error(f"'{skill}' is ambiguous. Use the full id: " + ", ".join(suggestions))
+        _skill_not_found(skill)
+    if licence:
+        if skill_id.startswith("custom/"):
+            typer.echo(f"{skill_id} is a custom skill you added: there is no licence information for it.")
+            return
+        text = skill_hub.skill_license_text(skill_id)
+        if text is None:
+            spdx = skill_hub.skill_info(skill_id)["license"] or "not recorded"
+            typer.echo(f"{skill_id} ships no licence file. Its SPDX licence id is {spdx}.")
+            return
+        typer.echo(text, nl=not text.endswith("\n"))
+        return
+    _print_skill_info(skill_hub.skill_info(skill_id), width)
+
+
+_ADD_NAME_HELP = (
+    "name for the skill: letters, digits, - and _, up to 64 characters. It is stored as custom/NAME"
+)
+_ADD_FILE_HELP = (
+    "a markdown file with the skill's instructions (UTF-8 text, up to 1 MB; frontmatter is optional)"
+)
+
+
+@skill_hub_app.command("add", help="add a custom skill from a local markdown file")
+def skill_hub_add(
+    name: str = typer.Argument(..., help=_ADD_NAME_HELP),
+    file: Path = typer.Argument(..., help=_ADD_FILE_HELP),
+) -> None:
     try:
-        skill_id = skill_hub.add_custom_skill(name, content)
+        content = skill_hub.read_custom_skill_source(file)
+        skill_hub.sanitize_skill_name(name)
+        warnings = skill_hub.custom_skill_warnings(content)
+        skill_id, note = skill_hub.add_custom_skill_with_sync(name, content)
     except ValueError as exc:
-        console.print(f"[bold red]error:[/bold red] {exc}")
-        raise typer.Exit(code=1) from exc
+        _hallbook_error(str(exc))
+    for warning in warnings:
+        _stderr_console.print(f"[bold]WARNING:[/bold] {escape_markup(warning)}.", soft_wrap=True)
     console.print(f"[bold green]Added custom skill[/bold green] {skill_id}")
+    if note:
+        typer.echo(note)
 
 
 @skill_hub_app.command("remove", help="remove a custom skill")
 def skill_hub_remove(name: str) -> None:
     try:
-        existed = skill_hub.remove_custom_skill(name)
+        existed, note = skill_hub.remove_custom_skill_with_sync(name)
     except ValueError as exc:
-        console.print(f"[bold red]error:[/bold red] {exc}")
-        raise typer.Exit(code=1) from exc
+        _hallbook_error(str(exc))
     if existed:
-        console.print(f"[bold green]Removed custom skill[/bold green] custom/{name}")
+        console.print(f"[bold green]Removed custom skill[/bold green] custom/{escape_markup(name)}")
     else:
-        console.print(f"custom/{name} was not present - nothing to remove.")
+        console.print(f"custom/{escape_markup(name)} was not present - nothing to remove.")
+    if note:
+        typer.echo(note)
 
 
 @app.command(help="authenticate with GitHub via device flow and save a personal API token")

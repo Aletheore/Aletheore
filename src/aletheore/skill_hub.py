@@ -3,6 +3,7 @@ import functools
 import json
 import logging
 import math
+import os
 import re
 import time
 from collections import Counter, defaultdict
@@ -115,43 +116,202 @@ _REQUIRED_FRONTMATTER_KEYS = ("skill_id", "title", "description", "source_url", 
 logger = logging.getLogger(__name__)
 
 
+MAX_SKILL_NAME_LENGTH = 64
+SKILL_NAME_RULES = "letters, digits, - and _, up to 64 characters"
+# Names saved by earlier versions could be longer than today's cap (up to what the filesystem allows once ".md" is
+# added). They stay readable and removable; only a new name is held to MAX_SKILL_NAME_LENGTH.
+_MAX_EXISTING_NAME_LENGTH = 251
+MAX_CUSTOM_SKILL_BYTES = 1024 * 1024
+MAX_BACKUPS_PER_SKILL = 5
+_MAX_BACKUP_STEM = 64
+# Device names Windows refuses as a file name, with or without an extension.
+_WINDOWS_RESERVED_NAMES = frozenset(
+    ["con", "prn", "aux", "nul"] + [f"com{n}" for n in range(1, 10)] + [f"lpt{n}" for n in range(1, 10)]
+)
+
+
+class CustomSkillError(ValueError):
+    """A custom-skill operation that cannot go ahead. The message is one line that says what is wrong and what to do."""
+
+
 def custom_skills_dir() -> Path:
     return user_home() / ".config" / "aletheore" / "custom_skills"
 
 
-def sanitize_skill_name(name: str) -> str:
+def _shown(name: object) -> str:
+    text = repr(name)
+    return text if len(text) <= 40 else text[:37] + "...'"
+
+
+def _reason(exc: OSError) -> str:
+    return (exc.strerror or str(exc) or exc.__class__.__name__).lower()
+
+
+def sanitize_skill_name(name: str, *, existing: bool = False) -> str:
     """Return `name` unchanged if it is a safe skill name, else raise ValueError.
 
     Path separators and null bytes are rejected before the regex check so they
     can never reach a filesystem path. The regex excludes '.', so '.' and '..'
-    are rejected too.
+    are rejected too. A new name is also capped at MAX_SKILL_NAME_LENGTH and may not be a Windows
+    device name; `existing=True` (looking up, reading or removing a skill that is already saved)
+    skips those two rules so a skill saved by an older version can still be reached.
     """
-    if "/" in name or "\\" in name or "\0" in name or not _SAFE_SKILL_NAME.fullmatch(name):
-        raise ValueError(f"Invalid skill name: {name!r}")
+    if (
+        not isinstance(name, str)
+        or "/" in name
+        or "\\" in name
+        or "\0" in name
+        or not _SAFE_SKILL_NAME.fullmatch(name)
+    ):
+        raise ValueError(f"Invalid skill name {_shown(name)}: use only {SKILL_NAME_RULES}")
+    limit = _MAX_EXISTING_NAME_LENGTH if existing else MAX_SKILL_NAME_LENGTH
+    if len(name) > limit:
+        raise ValueError(f"Invalid skill name: it is {len(name)} characters long. Use only {SKILL_NAME_RULES}")
+    if not existing and name.lower() in _WINDOWS_RESERVED_NAMES:
+        raise ValueError(
+            f"Invalid skill name {name!r}: it is a reserved device name on Windows. Pick another ({SKILL_NAME_RULES})"
+        )
     return name
 
 
-def write_custom_skill_file(name: str, content: str) -> Path:
-    safe = sanitize_skill_name(name)
+def validate_custom_skill_content(content: str) -> None:
+    """Raise CustomSkillError for skill text that must not be saved: empty, binary or over 1 MB."""
+    if not isinstance(content, str) or not content.strip():
+        raise CustomSkillError("the skill text is empty. Write the instructions in the file first")
+    if "\0" in content:
+        raise CustomSkillError("the skill text contains NUL bytes, so it is not a text file. Use a markdown file")
+    size = len(content.encode("utf-8", errors="replace"))
+    if size > MAX_CUSTOM_SKILL_BYTES:
+        raise CustomSkillError(
+            f"the skill text is {size / (1024 * 1024):.1f} MB and the limit is 1 MB. Trim it or split it into several skills"
+        )
+
+
+def custom_skill_warnings(content: str) -> list[str]:
+    """Warnings (not errors) about text that is still saved: it looks like it holds a credential.
+
+    Uses the scanner's own secret patterns, and skips values it would treat as placeholders.
+    """
+    from aletheore import secrets
+
+    found: list[str] = []
+    for pattern_name, pattern, value_group in secrets.SECRET_PATTERNS:
+        for match in pattern.finditer(content):
+            value = match.group(value_group)
+            if secrets._is_likely_placeholder("skill.md", value, pattern_name):
+                continue
+            label = pattern_name.replace("_", " ")
+            if label not in found:
+                found.append(label)
+            break
+    if not found:
+        return []
+    return [
+        f"this text looks like it contains a credential ({', '.join(found)}). Custom skills are stored in plain "
+        "text on this machine and uploaded to your Aletheore account when you are logged in. Remove the secret "
+        "from the skill if you did not mean to share it"
+    ]
+
+
+def read_custom_skill_source(path: Path) -> str:
+    """The text of a file given to `hallbook add`, or CustomSkillError saying what is wrong with it."""
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read(MAX_CUSTOM_SKILL_BYTES + 1)
+    except FileNotFoundError:
+        raise CustomSkillError(f"cannot read {path}: no such file. Check the path") from None
+    except IsADirectoryError:
+        raise CustomSkillError(f"{path} is a directory, not a file. Give the path of a markdown file") from None
+    except PermissionError:
+        raise CustomSkillError(f"cannot read {path}: permission denied. Check the file's permissions") from None
+    except OSError as exc:
+        raise CustomSkillError(f"cannot read {path}: {_reason(exc)}") from None
+    if b"\0" in data:
+        raise CustomSkillError(f"{path} contains NUL bytes, so it is not a text file. Use a markdown file")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        if len(data) > MAX_CUSTOM_SKILL_BYTES:
+            raise CustomSkillError(f"{path} is over 1 MB. Trim it or split it into several skills") from None
+        raise CustomSkillError(
+            f"{path} is not valid UTF-8 text (a binary or latin-1 file?). Save it as UTF-8 markdown and try again"
+        ) from None
+    return text
+
+
+def _ensure_custom_dir() -> Path:
     directory = custom_skills_dir()
-    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise CustomSkillError(
+            f"cannot use the custom skills folder {directory}: {_reason(exc)}. "
+            "Fix the folder (or remove whatever is in its place) and try again"
+        ) from None
+    try:
+        # Private to this user. Only tightened, never loosened: a folder the user made read-only stays read-only.
+        if directory.stat().st_mode & 0o077:
+            os.chmod(directory, 0o700)
+    except OSError:
+        pass  # best effort: not every filesystem has permission bits
+    return directory
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Write `text` to `path` through a temp file in the same folder, so a failure never leaves half a file."""
+    import tempfile  # lazy: the prompt hook imports this module and never writes
+
+    tmp_name = None
+    try:
+        fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=".skill-", suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        try:
+            os.chmod(tmp_name, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp_name, path)
+        tmp_name = None
+    except UnicodeEncodeError:
+        raise CustomSkillError("the skill text has characters that cannot be saved as UTF-8. Remove them") from None
+    except OSError as exc:
+        raise CustomSkillError(
+            f"cannot write {path.name} in {path.parent}: {_reason(exc)}. Check the folder's permissions"
+        ) from None
+    finally:
+        if tmp_name is not None:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+
+
+def write_custom_skill_file(name: str, content: str) -> Path:
+    safe = sanitize_skill_name(name, existing=True)
+    directory = _ensure_custom_dir()
     path = directory / f"{safe}.md"
-    path.write_text(content, encoding="utf-8")
+    _atomic_write(path, content)
     return path
 
 
 def read_custom_skill_file(name: str) -> str | None:
-    path = custom_skills_dir() / f"{sanitize_skill_name(name)}.md"
-    if not path.is_file():
-        return None
-    return path.read_text(encoding="utf-8")
+    path = custom_skills_dir() / f"{sanitize_skill_name(name, existing=True)}.md"
+    try:
+        if not path.is_file():
+            return None
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise CustomSkillError(f"cannot read {path.name}: {_reason(exc)}. Check the file's permissions") from None
 
 
 def list_custom_skill_names() -> list[str]:
     directory = custom_skills_dir()
-    if not directory.is_dir():
+    try:
+        if not directory.is_dir():
+            return []
+        return sorted(p.stem for p in directory.glob("*.md"))
+    except OSError:
         return []
-    return sorted(p.stem for p in directory.glob("*.md"))
 
 
 @dataclass
@@ -346,8 +506,18 @@ def _bundled_skill_md_path(skill_id: str) -> Path | None:
     parts = skill_id.split("/")
     if len(parts) != 2 or not all(_SAFE_ID_SEGMENT.fullmatch(part) for part in parts):
         return None
-    path = bundled_skills_dir() / parts[0] / parts[1] / "SKILL.md"
-    return path if path.is_file() else None
+    root = bundled_skills_dir()
+    path = root / parts[0] / parts[1] / "SKILL.md"
+    if not path.is_file():
+        return None
+    # On a case-insensitive filesystem "DEBUGGING/Systematic-Debugging" opens the real file; an id is only
+    # valid in the case it is spelled in, so check the folder names as the filesystem lists them.
+    try:
+        if parts[0] not in os.listdir(root) or parts[1] not in os.listdir(root / parts[0]):
+            return None
+    except OSError:
+        return None
+    return path
 
 
 def get_bundled_skill(skill_id: str) -> CuratedSkill | None:
@@ -357,6 +527,11 @@ def get_bundled_skill(skill_id: str) -> CuratedSkill | None:
 
 class SkillFileError(Exception):
     """Raised by read_skill_file for a path that is unsafe, missing, binary or not a file."""
+
+
+def _is_compiled_python(rel_path: str) -> bool:
+    parts = rel_path.replace("\\", "/").split("/")
+    return "__pycache__" in parts[:-1] or parts[-1].lower().endswith((".pyc", ".pyo"))
 
 
 def list_skill_files(skill_id: str) -> tuple[list[str], int]:
@@ -369,17 +544,7 @@ def list_skill_files(skill_id: str) -> tuple[list[str], int]:
     skill_md = _bundled_skill_md_path(skill_id)
     if skill_md is None:
         return [], 0
-    root = skill_md.parent
-    files = []
-    for path in sorted(root.rglob("*")):
-        if path.is_symlink() or not path.is_file():
-            continue
-        rel = path.relative_to(root).as_posix()
-        if any(part.startswith(".") for part in rel.split("/")):
-            continue  # wheels do not ship dotfiles, so never advertise one
-        if rel == "SKILL.md" or (("/" not in rel) and rel.upper().startswith("LICENSE")):
-            continue
-        files.append(rel)
+    files = _companion_files(skill_md.parent)
     return files[:_MAX_LISTED_FILES], len(files)
 
 
@@ -400,6 +565,8 @@ def read_skill_file(skill_id: str, rel_path: str) -> str:
     posix = PurePosixPath(rel_path.replace("\\", "/"))
     if posix.is_absolute() or ".." in posix.parts or re.match(r"^[A-Za-z]:", rel_path):
         raise SkillFileError(f"invalid file path: {rel_path!r}")
+    if _is_compiled_python(posix.as_posix()):
+        raise SkillFileError(f"{rel_path} is a compiled Python file, not part of the skill")
     root = skill_md.parent.resolve()
     target = (root / posix).resolve()
     if not target.is_relative_to(root) or not target.is_file():
@@ -456,6 +623,9 @@ class Skill:
     # _MAX_LISTED_FILES are listed; files_total is the real count.
     files: list[str] = field(default_factory=list)
     files_total: int = 0
+    # Who holds the copyright, as named in the shipped NOTICE.md ("not recorded" when it does not say).
+    # None for a custom skill, which carries no licence information.
+    copyright: str | None = None
 
 
 def _meta(curated: CuratedSkillMeta) -> SkillMeta:
@@ -857,6 +1027,19 @@ def skill_alternates(skill_id: str) -> list[str]:
     return sorted(_curation(str(bundled_skills_dir()))[1].get(skill_id, []))
 
 
+# A longer query only slows the search down (a 5,000-word one takes seconds) and ranks no better.
+MAX_QUERY_CHARS = 500
+
+
+def cap_query(query: str) -> str:
+    """The query cut to MAX_QUERY_CHARS, at a word boundary where there is one."""
+    if len(query) <= MAX_QUERY_CHARS:
+        return query
+    cut = query[:MAX_QUERY_CHARS]
+    head, _, tail = cut.rpartition(" ")
+    return head if head and tail and not query[MAX_QUERY_CHARS].isspace() else cut
+
+
 def search_skills(query: str, category: str | None = None, limit: int = 10) -> list[SkillMeta]:
     """Ranked search over name, title, description, intents, headings and body opening.
 
@@ -864,7 +1047,7 @@ def search_skills(query: str, category: str | None = None, limit: int = 10) -> l
     term rarity, length normalisation, query coverage, adjacent-word phrases and prefix matching.
     A skill needs at least one matching word; custom skills are matched on their name only.
     """
-    return [meta for meta, _ in search_skills_scored(query, category, limit)]
+    return [meta for meta, _ in search_skills_scored(cap_query(query), category, limit)]
 
 
 def list_skills(category: str | None = None) -> list[SkillMeta]:
@@ -914,6 +1097,7 @@ def get_skill(skill_id: str) -> Skill:
         requires=list(curated.requires),
         files=files,
         files_total=files_total,
+        copyright=skill_copyright(curated.skill_id),
     )
 
 
@@ -937,7 +1121,10 @@ def _is_high_confidence(results: list[tuple[SkillMeta, float]]) -> bool:
     if not results:
         return False
     top_score = results[0][1]
-    second_score = results[1][1] if len(results) > 1 else 0.0
+    # A custom skill is the user's own unvetted text and can never be the confident answer, so it must not
+    # count as the runner-up that a vetted top hit has to beat either: a custom skill named after the task
+    # would otherwise turn a correct "high" answer into "low". It is still listed as an alternative.
+    second_score = next((score for meta, score in results[1:] if not meta.skill_id.startswith(_CUSTOM_PREFIX)), 0.0)
     gap = top_score - second_score
     ratio = top_score / second_score if second_score > 0 else math.inf
     return top_score >= FIND_SKILL_MIN_SCORE and (
@@ -1031,7 +1218,8 @@ def hook_suggestion(prompt: str, mode: str = "hint") -> str | None:
                 top_meta = full_results[0][0]
                 return (
                     f"Hallbook skill that fits this task: {top_meta.skill_id} ({top_meta.title}).\n"
-                    "If it applies, load it with aletheore_get_skill and follow it; adapt it to this project."
+                    "If it applies, load it with aletheore_get_skill (or run: aletheore hallbook get "
+                    f"{top_meta.skill_id}) and follow it; adapt it to this project."
                 )
             results = full_results
         if len(results) < 2:
@@ -1044,7 +1232,7 @@ def hook_suggestion(prompt: str, mode: str = "hint") -> str | None:
         return (
             f"Hallbook may have a skill for this: {first.skill_id} ({first.title}) "
             f"or {second.skill_id} ({second.title}). "
-            "If one applies, load it with aletheore_get_skill; otherwise ignore this."
+            "If one applies, load it with aletheore_get_skill (or run: aletheore hallbook get <id>); otherwise ignore this."
         )
     result = find_skill(text)
     if result.get("confidence") != "high":
@@ -1063,35 +1251,132 @@ def hook_suggestion(prompt: str, mode: str = "hint") -> str | None:
     )
 
 
-def unique_backup_path(name: str, kind: str) -> Path:
-    """A fresh, never-overwritten backup path next to a custom skill: <name>.md.<kind>-<timestamp>.bak.
+# --- Backups of custom skills ---------------------------------------------------------------------------------------
+#
+# Every change that replaces or removes a custom skill first keeps the old text next to it:
+#   <name>.md.bak-<UTC time>              the version an add replaced
+#   <name>.md.deleted-<UTC time>.bak      the version a remove (or a sync that mirrors a remote delete) deleted
+#   <name>.md.server-<UTC time>.bak       the account's copy, saved before a local-wins push (see skill_hub_sync)
+#   <name>.md.synced-<UTC time>.bak       the local copy, saved before a pull from the account
+# The five newest per skill are kept. The single-file <name>.md.bak that earlier versions wrote is still
+# recognised: it counts as the oldest.
 
-    Backups made by sync and by remove must not clobber one another (a second conflict on the same skill would
-    otherwise destroy the first backup), so each gets its own name. `kind` is e.g. "server", "synced", "deleted".
+
+def _backup_stem(name: str) -> str:
+    """The name as used in a backup file name: long names are cut and hashed so the file name stays short."""
+    if len(name) <= _MAX_BACKUP_STEM:
+        return name
+    import hashlib
+
+    return f"{name[:48]}~{hashlib.sha1(name.encode()).hexdigest()[:10]}"
+
+
+def _backup_regex(stem: str) -> re.Pattern:
+    return re.compile(
+        rf"{re.escape(stem)}\.md\.(?:bak(?:-(?P<s1>\d{{8}}-\d{{6}})(?:-(?P<c1>\d+))?)?"
+        rf"|[a-z]+-(?P<s2>\d{{8}}-\d{{6}})(?:-(?P<c2>\d+))?\.bak)"
+    )
+
+
+def _backup_entries(name: str) -> list[tuple[tuple[str, int], Path]]:
+    """(sort key, path) for each backup of a custom skill, oldest first. The key is (UTC stamp, counter)."""
+    directory = custom_skills_dir()
+    pattern = _backup_regex(_backup_stem(name))
+    found = []
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return []
+    for entry in entries:
+        match = pattern.fullmatch(entry.name)
+        if match is None:
+            continue
+        stamp = match.group("s1") or match.group("s2") or ""
+        counter = int(match.group("c1") or match.group("c2") or (1 if stamp else 0))
+        found.append(((stamp, counter), entry))
+    return sorted(found, key=lambda item: (item[0], item[1].name))
+
+
+def list_backups(name: str) -> list[Path]:
+    """The backups kept for a custom skill, oldest first."""
+    return [entry for _, entry in _backup_entries(name)]
+
+
+def unique_backup_path(name: str, kind: str) -> Path:
+    """A fresh, never-overwritten backup path next to a custom skill (see the table above).
+
+    Backups made by add, remove and sync must not clobber one another, and a new one must always sort as the newest
+    (so pruning never drops it), so a second backup in the same second gets a counter above the existing ones.
+    `kind` is "bak" for a replaced version, or e.g. "server", "synced", "deleted". The name part is cut and hashed
+    when it is long, so a backup name can never exceed the filesystem's limit, whatever the skill is called.
     """
     directory = custom_skills_dir()
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    path = directory / f"{name}.md.{kind}-{stamp}.bak"
-    counter = 2
-    while path.exists():
-        path = directory / f"{name}.md.{kind}-{stamp}-{counter}.bak"
+    stem = _backup_stem(name)
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    counter = 1
+    entries = _backup_entries(name)
+    if entries:
+        (last_stamp, last_counter), _ = entries[-1]
+        if last_stamp >= stamp:  # same second (or a clock that went back): sort after what is there
+            stamp, counter = last_stamp, last_counter + 1
+    while True:
+        suffix = f"-{counter}" if counter > 1 else ""
+        path = (
+            directory / f"{stem}.md.bak-{stamp}{suffix}"
+            if kind == "bak"
+            else directory / f"{stem}.md.{kind}-{stamp}{suffix}.bak"
+        )
+        if not path.exists():
+            return path
         counter += 1
+
+
+def prune_backups(name: str, keep: int = MAX_BACKUPS_PER_SKILL) -> None:
+    """Delete the oldest backups of a custom skill beyond `keep`. Never raises."""
+    backups = list_backups(name)
+    for old in backups[: max(0, len(backups) - keep)]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+
+def write_backup(name: str, kind: str, text: str) -> Path:
+    """Save `text` as a new backup of the custom skill `name`, then prune the oldest beyond five."""
+    _ensure_custom_dir()
+    path = unique_backup_path(name, kind)
+    _atomic_write(path, text)
+    prune_backups(name)
     return path
 
 
-def add_custom_skill(name: str, content: str) -> str:
-    # Local-only safety net, separate from skill_hub_sync's pull-merge
-    # backup: if a skill already exists under this name (a user re-adding it,
-    # or an agent calling aletheore_add_custom_skill on a name the user
-    # already has), keep its current content in <name>.md.bak before
-    # overwriting. Same convention as the sync side: one file, overwritten
-    # each time, not a history. Skipped when the content is identical, so a
-    # repeated add can't replace a meaningful backup with a duplicate.
-    existing = read_custom_skill_file(name)
+def _sync_note(function_name: str, outcome):
+    from aletheore import skill_hub_sync
+
+    return getattr(skill_hub_sync, function_name)(outcome)
+
+
+def add_custom_skill_with_sync(name: str, content: str) -> tuple[str, str | None]:
+    """Save a custom skill. Returns (skill id, a one-line note when the account sync did not happen, else None).
+
+    Raises ValueError (CustomSkillError for the storage and content problems) with a one-line message.
+    """
+    safe = sanitize_skill_name(name)
+    validate_custom_skill_content(content)
+    for other in list_custom_skill_names():
+        if other != safe and other.lower() == safe.lower():
+            raise CustomSkillError(
+                f"a custom skill named {other!r} already exists and differs from {safe!r} only in capital letters "
+                f"(many systems treat the two as one file). Use {other!r}, or remove it first"
+            )
+    # Local-only safety net, separate from skill_hub_sync's pull-merge backup: if a skill already exists under
+    # this name (a user re-adding it, or an agent calling aletheore_add_custom_skill on a name the user already
+    # has), keep its current text as a timestamped backup (five are kept) before replacing it. Skipped when the
+    # content is identical, so a repeated add can't push a meaningful backup out with a duplicate.
+    existing = read_custom_skill_file(safe)
     if existing is not None and existing != content:
-        backup_path = custom_skills_dir() / f"{sanitize_skill_name(name)}.md.bak"
-        backup_path.write_text(existing, encoding="utf-8")
-    write_custom_skill_file(name, content)
+        write_backup(safe, "bak", existing)
+    write_custom_skill_file(safe, content)
     # Local import: skill_hub_sync imports this module, so a top-level import
     # here would be circular. The push never raises, so the return value is
     # unaffected by whether the sync succeeded.
@@ -1100,9 +1385,42 @@ def add_custom_skill(name: str, content: str) -> str:
     # Re-adding a name the user removed offline: the remove left a pending
     # server delete behind, and that must not fire at the next login and then
     # make the sync treat the re-added skill as deleted elsewhere.
-    skill_hub_sync._clear_pending_delete(sanitize_skill_name(name))
-    skill_hub_sync.push_custom_skill_best_effort(name, content)
-    return f"{_CUSTOM_PREFIX}{name}"
+    skill_hub_sync._clear_pending_delete(safe)
+    outcome = skill_hub_sync.push_custom_skill_best_effort(name, content)
+    return f"{_CUSTOM_PREFIX}{name}", skill_hub_sync.push_note(outcome)
+
+
+def add_custom_skill(name: str, content: str) -> str:
+    return add_custom_skill_with_sync(name, content)[0]
+
+
+def remove_custom_skill_with_sync(name: str) -> tuple[bool, str | None]:
+    """Delete a local custom skill. Returns (whether a local file was deleted, a one-line sync note or None)."""
+    safe = sanitize_skill_name(name, existing=True)
+    path = custom_skills_dir() / f"{safe}.md"
+    try:
+        existed = path.is_file()
+    except OSError:
+        existed = False
+    if existed:
+        # Keep a copy: the server delete below cannot be undone from here, and
+        # an agent can call this through MCP.
+        write_backup(safe, "deleted", read_custom_skill_file(safe) or "")
+        try:
+            path.unlink()
+        except OSError as exc:
+            raise CustomSkillError(
+                f"cannot remove {path.name} from {path.parent}: {_reason(exc)}. Check the folder's permissions"
+            ) from None
+    # Local import: skill_hub_sync imports this module, so a top-level import
+    # here would be circular. Called unconditionally, even when nothing was
+    # deleted locally: the server might still hold a stale copy from an
+    # earlier, now-forgotten local delete, and delete_custom_skill_best_effort
+    # itself handles "nothing to do" cheaply and never raises.
+    from aletheore import skill_hub_sync
+
+    outcome = skill_hub_sync.delete_custom_skill_best_effort(name)
+    return existed, skill_hub_sync.delete_note(outcome)
 
 
 def remove_custom_skill(name: str) -> bool:
@@ -1113,20 +1431,198 @@ def remove_custom_skill(name: str) -> bool:
     an error, so this never raises SkillNotFoundError the way get_skill does.
     Still raises ValueError for an unsafe name, same as add_custom_skill.
     """
-    safe = sanitize_skill_name(name)
-    path = custom_skills_dir() / f"{safe}.md"
-    existed = path.is_file()
-    if existed:
-        # Keep a copy: the server delete below cannot be undone from here, and
-        # an agent can call this through MCP.
-        unique_backup_path(safe, "deleted").write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-        path.unlink()
-    # Local import: skill_hub_sync imports this module, so a top-level import
-    # here would be circular. Called unconditionally, even when nothing was
-    # deleted locally: the server might still hold a stale copy from an
-    # earlier, now-forgotten local delete, and delete_custom_skill_best_effort
-    # itself handles "nothing to do" cheaply and never raises.
-    from aletheore import skill_hub_sync
+    return remove_custom_skill_with_sync(name)[0]
 
-    skill_hub_sync.delete_custom_skill_best_effort(name)
-    return existed
+
+# --- Provenance: the licence, copyright holder and source of a skill, and the catalogue as a whole ---------------
+
+NOT_RECORDED = "not recorded"
+_NOTICE_FILE = "NOTICE.md"
+_SCRIPT_SUFFIXES = (".py", ".sh", ".bash", ".zsh", ".ps1", ".rb", ".pl")
+
+
+def notice_path() -> Path:
+    """The generated NOTICE.md that ships with the bundled skills: one row per skill with its licence and copyright holder."""
+    return bundled_skills_dir() / _NOTICE_FILE
+
+
+@functools.lru_cache(maxsize=4)
+def _notice_table(path: str) -> dict[str, str]:
+    """skill id -> copyright holder, parsed once per process from the table in NOTICE.md (empty when it is absent).
+
+    Rows read: | `category/name` | LICENSE | Copyright holder | upstream repository | source URL |
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    table: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line.startswith("| `"):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 5:
+            continue
+        holder = " | ".join(cells[2:-2]).strip()
+        table[cells[0].strip("`")] = holder
+    return table
+
+
+def skill_copyright(skill_id: str) -> str:
+    """The copyright holder named for a bundled skill in NOTICE.md, or "not recorded"."""
+    return _notice_table(str(notice_path())).get(skill_id) or NOT_RECORDED
+
+
+def _companion_files(root: Path) -> list[str]:
+    files = []
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        rel = path.relative_to(root).as_posix()
+        if any(part.startswith(".") for part in rel.split("/")):
+            continue  # wheels do not ship dotfiles, so never advertise one
+        if _is_compiled_python(rel):
+            continue  # pip writes these when it byte-compiles a script; their names vary by Python version
+        if rel == "SKILL.md" or (("/" not in rel) and rel.upper().startswith("LICENSE")):
+            continue
+        files.append(rel)
+    return files
+
+
+def _is_script(rel_path: str) -> bool:
+    return rel_path.startswith("scripts/") or rel_path.lower().endswith(_SCRIPT_SUFFIXES)
+
+
+def _shelf_title(shelf: str) -> str:
+    if shelf == _CUSTOM_CATEGORY:
+        return "Your skills"
+    return SHELF_TITLES.get(shelf, shelf.replace("-", " ").title()) if shelf else ""
+
+
+def skill_info(skill_id: str) -> dict:
+    """What is known about where a skill comes from: pure data, raises SkillNotFoundError for an unknown id.
+
+    A custom skill is the user's own text: it is marked as custom and carries no licence information.
+    """
+    if skill_id.startswith(_CUSTOM_PREFIX):
+        skill = get_skill(skill_id)  # raises SkillNotFoundError
+        return {
+            "skill_id": skill.skill_id, "title": skill.title, "custom": True, "shelf": _CUSTOM_CATEGORY,
+            "shelf_title": _shelf_title(_CUSTOM_CATEGORY), "category": _CUSTOM_CATEGORY, "license": None,
+            "copyright": None, "source_url": None, "requires": [], "files_total": 0, "scripts": 0,
+            "license_file": False,
+        }
+    curated = get_bundled_skill(skill_id)
+    skill_md = _bundled_skill_md_path(skill_id)
+    if curated is None or skill_md is None:
+        raise SkillNotFoundError(skill_id)
+    files = _companion_files(skill_md.parent)
+    return {
+        "skill_id": curated.skill_id, "title": curated.title, "custom": False, "shelf": curated.shelf,
+        "shelf_title": _shelf_title(curated.shelf), "category": curated.skill_id.split("/", 1)[0],
+        "license": curated.license or "", "copyright": skill_copyright(curated.skill_id),
+        "source_url": curated.source_url or "", "requires": list(curated.requires), "files_total": len(files),
+        "scripts": sum(1 for rel in files if _is_script(rel)),
+        "license_file": any(skill_md.parent.glob("LICENSE*")),
+    }
+
+
+def skill_license_text(skill_id: str) -> str | None:
+    """The licence text the skill ships (LICENSE.upstream, else another top-level LICENSE file), or None if it has none."""
+    skill_md = _bundled_skill_md_path(skill_id)
+    if skill_md is None:
+        raise SkillNotFoundError(skill_id)
+    root = skill_md.parent
+    candidates = [root / "LICENSE.upstream", *sorted(p for p in root.glob("LICENSE*") if p.name != "LICENSE.upstream")]
+    for path in candidates:
+        if path.is_file() and not path.is_symlink():
+            return path.read_bytes()[:_MAX_FILE_BYTES].decode("utf-8", errors="replace")
+    return None
+
+
+def catalogue_summary() -> dict:
+    """The bundled catalogue in numbers, computed from the skill index: total, skills per licence, per shelf."""
+    metas = _index()
+    licences = Counter(meta.license or "unknown" for meta in metas)
+    shelves = [
+        {"shelf": entry["shelf"], "title": entry["title"], "skills": entry["skills"]}
+        for entry in list_overview()
+        if entry["shelf"] != _CUSTOM_CATEGORY
+    ]
+    return {
+        "total": len(metas),
+        "licenses": sorted(licences.items(), key=lambda item: (-item[1], item[0])),
+        "shelves": shelves,
+        "notice_path": str(notice_path()),
+        "notice_present": notice_path().is_file(),
+    }
+
+
+def known_categories() -> list[str]:
+    """Every category a search or list can be limited to, custom skills' included."""
+    return sorted({*list_bundled_categories(), _CUSTOM_CATEGORY})
+
+
+def check_category(category: str | None) -> None:
+    """Raise ValueError naming the valid categories (and the right capitalisation, if that was the slip) when unknown."""
+    if category is None:
+        return
+    valid = known_categories()
+    if category in valid:
+        return
+    folded = [name for name in valid if name.lower() == category.lower()]
+    hint = f" Did you mean '{folded[0]}'?" if folded else ""
+    raise ValueError(f"unknown category '{category}'.{hint} Valid categories: {', '.join(valid)}")
+
+
+def _bundled_ids() -> list[str]:
+    return [meta.skill_id for meta in _index()]
+
+
+def suggest_skill_ids(text: str, limit: int = 5) -> list[str]:
+    """Up to `limit` skill ids that the (mistyped, wrongly cased or partial) `text` may have meant, best first."""
+    import difflib
+
+    ids = _bundled_ids()
+    low = text.strip().lower()
+    bare = low.rsplit("/", 1)[-1]
+    if not bare:
+        return []
+    names = {sid: sid.split("/", 1)[1].lower() for sid in ids}
+    exact = [sid for sid in ids if sid.lower() == low or names[sid] == bare]
+    contained = [sid for sid in ids if sid not in exact and len(bare) >= 3 and (bare in names[sid] or names[sid] in bare)]
+    by_name: dict[str, list[str]] = defaultdict(list)
+    for sid, name in names.items():
+        by_name[name].append(sid)
+    close = []
+    for name in difflib.get_close_matches(bare, list(by_name), n=limit, cutoff=0.6):
+        close.extend(by_name[name])
+    ordered = list(dict.fromkeys([*exact, *close, *sorted(contained)]))
+    return ordered[:limit]
+
+
+def resolve_skill_id(text: str) -> tuple[str | None, list[str]]:
+    """Turn what the user typed into a skill id: (id, []) when it is exact or an unambiguous bare name.
+
+    Otherwise (None, suggestions): the ids a bare name could stand for when it is ambiguous, or the closest ids when
+    nothing matches. Matching is exact (including case); a near miss is only suggested.
+    """
+    text = text.strip()
+    if text.startswith(_CUSTOM_PREFIX):
+        name = text[len(_CUSTOM_PREFIX):]
+        try:
+            if read_custom_skill_file(name) is not None:
+                return text, []
+        except ValueError:
+            pass
+        return None, [f"{_CUSTOM_PREFIX}{other}" for other in list_custom_skill_names() if other.lower() == name.lower()][:5]
+    ids = _bundled_ids()
+    if text in ids:
+        return text, []
+    if text and "/" not in text:
+        matches = [sid for sid in ids if sid.split("/", 1)[1] == text]
+        if len(matches) == 1:
+            return matches[0], []
+        if matches:
+            return None, matches[:5]
+    return None, suggest_skill_ids(text)

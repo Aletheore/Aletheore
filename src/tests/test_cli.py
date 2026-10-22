@@ -3855,7 +3855,7 @@ def test_hallbook_search_without_a_terminal_uses_a_hundred_columns(monkeypatch):
     long = "word " * 100
     monkeypatch.setattr(skill_hub, "search_skills",
                         lambda *a, **k: [skill_hub.SkillMeta("testing/x", "testing", "X", long)])
-    lines = runner.invoke(app, ["hallbook", "search", "x"]).stdout.splitlines()
+    lines = runner.invoke(app, ["hallbook", "search", "xx"]).stdout.splitlines()
     assert max(len(line) for line in lines) <= 100 and lines[1].endswith("…")
 
 
@@ -3863,7 +3863,7 @@ def test_hallbook_search_keeps_a_short_description_whole_and_skips_an_empty_one(
     _fake_width(monkeypatch, 80)
     metas = [skill_hub.SkillMeta("a/one", "a", "One", "Short and sweet."), skill_hub.SkillMeta("a/two", "a", "Two", "")]
     monkeypatch.setattr(skill_hub, "search_skills", lambda *a, **k: metas)
-    assert runner.invoke(app, ["hallbook", "search", "x"]).stdout.splitlines() == [
+    assert runner.invoke(app, ["hallbook", "search", "xx"]).stdout.splitlines() == [
         "a/one  One", "    Short and sweet.", "a/two  Two"]
 
 
