@@ -5,7 +5,145 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
-- Fixed `aletheore scan` on large repos skipping `air.toon` with "Expected N items, but got M": python-toon 0.1.x misread `[1]` text inside a quoted docstring as an array header. The `python-toon` requirement is now `>=0.2.0,<0.3`.
+## 0.10.0 - 2026-10-22
+
+**Added: Hallbook, a bundled library of 1,129 vetted agent skills (#1070)**
+
+Hallbook is a shelf of ready-made skills (specialist instructions for debugging, code review, testing, planning,
+security, API and platform integrations, SEO, design and more) that your coding agent can look up while it works.
+New installs include the whole catalogue inside the package, so the wheel grew to about 25 MB. Each skill keeps
+its upstream licence (MIT, Apache-2.0, BSD or ISC only), and `NOTICE.md` in the package records the source and
+pinned commit of each one. Every skill and every file it ships goes through a vetting check in CI before release.
+
+- `aletheore hallbook categories` shows the shelves and categories with skill counts, `list` lists every skill,
+  `search "flaky test"` finds skills by what you are about to do (`--category`, `--limit`), `get` prints a skill,
+  and `files` / `get-file` read the references, scripts and templates a skill ships with.
+- Agents reach the same library through MCP: `aletheore_find_skill` takes a one-sentence task description and
+  returns one skill when the match is clearly good, and says so when it is not. `aletheore_search_skills`,
+  `aletheore_list_skills`, `aletheore_get_skill` and `aletheore_get_skill_file` cover browsing and loading.
+  `aletheore hallbook snippet` prints a short instruction to paste into `AGENTS.md` or `CLAUDE.md` so your agent
+  uses it.
+- Custom skills: `aletheore hallbook add <name> <file>` and `remove <name>` (or the `aletheore_add_custom_skill`
+  and `aletheore_remove_custom_skill` MCP tools) keep your own skills next to the bundled ones, stored under
+  `~/.config/aletheore/custom_skills`.
+- Optional sync: after `aletheore login`, custom skills sync to your Aletheore account, so they follow you to
+  another machine. A skill you add is pushed, a removal is deleted from the account, and login merges the account
+  copy with what is on disk. When both sides changed, your local edit wins and the account copy is saved next to
+  it as a `.bak` file; nothing is overwritten without a backup. Custom skills are stored on the server in plain
+  text once you are logged in. `aletheore logout` now also clears the Hallbook token, and
+  `aletheore logout --all-devices` revokes every personal token on the server.
+- Prompt hook: `aletheore hallbook hook` prints a Claude Code `UserPromptSubmit` settings snippet to paste in.
+  The hook (`aletheore hallbook suggest`, with `--mode hint` or `--mode inject`) stays silent unless one skill is
+  a clear match for your prompt, then adds one line pointing at it (or the skill text, in `inject` mode). It
+  always exits 0, so it cannot break a prompt.
+
+What Hallbook does not do: it never writes into your agent's skill folders, it only returns skill text when asked,
+and bundled scripts run only if your agent chooses to run them. Searching needs no network and no login.
+
+**Changed: a black-and-white look, a logo banner, and an arrow-key home menu (#1083)**
+
+Running `aletheore` with no command in a real terminal now opens a menu you move through with the arrow keys:
+scan, explore the evidence, audit, find a Hallbook skill, connect a coding agent, dashboard, account, and all
+commands. It shows the block-letter ALETHEORE logo, the version and the folder you are in. With no terminal (a pipe, CI,
+`TERM=dumb`) or with `ALETHEORE_NO_MENU=1`, it prints the plain command list as before. Output uses no color,
+only bold, dim and reverse video, so it reads on dark and light themes; `--help` is plain too. No commands or
+flags changed.
+
+**Added: a guard against scanning the wrong folder (#1083)**
+
+`scan`, `audit`, `watch`, `init`, `mcp`, `mcp-install` and `dashboard` now stop and ask when the folder is your
+home folder, Desktop, Documents, Downloads or the filesystem root and it holds no project files (`.git`,
+`package.json`, `pyproject.toml` and similar). A real project is never questioned, even under Documents. Pass
+`--yes` / `-y` or set `ALETHEORE_ASSUME_YES=1` to skip the question; without a terminal the command refuses with
+a hint and exit code 2.
+
+**Added: `dependents`, `usages`, `tests-for` and `cycles`, each a complete answer in one call (#1058, #1060, #1061, #1062, #1063, #1065)**
+
+These return the finished list instead of pointers you have to open and merge, and each ends with a short note on
+what it covers and what it cannot see (static imports only, textual matches, unparseable files, files changed
+since the scan).
+
+- `aletheore dependents <file>` lists every file that imports a file, directly or through other imports, as one
+  deduplicated list. `--under DIR` and `--exclude NAME` (both repeatable) narrow it, `--no-tests` drops test
+  files, `--packages` prints one line per importing directory, and a directory can be the target, which treats its
+  files as one package.
+- `aletheore usages <symbol>` lists every definition of a function or class name plus every other whole-word
+  reference to it, each with the matching source line, capped at 200 hits, with `--under` and `--exclude`. It uses
+  `git grep` in a git checkout. The match is literal text, so dynamic dispatch and renamed imports are not
+  tracked.
+- `aletheore tests-for <file>` lists the test files that exercise a file, by the import graph and by naming
+  convention (`test_x.py`, `x_test.py`, `x.test.*`, `x.spec.*`).
+- `aletheore cycles` lists every circular import group, with a concrete example chain for each, and takes
+  `--under` and `--exclude`. Cycles are still found over the whole graph, so one running through files outside
+  your scope is not missed.
+- `aletheore query dead-code` and `query error-handling` accept `--under`, `--exclude` and `--no-tests`, and
+  report how many entries were left out (#1066). Counts that are not per path stay repo-wide.
+- `aletheore query imports` and `imported-by` now list each file once; before, a file imported in ten places
+  appeared ten times (#1058).
+
+**Added: `aletheore locate`, a lean MCP profile and smaller MCP results (#1049, #1050)**
+
+- `aletheore locate 'write_usage HelpFormatter'` finds where names are defined and prints the matching code, and
+  is also available as the `aletheore_locate` MCP tool.
+- `aletheore mcp --profile nav` exposes three tools (`aletheore_locate`, `aletheore_symbol_source`,
+  `aletheore_search`), small enough for an agent to load up front. It turns background re-scanning off and says
+  so. `--profile full` (the default) is unchanged.
+- MCP tool results no longer scale with the size of the repository. `aletheore_symbol_source` shows at most 120
+  lines by default (a long class shows its header and a method list with line ranges), `aletheore_neighborhood`
+  lists the 20 most connected neighbors per direction, `aletheore_list` takes a `filter` and returns at most 200
+  items, and `aletheore_changes` caps its lists at 200. The repo-wide tools (`aletheore_database`,
+  `aletheore_error_handling`, `aletheore_environment_variables`, `aletheore_static_analysis`,
+  `aletheore_endpoints`, `aletheore_dead_code`, `aletheore_hotspots`, `aletheore_infrastructure`) stay within a
+  20,000-character budget. Each cap has a parameter to lift it (`max_lines=0`, `max_items=0`) and reports when it
+  trimmed. The CLI is not capped. Each result is also sent once instead of twice, and symbol source is no longer
+  double-escaped.
+- `aletheore tokens audit` sends one tiny request through your own `claude` CLI and reports the tools it loads
+  and the fixed token cost per turn; it asks first. `aletheore tokens profile core|core+web` shows the
+  `permissions.deny` entries it would add to the project's `.claude/settings.json` for built-in tools most coding
+  tasks never use, and applies them only after you type `yes` (or pass `--yes`). `tokens profile off` removes
+  exactly what it added. Nothing is applied automatically, and user-level settings are never touched.
+
+**Added: an opt-in read-once guard for Claude Code (#1064, #1094)**
+
+With `ALETHEORE_READ_GUARD=1`, `aletheore hook pre-read` and `aletheore hook post-read` (a `PreToolUse` and
+`PostToolUse` hook pair for `Read`) deny a full re-read of a file that is unchanged on disk since the agent read
+it in full in the same session. The message says the file is unchanged and leaves the choice to the agent; a
+read with `offset` or `limit` is never denied. A file that a whole-file read only showed in part (past 2,000
+lines, or with lines cut at 2,000 characters) is no longer recorded as read in full. The hooks are a silent no-op
+unless the variable is set.
+
+**Fixed: a repository could shadow a scanner or agent binary through a relative `PATH` entry (#1046, #1093)**
+
+If `PATH` held a relative entry, a scanned repository could put an executable with the same name as a scanner
+or coding-agent binary in its own tree and have it run. The seven scanner wrappers (bandit, semgrep, gosec, pmd,
+bearer, sonarqube, trivy), the six local coding-agent adapters and the `git` calls made inside a scanned
+repository now resolve to an absolute path before the working directory changes. Two MCP fixes from the same
+review: `aletheore_answer` now needs the `external` consent when the chosen agent reaches a third-party API, and
+the background watcher passes your actual `external` setting to re-indexing instead of always allowing hosted
+embedding.
+
+**Fixed: scanner and CLI correctness**
+
+- `aletheore scan` on large repos no longer skips `air.toon` with "Expected N items, but got M" (#1052).
+  `python-toon` 0.1.x read `[1]` inside a quoted docstring as an array header. The requirement is now
+  `python-toon>=0.2.0,<0.3`.
+- Python imports resolve case-sensitively (#1054). On macOS, `from pkg.vector import Point` matched a file
+  `point.py` and attached the import to the wrong file; it now falls back to the package, as Python does.
+- Orphaned `.worktrees` folders are excluded from scans (#1051); one whose `.git` link was gone had its files
+  counted twice.
+- Running any command from a deleted working directory now exits 1 with a clear message instead of a traceback
+  and a crash report (#1053).
+- `aletheore mcp-install` exits non-zero when it refuses to write a config because the path escapes the repo
+  through a symlink (#1057). It printed the warning but exited 0.
+- `aletheore usages` decodes `git grep` output and files as UTF-8, so non-ASCII file names and lines are correct
+  on Windows (#1096).
+
+**Changed: faster CLI startup (#1055, #1059)**
+
+`import aletheore.cli` went from about 1.2 seconds to about 0.3 seconds by loading the Anthropic and OpenAI SDKs,
+`httpx`, `sentry_sdk` and `networkx` only when used, and crash reporting no longer loads about 100 optional
+framework integrations at startup (3.5 seconds to 0.05 seconds in isolation). Crash capture and scrubbing are
+unchanged. A missing or broken dependency now shows at first use instead of at startup.
 
 ## 0.9.27 - 2026-10-14
 
