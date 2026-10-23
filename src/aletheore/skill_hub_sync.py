@@ -166,6 +166,7 @@ LOGGED_OUT = "logged_out"
 OFFLINE = "offline"
 UNAUTHORIZED = "unauthorized"
 SERVER_ERROR = "server_error"
+NOTHING_TO_DO = "nothing_to_do"  # delete while logged out of a skill that was never synced: no account copy exists
 
 _CONNECT_TIMEOUT = 2.0  # an unreachable host must not hold up `add` and `remove` for the whole request timeout
 
@@ -280,7 +281,7 @@ def delete_custom_skill_best_effort(name: str, timeout: float = 5.0) -> str | No
         if name in _load_sync_state():
             _record_pending_delete(name)
             return LOGGED_OUT
-        return SYNCED
+        return NOTHING_TO_DO
     try:
         response = httpx.delete(
             f"{_api_base_url()}/v1/custom-skills/{name}",
@@ -468,6 +469,17 @@ def _handle_account_switch(account_id: str | None) -> None:
     account_path.write_text(account_id, encoding="utf-8")
 
 
+def _check_server_name(name) -> None:
+    """A name the server lists becomes a local file name, so it gets the full rules for a new name (length cap,
+    no Windows device names). The one exception is a name this machine already holds, saved by an older version."""
+    try:
+        skill_hub.sanitize_skill_name(name)
+    except ValueError:
+        if not (isinstance(name, str) and name in skill_hub.list_custom_skill_names()):
+            raise
+        skill_hub.sanitize_skill_name(name, existing=True)
+
+
 def pull_merge_custom_skills(timeout: float = 10.0) -> None:
     """Run once at login. Requires a saved personal token - returns
     immediately (no network call) without one, since login's caller only
@@ -510,7 +522,7 @@ def pull_merge_custom_skills(timeout: float = 10.0) -> None:
         for entry in server_skills:
             name = entry["name"]
             try:
-                skill_hub.sanitize_skill_name(name, existing=True)
+                _check_server_name(name)
             except ValueError:
                 logger.warning("skill hub sync: ignoring unsafe skill name from server: %r", name)
                 continue

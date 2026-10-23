@@ -501,3 +501,66 @@ def test_a_backup_that_cannot_be_deleted_is_skipped_not_fatal(skills_dir, monkey
 
     monkeypatch.setattr(type(skills_dir), "unlink", locked)
     skill_hub.prune_backups("locked")  # must not raise
+
+
+# --- review follow-ups --------------------------------------------------------------------------------------------
+
+
+def _listing(*names):
+    return {"account_id": "acct", "skills": [{"name": n, "updated_at": "2026-01-01T00:00:00+00:00"} for n in names]}
+
+
+def test_server_supplied_names_get_the_strict_rules(skills_dir, monkeypatch):
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
+    fetched = []
+
+    def get(url, **kwargs):
+        if url.endswith("/v1/custom-skills"):
+            return httpx.Response(200, request=httpx.Request("GET", url), json=_listing("con", "nul", "a" * 80, "fine"))
+        fetched.append(url)
+        return httpx.Response(200, request=httpx.Request("GET", url), json={"content": "text"})
+
+    monkeypatch.setattr(skill_hub_sync.httpx, "get", get)
+    skill_hub_sync.pull_merge_custom_skills()
+    assert skill_hub.list_custom_skill_names() == ["fine"]
+    assert not any(url.endswith(("/con", "/nul")) for url in fetched)
+
+
+def test_a_long_name_this_machine_already_holds_is_still_synced(skills_dir, monkeypatch):
+    skills_dir.mkdir(parents=True)
+    legacy = "q" * 90
+    (skills_dir / f"{legacy}.md").write_text("old", encoding="utf-8")
+    skill_hub_sync._check_server_name(legacy)
+    with pytest.raises(ValueError):
+        skill_hub_sync._check_server_name("r" * 90)
+
+
+def test_deleting_a_never_synced_skill_while_logged_out_is_nothing_to_do(skills_dir):
+    assert skill_hub_sync.delete_custom_skill_best_effort("never-synced") == skill_hub_sync.NOTHING_TO_DO
+    assert skill_hub_sync.delete_note(skill_hub_sync.NOTHING_TO_DO) is None
+
+
+def test_info_ambiguity_message_survives_padded_input(monkeypatch):
+    monkeypatch.setattr(
+        skill_hub, "_bundled_ids", lambda: ["a/same-name", "b/same-name", "c/other"]
+    )
+    result = runner.invoke(app, ["hallbook", "info", "  same-name  "])
+    assert result.exit_code == 1 and "ambiguous" in result.output and "a/same-name" in result.output
+
+
+def test_info_licence_for_an_indexed_skill_without_files_is_a_clean_error(monkeypatch):
+    monkeypatch.setattr(skill_hub, "resolve_skill_id", lambda text: ("ghost/skill", []))
+    for args in (["--licence"], []):
+        result = runner.invoke(app, ["hallbook", "info", "ghost/skill", *args])
+        assert result.exit_code == 1 and result.output.startswith("error:") and NO_TRACEBACK not in result.output
+
+
+def test_legacy_backups_of_a_long_named_skill_are_listed_and_pruned(skills_dir):
+    name = "w" * 100
+    skills_dir.mkdir(parents=True)
+    legacy = skills_dir / f"{name}.md.bak"
+    legacy.write_text("legacy", encoding="utf-8")
+    assert skill_hub.list_backups(name) == [legacy]
+    for number in range(5):
+        skill_hub.write_backup(name, "bak", f"v{number}")
+    assert not legacy.exists() and len(skill_hub.list_backups(name)) == 5

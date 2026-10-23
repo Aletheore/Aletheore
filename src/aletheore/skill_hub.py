@@ -1273,9 +1273,13 @@ def _backup_stem(name: str) -> str:
     return f"{name[:48]}~{hashlib.sha1(name.encode(), usedforsecurity=False).hexdigest()[:10]}"
 
 
-def _backup_regex(stem: str) -> re.Pattern:
+def _backup_regex(name: str) -> re.Pattern:
+    # Backups written by earlier versions carry the full name even when it is long; today's carry the cut-and-hashed
+    # stem. Recognise both, so a legacy long-named skill's old backups are listed and pruned like any other.
+    stems = dict.fromkeys([_backup_stem(name), name])
+    stem = "(?:" + "|".join(re.escape(item) for item in stems) + ")"
     return re.compile(
-        rf"{re.escape(stem)}\.md\.(?:bak(?:-(?P<s1>\d{{8}}-\d{{6}})(?:-(?P<c1>\d+))?)?"
+        rf"{stem}\.md\.(?:bak(?:-(?P<s1>\d{{8}}-\d{{6}})(?:-(?P<c1>\d+))?)?"
         rf"|[a-z]+-(?P<s2>\d{{8}}-\d{{6}})(?:-(?P<c2>\d+))?\.bak)"
     )
 
@@ -1283,7 +1287,7 @@ def _backup_regex(stem: str) -> re.Pattern:
 def _backup_entries(name: str) -> list[tuple[tuple[str, int], Path]]:
     """(sort key, path) for each backup of a custom skill, oldest first. The key is (UTC stamp, counter)."""
     directory = custom_skills_dir()
-    pattern = _backup_regex(_backup_stem(name))
+    pattern = _backup_regex(name)
     found = []
     try:
         entries = list(directory.iterdir())
@@ -1350,12 +1354,6 @@ def write_backup(name: str, kind: str, text: str) -> Path:
     _atomic_write(path, text)
     prune_backups(name)
     return path
-
-
-def _sync_note(function_name: str, outcome):
-    from aletheore import skill_hub_sync
-
-    return getattr(skill_hub_sync, function_name)(outcome)
 
 
 def add_custom_skill_with_sync(name: str, content: str) -> tuple[str, str | None]:

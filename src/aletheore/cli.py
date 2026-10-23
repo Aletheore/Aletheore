@@ -3051,6 +3051,8 @@ def skill_hub_info(
     licence: bool = typer.Option(False, "--licence", "--license", help="print the skill's full licence text"),
 ) -> None:
     width = _plain_width()
+    if skill is not None:
+        skill = skill.strip()
     if skill is None:
         if licence:
             _hallbook_error("--licence needs a skill: aletheore hallbook info SKILL --licence")
@@ -3062,17 +3064,27 @@ def skill_hub_info(
             _hallbook_error(f"'{skill}' is ambiguous. Use the full id: " + ", ".join(suggestions))
         _skill_not_found(skill)
     if licence:
-        if skill_id.startswith("custom/"):
+        if skill_id.startswith(skill_hub._CUSTOM_PREFIX):
             typer.echo(f"{skill_id} is a custom skill you added: there is no licence information for it.")
             return
-        text = skill_hub.skill_license_text(skill_id)
+        try:
+            text = skill_hub.skill_license_text(skill_id)
+        except skill_hub.SkillNotFoundError:
+            _skill_not_found(skill_id)
         if text is None:
-            spdx = skill_hub.skill_info(skill_id)["license"] or "not recorded"
+            try:
+                spdx = skill_hub.skill_info(skill_id)["license"] or "not recorded"
+            except skill_hub.SkillNotFoundError:
+                _skill_not_found(skill_id)
             typer.echo(f"{skill_id} ships no licence file. Its SPDX licence id is {spdx}.")
             return
         typer.echo(text, nl=not text.endswith("\n"))
         return
-    _print_skill_info(skill_hub.skill_info(skill_id), width)
+    try:
+        info = skill_hub.skill_info(skill_id)
+    except skill_hub.SkillNotFoundError:
+        _skill_not_found(skill_id)
+    _print_skill_info(info, width)
 
 
 _ADD_NAME_HELP = (
