@@ -9,7 +9,7 @@ skill_id: platforms/azure-deploy
 title: Azure Deploy
 source_url: https://github.com/microsoft/azure-skills/tree/cf79ce8778ad063eeac19dbe8bf982d71b466ce0/skills/azure-deploy
 shelf: build
-aletheore: {"id": "platforms/azure-deploy", "shelf": "build", "category": "platforms", "origin": "https://github.com/microsoft/azure-skills/tree/cf79ce8778ad063eeac19dbe8bf982d71b466ce0/skills/azure-deploy", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "cf79ce8778ad063eeac19dbe8bf982d71b466ce0", "quality": 4, "curation_note": "Azure deploy/diagnostics/infra/AKS", "needs_tool": null, "vet": {"injection_pattern_hits": ["pipe-to-shell"], "portability_flags": [], "companion_files": 40, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["mcp:azure"], "adapted": {"pipe-to-shell": 1}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "platforms/azure-deploy", "shelf": "build", "category": "platforms", "origin": "https://github.com/microsoft/azure-skills/tree/cf79ce8778ad063eeac19dbe8bf982d71b466ce0/skills/azure-deploy", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "cf79ce8778ad063eeac19dbe8bf982d71b466ce0", "quality": 4, "curation_note": "Azure deploy/diagnostics/infra/AKS", "needs_tool": null, "vet": {"injection_pattern_hits": ["pipe-to-shell"], "portability_flags": [], "companion_files": 40, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["mcp:azure", "scripts"], "adapted": {"pipe-to-shell": 1}, "status": "ready", "mentions_agents": []}
 ---
 
 # Azure Deploy

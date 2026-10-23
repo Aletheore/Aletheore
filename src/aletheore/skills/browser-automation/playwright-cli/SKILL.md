@@ -3,7 +3,7 @@ name: playwright-cli
 description: Automate browser interactions, test web pages and work with Playwright tests.
 allowed-tools: Bash(playwright-cli:*) Bash(npx playwright:*) Bash(npx --no-install playwright:*)
 skill_id: browser-automation/playwright-cli
-title: Playwright Cli
+title: Playwright CLI
 source_url: https://github.com/microsoft/playwright-cli/tree/b85c7a736bb473bf55b584e54a09ffa698d6d871/skills/playwright-cli
 license: Apache-2.0
 shelf: ai-agents

@@ -2,7 +2,7 @@
 name: trace-to-training-data
 description: Convert evaluation traces and production logs into SFT examples and preference pairs. Use when graded traces or failure examples exist and need to become training data, when applying rejection sampling to model outputs, or when building DPO pairs from passing and failing runs.
 skill_id: ai-engineering/trace-to-training-data
-title: Trace To Training Data
+title: Trace to Training Data
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/llm-finetuning/skills/trace-to-training-data
 license: MIT
 shelf: ai-agents

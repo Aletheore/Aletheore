@@ -5,7 +5,7 @@ metadata:
   version: 1.0.2
   category: Storage
 skill_id: platforms/gke-storage
-title: Gke Storage
+title: GKE Storage
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/gke-storage
 license: Apache-2.0
 shelf: build

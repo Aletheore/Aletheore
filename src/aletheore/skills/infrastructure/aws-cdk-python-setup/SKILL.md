@@ -2,7 +2,7 @@
 name: aws-cdk-python-setup
 description: Setup and initialization guide for developing AWS CDK (Cloud Development Kit) applications in Python. This skill enables users to configure environment prerequisites, create new CDK projects, manage dependencies, and deploy to AWS.
 skill_id: infrastructure/aws-cdk-python-setup
-title: Aws Cdk Python Setup
+title: AWS CDK Python Setup
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/aws-cdk-python-setup
 license: MIT
 shelf: ship-operate

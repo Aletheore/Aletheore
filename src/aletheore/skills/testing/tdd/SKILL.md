@@ -2,7 +2,7 @@
 name: tdd
 description: Test-driven development. Use when the user wants to build features or fix bugs test-first, mentions "red-green-refactor", or wants integration tests.
 skill_id: testing/tdd
-title: Tdd
+title: TDD
 source_url: https://github.com/mattpocock/skills/tree/49dd158d1076134a641b33efb035946536778336/skills/engineering/tdd
 license: MIT
 shelf: quality

@@ -2,7 +2,7 @@
 name: doc-and-modernize
 description: Two related workflows for a locally-cloned codebase, in one skill. Documentation mode produces a single, comprehensive, verifiable architecture document primarily by reading files on disk (local-first) — use it whenever the user wants to understand, map, document, research, or onboard onto a codebase ("research this repo", "write up the architecture", "do an architecture deep dive", "document how this codebase works", "map the system design", "create an onboarding doc"). Modernization mode generates a phased plan to modernize, migrate, upgrade, or rewrite a legacy system ("modernize this", "plan the migration", "how would we rewrite this", "how do we get off this legacy stack"); if no architecture document exists yet it first runs Documentation mode, then continues straight through to the plan. It assumes the legacy stack may be dead, runs a time-boxed feasibility spike, and picks the highest achievable rung on a safety ladder instead of demanding a fully-green legacy CI gate up front.
 skill_id: refactoring/doc-and-modernize
-title: Doc And Modernize
+title: Doc and Modernize
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/doc-and-modernize
 license: MIT
 shelf: quality

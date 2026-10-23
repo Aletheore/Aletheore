@@ -59,14 +59,14 @@ def test_analyze_git_no_history_returns_unavailable(tmp_path):
     repo.mkdir()
     run(repo, "init", "-b", "main")
     result = analyze_git(repo)
-    assert result == {"available": False}
+    assert result == {"available": False, "reason": "no commits yet"}
 
 
 def test_analyze_git_not_a_repo_returns_unavailable(tmp_path):
     repo = tmp_path / "not_a_repo"
     repo.mkdir()
     result = analyze_git(repo)
-    assert result == {"available": False}
+    assert result == {"available": False, "reason": "not a git repository"}
 
 
 def test_analyze_git_branches_and_staleness(tmp_path):

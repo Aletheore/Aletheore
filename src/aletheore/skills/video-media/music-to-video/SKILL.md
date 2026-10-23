@@ -2,7 +2,7 @@
 name: music-to-video
 description: Turn a music track (an audio file, a video to pull audio from, or a track generated from a mood brief) into a beat-synced video — lyric video, slideshow, or kinetic promo. The music drives all pacing; any user-supplied images/videos are cut onto the same beat grid, and a complete video needs zero assets. Narrated pieces → the input-matched workflow (see /hyperframes). Unclear → /hyperframes.
 skill_id: video-media/music-to-video
-title: Music To Video
+title: Music to Video
 source_url: https://github.com/heygen-com/hyperframes/tree/76ba031dccef188a133c0f47806483c661151d68/skills/music-to-video
 license: Apache-2.0
 shelf: content-media

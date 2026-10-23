@@ -13,7 +13,7 @@ metadata:
   output-format: code
   related-skills: typescript-pro
 skill_id: frontend/nextjs-developer
-title: Nextjs Developer
+title: Next.js Developer
 source_url: https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/nextjs-developer
 shelf: build
 aletheore: {"id": "frontend/nextjs-developer", "shelf": "build", "category": "frontend", "origin": "https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/nextjs-developer", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "36f3fe8052da7c57083783268c6ea3265d075265", "quality": 4, "curation_note": "nextjs", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 5, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

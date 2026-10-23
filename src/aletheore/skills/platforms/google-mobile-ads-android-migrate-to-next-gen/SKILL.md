@@ -5,7 +5,7 @@ metadata:
   version: 1.1.0
   category: GoogleAds
 skill_id: platforms/google-mobile-ads-android-migrate-to-next-gen
-title: Google Mobile Ads Android Migrate To Next Gen
+title: Google Mobile Ads Android Migrate to Next Gen
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/ads/google-mobile-ads-android-migrate-to-next-gen
 license: Apache-2.0
 shelf: build

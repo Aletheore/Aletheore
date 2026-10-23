@@ -871,6 +871,72 @@ def _parse_gradle_pins(repo_path: Path) -> list[tuple[str, str, str]]:
     return pins
 
 
+def _pin_parsers():
+    return (
+        _parse_pip_pins, _parse_npm_pins, _parse_go_pins, _parse_cargo_pins, _parse_maven_pins,
+        _parse_gemfile_lock_pins, _parse_composer_pins, _parse_nuget_pins, _parse_gradle_pins,
+        _parse_swift_package_resolved_pins,
+    )
+
+
+def _pin_info_fields(info: dict) -> dict:
+    """Additive evidence fields describing which manifests were covered."""
+    fields: dict = {}
+    if any(d != "." for d in info["manifest_dirs"]):
+        fields["manifest_dirs"] = info["manifest_dirs"]
+    if info["manifest_dirs_truncated"]:
+        fields["note"] = (
+            f"{info['manifest_dirs_total']} manifest directories found; only the "
+            f"{len(info['manifest_dirs'])} shallowest were checked"
+        )
+    if info["unreadable_manifest_dirs"]:
+        fields["unreadable_manifest_dirs"] = info["unreadable_manifest_dirs"]
+    return fields
+
+
+def collect_pins(repo_path: Path) -> tuple[list[tuple[str, str, str]], dict[tuple[str, str, str], list[str]], dict]:
+    """Every dependency pin declared by a manifest at ANY depth of repo_path.
+
+    Returns (pins, manifests_by_pin, info). `pins` is de-duplicated (the same
+    ecosystem/name/version declared by several manifests appears once, in
+    first-seen order with the repository root first); `manifests_by_pin` maps
+    each pin to the repo-relative directories ("." for the root) of every
+    manifest that declares it; `info` carries the discovery totals plus the
+    directories skipped because a manifest in them could not be read.
+
+    A manifest that cannot be read skips only its own directory. If the
+    repository ROOT cannot be read at all the OSError propagates, keeping the
+    callers' existing "could not read a dependency manifest" behaviour.
+    """
+    from aletheore.manifests import discover_manifests, manifest_dir_paths
+
+    discovery = discover_manifests(repo_path)
+    pins: list[tuple[str, str, str]] = []
+    manifests_by_pin: dict[tuple[str, str, str], list[str]] = {}
+    unreadable: list[str] = []
+    for rel_dir, directory in manifest_dir_paths(repo_path):
+        try:
+            dir_pins = [pin for parser in _pin_parsers() for pin in parser(directory)]
+        except OSError:
+            if rel_dir == ".":
+                raise
+            unreadable.append(rel_dir)
+            continue
+        for pin in dir_pins:
+            owners = manifests_by_pin.setdefault(pin, [])
+            if not owners:
+                pins.append(pin)
+            if rel_dir not in owners:
+                owners.append(rel_dir)
+    info = {
+        "manifest_dirs": list(discovery["dirs"]),
+        "manifest_dirs_total": discovery["total"],
+        "manifest_dirs_truncated": discovery["truncated"],
+        "unreadable_manifest_dirs": unreadable,
+    }
+    return pins, manifests_by_pin, info
+
+
 def _query_batch(pins: list[tuple[str, str, str]], timeout: int) -> list[dict]:
     queries = [
         {
@@ -937,18 +1003,7 @@ def check_vulnerabilities(
     if cache_path is None:
         cache_path = DEFAULT_VULNERABILITY_CACHE_PATH
     try:
-        pins = (
-            _parse_pip_pins(repo_path)
-            + _parse_npm_pins(repo_path)
-            + _parse_go_pins(repo_path)
-            + _parse_cargo_pins(repo_path)
-            + _parse_maven_pins(repo_path)
-            + _parse_gemfile_lock_pins(repo_path)
-            + _parse_composer_pins(repo_path)
-            + _parse_nuget_pins(repo_path)
-            + _parse_gradle_pins(repo_path)
-            + _parse_swift_package_resolved_pins(repo_path)
-        )
+        pins, manifests_by_pin, pin_info = collect_pins(repo_path)
     except OSError as exc:
         # Same "degrade this one section, not the whole scan" shape as the
         # OSV.dev-unreachable case below, extended to cover the manifest
@@ -964,7 +1019,7 @@ def check_vulnerabilities(
             "findings": [],
         }
     if not pins:
-        return {"checked": True, "reason": None, "findings": []}
+        return {"checked": True, "reason": None, "findings": [], **_pin_info_fields(pin_info)}
 
     cache = _load_vulnerability_cache(cache_path)
     now = time.time()
@@ -1006,7 +1061,7 @@ def check_vulnerabilities(
         for vuln in result.get("vulns", [])
     ]
     if not vuln_entries:
-        return {"checked": True, "reason": None, "findings": []}
+        return {"checked": True, "reason": None, "findings": [], **_pin_info_fields(pin_info)}
 
     # Each advisory detail is an independent blocking HTTP call - a thread
     # pool overlaps their network wait instead of paying it serially, same
@@ -1037,10 +1092,11 @@ def check_vulnerabilities(
                 "advisory_id": vuln["id"],
                 "summary": summary,
                 "severity": detail.get("severity", []),
+                "manifests": manifests_by_pin.get((name, version, ecosystem), ["."]),
             }
         )
 
-    return {"checked": True, "reason": None, "findings": findings}
+    return {"checked": True, "reason": None, "findings": findings, **_pin_info_fields(pin_info)}
 
 
 # CVSS v3.1 base-score metric weights (NVD/FIRST spec) - see

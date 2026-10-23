@@ -2,7 +2,7 @@
 name: dotnet-upgrade
 description: Ready-to-use prompts for comprehensive .NET framework upgrade analysis and execution
 skill_id: refactoring/dotnet-upgrade
-title: Dotnet Upgrade
+title: .NET Upgrade
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/dotnet-upgrade
 license: MIT
 shelf: quality

@@ -13,7 +13,7 @@ metadata:
   output-format: code
   related-skills: devops-engineer, cloud-architect, kubernetes-specialist
 skill_id: reliability/sre-engineer
-title: Sre Engineer
+title: SRE Engineer
 source_url: https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/sre-engineer
 shelf: ship-operate
 aletheore: {"id": "reliability/sre-engineer", "shelf": "ship-operate", "category": "reliability", "origin": "https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/sre-engineer", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "36f3fe8052da7c57083783268c6ea3265d075265", "quality": 4, "curation_note": "SRE", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 5, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

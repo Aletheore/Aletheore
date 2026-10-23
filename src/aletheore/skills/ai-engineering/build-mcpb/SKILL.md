@@ -3,7 +3,7 @@ name: build-mcpb
 description: This skill should be used when the user wants to "package an MCP server", "bundle an MCP", "make an MCPB", "ship a local MCP server", "distribute a local MCP", discusses ".mcpb files", mentions bundling a Node or Python runtime with their MCP server, or needs an MCP server that interacts with the local filesystem, desktop apps, or OS and must be installable without the user having Node/Python set up.
 version: 0.1.0
 skill_id: ai-engineering/build-mcpb
-title: Build Mcpb
+title: Build MCPB
 source_url: https://github.com/anthropics/claude-plugins-official/tree/ea10b213686c90bb1984b2016937310e05336cf3/plugins/mcp-server-dev/skills/build-mcpb
 license: Apache-2.0
 shelf: ai-agents

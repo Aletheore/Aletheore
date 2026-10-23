@@ -42,7 +42,7 @@ Origin Server
 
 ### How It Works
 
-1. **On cache miss**: Content fetched from origin �� written to Cache Reserve + edge caches simultaneously
+1. **On cache miss**: Content fetched from origin → written to Cache Reserve + edge caches simultaneously
 2. **On edge eviction**: Content may be evicted from edge cache but remains in Cache Reserve
 3. **On subsequent request**: If edge cache misses but Cache Reserve hits → content restored to edge caches
 4. **Retention**: Assets remain in Cache Reserve for 30 days since last access (configurable via TTL)

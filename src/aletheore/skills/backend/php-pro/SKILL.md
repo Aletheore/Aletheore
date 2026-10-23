@@ -13,7 +13,7 @@ metadata:
   output-format: code
   related-skills: fullstack-guardian, fastapi-expert
 skill_id: backend/php-pro
-title: Php Pro
+title: PHP Pro
 source_url: https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/php-pro
 shelf: build
 aletheore: {"id": "backend/php-pro", "shelf": "build", "category": "backend", "origin": "https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/php-pro", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "36f3fe8052da7c57083783268c6ea3265d075265", "quality": 4, "curation_note": "php", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 5, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

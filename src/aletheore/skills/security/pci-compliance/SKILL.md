@@ -2,7 +2,7 @@
 name: pci-compliance
 description: Implement PCI DSS compliance requirements for secure handling of payment card data and payment systems. Use when securing payment processing, achieving PCI compliance, or implementing payment card security measures.
 skill_id: security/pci-compliance
-title: Pci Compliance
+title: PCI Compliance
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/payment-processing/skills/pci-compliance
 license: MIT
 shelf: quality

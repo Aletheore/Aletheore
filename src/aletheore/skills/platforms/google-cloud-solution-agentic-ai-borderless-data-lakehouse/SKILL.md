@@ -5,7 +5,7 @@ metadata:
   category: MultiProductSolutions
 description: Discovers requirements and designs a borderless open data lakehouse using Lakehouse for Apache Iceberg and BigQuery data agents. Use when architecting multi-cloud storage infrastructure (Cloud Storage, AWS S3, Azure Blob), establishing ingestion and AI serving subsystems, configuring Cross-Cloud Interconnect, or deploying Gemini Enterprise Agent Platform and BigQuery data agents. Don't use for single-cloud data warehouses, or when the focus is on Knowledge Catalog metadata governance and Spark-driven IDE analytics workflows (use google-cloud-solution-agentic-analytics-spark-knowledge-catalog instead).
 skill_id: platforms/google-cloud-solution-agentic-ai-borderless-data-lakehouse
-title: Google Cloud Solution Agentic Ai Borderless Data Lakehouse
+title: Google Cloud Solution Agentic AI Borderless Data Lakehouse
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/google-cloud-solution-agentic-ai-borderless-data-lakehouse
 license: Apache-2.0
 shelf: build

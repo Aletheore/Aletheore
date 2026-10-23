@@ -2,7 +2,7 @@
 name: creating-oracle-to-postgres-migration-integration-tests
 description: Creates integration test cases targeting Oracle for .NET data access artifacts. Tests capture Oracle expected behavior as the authoritative baseline; they are written once and later ported to PostgreSQL by migrating the test project in Phase 6. Use only during Phase 3, before any PostgreSQL migration work has begun. Do not invoke during Phase 6 or against a project that has already been migrated.
 skill_id: data/creating-oracle-to-postgres-migration-integration-tests
-title: Creating Oracle To Postgres Migration Integration Tests
+title: Creating Oracle to Postgres Migration Integration Tests
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/creating-oracle-to-postgres-migration-integration-tests
 license: MIT
 shelf: build

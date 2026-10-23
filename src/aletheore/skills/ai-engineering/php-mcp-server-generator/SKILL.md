@@ -2,7 +2,7 @@
 name: php-mcp-server-generator
 description: Generate a complete PHP Model Context Protocol server project with tools, resources, prompts, and tests using the official PHP SDK
 skill_id: ai-engineering/php-mcp-server-generator
-title: Php Mcp Server Generator
+title: PHP MCP Server Generator
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/php-mcp-server-generator
 license: MIT
 shelf: ai-agents

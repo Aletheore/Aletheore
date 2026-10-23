@@ -4,7 +4,7 @@ description: When the user wants to create SEO-driven pages at scale using templ
 metadata:
   version: 2.1.0
 skill_id: marketing/programmatic-seo
-title: Programmatic Seo
+title: Programmatic SEO
 source_url: https://github.com/coreyhaines31/marketingskills/tree/365b412152b9542499ca1439426f7fc3cc92bb65/skills/programmatic-seo
 license: MIT
 shelf: content-media

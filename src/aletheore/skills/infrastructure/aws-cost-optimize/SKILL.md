@@ -2,7 +2,7 @@
 name: aws-cost-optimize
 description: Analyze AWS resources used in the app (IaC files and/or resources in a target account/region) and optimize costs - creating GitHub issues for identified optimizations.
 skill_id: infrastructure/aws-cost-optimize
-title: Aws Cost Optimize
+title: AWS Cost Optimize
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/aws-cost-optimize
 license: MIT
 shelf: ship-operate

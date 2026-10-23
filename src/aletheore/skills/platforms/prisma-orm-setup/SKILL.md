@@ -6,7 +6,7 @@ metadata:
   author: prisma
   version: 1.0.0
 skill_id: platforms/prisma-orm-setup
-title: Prisma Orm Setup
+title: Prisma ORM Setup
 source_url: https://github.com/prisma/skills/tree/ba3f9d73200bbb62e49733ab93a961fd138a2c18/prisma-orm-setup
 shelf: build
 aletheore: {"id": "platforms/prisma-orm-setup", "shelf": "build", "category": "platforms", "origin": "https://github.com/prisma/skills/tree/ba3f9d73200bbb62e49733ab93a961fd138a2c18/prisma-orm-setup", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "ba3f9d73200bbb62e49733ab93a961fd138a2c18", "quality": 4, "curation_note": "official Prisma skill", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 8, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

@@ -214,7 +214,7 @@ def _exclude_arg(repo_path: Path) -> str | None:
 
 def check_bandit(repo_path: Path, timeout: int = DEFAULT_BANDIT_TIMEOUT_SECONDS) -> dict:
     if not has_real_file(repo_path, "*.py"):
-        return {"checked": True, "reason": None, "findings": []}
+        return {"checked": True, "reason": None, "findings": [], "not_applicable": "no Python source files"}
 
     binary = shutil.which("bandit")
     if binary is None:

@@ -9,7 +9,7 @@ title: Cloud Monitoring Chart Generation
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/cloud-monitoring-chart-generation
 license: Apache-2.0
 shelf: build
-aletheore: {"id": "platforms/cloud-monitoring-chart-generation", "shelf": "build", "category": "platforms", "origin": "https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/cloud-monitoring-chart-generation", "license": "Apache-2.0", "license_source": "LICENSE", "upstream_commit": "e86adb9e2b80220a593c2be9a68627171fd17afb", "quality": 4, "curation_note": "official Google Cloud", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 9, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["scripts"], "adapted": {}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "platforms/cloud-monitoring-chart-generation", "shelf": "build", "category": "platforms", "origin": "https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/cloud-monitoring-chart-generation", "license": "Apache-2.0", "license_source": "LICENSE", "upstream_commit": "e86adb9e2b80220a593c2be9a68627171fd17afb", "quality": 4, "curation_note": "official Google Cloud", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 9, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["scripts"], "adapted": {"SKILL.md": "a whitespace-only line without the \">\" marker split the CAUTION block quote and left a code fence unclosed; the line now carries the marker"}, "status": "ready", "mentions_agents": []}
 ---
 
 # Cloud Monitoring Chart Generation Skill (`cloud-monitoring-chart-generation`)
@@ -192,7 +192,7 @@ xy_chart {
 >       --expected_unit_override "UNIT_OVERRIDE_CANDIDATE"
 >
 >    # ALWAYS provide an identifying substring and the Stage 1 unit override candidate to verify you didn't mutate the data.
-    
+>
 >    # CRITICAL: If you generated multiple charts for multiple metrics, you MUST run this validation script independently for EACH file generated to ensure every chart is correct!
 > ```
 >

@@ -2,7 +2,7 @@
 name: bigquery-pipeline-audit
 description: Audits Python + BigQuery pipelines for cost safety, idempotency, and production readiness. Returns a structured report with exact patch locations.
 skill_id: data/bigquery-pipeline-audit
-title: Bigquery Pipeline Audit
+title: BigQuery Pipeline Audit
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/bigquery-pipeline-audit
 license: MIT
 shelf: build

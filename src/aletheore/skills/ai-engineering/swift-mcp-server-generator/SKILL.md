@@ -2,7 +2,7 @@
 name: swift-mcp-server-generator
 description: Generate a complete Model Context Protocol server project in Swift using the official MCP Swift SDK package.
 skill_id: ai-engineering/swift-mcp-server-generator
-title: Swift Mcp Server Generator
+title: Swift MCP Server Generator
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/swift-mcp-server-generator
 license: MIT
 shelf: ai-agents

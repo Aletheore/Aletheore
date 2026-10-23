@@ -2,7 +2,7 @@
 name: openai-docs
 description: Use when the user asks how to build with OpenAI products or APIs, asks about Codex itself or choosing Codex surfaces, needs up-to-date official documentation with citations, help choosing the latest model for a use case, or model upgrade and prompt-upgrade guidance; use OpenAI docs MCP tools for non-Codex docs questions, use the Codex manual helper first for broad Codex self-knowledge, and restrict fallback browsing to official OpenAI domains.
 skill_id: platforms/openai-docs
-title: Openai Docs
+title: OpenAI Docs
 source_url: https://github.com/openai/skills/tree/49f948faa9258a0c61caceaf225e179651397431/skills/.curated/openai-docs
 license: Apache-2.0
 shelf: build

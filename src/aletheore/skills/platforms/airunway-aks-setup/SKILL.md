@@ -7,7 +7,7 @@ metadata:
   version: 1.1.2
 argument-hint: '[skip-to-step N]'
 skill_id: platforms/airunway-aks-setup
-title: Airunway Aks Setup
+title: Airunway AKS Setup
 source_url: https://github.com/microsoft/azure-skills/tree/cf79ce8778ad063eeac19dbe8bf982d71b466ce0/skills/airunway-aks-setup
 shelf: build
 aletheore: {"id": "platforms/airunway-aks-setup", "shelf": "build", "category": "platforms", "origin": "https://github.com/microsoft/azure-skills/tree/cf79ce8778ad063eeac19dbe8bf982d71b466ce0/skills/airunway-aks-setup", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "cf79ce8778ad063eeac19dbe8bf982d71b466ce0", "quality": 3, "curation_note": "AI Runway on AKS", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 11, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

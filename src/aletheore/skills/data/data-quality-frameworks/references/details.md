@@ -449,4 +449,39 @@ class DataQualityPipeline:
         total_passed = sum(1 for r in results.values() if r.passed)
         total_tables = len(results)
 
-        report.append(f"
+        report.append(f"## Summary: {total_passed}/{total_tables} tables passed")
+        report.append("")
+
+        for table, result in results.items():
+            status = "✅" if result.passed else "❌"
+            report.append(f"### {status} {table}")
+            report.append(f"- Expectations: {result.total_expectations}")
+            report.append(f"- Failed: {result.failed_expectations}")
+
+            if not result.passed:
+                report.append("- Failed checks:")
+                for detail in result.details:
+                    if not detail["success"]:
+                        report.append(f"  - {detail['expectation']}: {detail['observed_value']}")
+            report.append("")
+
+        return "\n".join(report)
+
+# Usage
+context = gx.get_context()
+pipeline = DataQualityPipeline(context)
+
+tables_to_validate = {
+    "orders": "orders_suite",
+    "customers": "customers_suite",
+    "products": "products_suite",
+}
+
+results = pipeline.run_all(tables_to_validate)
+report = pipeline.generate_report(results)
+
+# Fail pipeline if any table failed
+if not all(r.passed for r in results.values()):
+    print(report)
+    raise ValueError("Data quality checks failed!")
+```

@@ -13,7 +13,7 @@ metadata:
   output-format: code
   related-skills: devops-engineer
 skill_id: backend/cli-developer
-title: Cli Developer
+title: CLI Developer
 source_url: https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/cli-developer
 shelf: build
 aletheore: {"id": "backend/cli-developer", "shelf": "build", "category": "backend", "origin": "https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/cli-developer", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "36f3fe8052da7c57083783268c6ea3265d075265", "quality": 3, "curation_note": "CLI tool building", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 5, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

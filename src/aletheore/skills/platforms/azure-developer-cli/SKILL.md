@@ -3,7 +3,7 @@ name: azure-developer-cli
 description: Design, create, review, migrate, or troubleshoot Azure Developer CLI (azd) projects using current Microsoft guidance. Use for azd, azure.yaml, AZD templates, Bicep or Terraform under infra, AZD environments and secrets, hooks, deployment workflows, and azd-managed CI/CD.
 license: MIT
 skill_id: platforms/azure-developer-cli
-title: Azure Developer Cli
+title: Azure Developer CLI
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/azure-developer-cli
 shelf: build
 aletheore: {"id": "platforms/azure-developer-cli", "shelf": "build", "category": "platforms", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/azure-developer-cli", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 3, "curation_note": "Azure CLIs", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 5, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "mentions": ["claude", "agents"], "adapted": {}, "status": "ready", "mentions_agents": ["GitHub Copilot"]}

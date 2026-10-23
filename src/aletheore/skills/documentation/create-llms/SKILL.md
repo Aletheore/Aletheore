@@ -2,7 +2,7 @@
 name: create-llms
 description: Create an llms.txt file from scratch based on repository structure following the llms.txt specification at https://llmstxt.org/
 skill_id: documentation/create-llms
-title: Create Llms
+title: Create LLMs
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/create-llms
 license: MIT
 shelf: ship-operate

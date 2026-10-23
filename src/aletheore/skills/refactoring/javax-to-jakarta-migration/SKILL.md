@@ -3,7 +3,7 @@ name: javax-to-jakarta-migration
 description: Migrate Java code from javax.* to jakarta.* namespace. Use only when the user explicitly asks for a javax to jakarta namespace or framework migration (for example to Tomcat 10+/11 or Jakarta EE), or when java-upgrade or spring-boot-4-migration delegates it. Finding javax imports alone does not authorize a migration.
 argument-hint: File, package, or module to migrate
 skill_id: refactoring/javax-to-jakarta-migration
-title: Javax To Jakarta Migration
+title: Javax to Jakarta Migration
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/javax-to-jakarta-migration
 license: MIT
 shelf: quality

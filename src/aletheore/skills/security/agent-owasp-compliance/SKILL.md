@@ -16,7 +16,7 @@ description: 'Check any AI agent codebase against the OWASP Agentic Security Ini
 
   - Any request like "is my agent OWASP compliant?", "check ASI compliance", or "agentic security audit"'
 skill_id: security/agent-owasp-compliance
-title: Agent Owasp Compliance
+title: Agent OWASP Compliance
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/agent-owasp-compliance
 license: MIT
 shelf: quality

@@ -6,7 +6,7 @@ title: Subagent Driven Development
 source_url: https://github.com/obra/superpowers/tree/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/subagent-driven-development
 license: MIT
 shelf: ai-agents
-aletheore: {"id": "agent-workflows/subagent-driven-development", "shelf": "ai-agents", "category": "agent-workflows", "origin": "https://github.com/obra/superpowers/tree/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/subagent-driven-development", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3", "quality": 4, "curation_note": "subagent-driven development, 32k", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": ["skill-ref"], "companion_files": 6, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["scripts", "subagents"], "adapted": {}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "agent-workflows/subagent-driven-development", "shelf": "ai-agents", "category": "agent-workflows", "origin": "https://github.com/obra/superpowers/tree/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/subagent-driven-development", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3", "quality": 4, "curation_note": "subagent-driven development, 32k", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": ["skill-ref"], "companion_files": 6, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["subagents"], "adapted": {}, "status": "ready", "mentions_agents": []}
 ---
 
 # Subagent-Driven Development

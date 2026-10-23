@@ -2,7 +2,7 @@
 name: dotnet-backend-patterns
 description: Master C#/.NET backend development patterns for building robust APIs, MCP servers, and enterprise applications. Covers async/await, dependency injection, Entity Framework Core, Dapper, configuration, caching, and testing with xUnit. Use when developing .NET backends, reviewing C# code, or designing API architectures.
 skill_id: backend/dotnet-backend-patterns
-title: Dotnet Backend Patterns
+title: .NET Backend Patterns
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/dotnet-contribution/skills/dotnet-backend-patterns
 license: MIT
 shelf: build

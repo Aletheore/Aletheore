@@ -1,6 +1,6 @@
 ---
 name: pr
-description: Use when writing a PR body.
+description: 'Use when writing a pull request body: a summary view, before and after evidence, and a merge danger section covering the door and the blast radius.'
 metadata:
   credits:
     skill: show-me
@@ -8,11 +8,11 @@ metadata:
     organisation: Humanlayer
     url: https://github.com/humanlayer/skills/blob/main/plugins/show-me/skills/show-me/SKILL.md
 skill_id: git-workflow/pr
-title: Pr
+title: PR
 source_url: https://github.com/mattpocock/skills/tree/49dd158d1076134a641b33efb035946536778336/skills/engineering/pr
 license: MIT
 shelf: ship-operate
-aletheore: {"id": "git-workflow/pr", "shelf": "ship-operate", "category": "git-workflow", "origin": "https://github.com/mattpocock/skills/tree/49dd158d1076134a641b33efb035946536778336/skills/engineering/pr", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "49dd158d1076134a641b33efb035946536778336", "quality": 4, "curation_note": "PR body writing", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 2, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "git-workflow/pr", "shelf": "ship-operate", "category": "git-workflow", "origin": "https://github.com/mattpocock/skills/tree/49dd158d1076134a641b33efb035946536778336/skills/engineering/pr", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "49dd158d1076134a641b33efb035946536778336", "quality": 4, "curation_note": "PR body writing", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 2, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {"SKILL.md": "the one-line frontmatter description was replaced with one that says what the skill does; the body is unchanged"}, "status": "ready", "mentions_agents": []}
 ---
 
 Use this template for writing the PR body:

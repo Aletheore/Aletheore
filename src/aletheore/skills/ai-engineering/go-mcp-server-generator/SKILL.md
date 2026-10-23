@@ -2,7 +2,7 @@
 name: go-mcp-server-generator
 description: Generate a complete Go MCP server project with proper structure, dependencies, and implementation using the official github.com/modelcontextprotocol/go-sdk.
 skill_id: ai-engineering/go-mcp-server-generator
-title: Go Mcp Server Generator
+title: Go MCP Server Generator
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/go-mcp-server-generator
 license: MIT
 shelf: ai-agents

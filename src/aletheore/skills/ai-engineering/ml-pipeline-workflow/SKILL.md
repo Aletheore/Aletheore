@@ -2,7 +2,7 @@
 name: ml-pipeline-workflow
 description: Build end-to-end MLOps pipelines from data preparation through model training, validation, and production deployment. Use when creating ML pipelines, implementing MLOps practices, or automating model training and deployment workflows.
 skill_id: ai-engineering/ml-pipeline-workflow
-title: Ml Pipeline Workflow
+title: ML Pipeline Workflow
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/machine-learning-ops/skills/ml-pipeline-workflow
 license: MIT
 shelf: ai-agents

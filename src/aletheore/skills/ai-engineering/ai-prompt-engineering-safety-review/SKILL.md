@@ -2,7 +2,7 @@
 name: ai-prompt-engineering-safety-review
 description: Comprehensive AI prompt engineering safety review and improvement prompt. Analyzes prompts for safety, bias, security vulnerabilities, and effectiveness while providing detailed improvement recommendations with extensive frameworks, testing methodologies, and educational content.
 skill_id: ai-engineering/ai-prompt-engineering-safety-review
-title: Ai Prompt Engineering Safety Review
+title: AI Prompt Engineering Safety Review
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/ai-prompt-engineering-safety-review
 license: MIT
 shelf: ai-agents

@@ -5,7 +5,7 @@ metadata:
   category: Storage
 description: Inspects, searches, and reads files and POSIX metadata on Filestore (NFS) instances on Google Cloud without local NFS client packages or root privileges. Use when browsing Filestore shares, searching files, reading remote logs, or inspecting file attributes; don't use for Cloud Storage buckets, Cloud NetApp Volumes, Persistent Disks, or modifying/deleting files.
 skill_id: platforms/google-cloud-filestore-nfs-browser
-title: Google Cloud Filestore Nfs Browser
+title: Google Cloud Filestore NFS Browser
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/google-cloud-filestore-nfs-browser
 license: Apache-2.0
 shelf: build

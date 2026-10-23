@@ -46,7 +46,7 @@ def check_gosec(repo_path: Path, timeout: int | None = None) -> dict:
     # used to be two separate full-tree walks here.
     has_go, file_count = file_census(repo_path, "*.go")
     if not has_go:
-        return {"checked": True, "reason": None, "findings": []}
+        return {"checked": True, "reason": None, "findings": [], "not_applicable": "no Go source files"}
 
     binary = shutil.which("gosec")
     if binary is None:

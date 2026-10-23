@@ -79,7 +79,7 @@
  },
  "skill": {
   "id": "debugging/systematic-debugging",
-  "head": "---\nname: systematic-debugging\ndescription: Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes\nskill_id: debugging/systematic-debugging\ntitle: Systematic Debugging\nsource_url: https://github.com/obra/superpowers/tree/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/systematic-debugging\nlicense: MIT\nshelf: quality\naletheore: {\"id\": \"debugging/systematic-debugging\", \"shelf\": \"quality\", \"category\": \"debugging\", \"origin\": \"https://github.com/obra/superpowers/tree/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/systematic-debugging\", \"license\": \"MIT\", \"license_source\": \"LICENSE\", \"upstream_commit\": \"bb92a77741419a4ab5f06e711a283343f1ada0c3\", \"quality\": 5, \"curation_note\": \"four-phase root cause, 10 companion refs; adapt: superpowers: skill refs\", \"needs_tool\": null, \"vet\": {\"injection_pattern_hits\": [], \"portability_flags\": [\"skill-ref\"], \"companion_files\": 10, \"has_scripts\": false}, \"curated_on\": \"2026-10-18\", \"requires\": [\"subagents\"], \"adapted\": {\"path\": 1}, \"status\": \"ready\", \"mentions_agents\": []}\n---\n\n# Systematic Debugging\n\n## Overview\n\n**Core principle:** ALWAYS find root cause before attempting fixes. Symptom fixes are failure.\n\n**Violating the letter of this process is violating the spirit of debugging.**\n\n## The Iron Law\n\n```\nNO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST\n```\n\nIf you haven't completed Phase 1, you cannot propose fixes.\n\n## When to Use\n\nUse for ANY technical issue:\n- Test failures\n- Bugs in production\n- Unexpected behavior\n- Performance problems"
+  "head": "---\nname: systematic-debugging\ndescription: Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes\nskill_id: debugging/systematic-debugging\ntitle: Systematic Debugging\nsource_url: https://github.com/obra/superpowers/tree/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/systematic-debugging\nlicense: MIT\nshelf: quality\naletheore: {\"id\": \"debugging/systematic-debugging\", \"shelf\": \"quality\", \"category\": \"debugging\", \"origin\": \"https://github.com/obra/superpowers/tree/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/systematic-debugging\", \"license\": \"MIT\", \"license_source\": \"LICENSE\", \"upstream_commit\": \"bb92a77741419a4ab5f06e711a283343f1ada0c3\", \"quality\": 5, \"curation_note\": \"four-phase root cause, 10 companion refs; adapt: superpowers: skill refs\", \"needs_tool\": null, \"vet\": {\"injection_pattern_hits\": [], \"portability_flags\": [\"skill-ref\"], \"companion_files\": 10, \"has_scripts\": true}, \"curated_on\": \"2026-10-18\", \"requires\": [\"scripts\", \"subagents\"], \"adapted\": {\"path\": 1}, \"status\": \"ready\", \"mentions_agents\": []}\n---\n\n# Systematic Debugging\n\n## Overview\n\n**Core principle:** ALWAYS find root cause before attempting fixes. Symptom fixes are failure.\n\n**Violating the letter of this process is violating the spirit of debugging.**\n\n## The Iron Law\n\n```\nNO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST\n```\n\nIf you haven't completed Phase 1, you cannot propose fixes.\n\n## When to Use\n\nUse for ANY technical issue:\n- Test failures\n- Bugs in production\n- Unexpected behavior\n- Performance problems"
  },
  "examples": {
   "plan a zero downtime database migration": {
@@ -110,7 +110,7 @@
     },
     {
      "id": "refactoring/deprecation-and-migration",
-     "title": "Deprecation And Migration",
+     "title": "Deprecation and Migration",
      "description": "Manages deprecation and migration. Use when removing old systems, APIs, or features. Use when migrating users from one implementation to another. Use when migrating a database schema in production, such as renaming or dropping a column with",
      "category": "refactoring",
      "shelf": "quality",
@@ -120,15 +120,23 @@
      "alternates": []
     },
     {
-     "id": "data/planning-oracle-to-postgres-migration-integration-testing",
-     "title": "Planning Oracle To Postgres Migration Integration Testing",
-     "description": "Creates an integration testing plan for .NET data access artifacts during Oracle-to-PostgreSQL database migrations. Analyzes a single project to identify repositories, DAOs, and service layers that interact with the database, then produces ",
+     "id": "data/creating-oracle-to-postgres-master-migration-plan",
+     "title": "Creating Oracle to Postgres Master Migration Plan",
+     "description": "Discovers all projects in a .NET solution, classifies each for Oracle-to-PostgreSQL migration eligibility, and produces a persistent master migration plan. Use when starting a multi-project Oracle-to-PostgreSQL migration, creating a migrati",
      "category": "data",
      "shelf": "build",
      "license": "MIT",
      "quality": 3,
-     "source": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/planning-oracle-to-postgres-migration-integration-testing",
-     "alternates": []
+     "source": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/creating-oracle-to-postgres-master-migration-plan",
+     "alternates": [
+      "data/creating-oracle-to-postgres-migration-bug-report",
+      "data/creating-oracle-to-postgres-migration-integration-tests",
+      "data/migrating-oracle-to-postgres-data-access-code",
+      "data/migrating-oracle-to-postgres-stored-procedures",
+      "data/planning-oracle-to-postgres-migration-integration-testing",
+      "data/reviewing-oracle-to-postgres-migration",
+      "data/scaffolding-oracle-to-postgres-migration-test-project"
+     ]
     }
    ],
    "chars": 7844,
@@ -261,7 +269,7 @@
    "alternatives": [
     {
      "id": "git-workflow/git-workflow-and-versioning",
-     "title": "Git Workflow And Versioning",
+     "title": "Git Workflow and Versioning",
      "description": "Structures git workflow practices. Use when making any code change. Use when committing, branching, resolving conflicts, splitting uncommitted work in a messy working tree into clean atomic commits, opening or reviewing a pull request (PR),",
      "category": "git-workflow",
      "shelf": "ship-operate",
@@ -310,7 +318,7 @@
     },
     {
      "id": "git-workflow/git-workflow-and-versioning",
-     "title": "Git Workflow And Versioning",
+     "title": "Git Workflow and Versioning",
      "description": "Structures git workflow practices. Use when making any code change. Use when committing, branching, resolving conflicts, splitting uncommitted work in a messy working tree into clean atomic commits, opening or reviewing a pull request (PR),",
      "category": "git-workflow",
      "shelf": "ship-operate",
@@ -359,7 +367,7 @@
    "note": "No clear match. If none of these fits, continue without a skill and do not search again for the same need.",
    "top": {
     "id": "architecture/api-and-interface-design",
-    "title": "Api And Interface Design",
+    "title": "API and Interface Design",
     "description": "Guides stable API and interface design. Use when designing APIs, module boundaries, or any public interface. Use when creating REST or GraphQL endpoints, defining type contracts between modules, or establishing boundaries between frontend a",
     "category": "architecture",
     "shelf": "build",
@@ -382,7 +390,7 @@
     },
     {
      "id": "architecture/api-design-principles",
-     "title": "Api Design Principles",
+     "title": "API Design Principles",
      "description": "Master REST and GraphQL API design principles to build intuitive, scalable, and maintainable APIs that delight developers. Use when designing new APIs, reviewing API specifications, or establishing API design standards.",
      "category": "architecture",
      "shelf": "build",
@@ -393,7 +401,7 @@
     },
     {
      "id": "architecture/api-designer",
-     "title": "Api Designer",
+     "title": "API Designer",
      "description": "Use when designing REST or GraphQL APIs, creating OpenAPI specifications, or planning API architecture. Invoke for resource modeling, versioning strategies, pagination patterns, error handling standards.",
      "category": "architecture",
      "shelf": "build",
@@ -406,7 +414,7 @@
    "candidates": [
     {
      "id": "architecture/api-and-interface-design",
-     "title": "Api And Interface Design",
+     "title": "API and Interface Design",
      "description": "Guides stable API and interface design. Use when designing APIs, module boundaries, or any public interface. Use when creating REST or GraphQL endpoints, defining type contracts between modules, or establishing boundaries between frontend a",
      "category": "architecture",
      "shelf": "build",
@@ -428,7 +436,7 @@
     },
     {
      "id": "architecture/api-design-principles",
-     "title": "Api Design Principles",
+     "title": "API Design Principles",
      "description": "Master REST and GraphQL API design principles to build intuitive, scalable, and maintainable APIs that delight developers. Use when designing new APIs, reviewing API specifications, or establishing API design standards.",
      "category": "architecture",
      "shelf": "build",
@@ -439,7 +447,7 @@
     },
     {
      "id": "architecture/api-designer",
-     "title": "Api Designer",
+     "title": "API Designer",
      "description": "Use when designing REST or GraphQL APIs, creating OpenAPI specifications, or planning API architecture. Invoke for resource modeling, versioning strategies, pagination patterns, error handling standards.",
      "category": "architecture",
      "shelf": "build",
@@ -450,7 +458,7 @@
     },
     {
      "id": "platforms/api-gateway-mcp-server",
-     "title": "Api Gateway Mcp Server",
+     "title": "API Gateway MCP Server",
      "description": "Configures Google Cloud API Gateway to act as a remote Model Context Protocol (MCP) server (Public Preview) that exposes REST APIs as agent tools over HTTP (POST /mcp). Use when migrating OpenAPI 2.0 specs to OpenAPI 3.x for MCP, annotating",
      "category": "platforms",
      "shelf": "build",
@@ -466,7 +474,7 @@
    "note": "No clear match. If none of these fits, continue without a skill and do not search again for the same need.",
    "top": {
     "id": "testing/tdd",
-    "title": "Tdd",
+    "title": "TDD",
     "description": "Test-driven development. Use when the user wants to build features or fix bugs test-first, mentions \"red-green-refactor\", or wants integration tests.",
     "category": "testing",
     "shelf": "quality",
@@ -513,7 +521,7 @@
    "candidates": [
     {
      "id": "testing/tdd",
-     "title": "Tdd",
+     "title": "TDD",
      "description": "Test-driven development. Use when the user wants to build features or fix bugs test-first, mentions \"red-green-refactor\", or wants integration tests.",
      "category": "testing",
      "shelf": "quality",
@@ -557,7 +565,7 @@
     },
     {
      "id": "ai-engineering/ai-prompt-engineering-safety-review",
-     "title": "Ai Prompt Engineering Safety Review",
+     "title": "AI Prompt Engineering Safety Review",
      "description": "Comprehensive AI prompt engineering safety review and improvement prompt. Analyzes prompts for safety, bias, security vulnerabilities, and effectiveness while providing detailed improvement recommendations with extensive frameworks, testing",
      "category": "ai-engineering",
      "shelf": "ai-agents",

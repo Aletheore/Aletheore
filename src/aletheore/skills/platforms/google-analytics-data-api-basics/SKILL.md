@@ -5,7 +5,7 @@ metadata:
   category: GoogleAnalytics
 description: Manages Google Analytics reporting data, enables the Analytics Data API via the Cloud CLI, and creates reports using the Google Analytics Data API (v1beta). Use when you need to interact with Google Analytics properties, run customized analytics reports, query metrics (like activeUsers, screenPageViews) and dimensions (like city, date), check metrics and dimensions compatibility, or verify API enablement. Don't use for Google Analytics Admin API operations (e.g., creating properties, managing users) or for front-end tracking installation.
 skill_id: platforms/google-analytics-data-api-basics
-title: Google Analytics Data Api Basics
+title: Google Analytics Data API Basics
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/analytics/google-analytics-data-api-basics
 license: Apache-2.0
 shelf: build

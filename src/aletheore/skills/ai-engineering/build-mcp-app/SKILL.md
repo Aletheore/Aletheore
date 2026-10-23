@@ -3,7 +3,7 @@ name: build-mcp-app
 description: This skill should be used when the user wants to build an "MCP app", add "interactive UI" or "widgets" to an MCP server, "render components in chat", build "MCP UI resources", make a tool that shows a "form", "picker", "dashboard" or "confirmation dialog" inline in the conversation, or mentions "apps SDK" in the context of MCP. Use AFTER the build-mcp-server skill has settled the deployment model, or when the user already knows they want UI widgets.
 version: 0.1.0
 skill_id: ai-engineering/build-mcp-app
-title: Build Mcp App
+title: Build MCP App
 source_url: https://github.com/anthropics/claude-plugins-official/tree/ea10b213686c90bb1984b2016937310e05336cf3/plugins/mcp-server-dev/skills/build-mcp-app
 license: Apache-2.0
 shelf: ai-agents

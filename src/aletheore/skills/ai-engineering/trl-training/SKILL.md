@@ -6,7 +6,7 @@ metadata:
   author: huggingface
   documentation: https://huggingface.co/docs/trl
 skill_id: ai-engineering/trl-training
-title: Trl Training
+title: TRL Training
 source_url: https://github.com/huggingface/skills/tree/c3ff942be3e07116b475253f0a8fc4f54682c1a8/skills/trl-training
 shelf: ai-agents
 aletheore: {"id": "ai-engineering/trl-training", "shelf": "ai-agents", "category": "ai-engineering", "origin": "https://github.com/huggingface/skills/tree/c3ff942be3e07116b475253f0a8fc4f54682c1a8/skills/trl-training", "license": "Apache-2.0", "license_source": "frontmatter", "upstream_commit": "c3ff942be3e07116b475253f0a8fc4f54682c1a8", "quality": 4, "curation_note": "official Hugging Face skill; check injection-flag context for hf-cli/spaces before shipping", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 0, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

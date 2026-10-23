@@ -80,6 +80,69 @@ says what is expected. An empty `secrets` result explains that the target is a f
 - `audit --agent NAME` checks the name before scanning, `watch` runs an initial scan on a never-scanned repo, and the
   `init` template refers to `air.json`.
 
+**Fixed: an unreadable file no longer crashes a scan**
+
+The endpoint-mapping pass, the manifest and config readers, framework detection and the infrastructure detectors read
+files without handling a permission error, so one `chmod 000` file ended `aletheore scan` with a traceback and no
+evidence. Every stage now skips a file it cannot read or decode, and the skips are listed in the new
+`repository.unreadable_files` evidence field (the module graph's own skips stay in `unparseable_files`).
+
+**Fixed: workspace packages are connected in the dependency graph**
+
+A bare import that names an npm, yarn or pnpm workspace package (`import { b } from "@m/b"`) now resolves to that
+package's source through its `exports`, `module`, `main` or `src/index` entry, mapping a built entry such as
+`dist/index.js` back to `src/index.ts`. `dependents`, `imports`, `cycles` and `tests-for` see the edges. TypeScript
+`paths` aliases are not resolved yet.
+
+**Fixed: Go modules in a subdirectory and several Go modules in one repo**
+
+Go imports are resolved against every `go.mod` in the repository, by module path, instead of only a root `go.mod`. An
+import whose path merely starts with a module path (`example.com/g` and `example.com/gx`) no longer matches it.
+
+**Fixed: manifests at any depth are checked**
+
+The vulnerability check, the licence check and the unused-dependency check read only root-level manifests. They now
+cover `package.json`, `requirements.txt`, `pyproject.toml`, `go.mod`, `pom.xml`, `Gemfile`, `Cargo.toml` and the other
+supported manifests in any directory, skipping `node_modules`, vendored, build, fixture and ignored paths and capping
+the search at 200 manifest directories with a note. A dependency declared in several manifests is checked once. Findings
+gain a `manifests` list, unused dependencies in a nested manifest gain a `manifest` field, and each check reports the
+`manifest_dirs` it covered. An unused dependency is judged against the code under its own manifest's directory. A nested manifest with no indexed source under it is skipped rather than reported as entirely unused.
+
+**Fixed: monorepo detection**
+
+`monorepo.detected` is now true for a repo with project manifests in two or more directories, and for `go.work` and
+Lerna, Nx or pnpm workspaces. The new `monorepo.packages` lists every package root with its manifests, ecosystems and
+name, and `monorepo.reason` says why it was detected.
+
+**Fixed: `scan` honours `.gitignore`**
+
+In a git repository the scanned file set now comes from git itself (tracked files plus untracked files that no
+`.gitignore` ignores), so a file under an ignored `built/` or a nested `gen/` no longer appears in `modules` or as
+unreachable dead code. A tracked file is always scanned even if a pattern matches it. `.aletheore.json` `ignored_paths`
+and the built-in skips still apply. A folder that is not a git repository is scanned as before, and the secrets scan
+still looks at ignored files.
+
+**Fixed: a read-only folder gives a clear error**
+
+Scanning a folder that cannot be written to now raises `EvidenceWriteError` (an `OSError`) with the message "cannot
+write evidence to <path>/.aletheore: permission denied" instead of a raw `PermissionError`.
+
+**Fixed: an invalid `.aletheore.json` is reported**
+
+Malformed JSON, a non-object file, an unknown key, a wrong-typed value, a bad `severity_threshold` or
+`cluster_resolution` and an unknown `disabled_checks` value are each printed as a warning on stderr and recorded in the
+evidence as `config_warnings`. The scan still continues with the defaults, and valid settings such as `ignored_paths`
+keep working. A non-string entry in `disabled_checks` no longer raises.
+
+**Fixed: smaller evidence correctness gaps**
+
+A module's `imports` list no longer repeats a file (and the dependency graph no longer repeats the edge). A Python file
+with a syntax error is listed in `unparseable_files`. `static_analysis.tools_run` lists only the tools that ran; a tool
+with nothing to analyze, such as PMD in a repo with no Java, is listed under `tools_skipped`. The `git` section says
+why it is unavailable ("not a git repository" or "no commits yet"). The evidence has a new `cli_version` field next to
+`aletheore_version`, which remains the evidence schema version, and the incompatible-evidence message now says
+"evidence schema".
+
 **Added: a skills browser in the home menu**
 
 "Find a Hallbook skill" is now a small submenu instead of a prompt followed by a wall of text. "Search by what you are
@@ -123,6 +186,24 @@ The provider list showed Ollama whenever something answered on its local port, e
 coding agent installed. Only usable providers are offered now: an agent CLI must be on your `PATH`, and Ollama also needs
 its command installed. With none, the audit prints one message saying no coding agent was found and how to install or
 configure one, keeps the evidence it just wrote, and exits with code 1 as before. `--agent NAME` is unchanged.
+
+Cleanup of the bundled Hallbook skill catalogue, from a QA pass over 0.10.2. The count stays 1,129 skills across the same six shelves.
+
+**Fixed: garbled characters and broken code fences in bundled skills**
+
+Four files carried a corrupted character (the Unicode replacement character): three section headings in `data/postgresql-optimization`, a line in `devops/cloudflare-deploy`'s Cache Reserve notes, and the emoji example in `design/break-ui`. The headings lost the broken glyph, the Cache Reserve line has its arrow back, and the `break-ui` example now writes it as an escape sequence. Five skills (`data/data-quality-frameworks`, `platforms/cloud-monitoring-chart-generation`, `planning/update-specification`, `infrastructure/az-cost-optimize`, `reliability/azure-resource-health-diagnose`) had a code fence that never closed and swallowed the rest of the page. In `data/data-quality-frameworks` the cut-off end of a code sample had also been left in the skill body; it is back in `references/details.md` where it belongs. Every change is recorded in the skill's `adapted` provenance.
+
+**Fixed: complete metadata for the two seed skills, and accurate script flags**
+
+`brainstorming/open-ended` and `code-review/security-focused` now carry `name` and `shelf` like every other skill, and link to the upstream file at a pinned commit instead of `main`. Twenty-five skills that ship script files (for example `debugging/systematic-debugging` and `ai-engineering/claude-api`) were marked as having none, and two marked as having scripts had none; `has_scripts` and the matching `scripts` entry in `requires` now follow the files. Three one-line descriptions (`git-workflow/pr`, `documentation/create-readme`, `planning/structured-autonomy-plan`) now say what the skill does.
+
+**Changed: readable skill titles**
+
+Titles are written out of the skill name, and acronyms and product names came out as plain words. 380 titles now read as intended: "SQL Code Review", "API Breaking Change Detector", "ASP.NET Core", "GitHub Actions Security Review", "MCP Implementation Security Review", "Oracle to Postgres". Skill ids, names and search ranking are unchanged.
+
+**Changed: fewer near-identical results in Hallbook search**
+
+Seven of the eight Oracle-to-PostgreSQL migration skills now sit under `data/creating-oracle-to-postgres-master-migration-plan`, five Qdrant data-volume skills that duplicate sections of `platforms/qdrant-scaling` sit under it, and `marketing/marketing-ideas-phuryn` sits under `marketing/marketing-ideas`. They are listed as alternates of the main skill and can still be loaded by id.
 
 ## 0.10.2 - 2026-10-22
 

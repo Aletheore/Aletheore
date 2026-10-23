@@ -2,7 +2,7 @@
 name: swot-analysis
 description: Perform a detailed SWOT analysis — strengths, weaknesses, opportunities, and threats with actionable recommendations. Use when doing strategic assessment, competitive analysis, or evaluating a product or business position.
 skill_id: product/swot-analysis
-title: Swot Analysis
+title: SWOT Analysis
 source_url: https://github.com/phuryn/pm-skills/tree/07b34f64ee828df08953f505b7f747aef85ae7c6/pm-product-strategy/skills/swot-analysis
 license: MIT
 shelf: product-design

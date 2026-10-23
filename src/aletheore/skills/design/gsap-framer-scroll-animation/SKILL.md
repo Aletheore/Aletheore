@@ -5,7 +5,7 @@ metadata:
   author: Utkarsh Patrikar
   author_url: https://github.com/utkarsh232005
 skill_id: design/gsap-framer-scroll-animation
-title: Gsap Framer Scroll Animation
+title: GSAP Framer Scroll Animation
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/gsap-framer-scroll-animation
 license: MIT
 shelf: product-design

@@ -2,7 +2,7 @@
 name: mcp-release-qa
 description: Verify an MCP server before release by exercising a real protocol session, comparing runtime capabilities with source and documentation, testing failure paths, and recording reproducible evidence. Use when shipping or reviewing an MCP server, tool, resource, prompt, catalog, or install path.
 skill_id: ai-engineering/mcp-release-qa
-title: Mcp Release Qa
+title: MCP Release QA
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/mcp-release-qa
 license: MIT
 shelf: ai-agents

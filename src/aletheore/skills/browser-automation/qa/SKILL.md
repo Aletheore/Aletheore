@@ -3,7 +3,7 @@ name: qa
 description: QA-test a website or web app and return a 1-5 quality score (5 = flawless, 1 = broken) with evidence. Use when the user wants to test, QA, evaluate, score, or "check how good" a site, page, flow, or app — including a local dev server (e.g. "qa test localhost:5173", "does the checkout work?", "rate this landing page"). Drives a real Browser Use cloud browser, tunneling localhost automatically.
 allowed-tools: Bash, Read, Task
 skill_id: browser-automation/qa
-title: Qa
+title: QA
 source_url: https://github.com/browser-use/browser-use/tree/aa093a843da5edbf323c0b4145c9b6a0db3ecde8/skills/qa
 license: MIT
 shelf: ai-agents

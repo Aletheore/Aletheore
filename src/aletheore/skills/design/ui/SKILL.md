@@ -4,7 +4,7 @@ description: Produces distinctive production UI and screenshot-grounded visual p
 when_to_use: 做组件, 不好看, 不和谐, 不清晰, 很丑, 很怪, 很傻, 突兀, 不协调, 字体, 排版, UI, 截图, build page, create component, make it look good, screenshot with visual complaint, font looks wrong
 dispatch_intent: UI, component, page, visual interface, frontend, artifact-grounded screenshot aesthetic complaint
 skill_id: design/ui
-title: Ui
+title: UI
 source_url: https://github.com/tw93/Waza/tree/840f926af48c98e0b36a3a64658a9ddc4cf7e716/plugins/waza/skills/ui
 license: MIT
 shelf: product-design

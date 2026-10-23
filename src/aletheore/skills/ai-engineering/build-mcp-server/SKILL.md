@@ -3,7 +3,7 @@ name: build-mcp-server
 description: This skill should be used when the user asks to "build an MCP server", "create an MCP", "make an MCP integration", "wrap an API for Claude", "expose tools to Claude", "make an MCP app", or discusses building something with the Model Context Protocol. It is the entry point for MCP server development — it interrogates the user about their use case, determines the right deployment model (remote HTTP, MCPB, local stdio), picks a tool-design pattern, and hands off to specialized skills.
 version: 0.1.0
 skill_id: ai-engineering/build-mcp-server
-title: Build Mcp Server
+title: Build MCP Server
 source_url: https://github.com/anthropics/claude-plugins-official/tree/ea10b213686c90bb1984b2016937310e05336cf3/plugins/mcp-server-dev/skills/build-mcp-server
 license: Apache-2.0
 shelf: ai-agents
