@@ -688,3 +688,11 @@ def test_unreadable_package_json_keeps_the_readable_requirements_in_dead_code(tm
     modules, _graph, _bad = build_module_graph(tmp_path)
     result = find_dead_code(tmp_path, modules, None)
     assert ("flask", "svc") in {(d["package"], d.get("manifest")) for d in result["unused_dependencies"]}
+
+
+def test_collect_unreadable_root_with_trailing_separator_is_dot(tmp_path):
+    from aletheore import safe_io
+
+    safe_io.reset_unreadable()
+    safe_io.record_unreadable(str(tmp_path) + "/", "root with slash")
+    assert [e["path"] for e in safe_io.collect_unreadable(tmp_path)] == ["."]

@@ -30,10 +30,12 @@ def record_unreadable(path: Path | str, reason: str) -> None:
 
 def _relative_to_root(raw: str, roots: list[str]) -> str:
     """raw as a repo-relative POSIX path. Comparison goes through
-    os.path.normcase, so a Windows drive letter or directory in a different
-    case, or mixed separators, still match; a path equal to the root is ".";
-    a path outside every root is returned with forward slashes, unchanged
-    otherwise."""
+    os.path.normcase: on Windows that folds case and separators, so a drive
+    letter or directory in a different case still matches; on POSIX it is the
+    identity, so matching is exact (case-sensitive) there. A path equal to the
+    root, with or without a trailing separator, is "."; a path outside every
+    root is returned with forward slashes, otherwise unchanged."""
+    raw = raw.rstrip("/" + os.sep) or raw
     folded = os.path.normcase(raw)
     for root in roots:
         folded_root = os.path.normcase(root).rstrip("/" + os.sep)
