@@ -1,5 +1,6 @@
 import dataclasses
 import functools
+import inspect
 import json
 from datetime import datetime
 import multiprocessing
@@ -11,6 +12,7 @@ import re
 import sys
 import threading
 from collections.abc import Callable
+from typing import Any
 from pathlib import Path, PurePath
 
 from mcp.server.mcpserver import MCPServer
@@ -29,7 +31,7 @@ from aletheore.evidence import (
 from aletheore.healthcheck import run_healthcheck, save_healthcheck
 from aletheore.history import compute_diff, list_snapshots, save_snapshot
 from aletheore.managed_audit_client import run_managed_audit_request
-from aletheore.mcp_budget import apply_budget, budget_chars
+from aletheore.mcp_budget import BudgetError, apply_budget, budget_chars
 from aletheore.query import (
     BranchNotFoundInEvidenceError,
     ModuleNotFoundInEvidenceError,
@@ -117,7 +119,7 @@ def _guard_evidence_read_errors(tool_func: Callable[..., str]) -> Callable[..., 
         try:
             return tool_func(*args, **kwargs)
         except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
-            return _toon_result({"error": str(exc)})
+            return _error_result({"error": str(exc)})
 
     return wrapped
 
@@ -153,7 +155,9 @@ evidence exists yet, run aletheore_scan once - the deterministic parse and \
 dependency-graph pass every other tool reads from. aletheore_search_codebase \
 and aletheore_answer additionally require aletheore_index to have run first \
 (builds the semantic index on top of scan evidence); every other tool works \
-straight off scan evidence alone.
+straight off scan evidence alone. aletheore_answer exists only when the server \
+was started with --agent <provider>; if it is not in your tool list, use \
+aletheore_search_codebase instead.
 
 Timing: aletheore_scan and aletheore_index both report live progress while \
 running, not a silent hang - a small repo finishes in seconds, a large \
@@ -225,6 +229,49 @@ fix, instead of it silently recurring for every future user who hits the \
 same thing."""
 
 
+def _package_version() -> str:
+    import importlib.metadata
+
+    try:
+        return importlib.metadata.version("aletheore")
+    except importlib.metadata.PackageNotFoundError:
+        return "0.0.0"
+
+
+@dataclasses.dataclass(frozen=True)
+class _ToolError:
+    """What a tool returns when it failed (built only by `_error_result`). The wrapper turns it into an MCP result
+    with isError=true and the same text. Success payloads are plain strings, so nothing is inferred from a result's
+    shape or wording."""
+
+    text: str
+
+
+def _flag_error_results(tool_func: Callable[..., Any]) -> Callable[..., Any]:
+    """A tool reports an application failure as a result whose only content is an `error`. Return those as an MCP
+    error (isError=true) with the same text, so a client can tell "failed" from "found nothing"."""
+    from mcp.types import CallToolResult, TextContent
+
+    def flag(result: Any) -> Any:
+        if isinstance(result, _ToolError):
+            return CallToolResult(content=[TextContent(type="text", text=result.text)], is_error=True)
+        return result
+
+    if inspect.iscoroutinefunction(tool_func):
+
+        @functools.wraps(tool_func)
+        async def async_wrapped(*args, **kwargs):
+            return flag(await tool_func(*args, **kwargs))
+
+        return async_wrapped
+
+    @functools.wraps(tool_func)
+    def wrapped(*args, **kwargs):
+        return flag(tool_func(*args, **kwargs))
+
+    return wrapped
+
+
 def _toon_result(data: object) -> str:
     # Every tool result is TOON-encoded rather than returned as a plain dict
     # (which MCPServer would otherwise auto-serialize to JSON) - this is the
@@ -237,6 +284,16 @@ def _toon_result(data: object) -> str:
         return to_toon({"result": data})
     except ToonEncodingError:
         return json.dumps({"result": data})
+
+
+def _error_result(data: dict) -> _ToolError:
+    """A failed tool call: same encoded text as any result, flagged explicitly as an error."""
+    return _ToolError(_toon_result(data))
+
+
+def _budget_result(data: object) -> "str | _ToolError":
+    """_toon_result for something apply_budget returned: its argument errors become flagged failures."""
+    return _error_result(data) if isinstance(data, BudgetError) else _toon_result(data)
 
 
 _TOOL_NAME_TO_QUERY_KIND = {
@@ -593,7 +650,7 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
             # ones - including the "requires a target" and "optional target"
             # branches below, which previously had no cap whatsoever.
             def budgeted(result, section, offset, limit, filter):
-                return _toon_result(
+                return _budget_result(
                     apply_budget(
                         result,
                         size_of=lambda data: len(_toon_result(data)),
@@ -619,7 +676,7 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
                     try:
                         result = func(evidence, target)
                     except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
-                        return _toon_result({"error": str(exc)})
+                        return _error_result({"error": str(exc)})
                     return budgeted(result, section, offset, limit, filter)
 
                 return tool, True
@@ -637,7 +694,7 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
                     try:
                         result = func(evidence, target)
                     except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
-                        return _toon_result({"error": str(exc)})
+                        return _error_result({"error": str(exc)})
                     return budgeted(result, section, offset, limit, filter)
 
                 return tool, True
@@ -746,7 +803,7 @@ def _register_changes_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
             except json.JSONDecodeError:
                 return _toon_result({"message": f"{label} snapshot is unreadable ({snapshot_path})"})
             except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
-                return _toon_result({"error": str(exc)})
+                return _error_result({"error": str(exc)})
         old, new = loaded
         diff = _cap_diff(compute_diff(old, new, full=full), full, max_items)
         return _toon_result(diff)
@@ -802,7 +859,7 @@ def _register_neighborhood_tool(mcp_instance: MCPServer, repo_path: Path) -> Non
             imports = find_imports(evidence, target)
             imported_by = find_imported_by(evidence, target)
         except ModuleNotFoundInEvidenceError as exc:
-            return _toon_result({"error": str(exc)})
+            return _error_result({"error": str(exc)})
         try:
             cluster = find_cluster(evidence, target)
         except ModuleNotFoundInEvidenceError:
@@ -850,7 +907,7 @@ def _register_blast_radius_tool(mcp_instance: MCPServer, repo_path: Path) -> Non
         try:
             return _toon_result(find_blast_radius(evidence, repo_path, target, symbol))
         except ModuleNotFoundInEvidenceError as exc:
-            return _toon_result({"error": str(exc)})
+            return _error_result({"error": str(exc)})
 
 
 def _register_symbol_path_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
@@ -876,7 +933,7 @@ def _register_symbol_path_tool(mcp_instance: MCPServer, repo_path: Path) -> None
                 find_symbol_path(evidence, repo_path, source, source_symbol, target, target_symbol)
             )
         except (ModuleNotFoundInEvidenceError, SymbolNotFoundInEvidenceError) as exc:
-            return _toon_result({"error": str(exc)})
+            return _error_result({"error": str(exc)})
 
 
 _LIST_KIND_TO_FUNCTION = {
@@ -913,7 +970,7 @@ def _register_list_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
         max_items caps the result (default 200); 0 returns everything."""
         func = _LIST_KIND_TO_FUNCTION.get(kind)
         if func is None:
-            return _toon_result(
+            return _error_result(
                 {"error": f"unknown kind {kind!r} - expected one of {sorted(_LIST_KIND_TO_FUNCTION)}"}
             )
         evidence = read_evidence(repo_path)
@@ -1005,7 +1062,7 @@ def _register_skill_hub_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
         webhook handling to a Django app'. Skip it for trivial edits and simple
         questions. If confidence is low or none, just carry on without a skill
         and do not keep searching for the same need."""
-        return _toon_result(skill_hub.find_skill(task, category=category))
+        return _toon_result(skill_hub.find_skill(skill_hub.cap_query(task), category=category))
 
     @mcp_instance.tool(name="aletheore_search_skills", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_search_skills(query: str, category: str | None = None, limit: int = 8) -> str:
@@ -1038,7 +1095,8 @@ def _register_skill_hub_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_get_skill", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_get_skill(skill_id: str) -> str:
         """Fetches one skill by its skill_id (from aletheore_search_skills or
-        aletheore_list_skills): its title, description, license, source_url,
+        aletheore_list_skills): its title, description, license, copyright
+        holder, source_url (the pinned upstream),
         what it requires of the agent (e.g. subagents, an MCP server, a
         browser), and the full instructions in `content`. If the instructions
         refer to other files (references, scripts, templates), `files` lists
@@ -1086,10 +1144,16 @@ def _register_add_custom_skill_tool(mcp_instance: MCPServer, repo_path: Path) ->
         aletheore_list_skills. name must contain only letters, digits, '-',
         and '_' (no path separators)."""
         try:
-            skill_id = skill_hub.add_custom_skill(name, content)
+            warnings = skill_hub.custom_skill_warnings(content)
+            skill_id, note = skill_hub.add_custom_skill_with_sync(name, content)
         except ValueError as exc:
             return str(exc)
-        return f"Saved custom skill as '{skill_id}'."
+        message = f"Saved custom skill as '{skill_id}'."
+        for warning in warnings:
+            message += f" WARNING: {warning}."
+        if note:
+            message += f" {note}"
+        return message
 
 
 def _register_remove_custom_skill_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
@@ -1116,27 +1180,30 @@ def _register_remove_custom_skill_tool(mcp_instance: MCPServer, repo_path: Path)
         removed) is not an error. name must contain only letters, digits,
         '-', and '_' (no path separators)."""
         try:
-            existed = skill_hub.remove_custom_skill(name)
+            existed, note = skill_hub.remove_custom_skill_with_sync(name)
         except ValueError as exc:
             return str(exc)
-        if existed:
-            return f"Removed custom skill custom/{name}."
-        return f"custom/{name} was not present - nothing to remove."
+        message = (
+            f"Removed custom skill custom/{name}." if existed else f"custom/{name} was not present - nothing to remove."
+        )
+        return f"{message} {note}" if note else message
 
 
 def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_search", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_search(pattern: str, regex: bool = False, path_glob: str | None = None) -> str:
         """Deterministic literal or regex search over the repository's source files."""
+        if not pattern or not pattern.strip():
+            return _error_result({"error": "pattern must not be empty or whitespace-only"})
         if path_glob is not None and not path_glob.strip():
-            return _toon_result({"error": "path_glob must not be empty"})
+            return _error_result({"error": "path_glob must not be empty"})
         if not regex:
             return _toon_result(_search_files(repo_path, pattern, regex, path_glob))
 
         try:
             re.compile(pattern)
         except re.error as exc:
-            return _toon_result({"error": f"invalid regex pattern: {exc}"})
+            return _error_result({"error": f"invalid regex pattern: {exc}"})
 
         ctx = multiprocessing.get_context("spawn")
         result_queue: multiprocessing.Queue = ctx.Queue()
@@ -1147,14 +1214,14 @@ def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
         process.start()
         if not _wait_until_ready(ready, process, _SEARCH_STARTUP_TIMEOUT_SECONDS):
             _stop_search_process(process)
-            return _toon_result(
+            return _error_result(
                 {"error": "the regex search worker failed to start; try a literal (non-regex) search"}
             )
         try:
             result = result_queue.get(timeout=_SEARCH_TIMEOUT_SECONDS)
         except queue.Empty:
             _stop_search_process(process)
-            return _toon_result(
+            return _error_result(
                 {
                     "error": (
                         f"search exceeded its {_SEARCH_TIMEOUT_SECONDS:.0f}s time budget - "
@@ -1191,9 +1258,9 @@ def _register_ast_pattern_tool(mcp_instance: MCPServer, repo_path: Path) -> None
         try:
             return _toon_result(search_ast_pattern(repo_path, language, query, ignored_paths))
         except UnknownLanguageError as exc:
-            return _toon_result({"error": str(exc)})
+            return _error_result({"error": str(exc)})
         except InvalidPatternError as exc:
-            return _toon_result({"error": f"invalid tree-sitter query: {exc}"})
+            return _error_result({"error": f"invalid tree-sitter query: {exc}"})
 
 
 def _register_locate_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
@@ -1278,7 +1345,7 @@ def _register_symbol_source_tool(mcp_instance: MCPServer, repo_path: Path) -> No
             found = find_symbol_source(evidence, repo_path, module, symbol)
             return _render_symbol_source(evidence, found, max_lines)
         except (ModuleNotFoundInEvidenceError, SymbolNotFoundInEvidenceError) as exc:
-            return _toon_result({"error": str(exc)})
+            return _error_result({"error": str(exc)})
 
 
 def _register_verify_citations_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
@@ -1414,7 +1481,7 @@ def _register_healthcheck_tool(mcp_instance: MCPServer, repo_path: Path) -> None
         try:
             result = run_healthcheck(endpoints, base_url)
         except ValueError as exc:
-            return _toon_result({"error": str(exc)})
+            return _error_result({"error": str(exc)})
         save_healthcheck(result, repo_path)
         return _toon_result(result)
 
@@ -1454,7 +1521,7 @@ def _register_index_tool(mcp_instance: MCPServer, repo_path: Path, effects: froz
                     already_consented=EFFECT_EXTERNAL in effects,
                 )
             except Exception as exc:  # noqa: BLE001
-                return _toon_result({"error": str(exc)})
+                return _error_result({"error": str(exc)})
         return _toon_result({"indexed_chunks": count})
 
 
@@ -1495,11 +1562,11 @@ def _register_search_codebase_tool(
                 allow_hosted=EFFECT_EXTERNAL in effects,
             )
         except IndexNotFoundError:
-            return _toon_result(_NO_INDEX_ERROR)
+            return _error_result(_NO_INDEX_ERROR)
         except IndexDimensionMismatchError as exc:
-            return _toon_result({"error": str(exc)})
+            return _error_result({"error": str(exc)})
         except (EmbeddingProviderUnavailableError, HostedEmbeddingUnavailableError) as exc:
-            return _toon_result({"error": str(exc)})
+            return _error_result({"error": str(exc)})
         return _toon_result(
             apply_budget(results, size_of=lambda data: len(_toon_result(data)), budget_chars=search_budget_chars)
         )
@@ -1526,11 +1593,11 @@ def _register_answer_tool(
                 )
             )
         except IndexNotFoundError:
-            return _toon_result(_NO_INDEX_ERROR)
+            return _error_result(_NO_INDEX_ERROR)
         except IndexDimensionMismatchError as exc:
-            return _toon_result({"error": str(exc)})
+            return _error_result({"error": str(exc)})
         except (EmbeddingProviderUnavailableError, HostedEmbeddingUnavailableError) as exc:
-            return _toon_result({"error": str(exc)})
+            return _error_result({"error": str(exc)})
 
 
 def _register_managed_audit_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
@@ -1555,7 +1622,7 @@ def _register_managed_audit_tool(mcp_instance: MCPServer, repo_path: Path) -> No
             "ALETHEORE_API_TOKEN", "aletheore-managed-audit", prompt_fn=lambda _: ""
         )
         if not resolved_token:
-            return _toon_result(
+            return _error_result(
                 {"error": "no managed-audit token available (run 'aletheore login', set ALETHEORE_API_TOKEN, or pass token)"}
             )
         evidence = read_evidence(repo_path)
@@ -1710,7 +1777,10 @@ def build_server(
         # it doesn't need.
         required_effects["aletheore_scan"] = required_effects["aletheore_scan"] | {EFFECT_EXTERNAL}
 
-    mcp_instance = MCPServer("aletheore", instructions={"nav": NAV_INSTRUCTIONS, "router": ROUTER_INSTRUCTIONS}.get(profile, SERVER_INSTRUCTIONS),
+    mcp_instance = MCPServer(
+        "aletheore",
+        instructions={"nav": NAV_INSTRUCTIONS, "router": ROUTER_INSTRUCTIONS}.get(profile, SERVER_INSTRUCTIONS),
+        version=_package_version(),
     )
     # A tool that returns a string would otherwise also send a JSON-wrapped structured copy, and the model is shown
     # that copy with every quote and newline escaped again. One text result per call.
@@ -1725,7 +1795,12 @@ def build_server(
 
     def tool_without_structured_copy(*args, **kwargs):
         kwargs.setdefault("structured_output", False)
-        return register_tool(*args, **kwargs)
+        decorator = register_tool(*args, **kwargs)
+
+        def register(fn):
+            return decorator(_flag_error_results(fn))
+
+        return register
 
     mcp_instance.tool = tool_without_structured_copy
     if profile == "router":

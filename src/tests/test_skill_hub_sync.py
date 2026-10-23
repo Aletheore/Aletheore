@@ -244,7 +244,7 @@ def test_push_is_noop_with_no_personal_token(monkeypatch, http_client_that_raise
 def test_push_sends_put_with_timeout(monkeypatch, recording_http_client):
     monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
     skill_hub_sync.push_custom_skill_best_effort("my-review", "x", timeout=5.0)
-    assert recording_http_client.last_call.timeout == 5.0
+    assert recording_http_client.last_call.timeout == httpx.Timeout(5.0, connect=2.0)
     assert recording_http_client.last_call.method == "PUT"
 
 
@@ -799,6 +799,6 @@ def test_push_401_tells_the_user_to_log_in_again(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
     monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "revoked")
     monkeypatch.setattr(skill_hub_sync.httpx, "put", lambda url, **k: _resp("PUT", url, status=401, detail="invalid or revoked token"))
-    with caplog.at_level("WARNING"):
-        skill_hub_sync.push_custom_skill_best_effort("b-skill", "content")
-    assert any("aletheore login" in r.message for r in caplog.records)
+    outcome = skill_hub_sync.push_custom_skill_best_effort("b-skill", "content")
+    assert outcome == skill_hub_sync.UNAUTHORIZED
+    assert "aletheore login" in skill_hub_sync.push_note(outcome)

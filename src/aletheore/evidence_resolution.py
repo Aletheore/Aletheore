@@ -397,7 +397,7 @@ def attach_dependency_evidence(evidence: dict, resolution: dict) -> dict:
     )
 
 
-def _risk(category: str, severity: str, summary: str, evidence_path: str) -> dict:
+def _risk(category: str, severity: Any, summary: str, evidence_path: str) -> dict:
     return {
         "category": category,
         "severity": severity,
@@ -466,7 +466,7 @@ def attach_risk_evidence(evidence: dict, resolution: dict, max_risks: int = 5) -
             risks.append(
                 _risk(
                     "vulnerability",
-                    str(finding.get("severity", "unknown")).lower(),
+                    finding.get("severity", "unknown"),
                     f"{package} {finding.get('advisory_id', 'vulnerability')}",
                     f"security.dependency_vulnerabilities.findings[{index}]",
                 )
@@ -480,7 +480,7 @@ def attach_risk_evidence(evidence: dict, resolution: dict, max_risks: int = 5) -
             risks.append(
                 _risk(
                     "license",
-                    str(finding.get("severity", "unknown")).lower(),
+                    finding.get("severity", "unknown"),
                     f"{package} license {finding.get('license', 'unknown')}",
                     f"security.dependency_licenses.findings[{index}]",
                 )

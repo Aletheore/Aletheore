@@ -58,6 +58,13 @@ _CPP_CLASS_TEXT = re.compile(
 _NON_TYPES = {"(re-raise)", "(any)", "(value)", "(expression)", "(unknown)", "..."}
 
 
+NON_TYPES = _NON_TYPES  # public: aletheore.scope_filter recounts error types with the same rules
+
+
+def short_error_name(name: str) -> str:
+    return _last(name)
+
+
 def _last(name: str) -> str:
     if name in ("errors.New", "fmt.Errorf"):  # Go constructors read better whole than as "New"
         return name

@@ -122,7 +122,7 @@ clean_error("scan missing path", ["scan", str(ROOT / "nope"), *SCAN])
 clean_error("scan file as path", ["scan", str(repo / "src" / "a.py"), *SCAN])
 for cmd in ("init", "watch", "mcp-install", "index", "dashboard"):
     clean_error(f"{cmd} missing path", [cmd, str(ROOT / "nope")])
-clean_error("diff dir as file", ["diff", str(repo), str(repo)])
+clean_error("diff dir as file", ["diff", str(repo), str(repo)], code=2)  # 2 = input error, 1 = gate failed
 clean_error("verify missing report", ["verify", str(ROOT / "nope.md")])
 clean_error("healthcheck without --base-url", ["healthcheck", str(repo)])
 check("--k 0 rejected", run(["query", "secrets", "--k", "0"])[0] == 2)
@@ -161,18 +161,29 @@ check("verify flags the bad citation", rc == 1 and "9999" in out and "Traceback"
 cfg_home = HOME
 cursor = repo / ".cursor"
 cursor.mkdir()
-(cursor / "mcp.json").write_bytes(b'\xef\xbb\xbf{\n // keep me\n "mcpServers": {"other": {"command": "x",},},\n}')
+commented_cursor = b'\xef\xbb\xbf{\n // keep me\n "mcpServers": {"other": {"command": "x",},},\n}'
+commented_vscode = '{\n/* c */ "servers": {}\n}'
+(cursor / "mcp.json").write_bytes(commented_cursor)
 (repo / ".vscode").mkdir()
-(repo / ".vscode" / "mcp.json").write_text('{\n/* c */ "servers": {}\n}', encoding="utf-8")
+(repo / ".vscode" / "mcp.json").write_text(commented_vscode, encoding="utf-8")
 if WIN:
     (HOME / "AppData" / "Roaming" / "Claude").mkdir(parents=True)
 elif sys.platform == "darwin":
     (HOME / "Library" / "Application Support" / "Claude").mkdir(parents=True)
+# Configs holding comments or trailing commas are never rewritten (that would delete the comments): the run fails
+# for them, shows the entry to paste, and still writes every other target.
+rc, out = run(["mcp-install", str(repo)])
+check("mcp-install refuses commented configs", rc == 1 and "comments or trailing commas" in out, out)
+check("commented cursor config untouched", (cursor / "mcp.json").read_bytes() == commented_cursor)
+check("commented vscode config untouched", (repo / ".vscode" / "mcp.json").read_text(encoding="utf-8") == commented_vscode)
+# Without comments (a BOM alone is fine) the same files are merged.
+(cursor / "mcp.json").write_bytes(b'\xef\xbb\xbf{"mcpServers": {"other": {"command": "x"}}}')
+(repo / ".vscode" / "mcp.json").write_text('{"servers": {}}', encoding="utf-8")
 rc, out = run(["mcp-install", str(repo)])
 check("mcp-install all targets", rc == 0, out)
-c = json.loads((cursor / "mcp.json").read_text(encoding="utf-8"))
-check("mcp-install merged BOM+JSONC cursor config", "other" in c["mcpServers"] and "aletheore" in c["mcpServers"], c)
-check("mcp-install merged JSONC vscode config", "aletheore" in json.loads((repo / ".vscode" / "mcp.json").read_text(encoding="utf-8"))["servers"])
+c = json.loads((cursor / "mcp.json").read_text(encoding="utf-8-sig"))
+check("mcp-install merged BOM cursor config", "other" in c["mcpServers"] and "aletheore" in c["mcpServers"], c)
+check("mcp-install merged vscode config", "aletheore" in json.loads((repo / ".vscode" / "mcp.json").read_text(encoding="utf-8"))["servers"])
 cmd = json.loads((repo / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["aletheore"]["command"]
 check("written command exists on disk", Path(cmd).exists(), cmd)
 check("command is the .exe on Windows", (not WIN) or cmd.lower().endswith(".exe"), cmd)

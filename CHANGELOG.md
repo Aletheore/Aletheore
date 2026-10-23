@@ -5,6 +5,136 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+**Added: `aletheore hallbook info`**
+
+`aletheore hallbook info debugging/systematic-debugging` (or just `systematic-debugging` when the name is unambiguous)
+prints a skill's title, shelf, category, license, copyright holder, pinned source, what it needs and how many files and
+scripts it ships. `--licence` (or `--license`) prints the licence text the skill ships. With no argument it prints the
+catalogue in numbers: the skills per license, the six shelves and where the NOTICE file lives. A mistyped or ambiguous
+name lists up to five ids you may have meant. The copyright holder is also in the `aletheore_get_skill` result and in the
+skill detail view of the skills browser.
+
+**Fixed: custom-skill commands no longer crash with a traceback**
+
+`hallbook add` and `hallbook remove` now print one line, `error: ...`, that says what is wrong and what to do, and exit 1.
+That covers a missing file, a folder given instead of a file, a binary or non-UTF-8 file, a read-only or blocked custom
+skills folder and a name that is too long. Skill names are limited to 64 characters, may not be a Windows device name
+(CON, NUL, COM1 and so on) and may not differ from an existing custom skill only in capital letters. The invalid-name
+message lists the allowed characters. Skills saved earlier under a longer name can still be read and removed.
+
+**Fixed: empty, binary and oversized custom skills are refused; credentials get a warning**
+
+An empty file, a file with NUL bytes and a file over 1 MB are rejected, in `hallbook add` and in
+`aletheore_add_custom_skill`. Text that looks like it holds a credential (an AWS key, a GitHub token, a private key
+header) is still saved, with a warning that custom skills are stored in plain text here and uploaded to your account when
+you are logged in.
+
+**Fixed: earlier versions of a custom skill are kept, and writes are atomic**
+
+Replacing or removing a custom skill keeps the old text as a timestamped backup and the five newest are kept; before, only
+the last version survived an add and every remove left another file behind for good. A skill is written through a temporary
+file, so a failed write no longer leaves half a skill. Custom skill files are readable by you only. Backup file names are
+cut to a safe length for any skill name.
+
+**Fixed: offline `add` and `remove` print one line, not a 70-line traceback**
+
+When you are logged in but the account cannot be reached, the skill is still saved or removed locally and one line says so:
+that it will sync the next time you run `aletheore login`. A rejected login says to log in again. A remove that did not
+reach the account says that the copy on the account still exists and will be removed at the next login. An unreachable
+host now fails after 2 seconds instead of 5.
+
+**Fixed: a custom skill named after the task no longer lowers a correct answer**
+
+A custom skill that matched the task counted as the runner-up and turned a clear `high` answer from `aletheore_find_skill`
+into `low`. Custom skills are still listed as alternatives but no longer count against a bundled top match.
+
+**Fixed: `hallbook files` and `aletheore_get_skill` listed compiled Python files**
+
+Python bytecode files (`.pyc` and `.pyo`) and the cache folders that hold them are no longer listed, and `get-file` refuses them.
+
+**Fixed: smaller Hallbook command gaps**
+
+`hallbook search` with an empty or one-character query asks for more instead of saying nothing matched. An unknown
+`--category` is an error that lists the valid ones (and the right capital letters). `hallbook add --help` explains the
+name and file arguments. `hallbook suggest --help` prints the help. A wrong `--mode` is refused by `hallbook hook`, and
+`hallbook suggest` stays silent on stdout and exits 0 with one line on stderr. Search queries are cut at 500 characters.
+`hallbook get` with the wrong capital letters says the skill was not found and suggests the right id, without a log
+message. The hook hint now also names the `aletheore hallbook get` command, for agents without the MCP server.
+**Fixed: `aletheore mcp` wrote a plain-text notice before the JSON-RPC stream**
+
+`--profile nav` printed its "does not watch for file changes" note to stdout, ahead of the first protocol message, which
+a strict MCP client rejects. Every notice and error the command prints now goes to stderr, so the first line on stdout
+is always JSON-RPC. The server also reports its package version in `serverInfo`, tool failures (an unknown file, an
+empty `aletheore_search` pattern, `limit=-5`) come back flagged as errors instead of as ordinary results, and a bad
+`limit` or `offset` names the range instead of asking for `section`. The server instructions and `--agent` help now say
+`aletheore_answer` exists only when the server starts with `--agent`.
+
+**Fixed: `config crash-reporting` reported success when nothing was saved, and the first-run notice ignored the opt-out**
+
+On a read-only home folder `aletheore config crash-reporting off` printed "turned off" and exited 0 without saving, so
+the first-run notice came back on every run. It now prints an error and exits 1. When `ALETHEORE_CRASH_REPORTING`
+overrides the stored value, both `config crash-reporting` and `status` say so. With the variable set to a disabling
+value, the first-run notice is not printed and no `preferences.json` is written.
+
+**Fixed: `healthcheck` called every HTTP answer healthy**
+
+Each endpoint line shows its status. 2xx and 3xx count as healthy; 4xx and 5xx print "responded 404" (or the code) and
+an unreachable endpoint prints why (connection refused, timeout, DNS lookup failed). The exit code is non-zero when any
+endpoint is unhealthy or unreachable. A repo with no mapped endpoints says so instead of printing nothing, and a base
+URL containing `user:password@` is rejected. Only GET requests are ever sent.
+
+**Fixed: `diff --fail-on-new-vulnerabilities` failed a build when the check was merely toggled**
+
+If the vulnerability check was skipped in either snapshot, the gate is not enforced: a note on stderr says so and the
+exit code is 0. Exit codes are now distinct: 1 means a `--fail-on-new-*` gate failed, 2 means a usage or input error
+(missing file, invalid JSON, wrong schema); `--help` documents both. The dashboard history reports no value, not zero,
+for scans that skipped the vulnerability check, and its trend chart shows a gap ("-") for them.
+
+**Fixed: `verify` accepted impossible citations and dropped some silently**
+
+A range such as `app/util.py:5-99` is checked at both ends against the file's length, and a reversed range such as
+`:3-2` is unverified. A citation whose path is absolute or climbs out of the repository (`../../etc/passwd:1`,
+`/etc/passwd:2`) is counted and listed as "path outside the repository" and its file is never read. A URL such as
+`http://x.com/a.py:5` is no longer read as a citation, and `./app/util.py:2` and `app//util.py:2` are normalized to
+`app/util.py:2`.
+
+**Fixed: `mcp-install` hid failures and could destroy a config file**
+
+The command exits 1 when a requested target was skipped or failed, and prints the restart and per-client notes only for
+targets that were actually written. A `.vscode/mcp.json` (or any JSON target) containing comments or trailing commas is
+left untouched, with the exact entry to paste. Rewriting a Codex `config.toml` now warns about lost comments before it
+writes, and keeps the original next to it as `config.toml.bak`. With no `--target`, a terminal run lists every file it
+will write, marks the machine-global Claude Desktop config, and asks `Write these? [y/N]`; `--yes` skips the question
+and scripts behave as before. Rewrites keep a file's CRLF line endings and BOM.
+
+**Fixed: `query` answered "not found" with a block of empty fields**
+
+`evidence-for-symbol`, `-endpoint` and `-dependency` now say the target was not found, suggest up to three close
+matches and exit 1. `evidence-for-endpoint /users` accepts a bare path and lists every method serving it; a wrong form
+says what is expected. An empty `secrets` result explains that the target is a file path filter, not a keyword. The
+`severity` of a dependency risk keeps its real structure and original case instead of a lowercased Python list, and
+`locate` puts the definition of a name above functions that merely mention it.
+
+**Fixed: smaller gaps in the command surface**
+
+- `scan` progress and the GitHub App note go to stderr, so piped and CI output stays usable.
+- Giving both a PATH argument and a different `--path` is an error (exit 2).
+- Errors for an unknown file say a repo-relative path is needed, accept `./` and absolute paths inside the repo, and
+  suggest the closest matches. Missing-target errors say what the target should be.
+- `query` warns on stderr about flags that have no effect for the chosen kind, and `--under` that matches no file says
+  so for `query`, `dependents`, `cycles` and `usages`.
+- `query error-handling` with `--under`, `--exclude` or `--no-tests` recounts `by_error_type` from the filtered lists.
+- A `--path` that does not exist is reported as such, and the "run aletheore scan" hint appears once.
+- Wording: singular and plural forms, capitalised sentences, and an import-coverage note that names the right dynamic
+  loading mechanisms for Go and TypeScript projects.
+- `locate` exits 1 when nothing matches, as `usages` does.
+- The banner and "All commands" picker list `index`, `dependents`, `cycles`, `tests-for`, `usages`, `locate`, `hook` and
+  `tokens`, name every `mcp-install` client, and `logout` says it clears the Hallbook token too.
+- `tokens profile` and `tokens audit` take `--path` (`--project` remains as a hidden alias) and refuse a missing folder
+  instead of creating it.
+- `audit --agent NAME` checks the name before scanning, `watch` runs an initial scan on a never-scanned repo, and the
+  `init` template refers to `air.json`.
+
 **Fixed: an unreadable file no longer crashes a scan**
 
 The endpoint-mapping pass, the manifest and config readers, framework detection and the infrastructure detectors read

@@ -1,3 +1,5 @@
+import difflib
+import posixpath
 import re
 from collections import deque
 from collections.abc import Callable
@@ -8,9 +10,16 @@ from aletheore.evidence_resolution import resolve_code_evidence
 
 
 class ModuleNotFoundInEvidenceError(Exception):
-    def __init__(self, file_path: str):
-        super().__init__(f"'{file_path}' is not present in evidence.repository.modules")
+    def __init__(self, file_path: str, suggestions: list[str] | None = None):
+        message = (
+            f"'{file_path}' is not a scanned file. Give a repo-relative file path "
+            "such as 'src/app.py' (not a number, a directory or a symbol name)"
+        )
+        if suggestions:
+            message += f"; did you mean: {', '.join(suggestions)}?"
+        super().__init__(message)
         self.file_path = file_path
+        self.suggestions = suggestions or []
 
 
 class BranchNotFoundInEvidenceError(Exception):
@@ -26,11 +35,52 @@ class SymbolNotFoundInEvidenceError(Exception):
         self.symbol_name = symbol_name
 
 
+def normalize_module_target(evidence: dict, file_path: str | None) -> str | None:
+    """Accepts `./src/app.py`, `src//app.py` and an absolute path inside the
+    scanned repo, and returns the repo-relative form evidence uses."""
+    if not file_path:
+        return file_path
+    text = file_path.strip()
+    path = Path(text)
+    if path.is_absolute() or text.startswith("/"):
+        root = evidence.get("repo_path")
+        if root:
+            # Path comparison, not string prefixes: it handles drive letters, case and backslashes on Windows.
+            candidates = {path}
+            try:
+                candidates.add(path.resolve())
+            except OSError:
+                pass
+            roots = {Path(root)}
+            try:
+                roots.add(Path(root).resolve())
+            except OSError:
+                pass
+            for candidate in candidates:
+                for candidate_root in roots:
+                    try:
+                        return candidate.relative_to(candidate_root).as_posix()
+                    except ValueError:
+                        continue
+        return text
+    # Backslashes are separators too (a Windows user types src\\app.py); evidence paths always use "/".
+    return posixpath.normpath(text.replace("\\", "/"))
+
+
+def _module_path_suggestions(evidence: dict, wanted: str) -> list[str]:
+    paths = [m["path"] for m in evidence["repository"]["modules"] if m.get("path")]
+    base = posixpath.basename(wanted)
+    same_name = [p for p in paths if base and posixpath.basename(p) == base]
+    close = difflib.get_close_matches(wanted, paths, n=3, cutoff=0.5)
+    return list(dict.fromkeys(same_name + close))[:3]
+
+
 def _find_module(evidence: dict, file_path: str) -> dict:
+    wanted = normalize_module_target(evidence, file_path)
     for module in evidence["repository"]["modules"]:
-        if module["path"] == file_path:
+        if module["path"] == wanted:
             return module
-    raise ModuleNotFoundInEvidenceError(file_path)
+    raise ModuleNotFoundInEvidenceError(file_path, _module_path_suggestions(evidence, wanted or ""))
 
 
 def _unique(paths: list[str]) -> list[str]:
@@ -179,10 +229,66 @@ def find_endpoints(evidence: dict, target: str | None) -> dict:
 def find_code_evidence_for_endpoint(
     evidence: dict, target: str | None, repo_path: Path | None = None
 ) -> dict:
-    if not target or " " not in target.strip():
+    if not target or not target.strip():
         return resolve_code_evidence(evidence, repo_path, kind="endpoint")
-    method, path = target.strip().split(maxsplit=1)
+    text = target.strip()
+    if " " not in text:
+        # A bare path matches whichever method(s) serve it; they are listed.
+        wanted = text if text.startswith("/") else f"/{text}"
+        matches = [e for e in _endpoint_list(evidence) if _endpoint_path(e) == wanted]
+        if not matches:
+            return resolve_code_evidence(evidence, repo_path, kind="endpoint")
+        first = matches[0]
+        result = resolve_code_evidence(
+            evidence, repo_path, kind="endpoint", method=(first.get("method") or "GET").upper(), path=wanted
+        )
+        result["methods"] = sorted({(e.get("method") or "?").upper() for e in matches})
+        return result
+    method, path = text.split(maxsplit=1)
     return resolve_code_evidence(evidence, repo_path, kind="endpoint", method=method, path=path)
+
+
+def _endpoint_list(evidence: dict) -> list[dict]:
+    return evidence.get("repository", {}).get("api_endpoints", {}).get("endpoints", [])
+
+
+def _endpoint_path(endpoint: dict) -> str:
+    path = endpoint.get("path") or ""
+    return path if path.startswith("/") else f"/{path}"
+
+
+def evidence_target_not_found_message(evidence: dict, kind: str, target: str | None) -> str | None:
+    """For the evidence-for-* kinds: a message when `target` resolved to nothing
+    (otherwise the result is a block of all-"unavailable" fields that reads like
+    a successful answer), with up to three close matches. None when it resolved."""
+    target = (target or "").strip()
+    if kind == "evidence-for-symbol":
+        names = []
+        for module in evidence["repository"]["modules"]:
+            symbols = module.get("symbols", {})
+            for group in ("functions", "classes", "constants"):
+                names += [e["name"] for e in symbols.get(group, []) if e.get("name")]
+        close = difflib.get_close_matches(target, list(dict.fromkeys(names)), n=3, cutoff=0.6)
+        return _not_found("symbol", target, close)
+    if kind == "evidence-for-dependency":
+        imports = sorted({i for m in evidence["repository"]["modules"] for i in m.get("imports", [])})
+        close = difflib.get_close_matches(target, imports, n=3, cutoff=0.6)
+        return _not_found("dependency", target, close)
+    if kind == "evidence-for-endpoint":
+        labels = [f"{(e.get('method') or '?').upper()} {_endpoint_path(e)}" for e in _endpoint_list(evidence)]
+        close = difflib.get_close_matches(target, labels, n=3, cutoff=0.5)
+        message = _not_found("endpoint", target, close)
+        return message + (
+            "\nExpected 'METHOD /path' (for example 'GET /users') or a bare path (for example '/users')."
+        )
+    return None
+
+
+def _not_found(what: str, target: str, close: list[str]) -> str:
+    message = f"{what} '{target}' was not found in the scan's evidence."
+    if close:
+        message += " Did you mean: " + ", ".join(close) + "?"
+    return message
 
 
 def find_code_evidence_for_symbol(
@@ -198,10 +304,11 @@ def find_code_evidence_for_dependency(
 
 
 def find_cluster(evidence: dict, target: str | None) -> dict:
+    wanted = normalize_module_target(evidence, target)
     for cluster in evidence["architecture"]["clusters"]:
-        if target in cluster["modules"]:
+        if wanted in cluster["modules"]:
             return cluster
-    raise ModuleNotFoundInEvidenceError(target)
+    raise ModuleNotFoundInEvidenceError(target, _module_path_suggestions(evidence, wanted or ""))
 
 
 def find_layer_violations(evidence: dict, target: str | None) -> dict:

@@ -36,7 +36,12 @@ def main(argv: list[str] | None = None) -> int:
                 mode = args[index + 1]
             elif arg.startswith("--mode="):
                 mode = arg.split("=", 1)[1]
-        from aletheore.skill_hub import hook_suggestion
+        from aletheore.skill_hub import HOOK_MODES, hook_suggestion
+
+        if mode not in HOOK_MODES:
+            # The hook must never break a prompt, so this stays exit 0 with nothing on stdout.
+            sys.stderr.write(f"aletheore hallbook suggest: unknown mode {mode!r}; use one of: {', '.join(HOOK_MODES)}\n")
+            return 0
 
         suggestion = hook_suggestion(_read_prompt(), mode=mode)
         if suggestion:

@@ -157,24 +157,76 @@ def test_add_custom_skill_backs_up_existing_content_before_overwriting(tmp_path,
     skill_hub.add_custom_skill("my-review", "second version")
 
     assert (tmp_path / "my-review.md").read_text(encoding="utf-8") == "second version"
-    assert (tmp_path / "my-review.md.bak").read_text(encoding="utf-8") == "first version"
+    assert _bak_texts(tmp_path, "my-review") == ["first version"]
 
 
-def test_add_custom_skill_keeps_only_the_most_recent_backup(tmp_path, monkeypatch):
+def _bak_texts(directory, name):
+    return [p.read_text(encoding="utf-8") for p in skill_hub.list_backups(name)]
+
+
+def test_add_custom_skill_keeps_earlier_versions_not_just_the_last(tmp_path, monkeypatch):
     monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
-    skill_hub.add_custom_skill("my-review", "v1")
-    skill_hub.add_custom_skill("my-review", "v2")
-    skill_hub.add_custom_skill("my-review", "v3")
+    for version in ("v1", "v2", "v3"):
+        skill_hub.add_custom_skill("my-review", version)
 
-    assert (tmp_path / "my-review.md.bak").read_text(encoding="utf-8") == "v2"
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["my-review.md", "my-review.md.bak"]
+    assert _bak_texts(tmp_path, "my-review") == ["v1", "v2"]
+    assert all(p.name.startswith("my-review.md.bak-") for p in skill_hub.list_backups("my-review"))
+
+
+def test_only_the_five_newest_backups_are_kept_across_add_and_remove(tmp_path, monkeypatch):
+    from aletheore import skill_hub_sync
+
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "delete_custom_skill_best_effort", lambda name, **kw: None)
+    for number in range(1, 10):
+        skill_hub.add_custom_skill("my-review", f"v{number}")
+    assert _bak_texts(tmp_path, "my-review") == ["v4", "v5", "v6", "v7", "v8"]
+    skill_hub.remove_custom_skill("my-review")
+    assert _bak_texts(tmp_path, "my-review") == ["v5", "v6", "v7", "v8", "v9"]
+    assert list(tmp_path.glob("my-review.md.deleted-*.bak"))
+
+
+def test_a_legacy_single_bak_still_counts_as_the_oldest_backup(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    (tmp_path / "my-review.md.bak").write_text("legacy", encoding="utf-8")
+    for number in range(1, 7):
+        skill_hub.add_custom_skill("my-review", f"v{number}")
+    assert _bak_texts(tmp_path, "my-review") == ["v1", "v2", "v3", "v4", "v5"]
+    assert not (tmp_path / "my-review.md.bak").exists()
+
+
+def test_a_failed_overwrite_leaves_the_previous_skill_intact(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    skill_hub.add_custom_skill("my-review", "good text")
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(skill_hub.os, "replace", boom)
+    with pytest.raises(skill_hub.CustomSkillError):
+        skill_hub.add_custom_skill("my-review", "new text")
+    monkeypatch.undo()
+    assert (tmp_path / "my-review.md").read_text(encoding="utf-8") == "good text"
+    assert not list(tmp_path.glob(".skill-*"))
+
+
+def test_custom_skill_files_are_private(tmp_path, monkeypatch):
+    import os
+    import stat
+
+    target = tmp_path / "custom_skills"
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: target)
+    skill_hub.add_custom_skill("my-review", "x")
+    if os.name == "posix":
+        assert stat.S_IMODE((target / "my-review.md").stat().st_mode) == 0o600
+        assert stat.S_IMODE(target.stat().st_mode) == 0o700
 
 
 def test_add_custom_skill_first_add_writes_no_backup(tmp_path, monkeypatch):
     monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
     skill_hub.add_custom_skill("my-review", "v1")
 
-    assert not (tmp_path / "my-review.md.bak").exists()
+    assert skill_hub.list_backups("my-review") == []
 
 
 def test_add_custom_skill_identical_content_does_not_clobber_the_backup(tmp_path, monkeypatch):
@@ -183,7 +235,7 @@ def test_add_custom_skill_identical_content_does_not_clobber_the_backup(tmp_path
     skill_hub.add_custom_skill("my-review", "v2")
     skill_hub.add_custom_skill("my-review", "v2")  # re-adding the same content
 
-    assert (tmp_path / "my-review.md.bak").read_text(encoding="utf-8") == "v1"
+    assert _bak_texts(tmp_path, "my-review") == ["v1"]
 
 
 def test_backup_file_is_not_listed_as_a_skill(tmp_path, monkeypatch):
@@ -227,9 +279,9 @@ def test_remove_custom_skill_leaves_bak_file_alone(tmp_path, monkeypatch):
     monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
     monkeypatch.setattr(skill_hub_sync, "delete_custom_skill_best_effort", lambda name, **kw: None)
     skill_hub.add_custom_skill("my-review", "v1")
-    skill_hub.add_custom_skill("my-review", "v2")  # creates my-review.md.bak with "v1"
+    skill_hub.add_custom_skill("my-review", "v2")  # keeps "v1" as a backup
     skill_hub.remove_custom_skill("my-review")
-    assert (tmp_path / "my-review.md.bak").read_text(encoding="utf-8") == "v1"
+    assert "v1" in _bak_texts(tmp_path, "my-review")
 
 
 def test_remove_custom_skill_calls_sync_delete_even_when_local_file_absent(tmp_path, monkeypatch):

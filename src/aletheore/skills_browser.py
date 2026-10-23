@@ -43,7 +43,7 @@ def detail_lines(skill: skill_hub.Skill) -> list[tuple[str, str]]:
     """The labelled facts of a skill, in display order; a fact the skill does not have is left out."""
     category = skill.skill_id.split("/", 1)[0]
     facts = [("Shelf", shelf_title(skill.shelf)), ("Category", category), ("License", skill.license or ""),
-             ("Source", skill.source_url or ""), ("Needs", ", ".join(skill.requires))]
+             ("Copyright", skill.copyright or ""), ("Source", skill.source_url or ""), ("Needs", ", ".join(skill.requires))]
     return [(label, value) for label, value in facts if value]
 
 
@@ -55,7 +55,7 @@ def print_detail(console: Console, skill: skill_hub.Skill) -> None:
     console.print()
     for label, value in detail_lines(skill):
         line = Text()
-        line.append(f"{label:<9}", style="dim")
+        line.append(f"{label:<10}", style="dim")
         line.append(value)
         # The source URL is printed unwrapped, so the terminal soft-wraps it and it can still be copied whole.
         console.print(line, soft_wrap=label == "Source")

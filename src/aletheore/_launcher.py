@@ -15,7 +15,7 @@ import sys
 
 def main() -> None:
     argv = sys.argv[1:]
-    if len(argv) >= 2 and argv[0] == "hallbook" and argv[1] == "suggest":
+    if len(argv) >= 2 and argv[0] == "hallbook" and argv[1] == "suggest" and "--help" not in argv[2:]:
         from aletheore.hallbook_hook import main as hook_main
 
         raise SystemExit(hook_main(argv[2:]))

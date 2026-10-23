@@ -1,6 +1,7 @@
 import http.client
 import json
 import re
+import socket
 import ssl
 import time
 import urllib.error
@@ -29,11 +30,42 @@ MAX_ENDPOINT_CHECK_WORKERS = 8
 
 
 def _require_http_scheme(base_url: str) -> None:
-    scheme = urlsplit(base_url).scheme.lower()
+    parts = urlsplit(base_url)
+    scheme = parts.scheme.lower()
     if scheme not in _ALLOWED_SCHEMES:
         raise ValueError(
             f"base_url must be http or https, got scheme {scheme!r} in {base_url!r}"
         )
+    if parts.username is not None or parts.password is not None:
+        # Never echo the URL back: it holds the secret. GET-only probing sends
+        # no Authorization header, so credentials here would do nothing useful
+        # and would end up in saved results and shell history.
+        raise ValueError(
+            "base_url must not contain credentials (user:password@host); "
+            "remove them and pass the plain root URL"
+        )
+
+
+def is_healthy_status(status_code: int | None) -> bool:
+    """2xx and 3xx count as healthy; 4xx, 5xx and no response do not."""
+    return status_code is not None and 200 <= status_code < 400
+
+
+def describe_failure(exc: BaseException) -> str:
+    """A short human reason for a request that never got an HTTP response."""
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    if isinstance(reason, ConnectionRefusedError):
+        return "connection refused"
+    if isinstance(reason, socket.gaierror):
+        return "DNS lookup failed"
+    if isinstance(reason, (TimeoutError, socket.timeout)):
+        return "timeout"
+    if isinstance(reason, ConnectionResetError):
+        return "connection reset"
+    if isinstance(reason, ssl.SSLError):
+        return "TLS error"
+    text = str(reason).strip()
+    return text or type(reason).__name__
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -213,10 +245,12 @@ def _check_endpoint(endpoint: dict, base_url: str, opener, timeout: float) -> di
         entry["status_code"] = exc.code
         entry["reachable"] = True
         entry["response_shape"] = None
-    except (urllib.error.URLError, TimeoutError, OSError):
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
         entry["status_code"] = None
         entry["reachable"] = False
         entry["response_shape"] = None
+        entry["error"] = describe_failure(exc)
+    entry["healthy"] = is_healthy_status(entry.get("status_code"))
     entry["latency_ms"] = round((time.monotonic() - start) * 1000, 1)
     return entry
 

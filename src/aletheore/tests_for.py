@@ -127,7 +127,7 @@ def tests_for_report(evidence: dict, repo_path: Path, target: str) -> str:
 
     if not both:
         return (
-            f"no test file imports {target} (directly or transitively) or matches its naming convention.\n\n"
+            f"No test file imports {target} (directly or transitively) or matches its naming convention.\n\n"
             f"Coverage: {fresh}. A test may still exercise this file through a fixture or integration path this "
             "cannot see; this says only that the two signals it checks found nothing, not that the file is untested."
         )
@@ -137,7 +137,7 @@ def tests_for_report(evidence: dict, repo_path: Path, target: str) -> str:
         lines.append(f"{len(high_confidence)} test file(s) likely exercise {target} (direct import or naming match):")
         lines.extend(high_confidence)
     else:
-        lines.append(f"no test file directly imports or is named for {target}, but:")
+        lines.append(f"No test file directly imports or is named for {target}, but:")
     if lower_confidence:
         if high_confidence:
             lines.append("")
