@@ -4,6 +4,7 @@ modules and manifests, .gitignore, config validation, read-only folders."""
 import json
 import os
 import subprocess
+import sys
 import warnings
 from pathlib import Path
 from unittest.mock import patch
@@ -31,6 +32,13 @@ from aletheore.vulnerabilities import check_vulnerabilities
 pytestmark = pytest.mark.skipif(
     hasattr(os, "geteuid") and os.geteuid() == 0, reason="permission tests need a non-root user"
 )
+
+
+# chmod 0 / a 0o555 folder do not make a file unreadable or a folder read-only on
+# Windows (and some tests are root-proof only via the skip above), so those
+# tests are POSIX-only; the same behaviour is covered everywhere by the
+# simulated-read tests below.
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
 
 
 @pytest.fixture(autouse=True)
@@ -90,6 +98,7 @@ UNREADABLE = {
 }
 
 
+@posix_only
 @pytest.mark.parametrize("git", [False, True])
 def test_scan_survives_unreadable_files_of_every_kind(tmp_path, git):
     repo = tmp_path / "repo"
@@ -111,6 +120,7 @@ def test_scan_survives_unreadable_files_of_every_kind(tmp_path, git):
     assert {"bad.py", "bad.ts", "bad.go", "bad.java", "bad.rb"} <= skipped
 
 
+@posix_only
 def test_unreadable_manifests_degrade_the_dependency_checks_without_crashing(tmp_path):
     repo = tmp_path / "repo"
     _write(repo, {"requirements.txt": "flask==2.0\n", "web/package.json": '{"dependencies": {"a": "1.0.0"}}'})
@@ -133,6 +143,7 @@ def test_unreadable_manifests_degrade_the_dependency_checks_without_crashing(tmp
     assert root["checked"] is False and "could not read a dependency manifest" in root["reason"]
 
 
+@posix_only
 def test_endpoint_mapping_pass_records_an_unreadable_file(tmp_path):
     from aletheore.endpoints import map_api_endpoints
 
@@ -370,6 +381,7 @@ def test_workspaces_declaration_is_a_monorepo_even_with_one_package(tmp_path):
 # ---------------------------------------------------------------- M3 / M4
 
 
+@posix_only
 def test_write_evidence_to_a_read_only_folder_raises_a_clear_error(tmp_path):
     repo = tmp_path / "ro"
     repo.mkdir()
@@ -487,3 +499,60 @@ def test_incompatible_evidence_message_names_the_schema(tmp_path):
         load_evidence_file(path)
     message = str(excinfo.value)
     assert "evidence schema '0.1.0'" in message and "aletheore_version" not in message
+
+
+# ----------------------------------------------- simulated unreadability (all platforms)
+
+
+def _deny(monkeypatch, name: str) -> None:
+    real_bytes, real_text = Path.read_bytes, Path.read_text
+
+    def read_bytes(self, *a, **k):
+        if self.name == name:
+            raise PermissionError(13, "Permission denied")
+        return real_bytes(self, *a, **k)
+
+    def read_text(self, *a, **k):
+        if self.name == name:
+            raise PermissionError(13, "Permission denied")
+        return real_text(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+
+def test_endpoint_pass_skips_an_unreadable_file_simulated(tmp_path, monkeypatch):
+    from aletheore.endpoints import map_api_endpoints
+
+    _write(tmp_path, {"app.py": "from flask import Flask\napp = Flask(__name__)\n@app.get('/x')\ndef x(): pass\n",
+                      "locked.py": "x = 1\n", "locked.ts": "export const a = 1\n"})
+    _deny(monkeypatch, "locked.py")
+    _deny(monkeypatch, "locked.ts")
+    assert [e["path"] for e in map_api_endpoints(tmp_path)["endpoints"]] == ["/x"]
+
+
+def test_safe_io_records_unreadable_files(tmp_path, monkeypatch):
+    from aletheore.safe_io import collect_unreadable, read_bytes_or_none, read_text_lenient, reset_unreadable
+
+    _write(tmp_path, {"a.env": "X=1\n"})
+    reset_unreadable()
+    _deny(monkeypatch, "a.env")
+    assert read_bytes_or_none(tmp_path / "a.env") is None
+    assert read_text_lenient(tmp_path / "a.env") == ""
+    (entry,) = collect_unreadable(tmp_path)
+    assert entry["path"] == "a.env" and entry["reason"].startswith("could not read file")
+
+
+def test_unreadable_nested_manifest_skips_only_its_directory_simulated(tmp_path, monkeypatch):
+    _write(tmp_path, {"requirements.txt": "flask==2.0\n", "web/package.json": '{"dependencies": {"a": "1.0.0"}}'})
+    real = Path.read_text
+
+    def read_text(self, *a, **k):
+        if self.parent.name == "web":
+            raise PermissionError(13, "Permission denied")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    with patch("aletheore.vulnerabilities._query_batch", lambda pins, t: [{"vulns": []}] * len(pins)):
+        result = check_vulnerabilities(tmp_path, cache_path=tmp_path / "c.json")
+    assert result["checked"] is True and result["unreadable_manifest_dirs"] == ["web"]
