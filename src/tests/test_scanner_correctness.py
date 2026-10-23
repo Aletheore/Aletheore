@@ -54,7 +54,7 @@ def _write(root: Path, files: dict[str, str]) -> None:
     for rel, text in files.items():
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
+        path.write_bytes(text.encode("utf-8"))
 
 
 def _git(repo: Path) -> None:
@@ -494,7 +494,7 @@ def test_evidence_carries_the_cli_version_next_to_the_schema_version(tmp_path):
 
 def test_incompatible_evidence_message_names_the_schema(tmp_path):
     path = tmp_path / "air.json"
-    path.write_text(json.dumps({"aletheore_version": "0.1.0"}))
+    path.write_text(json.dumps({"aletheore_version": "0.1.0"}), encoding="utf-8")
     with pytest.raises(IncompatibleEvidenceVersionError) as excinfo:
         load_evidence_file(path)
     message = str(excinfo.value)
@@ -556,3 +556,24 @@ def test_unreadable_nested_manifest_skips_only_its_directory_simulated(tmp_path,
     with patch("aletheore.vulnerabilities._query_batch", lambda pins, t: [{"vulns": []}] * len(pins)):
         result = check_vulnerabilities(tmp_path, cache_path=tmp_path / "c.json")
     assert result["checked"] is True and result["unreadable_manifest_dirs"] == ["web"]
+
+
+def test_crlf_manifests_resolve_the_same(tmp_path):
+    _write(tmp_path, {
+        "go/go.mod": "module example.com/g\r\n\r\ngo 1.21\r\n",
+        "go/cmd/main.go": 'package main\r\nimport "example.com/g/internal/util"\r\nfunc main() {}\r\n',
+        "go/internal/util/util.go": "package util\r\n",
+    })
+    _modules, graph, _bad = build_module_graph(tmp_path)
+    assert graph["edges"] == [["go/cmd/main.go", "go/internal/util/util.go"]]
+
+
+def test_visible_paths_are_posix_relative_and_case_folded_only_where_the_fs_is_insensitive(tmp_path):
+    from aletheore.scanner.detect import _CASE_INSENSITIVE_FS
+
+    _write(tmp_path, {"Sub/Dir/File.ts": "export const a = 1\n"})
+    _git(tmp_path)
+    files, dirs = git_visible_paths(tmp_path)
+    expected = "Sub/Dir/File.ts".casefold() if _CASE_INSENSITIVE_FS else "Sub/Dir/File.ts"
+    assert expected in files and "\\" not in "".join(files)
+    assert ("sub/dir" if _CASE_INSENSITIVE_FS else "Sub/Dir") in dirs

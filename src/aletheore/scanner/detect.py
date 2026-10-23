@@ -1,6 +1,7 @@
 import json
 import os
 import stat
+import sys
 import tomllib
 from functools import lru_cache
 from pathlib import Path
@@ -279,6 +280,16 @@ def _nested_git_roots(repo_path: Path) -> set[Path]:
     return roots
 
 
+# Windows and (by default) macOS file systems compare names case-insensitively
+# while git records the case a file was added with, so lookups against the
+# visible sets fold case on those platforms. Use visible_key() for every lookup.
+_CASE_INSENSITIVE_FS = sys.platform in ("win32", "darwin")
+
+
+def visible_key(rel_path: str) -> str:
+    return rel_path.casefold() if _CASE_INSENSITIVE_FS else rel_path
+
+
 @lru_cache(maxsize=32)
 def git_visible_paths(repo_path: Path) -> tuple[frozenset[str], frozenset[str]] | None:
     """Files git itself considers part of the working tree, as (files, dirs).
@@ -325,7 +336,7 @@ def git_visible_paths(repo_path: Path) -> tuple[frozenset[str], frozenset[str]] 
     for raw in proc.stdout.split(b"\0"):
         if not raw:
             continue
-        rel = raw.decode("utf-8", errors="surrogateescape")
+        rel = visible_key(raw.decode("utf-8", errors="surrogateescape"))
         files.add(rel)
         parent = rel.rpartition("/")[0]
         while parent and parent not in dirs:
@@ -379,7 +390,7 @@ def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
             for d in dirnames
             if d not in IGNORED_DIRS
             and not is_ignored(f"{rel_dir}/{d}" if rel_dir != "." else d, patterns)
-            and (visible is None or (f"{rel_dir}/{d}" if rel_dir != "." else d) in visible[1])
+            and (visible is None or visible_key(f"{rel_dir}/{d}" if rel_dir != "." else d) in visible[1])
         ]
         if any(dirpath == root or dirpath.startswith(root + sep) for root in nested_git_roots):
             dirnames[:] = []
@@ -394,7 +405,7 @@ def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
             rel_path = f"{rel_dir}/{filename}" if rel_dir != "." else filename
             if is_ignored(rel_path, patterns):
                 continue
-            if visible is not None and rel_path not in visible[0]:
+            if visible is not None and visible_key(rel_path) not in visible[0]:
                 continue  # ignored by a .gitignore (and not tracked)
             yield Path(full)
 

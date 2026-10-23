@@ -26,7 +26,7 @@ from tree_sitter import Language, Node, Parser, Tree
 
 from aletheore.safe_io import read_text_lenient
 from aletheore.repo_config import is_ignored
-from aletheore.scanner.detect import IGNORED_DIRS, _nested_git_roots, git_visible_paths
+from aletheore.scanner.detect import IGNORED_DIRS, _nested_git_roots, git_visible_paths, visible_key
 
 PY_LANGUAGE = Language(tspython.language())
 JS_LANGUAGE = Language(tsjavascript.language())
@@ -113,7 +113,7 @@ def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
             for d in dirnames
             if d not in IGNORED_DIRS
             and not is_ignored(f"{rel_dir}/{d}" if rel_dir != "." else d, patterns)
-            and (visible is None or (f"{rel_dir}/{d}" if rel_dir != "." else d) in visible[1])
+            and (visible is None or visible_key(f"{rel_dir}/{d}" if rel_dir != "." else d) in visible[1])
         ]
         if any(dirpath == root or dirpath.startswith(root + sep) for root in nested_git_roots):
             dirnames[:] = []
@@ -129,7 +129,7 @@ def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
             rel_path = f"{rel_dir}/{filename}" if rel_dir != "." else filename
             if is_ignored(rel_path, patterns):
                 continue
-            if visible is not None and rel_path not in visible[0]:
+            if visible is not None and visible_key(rel_path) not in visible[0]:
                 continue  # ignored by a .gitignore (and not tracked)
             found.append((rel_path, full))
     if os.name == "nt":
