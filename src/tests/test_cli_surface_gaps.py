@@ -599,7 +599,7 @@ def test_init_template_names_air_json():
     text = runner.invoke(app, ["init", "--help"]).output
     from pathlib import Path as _P
 
-    source = _P(cli.__file__).read_text()
+    source = _P(cli.__file__).read_text(encoding="utf-8")
     assert "evidence.json always keeps everything" not in source
     assert "air.json always keeps everything" in source
     assert text

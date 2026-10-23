@@ -40,16 +40,29 @@ def normalize_module_target(evidence: dict, file_path: str | None) -> str | None
     if not file_path:
         return file_path
     text = file_path.strip()
-    if text.startswith("/"):
+    path = Path(text)
+    if path.is_absolute() or text.startswith("/"):
         root = evidence.get("repo_path")
         if root:
-            for candidate_root in {root, str(Path(root).resolve())}:
-                try:
-                    return Path(text).relative_to(candidate_root).as_posix()
-                except ValueError:
-                    continue
+            # Path comparison, not string prefixes: it handles drive letters, case and backslashes on Windows.
+            candidates = {path}
+            try:
+                candidates.add(path.resolve())
+            except OSError:
+                pass
+            roots = {Path(root)}
+            try:
+                roots.add(Path(root).resolve())
+            except OSError:
+                pass
+            for candidate in candidates:
+                for candidate_root in roots:
+                    try:
+                        return candidate.relative_to(candidate_root).as_posix()
+                    except ValueError:
+                        continue
         return text
-    return posixpath.normpath(text)
+    return posixpath.normpath(path.as_posix())
 
 
 def _module_path_suggestions(evidence: dict, wanted: str) -> list[str]:
