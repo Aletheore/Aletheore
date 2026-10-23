@@ -1763,7 +1763,9 @@ def build_server(
         decorator = register_tool(*args, **kwargs)
 
         def register(fn):
-            return decorator(describe_arguments(kwargs.get("name") or fn.__name__, _flag_error_results(fn)))
+            # The tool name is `name=` or the first positional argument, as in MCPServer.tool.
+            tool_name = kwargs.get("name") or (args[0] if args and isinstance(args[0], str) else None) or fn.__name__
+            return decorator(describe_arguments(tool_name, _flag_error_results(fn)))
 
         return register
 

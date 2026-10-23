@@ -699,3 +699,37 @@ def test_declared_workspaces_in_an_examples_folder_still_count(tmp_path):
     })
     result = detect_monorepo(tmp_path)
     assert result["detected"] is True and result["reason"] == "workspaces"
+
+
+def test_go_mod_replace_applies_only_to_the_module_that_declares_it(tmp_path):
+    _write(tmp_path, {
+        "a/go.mod": "module example.com/a\n\nreplace example.com/lib => ../libs/lib\n",
+        "a/main.go": GO_IMPORTER,
+        "b/go.mod": "module example.com/b\n",
+        "b/main.go": GO_IMPORTER,
+        "libs/lib/sub/sub.go": "package sub\n",
+    })
+    edges = _edges(tmp_path)
+    assert ("a/main.go", "libs/lib/sub/sub.go") in edges
+    assert ("b/main.go", "libs/lib/sub/sub.go") not in edges
+
+
+def test_extended_length_windows_citations_are_outside_the_repo():
+    result = verify_citations("see \\\\?\\C:\\repo\\x.py:7", _citation_evidence())
+    assert result["all_verified"] is False
+    assert result["unverified"][0]["reason"] == "path outside the repository"
+
+
+@posix_only
+@not_root
+def test_an_existing_read_only_air_json_fails_the_early_check(tmp_path):
+    repo = _small_repo(tmp_path)
+    (repo / ".aletheore").mkdir()
+    air = repo / ".aletheore" / "air.json"
+    air.write_text("{}", encoding="utf-8")
+    air.chmod(0o444)
+    try:
+        with pytest.raises(EvidenceWriteError):
+            check_evidence_writable(repo)
+    finally:
+        air.chmod(0o644)

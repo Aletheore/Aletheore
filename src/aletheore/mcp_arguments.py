@@ -163,8 +163,9 @@ def describe_arguments(tool_name: str, fn: Callable[..., Any]) -> Callable[..., 
     parameters = []
     for parameter in signature.parameters.values():
         text = descriptions.get(parameter.name)
-        if text and parameter.annotation is not inspect.Parameter.empty:
-            parameter = parameter.replace(annotation=Annotated[parameter.annotation, Field(description=text)])
+        if text:
+            annotation = Any if parameter.annotation is inspect.Parameter.empty else parameter.annotation
+            parameter = parameter.replace(annotation=Annotated[annotation, Field(description=text)])
         parameters.append(parameter)
     fn.__signature__ = signature.replace(parameters=parameters)  # type: ignore[attr-defined]
     return fn

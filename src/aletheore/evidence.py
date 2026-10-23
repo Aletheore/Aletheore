@@ -1,3 +1,4 @@
+import errno
 import hashlib
 import json
 import os
@@ -136,10 +137,17 @@ def _evidence_write_error(aletheore_dir: Path, exc: OSError) -> EvidenceWriteErr
 def check_evidence_writable(repo_path: Path) -> None:
     """Raises EvidenceWriteError when <repo>/.aletheore cannot be created or written
     to. Called before a scan starts so a read-only folder fails in a second, not
-    after the whole scan has run; the message is the one write_evidence gives."""
+    after the whole scan has run; the message is the one write_evidence gives.
+
+    Creates `.aletheore/` if it is missing (a scan needs it anyway), so a run that
+    stops early can leave that empty folder behind. An existing air.json that this
+    user cannot overwrite is reported too."""
     aletheore_dir = Path(repo_path) / ".aletheore"
     try:
         aletheore_dir.mkdir(parents=True, exist_ok=True)
+        existing = aletheore_dir / "air.json"
+        if existing.exists() and not os.access(existing, os.W_OK):
+            raise PermissionError(errno.EACCES, "Permission denied", str(existing))
         handle, probe_name = tempfile.mkstemp(prefix=".write-check-", dir=aletheore_dir)
         os.close(handle)
         os.unlink(probe_name)

@@ -9,7 +9,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 `scan` checks that `.aletheore/` can be written before it starts scanning, so a read-only folder fails in a second
 instead of after the whole scan, with `error: cannot write evidence to ...` on stderr and exit code 1. A write failure
-after the scan, or while saving the snapshot, gets the same one-line message. `audit`, `audit --managed` and `watch`
+after the scan is reported with the same message, and one while saving the snapshot says the evidence was written and
+the snapshot was not. `audit`, `audit --managed` and `watch`
 stop the same way, `watch` keeps running after a failed rebuild and prints that one line again on the next change,
 `init` and `mcp-install` say which file they could not write instead of crashing, and the `aletheore_scan` MCP tool
 returns the message as a tool error.

@@ -55,7 +55,7 @@ _ESCAPING_PATTERN = re.compile(
 # which must contain a backslash, is rewritten with forward slashes before the
 # patterns above run, so the existing inside-the-repo and outside-the-repo rules
 # apply to it unchanged. A drive letter or UNC prefix becomes an absolute path.
-_BACKSLASH_PATH_PATTERN = re.compile(r"(?<![\w.\\/-])((?:[A-Za-z]:)?(?:\\\\)?[\w.\-]*(?:\\[\w.\-]+)+):(?=\d)")
+_BACKSLASH_PATH_PATTERN = re.compile(r"(?<![\w.\\/-])((?:\\\\\?\\)?(?:[A-Za-z]:)?(?:\\\\)?[\w.\-]*(?:\\[\w.\-]+)+):(?=\d)")
 
 # URLs are not citations: `http://x.com/a.py:5` must not become `//x.com/a.py:5`.
 _URL_PATTERN = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://[^\s`)>\]]+")

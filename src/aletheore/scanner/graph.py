@@ -1124,9 +1124,11 @@ def _go_local_dir(repo_path: Path, base_rel_dir: str, target: str) -> str | None
     return joined
 
 
-def _load_go_modules(repo_path: Path) -> tuple[tuple[str, str], ...]:
+def _load_go_modules(repo_path: Path) -> tuple[tuple, ...]:
     """Every Go module in the repository as (module path, repo-relative dir),
-    longest module path first. A repo can hold several modules (a go.mod in a
+    longest module path first. A local `replace` is a third element, the directory
+    whose files it applies to ("." for go.work and the root go.mod), because Go applies
+    a go.mod's replaces to that module only. A repo can hold several modules (a go.mod in a
     subdirectory, several side by side, or a go.work listing them); go.mod
     files are found at any depth, skipping vendored and ignored directories.
     Directories a go.work `use`s are added even when discovery skipped them, and
@@ -1135,6 +1137,7 @@ def _load_go_modules(repo_path: Path) -> tuple[tuple[str, str], ...]:
     from aletheore.manifests import discover_manifests
 
     modules: dict[str, str] = {}
+    replaces: dict[tuple[str, str], str] = {}
     go_files: list[tuple[str, str]] = []  # (repo-relative dir, "go.mod" | "go.work")
 
     def add(module_path: str, rel_dir: str) -> None:
@@ -1177,15 +1180,25 @@ def _load_go_modules(repo_path: Path) -> tuple[tuple[str, str], ...]:
                 continue
             local_dir = repo_path if local == "." else repo_path / Path(*local.split("/"))
             if local_dir.is_dir():
-                add(tokens[0], local)
+                replaces.setdefault((tokens[0].strip('"'), rel_dir), local)
                 inner = _load_go_module_prefix(local_dir) if (local_dir / "go.mod").is_file() else None
                 if inner:
                     add(inner, local)
 
-    return tuple(sorted(((path, rel_dir) for path, rel_dir in modules.items()), key=lambda item: (-len(item[0]), item[1])))
+    entries = [(path, rel_dir) for path, rel_dir in modules.items()]
+    entries.extend((path, local, scope) for (path, scope), local in replaces.items())
+    return tuple(sorted(entries, key=lambda item: (-len(item[0]), item[1], item[2:] )))
 
 
-def _resolve_go_import(repo_path: Path, module_prefix, import_path: str) -> list[str]:
+def _go_replace_applies(scope: str, from_rel: str | None) -> bool:
+    """A replace declared in the go.mod at `scope` applies to files under that directory
+    (everywhere for the root, which is also where go.work lives)."""
+    if scope == "." or from_rel is None:
+        return True
+    return from_rel.startswith(scope + "/")
+
+
+def _resolve_go_import(repo_path: Path, module_prefix, import_path: str, from_rel: str | None = None) -> list[str]:
     # Go doesn't import individual files, it imports whole packages (directories) - every
     # non-test .go file in that directory is part of what gets pulled in, so one import
     # statement can fan out to several edges. An import that doesn't start with the
@@ -1207,9 +1220,10 @@ def _resolve_go_import(repo_path: Path, module_prefix, import_path: str) -> list
         )
     else:
         candidates = [
-            (path, rel_dir)
-            for path, rel_dir in module_prefix
-            if import_path == path or import_path.startswith(path.rstrip("/") + "/")
+            (entry[0], entry[1])
+            for entry in module_prefix
+            if (import_path == entry[0] or import_path.startswith(entry[0].rstrip("/") + "/"))
+            and (len(entry) < 3 or _go_replace_applies(entry[2], from_rel))
         ]
     if not candidates:
         return []
@@ -3844,7 +3858,7 @@ def _extract_module(
     elif language_name == "go":
         raw_imports, functions, classes = _extract_go(tree.root_node, source)
         for spec in raw_imports:
-            for target in _resolve_go_import(repo_path, go_module_prefix, spec):
+            for target in _resolve_go_import(repo_path, go_module_prefix, spec, rel_path):
                 if target != rel_path:
                     resolved_imports.append(target)
     elif language_name == "rust":
