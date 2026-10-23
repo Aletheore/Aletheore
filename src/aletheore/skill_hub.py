@@ -86,7 +86,7 @@ FIND_SKILL_MAX_CONTENT_CHARS = 14_000
 # a prompt longer than HOOK_MAX_PROMPT_CHARS is usually a pasted log, so only its first
 # HOOK_TRUNCATE_CHARS characters are searched (the task is normally stated at the top).
 HOOK_MODES = ("hint", "inject")
-HOOK_MIN_WORDS = 5
+HOOK_MIN_WORDS = 6
 HOOK_MAX_PROMPT_CHARS = 6_000
 HOOK_TRUNCATE_CHARS = 800
 # The medium hint tier is deliberately looser than find_skill's "high" bar: a hint is about
@@ -862,6 +862,10 @@ _RANK_WEIGHTS = {
     "coverage": 3.92,
     "name_hit": 2.8,
     "name_cov": 2.0,
+    # An additive name bonus bypasses BM25's field-length normalisation, so a long
+    # name that repeats the query can outrank a shorter, more general skill. Penalise
+    # each name token the query did not ask for; tuned on the dev half.
+    "name_extra": 3.0,
     "phrase": 1.26,
     "prefix": 0.6,
     # A token recovered by one edit is a guess, so its term frequency counts for less
@@ -1112,6 +1116,7 @@ class _RankIndex:
                 score += weights["name_hit"] * sum(idf.get(token, 0.0) for token in name_hits)
                 if self.name_sizes[doc_index]:
                     score += weights["name_cov"] * (len(set(name_hits)) / self.name_sizes[doc_index])
+                score -= weights["name_extra"] * (self.name_sizes[doc_index] - len(set(name_hits)))
             if phrase and query_pairs:
                 bigrams: set[tuple[str, str]] = set()
                 for tokens in doc_tokens[doc_index]:

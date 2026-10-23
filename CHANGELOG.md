@@ -5,6 +5,13 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+**Changed: a long, specific skill name no longer beats the general skill**
+
+The name bonus bypassed BM25's length normalisation, so a skill whose long name happened to repeat the query could
+outrank a shorter skill that covered the task more broadly. Each name word the query did not ask for now carries a
+small penalty. "postgres migration" puts `data/database-migration` in the top three instead of behind the
+Oracle-to-Postgres and Neon skills. Top1, top3, top5 and typo recovery all improved on both dev and test.
+
 **Changed: custom Hallbook skills are searchable by their content**
 
 Custom skills now match on their title, frontmatter description and body, not only their file name. They are

@@ -5,6 +5,8 @@ custom-skill content search and the small regression query list. They stay fast
 on purpose: the full 994-query benchmark lives in benchmarks/hallbook-search.
 """
 
+import pytest
+
 from aletheore import skill_hub
 
 
@@ -87,6 +89,7 @@ def test_hook_stays_silent_for_follow_up_questions_about_the_chat():
         "sorry, I meant the other file",
         "can you show me the diff for the last change",
         "thanks for taking a look at that earlier, it is working now",
+        "add a stripe webhook handler",
     ):
         assert skill_hub.hook_suggestion(prompt) is None, prompt
 
@@ -243,3 +246,28 @@ def test_fuzzy_and_prefix_candidates_are_sorted_for_stable_results():
             assert candidates == sorted(candidates)
     index._ensure_prefix_tokens()
     assert all(candidates == tuple(sorted(candidates)) for candidates in index.prefix_tokens.values())
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("postgres migration", "data/database-migration"),
+        ("kubernetes deployment", "devops/kubernetes-specialist"),
+        ("debug a failing test", "debugging/systematic-debugging"),
+        ("react performance optimization", "performance/performance-optimization"),
+        ("stripe webhook handler", "platforms/stripe-integration"),
+        ("terraform aws infrastructure", "infrastructure/terraform-engineer"),
+        ("oauth authentication security", "backend/auth-implementation-patterns"),
+        ("sql query optimization", "data/sql-optimization-patterns"),
+        ("docker multi-stage build", "devops/multi-stage-dockerfile"),
+        ("github actions cache", "devops/github-actions-efficiency"),
+        ("write technical documentation", "documentation/documentation-writer"),
+        ("security focused code review", "code-review/security-focused"),
+        ("flaky e2e tests", "testing/e2e-testing-patterns"),
+        ("postgres index performance", "data/postgres-pro"),
+        ("database schema change rollback", "data/database-migration"),
+    ],
+)
+def test_hand_picked_queries_keep_the_expected_skill_in_the_top_three(query, expected):
+    ids = [meta.skill_id for meta in skill_hub.search_skills(query, limit=3)]
+    assert expected in ids, (query, ids)
