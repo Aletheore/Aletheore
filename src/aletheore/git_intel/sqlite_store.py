@@ -72,7 +72,22 @@ class SQLiteRepoGraphStore:
             self._conn.execute("ALTER TABLE file_churn ADD COLUMN owners TEXT NOT NULL DEFAULT '{}'")
         except sqlite3.OperationalError:
             pass  # column already exists
+        self._drop_sync_when_file_owners_were_never_filled()
         self._conn.commit()
+
+    def _drop_sync_when_file_owners_were_never_filled(self) -> None:
+        """Make the next sync a full rebuild when the stored files have changes but no owner at all.
+
+        Rows written before the `owners` column existed take its default, an empty map, while the sync state still
+        says they are current, so an incremental sync never fills them and every file shows no owner. Files with
+        recorded changes and not one owner among them can only be that state, whether the column was added just
+        now or by an earlier version, so the recorded sync is dropped and the analyzer rebuilds the history once.
+        """
+        changed, with_owner = self._conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(owners != '{}'), 0) FROM file_churn WHERE churn_count > 0"
+        ).fetchone()
+        if changed and not with_owner:
+            self._conn.execute("DELETE FROM sync_state")
 
     def close(self) -> None:
         self._conn.close()

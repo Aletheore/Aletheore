@@ -49,11 +49,13 @@ _GIT_LOG_COMMITS = 800
 _GIT_LOG_TIMEOUT = 20
 _GIT_MAX_FILES_PER_COMMIT = 25
 _GIT_MIN_PAIR = 2
-_TOOLS_AT_FILE_TOUCH =frozenset({"Read", "Edit", "MultiEdit", "Write"})
+_TOOLS_AT_FILE_TOUCH = frozenset({"Read", "Edit", "MultiEdit", "Write"})
 
 # Same shape as tests_for._TEST_PATH, kept local so this module imports nothing from the package at hook time.
 _TEST_PATH = re.compile(
-    r"(^|/)(tests?|__tests__|spec|e2e)(/|$)|(^|/)test_[^/]*$|_test\.[A-Za-z0-9]+$|\.(test|spec)\.[A-Za-z0-9]+$",
+    r"(^|/)(tests?|__tests__|spec|e2e)(/|$)|(^|/)test_[^/]*$|_test\.[A-Za-z0-9]+$|\.(test|spec)\.[A-Za-z0-9]+$"
+    # PascalCase test files and test projects (FooTests.cs, UnitTests/); case matters here, "Contests/" is not one
+    r"|(?-i:[A-Za-z0-9]Tests?\.(?:cs|java|kt|kts|php|scala|swift)$|(^|/)[\w.\-]*Tests?/)",
     re.IGNORECASE,
 )
 _EXT = re.compile(r"\.[A-Za-z0-9]+$")

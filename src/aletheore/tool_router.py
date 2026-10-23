@@ -137,7 +137,7 @@ INTENTS: tuple[Intent, ...] = (
         "dead_code",
         "aletheore_dead_code",
         (
-            r"\bnobody (?:imports|uses|calls|references)\b", r"\bno other (?:\w+ ){0,3}(?:modules?|files?)\b[^.?]*\bimports?\b",
+            r"\bnobody (?:imports|uses|calls|references)\b", r"\bno other (?:[\w#+.]+ ){0,3}(?:modules?|files?)\b[^.?]*\bimports?\b",
             r"\b(?:un-?imported|no importers?|zero importers?|not imported by (?:any|anything))\b", r"\bsafely delete\b", r"\bcut the fat\b", r"\bdead (?:files?|modules?|functions?)\b", r"\borphan\w*\b",r"\bdead code\b", r"\bunused (?:code|files?|modules?|functions?)\b", r"\bunreachable\b", r"\bnever (?:used|called|imported)\b", r"\bsafe to delete\b"),
         weight=1.2,
     ),
@@ -259,6 +259,12 @@ _COMPILED = {intent.name: tuple(re.compile(p, re.IGNORECASE) for p in intent.pat
 
 # A path-looking token: contains a slash or ends in a known source extension.
 _PATH_TOKEN = re.compile(r"[\w@./+-]+\.(?:py|pyi|js|jsx|ts|tsx|mjs|cjs|go|rs|rb|php|java|kt|swift|cs|cpp|cc|c|h|hpp|scala|sql|sh|vue|svelte)\b|[\w@.+-]+(?:/[\w@.+-]+)+")
+_BARE_DIR_QUOTED = re.compile(r"[`'\"]([\w@.+-]+)[`'\"]")
+_BARE_DIR_AFTER_PREPOSITION = re.compile(
+    r"\b(?:under|inside|within|beneath|below|in)\s+(?:the\s+)?(?:directory\s+|folder\s+|dir\s+|package\s+)?([\w@.+-]+)\b"
+    r"(?=\s*(?:\(|,|\.|\?|\s(?:directory|folder|dir|package)\b|$))",
+    re.IGNORECASE,
+)
 _IDENT_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{3,}")
 _STOP = frozenset(
     "this that what which where when does should would could have with from there their about into your "
@@ -388,8 +394,11 @@ _SLASH_PATH = re.compile(r"[\w@.+-]+(?:/[\w@.+-]+)+/?")
 
 
 def intent_text_of(question: str) -> str:
-    """The question with test qualifiers and directory-style paths removed, for intent scoring only."""
-    return _SLASH_PATH.sub(" ", strip_test_qualifiers(question))
+    """The question with test qualifiers, directory-style paths and file names removed, for intent scoring only.
+
+    A file name such as `auth.go` leaves a bare "." in the text, which the sentence-bounded intent patterns
+    ([^?.]{0,80}) cannot cross, so a root-level file used to misroute the question."""
+    return _PATH_TOKEN.sub(" ", _SLASH_PATH.sub(" ", strip_test_qualifiers(question)))
 
 
 def resolve_scope(question: str, explicit: str | None, paths: list[str]) -> str | None:
@@ -397,6 +406,10 @@ def resolve_scope(question: str, explicit: str | None, paths: list[str]) -> str 
     of known modules. A path that is itself a module is a file target, handled by resolve_target, not a scope."""
     known = set(paths)
     candidates = ([explicit] if explicit else []) + _PATH_TOKEN.findall(question)
+    # A one-word directory ("under `examples`", "in the lib folder") has no slash or extension for _PATH_TOKEN to
+    # find. Accept one only when the question marks it as a place (quoted, or after under/in/inside plus an
+    # optional "the"/"directory"), so ordinary words that happen to be directory names are not read as scopes.
+    candidates += _BARE_DIR_QUOTED.findall(question) + _BARE_DIR_AFTER_PREPOSITION.findall(question)
     for token in candidates:
         token = token.strip().strip("`'\"()[],;:").removeprefix("./").rstrip("/")
         if not token or token in known:

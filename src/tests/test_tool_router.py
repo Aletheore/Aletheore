@@ -42,6 +42,27 @@ def test_routes_clear_questions_with_high_confidence(question, intent):
     assert (decision.confidence, decision.intent) == ("high", intent)
 
 
+def test_a_one_word_directory_is_a_scope_only_when_the_question_marks_it_as_a_place():
+    quoted = tr.route("Under the directory `web` list the modules that no other module imports.", None, PATHS)
+    assert (quoted.intent, quoted.scope) == ("dead_code", "web")
+    spoken = tr.route("In the web folder, list the modules that nobody imports.", None, PATHS)
+    assert (spoken.intent, spoken.scope) == ("dead_code", "web")
+    # "web" is only a word here, followed by more of the sentence, not a place
+    assert tr.route("list unused files in web projects", None, PATHS).scope is None
+
+
+def test_cpp_and_csharp_unimported_questions_route_to_dead_code():
+    for language in ("C++", "C#", "Java", "Python"):
+        decision = tr.route(f"List the modules that no other {language} module imports.", None, PATHS)
+        assert (decision.confidence, decision.intent) == ("high", "dead_code"), language
+
+
+def test_a_root_level_file_name_does_not_misroute_a_dependency_question():
+    paths = ["auth.go", "internal/store.go"]
+    decision = tr.route("How many modules does auth.go depend on through imports, directly or transitively?", None, paths)
+    assert (decision.confidence, decision.intent, decision.target) == ("high", "dependencies", "auth.go")
+
+
 def test_a_file_question_without_a_file_is_low_confidence_not_a_guess():
     decision = tr.route("is it safe to rename this", None, PATHS)
     assert decision.confidence == "low"

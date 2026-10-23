@@ -429,6 +429,29 @@ def test_find_blast_radius_truncates_transitive_dependents_past_the_cap(tmp_path
     assert result["transitive_dependents_truncated"] is True
 
 
+def test_pascal_case_test_files_and_projects_count_as_tests_but_lookalikes_do_not():
+    from aletheore import code_locator, dead_code, evidence_hook, query, tests_for
+
+    tests = [
+        "src/AutoMapper.UnitTests/Mappers.cs",
+        "src/IntegrationTests/Setup.cs",
+        "src/Foo/BarTests.cs",
+        "src/main/java/FooTest.java",
+        "app/Http/UserTest.php",
+    ]
+    sources = ["src/Contests/Entry.cs", "src/Foo/Latest.cs", "src/Foo/Bar.cs", "src/Protests.txt"]
+    for path in tests:
+        assert query._BLAST_TEST_PATH.search(path), path
+        assert tests_for._TEST_PATH.search(path), path
+        assert code_locator._TEST_PATH.search(path), path
+        assert evidence_hook.is_test_path(path), path
+        assert dead_code.is_test_file(path), path
+    for path in sources:
+        assert not query._BLAST_TEST_PATH.search(path), path
+        assert not tests_for._TEST_PATH.search(path), path
+        assert not evidence_hook.is_test_path(path), path
+
+
 def _chain_evidence():
     # app -> svc -> core, svc -> tests/test_helpers; imports repeated per statement as the scan records them
     modules = [

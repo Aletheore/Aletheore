@@ -229,6 +229,8 @@ _BLAST_RADIUS_MAX_DIRECT = 50
 # Same shape as tests_for._TEST_PATH, local so the count of test files in a blast radius needs no extra import.
 _BLAST_TEST_PATH = re.compile(
     r"(^|/)(tests?|testing|__tests__|spec)/|_test\.|\.test\.|\.spec\.|(^|/)test_[^/]*$|/testdata/|conftest"
+    # PascalCase test files and test projects: FooTests.cs, FooTest.java, UnitTests/, Foo.Tests/
+    r"|[A-Za-z0-9]Tests?\.(?:cs|java|kt|kts|php|scala|swift)$|(^|/)[\w.\-]*Tests?/"
 )
 
 

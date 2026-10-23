@@ -78,7 +78,10 @@ def test_existing_database_without_file_owners_column_upgrades_in_place(tmp_path
 
     store = SQLiteRepoGraphStore(db_path)
     snapshot = store.load("repo-1", "main")
-    assert snapshot.file_churn["a.txt"].owners == {}
+    # The old rows would claim an empty owner map for every file while the sync state said they were current, so
+    # no incremental sync would ever fill them. The upgrade drops the recorded sync instead; the analyzer sees no
+    # last_synced_sha and rebuilds the history once, which is what populates per-file owners.
+    assert snapshot.last_synced_sha is None
 
 
 def test_incremental_apply_matches_a_single_full_fold(tmp_path):

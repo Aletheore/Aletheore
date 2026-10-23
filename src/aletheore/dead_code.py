@@ -77,7 +77,9 @@ TEST_PATH_PATTERNS = [
     # Swift (XCTest) use the identical convention and were never added -
     # search_index._is_test_path had the same gap, already fixed there.
     # "Tests?" (not just "Test") to cover Swift's common pluralized form.
-    re.compile(r"(^|/)[^/]+Tests?\.(kt|kts|java|php|swift|scala)$"),
+    re.compile(r"(^|/)[^/]+Tests?\.(kt|kts|java|php|swift|scala|cs)$"),
+    # .NET test projects live in directories named UnitTests/, IntegrationTests/ or Foo.Tests/
+    re.compile(r"(^|/)[\w.\-]*Tests?/"),
     # Gradle's androidTest/test source-set convention - doesn't require the
     # PascalCase suffix above (e.g. a test helper/fixture file), and
     # "androidTest" isn't matched by the tests?/__tests__ pattern above
