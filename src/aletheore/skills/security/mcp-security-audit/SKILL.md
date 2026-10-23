@@ -18,7 +18,7 @@ description: 'Audit MCP (Model Context Protocol) server configurations for secur
 
   keywords: [mcp, security, audit, secrets, shell-injection, supply-chain, governance]'
 skill_id: security/mcp-security-audit
-title: Mcp Security Audit
+title: MCP Security Audit
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/mcp-security-audit
 license: MIT
 shelf: quality

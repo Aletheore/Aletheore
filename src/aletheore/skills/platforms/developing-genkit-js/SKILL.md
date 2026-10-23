@@ -5,7 +5,7 @@ metadata:
   version: 1.0.0
   category: AiAndMachineLearning
 skill_id: platforms/developing-genkit-js
-title: Developing Genkit Js
+title: Developing Genkit JS
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/developing-genkit-js
 license: Apache-2.0
 shelf: build

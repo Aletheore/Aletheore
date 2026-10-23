@@ -9,7 +9,7 @@ skill_id: ai-engineering/webmcpify
 title: Webmcpify
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/webmcpify
 shelf: ai-agents
-aletheore: {"id": "ai-engineering/webmcpify", "shelf": "ai-agents", "category": "ai-engineering", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/webmcpify", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 3, "curation_note": "make web app agent-ready with WebMCP", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": ["slash"], "companion_files": 11, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["subagents"], "mentions_agents": [], "adapted": {"slash-skill": 1}, "status": "ready"}
+aletheore: {"id": "ai-engineering/webmcpify", "shelf": "ai-agents", "category": "ai-engineering", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/webmcpify", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 3, "curation_note": "make web app agent-ready with WebMCP", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": ["slash"], "companion_files": 11, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["scripts", "subagents"], "mentions_agents": [], "adapted": {"slash-skill": 1}, "status": "ready"}
 ---
 
 # webmcpify — make any web app agent-ready, verifiably

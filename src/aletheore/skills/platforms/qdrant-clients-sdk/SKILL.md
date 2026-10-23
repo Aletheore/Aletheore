@@ -7,7 +7,7 @@ allowed-tools:
 - Glob
 - Bash
 skill_id: platforms/qdrant-clients-sdk
-title: Qdrant Clients Sdk
+title: Qdrant Clients SDK
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/qdrant-clients-sdk
 license: MIT
 shelf: build

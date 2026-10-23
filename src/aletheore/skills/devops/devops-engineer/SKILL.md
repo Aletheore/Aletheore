@@ -13,7 +13,7 @@ metadata:
   output-format: code
   related-skills: terraform-engineer, kubernetes-specialist, sre-engineer, monitoring-expert, security-reviewer
 skill_id: devops/devops-engineer
-title: Devops Engineer
+title: DevOps Engineer
 source_url: https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/devops-engineer
 shelf: ship-operate
 aletheore: {"id": "devops/devops-engineer", "shelf": "ship-operate", "category": "devops", "origin": "https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/devops-engineer", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "36f3fe8052da7c57083783268c6ea3265d075265", "quality": 4, "curation_note": "Docker/CI/K8s/Terraform", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": ["slash"], "companion_files": 9, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

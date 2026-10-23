@@ -6,7 +6,7 @@ skill_id: design/algorithmic-art
 title: Algorithmic Art
 source_url: https://github.com/anthropics/skills/tree/dbd4588f9e1033efb41dad4bef2f7947c8993d44/skills/algorithmic-art
 shelf: product-design
-aletheore: {"id": "design/algorithmic-art", "shelf": "product-design", "category": "design", "origin": "https://github.com/anthropics/skills/tree/dbd4588f9e1033efb41dad4bef2f7947c8993d44/skills/algorithmic-art", "license": "Apache-2.0", "license_source": "skills/algorithmic-art/LICENSE.txt", "upstream_commit": "dbd4588f9e1033efb41dad4bef2f7947c8993d44", "quality": 3, "curation_note": "algorithmic art with p5.js", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 3, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "mentions_agents": [], "adapted": {}, "status": "ready"}
+aletheore: {"id": "design/algorithmic-art", "shelf": "product-design", "category": "design", "origin": "https://github.com/anthropics/skills/tree/dbd4588f9e1033efb41dad4bef2f7947c8993d44/skills/algorithmic-art", "license": "Apache-2.0", "license_source": "skills/algorithmic-art/LICENSE.txt", "upstream_commit": "dbd4588f9e1033efb41dad4bef2f7947c8993d44", "quality": 3, "curation_note": "algorithmic art with p5.js", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 3, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["scripts"], "mentions_agents": [], "adapted": {}, "status": "ready"}
 ---
 
 Algorithmic philosophies are computational aesthetic movements that are then expressed through code. Output .md files (philosophy), .html files (interactive viewer), and .js files (generative algorithms).

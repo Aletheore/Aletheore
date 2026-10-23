@@ -11,7 +11,7 @@ skill_id: ai-engineering/eval-driven-dev
 title: Eval Driven Dev
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/eval-driven-dev
 shelf: ai-agents
-aletheore: {"id": "ai-engineering/eval-driven-dev", "shelf": "ai-agents", "category": "ai-engineering", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/eval-driven-dev", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 4, "curation_note": "eval-driven development", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 18, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["subagents"], "adapted": {}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "ai-engineering/eval-driven-dev", "shelf": "ai-agents", "category": "ai-engineering", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/eval-driven-dev", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 4, "curation_note": "eval-driven development", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 18, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["scripts", "subagents"], "adapted": {}, "status": "ready", "mentions_agents": []}
 ---
 
 # Eval-Driven Development for Python LLM Applications

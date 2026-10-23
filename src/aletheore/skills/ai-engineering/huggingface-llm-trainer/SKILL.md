@@ -3,7 +3,7 @@ name: huggingface-llm-trainer
 description: Train or fine-tune language and vision models using TRL (Transformer Reinforcement Learning) or Unsloth with Hugging Face Jobs infrastructure. Covers SFT, DPO, GRPO and reward modeling training methods, plus GGUF conversion for local deployment. Includes guidance on the TRL Jobs package, UV scripts with PEP 723 format, dataset preparation and validation, hardware selection, cost estimation, Trackio monitoring, Hub authentication, model selection/leaderboards and model persistence. Use for tasks involving cloud GPU training, GGUF conversion, or when users mention training on Hugging Face Jobs without local GPU setup.
 license: Apache-2.0
 skill_id: ai-engineering/huggingface-llm-trainer
-title: Huggingface Llm Trainer
+title: Huggingface LLM Trainer
 source_url: https://github.com/huggingface/skills/tree/c3ff942be3e07116b475253f0a8fc4f54682c1a8/skills/huggingface-llm-trainer
 shelf: ai-agents
 aletheore: {"id": "ai-engineering/huggingface-llm-trainer", "shelf": "ai-agents", "category": "ai-engineering", "origin": "https://github.com/huggingface/skills/tree/c3ff942be3e07116b475253f0a8fc4f54682c1a8/skills/huggingface-llm-trainer", "license": "Apache-2.0", "license_source": "LICENSE", "upstream_commit": "c3ff942be3e07116b475253f0a8fc4f54682c1a8", "quality": 4, "curation_note": "official Hugging Face skill; check injection-flag context for hf-cli/spaces before shipping", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": ["slash"], "companion_files": 18, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["mcp:direct", "mcp:huggingface", "scripts"], "mentions_agents": ["Claude Code"], "mentions": ["claude", "agents"], "adapted": {}, "status": "ready"}

@@ -6,7 +6,7 @@ metadata:
   version: '1.0'
 compatibility: Requires the ax CLI and a configured Arize profile.
 skill_id: platforms/arize-ai-provider-integration
-title: Arize Ai Provider Integration
+title: Arize AI Provider Integration
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/arize-ai-provider-integration
 license: MIT
 shelf: build

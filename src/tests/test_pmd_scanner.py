@@ -20,7 +20,7 @@ def test_check_pmd_is_checked_true_with_no_findings_when_no_java_source(tmp_path
         result = check_pmd(tmp_path)
 
     mock_which.assert_not_called()
-    assert result == {"checked": True, "reason": None, "findings": []}
+    assert result == {"checked": True, "reason": None, "findings": [], "not_applicable": "no Java source files"}
 
 
 def test_check_pmd_reports_not_installed(tmp_path):

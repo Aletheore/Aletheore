@@ -2,7 +2,7 @@
 name: rust-mcp-server-generator
 description: Generate a complete Rust Model Context Protocol server project with tools, prompts, resources, and tests using the official rmcp SDK
 skill_id: ai-engineering/rust-mcp-server-generator
-title: Rust Mcp Server Generator
+title: Rust MCP Server Generator
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/rust-mcp-server-generator
 license: MIT
 shelf: ai-agents

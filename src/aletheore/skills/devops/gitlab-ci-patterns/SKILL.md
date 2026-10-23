@@ -2,7 +2,7 @@
 name: gitlab-ci-patterns
 description: Build GitLab CI/CD pipelines with multi-stage workflows, caching, and distributed runners for scalable automation. Use when implementing GitLab CI/CD, optimizing pipeline performance, or setting up automated testing and deployment.
 skill_id: devops/gitlab-ci-patterns
-title: Gitlab Ci Patterns
+title: GitLab CI Patterns
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/cicd-automation/skills/gitlab-ci-patterns
 license: MIT
 shelf: ship-operate

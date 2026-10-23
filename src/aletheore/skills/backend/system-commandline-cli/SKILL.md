@@ -2,7 +2,7 @@
 name: system-commandline-cli
 description: 'Use this skill when adding, modifying, or reviewing CLI commands in a .NET project built with System.CommandLine. Triggers include: creating a new CLI command, adding options or arguments, wiring command handlers, registering subcommands, building command groups, or any architecture decision about CLI command structure. Also use when the user mentions ''System.CommandLine'', ''CommandBase'', ''SetAction'', ''ParseResult'', ''RootCommand'', ''subcommand'', or asks to add a verb to the CLI. Do NOT use for general C# coding, web APIs, UI work, or non-CLI projects.'
 skill_id: backend/system-commandline-cli
-title: System Commandline Cli
+title: System Commandline CLI
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/system-commandline-cli
 license: MIT
 shelf: build

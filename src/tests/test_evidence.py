@@ -250,7 +250,7 @@ def test_scan_repository_handles_no_git_history(tmp_path):
     repo.mkdir()
     (repo / "main.py").write_text("x = 1\n")
     evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
-    assert evidence["git"] == {"available": False}
+    assert evidence["git"] == {"available": False, "reason": "not a git repository"}
     assert "dead_code" in evidence["repository"]
     assert "hotspots" not in evidence["git"]
 

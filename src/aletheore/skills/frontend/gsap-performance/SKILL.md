@@ -3,7 +3,7 @@ name: gsap-performance
 description: Official GSAP skill for performance — prefer transforms, avoid layout thrashing, will-change, batching. Use when optimizing GSAP animations, reducing jank, or when the user asks about animation performance, FPS, or smooth 60fps.
 license: MIT
 skill_id: frontend/gsap-performance
-title: Gsap Performance
+title: GSAP Performance
 source_url: https://github.com/greensock/gsap-skills/tree/aed9cfd3277740755f6bfc1155c7aa645403b760/skills/gsap-performance
 shelf: build
 aletheore: {"id": "frontend/gsap-performance", "shelf": "build", "category": "frontend", "origin": "https://github.com/greensock/gsap-skills/tree/aed9cfd3277740755f6bfc1155c7aa645403b760/skills/gsap-performance", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "aed9cfd3277740755f6bfc1155c7aa645403b760", "quality": 3, "curation_note": "official GSAP performance", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 0, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

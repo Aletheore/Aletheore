@@ -2,7 +2,7 @@
 name: pptx-quality-gates
 description: Use when validating or repairing an editable PPTX deck for geometry, accessibility, native editability, source lineage, and OOXML package integrity.
 skill_id: documents/pptx-quality-gates
-title: Pptx Quality Gates
+title: PPTX Quality Gates
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/pptx-deck-creation/skills/pptx-quality-gates
 license: MIT
 shelf: content-media

@@ -78,6 +78,13 @@ def _has_commits(repo_path: Path) -> bool:
     return result.returncode == 0 and result.stdout.strip() != ""
 
 
+def _unavailable(repo_path: Path) -> dict:
+    """{"available": False, "reason": ...} saying why there is no git data."""
+    if _run_git(repo_path, "rev-parse", "--git-dir").returncode != 0:
+        return {"available": False, "reason": "not a git repository"}
+    return {"available": False, "reason": "no commits yet"}
+
+
 def _remote_names(repo_path: Path) -> set[str]:
     result = _run_git(repo_path, "remote")
     return set(result.stdout.strip().splitlines())
@@ -499,7 +506,7 @@ def prepare_git_analysis(
         now = datetime.now(timezone.utc)
 
     if not _has_commits(repo_path):
-        return {"available": False}
+        return _unavailable(repo_path)
 
     facts = history_facts(repo_path)
     if facts is not None:
@@ -555,7 +562,8 @@ def prepare_git_analysis(
 
 def finish_git_analysis(prepared: dict, modules: list[dict] | None) -> dict:
     if not prepared.get("available"):
-        return {"available": False}
+        reason = prepared.get("reason")
+        return {"available": False, **({"reason": reason} if reason else {})}
     return {
         "available": True,
         "branches": prepared["branches"],

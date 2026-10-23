@@ -6,7 +6,7 @@ title: Executing Plans
 source_url: https://github.com/obra/superpowers/tree/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/executing-plans
 license: MIT
 shelf: build
-aletheore: {"id": "planning/executing-plans", "shelf": "build", "category": "planning", "origin": "https://github.com/obra/superpowers/tree/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/executing-plans", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3", "quality": 4, "curation_note": "executing implementation plans", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": ["skill-ref"], "companion_files": 2, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["scripts", "subagents"], "adapted": {}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "planning/executing-plans", "shelf": "build", "category": "planning", "origin": "https://github.com/obra/superpowers/tree/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/executing-plans", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3", "quality": 4, "curation_note": "executing implementation plans", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": ["skill-ref"], "companion_files": 2, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["subagents"], "adapted": {}, "status": "ready", "mentions_agents": []}
 ---
 
 # Executing Plans

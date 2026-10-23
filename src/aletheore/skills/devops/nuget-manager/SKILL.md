@@ -2,7 +2,7 @@
 name: nuget-manager
 description: Manage NuGet packages in .NET projects/solutions. Use this skill when adding, removing, or updating NuGet package versions. It enforces using `dotnet` CLI for package management and provides strict procedures for direct file edits only when updating versions.
 skill_id: devops/nuget-manager
-title: Nuget Manager
+title: NuGet Manager
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/nuget-manager
 license: MIT
 shelf: ship-operate

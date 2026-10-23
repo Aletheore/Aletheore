@@ -3,7 +3,7 @@ name: java-mcp-server-generator
 description: Use this skill when the user wants to create a Model Context Protocol (MCP) server in Java or in a Spring Boot app. Also use it when the user wants AI agents, such as GitHub Copilot or Claude, to use Java code, an API, or a database. Use it even if the user does not say "MCP". The skill makes a Maven or Gradle project with the MCP Java SDK 2.x, tools, JUnit tests, and client configuration. Do not use it for an MCP client or for a server in another language.
 compatibility: JDK 17 or later, Maven 3.9 or later or Gradle 9 or later, and network access to download dependencies. The MCP Inspector also uses Node.js.
 skill_id: ai-engineering/java-mcp-server-generator
-title: Java Mcp Server Generator
+title: Java MCP Server Generator
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/java-mcp-server-generator
 license: MIT
 shelf: ai-agents

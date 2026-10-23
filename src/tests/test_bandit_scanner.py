@@ -54,7 +54,7 @@ def test_check_bandit_is_checked_true_with_no_findings_when_no_python_source(tmp
         result = check_bandit(tmp_path)
 
     mock_which.assert_not_called()
-    assert result == {"checked": True, "reason": None, "findings": []}
+    assert result == {"checked": True, "reason": None, "findings": [], "not_applicable": "no Python source files"}
 
 
 def test_check_bandit_reports_not_installed(tmp_path):

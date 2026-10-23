@@ -2,7 +2,7 @@
 name: import-infrastructure-as-code
 description: Import existing Azure resources into Terraform using Azure CLI discovery and Azure Verified Modules (AVM). Use when asked to reverse-engineer live Azure infrastructure, generate Infrastructure as Code from existing subscriptions/resource groups/resource IDs, map dependencies, derive exact import addresses from downloaded module source, prevent configuration drift, and produce AVM-based Terraform files ready for validation and planning across any Azure resource type.
 skill_id: infrastructure/import-infrastructure-as-code
-title: Import Infrastructure As Code
+title: Import Infrastructure as Code
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/import-infrastructure-as-code
 license: MIT
 shelf: ship-operate

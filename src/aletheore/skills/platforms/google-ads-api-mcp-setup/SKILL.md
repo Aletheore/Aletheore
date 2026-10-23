@@ -7,7 +7,7 @@ metadata:
   version: 1.0.0
   category: GoogleAds
 skill_id: platforms/google-ads-api-mcp-setup
-title: Google Ads Api Mcp Setup
+title: Google Ads API MCP Setup
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/ads/google-ads-api-mcp-setup
 license: Apache-2.0
 shelf: build

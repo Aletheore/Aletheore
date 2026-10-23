@@ -1,12 +1,12 @@
 ---
 name: create-readme
-description: Create a README.md file for the project
+description: Review the whole project and write a concise, well-structured README.md in GitHub Flavored Markdown, leaving out license and contributing sections.
 skill_id: documentation/create-readme
 title: Create Readme
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/create-readme
 license: MIT
 shelf: ship-operate
-aletheore: {"id": "documentation/create-readme", "shelf": "ship-operate", "category": "documentation", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/create-readme", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 3, "curation_note": "README creation", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 0, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "documentation/create-readme", "shelf": "ship-operate", "category": "documentation", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/create-readme", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 3, "curation_note": "README creation", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 0, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {"SKILL.md": "the one-line frontmatter description was replaced with one that says what the skill does; the body is unchanged"}, "status": "ready", "mentions_agents": []}
 ---
 
 ## Role

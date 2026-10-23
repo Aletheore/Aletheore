@@ -2,7 +2,7 @@
 name: csharp-nunit
 description: Get best practices for NUnit unit testing, including data-driven tests
 skill_id: testing/csharp-nunit
-title: Csharp Nunit
+title: Csharp NUnit
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/csharp-nunit
 license: MIT
 shelf: quality

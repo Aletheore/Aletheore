@@ -2,7 +2,7 @@
 name: qdrant-scaling-qps
 description: Guides Qdrant query throughput (QPS) scaling. Use when someone asks 'how to increase QPS', 'need more throughput', 'queries per second too low', 'batch search', 'read replicas', or 'how to handle more concurrent queries'.
 skill_id: platforms/qdrant-scaling-qps
-title: Qdrant Scaling Qps
+title: Qdrant Scaling QPS
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/qdrant-scaling/scaling-qps
 license: MIT
 shelf: build

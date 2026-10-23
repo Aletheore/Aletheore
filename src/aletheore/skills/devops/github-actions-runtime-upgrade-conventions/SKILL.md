@@ -2,7 +2,7 @@
 name: github-actions-runtime-upgrade-conventions
 description: Upgrade GitHub Actions to supported runtimes by selecting safe action versions, preserving workflow behavior, and validating post-upgrade execution.
 skill_id: devops/github-actions-runtime-upgrade-conventions
-title: Github Actions Runtime Upgrade Conventions
+title: GitHub Actions Runtime Upgrade Conventions
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/github-actions-runtime-upgrade-conventions
 license: MIT
 shelf: ship-operate

@@ -16,16 +16,8 @@ import certifi
 
 from aletheore.user_paths import user_home
 from aletheore.vulnerabilities import (
-    _parse_cargo_pins,
-    _parse_composer_pins,
-    _parse_gemfile_lock_pins,
-    _parse_go_pins,
-    _parse_gradle_pins,
-    _parse_maven_pins,
-    _parse_npm_pins,
-    _parse_nuget_pins,
-    _parse_pip_pins,
-    _parse_swift_package_resolved_pins,
+    _pin_info_fields,
+    collect_pins,
 )
 
 PYPI_URL_TEMPLATE = "https://pypi.org/pypi/{name}/{version}/json"
@@ -657,18 +649,7 @@ def check_dependency_licenses(
         cache_path = DEFAULT_LICENSE_CACHE_PATH
     try:
         repo_license = detect_repo_license(repo_path)
-        pins = (
-            _parse_pip_pins(repo_path)
-            + _parse_npm_pins(repo_path)
-            + _parse_go_pins(repo_path)
-            + _parse_cargo_pins(repo_path)
-            + _parse_maven_pins(repo_path)
-            + _parse_gemfile_lock_pins(repo_path)
-            + _parse_composer_pins(repo_path)
-            + _parse_nuget_pins(repo_path)
-            + _parse_gradle_pins(repo_path)
-            + _parse_swift_package_resolved_pins(repo_path)
-        )
+        pins, manifests_by_pin, pin_info = collect_pins(repo_path)
     except OSError as exc:
         # Same reasoning as check_vulnerabilities' identical guard in
         # vulnerabilities.py: none of the _parse_*_pins() functions (or
@@ -684,7 +665,10 @@ def check_dependency_licenses(
             "findings": [],
         }
     if not pins:
-        return {"checked": True, "reason": None, "repo_license": repo_license, "findings": []}
+        return {
+            "checked": True, "reason": None, "repo_license": repo_license, "findings": [],
+            **_pin_info_fields(pin_info),
+        }
 
     findings = []
     cache = _load_license_cache(cache_path)
@@ -726,6 +710,7 @@ def check_dependency_licenses(
                         "installed_version": version,
                         "license": license_text,
                         "category": category,
+                        "manifests": manifests_by_pin.get((name, version, ecosystem), ["."]),
                     }
                 )
     finally:
@@ -740,4 +725,7 @@ def check_dependency_licenses(
         cache_snapshot = dict(cache)
     _save_license_cache(cache_path, cache_snapshot)
 
-    return {"checked": True, "reason": None, "repo_license": repo_license, "findings": findings}
+    return {
+        "checked": True, "reason": None, "repo_license": repo_license, "findings": findings,
+        **_pin_info_fields(pin_info),
+    }

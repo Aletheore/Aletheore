@@ -6,7 +6,7 @@ title: Azure Resource Health Diagnose
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/azure-resource-health-diagnose
 license: MIT
 shelf: ship-operate
-aletheore: {"id": "reliability/azure-resource-health-diagnose", "shelf": "ship-operate", "category": "reliability", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/azure-resource-health-diagnose", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 3, "curation_note": "Azure resource health diagnose; needs Azure MCP", "needs_tool": "Azure MCP", "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 0, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["mcp:azure", "mcp:prefer-azure", "tool:azure-mcp"], "adapted": {}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "reliability/azure-resource-health-diagnose", "shelf": "ship-operate", "category": "reliability", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/azure-resource-health-diagnose", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 3, "curation_note": "Azure resource health diagnose; needs Azure MCP", "needs_tool": "Azure MCP", "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 0, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["mcp:azure", "mcp:prefer-azure", "tool:azure-mcp"], "adapted": {"SKILL.md": "the outer markdown template fence is four backticks so the inner code fences no longer end it early"}, "status": "ready", "mentions_agents": []}
 ---
 
 # Azure Resource Health & Issue Diagnosis
@@ -210,7 +210,7 @@ This workflow analyzes a specific Azure resource to assess its health status, di
    ```
 
 2. **Generate Detailed Report**:
-   ```markdown
+   ````markdown
    # Azure Resource Health Report: [Resource Name]
    
    **Generated**: [Timestamp]  
@@ -276,7 +276,7 @@ This workflow analyzes a specific Azure resource to assess its health status, di
    - [Recommendations to prevent similar issues]
    - [Process improvements]
    - [Monitoring enhancements]
-   ```
+   ````
 
 ## Error Handling
 - **Resource Not Found**: Provide guidance on resource name/location specification

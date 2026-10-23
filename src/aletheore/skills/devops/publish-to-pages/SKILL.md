@@ -2,7 +2,7 @@
 name: publish-to-pages
 description: Publish presentations and web content to GitHub Pages. Converts PPTX, PDF, HTML, or Google Slides to a live GitHub Pages URL. Handles repo creation, file conversion, Pages enablement, and returns the live URL. Use when the user wants to publish, deploy, or share a presentation or HTML file via GitHub Pages.
 skill_id: devops/publish-to-pages
-title: Publish To Pages
+title: Publish to Pages
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/publish-to-pages
 license: MIT
 shelf: ship-operate

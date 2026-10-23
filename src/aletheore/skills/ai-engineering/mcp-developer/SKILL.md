@@ -13,7 +13,7 @@ metadata:
   output-format: code
   related-skills: fastapi-expert, typescript-pro, security-reviewer, devops-engineer
 skill_id: ai-engineering/mcp-developer
-title: Mcp Developer
+title: MCP Developer
 source_url: https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/mcp-developer
 shelf: ai-agents
 aletheore: {"id": "ai-engineering/mcp-developer", "shelf": "ai-agents", "category": "ai-engineering", "origin": "https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/mcp-developer", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "36f3fe8052da7c57083783268c6ea3265d075265", "quality": 4, "curation_note": "MCP server dev with TS/Python examples, 5 refs", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 5, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["mcp:re-throw", "mcp:senior"], "adapted": {}, "status": "ready", "mentions_agents": []}

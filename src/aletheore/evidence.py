@@ -23,7 +23,9 @@ from aletheore.git_intel.analyzer import (
 )
 from aletheore.licenses import check_dependency_licenses
 from aletheore.model_associations import rails_model_association_edges
-from aletheore.repo_config import load_repo_config
+from aletheore.manifests import clear_manifest_cache
+from aletheore.repo_config import load_repo_config, load_repo_config_warnings
+from aletheore.safe_io import collect_unreadable, reset_unreadable
 from aletheore.schema_map import extract_schema, skipped_schema
 from aletheore.scanner.detect import (
     _nested_git_roots,
@@ -36,6 +38,7 @@ from aletheore.scanner.detect import (
     detect_languages,
     detect_monorepo,
     detect_policy_docs,
+    git_visible_paths,
 )
 from aletheore.scanner.graph import _parallel_parse_disabled, build_module_graph
 from aletheore.secrets import (
@@ -96,6 +99,28 @@ class MalformedEvidenceError(Exception):
     pass
 
 
+class EvidenceWriteError(OSError):
+    """Evidence could not be written to <repo>/.aletheore (read-only folder,
+    permission denied, disk full). An OSError subclass, so a caller that
+    already catches OSError keeps working; str() is a complete message."""
+
+    def __init__(self, message: str, errno: int | None = None):
+        super().__init__(errno, message)
+        self.message = message
+
+    def __str__(self) -> str:
+        return self.message
+
+
+def _evidence_write_error(aletheore_dir: Path, exc: OSError) -> EvidenceWriteError:
+    reason = (exc.strerror or exc.__class__.__name__).lower()
+    return EvidenceWriteError(
+        f"cannot write evidence to {aletheore_dir}: {reason}"
+        + (" - make the folder writable, or scan a copy of it" if isinstance(exc, PermissionError) else ""),
+        exc.errno,
+    )
+
+
 def load_evidence_file(evidence_path: Path) -> dict:
     """Reads and validates a raw air.json or snapshot file, refusing evidence
     written by an incompatible schema version or with the wrong shape.
@@ -115,7 +140,7 @@ def load_evidence_file(evidence_path: Path) -> dict:
     written_version = evidence.get("aletheore_version") if isinstance(evidence, dict) else None
     if not is_evidence_version_compatible(written_version):
         raise IncompatibleEvidenceVersionError(
-            f"{evidence_path} was written by aletheore_version={written_version!r}, which "
+            f"{evidence_path} was written with evidence schema {written_version!r}, which "
             f"isn't compatible with this build's evidence schema ({EVIDENCE_VERSION}) - "
             "re-run 'aletheore scan' to refresh it"
         )
@@ -125,7 +150,7 @@ def load_evidence_file(evidence_path: Path) -> dict:
         if len(problems) > 5:
             detail += f" (and {len(problems) - 5} more)"
         raise MalformedEvidenceError(
-            f"{evidence_path} claims a compatible aletheore_version but does not match the "
+            f"{evidence_path} claims a compatible evidence schema version but does not match the "
             f"AIR schema: {detail} - re-run 'aletheore scan' to regenerate it"
         )
     return evidence
@@ -499,6 +524,14 @@ def scan_repository(
     report = progress or _noop_progress
     repo_path = repo_path.resolve()
     ignored_paths = load_repo_config(repo_path)["ignored_paths"]
+    # A typo in .aletheore.json must not pass silently: each problem is
+    # warned on stderr and recorded in the evidence (`config_warnings`); the
+    # scan itself carries on with the defaults for whatever was invalid.
+    config_warnings = load_repo_config_warnings(repo_path)
+    for problem in config_warnings:
+        warnings.warn(problem, UserWarning, stacklevel=2)
+    reset_unreadable()
+    clear_manifest_cache()
 
     # _nested_git_roots is @lru_cache'd for the life of the process, not one
     # scan - a long-lived scan_worker reuses the same on-disk checkout_dir
@@ -507,6 +540,7 @@ def scan_repository(
     # keeps the within-scan caching win (it's still called up to 6 times per
     # scan) without carrying a stale answer into the next scan of this path.
     _nested_git_roots.cache_clear()
+    git_visible_paths.cache_clear()
 
     # Must run before any file-counting walk below (detect_languages is the
     # first one), not after the scan in write_evidence as before - creating
@@ -789,6 +823,11 @@ def scan_repository(
 
     return {
         "aletheore_version": EVIDENCE_VERSION,
+        # The CLI/library version that wrote this file. aletheore_version above
+        # is the evidence SCHEMA version (kept under that name for
+        # compatibility), which is not the same thing.
+        "cli_version": __version__,
+        "config_warnings": config_warnings,
         "scanned_at": datetime.now(timezone.utc).isoformat(),
         "repo_path": str(repo_path),
         "repository": {
@@ -804,6 +843,10 @@ def scan_repository(
             "modules": modules,
             "dependency_graph": dependency_graph,
             "unparseable_files": unparseable_files,
+            # Files some stage could not read (permission denied, removed
+            # mid-scan) and so skipped; the module graph's own entries are
+            # also in unparseable_files above.
+            "unreadable_files": collect_unreadable(repo_path),
             "api_endpoints": api_endpoints_data,
             "error_handling": error_handling_data,
             "dead_code": dead_code_data,
@@ -962,7 +1005,10 @@ def write_evidence(evidence: dict, repo_path: Path) -> Path:
     # scan_repository.
     _ensure_aletheore_dir_gitignored(repo_path)
     aletheore_dir = repo_path / ".aletheore"
-    aletheore_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        aletheore_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise _evidence_write_error(aletheore_dir, exc) from exc
     output_path = aletheore_dir / "air.json"
     # Explicit encoding, not Path.write_text()'s locale-dependent default:
     # Windows' default text encoding is still the legacy ANSI codepage (e.g.
@@ -978,7 +1024,10 @@ def write_evidence(evidence: dict, repo_path: Path) -> Path:
     # Compact, not indent=2: on the Linux kernel the indented form was 1.3GB
     # and 42s to encode, compact is 720MB and 6s. Every reader parses it.
     evidence_text = json.dumps(evidence, separators=(",", ":"))
-    _atomic_write_text(output_path, evidence_text)
+    try:
+        _atomic_write_text(output_path, evidence_text)
+    except OSError as exc:
+        raise _evidence_write_error(aletheore_dir, exc) from exc
 
     # A second, TOON-encoded copy exists specifically for the audit command's
     # coding-agent adapter to read instead of the JSON one - the agent's own

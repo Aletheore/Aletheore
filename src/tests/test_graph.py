@@ -369,7 +369,7 @@ def test_build_module_graph_extracts_commonjs_reexports_and_dynamic_imports(tmp_
     modules, dependency_graph, unparseable = build_module_graph(repo)
     consumer = next(module for module in modules if module["path"] == "consumer.js")
 
-    assert consumer["imports"] == ["foo.js", "baz.js", "qux.js", "foo.js"]
+    assert consumer["imports"] == ["foo.js", "baz.js", "qux.js"]  # a repeated target is listed once
     assert ["consumer.js", "foo.js"] in dependency_graph["edges"]
     assert ["consumer.js", "baz.js"] in dependency_graph["edges"]
     assert ["consumer.js", "qux.js"] in dependency_graph["edges"]

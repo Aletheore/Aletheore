@@ -2,7 +2,7 @@
 name: openapi-to-application-code
 description: Generate a complete, production-ready application from an OpenAPI specification
 skill_id: backend/openapi-to-application-code
-title: Openapi To Application Code
+title: Openapi to Application Code
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/openapi-to-application-code
 license: MIT
 shelf: build

@@ -3,7 +3,7 @@ name: mcp-builder
 description: Guide for creating high-quality MCP (Model Context Protocol) servers that enable LLMs to interact with external services through well-designed tools. Use when building MCP servers to integrate external APIs or services, whether in Python (FastMCP) or Node/TypeScript (MCP SDK).
 license: Apache-2.0
 skill_id: ai-engineering/mcp-builder
-title: Mcp Builder
+title: MCP Builder
 source_url: https://github.com/anthropics/skills/tree/dbd4588f9e1033efb41dad4bef2f7947c8993d44/skills/mcp-builder
 shelf: ai-agents
 aletheore: {"id": "ai-engineering/mcp-builder", "shelf": "ai-agents", "category": "ai-engineering", "origin": "https://github.com/anthropics/skills/tree/dbd4588f9e1033efb41dad4bef2f7947c8993d44/skills/mcp-builder", "license": "Apache-2.0", "license_source": "skills/mcp-builder/LICENSE.txt", "upstream_commit": "dbd4588f9e1033efb41dad4bef2f7947c8993d44", "quality": 5, "curation_note": "MCP server builder", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 9, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["mcp:advanced", "mcp:core", "mcp:create", "mcp:crm", "mcp:encourages", "mcp:for-http-based", "mcp:for-sse-based", "mcp:github", "mcp:issue-tracker", "mcp:project-management", "mcp:python", "mcp:read", "mcp:study", "mcp:typescript", "mcp:understand-modern", "mcp:universal", "scripts", "subagents"], "mentions": ["claude", "agents"], "adapted": {}, "status": "ready", "mentions_agents": []}

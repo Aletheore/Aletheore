@@ -4,7 +4,7 @@ description: When the user wants to audit, review, or diagnose SEO issues on the
 metadata:
   version: 2.2.1
 skill_id: marketing/seo-audit-coreyhaines31
-title: Seo Audit
+title: SEO Audit
 source_url: https://github.com/coreyhaines31/marketingskills/tree/365b412152b9542499ca1439426f7fc3cc92bb65/skills/seo-audit
 license: MIT
 shelf: content-media

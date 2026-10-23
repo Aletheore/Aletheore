@@ -43,7 +43,7 @@ def test_scope_result_filters_every_listed_path_and_reports_what_it_left_out():
     assert out["scope"]["left_out"] == {"unreachable_modules": 2, "entry_points_detected": 1}
     err = scope_result("error-handling", ERR, [], ["pkg"], True)
     assert [e["name"] for e in err["error_types"]] == ["E1"] and len(err["raise_sites"]) == 1 and err["handlers"] == []
-    assert err["truncated"] is True and err["by_error_type"] == ERR["by_error_type"]
+    assert err["truncated"] is True and err["by_error_type"] == [{"name": "E1", "defined_in": "pkg/e.py", "raised": 0, "caught": 0}]  # recounted
     assert ERR["error_types"][1]["file"] == "other/e.py"  # the input is not modified
 
 
@@ -53,7 +53,7 @@ def test_cli_query_scoping(tmp_path):
     ):
         ok = CliRunner().invoke(app, ["query", "dead-code", "--path", str(tmp_path), "--under", "pkg", "--no-tests"])
         bad = CliRunner().invoke(app, ["query", "hotspots", "--path", str(tmp_path), "--under", "pkg"])
-    assert ok.exit_code == 0 and [m["path"] for m in json.loads(ok.output)["unreachable_modules"]] == ["pkg/a.py"]
+    assert ok.exit_code == 0 and [m["path"] for m in json.loads(ok.stdout)["unreachable_modules"]] == ["pkg/a.py"]
     assert bad.exit_code == 1 and "supported for" in bad.output and set(SCOPABLE) <= set(bad.output.replace(",", " ").split())
 
 

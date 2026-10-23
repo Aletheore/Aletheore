@@ -2,7 +2,7 @@
 name: breakdown-epic-pm
 description: Prompt for creating an Epic Product Requirements Document (PRD) for a new epic. This PRD will be used as input for generating a technical architecture specification.
 skill_id: planning/breakdown-epic-pm
-title: Breakdown Epic Pm
+title: Breakdown Epic PM
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/breakdown-epic-pm
 license: MIT
 shelf: build

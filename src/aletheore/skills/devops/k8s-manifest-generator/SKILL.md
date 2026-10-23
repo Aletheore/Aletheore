@@ -2,7 +2,7 @@
 name: k8s-manifest-generator
 description: Create production-ready Kubernetes manifests for Deployments, Services, ConfigMaps, and Secrets following best practices and security standards. Use when generating Kubernetes YAML manifests, creating K8s resources, or implementing production-grade Kubernetes configurations.
 skill_id: devops/k8s-manifest-generator
-title: K8S Manifest Generator
+title: K8s Manifest Generator
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/kubernetes-operations/skills/k8s-manifest-generator
 license: MIT
 shelf: ship-operate

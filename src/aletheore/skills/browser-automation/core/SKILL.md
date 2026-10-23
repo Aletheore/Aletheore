@@ -7,7 +7,7 @@ title: Core
 source_url: https://github.com/vercel-labs/agent-browser/tree/dac13bb87468fe9d74a040d862720f6cc17a9565/skill-data/core
 license: Apache-2.0
 shelf: ai-agents
-aletheore: {"id": "browser-automation/core", "shelf": "ai-agents", "category": "browser-automation", "origin": "https://github.com/vercel-labs/agent-browser/tree/dac13bb87468fe9d74a040d862720f6cc17a9565/skill-data/core", "license": "Apache-2.0", "license_source": "LICENSE", "upstream_commit": "dac13bb87468fe9d74a040d862720f6cc17a9565", "quality": 5, "curation_note": "core agent-browser guide, 37k; needs agent-browser CLI", "needs_tool": "agent-browser CLI", "vet": {"injection_pattern_hits": ["ignore-instructions"], "portability_flags": [], "companion_files": 13, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["browser", "mcp:every", "tool:agent-browser-cli"], "adapted": {}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "browser-automation/core", "shelf": "ai-agents", "category": "browser-automation", "origin": "https://github.com/vercel-labs/agent-browser/tree/dac13bb87468fe9d74a040d862720f6cc17a9565/skill-data/core", "license": "Apache-2.0", "license_source": "LICENSE", "upstream_commit": "dac13bb87468fe9d74a040d862720f6cc17a9565", "quality": 5, "curation_note": "core agent-browser guide, 37k; needs agent-browser CLI", "needs_tool": "agent-browser CLI", "vet": {"injection_pattern_hits": ["ignore-instructions"], "portability_flags": [], "companion_files": 13, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["browser", "mcp:every", "scripts", "tool:agent-browser-cli"], "adapted": {}, "status": "ready", "mentions_agents": []}
 ---
 
 # agent-browser core

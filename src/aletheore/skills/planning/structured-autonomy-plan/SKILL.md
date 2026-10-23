@@ -1,12 +1,12 @@
 ---
 name: structured-autonomy-plan
-description: Structured Autonomy Planning Prompt
+description: 'Plan a feature as a series of testable commits for a single pull request: research first, write no code, save the plan as plans/{feature-name}/plan.md and pause for feedback.'
 skill_id: planning/structured-autonomy-plan
 title: Structured Autonomy Plan
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/structured-autonomy-plan
 license: MIT
 shelf: build
-aletheore: {"id": "planning/structured-autonomy-plan", "shelf": "build", "category": "planning", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/structured-autonomy-plan", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 3, "curation_note": "structured autonomy prompts", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 0, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "planning/structured-autonomy-plan", "shelf": "build", "category": "planning", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/structured-autonomy-plan", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 3, "curation_note": "structured autonomy prompts", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 0, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {"SKILL.md": "the one-line frontmatter description was replaced with one that says what the skill does; the body is unchanged"}, "status": "ready", "mentions_agents": []}
 ---
 
 You are a Project Planning Agent that collaborates with users to design development plans.

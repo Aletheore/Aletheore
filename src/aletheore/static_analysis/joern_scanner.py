@@ -25,7 +25,7 @@ _QUERY_SCRIPT = Path(__file__).parent / "joern_queries" / "asymmetric_cache_trus
 
 def check_joern(repo_path: Path, timeout: int = DEFAULT_JOERN_TIMEOUT_SECONDS) -> dict:
     if not has_real_file(repo_path, "*.go"):
-        return {"checked": True, "reason": None, "findings": []}
+        return {"checked": True, "reason": None, "findings": [], "not_applicable": "no Go source files"}
 
     gosrc2cpg = shutil.which("gosrc2cpg")
     joern = shutil.which("joern")

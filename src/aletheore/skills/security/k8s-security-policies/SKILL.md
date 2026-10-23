@@ -2,7 +2,7 @@
 name: k8s-security-policies
 description: Implement Kubernetes security policies including NetworkPolicy, PodSecurityPolicy, and RBAC for production-grade security. Use when securing Kubernetes clusters, implementing network isolation, or enforcing pod security standards.
 skill_id: security/k8s-security-policies
-title: K8S Security Policies
+title: K8s Security Policies
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/kubernetes-operations/skills/k8s-security-policies
 license: MIT
 shelf: quality

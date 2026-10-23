@@ -2,7 +2,7 @@
 name: sql-queries
 description: Generate SQL queries from natural language descriptions. Supports BigQuery, PostgreSQL, MySQL, and other dialects. Reads database schemas from uploaded diagrams or documentation. Use when writing SQL, building data reports, exploring databases, or translating business questions into queries.
 skill_id: data/sql-queries
-title: Sql Queries
+title: SQL Queries
 source_url: https://github.com/phuryn/pm-skills/tree/07b34f64ee828df08953f505b7f747aef85ae7c6/pm-data-analytics/skills/sql-queries
 license: MIT
 shelf: build

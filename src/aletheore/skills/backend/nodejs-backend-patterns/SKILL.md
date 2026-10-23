@@ -2,7 +2,7 @@
 name: nodejs-backend-patterns
 description: Build production-ready Node.js backend services with Express/Fastify, implementing middleware patterns, error handling, authentication, database integration, and API design best practices. Use when creating Node.js servers, REST APIs, GraphQL backends, or microservices architectures.
 skill_id: backend/nodejs-backend-patterns
-title: Nodejs Backend Patterns
+title: Node.js Backend Patterns
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/javascript-typescript/skills/nodejs-backend-patterns
 license: MIT
 shelf: build

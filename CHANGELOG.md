@@ -60,6 +60,143 @@ name and file arguments. `hallbook suggest --help` prints the help. A wrong `--m
 `hallbook suggest` stays silent on stdout and exits 0 with one line on stderr. Search queries are cut at 500 characters.
 `hallbook get` with the wrong capital letters says the skill was not found and suggests the right id, without a log
 message. The hook hint now also names the `aletheore hallbook get` command, for agents without the MCP server.
+**Fixed: `aletheore mcp` wrote a plain-text notice before the JSON-RPC stream**
+
+`--profile nav` printed its "does not watch for file changes" note to stdout, ahead of the first protocol message, which
+a strict MCP client rejects. Every notice and error the command prints now goes to stderr, so the first line on stdout
+is always JSON-RPC. The server also reports its package version in `serverInfo`, tool failures (an unknown file, an
+empty `aletheore_search` pattern, `limit=-5`) come back flagged as errors instead of as ordinary results, and a bad
+`limit` or `offset` names the range instead of asking for `section`. The server instructions and `--agent` help now say
+`aletheore_answer` exists only when the server starts with `--agent`.
+
+**Fixed: `config crash-reporting` reported success when nothing was saved, and the first-run notice ignored the opt-out**
+
+On a read-only home folder `aletheore config crash-reporting off` printed "turned off" and exited 0 without saving, so
+the first-run notice came back on every run. It now prints an error and exits 1. When `ALETHEORE_CRASH_REPORTING`
+overrides the stored value, both `config crash-reporting` and `status` say so. With the variable set to a disabling
+value, the first-run notice is not printed and no `preferences.json` is written.
+
+**Fixed: `healthcheck` called every HTTP answer healthy**
+
+Each endpoint line shows its status. 2xx and 3xx count as healthy; 4xx and 5xx print "responded 404" (or the code) and
+an unreachable endpoint prints why (connection refused, timeout, DNS lookup failed). The exit code is non-zero when any
+endpoint is unhealthy or unreachable. A repo with no mapped endpoints says so instead of printing nothing, and a base
+URL containing `user:password@` is rejected. Only GET requests are ever sent.
+
+**Fixed: `diff --fail-on-new-vulnerabilities` failed a build when the check was merely toggled**
+
+If the vulnerability check was skipped in either snapshot, the gate is not enforced: a note on stderr says so and the
+exit code is 0. Exit codes are now distinct: 1 means a `--fail-on-new-*` gate failed, 2 means a usage or input error
+(missing file, invalid JSON, wrong schema); `--help` documents both. The dashboard history reports no value, not zero,
+for scans that skipped the vulnerability check, and its trend chart shows a gap ("-") for them.
+
+**Fixed: `verify` accepted impossible citations and dropped some silently**
+
+A range such as `app/util.py:5-99` is checked at both ends against the file's length, and a reversed range such as
+`:3-2` is unverified. A citation whose path is absolute or climbs out of the repository (`../../etc/passwd:1`,
+`/etc/passwd:2`) is counted and listed as "path outside the repository" and its file is never read. A URL such as
+`http://x.com/a.py:5` is no longer read as a citation, and `./app/util.py:2` and `app//util.py:2` are normalized to
+`app/util.py:2`.
+
+**Fixed: `mcp-install` hid failures and could destroy a config file**
+
+The command exits 1 when a requested target was skipped or failed, and prints the restart and per-client notes only for
+targets that were actually written. A `.vscode/mcp.json` (or any JSON target) containing comments or trailing commas is
+left untouched, with the exact entry to paste. Rewriting a Codex `config.toml` now warns about lost comments before it
+writes, and keeps the original next to it as `config.toml.bak`. With no `--target`, a terminal run lists every file it
+will write, marks the machine-global Claude Desktop config, and asks `Write these? [y/N]`; `--yes` skips the question
+and scripts behave as before. Rewrites keep a file's CRLF line endings and BOM.
+
+**Fixed: `query` answered "not found" with a block of empty fields**
+
+`evidence-for-symbol`, `-endpoint` and `-dependency` now say the target was not found, suggest up to three close
+matches and exit 1. `evidence-for-endpoint /users` accepts a bare path and lists every method serving it; a wrong form
+says what is expected. An empty `secrets` result explains that the target is a file path filter, not a keyword. The
+`severity` of a dependency risk keeps its real structure and original case instead of a lowercased Python list, and
+`locate` puts the definition of a name above functions that merely mention it.
+
+**Fixed: smaller gaps in the command surface**
+
+- `scan` progress and the GitHub App note go to stderr, so piped and CI output stays usable.
+- Giving both a PATH argument and a different `--path` is an error (exit 2).
+- Errors for an unknown file say a repo-relative path is needed, accept `./` and absolute paths inside the repo, and
+  suggest the closest matches. Missing-target errors say what the target should be.
+- `query` warns on stderr about flags that have no effect for the chosen kind, and `--under` that matches no file says
+  so for `query`, `dependents`, `cycles` and `usages`.
+- `query error-handling` with `--under`, `--exclude` or `--no-tests` recounts `by_error_type` from the filtered lists.
+- A `--path` that does not exist is reported as such, and the "run aletheore scan" hint appears once.
+- Wording: singular and plural forms, capitalised sentences, and an import-coverage note that names the right dynamic
+  loading mechanisms for Go and TypeScript projects.
+- `locate` exits 1 when nothing matches, as `usages` does.
+- The banner and "All commands" picker list `index`, `dependents`, `cycles`, `tests-for`, `usages`, `locate`, `hook` and
+  `tokens`, name every `mcp-install` client, and `logout` says it clears the Hallbook token too.
+- `tokens profile` and `tokens audit` take `--path` (`--project` remains as a hidden alias) and refuse a missing folder
+  instead of creating it.
+- `audit --agent NAME` checks the name before scanning, `watch` runs an initial scan on a never-scanned repo, and the
+  `init` template refers to `air.json`.
+
+**Fixed: an unreadable file no longer crashes a scan**
+
+The endpoint-mapping pass, the manifest and config readers, framework detection and the infrastructure detectors read
+files without handling a permission error, so one `chmod 000` file ended `aletheore scan` with a traceback and no
+evidence. Every stage now skips a file it cannot read or decode, and the skips are listed in the new
+`repository.unreadable_files` evidence field (the module graph's own skips stay in `unparseable_files`).
+
+**Fixed: workspace packages are connected in the dependency graph**
+
+A bare import that names an npm, yarn or pnpm workspace package (`import { b } from "@m/b"`) now resolves to that
+package's source through its `exports`, `module`, `main` or `src/index` entry, mapping a built entry such as
+`dist/index.js` back to `src/index.ts`. `dependents`, `imports`, `cycles` and `tests-for` see the edges. TypeScript
+`paths` aliases are not resolved yet.
+
+**Fixed: Go modules in a subdirectory and several Go modules in one repo**
+
+Go imports are resolved against every `go.mod` in the repository, by module path, instead of only a root `go.mod`. An
+import whose path merely starts with a module path (`example.com/g` and `example.com/gx`) no longer matches it.
+
+**Fixed: manifests at any depth are checked**
+
+The vulnerability check, the licence check and the unused-dependency check read only root-level manifests. They now
+cover `package.json`, `requirements.txt`, `pyproject.toml`, `go.mod`, `pom.xml`, `Gemfile`, `Cargo.toml` and the other
+supported manifests in any directory, skipping `node_modules`, vendored, build, fixture and ignored paths and capping
+the search at 200 manifest directories with a note. A dependency declared in several manifests is checked once. Findings
+gain a `manifests` list, unused dependencies in a nested manifest gain a `manifest` field, and each check reports the
+`manifest_dirs` it covered. An unused dependency is judged against the code under its own manifest's directory. A nested manifest with no indexed source under it is skipped rather than reported as entirely unused.
+
+**Fixed: monorepo detection**
+
+`monorepo.detected` is now true for a repo with project manifests in two or more directories, and for `go.work` and
+Lerna, Nx or pnpm workspaces. The new `monorepo.packages` lists every package root with its manifests, ecosystems and
+name, and `monorepo.reason` says why it was detected.
+
+**Fixed: `scan` honours `.gitignore`**
+
+In a git repository the scanned file set now comes from git itself (tracked files plus untracked files that no
+`.gitignore` ignores), so a file under an ignored `built/` or a nested `gen/` no longer appears in `modules` or as
+unreachable dead code. A tracked file is always scanned even if a pattern matches it. `.aletheore.json` `ignored_paths`
+and the built-in skips still apply. A folder that is not a git repository is scanned as before, and the secrets scan
+still looks at ignored files.
+
+**Fixed: a read-only folder gives a clear error**
+
+Scanning a folder that cannot be written to now raises `EvidenceWriteError` (an `OSError`) with the message "cannot
+write evidence to <path>/.aletheore: permission denied" instead of a raw `PermissionError`.
+
+**Fixed: an invalid `.aletheore.json` is reported**
+
+Malformed JSON, a non-object file, an unknown key, a wrong-typed value, a bad `severity_threshold` or
+`cluster_resolution` and an unknown `disabled_checks` value are each printed as a warning on stderr and recorded in the
+evidence as `config_warnings`. The scan still continues with the defaults, and valid settings such as `ignored_paths`
+keep working. A non-string entry in `disabled_checks` no longer raises.
+
+**Fixed: smaller evidence correctness gaps**
+
+A module's `imports` list no longer repeats a file (and the dependency graph no longer repeats the edge). A Python file
+with a syntax error is listed in `unparseable_files`. `static_analysis.tools_run` lists only the tools that ran; a tool
+with nothing to analyze, such as PMD in a repo with no Java, is listed under `tools_skipped`. The `git` section says
+why it is unavailable ("not a git repository" or "no commits yet"). The evidence has a new `cli_version` field next to
+`aletheore_version`, which remains the evidence schema version, and the incompatible-evidence message now says
+"evidence schema".
 
 **Added: a skills browser in the home menu**
 
@@ -104,6 +241,24 @@ The provider list showed Ollama whenever something answered on its local port, e
 coding agent installed. Only usable providers are offered now: an agent CLI must be on your `PATH`, and Ollama also needs
 its command installed. With none, the audit prints one message saying no coding agent was found and how to install or
 configure one, keeps the evidence it just wrote, and exits with code 1 as before. `--agent NAME` is unchanged.
+
+Cleanup of the bundled Hallbook skill catalogue, from a QA pass over 0.10.2. The count stays 1,129 skills across the same six shelves.
+
+**Fixed: garbled characters and broken code fences in bundled skills**
+
+Four files carried a corrupted character (the Unicode replacement character): three section headings in `data/postgresql-optimization`, a line in `devops/cloudflare-deploy`'s Cache Reserve notes, and the emoji example in `design/break-ui`. The headings lost the broken glyph, the Cache Reserve line has its arrow back, and the `break-ui` example now writes it as an escape sequence. Five skills (`data/data-quality-frameworks`, `platforms/cloud-monitoring-chart-generation`, `planning/update-specification`, `infrastructure/az-cost-optimize`, `reliability/azure-resource-health-diagnose`) had a code fence that never closed and swallowed the rest of the page. In `data/data-quality-frameworks` the cut-off end of a code sample had also been left in the skill body; it is back in `references/details.md` where it belongs. Every change is recorded in the skill's `adapted` provenance.
+
+**Fixed: complete metadata for the two seed skills, and accurate script flags**
+
+`brainstorming/open-ended` and `code-review/security-focused` now carry `name` and `shelf` like every other skill, and link to the upstream file at a pinned commit instead of `main`. Twenty-five skills that ship script files (for example `debugging/systematic-debugging` and `ai-engineering/claude-api`) were marked as having none, and two marked as having scripts had none; `has_scripts` and the matching `scripts` entry in `requires` now follow the files. Three one-line descriptions (`git-workflow/pr`, `documentation/create-readme`, `planning/structured-autonomy-plan`) now say what the skill does.
+
+**Changed: readable skill titles**
+
+Titles are written out of the skill name, and acronyms and product names came out as plain words. 380 titles now read as intended: "SQL Code Review", "API Breaking Change Detector", "ASP.NET Core", "GitHub Actions Security Review", "MCP Implementation Security Review", "Oracle to Postgres". Skill ids, names and search ranking are unchanged.
+
+**Changed: fewer near-identical results in Hallbook search**
+
+Seven of the eight Oracle-to-PostgreSQL migration skills now sit under `data/creating-oracle-to-postgres-master-migration-plan`, five Qdrant data-volume skills that duplicate sections of `platforms/qdrant-scaling` sit under it, and `marketing/marketing-ideas-phuryn` sits under `marketing/marketing-ideas`. They are listed as alternates of the main skill and can still be loaded by id.
 
 ## 0.10.2 - 2026-10-22
 

@@ -2,7 +2,7 @@
 name: ui-screenshots
 description: Capture screenshots of web apps during development using Playwright and PIL. Supports full-page captures, interactive states, and an iterate-on-crop workflow that avoids slow re-screenshots.
 skill_id: browser-automation/ui-screenshots
-title: Ui Screenshots
+title: UI Screenshots
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/ui-screenshots
 license: MIT
 shelf: ai-agents

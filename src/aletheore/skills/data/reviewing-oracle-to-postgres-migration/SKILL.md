@@ -2,7 +2,7 @@
 name: reviewing-oracle-to-postgres-migration
 description: Identifies Oracle-to-PostgreSQL migration risks by cross-referencing code against known behavioral differences (empty strings, refcursors, type coercion, sorting/collations, UNION ALL planner risks, materialized-view refresh requirements, timestamps, concurrent transactions, etc.). Use when planning a database migration, reviewing migration artifacts, or validating that integration tests cover Oracle/PostgreSQL differences.
 skill_id: data/reviewing-oracle-to-postgres-migration
-title: Reviewing Oracle To Postgres Migration
+title: Reviewing Oracle to Postgres Migration
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/reviewing-oracle-to-postgres-migration
 license: MIT
 shelf: build

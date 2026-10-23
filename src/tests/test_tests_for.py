@@ -34,7 +34,7 @@ def test_transitive_importer_through_another_module_is_found(tmp_path: Path):
 def test_non_test_importer_is_not_counted(tmp_path: Path):
     graph = {"a.py": ["b.py"], "b.py": []}
     text = render_tests_for(_ev(graph), tmp_path, "a.py")
-    assert "no test file imports a.py" in text
+    assert "No test file imports a.py" in text
 
 
 def test_naming_convention_match_without_any_import(tmp_path: Path):
@@ -94,7 +94,7 @@ def test_a_naming_convention_file_cannot_match_itself(tmp_path: Path):
     # pattern against its own name, reporting the file as a test that exercises itself.
     graph = {"foo.test.ts": []}
     text = render_tests_for(_ev(graph), tmp_path, "foo.test.ts")
-    assert "no test file imports foo.test.ts" in text
+    assert "No test file imports foo.test.ts" in text
 
 
 def test_a_hub_module_that_only_transitively_reaches_the_target_is_lower_confidence(tmp_path: Path):
@@ -106,7 +106,7 @@ def test_a_hub_module_that_only_transitively_reaches_the_target_is_lower_confide
         "tests/test_pkg.py": [],
     }
     text = render_tests_for(_ev(graph), tmp_path, "a.py")
-    assert "no test file directly imports or is named for a.py, but:" in text
+    assert "No test file directly imports or is named for a.py, but:" in text
     assert "1 more test file(s) reach it only through other imports - lower confidence" in text
     assert "tests/test_pkg.py" in text
 

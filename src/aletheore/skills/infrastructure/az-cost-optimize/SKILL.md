@@ -6,7 +6,7 @@ title: Az Cost Optimize
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/az-cost-optimize
 license: MIT
 shelf: ship-operate
-aletheore: {"id": "infrastructure/az-cost-optimize", "shelf": "ship-operate", "category": "infrastructure", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/az-cost-optimize", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 4, "curation_note": "Azure cost optimization", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 0, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["mcp:azure", "mcp:github", "mcp:prefer-azure"], "adapted": {}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "infrastructure/az-cost-optimize", "shelf": "ship-operate", "category": "infrastructure", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/az-cost-optimize", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 4, "curation_note": "Azure cost optimization", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 0, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["mcp:azure", "mcp:github", "mcp:prefer-azure"], "adapted": {"SKILL.md": "the outer markdown template fence is four backticks so the inner code fences no longer end it early"}, "status": "ready", "mentions_agents": []}
 ---
 
 # Azure Cost Optimize
@@ -192,7 +192,7 @@ This workflow analyzes Infrastructure-as-Code (IaC) files and Azure resources to
    **Title Format**: `[COST-OPT] [Resource Type] - [Brief Description] - $X/month savings`
    
    **Body Template**:
-   ```markdown
+   ````markdown
    ## 💰 Cost Optimization: [Brief Title]
    
    **Monthly Savings**: $X | **Risk Level**: [Low/Medium/High] | **Implementation Effort**: X days
@@ -232,7 +232,7 @@ This workflow analyzes Infrastructure-as-Code (IaC) files and Azure resources to
    - [Risk 2 and mitigation]
    
    **Priority Score**: X | **Value**: X/10 | **Risk**: X/10
-   ```
+   ````
 
 ### Step 7: Create EPIC Coordinating Issue
 **Action**: Create master issue to track all optimization work. Label it with "cost-optimization" (green color), "azure" (blue color), and "epic" (purple color).
@@ -244,7 +244,7 @@ This workflow analyzes Infrastructure-as-Code (IaC) files and Azure resources to
    **Title**: `[EPIC] Azure Cost Optimization Initiative - $X/month potential savings`
    
    **Body Template**:
-   ```markdown
+   ````markdown
    # 🎯 Azure Cost Optimization EPIC
    
    **Total Potential Savings**: $X/month | **Implementation Timeline**: X weeks
@@ -292,7 +292,7 @@ This workflow analyzes Infrastructure-as-Code (IaC) files and Azure resources to
    - Review and update this EPIC as issues are completed
    - Monitor actual vs. estimated savings
    - Consider scheduling regular cost optimization reviews
-   ```
+   ````
 
 ## Error Handling
 - **Cost Validation**: If savings estimates lack supporting evidence or seem inconsistent with Azure pricing, re-verify configurations and pricing sources before proceeding

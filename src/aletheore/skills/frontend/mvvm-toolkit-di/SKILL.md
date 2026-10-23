@@ -2,7 +2,7 @@
 name: mvvm-toolkit-di
 description: Wire CommunityToolkit.Mvvm ViewModels into Microsoft.Extensions.DependencyInjection. Covers the .NET Generic Host composition root, constructor injection, service lifetimes (Singleton / Transient / Scoped), IMessenger registration, resolving ViewModels in Views, keyed services, testing seams, and the legacy Ioc.Default escape hatch. Use across WPF, WinUI 3, .NET MAUI, Uno, and Avalonia.
 skill_id: frontend/mvvm-toolkit-di
-title: Mvvm Toolkit Di
+title: MVVM Toolkit Di
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/mvvm-toolkit-di
 license: MIT
 shelf: build

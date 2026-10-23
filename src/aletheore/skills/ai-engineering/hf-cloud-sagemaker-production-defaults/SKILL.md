@@ -2,7 +2,7 @@
 name: hf-cloud-sagemaker-production-defaults
 description: Create a SageMaker endpoint (real-time, real-time scale-to-zero, or async) with autoscaling, CloudWatch alarms, and tagging enabled by default. Use this skill whenever about to create a SageMaker endpoint, write deployment code that calls `create_endpoint`, or finalize a deployment after the image URI and IAM role are known. Provides deploy.py for real-time endpoints, deploy_ic.py for real-time endpoints that scale to zero instances via inference components, and deploy_async.py for async endpoints (also scale-to-zero). This is the last step in the SageMaker deployment workflow. Never generate a bare `create_endpoint` call without these defaults — endpoints without autoscaling or alarms are demos, not deployments.
 skill_id: ai-engineering/hf-cloud-sagemaker-production-defaults
-title: Hf Cloud Sagemaker Production Defaults
+title: HF Cloud SageMaker Production Defaults
 source_url: https://github.com/huggingface/skills/tree/c3ff942be3e07116b475253f0a8fc4f54682c1a8/skills/hf-cloud-sagemaker-production-defaults
 license: Apache-2.0
 shelf: ai-agents

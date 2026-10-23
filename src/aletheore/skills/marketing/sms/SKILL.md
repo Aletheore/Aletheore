@@ -4,7 +4,7 @@ description: When the user wants to plan, build, or optimize SMS, MMS, or WhatsA
 metadata:
   version: 1.1.0
 skill_id: marketing/sms
-title: Sms
+title: SMS
 source_url: https://github.com/coreyhaines31/marketingskills/tree/365b412152b9542499ca1439426f7fc3cc92bb65/skills/sms
 license: MIT
 shelf: content-media

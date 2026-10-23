@@ -319,6 +319,8 @@ def test_main_initializes_cli_sentry_before_running_the_cli(monkeypatch):
 def test_main_prints_first_run_notice_once(monkeypatch):
     from aletheore.cli import main
 
+    monkeypatch.delenv("ALETHEORE_CRASH_REPORTING", raising=False)
+
     monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: None)
     monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: False)
     marked = []
@@ -348,6 +350,8 @@ def test_main_omits_first_run_notice_when_already_shown(monkeypatch, capsys):
 
 def test_main_first_run_notice_goes_to_stderr_not_stdout(monkeypatch, capsys):
     from aletheore.cli import main
+
+    monkeypatch.delenv("ALETHEORE_CRASH_REPORTING", raising=False)
 
     monkeypatch.setattr("aletheore.cli.init_cli_sentry", lambda: None)
     monkeypatch.setattr("aletheore.cli.has_shown_crash_reporting_notice", lambda: False)
@@ -1078,7 +1082,8 @@ def test_mcp_install_skips_claude_desktop_on_unsupported_platform(tmp_path, monk
 
     result = runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "claude-desktop"])
 
-    assert result.exit_code == 0
+    # Asked for by name and not written: a failure, not a quiet success.
+    assert result.exit_code == 1
     assert "skipped" in result.stdout
     assert "macOS and Windows" in result.stdout
 
@@ -1107,7 +1112,7 @@ def test_mcp_install_rejects_unknown_target(tmp_path):
     result = runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "notatool"])
 
     assert result.exit_code == 1
-    assert "notatool" in result.stdout
+    assert "notatool" in result.output
 
 
 def test_mcp_install_written_entry_points_at_the_resolved_repo_path(tmp_path):
@@ -1235,7 +1240,7 @@ def test_progress_printer_prints_each_distinct_phase_on_its_own_line(capsys):
     report("Building module dependency graph (parsing source with tree-sitter)")
 
     captured = capsys.readouterr()
-    lines = [line for line in captured.out.split("\n") if line]
+    lines = [line for line in captured.err.split("\n") if line]
     assert len(lines) == 2
     assert "Detecting languages" in lines[0]
     assert "Building module dependency graph" in lines[1]
@@ -1250,9 +1255,9 @@ def test_progress_printer_overwrites_repeated_license_progress_on_a_tty(capsys):
     captured = capsys.readouterr()
     # both license lines share one terminal line via \r, so only two real
     # newlines appear: one closing out the in-place license line, one from "Done"
-    assert captured.out.count("\n") == 2
-    assert "requests" in captured.out
-    assert "Done" in captured.out
+    assert captured.err.count("\n") == 2
+    assert "requests" in captured.err
+    assert "Done" in captured.err
 
 
 def test_progress_printer_prints_every_license_line_when_not_a_tty(capsys):
@@ -1262,7 +1267,7 @@ def test_progress_printer_prints_every_license_line_when_not_a_tty(capsys):
     report("Done")
 
     captured = capsys.readouterr()
-    lines = [line for line in captured.out.split("\n") if line]
+    lines = [line for line in captured.err.split("\n") if line]
     assert len(lines) == 3
     assert "flask" in lines[0]
     assert "requests" in lines[1]
@@ -1278,8 +1283,8 @@ def test_progress_printer_overwrites_repeated_embedding_progress_on_a_tty(capsys
     report("Embedding chunks: 515/515")
 
     captured = capsys.readouterr()
-    assert "\r" in captured.out
-    assert "515/515" in captured.out
+    assert "\r" in captured.err
+    assert "515/515" in captured.err
 
 
 def test_progress_printer_finish_closes_a_pending_in_place_line(capsys):
@@ -1294,7 +1299,7 @@ def test_progress_printer_finish_closes_a_pending_in_place_line(capsys):
     report.finish()
 
     captured = capsys.readouterr()
-    assert captured.out.endswith("\n")
+    assert captured.err.endswith("\n")
 
 
 def test_progress_printer_finish_is_a_no_op_when_nothing_was_in_place(capsys):
@@ -1305,7 +1310,7 @@ def test_progress_printer_finish_is_a_no_op_when_nothing_was_in_place(capsys):
     report.finish()
 
     captured = capsys.readouterr()
-    assert captured.out == ""
+    assert captured.err == ""
 
 
 def test_elapsed_ticker_updates_in_place_on_a_tty(capsys):
@@ -1666,14 +1671,25 @@ def test_verify_errors_cleanly_on_non_utf8_report(tmp_path):
     assert "not valid UTF-8" in result.output
 
 
+def _invoke_audit_stopping_after_the_scan(args):
+    # `audit --agent NAME` now validates NAME before scanning, so a made-up name can no longer be used to stop an
+    # audit after its scan. These tests only care how scan flags are threaded, so the agent phase is stubbed to fail.
+    from aletheore.adapters.claude_code import AdapterInvocationError
+
+    fake = MagicMock()
+    fake.name = "fake"
+    fake.requires_consent = False
+    with patch("aletheore.cli.select_adapter", return_value=fake), patch(
+        "aletheore.cli.run_reasoning_phase", side_effect=AdapterInvocationError("stop")
+    ):
+        return runner.invoke(app, ["audit", *args, "--agent", "claude"])
+
+
 def test_main_audit_threads_no_check_vulnerabilities_flag(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
 
-    runner.invoke(
-        app,
-        ["audit", str(repo), "--no-check-vulnerabilities", "--agent", "nonexistent"],
-    )
+    _invoke_audit_stopping_after_the_scan([str(repo), "--no-check-vulnerabilities"])
 
     evidence = json.loads((repo / ".aletheore" / "air.json").read_text())
     assert evidence["security"]["dependency_vulnerabilities"]["checked"] is False
@@ -1687,7 +1703,7 @@ def test_main_audit_threads_no_check_licenses_flag(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
 
-    runner.invoke(app, ["audit", str(repo), "--no-check-licenses", "--agent", "nonexistent"])
+    _invoke_audit_stopping_after_the_scan([str(repo), "--no-check-licenses"])
 
     evidence = json.loads((repo / ".aletheore" / "air.json").read_text())
     assert evidence["security"]["dependency_licenses"]["checked"] is False
@@ -1702,7 +1718,7 @@ def test_main_audit_threads_no_map_schema_flag(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
 
-    runner.invoke(app, ["audit", str(repo), "--no-map-schema", "--agent", "nonexistent"])
+    _invoke_audit_stopping_after_the_scan([str(repo), "--no-map-schema"])
 
     evidence = json.loads((repo / ".aletheore" / "air.json").read_text())
     assert evidence["repository"]["database"]["schema"]["checked"] is False
@@ -1874,17 +1890,7 @@ def test_main_audit_threads_no_scan_git_history_flag(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
 
-    runner.invoke(
-        app,
-        [
-            "audit",
-            str(repo),
-            "--no-check-vulnerabilities",
-            "--no-scan-git-history",
-            "--agent",
-            "nonexistent",
-        ],
-    )
+    _invoke_audit_stopping_after_the_scan([str(repo), "--no-check-vulnerabilities", "--no-scan-git-history"])
 
     evidence = json.loads((repo / ".aletheore" / "air.json").read_text())
     assert evidence["security"]["secrets"]["history_scanned_commits"] == 0
@@ -2208,7 +2214,8 @@ def test_main_healthcheck_fails_when_every_endpoint_is_unreachable(tmp_path):
         )
 
     assert result.exit_code == 1
-    assert "0 of 1 endpoint(s) reachable" in result.output
+    assert "0 of 1 endpoint(s) healthy" in result.output
+    assert "UNREACHABLE: connection refused" in result.output
 
 
 def test_main_healthcheck_without_evidence_errors_clearly(tmp_path):
@@ -2983,7 +2990,7 @@ def test_main_query_unknown_module_errors_clearly(tmp_path):
     )
 
     assert result.exit_code == 1
-    assert "not present in evidence" in result.output
+    assert "not a scanned file" in result.output
 
 
 def test_main_query_unknown_kind_errors_clearly(tmp_path):
@@ -3064,7 +3071,7 @@ def test_main_diff_sarif_format_rejects_full_flag(tmp_path):
 
     result = runner.invoke(app, ["diff", str(old_path), str(new_path), "--format", "sarif", "--full"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "incompatible with --full" in result.output
 
 
@@ -3074,7 +3081,7 @@ def test_main_diff_rejects_unknown_format(tmp_path):
 
     result = runner.invoke(app, ["diff", str(old_path), str(new_path), "--format", "xml"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "unknown --format" in result.output
 
 
@@ -3085,7 +3092,7 @@ def test_main_diff_rejects_an_evidence_file_from_an_incompatible_schema_version(
 
     result = runner.invoke(app, ["diff", str(old_path), str(new_path)])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "re-run" in result.output.lower()
 
 
@@ -3286,7 +3293,7 @@ def test_main_diff_missing_file_errors_cleanly(tmp_path):
 
     result = runner.invoke(app, ["diff", str(old_path), str(missing_path)])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "not found" in result.output
 
 

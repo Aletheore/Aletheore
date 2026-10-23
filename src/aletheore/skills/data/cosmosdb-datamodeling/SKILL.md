@@ -2,7 +2,7 @@
 name: cosmosdb-datamodeling
 description: 'Step-by-step guide for capturing key application requirements for NoSQL use-case and produce Azure Cosmos DB Data NoSQL Model design using best practices and common patterns, artifacts_produced: "cosmosdb_requirements.md" file and "cosmosdb_data_model.md" file'
 skill_id: data/cosmosdb-datamodeling
-title: Cosmosdb Datamodeling
+title: Cosmos DB Datamodeling
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/cosmosdb-datamodeling
 license: MIT
 shelf: build

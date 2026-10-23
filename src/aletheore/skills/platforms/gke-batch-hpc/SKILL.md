@@ -5,7 +5,7 @@ metadata:
   version: 1.0.0
   category: Containers
 skill_id: platforms/gke-batch-hpc
-title: Gke Batch Hpc
+title: GKE Batch HPC
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/gke-batch-hpc
 license: Apache-2.0
 shelf: build

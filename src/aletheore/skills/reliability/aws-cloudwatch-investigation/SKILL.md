@@ -2,7 +2,7 @@
 name: aws-cloudwatch-investigation
 description: 'Reusable investigation patterns for AWS CloudWatch: Logs Insights query templates, alarm-to-deployment correlation, blast-radius narrowing decision tree, and PromQL-style metric query patterns for structured incident triage.'
 skill_id: reliability/aws-cloudwatch-investigation
-title: Aws Cloudwatch Investigation
+title: AWS Cloudwatch Investigation
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/aws-cloudwatch-investigation
 license: MIT
 shelf: ship-operate

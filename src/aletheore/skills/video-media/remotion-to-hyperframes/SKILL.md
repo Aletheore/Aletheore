@@ -2,7 +2,7 @@
 name: remotion-to-hyperframes
 description: Port an existing Remotion (React) composition's source to HyperFrames HTML. Use ONLY on an explicit ask to port/convert/migrate/translate a Remotion source — one-way, Remotion-only. A passing Remotion mention, reference-only code, or "make something like my Remotion video" is a fresh build (/general-video). Unclear → /hyperframes.
 skill_id: video-media/remotion-to-hyperframes
-title: Remotion To Hyperframes
+title: Remotion to Hyperframes
 source_url: https://github.com/heygen-com/hyperframes/tree/76ba031dccef188a133c0f47806483c661151d68/skills/remotion-to-hyperframes
 license: Apache-2.0
 shelf: content-media

@@ -2,7 +2,7 @@
 name: airflow-dag-patterns
 description: Build production Apache Airflow DAGs with best practices for operators, sensors, testing, and deployment. Use when creating data pipelines, orchestrating workflows, or scheduling batch jobs.
 skill_id: data/airflow-dag-patterns
-title: Airflow Dag Patterns
+title: Airflow DAG Patterns
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/data-engineering/skills/airflow-dag-patterns
 license: MIT
 shelf: build

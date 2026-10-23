@@ -2,7 +2,7 @@
 name: csharp-tunit
 description: Get best practices for TUnit unit testing, including data-driven tests
 skill_id: testing/csharp-tunit
-title: Csharp Tunit
+title: Csharp TUnit
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/csharp-tunit
 license: MIT
 shelf: quality

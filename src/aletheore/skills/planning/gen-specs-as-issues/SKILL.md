@@ -2,7 +2,7 @@
 name: gen-specs-as-issues
 description: This workflow guides you through a systematic approach to identify missing features, prioritize them, and create detailed specifications for implementation.
 skill_id: planning/gen-specs-as-issues
-title: Gen Specs As Issues
+title: Gen Specs as Issues
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/gen-specs-as-issues
 license: MIT
 shelf: build

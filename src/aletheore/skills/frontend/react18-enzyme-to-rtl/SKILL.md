@@ -2,7 +2,7 @@
 name: react18-enzyme-to-rtl
 description: Provides exact Enzyme → React Testing Library migration patterns for React 18 upgrades. Use this skill whenever Enzyme tests need to be rewritten - shallow, mount, wrapper.find(), wrapper.simulate(), wrapper.prop(), wrapper.state(), wrapper.instance(), Enzyme configure/Adapter calls, or any test file that imports from enzyme. This skill covers the full API mapping and the philosophy shift from implementation testing to behavior testing. Always read this skill before rewriting Enzyme tests - do not translate Enzyme APIs 1:1, that produces brittle RTL tests.
 skill_id: frontend/react18-enzyme-to-rtl
-title: React18 Enzyme To Rtl
+title: React18 Enzyme to RTL
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/react18-enzyme-to-rtl
 license: MIT
 shelf: build

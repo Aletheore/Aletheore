@@ -13,7 +13,7 @@ metadata:
   output-format: code
   related-skills: fullstack-guardian, test-master, devops-engineer
 skill_id: backend/nestjs-expert
-title: Nestjs Expert
+title: NestJS Expert
 source_url: https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/nestjs-expert
 shelf: build
 aletheore: {"id": "backend/nestjs-expert", "shelf": "build", "category": "backend", "origin": "https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/nestjs-expert", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "36f3fe8052da7c57083783268c6ea3265d075265", "quality": 4, "curation_note": "nestjs", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 6, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

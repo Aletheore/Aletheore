@@ -13,7 +13,7 @@ metadata:
   output-format: code
   related-skills: fullstack-guardian, microservices-architect, cloud-architect, test-master
 skill_id: backend/dotnet-core-expert
-title: Dotnet Core Expert
+title: .NET Core Expert
 source_url: https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/dotnet-core-expert
 shelf: build
 aletheore: {"id": "backend/dotnet-core-expert", "shelf": "build", "category": "backend", "origin": "https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/dotnet-core-expert", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "36f3fe8052da7c57083783268c6ea3265d075265", "quality": 4, "curation_note": "dotnet core", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 5, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

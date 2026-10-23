@@ -2,11 +2,11 @@
 name: break-ui
 description: Try to break a piece of UI by feeding it worst-case data — long names, unbreakable emails, one-letter names, missing fields, huge counts, zero items, long labels, non-Latin text, emoji, extreme numbers — then render it behind a "Demo data / Worst case" toggle and report everything that broke, with the fix for each. Use when the user asks to stress-test, break, or find edge cases in a component or screen, or to "try the worst case". For visual design critique use emil-design-eng; for motion use review-animations.
 skill_id: design/break-ui
-title: Break Ui
+title: Break UI
 source_url: https://github.com/emilkowalski/skills/tree/2d228630ba1446365f614a108cb8252f1feda202/skills/break-ui
 license: MIT
 shelf: product-design
-aletheore: {"id": "design/break-ui", "shelf": "product-design", "category": "design", "origin": "https://github.com/emilkowalski/skills/tree/2d228630ba1446365f614a108cb8252f1feda202/skills/break-ui", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "2d228630ba1446365f614a108cb8252f1feda202", "quality": 4, "curation_note": "break UI with worst-case data; injection flag is test strings", "needs_tool": null, "vet": {"injection_pattern_hits": ["ignore-instructions"], "portability_flags": [], "companion_files": 1, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "design/break-ui", "shelf": "product-design", "category": "design", "origin": "https://github.com/emilkowalski/skills/tree/2d228630ba1446365f614a108cb8252f1feda202/skills/break-ui", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "2d228630ba1446365f614a108cb8252f1feda202", "quality": 4, "curation_note": "break UI with worst-case data; injection flag is test strings", "needs_tool": null, "vet": {"injection_pattern_hits": ["ignore-instructions"], "portability_flags": [], "companion_files": 1, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {"SKILL.md": "the literal U+FFFD in the initials example was spelled as the escape \\uFFFD (it deliberately shows the replacement character that splitting an emoji produces)", "CATALOG.md": "the literal U+FFFD in the emoji row was spelled as the escape \\uFFFD"}, "status": "ready", "mentions_agents": []}
 ---
 
 # Breaking UI
@@ -108,7 +108,7 @@ Each of these appears in the screenshot. The cause in the right column is almost
 | Avatar centered against a three-line name looks adrift | `align-items: center` on rows of varying height | Top-align (`align-items: flex-start`) once text can wrap, |
 | Last row cut off at a hard edge mid-glyph | Fixed-height container with no fade or scroll affordance | Visible scrollbar or a fade mask, and ensure `overflow` is intended |
 | Long word breaks mid-word in a heading | `word-break: break-all` | `overflow-wrap: anywhere` breaks only when it has to |
-| Wrong initials (`"J"` for "Jo", `"CI"` for "… Montgomery III", `"�"` for an emoji-first name) | `.split(' ')[0][0]` style code | Initials from grapheme clusters (`Intl.Segmenter`), first + last word, fallback icon |
+| Wrong initials (`"J"` for "Jo", `"CI"` for "… Montgomery III", `"\uFFFD"` (the replacement character) for an emoji-first name) | `.split(' ')[0][0]` style code | Initials from grapheme clusters (`Intl.Segmenter`), first + last word, fallback icon |
 | Orphaned `—` or empty line where the role was | Placeholder rendered for a missing optional field | Omit the line, or reserve its height intentionally |
 | "1 members", "0 member" | Hardcoded plural | `Intl.PluralRules`, or separate strings per count |
 | Numbers jitter when they update, columns misalign | Proportional figures | `font-variant-numeric: tabular-nums` |

@@ -22,6 +22,8 @@
     "docs/**/*.md"
   ],
   "words": [
+    "phuryn",
+    "qdrant",
     "certifi",
     "hallbook",
     "hardlinked",

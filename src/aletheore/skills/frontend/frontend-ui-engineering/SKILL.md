@@ -2,7 +2,7 @@
 name: frontend-ui-engineering
 description: Builds production-quality, accessible, responsive user-facing UIs. Use when building or modifying interfaces and pages, creating components, implementing layouts, meeting WCAG accessibility requirements, managing state, or when the output needs to look and feel production-quality rather than AI-generated.
 skill_id: frontend/frontend-ui-engineering
-title: Frontend Ui Engineering
+title: Frontend UI Engineering
 source_url: https://github.com/addyosmani/agent-skills/tree/aeac41d4d005999432bb7312f7ff06383a91d59d/skills/frontend-ui-engineering
 license: MIT
 shelf: build
