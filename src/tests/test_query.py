@@ -428,6 +428,21 @@ def test_find_blast_radius_truncates_transitive_dependents_past_the_cap(tmp_path
     assert result["transitive_dependents_truncated"] is True
 
 
+def test_find_blast_radius_totals_stay_exact_when_the_list_is_capped(tmp_path, monkeypatch):
+    # Capping the list once also stopped the walk, so a hub's real reach was unknowable and "how many modules
+    # does this affect" had no answer. The totals now cover the whole closure whatever the display cap is.
+    import aletheore.query as query_module
+
+    full = find_blast_radius(_blast_radius_evidence(), tmp_path, "core/util.py")
+    monkeypatch.setattr(query_module, "_BLAST_RADIUS_MAX_TRANSITIVE", 1)
+    capped = find_blast_radius(_blast_radius_evidence(), tmp_path, "core/util.py")
+
+    assert capped["transitive_total"] == full["transitive_total"] == len(full["transitive_dependents"])
+    assert capped["direct_total"] == len(full["direct_dependents"])
+    assert capped["affected_total"] == capped["direct_total"] + capped["transitive_total"]
+    assert capped["affected_test_files"] == 0
+
+
 def test_find_blast_radius_truncates_direct_dependents_past_the_cap(tmp_path, monkeypatch):
     # Real bug found via audit: direct_dependents (evidence's own raw
     # imported_by list) was returned verbatim with no cap at all, unlike

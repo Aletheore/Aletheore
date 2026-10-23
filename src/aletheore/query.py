@@ -185,6 +185,10 @@ _BLAST_RADIUS_MAX_TRANSITIVE = 50
 # already hardened twice this session for aletheore_search and
 # aletheore_ast_pattern.
 _BLAST_RADIUS_MAX_DIRECT = 50
+# Same shape as tests_for._TEST_PATH, local so the count of test files in a blast radius needs no extra import.
+_BLAST_TEST_PATH = re.compile(
+    r"(^|/)(tests?|testing|__tests__|spec)/|_test\.|\.test\.|\.spec\.|(^|/)test_[^/]*$|/testdata/|conftest"
+)
 
 
 def find_blast_radius(
@@ -233,8 +237,10 @@ def find_blast_radius(
     by_path = {m["path"]: m for m in evidence["repository"]["modules"] if m.get("path")}
 
     visited = {target, *direct_dependents}
-    transitive_dependents: list[str] = []
-    truncated = False
+    # The walk covers the whole closure (it is bounded by the number of modules) so the totals are exact;
+    # only the list handed back is capped. Stopping the walk at the cap, as this once did, left a hub's real
+    # reach unknown and made "how many modules does this affect" unanswerable.
+    all_transitive: list[str] = []
     queue = list(direct_dependents)
     while queue:
         current = queue.pop(0)
@@ -242,14 +248,18 @@ def find_blast_radius(
             if dependent in visited:
                 continue
             visited.add(dependent)
-            if len(transitive_dependents) >= _BLAST_RADIUS_MAX_TRANSITIVE:
-                truncated = True
-                continue
-            transitive_dependents.append(dependent)
+            all_transitive.append(dependent)
             queue.append(dependent)
+    transitive_dependents = all_transitive[:_BLAST_RADIUS_MAX_TRANSITIVE]
+    truncated = len(all_transitive) > _BLAST_RADIUS_MAX_TRANSITIVE
+    affected = [*direct_dependents, *all_transitive]
 
     result: dict[str, Any] = {
         "target": target,
+        "affected_total": len(affected),
+        "affected_test_files": sum(1 for path in affected if _BLAST_TEST_PATH.search(path)),
+        "direct_total": len(direct_dependents),
+        "transitive_total": len(all_transitive),
         # Truncated for DISPLAY only - the BFS above, confirmed_callers
         # below, and blast_radius_modules further down all still use the
         # full, untruncated direct_dependents list, so a large hub's real
@@ -295,7 +305,7 @@ def find_blast_radius(
         result["confirmed_callers"] = confirmed_callers
         result["same_file_caller"] = same_file_caller
 
-    blast_radius_modules = {target, *direct_dependents, *transitive_dependents}
+    blast_radius_modules = {target, *direct_dependents, *all_transitive}
     violations = evidence.get("architecture", {}).get("layer_violations", {}).get("violations") or []
     result["layer_violations"] = [
         v for v in violations
