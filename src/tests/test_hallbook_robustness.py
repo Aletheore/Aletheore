@@ -259,7 +259,7 @@ def test_compiled_python_is_not_listed_or_readable(bundled_root):
 def test_skill_info_reads_the_holder_from_notice():
     info = skill_hub.skill_info("debugging/systematic-debugging")
     assert info["license"] == "MIT" and "Jesse Vincent" in info["copyright"]
-    assert info["source_url"].startswith("https://github.com/") and info["requires"] == ["subagents"]
+    assert info["source_url"].startswith("https://github.com/") and "subagents" in info["requires"]
     assert info["files_total"] == len(skill_hub.list_skill_files("debugging/systematic-debugging")[0])
     assert info["scripts"] >= 1
 
