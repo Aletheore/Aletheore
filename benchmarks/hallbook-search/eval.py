@@ -16,6 +16,8 @@ import argparse
 import collections
 import json
 import os
+import random
+import re
 import sys
 import zlib
 from pathlib import Path
@@ -36,6 +38,58 @@ def load_queries(split: str) -> list[dict]:
     return [r for r in rows if split == "all" or split_of(r["skill_id"]) == split]
 
 
+_WORD = re.compile(r"[A-Za-z]{5,}")
+
+
+def _perturb_word(word: str, rng: random.Random) -> str | None:
+    """One seeded typo in a word, or None when no safe edit is possible.
+
+    The first letter is kept, because the fuzzy matcher is deliberately restricted
+    to the same first letter, so a typo there is outside what it can recover.
+    """
+    lower = word.lower()
+    if lower in skill_hub._STOPWORDS:
+        return None
+    operations = ["transpose", "drop", "double"]
+    rng.shuffle(operations)
+    for operation in operations:
+        if operation == "transpose":
+            spots = [i for i in range(1, len(word) - 1) if word[i] != word[i + 1]]
+            if spots:
+                i = rng.choice(spots)
+                return word[:i] + word[i + 1] + word[i] + word[i + 2:]
+        elif operation == "drop":
+            spots = list(range(1, len(word)))
+            if spots:
+                i = rng.choice(spots)
+                return word[:i] + word[i + 1:]
+        else:
+            spots = list(range(1, len(word)))
+            if spots:
+                i = rng.choice(spots)
+                return word[:i] + word[i] + word[i:]
+    return None
+
+
+def perturb_query(query: str) -> str | None:
+    """The query with one content word mistyped, deterministically for the same text."""
+    rng = random.Random(zlib.crc32(query.encode("utf-8")))
+    matches = list(_WORD.finditer(query))
+    rng.shuffle(matches)
+    for match in matches:
+        changed = _perturb_word(match.group(0), rng)
+        if changed is not None:
+            return query[: match.start()] + changed + query[match.end():]
+    return None
+
+
+def _top3_hit(row: dict, query: str) -> bool:
+    result = skill_hub.find_skill(query)
+    ids = [result["top"]["skill_id"]] if result.get("top") else []
+    ids += [alt["skill_id"] for alt in result.get("alternatives") or []]
+    return row["skill_id"] in ids[:3]
+
+
 def measure(split: str = "all", limit: int | None = None) -> dict:
     rows = load_queries(split)[:limit]
     hits = {1: 0, 3: 0, 5: 0}
@@ -50,6 +104,10 @@ def measure(split: str = "all", limit: int | None = None) -> dict:
         right_by_conf[conf] += row["skill_id"] == (ids[0] if ids else None)
         for k in hits:
             hits[k] += row["skill_id"] in ids[:k]
+    typo_rows = [(row, perturbed) for row in rows if (perturbed := perturb_query(row["query"])) is not None]
+    typo_clean_hits = sum(_top3_hit(row, row["query"]) for row, _ in typo_rows)
+    typo_hits = sum(_top3_hit(row, perturbed) for row, perturbed in typo_rows)
+    typos = len(typo_rows)
     chatty = json.loads((HERE / "chatty_prompts.json").read_text(encoding="utf-8"))
     non_task_quiet = sum(skill_hub.find_skill(q).get("confidence") in ("none", "low") for q in chatty["non_task"])
     non_task_none = sum(skill_hub.find_skill(q).get("confidence") == "none" for q in chatty["non_task"])
@@ -60,6 +118,9 @@ def measure(split: str = "all", limit: int | None = None) -> dict:
         "top1": round(hits[1] / n, 4),
         "top3": round(hits[3] / n, 4),
         "top5": round(hits[5] / n, 4),
+        "typo_queries": typos,
+        "typo_clean_top3": round(typo_clean_hits / typos, 4) if typos else None,
+        "typo_top3": round(typo_hits / typos, 4) if typos else None,
         "confidence": dict(by_conf),
         "high_precision": round(right_by_conf["high"] / by_conf["high"], 4) if by_conf["high"] else None,
         "wrong_high": by_conf["high"] - right_by_conf["high"],
@@ -84,7 +145,7 @@ def main() -> int:
         base = json.loads(Path(args.compare).read_text(encoding="utf-8"))
         worse = [
             key
-            for key in ("top1", "top3", "top5", "high_precision", "non_task_quiet")
+            for key in ("top1", "top3", "top5", "typo_top3", "high_precision", "non_task_quiet")
             if (metrics[key] or 0) < (base[key] or 0) - 1e-9
         ]
         if metrics["wrong_high"] > base["wrong_high"]:

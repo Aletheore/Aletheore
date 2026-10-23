@@ -5,6 +5,13 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+**Fixed: Hallbook search recovers from a typo in a task word**
+
+`find_skill`, `search_skills` and the prompt hook now match a query word that is one letter away from a word in
+the catalog. A transposed, missing or doubled letter, as in "kuberentes deployment" or "webhoks", finds the same
+skills as the correct spelling. The match is down-weighted and only used when the word has no exact match, so
+queries with no typos rank exactly as before.
+
 **Fixed: a read-only `.aletheore/` folder no longer ends a command with a traceback**
 
 `scan` checks that `.aletheore/` can be written before it starts scanning, so a read-only folder fails in a second

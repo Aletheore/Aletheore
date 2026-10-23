@@ -737,6 +737,41 @@ def _tokens(text: str) -> list[str]:
     return [_stem(t) for t in re.findall(r"[a-z0-9]+", text.lower()) if len(t) > 1 and t not in _STOPWORDS]
 
 
+def _collapse_repeats(token: str) -> str:
+    """Fold runs of the same letter, so a doubled-letter typo still finds its word."""
+    return re.sub(r"(.)\1+", r"\1", token)
+
+
+def _within_one_edit(left: str, right: str) -> bool:
+    """True when two tokens differ by one insert, delete, substitute or adjacent swap.
+
+    This is a narrow, allocation-light check rather than a full edit-distance matrix: the
+    query path runs it against a small bucket of candidate vocabulary words.
+    """
+    if left == right:
+        return True
+    left_len, right_len = len(left), len(right)
+    if abs(left_len - right_len) > 1:
+        return False
+    if left_len == right_len:
+        differing = [index for index in range(left_len) if left[index] != right[index]]
+        if len(differing) == 1:
+            return True
+        if len(differing) == 2:
+            first, second = differing
+            return (
+                second == first + 1
+                and left[first] == right[second]
+                and left[second] == right[first]
+            )
+        return False
+    short, long = (left, right) if left_len < right_len else (right, left)
+    index = 0
+    while index < len(short) and short[index] == long[index]:
+        index += 1
+    return short[index:] == long[index + 1:]
+
+
 _SEARCH_FIELDS = ("name", "title", "description", "intents", "headings", "body", "category")
 
 # Tuned by coordinate ascent on the DEV half of the benchmark in search-lab/lab_rankers.py (on the hallbook/search-lab branch).
@@ -753,6 +788,9 @@ _RANK_WEIGHTS = {
     "name_cov": 2.0,
     "phrase": 1.26,
     "prefix": 0.6,
+    # A token recovered by one edit is a guess, so its term frequency counts for less
+    # than an exact hit. It only applies to query tokens with no exact index match.
+    "fuzzy": 0.55,
     "quality": 0.07,
     "k1": 1.2,
     "b": 0.75,
@@ -811,6 +849,42 @@ class _RankIndex:
             ]
             for lengths in self.doc_len
         ]
+        # The vocabulary is grouped by first letter and length. A one-edit match must share the
+        # first letter and is at most one character longer or shorter, so this keeps the fuzzy
+        # lookup to a few dozen words instead of scanning every token in the catalog.
+        self.vocab: set[str] = set()
+        for texts in self.texts:
+            for text in texts:
+                self.vocab.update(text.split())
+        self.vocab_by_first: dict[str, dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
+        for token in self.vocab:
+            if len(token) >= 4:
+                self.vocab_by_first[token[0]][len(token)].append(token)
+
+    def _fuzzy_match(self, token: str) -> str | None:
+        """The closest vocabulary token to an unmatched query token, or None.
+
+        A doubled-letter typo is folded first ("postgress" -> "postgres") because the
+        stemmer keeps "ss" and would otherwise leave it several edits from "postgr".
+        """
+        if len(token) < 5:
+            return None
+        forms = [token]
+        collapsed = _collapse_repeats(token)
+        if collapsed != token:
+            forms.append(collapsed)
+            forms.append(_stem(collapsed))
+        for form in dict.fromkeys(forms):
+            if form in self.vocab:
+                return form
+            if len(form) < 4:
+                continue
+            buckets = self.vocab_by_first.get(form[0], {})
+            for length in (len(form) - 1, len(form), len(form) + 1):
+                for candidate in buckets.get(length, ()):
+                    if _within_one_edit(form, candidate):
+                        return candidate
+        return None
 
     def _ensure_prefix_tokens(self) -> None:
         """Build the prefix map on first use; the hook path (prefix=False) never needs it."""
@@ -834,16 +908,30 @@ class _RankIndex:
         min_matches: int = 1,
         prefix: bool = True,
         phrase: bool = True,
+        fuzzy: bool = True,
     ) -> list[tuple[CuratedSkillMeta, float]]:
         weights = _RANK_WEIGHTS
         field_weights = [weights[field] for field in _SEARCH_FIELDS]
         k1 = weights["k1"]
-        needed = set(query_tokens)
+        # (token used for term frequency, weight applied to it) for each query token.
+        # An exact hit is the token itself at full weight. A typo is the recovered
+        # vocabulary word, down-weighted so it can only help an otherwise weak match.
+        sources: dict[str, tuple[str, float]] = {}
+        needed: set[str] = set()
+        for token in query_tokens:
+            if token in self.vocab:
+                sources[token] = (token, 1.0)
+                needed.add(token)
+            elif fuzzy:
+                recovered = self._fuzzy_match(token)
+                if recovered is not None:
+                    sources[token] = (recovered, weights["fuzzy"])
+                    needed.add(recovered)
         if prefix:
             self._ensure_prefix_tokens()
             assert self.prefix_tokens is not None
             for token in query_tokens:
-                if len(token) >= 5:
+                if token in self.vocab and len(token) >= 5:
                     for other in self.prefix_tokens.get(token[:5], ()):
                         if other != token and other.startswith(token):
                             needed.add(other)
@@ -877,10 +965,15 @@ class _RankIndex:
         term_maps: list[tuple[str, dict[int, list[float]]]] = []
         matching: set[int] = set()
         for token in query_tokens:
+            source = sources.get(token)
+            if source is None:
+                term_maps.append((token, {}))
+                continue
+            source_token, source_weight = source
             merged: dict[int, list[float]] = {}
-            for doc_index, tfs in postings[token].items():
-                merged[doc_index] = list(tfs)
-            if prefix and len(token) >= 5:
+            for doc_index, tfs in postings[source_token].items():
+                merged[doc_index] = [source_weight * value for value in tfs]
+            if prefix and token in self.vocab and len(token) >= 5:
                 for other in needed_tokens:
                     if other == token or not other.startswith(token):
                         continue
@@ -892,10 +985,14 @@ class _RankIndex:
                             current[position] += weights["prefix"] * value
             if merged:
                 matching.update(merged)
-            term_maps.append((token, merged))
+            term_maps.append((source_token, merged))
         if not matching:
             return []
-        query_pairs = list(zip(query_tokens, query_tokens[1:]))
+        # Recovered typo tokens stand in for the query token in the name and phrase checks,
+        # so "kuberentes deployment" still gets the same name and adjacent-word credit as
+        # "kubernetes deployment". Coverage still counts each query token once.
+        scoring_tokens = [sources.get(token, (token, 0.0))[0] for token in query_tokens]
+        query_pairs = list(zip(scoring_tokens, scoring_tokens[1:]))
         n_terms = len(query_tokens)
         scored: list[tuple[CuratedSkillMeta, float]] = []
         for doc_index in matching:
@@ -917,7 +1014,7 @@ class _RankIndex:
                     score += idf.get(token, 0.0) * weighted_tf * (k1 + 1.0) / (k1 + weighted_tf)
             score += weights["coverage"] * (matched / n_terms)
             name_tokens = doc_tokens[doc_index][0]
-            name_hits = [token for token in query_tokens if token in name_tokens]
+            name_hits = [token for token in scoring_tokens if token in name_tokens]
             if name_hits:
                 score += weights["name_hit"] * sum(idf.get(token, 0.0) for token in name_hits)
                 if self.name_sizes[doc_index]:
@@ -976,12 +1073,13 @@ def search_skills_scored(
     min_matches: int = 1,
     prefix: bool = True,
     phrase: bool = True,
+    fuzzy: bool = True,
 ) -> list[tuple[SkillMeta, float]]:
     """The same ranking as search_skills, with the raw score for each result.
 
-    `min_matches`, `prefix` and `phrase` are candidate-pruning aids for callers that
-    only need the head of the ranking (the prompt hook). Their defaults are the full
-    ranking.
+    `min_matches`, `prefix`, `phrase` and `fuzzy` are candidate-pruning aids for
+    callers that only need the head of the ranking (the prompt hook). Their defaults
+    are the full ranking.
     """
     query_tokens = list(dict.fromkeys(_tokens(query)))
     if not query_tokens or limit <= 0:
@@ -997,6 +1095,7 @@ def search_skills_scored(
         min_matches=min_matches,
         prefix=prefix,
         phrase=phrase,
+        fuzzy=fuzzy,
     ):
         if score:
             scored.append((score, meta.skill_id, _meta(meta)))
