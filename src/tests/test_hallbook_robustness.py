@@ -434,14 +434,30 @@ def test_add_help_documents_both_arguments():
     assert "letters, digits" in out and "64" in out and "markdown" in out and "frontmatter" in out
 
 
-def test_suggest_help_works_through_the_launcher(monkeypatch, capsys):
-    from aletheore import _launcher
+def test_suggest_help_goes_to_the_full_cli_but_the_hook_path_stays_fast(monkeypatch):
+    # The launcher decides which entry point runs. The stubs keep this test from running the real CLI main(), which
+    # reconfigures the process's stdout and stderr.
+    from aletheore import _launcher, cli, hallbook_hook
 
-    monkeypatch.setattr("sys.argv", ["aletheore", "hallbook", "suggest", "--help"])
-    with pytest.raises(SystemExit) as exit_info:
-        _launcher.main()
-    assert exit_info.value.code == 0
-    assert "--mode" in capsys.readouterr().out
+    calls = []
+    monkeypatch.setattr(cli, "main", lambda: calls.append("cli"))
+    monkeypatch.setattr(hallbook_hook, "main", lambda argv=None: calls.append("hook") or 0)
+    for argv, expected in (
+        (["hallbook", "suggest", "--help"], "cli"),
+        (["hallbook", "suggest", "--mode", "hint"], "hook"),
+    ):
+        monkeypatch.setattr("sys.argv", ["aletheore", *argv])
+        calls.clear()
+        try:
+            _launcher.main()
+        except SystemExit:
+            pass
+        assert calls == [expected]
+
+
+def test_suggest_help_text_lists_the_mode_option():
+    result = runner.invoke(app, ["hallbook", "suggest", "--help"])
+    assert result.exit_code == 0 and "--mode" in result.output
 
 
 def test_suggest_with_a_bogus_mode_prints_nothing_to_stdout_and_exits_zero(monkeypatch, capsys):
