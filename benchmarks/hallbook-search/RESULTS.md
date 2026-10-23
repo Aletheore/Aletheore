@@ -71,8 +71,9 @@ existing 5% ambiguity guard, so the hook deliberately does not choose between th
    one edit away, restricted by first letter and length and down-weighted to 0.55.
 2. `7e5c2bac` made `find_skill` return `none` for small talk, trivial edits, chat questions and weak scattered
    matches. It added the task and non-task prompt sets and the `non_task_none` and `task_none` metrics.
-3. `ca6340c9` required a high-confidence result to cover at least 80% of the task's content words. This raised
-   precision and cut wrong high answers while keeping 86.8% of correct high answers on test.
+3. `ca6340c9` required a high-confidence result to cover at least 80% of the task's content words. On test this
+   took precision to 0.8608 with 11 wrong high answers and kept 68 of 76 correct high answers. Goal 6 later took
+   test precision to 0.8800 with 9 wrong high and 66 of 76 correct high.
 4. `b14a8ee0` made the hook silent for follow-up questions and medium hints cover at least half the prompt.
    It added per-session skill dedupe in an atomic JSON file under `~/.config/aletheore/hallbook_sessions/`,
    pruned after seven days.
