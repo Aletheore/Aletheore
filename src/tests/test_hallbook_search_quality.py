@@ -76,3 +76,102 @@ def test_a_fully_covered_strong_match_is_high_confidence():
     result = skill_hub.find_skill("How should I write Javadoc comments for Java classes and methods?")
     assert result["confidence"] == "high"
     assert result["top"]["skill_id"] == "documentation/java-docs"
+
+
+def test_hook_stays_silent_for_follow_up_questions_about_the_chat():
+    for prompt in (
+        "can you explain what you meant by the previous paragraph",
+        "what did you do in the last step",
+        "please continue with what you were saying",
+        "that output looks correct to me, thanks",
+        "sorry, I meant the other file",
+        "can you show me the diff for the last change",
+        "thanks for taking a look at that earlier, it is working now",
+    ):
+        assert skill_hub.hook_suggestion(prompt) is None, prompt
+
+
+def test_hook_still_hints_for_a_clear_task_with_a_short_polite_prefix():
+    suggestion = skill_hub.hook_suggestion("please add a stripe webhook handler for payments")
+    assert suggestion is not None
+    assert "platforms/stripe-integration" in suggestion
+
+
+def test_hook_suggests_a_skill_at_most_once_per_session(monkeypatch, tmp_path):
+    monkeypatch.setattr(skill_hub, "user_home", lambda: tmp_path)
+    prompt = "can you look at why my login test is flaky"
+
+    first = skill_hub.hook_suggestion(prompt, session_id="session-one")
+    assert first is not None
+    assert skill_hub.hook_suggestion(prompt, session_id="session-one") is None
+    assert skill_hub.hook_suggestion(prompt, session_id="session-two") is not None
+
+    state = tmp_path / ".config" / "aletheore" / "hallbook_sessions" / "session-one.json"
+    assert state.is_file()
+    assert "testing/e2e-testing-patterns" in state.read_text(encoding="utf-8")
+
+
+def test_hook_dedupe_does_not_need_a_session_id(monkeypatch, tmp_path):
+    monkeypatch.setattr(skill_hub, "user_home", lambda: tmp_path)
+    prompt = "can you look at why my login test is flaky"
+
+    assert skill_hub.hook_suggestion(prompt) is not None
+    assert skill_hub.hook_suggestion(prompt) is not None
+    assert not (tmp_path / ".config").exists()
+
+
+def test_hook_ignores_an_unsafe_session_id(monkeypatch, tmp_path):
+    monkeypatch.setattr(skill_hub, "user_home", lambda: tmp_path)
+    prompt = "can you look at why my login test is flaky"
+
+    assert skill_hub.hook_suggestion(prompt, session_id="../escape") is not None
+    assert not (tmp_path / ".config").exists()
+
+
+def test_hook_recovers_from_a_corrupt_session_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(skill_hub, "user_home", lambda: tmp_path)
+    state = tmp_path / ".config" / "aletheore" / "hallbook_sessions" / "s1.json"
+    state.parent.mkdir(parents=True)
+    state.write_text("{not json", encoding="utf-8")
+
+    assert skill_hub.hook_suggestion("can you look at why my login test is flaky", session_id="s1") is not None
+
+
+def test_hook_prunes_session_files_older_than_a_week(monkeypatch, tmp_path):
+    import os
+    import time
+
+    monkeypatch.setattr(skill_hub, "user_home", lambda: tmp_path)
+    old = tmp_path / ".config" / "aletheore" / "hallbook_sessions" / "old.json"
+    old.parent.mkdir(parents=True)
+    old.write_text('{"suggested": []}', encoding="utf-8")
+    eight_days_ago = time.time() - 8 * 24 * 60 * 60
+    os.utime(old, (eight_days_ago, eight_days_ago))
+
+    assert skill_hub.hook_suggestion("can you look at why my login test is flaky", session_id="new") is not None
+    assert not old.exists()
+
+
+def test_hallbook_hook_reads_the_session_id_from_the_payload(monkeypatch):
+    import io
+    import json
+    import sys
+    from aletheore import hallbook_hook
+
+    class FakeStdin:
+        buffer = io.BytesIO(json.dumps({"prompt": "a task prompt", "session_id": "s1"}).encode("utf-8"))
+
+    monkeypatch.setattr(sys, "stdin", FakeStdin())
+    assert hallbook_hook._read_payload() == ("a task prompt", "s1")
+
+
+def test_hallbook_hook_accepts_plain_text_without_a_session_id(monkeypatch):
+    import io
+    import sys
+    from aletheore import hallbook_hook
+
+    class FakeStdin:
+        buffer = io.BytesIO(b"a plain prompt")
+
+    monkeypatch.setattr(sys, "stdin", FakeStdin())
+    assert hallbook_hook._read_payload() == ("a plain prompt", None)

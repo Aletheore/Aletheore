@@ -126,5 +126,30 @@
     "what does this function do too",
     "can you explain this line again",
     "why is this here now"
+  ],
+  "hook_silent": [
+    "thanks for taking a look at that earlier, it is working now",
+    "can you explain what you meant by the previous paragraph",
+    "what did you do in the last step",
+    "please continue with what you were saying",
+    "that output looks correct to me, thanks",
+    "sorry, I meant the other file",
+    "can you show me the diff for the last change",
+    "why did you choose that approach earlier",
+    "ok that makes sense, go on",
+    "what is the weather like where you are",
+    "add a stripe webhook handler",
+    "how are you doing today"
+  ],
+  "hook_useful": [
+    "can you look at why my login test is flaky",
+    "I need to add stripe webhooks",
+    "please add a stripe webhook handler for payments",
+    "trace the user input flows and flag anything exploitable",
+    "help me set up a GitHub Actions pipeline to run tests",
+    "how do I cache expensive database queries",
+    "review the authentication flow for security holes",
+    "make the landing page faster on mobile",
+    "help me write a migration plan for the database"
   ]
 }

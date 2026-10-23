@@ -97,6 +97,10 @@ HOOK_TRUNCATE_CHARS = 800
 # 86.1% fire rate, with 10% of the non-task chatty prompts firing.
 HINT_MIN_SCORE = 10.0
 HINT_MIN_RATIO = 1.05
+# A medium hint is only worth showing when the first skill covers half of the prompt's
+# content words. Without a floor, a conversational prompt can share one broad word with
+# a skill and still produce a hint.
+HOOK_MIN_COVERAGE = 0.5
 HOOK_ACKNOWLEDGEMENTS = frozenset(
     {
         "ok", "okay", "k", "thanks", "thank", "thx", "yes", "yeah", "yep", "sure",
@@ -113,6 +117,20 @@ _SMALL_TALK_WORDS = frozenset(
     "ok okay sure yeah yep yes no nope done agreed lgtm see later going good morning night well hmm "
     "sounds fine alright right now then please go ahead continue next stop wait awesome got worked "
     "cancel proceed thx".split()
+)
+_CONVERSATIONAL_PATTERNS = (
+    re.compile(r"\b(?:what|why|how) (?:did|do|does) you (?:do|mean|choose|say|use|think)\b"),
+    re.compile(r"\bwhat you (?:meant|said|were saying|are saying)\b"),
+    re.compile(
+        r"\b(?:previous|last|earlier) (?:message|paragraph|step|change|answer|response|diff|output|"
+        r"command|approach|explanation)\b"
+    ),
+    re.compile(r"\b(?:show|give) me (?:the|that) (?:diff|output|last|previous)\b"),
+    re.compile(r"\b(?:thanks|thank you)\b[^.!?]*\b(?:works?|worked|is working|looks? (?:good|correct|right))\b"),
+    re.compile(r"^(?:sorry|i meant|i was referring)\b"),
+    re.compile(r"^(?:please )?(?:continue|go on|keep going)\b"),
+    re.compile(r"^(?:that|this) (?:output|looks|sounds|makes sense)\b"),
+    re.compile(r"^(?:can you )?(?:repeat|say) (?:that|this)\b"),
 )
 _TRIVIAL_PATTERNS = (
     re.compile(
@@ -137,12 +155,18 @@ _TRIVIAL_PATTERNS = (
 )
 
 
+def _is_conversational_prompt(text: str) -> bool:
+    """True for a follow-up about the chat itself rather than a new task for a skill."""
+    lowered = text.strip().lower()
+    return any(pattern.search(lowered) for pattern in _CONVERSATIONAL_PATTERNS)
+
+
 def _is_trivial_prompt(text: str) -> bool:
     """True for small talk, one-word replies and local edits that deserve no skill suggestion."""
     lowered = text.strip().lower()
     if not lowered:
         return True
-    words = [word for word in re.findall(r"[a-z]+", lowered) if len(word) > 1]
+    words = re.findall(r"[a-z]+", lowered)
     if len(words) <= 2:
         return True
     if all(word in _STOPWORDS or word in _SMALL_TALK_WORDS for word in words):
@@ -1366,6 +1390,86 @@ def find_skill(task: str, category: str | None = None) -> dict:
     return result
 
 
+# Per-session hook state: one small JSON file per Claude Code session under the user's
+# Aletheore config directory. A skill is suggested at most once per session. Every
+# operation is best effort: a missing, unreadable or unwritable file only means the hook
+# may repeat a suggestion, never that it crashes or prints a traceback.
+_SESSION_DIRNAME = "hallbook_sessions"
+_SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+_SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+
+
+def session_state_dir() -> Path:
+    return user_home() / ".config" / "aletheore" / _SESSION_DIRNAME
+
+
+def _session_state_path(session_id: object) -> Path | None:
+    if not isinstance(session_id, str) or not _SESSION_ID.fullmatch(session_id):
+        return None
+    return session_state_dir() / f"{session_id}.json"
+
+
+def _prune_session_state() -> None:
+    directory = session_state_dir()
+    cutoff = time.time() - _SESSION_MAX_AGE_SECONDS
+    try:
+        for entry in directory.iterdir():
+            try:
+                if entry.is_file() and entry.stat().st_mtime < cutoff:
+                    entry.unlink()
+            except OSError:
+                continue
+    except OSError:
+        return
+
+
+def _load_session_skills(path: Path) -> set[str]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    values = data.get("suggested") if isinstance(data, dict) else None
+    return {value for value in values if isinstance(value, str)} if isinstance(values, list) else set()
+
+
+def _write_session_skills(path: Path, skills: set[str]) -> None:
+    import tempfile
+
+    tmp_name = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=".session-", suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump({"suggested": sorted(skills)}, handle)
+        os.replace(tmp_name, path)
+        tmp_name = None
+    except OSError:
+        return
+    finally:
+        if tmp_name is not None:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+
+
+def _new_session_suggestions(session_id: object, skill_ids: list[str]) -> list[str]:
+    """The ids not already suggested in this session, recorded as suggested now.
+
+    Returns every id when there is no usable session id, so a direct caller such as
+    `aletheore hallbook suggest` keeps working without state.
+    """
+    path = _session_state_path(session_id)
+    if path is None:
+        return list(skill_ids)
+    _prune_session_state()
+    seen = _load_session_skills(path)
+    new = [skill_id for skill_id in skill_ids if skill_id not in seen]
+    if new:
+        _write_session_skills(path, seen | set(new))
+    return new
+
+
 def _hook_prompt_text(prompt: object) -> str | None:
     """The searchable text of a hook prompt, or None when the hook should stay silent."""
     if not isinstance(prompt, str):
@@ -1380,15 +1484,19 @@ def _hook_prompt_text(prompt: object) -> str | None:
     words = re.findall(r"[a-z']+", text.lower())
     if words and all(word in HOOK_ACKNOWLEDGEMENTS for word in words):
         return None
+    if _is_trivial_prompt(text) or _is_conversational_prompt(text):
+        return None
     return text
 
 
-def hook_suggestion(prompt: str, mode: str = "hint") -> str | None:
+def hook_suggestion(prompt: str, mode: str = "hint", session_id: str | None = None) -> str | None:
     """Suggest a Hallbook skill for a Claude Code UserPromptSubmit hook, or None to add nothing.
 
     Silent by design: only a clear, high-confidence match produces output, so the hook never nudges
-    the agent for small talk, slash commands, fragments or ambiguous requests. "hint" prints one short
-    pointer; "inject" prints the skill content itself. The caller is responsible for swallowing errors.
+    the agent for small talk, follow-up questions, slash commands, fragments or ambiguous requests.
+    "hint" prints one short pointer; "inject" prints the skill content itself. A skill is suggested
+    at most once per session when the caller passes the hook payload's `session_id`. The caller is
+    responsible for swallowing errors.
     """
     if mode not in HOOK_MODES:
         raise ValueError(f"unknown hook mode: {mode!r}")
@@ -1408,6 +1516,8 @@ def hook_suggestion(prompt: str, mode: str = "hint") -> str | None:
             full_results = search_skills_scored(text, limit=5)
             if _is_high_confidence(full_results, text):
                 top_meta = full_results[0][0]
+                if not _new_session_suggestions(session_id, [top_meta.skill_id]):
+                    return None
                 return (
                     f"Hallbook skill that fits this task: {top_meta.skill_id} ({top_meta.title}).\n"
                     "If it applies, load it with aletheore_get_skill (or run: aletheore hallbook get "
@@ -1421,9 +1531,15 @@ def hook_suggestion(prompt: str, mode: str = "hint") -> str | None:
             return None
         if second_score > 0 and first_score < HINT_MIN_RATIO * second_score:
             return None
+        if _query_coverage(text, first.skill_id) < HOOK_MIN_COVERAGE:
+            return None
+        by_id = {first.skill_id: first, second.skill_id: second}
+        suggested = _new_session_suggestions(session_id, [first.skill_id, second.skill_id])
+        if not suggested:
+            return None
+        names = " or ".join(f"{by_id[skill_id].skill_id} ({by_id[skill_id].title})" for skill_id in suggested)
         return (
-            f"Hallbook may have a skill for this: {first.skill_id} ({first.title}) "
-            f"or {second.skill_id} ({second.title}). "
+            f"Hallbook may have a skill for this: {names}. "
             "If one applies, load it with aletheore_get_skill (or run: aletheore hallbook get <id>); otherwise ignore this."
         )
     result = find_skill(text)
@@ -1433,6 +1549,8 @@ def hook_suggestion(prompt: str, mode: str = "hint") -> str | None:
     skill = result.get("skill") or {}
     skill_id = top.get("skill_id") or skill.get("skill_id")
     if not skill_id:
+        return None
+    if not _new_session_suggestions(session_id, [skill_id]):
         return None
     content = skill.get("content") or ""
     if len(content) > FIND_SKILL_MAX_CONTENT_CHARS:

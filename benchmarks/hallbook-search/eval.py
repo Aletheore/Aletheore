@@ -114,6 +114,10 @@ def measure(split: str = "all", limit: int | None = None) -> dict:
     non_task_quiet = sum(result.get("confidence") in ("none", "low") for result in non_task_results)
     non_task_none = sum(result.get("confidence") == "none" for result in non_task_results)
     task_none = sum(result.get("confidence") == "none" for result in task_results)
+    hook_silent_cases = chatty.get("hook_silent", [])
+    hook_useful_cases = chatty.get("hook_useful", [])
+    hook_silent_quiet = sum(skill_hub.hook_suggestion(q) is None for q in hook_silent_cases)
+    hook_useful_fired = sum(skill_hub.hook_suggestion(q) is not None for q in hook_useful_cases)
     n = len(rows) or 1
     return {
         "split": split,
@@ -132,6 +136,10 @@ def measure(split: str = "all", limit: int | None = None) -> dict:
         "non_task_none": non_task_none,
         "task_prompts": len(chatty["task"]),
         "task_none": task_none,
+        "hook_silent_prompts": len(hook_silent_cases),
+        "hook_silent_quiet": hook_silent_quiet,
+        "hook_useful_prompts": len(hook_useful_cases),
+        "hook_useful_fired": hook_useful_fired,
     }
 
 
