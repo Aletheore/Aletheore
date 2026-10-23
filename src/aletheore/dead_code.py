@@ -1749,18 +1749,27 @@ def find_dead_code(
     unused_dependencies = []
     seen_unused: set[tuple[str, str, str]] = set()
     for rel_dir, directory in manifest_dir_paths(repo_path, ignored_paths):
-        try:
-            declared = _parse_pip_pins(directory) + _parse_npm_direct_pins(directory)
-        except OSError:
-            continue
+        # Each parser separately: an unreadable package.json must not drop the
+        # pins a readable requirements.txt in the same directory declared.
+        declared = []
+        for parse in (_parse_pip_pins, _parse_npm_direct_pins):
+            try:
+                declared += parse(directory)
+            except OSError:
+                continue
         if not declared:
             continue
+        scoped = (
+            modules
+            if rel_dir == "."
+            else [m for m in modules if m["path"].startswith(rel_dir + "/")]
+        )
+        if rel_dir != "." and not scoped:
+            # No indexed source under this manifest (config-only package.json,
+            # docs requirements): nothing to compare against, so claiming every
+            # dependency is unused would be a false positive.
+            continue
         if rel_dir not in imported_roots_by_scope:
-            scoped = (
-                modules
-                if rel_dir == "."
-                else [m for m in modules if m["path"].startswith(rel_dir + "/")]
-            )
             imported_roots_by_scope[rel_dir] = _import_roots(scoped) | _raw_external_import_roots(
                 repo_path, scoped
             )

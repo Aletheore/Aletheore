@@ -9,6 +9,7 @@ evidence can list it (`repository.unreadable_files`) instead of hiding it.
 
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 
@@ -27,19 +28,32 @@ def record_unreadable(path: Path | str, reason: str) -> None:
         _records.setdefault(str(path), reason)
 
 
+def _relative_to_root(raw: str, roots: list[str]) -> str:
+    """raw as a repo-relative POSIX path. Comparison goes through
+    os.path.normcase, so a Windows drive letter or directory in a different
+    case, or mixed separators, still match; a path equal to the root is ".";
+    a path outside every root is returned with forward slashes, unchanged
+    otherwise."""
+    folded = os.path.normcase(raw)
+    for root in roots:
+        folded_root = os.path.normcase(root).rstrip("/" + os.sep)
+        if folded == folded_root:
+            return "."
+        for sep in {"/", os.sep}:
+            if folded.startswith(folded_root + sep):
+                return raw[len(folded_root) + 1:].replace(os.sep, "/")
+    return raw.replace(os.sep, "/")
+
+
 def collect_unreadable(repo_path: Path) -> list[dict]:
     """Recorded skips as repo-relative {"path", "reason"} entries, sorted by path."""
-    root = str(repo_path)
-    entries = []
+    roots = [str(repo_path)]
+    resolved = str(Path(repo_path).resolve())
+    if resolved not in roots:
+        roots.append(resolved)
     with _lock:
         items = list(_records.items())
-    for raw, reason in items:
-        rel = raw
-        for prefix in (root, str(Path(root).resolve())):
-            if raw.startswith(prefix + "/") or raw.startswith(prefix + "\\"):
-                rel = raw[len(prefix) + 1:].replace("\\", "/")
-                break
-        entries.append({"path": rel, "reason": reason})
+    entries = [{"path": _relative_to_root(raw, roots), "reason": reason} for raw, reason in items]
     entries.sort(key=lambda entry: entry["path"])
     return entries
 
@@ -54,7 +68,11 @@ def read_bytes_or_none(path: Path) -> bytes | None:
 
 
 def read_text_or_none(path: Path, encoding: str = "utf-8", errors: str = "ignore") -> str | None:
-    """File text, or None (and a recorded skip) when it cannot be read or decoded."""
+    """File text, or None (and a recorded skip) when it cannot be read.
+
+    With the default errors="ignore" undecodable bytes are dropped silently and
+    never raise; pass errors="strict" to have an undecodable file skipped and
+    recorded as "could not decode file" instead."""
     try:
         return path.read_text(encoding=encoding, errors=errors)
     except OSError as exc:

@@ -352,7 +352,7 @@ def test_unused_dependencies_cover_nested_manifests_scoped_to_their_directory(tm
     unused = {(d["package"], d.get("manifest", ".")) for d in result["unused_dependencies"]}
     assert ("lodash", "web") in unused  # declared in web/, only used under packages/a
     assert ("left-pad", "packages/a") in unused
-    assert ("flask", "svc") in unused
+    assert ("flask", "svc") not in unused  # svc/ has no indexed source: nothing to judge against
     assert ("express", "web") not in unused
     assert ("lodash", "packages/a") not in unused
 
@@ -577,3 +577,114 @@ def test_visible_paths_are_posix_relative_and_case_folded_only_where_the_fs_is_i
     expected = "Sub/Dir/File.ts".casefold() if _CASE_INSENSITIVE_FS else "Sub/Dir/File.ts"
     assert expected in files and "\\" not in "".join(files)
     assert ("sub/dir" if _CASE_INSENSITIVE_FS else "Sub/Dir") in dirs
+
+
+# ------------------------------------------------------------ review follow-ups
+
+
+@pytest.mark.parametrize("value", ["[\"high\"]", "{\"a\": 1}", "7", "true", "\"urgent\""])
+def test_severity_threshold_of_any_json_type_is_reported_never_a_crash(value):
+    from aletheore.repo_config import parse_repo_config
+
+    text = '{"severity_threshold": %s}' % value
+    assert any("severity_threshold" in p for p in validate_repo_config_text(text))
+    assert parse_repo_config(text)["severity_threshold"] is None
+
+
+def test_layer_marker_keys_must_be_strings():
+    # JSON keys are always strings; the check covers a dict reused from elsewhere.
+    from aletheore import repo_config
+
+    with patch.object(repo_config.json, "loads", return_value={"layer_markers": {1: 2, "ok": 1}}):
+        problems = validate_repo_config_text("ignored")
+    assert any("key 1 must be a string" in p for p in problems)
+
+
+def test_go_str_prefix_is_boundary_safe(tmp_path):
+    from aletheore.scanner.graph import _resolve_go_import
+
+    _write(tmp_path, {"util/u.go": "package util\n", "x/x.go": "package x\n"})
+    assert _resolve_go_import(tmp_path, "example.com/g", "example.com/g/util") == ["util/u.go"]
+    assert _resolve_go_import(tmp_path, "example.com/g", "example.com/gx/x") == []
+    assert _resolve_go_import(tmp_path, "example.com/g/", "example.com/g/util") == ["util/u.go"]
+
+
+def test_go_modules_fall_back_when_the_root_go_mod_is_gitignored(tmp_path):
+    _write(tmp_path, {
+        ".gitignore": "go.mod\n",
+        "go.mod": "module example.com/g\n",
+        "main.go": 'package main\nimport (\n"example.com/g/util"\n"example.com/gx/other"\n)\nfunc main() {}\n',
+        "util/u.go": "package util\n",
+        "other/o.go": "package other\n",
+    })
+    _git(tmp_path)
+    _modules, graph, _bad = build_module_graph(tmp_path)
+    assert graph["edges"] == [["main.go", "util/u.go"]]
+
+
+def test_safe_io_undecodable_is_recorded_only_with_strict_errors(tmp_path):
+    from aletheore.safe_io import collect_unreadable, read_text_or_none, reset_unreadable
+
+    (tmp_path / "bin.txt").write_bytes(b"ok \xff\xfe bytes")
+    reset_unreadable()
+    assert read_text_or_none(tmp_path / "bin.txt") is not None  # lenient: bytes dropped, no skip
+    assert collect_unreadable(tmp_path) == []
+    assert read_text_or_none(tmp_path / "bin.txt", errors="strict") is None
+    assert collect_unreadable(tmp_path) == [{"path": "bin.txt", "reason": "could not decode file"}]
+
+
+def test_collect_unreadable_relativizes_root_relative_and_drive_case_variants(tmp_path, monkeypatch):
+    import ntpath
+
+    from aletheore import safe_io
+
+    safe_io.reset_unreadable()
+    safe_io.record_unreadable(str(tmp_path), "root itself")
+    safe_io.record_unreadable(str(tmp_path / "sub" / "a.env"), "x")
+    assert {e["path"] for e in safe_io.collect_unreadable(tmp_path)} == {".", "sub/a.env"}
+
+    # Windows: drive letter and directory case differ, separators are backslashes.
+    safe_io.reset_unreadable()
+    monkeypatch.setattr(safe_io.os.path, "normcase", ntpath.normcase)
+    monkeypatch.setattr(safe_io.os, "sep", "\\")
+    safe_io.record_unreadable("C:\\Repo\\sub\\A.env", "x")
+    entries = safe_io.collect_unreadable(Path("c:/repo"))
+    assert [e["path"] for e in entries] == ["sub/A.env"]
+
+
+def test_git_missing_falls_back_to_unfiltered_scan(tmp_path):
+    _write(tmp_path, {".gitignore": "built/\n", "built/z.ts": "export const z = 1\n"})
+    _git(tmp_path)
+    git_visible_paths.cache_clear()
+    with patch("aletheore.git_exec.git_executable", side_effect=FileNotFoundError("git was not found on PATH")):
+        assert git_visible_paths(tmp_path) is None
+    git_visible_paths.cache_clear()
+
+
+def test_source_less_nested_manifest_does_not_report_everything_unused(tmp_path):
+    _write(tmp_path, {
+        "tools/package.json": '{"devDependencies": {"prettier": "3.0.0"}}',
+        "app/package.json": '{"dependencies": {"left-pad": "1.3.0"}}',
+        "app/index.js": "const x = 1;\n",
+    })
+    modules, _graph, _bad = build_module_graph(tmp_path)
+    result = find_dead_code(tmp_path, modules, None)
+    unused = {(d["package"], d.get("manifest")) for d in result["unused_dependencies"]}
+    assert ("left-pad", "app") in unused
+    assert not any(m == "tools" for _p, m in unused)
+
+
+def test_unreadable_package_json_keeps_the_readable_requirements_in_dead_code(tmp_path, monkeypatch):
+    _write(tmp_path, {"svc/requirements.txt": "flask==2.0\n", "svc/package.json": '{"dependencies": {"a": "1.0.0"}}',
+                      "svc/app.py": "x = 1\n"})
+    real = Path.read_text
+
+    def read_text(self, *a, **k):
+        if self.name == "package.json":
+            raise PermissionError(13, "Permission denied")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    modules, _graph, _bad = build_module_graph(tmp_path)
+    result = find_dead_code(tmp_path, modules, None)
+    assert ("flask", "svc") in {(d["package"], d.get("manifest")) for d in result["unused_dependencies"]}

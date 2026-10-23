@@ -31,7 +31,7 @@ cover `package.json`, `requirements.txt`, `pyproject.toml`, `go.mod`, `pom.xml`,
 supported manifests in any directory, skipping `node_modules`, vendored, build, fixture and ignored paths and capping
 the search at 200 manifest directories with a note. A dependency declared in several manifests is checked once. Findings
 gain a `manifests` list, unused dependencies in a nested manifest gain a `manifest` field, and each check reports the
-`manifest_dirs` it covered. An unused dependency is judged against the code under its own manifest's directory.
+`manifest_dirs` it covered. An unused dependency is judged against the code under its own manifest's directory. A nested manifest with no indexed source under it is skipped rather than reported as entirely unused.
 
 **Fixed: monorepo detection**
 

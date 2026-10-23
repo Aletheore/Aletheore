@@ -1121,7 +1121,11 @@ def _resolve_go_import(repo_path: Path, module_prefix, import_path: str) -> list
     if not module_prefix:
         return []
     if isinstance(module_prefix, str):
-        candidates = [(module_prefix, ".")] if import_path.startswith(module_prefix) else []
+        candidates = (
+            [(module_prefix, ".")]
+            if import_path == module_prefix or import_path.startswith(module_prefix.rstrip("/") + "/")
+            else []
+        )
     else:
         candidates = [
             (path, rel_dir)

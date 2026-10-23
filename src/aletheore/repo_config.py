@@ -96,7 +96,7 @@ def parse_repo_config(raw_text: str | None) -> dict:
         result["disabled_checks"] = [c for c in disabled_checks if isinstance(c, str) and c in DISABLEABLE_CHECKS]
 
     severity_threshold = data.get("severity_threshold")
-    if severity_threshold in SEVERITY_LEVELS:
+    if isinstance(severity_threshold, str) and severity_threshold in SEVERITY_LEVELS:
         result["severity_threshold"] = severity_threshold
 
     return result
@@ -137,7 +137,9 @@ def validate_repo_config_text(raw_text: str | None) -> list[str]:
             problems.append(".aletheore.json: layer_markers must be an object of name to integer rank; ignored")
         else:
             for name, rank in markers.items():
-                if not (isinstance(rank, int) and not isinstance(rank, bool)):
+                if not isinstance(name, str):
+                    problems.append(f".aletheore.json: layer_markers key {name!r} must be a string; entry ignored")
+                elif not (isinstance(rank, int) and not isinstance(rank, bool)):
                     problems.append(f".aletheore.json: layer_markers[{name!r}] must be an integer rank; entry ignored")
     if "cluster_resolution" in data:
         value = data["cluster_resolution"]
@@ -171,7 +173,7 @@ def validate_repo_config_text(raw_text: str | None) -> list[str]:
                     )
     if "severity_threshold" in data:
         value = data["severity_threshold"]
-        if value is not None and value not in SEVERITY_LEVELS:
+        if value is not None and not (isinstance(value, str) and value in SEVERITY_LEVELS):
             problems.append(
                 f".aletheore.json: severity_threshold must be one of {', '.join(SEVERITY_LEVELS)} or null, "
                 f"got {value!r}; no threshold applied"
