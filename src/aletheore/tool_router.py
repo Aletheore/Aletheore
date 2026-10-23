@@ -141,7 +141,12 @@ INTENTS: tuple[Intent, ...] = (
         "aletheore_dead_code",
         (
             r"\bnobody (?:imports|uses|calls|references)\b", r"\bno other (?:[\w#+.]+ ){0,3}(?:modules?|files?)\b[^.?]*\bimports?\b",
-            r"\b(?:un-?imported|no importers?|zero importers?|not imported by (?:any|anything))\b", r"\bsafely delete\b", r"\bcut the fat\b", r"\bdead (?:files?|modules?|functions?)\b", r"\borphan\w*\b",r"\bdead code\b", r"\bunused (?:code|files?|modules?|functions?)\b", r"\bunreachable\b", r"\bnever (?:used|called|imported)\b", r"\bsafe to delete\b"),
+            r"\b(?:un-?imported|no importers?|zero importers?|not imported by (?:any|anything))\b", r"\bsafely delete\b",
+            r"\bnot imported (?:by|anywhere)\b", r"\b(?:isn'?t|aren'?t|is not|are not|never|not) (?:being )?imported\b",
+            r"\bnothing (?:imports|depends on|uses|references)\b", r"\bno one (?:imports|uses|references)\b",
+            r"\b(?:no|zero) (?:other )?(?:modules?|files?) (?:import|use|reference)s?\b",
+            r"\b(?:with|has|have|without) (?:no|zero|any) (?:importers?|dependents?)\b",
+            r"\bno one importing\b", r"\bimported (?:by )?(?:no ?one|nothing|nobody)\b", r"\bcut the fat\b", r"\bdead (?:files?|modules?|functions?)\b", r"\borphan\w*\b",r"\bdead code\b", r"\bunused (?:code|files?|modules?|functions?)\b", r"\bunreachable\b", r"\bnever (?:used|called|imported)\b", r"\bsafe to delete\b"),
         weight=1.2,
     ),
     Intent(
@@ -532,7 +537,10 @@ def route(question: str, explicit_target: str | None, paths: list[str]) -> Route
         if ambiguous:
             reason = "several files match: " + ", ".join(ambiguous)
         return Route("low", top.name, top.tool, None, reason=reason, candidates=ambiguous)
-    if top_score - runner_up < 0.5 and len(scored) > 1 and top.name not in ("impact", "tests", "owner", "dependencies"):
+    # An intent that needs a file cannot run when the question names none, so it is not a real rival: a question
+    # about a directory that matches both "nothing imports it" and "what imports this file" is the first one.
+    rivals = [i for s, i in scored[1:] if top_score - s < 0.5 and not (i.needs_file and target is None)]
+    if rivals and top.name not in ("impact", "tests", "owner", "dependencies"):
         # A near tie between unrelated intents is not worth a confident wrong answer.
         return Route(
             "low", top.name, top.tool, target, reason="the question fits more than one query",

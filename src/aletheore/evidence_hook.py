@@ -153,8 +153,12 @@ def _fill_history_from_git(repo_path: Path, index: dict) -> None:
     """
     files = index.get("files") or {}
     try:
-        result = subprocess.run(  # noqa: S603 - fixed argv
-            ["git", "-C", str(repo_path), "log", "--no-merges", "--name-only", "--format=%x00", f"-n{_GIT_LOG_COMMITS}"],
+        # An absolute git, as everywhere else git runs against a repository we did not write: a bare name is
+        # re-resolved against PATH and a relative entry could let the repository shadow it.
+        from aletheore.git_exec import git_executable
+
+        result = subprocess.run(  # noqa: S603 - fixed argv, absolute executable
+            [git_executable(), "-C", str(repo_path), "log", "--no-merges", "--name-only", "--format=%x00", f"-n{_GIT_LOG_COMMITS}"],
             capture_output=True,
             text=True,
             timeout=_GIT_LOG_TIMEOUT,
