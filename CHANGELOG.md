@@ -5,6 +5,81 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+**Fixed: `aletheore mcp` wrote a plain-text notice before the JSON-RPC stream**
+
+`--profile nav` printed its "does not watch for file changes" note to stdout, ahead of the first protocol message, which
+a strict MCP client rejects. Every notice and error the command prints now goes to stderr, so the first line on stdout
+is always JSON-RPC. The server also reports its package version in `serverInfo`, tool failures (an unknown file, an
+empty `aletheore_search` pattern, `limit=-5`) come back flagged as errors instead of as ordinary results, and a bad
+`limit` or `offset` names the range instead of asking for `section`. The server instructions and `--agent` help now say
+`aletheore_answer` exists only when the server starts with `--agent`.
+
+**Fixed: `config crash-reporting` reported success when nothing was saved, and the first-run notice ignored the opt-out**
+
+On a read-only home folder `aletheore config crash-reporting off` printed "turned off" and exited 0 without saving, so
+the first-run notice came back on every run. It now prints an error and exits 1. When `ALETHEORE_CRASH_REPORTING`
+overrides the stored value, both `config crash-reporting` and `status` say so. With the variable set to a disabling
+value, the first-run notice is not printed and no `preferences.json` is written.
+
+**Fixed: `healthcheck` called every HTTP answer healthy**
+
+Each endpoint line shows its status. 2xx and 3xx count as healthy; 4xx and 5xx print "responded 404" (or the code) and
+an unreachable endpoint prints why (connection refused, timeout, DNS lookup failed). The exit code is non-zero when any
+endpoint is unhealthy or unreachable. A repo with no mapped endpoints says so instead of printing nothing, and a base
+URL containing `user:password@` is rejected. Only GET requests are ever sent.
+
+**Fixed: `diff --fail-on-new-vulnerabilities` failed a build when the check was merely toggled**
+
+If the vulnerability check was skipped in either snapshot, the gate is not enforced: a note on stderr says so and the
+exit code is 0. Exit codes are now distinct: 1 means a `--fail-on-new-*` gate failed, 2 means a usage or input error
+(missing file, invalid JSON, wrong schema); `--help` documents both. The dashboard history reports no value, not zero,
+for scans that skipped the vulnerability check, and its trend chart shows a gap ("-") for them.
+
+**Fixed: `verify` accepted impossible citations and dropped some silently**
+
+A range such as `app/util.py:5-99` is checked at both ends against the file's length, and a reversed range such as
+`:3-2` is unverified. A citation whose path is absolute or climbs out of the repository (`../../etc/passwd:1`,
+`/etc/passwd:2`) is counted and listed as "path outside the repository" and its file is never read. A URL such as
+`http://x.com/a.py:5` is no longer read as a citation, and `./app/util.py:2` and `app//util.py:2` are normalized to
+`app/util.py:2`.
+
+**Fixed: `mcp-install` hid failures and could destroy a config file**
+
+The command exits 1 when a requested target was skipped or failed, and prints the restart and per-client notes only for
+targets that were actually written. A `.vscode/mcp.json` (or any JSON target) containing comments or trailing commas is
+left untouched, with the exact entry to paste. Rewriting a Codex `config.toml` now warns about lost comments before it
+writes, and keeps the original next to it as `config.toml.bak`. With no `--target`, a terminal run lists every file it
+will write, marks the machine-global Claude Desktop config, and asks `Write these? [y/N]`; `--yes` skips the question
+and scripts behave as before. Rewrites keep a file's CRLF line endings and BOM.
+
+**Fixed: `query` answered "not found" with a block of empty fields**
+
+`evidence-for-symbol`, `-endpoint` and `-dependency` now say the target was not found, suggest up to three close
+matches and exit 1. `evidence-for-endpoint /users` accepts a bare path and lists every method serving it; a wrong form
+says what is expected. An empty `secrets` result explains that the target is a file path filter, not a keyword. The
+`severity` of a dependency risk keeps its real structure and original case instead of a lowercased Python list, and
+`locate` puts the definition of a name above functions that merely mention it.
+
+**Fixed: smaller gaps in the command surface**
+
+- `scan` progress and the GitHub App note go to stderr, so piped and CI output stays usable.
+- Giving both a PATH argument and a different `--path` is an error (exit 2).
+- Errors for an unknown file say a repo-relative path is needed, accept `./` and absolute paths inside the repo, and
+  suggest the closest matches. Missing-target errors say what the target should be.
+- `query` warns on stderr about flags that have no effect for the chosen kind, and `--under` that matches no file says
+  so for `query`, `dependents`, `cycles` and `usages`.
+- `query error-handling` with `--under`, `--exclude` or `--no-tests` recounts `by_error_type` from the filtered lists.
+- A `--path` that does not exist is reported as such, and the "run aletheore scan" hint appears once.
+- Wording: singular and plural forms, capitalised sentences, and an import-coverage note that names the right dynamic
+  loading mechanisms for Go and TypeScript projects.
+- `locate` exits 1 when nothing matches, as `usages` does.
+- The banner and "All commands" picker list `index`, `dependents`, `cycles`, `tests-for`, `usages`, `locate`, `hook` and
+  `tokens`, name every `mcp-install` client, and `logout` says it clears the Hallbook token too.
+- `tokens profile` and `tokens audit` take `--path` (`--project` remains as a hidden alias) and refuse a missing folder
+  instead of creating it.
+- `audit --agent NAME` checks the name before scanning, `watch` runs an initial scan on a never-scanned repo, and the
+  `init` template refers to `air.json`.
+
 **Fixed: an unreadable file no longer crashes a scan**
 
 The endpoint-mapping pass, the manifest and config readers, framework detection and the infrastructure detectors read

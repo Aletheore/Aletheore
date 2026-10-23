@@ -13,7 +13,7 @@ def _ev(graph: dict[str, list[str]], scanned_at: str = "2999-01-01T00:00:00+00:0
 def test_no_cycle_in_a_simple_chain(tmp_path: Path):
     graph = {"a.py": ["b.py"], "b.py": ["c.py"], "c.py": []}
     text = cycles_report(_ev(graph), tmp_path)
-    assert "no circular import dependency found" in text
+    assert "No circular import dependency found" in text
 
 
 def test_a_three_file_cycle_is_found_with_an_example_chain(tmp_path: Path):
@@ -56,7 +56,7 @@ def test_a_longer_cycle_picks_the_shortest_concrete_chain(tmp_path: Path):
 def test_self_import_is_not_a_cycle(tmp_path: Path):
     graph = {"a.py": ["a.py"]}
     text = cycles_report(_ev(graph), tmp_path)
-    assert "no circular import dependency found" in text
+    assert "No circular import dependency found" in text
 
 
 def test_stale_scan_is_flagged(tmp_path: Path):
@@ -70,7 +70,7 @@ def test_missing_scan_time_is_unknown_not_current(tmp_path: Path):
     graph = {"a.py": ["b.py"], "b.py": ["a.py"]}
     ev = _ev(graph)
     del ev["scanned_at"]
-    assert "freshness unknown" in cycles_report(ev, tmp_path)
+    assert "Freshness unknown" in cycles_report(ev, tmp_path)
 
 
 def test_cli_cycles_end_to_end(tmp_path: Path):
@@ -101,7 +101,7 @@ def test_scoped_report_lists_only_files_in_scope_but_finds_cycles_through_outsid
     head = text.split("\n\n")[0]
     assert head.splitlines()[0].startswith("2 file(s) in the requested scope")
     assert "pkg/a.py" in head and "pkg/b.py" in head and "other/c.py" not in head and "pkg/d.py" not in head
-    assert "group of 3 file(s) repo-wide, 2 in scope" in text
+    assert "Group of 3 file(s) repo-wide, 2 in scope" in text
 
 
 def test_scoped_report_exclude_matches_whole_names(tmp_path):

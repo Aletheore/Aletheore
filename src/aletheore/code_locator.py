@@ -225,9 +225,9 @@ def render_locate(
 ) -> str:
     """For each file, the functions whose code holds the matched words: a `path::Name Lstart-end` header and the raw
     source (cut at `max_lines`), best functions first. Files scoring well below the top file are left out."""
-    out: list[str] = []
-    used = 0
+    blocks: list[tuple[int, int, str]] = []
     top = cands[0].score if cands else 0.0
+    order = 0
     for c in [c for c in cands if c.path_hit or c.score >= rel_cutoff * top][:max_files]:
         try:
             p = Path(repo_path) / c.path
@@ -245,8 +245,14 @@ def render_locate(
             sym = _innermost(i, c.symbols, "function") or _innermost(i, c.symbols, "class")
             if sym:
                 found.setdefault((sym.start, sym.end), (sym, set()))[1].update(hit)
-        ranked = sorted(found.values(), key=lambda t: (-len(t[1]), t[0].end - t[0].start, t[0].start))[:max_symbols]
-        for sym, hit in sorted(ranked, key=lambda t: t[0].start):
+        # A symbol whose own name is a searched word is the definition being asked for; one that merely mentions
+        # the word in its body (a caller) ranks below it, in this file and across files.
+        defines = lambda sym: sym.name in c.matched  # noqa: E731
+        ranked = sorted(
+            found.values(),
+            key=lambda t: (not defines(t[0]), -len(t[1]), t[0].end - t[0].start, t[0].start),
+        )[:max_symbols]
+        for sym, hit in sorted(ranked, key=lambda t: (not defines(t[0]), t[0].start)):
             owner = _innermost(sym.start, [s for s in c.symbols if s is not sym], "class") if sym.kind == "function" else None
             name = f"{owner.name}.{sym.name}" if owner else sym.name
             # a class that merely contains the matching method is shown as its signature line, not its whole body
@@ -255,11 +261,16 @@ def render_locate(
             block = f"{c.path}::{name} L{sym.start}-{sym.end}\n" + "\n".join(body[:max_lines])
             if cut:
                 block += f"\n... ({len(body) - max_lines} more lines; use aletheore_symbol_source for the whole function)"
-            if used + len(block) > max_chars and out:
-                out.append("... (more matches not shown; narrow the query)")
-                return "\n\n".join(out)
-            out.append(block)
-            used += len(block)
+            blocks.append((0 if defines(sym) else 1, order, block))
+            order += 1
+    out: list[str] = []
+    used = 0
+    for _, _, block in sorted(blocks, key=lambda t: (t[0], t[1])):
+        if used + len(block) > max_chars and out:
+            out.append("... (more matches not shown; narrow the query)")
+            return "\n\n".join(out)
+        out.append(block)
+        used += len(block)
     return "\n\n".join(out)
 
 
@@ -279,13 +290,20 @@ def _files_changed_since_scan(repo_path: Path, paths: list[str], scanned_at: obj
     return changed
 
 
-def locate_report(evidence: dict, repo_path: Path, query: str, *, no_match_hint: str = "try grep or a literal search") -> str:
-    """What the `aletheore locate` command and the `aletheore_locate` MCP tool return for `query`."""
+def locate_result(
+    evidence: dict, repo_path: Path, query: str, *, no_match_hint: str = "try grep or a literal search"
+) -> tuple[str, bool]:
+    """(report text, whether anything matched). Callers that need an exit status use the flag, not the text."""
     cands = locate(query, repo_path, evidence["repository"]["modules"], all_words=True, require_confidence=False)
     text = render_locate(cands, repo_path) if cands else ""
     if not text:
-        return f"no match for {query!r}; {no_match_hint}"
+        return f"no match for {query!r}; {no_match_hint}", False
     changed = _files_changed_since_scan(repo_path, [c.path for c in cands], evidence.get("scanned_at"))
     if changed:
         text = f"note: {', '.join(changed)} changed since the last scan; line ranges may be off\n\n{text}"
-    return text
+    return text, True
+
+
+def locate_report(evidence: dict, repo_path: Path, query: str, *, no_match_hint: str = "try grep or a literal search") -> str:
+    """What the `aletheore locate` command and the `aletheore_locate` MCP tool return for `query`."""
+    return locate_result(evidence, repo_path, query, no_match_hint=no_match_hint)[0]
