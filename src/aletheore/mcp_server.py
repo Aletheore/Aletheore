@@ -1019,7 +1019,7 @@ def _register_skill_hub_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
         webhook handling to a Django app'. Skip it for trivial edits and simple
         questions. If confidence is low or none, just carry on without a skill
         and do not keep searching for the same need."""
-        return _toon_result(skill_hub.find_skill(task, category=category))
+        return _toon_result(skill_hub.find_skill(skill_hub.cap_query(task), category=category))
 
     @mcp_instance.tool(name="aletheore_search_skills", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_search_skills(query: str, category: str | None = None, limit: int = 8) -> str:
@@ -1052,7 +1052,8 @@ def _register_skill_hub_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_get_skill", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_get_skill(skill_id: str) -> str:
         """Fetches one skill by its skill_id (from aletheore_search_skills or
-        aletheore_list_skills): its title, description, license, source_url,
+        aletheore_list_skills): its title, description, license, copyright
+        holder, source_url (the pinned upstream),
         what it requires of the agent (e.g. subagents, an MCP server, a
         browser), and the full instructions in `content`. If the instructions
         refer to other files (references, scripts, templates), `files` lists
@@ -1100,10 +1101,16 @@ def _register_add_custom_skill_tool(mcp_instance: MCPServer, repo_path: Path) ->
         aletheore_list_skills. name must contain only letters, digits, '-',
         and '_' (no path separators)."""
         try:
-            skill_id = skill_hub.add_custom_skill(name, content)
+            warnings = skill_hub.custom_skill_warnings(content)
+            skill_id, note = skill_hub.add_custom_skill_with_sync(name, content)
         except ValueError as exc:
             return str(exc)
-        return f"Saved custom skill as '{skill_id}'."
+        message = f"Saved custom skill as '{skill_id}'."
+        for warning in warnings:
+            message += f" WARNING: {warning}."
+        if note:
+            message += f" {note}"
+        return message
 
 
 def _register_remove_custom_skill_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
@@ -1130,12 +1137,13 @@ def _register_remove_custom_skill_tool(mcp_instance: MCPServer, repo_path: Path)
         removed) is not an error. name must contain only letters, digits,
         '-', and '_' (no path separators)."""
         try:
-            existed = skill_hub.remove_custom_skill(name)
+            existed, note = skill_hub.remove_custom_skill_with_sync(name)
         except ValueError as exc:
             return str(exc)
-        if existed:
-            return f"Removed custom skill custom/{name}."
-        return f"custom/{name} was not present - nothing to remove."
+        message = (
+            f"Removed custom skill custom/{name}." if existed else f"custom/{name} was not present - nothing to remove."
+        )
+        return f"{message} {note}" if note else message
 
 
 def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:

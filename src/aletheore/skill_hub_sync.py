@@ -159,46 +159,111 @@ def _is_newer(candidate, baseline) -> bool:
     return str(candidate) > str(baseline)
 
 
-def push_custom_skill_best_effort(name: str, content: str, timeout: float = 5.0) -> None:
+# What a best-effort push or delete came to. The callers turn it into one line for the user with push_note and
+# delete_note; the details of a failure (never the token) go to the debug log.
+SYNCED = "synced"
+LOGGED_OUT = "logged_out"
+OFFLINE = "offline"
+UNAUTHORIZED = "unauthorized"
+SERVER_ERROR = "server_error"
+NOTHING_TO_DO = "nothing_to_do"  # delete while logged out of a skill that was never synced: no account copy exists
+
+_CONNECT_TIMEOUT = 2.0  # an unreachable host must not hold up `add` and `remove` for the whole request timeout
+
+
+def _request_timeout(timeout: float) -> httpx.Timeout:
+    return httpx.Timeout(timeout, connect=min(_CONNECT_TIMEOUT, timeout))
+
+
+def _log_failure(message: str, *args) -> None:
+    """One warning line, and the traceback only when debug logging is on (a network error is not a bug)."""
+    logger.warning(message, *args)
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("details of the failure above", exc_info=True)
+
+
+def push_note(outcome) -> str | None:
+    """The one-line message for a push outcome, or None when there is nothing to tell the user."""
+    if outcome == OFFLINE:
+        return (
+            "Saved locally. Could not reach your Aletheore account (offline?); "
+            "it will sync the next time you run aletheore login."
+        )
+    if outcome == UNAUTHORIZED:
+        return (
+            "Saved locally. Your Aletheore login is no longer valid (revoked or replaced); "
+            "run aletheore login and it will sync."
+        )
+    if outcome == SERVER_ERROR:
+        return (
+            "Saved locally. Your Aletheore account returned an error; "
+            "it will sync the next time you run aletheore login."
+        )
+    return None
+
+
+def delete_note(outcome) -> str | None:
+    """The one-line message for a delete outcome. The account copy still exists whenever there is a message."""
+    if outcome == OFFLINE:
+        return (
+            "Removed locally. Could not reach your Aletheore account (offline?); the copy on your account still "
+            "exists and will be removed the next time you run aletheore login."
+        )
+    if outcome == UNAUTHORIZED:
+        return (
+            "Removed locally. Your Aletheore login is no longer valid (revoked or replaced); the copy on your "
+            "account still exists and will be removed after you run aletheore login."
+        )
+    if outcome == SERVER_ERROR:
+        return (
+            "Removed locally. Your Aletheore account returned an error; the copy on your account still exists "
+            "and will be removed the next time you run aletheore login."
+        )
+    if outcome == LOGGED_OUT:
+        return (
+            "Removed locally. You are not logged in, so the copy on your account still exists; "
+            "it will be removed the next time you run aletheore login."
+        )
+    return None
+
+
+def push_custom_skill_best_effort(name: str, content: str, timeout: float = 5.0) -> str | None:
     """Fire-and-forget push of one custom skill, called right after `add`.
     Never raises: a token-less machine, an offline machine, and a server
     error are all just "didn't sync this time", not a failure the caller
-    needs to handle."""
+    needs to handle. Returns what happened (SYNCED, LOGGED_OUT, OFFLINE,
+    UNAUTHORIZED or SERVER_ERROR) so the caller can say so in one line."""
     token = _personal_token()
     if token is None:
-        return
+        return LOGGED_OUT
     try:
         response = httpx.put(
             f"{_api_base_url()}/v1/custom-skills/{name}",
             json={"content": content},
             headers={"Authorization": f"Bearer {token}"},
-            timeout=timeout,
+            timeout=_request_timeout(timeout),
         )
         if response.status_code // 100 != 2:
-            if response.status_code == 401:
-                logger.warning(
-                    "push of custom skill '%s' failed: your Hallbook login is no longer valid (revoked or replaced). "
-                    "Saved locally; run `aletheore login` and it will sync.",
-                    name,
-                )
-                return
-            logger.warning(
-                "push of custom skill '%s' failed: server returned %s",
-                name,
-                response.status_code,
-            )
-            return
+            logger.debug("push of custom skill '%s' failed: server returned %s", name, response.status_code)
+            return UNAUTHORIZED if response.status_code == 401 else SERVER_ERROR
         updated_at = response.json().get("updated_at")
         _record_sync_state(name, updated_at, _content_hash(content))
+        return SYNCED
+    except httpx.HTTPError:
+        logger.debug("push of custom skill '%s' could not reach the server", name, exc_info=True)
+        return OFFLINE
     except Exception:
-        logger.warning("push of custom skill '%s' failed", name, exc_info=True)
+        logger.debug("push of custom skill '%s' failed", name, exc_info=True)
+        return SERVER_ERROR
 
 
-def delete_custom_skill_best_effort(name: str, timeout: float = 5.0) -> None:
+def delete_custom_skill_best_effort(name: str, timeout: float = 5.0) -> str | None:
     """Fire-and-forget delete of one custom skill, called right after a
     local `remove`. Never raises: a token-less machine, an offline
     machine, and a server error are all just "didn't sync this time", not
-    a failure the caller needs to handle.
+    a failure the caller needs to handle. Returns what happened, like
+    push_custom_skill_best_effort (LOGGED_OUT only when a pending-delete
+    tombstone was left because the skill had been synced before).
 
     A 204 and a 404 both mean the server no longer has it (a 404 is just
     "already gone" from this function's point of view, not an error) -
@@ -215,28 +280,31 @@ def delete_custom_skill_best_effort(name: str, timeout: float = 5.0) -> None:
         # back from the account at the next login, so leave a tombstone for it.
         if name in _load_sync_state():
             _record_pending_delete(name)
-        return
+            return LOGGED_OUT
+        return NOTHING_TO_DO
     try:
         response = httpx.delete(
             f"{_api_base_url()}/v1/custom-skills/{name}",
             headers={"Authorization": f"Bearer {token}"},
-            timeout=timeout,
+            timeout=_request_timeout(timeout),
         )
         if response.status_code == 204 or response.status_code == 404:
             sync_state = _load_sync_state()
             if sync_state.pop(name, None) is not None:
                 _save_sync_state(sync_state)
             _clear_pending_delete(name)
-            return
-        logger.warning(
-            "delete of custom skill '%s' failed: server returned %s",
-            name,
-            response.status_code,
-        )
+            return SYNCED
+        logger.debug("delete of custom skill '%s' failed: server returned %s", name, response.status_code)
         _record_pending_delete(name)
+        return UNAUTHORIZED if response.status_code == 401 else SERVER_ERROR
+    except httpx.HTTPError:
+        logger.debug("delete of custom skill '%s' could not reach the server", name, exc_info=True)
+        _record_pending_delete(name)
+        return OFFLINE
     except Exception:
-        logger.warning("delete of custom skill '%s' failed", name, exc_info=True)
+        logger.debug("delete of custom skill '%s' failed", name, exc_info=True)
         _record_pending_delete(name)
+        return SERVER_ERROR
 
 
 def _fetch_skill_content(name: str, headers: dict, timeout: float) -> str:
@@ -269,8 +337,7 @@ def _backup_server_copy(name: str, local_content: str, headers: dict, timeout: f
     server_content = _fetch_skill_content(name, headers, timeout)
     if server_content == local_content:
         return
-    backup_path = skill_hub.unique_backup_path(name, "server")
-    backup_path.write_text(server_content, encoding="utf-8")
+    backup_path = skill_hub.write_backup(name, "server", server_content)
     logger.warning(
         "custom skill '%s' was also changed on your account (another machine); "
         "your local version is being pushed over it - the account copy was saved to %s",
@@ -283,8 +350,7 @@ def _drop_locally_deleted_elsewhere(name: str, local_content: str, sync_state: d
     """The server no longer lists `name`, this machine last synced it, and the
     local copy is unchanged since: it was deleted from another machine. Mirror
     that delete here (keeping a .md.bak) instead of re-uploading it."""
-    backup_path = skill_hub.unique_backup_path(name, "deleted")
-    backup_path.write_text(local_content, encoding="utf-8")
+    backup_path = skill_hub.write_backup(name, "deleted", local_content)
     skill_hub.custom_skills_dir().joinpath(f"{name}.md").unlink(missing_ok=True)
     sync_state.pop(name, None)
     _save_sync_state(sync_state)
@@ -349,8 +415,7 @@ def _merge_one_server_skill(
         # that overwrites existing local content with something
         # that arrived over the network, so harden it: back up the
         # current content first and log a visible notice.
-        backup_path = skill_hub.unique_backup_path(name, "synced")
-        backup_path.write_text(local_content, encoding="utf-8")
+        backup_path = skill_hub.write_backup(name, "synced", local_content)
         logger.warning(
             "custom skill '%s' was updated from your account (synced from "
             "another machine) - previous local content saved to %s",
@@ -404,6 +469,17 @@ def _handle_account_switch(account_id: str | None) -> None:
     account_path.write_text(account_id, encoding="utf-8")
 
 
+def _check_server_name(name) -> None:
+    """A name the server lists becomes a local file name, so it gets the full rules for a new name (length cap,
+    no Windows device names). The one exception is a name this machine already holds, saved by an older version."""
+    try:
+        skill_hub.sanitize_skill_name(name)
+    except ValueError:
+        if not (isinstance(name, str) and name in skill_hub.list_custom_skill_names()):
+            raise
+        skill_hub.sanitize_skill_name(name, existing=True)
+
+
 def pull_merge_custom_skills(timeout: float = 10.0) -> None:
     """Run once at login. Requires a saved personal token - returns
     immediately (no network call) without one, since login's caller only
@@ -446,7 +522,7 @@ def pull_merge_custom_skills(timeout: float = 10.0) -> None:
         for entry in server_skills:
             name = entry["name"]
             try:
-                skill_hub.sanitize_skill_name(name)
+                _check_server_name(name)
             except ValueError:
                 logger.warning("skill hub sync: ignoring unsafe skill name from server: %r", name)
                 continue
@@ -456,7 +532,7 @@ def pull_merge_custom_skills(timeout: float = 10.0) -> None:
             except Exception:
                 # One skill failing (a bad fetch, a disk error) must not skip
                 # the rest of the merge or the offline-push loop below.
-                logger.warning("skill hub sync: could not merge custom skill '%s'", name, exc_info=True)
+                _log_failure("skill hub sync: could not merge custom skill '%s'", name)
         # Any local custom skill the server's list didn't contain at all -
         # added locally while fully offline, never pushed. Same
         # push-and-record-state logic as the "never synced" branch above.
@@ -477,6 +553,6 @@ def pull_merge_custom_skills(timeout: float = 10.0) -> None:
                 # Never synced, or edited here after the remote delete: push.
                 _push_and_record(name, local_content, headers, timeout, sync_state)
             except Exception:
-                logger.warning("skill hub sync: could not merge custom skill '%s'", name, exc_info=True)
+                _log_failure("skill hub sync: could not merge custom skill '%s'", name)
     except Exception:
-        logger.warning("skill hub pull-merge failed", exc_info=True)
+        _log_failure("skill hub pull-merge failed")

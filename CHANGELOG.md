@@ -5,6 +5,61 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+**Added: `aletheore hallbook info`**
+
+`aletheore hallbook info debugging/systematic-debugging` (or just `systematic-debugging` when the name is unambiguous)
+prints a skill's title, shelf, category, license, copyright holder, pinned source, what it needs and how many files and
+scripts it ships. `--licence` (or `--license`) prints the licence text the skill ships. With no argument it prints the
+catalogue in numbers: the skills per license, the six shelves and where the NOTICE file lives. A mistyped or ambiguous
+name lists up to five ids you may have meant. The copyright holder is also in the `aletheore_get_skill` result and in the
+skill detail view of the skills browser.
+
+**Fixed: custom-skill commands no longer crash with a traceback**
+
+`hallbook add` and `hallbook remove` now print one line, `error: ...`, that says what is wrong and what to do, and exit 1.
+That covers a missing file, a folder given instead of a file, a binary or non-UTF-8 file, a read-only or blocked custom
+skills folder and a name that is too long. Skill names are limited to 64 characters, may not be a Windows device name
+(CON, NUL, COM1 and so on) and may not differ from an existing custom skill only in capital letters. The invalid-name
+message lists the allowed characters. Skills saved earlier under a longer name can still be read and removed.
+
+**Fixed: empty, binary and oversized custom skills are refused; credentials get a warning**
+
+An empty file, a file with NUL bytes and a file over 1 MB are rejected, in `hallbook add` and in
+`aletheore_add_custom_skill`. Text that looks like it holds a credential (an AWS key, a GitHub token, a private key
+header) is still saved, with a warning that custom skills are stored in plain text here and uploaded to your account when
+you are logged in.
+
+**Fixed: earlier versions of a custom skill are kept, and writes are atomic**
+
+Replacing or removing a custom skill keeps the old text as a timestamped backup and the five newest are kept; before, only
+the last version survived an add and every remove left another file behind for good. A skill is written through a temporary
+file, so a failed write no longer leaves half a skill. Custom skill files are readable by you only. Backup file names are
+cut to a safe length for any skill name.
+
+**Fixed: offline `add` and `remove` print one line, not a 70-line traceback**
+
+When you are logged in but the account cannot be reached, the skill is still saved or removed locally and one line says so:
+that it will sync the next time you run `aletheore login`. A rejected login says to log in again. A remove that did not
+reach the account says that the copy on the account still exists and will be removed at the next login. An unreachable
+host now fails after 2 seconds instead of 5.
+
+**Fixed: a custom skill named after the task no longer lowers a correct answer**
+
+A custom skill that matched the task counted as the runner-up and turned a clear `high` answer from `aletheore_find_skill`
+into `low`. Custom skills are still listed as alternatives but no longer count against a bundled top match.
+
+**Fixed: `hallbook files` and `aletheore_get_skill` listed compiled Python files**
+
+Python bytecode files (`.pyc` and `.pyo`) and the cache folders that hold them are no longer listed, and `get-file` refuses them.
+
+**Fixed: smaller Hallbook command gaps**
+
+`hallbook search` with an empty or one-character query asks for more instead of saying nothing matched. An unknown
+`--category` is an error that lists the valid ones (and the right capital letters). `hallbook add --help` explains the
+name and file arguments. `hallbook suggest --help` prints the help. A wrong `--mode` is refused by `hallbook hook`, and
+`hallbook suggest` stays silent on stdout and exits 0 with one line on stderr. Search queries are cut at 500 characters.
+`hallbook get` with the wrong capital letters says the skill was not found and suggests the right id, without a log
+message. The hook hint now also names the `aletheore hallbook get` command, for agents without the MCP server.
 **Fixed: `aletheore mcp` wrote a plain-text notice before the JSON-RPC stream**
 
 `--profile nav` printed its "does not watch for file changes" note to stdout, ahead of the first protocol message, which
