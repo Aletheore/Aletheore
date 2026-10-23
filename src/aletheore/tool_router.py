@@ -267,10 +267,19 @@ _COMPILED = {intent.name: tuple(re.compile(p, re.IGNORECASE) for p in intent.pat
 
 # A path-looking token: contains a slash or ends in a known source extension.
 _PATH_TOKEN = re.compile(r"[\w@./+-]+\.(?:py|pyi|js|jsx|ts|tsx|mjs|cjs|go|rs|rb|php|java|kt|swift|cs|cpp|cc|c|h|hpp|scala|sql|sh|vue|svelte)\b|[\w@.+-]+(?:/[\w@.+-]+)+")
-_BARE_DIR_QUOTED = re.compile(r"[`'\"]([\w@.+-]+)[`'\"]")
+# Ways a question marks a one-word directory as a place, kept narrow because the result narrows the answer: a
+# quoted word counts only right after a place cue (so `retry` in "how does `retry` work" is an identifier, not a
+# scope), "under/inside/within/below X" is a place on its own, and a plain "in X" needs a directory word beside it.
+_PLACE_CUE = r"(?:under|inside|within|beneath|below|in|of|directory|folder|dir|package)"
+_DIR_WORD = r"(?:directory|folder|dir|package)"
+_BARE_DIR_QUOTED = re.compile(
+    rf"\b{_PLACE_CUE}\s+(?:the\s+)?(?:{_DIR_WORD}\s+)?[`'\"]([\w@.+-]+)[`'\"]|[`'\"]([\w@.+-]+)[`'\"]\s+{_DIR_WORD}\b",
+    re.IGNORECASE,
+)
 _BARE_DIR_AFTER_PREPOSITION = re.compile(
-    r"\b(?:under|inside|within|beneath|below|in)\s+(?:the\s+)?(?:directory\s+|folder\s+|dir\s+|package\s+)?([\w@.+-]+)\b"
-    r"(?=\s*(?:\(|,|\.|\?|\s(?:directory|folder|dir|package)\b|$))",
+    r"\b(?:under|inside|within|beneath|below)\s+(?:the\s+)?(?:" + _DIR_WORD + r"\s+)?([\w@.+-]+)\b"
+    rf"|\b(?:in|of|for)\s+(?:the\s+)?([\w@.+-]+)\s+{_DIR_WORD}\b"
+    rf"|\b{_DIR_WORD}\s+([\w@.+-]+)\b",
     re.IGNORECASE,
 )
 _IDENT_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{3,}")
@@ -426,7 +435,9 @@ def resolve_scope(question: str, explicit: str | None, paths: list[str]) -> str 
     # A one-word directory ("under `examples`", "in the lib folder") has no slash or extension for _PATH_TOKEN to
     # find. Accept one only when the question marks it as a place (quoted, or after under/in/inside plus an
     # optional "the"/"directory"), so ordinary words that happen to be directory names are not read as scopes.
-    candidates += _BARE_DIR_QUOTED.findall(question) + _BARE_DIR_AFTER_PREPOSITION.findall(question)
+    # findall returns one tuple per match when a pattern has several groups; take whichever group matched
+    for match in _BARE_DIR_QUOTED.findall(question) + _BARE_DIR_AFTER_PREPOSITION.findall(question):
+        candidates.append(next((g for g in match if g), "") if isinstance(match, tuple) else match)
     for token in candidates:
         token = token.strip().strip("`'\"()[],;:").removeprefix("./").rstrip("/")
         if not token or token in known:

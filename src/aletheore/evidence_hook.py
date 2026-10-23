@@ -34,6 +34,8 @@ import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from aletheore.git_exec import git_executable  # imports only os and shutil
+
 _LOG = logging.getLogger(__name__)
 
 INDEX_NAME = "hook_index.json"
@@ -155,8 +157,6 @@ def _fill_history_from_git(repo_path: Path, index: dict) -> None:
     try:
         # An absolute git, as everywhere else git runs against a repository we did not write: a bare name is
         # re-resolved against PATH and a relative entry could let the repository shadow it.
-        from aletheore.git_exec import git_executable
-
         result = subprocess.run(  # noqa: S603 - fixed argv, absolute executable
             [git_executable(), "-C", str(repo_path), "log", "--no-merges", "--name-only", "--format=%x00", f"-n{_GIT_LOG_COMMITS}"],
             capture_output=True,
@@ -421,28 +421,24 @@ def _session_state_path(repo_path: Path, session_id: str) -> Path | None:
         return None
     if not (repo_path / ".aletheore").is_dir():
         return None
-    return repo_path / ".aletheore" / _STATE_DIRNAME / f"{session_id}.json"
+    return repo_path / ".aletheore" / _STATE_DIRNAME / f"{session_id}.shown"
 
 
 def _already_shown(state_path: Path, rel_path: str) -> bool:
     try:
-        shown = json.loads(state_path.read_text())
-    except (OSError, ValueError):
-        shown = []
-    return isinstance(shown, list) and rel_path in shown
+        return rel_path in state_path.read_text().splitlines()
+    except OSError:
+        return False
 
 
 def _mark_shown(state_path: Path, rel_path: str) -> None:
-    try:
-        shown = json.loads(state_path.read_text())
-        if not isinstance(shown, list):
-            shown = []
-    except (OSError, ValueError):
-        shown = []
-    shown.append(rel_path)
+    # One path per line, appended: Claude Code can run tool calls in parallel inside one session, and a
+    # read-modify-write of a single list would let one call's entry overwrite another's. An append of a short
+    # line is a single write, so concurrent hook calls cannot lose each other's paths.
     try:
         state_path.parent.mkdir(parents=True, exist_ok=True)
-        state_path.write_text(json.dumps(shown))
+        with state_path.open("a", encoding="utf-8") as handle:
+            handle.write(rel_path + "\n")
     except OSError:
         pass
 

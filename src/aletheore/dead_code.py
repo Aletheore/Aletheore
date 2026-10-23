@@ -79,7 +79,8 @@ TEST_PATH_PATTERNS = [
     # search_index._is_test_path had the same gap, already fixed there.
     # "Tests?" (not just "Test") to cover Swift's common pluralized form.
     re.compile(r"(^|/)[^/]+Tests?\.(kt|kts|java|php|swift|scala|cs)$"),
-    # .NET test projects live in directories named UnitTests/, IntegrationTests/ or Foo.Tests/
+    # .NET test projects live in directories named UnitTests/, IntegrationTests/ or Foo.Tests/. Compiled without
+    # IGNORECASE on purpose, so "Contests/" and "Latest/" are not test directories.
     re.compile(r"(^|/)[\w.\-]*Tests?/"),
     # Gradle's androidTest/test source-set convention - doesn't require the
     # PascalCase suffix above (e.g. a test helper/fixture file), and

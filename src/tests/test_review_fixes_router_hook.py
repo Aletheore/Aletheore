@@ -108,6 +108,35 @@ def test_the_router_profile_does_not_tell_the_agent_to_call_a_tool_it_does_not_h
     assert "call aletheore_get_blast_radius directly" in str(full)
 
 
+@pytest.mark.parametrize(
+    "question,scope",
+    [
+        ("which modules under `web` does nothing import", "web"),
+        ("in the web folder, which modules does nobody import", "web"),
+        ("list the modules of the `web` package that nothing imports", "web"),
+        ("which modules inside web does nobody import", "web"),
+        # an identifier or an ordinary word is not a place, even when a directory of that name exists
+        ("is `web` unused, nobody imports it", None),
+        ("what changed in web, anything nobody imports", None),
+        ("how does `web` work, any modules nothing imports", None),
+    ],
+)
+def test_a_one_word_directory_needs_a_place_cue_to_become_the_scope(question, scope):
+    paths = ["web/a.py", "web/b.py", "lib/c.py"]
+    assert tool_router.resolve_scope(question, None, paths) == scope
+
+
+def test_parallel_hook_calls_do_not_lose_each_others_shown_files(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    state = tmp_path / "s.shown"
+    names = [f"src/file{i}.py" for i in range(200)]
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        list(pool.map(lambda name: evidence_hook._mark_shown(state, name), names))
+    assert all(evidence_hook._already_shown(state, name) for name in names)
+    assert not evidence_hook._already_shown(state, "src/other.py")
+
+
 def test_hook_failures_are_visible_on_stderr_only_when_debugging_is_asked_for(monkeypatch, capsys):
     stdout = io.StringIO()
     monkeypatch.delenv("ALETHEORE_HOOK_DEBUG", raising=False)
