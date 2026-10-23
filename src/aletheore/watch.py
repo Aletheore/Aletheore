@@ -479,6 +479,8 @@ def watch(
     """
     from watchdog.observers import Observer
 
+    from aletheore.evidence import EvidenceWriteError
+
     stop = stop or threading.Event()
     # Printed before building the mtime baseline (_DebouncedHandler.__init__
     # walks the tree once - see _current_mtimes) so a large repo shows
@@ -512,6 +514,10 @@ def watch(
                 try:
                     with EVIDENCE_WRITE_LOCK:
                         rebuild(repo_path, report, allow_hosted=allow_hosted)
+                except EvidenceWriteError as exc:
+                    # Read-only .aletheore/: say so once per edit, in the message
+                    # the scan command gives, not as a class name and a traceback.
+                    report(f"rebuild failed: {exc}")
                 except Exception as exc:  # noqa: BLE001
                     # A scan that fails on one bad edit - a half-written
                     # file, a syntax error mid-keystroke - should not end a

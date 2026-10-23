@@ -134,6 +134,18 @@ _MODULE = _obj(
     },
     required=["path", "language", "imports", "imported_by"],
 )
+# Fields added after 0.8.1 (EVIDENCE_VERSION 0.9.0). All optional: evidence written before
+# them stays valid, and readers use .get() with the default the field's absence implies.
+_UNREADABLE_FILE = _obj({"path": _STR, "reason": _STR})
+_NULLABLE_STR: dict = {"type": ["string", "null"]}
+# Both dependency checks report which manifests they covered. manifest_dirs is only present
+# when a manifest sits below the root; unreadable_manifest_dirs only when one could not be read.
+_DEPENDENCY_CHECK_OPTIONAL = {
+    "reason": _NULLABLE_STR,
+    "note": _STR,
+    "manifest_dirs": _ANY_LIST,
+    "unreadable_manifest_dirs": _ANY_LIST,
+}
 _LANGUAGE = _obj({"name": _STR, "file_count": _INT, "loc": _INT})
 _OWNERSHIP = _obj({"email": _STR, "commit_count": _INT, "percent": _NUM})
 _BRANCH = _obj({"name": _STR, "type": _STR})
@@ -156,6 +168,10 @@ AIR_JSON_SCHEMA: dict = {
     ],
     "properties": {
         "aletheore_version": _STR,
+        # The CLI/library version that wrote the file (aletheore_version above is the schema version).
+        "cli_version": _STR,
+        # Problems found in .aletheore.json while scanning, as readable sentences.
+        "config_warnings": _arr(_STR),
         "scanned_at": _STR,
         "repo_path": _STR,
         "repository": _with_optional(_obj(
@@ -173,7 +189,19 @@ AIR_JSON_SCHEMA: dict = {
                 ),
                 "policy_docs": _ANY_LIST,
                 "build_tools": _ANY_LIST,
-                "monorepo": _obj({"detected": _BOOL, "workspaces": _ANY_LIST}),
+                "monorepo": _obj(
+                    {
+                        "detected": _BOOL,
+                        "workspaces": _ANY_LIST,
+                        # One entry per directory holding a manifest: {path, manifests, ecosystems, name?}.
+                        "packages": _ANY_LIST,
+                        # "workspaces" | "multiple manifests" | null.
+                        "reason": _NULLABLE_STR,
+                        # True when manifest discovery hit its cap.
+                        "manifests_truncated": _BOOL,
+                    },
+                    required=["detected", "workspaces"],
+                ),
                 "database": _obj(
                     {
                         "orm_frameworks": _ANY_LIST,
@@ -194,6 +222,8 @@ AIR_JSON_SCHEMA: dict = {
                 "modules": _arr(_MODULE),
                 "dependency_graph": _obj({"nodes": _ANY_LIST, "edges": _ANY_LIST}),
                 "unparseable_files": _ANY_LIST,
+                # Files a scan stage could not read, as {path, reason}.
+                "unreadable_files": _arr(_UNREADABLE_FILE),
                 "api_endpoints": _obj({"checked": _BOOL, "endpoints": _arr(_ENDPOINT)}),
                 "dead_code": _obj(
                     {
@@ -214,7 +244,7 @@ AIR_JSON_SCHEMA: dict = {
                     required=["checked"],
                 ),
             }
-        ), "error_handling"),
+        ), "error_handling", "unreadable_files"),
         # A repo with no commits yields {"available": False} and nothing
         # else, so `available` is the only unconditionally required key here.
         # Consumers must branch on it before reading anything below.
@@ -236,6 +266,8 @@ AIR_JSON_SCHEMA: dict = {
                 "history_depth_limited": _BOOL,
                 "hotspots": _ANY_LIST,
                 "recently_updated": _ANY_LIST,
+                # Why git data is missing when available is false (no repository, no commits yet).
+                "reason": _STR,
             },
             required=["available"],
         ),
@@ -249,8 +281,14 @@ AIR_JSON_SCHEMA: dict = {
                         "history_findings": _ANY_LIST,
                     }
                 ),
-                "dependency_vulnerabilities": _obj({"checked": _BOOL, "findings": _ANY_LIST}),
-                "dependency_licenses": _obj({"checked": _BOOL, "findings": _ANY_LIST}),
+                "dependency_vulnerabilities": _obj(
+                    {"checked": _BOOL, "findings": _ANY_LIST, **_DEPENDENCY_CHECK_OPTIONAL},
+                    required=["checked", "findings"],
+                ),
+                "dependency_licenses": _obj(
+                    {"checked": _BOOL, "findings": _ANY_LIST, **_DEPENDENCY_CHECK_OPTIONAL},
+                    required=["checked", "findings"],
+                ),
                 "static_analysis": _obj(
                     {
                         "checked": _BOOL,

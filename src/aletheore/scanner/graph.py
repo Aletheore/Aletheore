@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import posixpath
 import re
 import stat
 import xml.etree.ElementTree as ET
@@ -1086,27 +1087,125 @@ def _load_go_module_prefix(repo_path: Path) -> str | None:
     return None
 
 
-def _load_go_modules(repo_path: Path) -> tuple[tuple[str, str], ...]:
+def _go_directives(text: str, keyword: str) -> list[list[str]]:
+    """Token lists of every `keyword` directive in a go.mod / go.work file, single-line
+    (`use ./a`) and block (`use ( ... )`) form alike, comments and quotes removed."""
+    directives: list[list[str]] = []
+    in_block = False
+    for raw in text.splitlines():
+        line = raw.split("//", 1)[0].strip()
+        if not line:
+            continue
+        if in_block:
+            if line.startswith(")"):
+                in_block = False
+            else:
+                directives.append([t.strip('"`') for t in line.split()])
+            continue
+        parts = line.split()
+        if parts[0] != keyword:
+            continue
+        rest = line[len(keyword):].strip()
+        if rest == "(":
+            in_block = True
+        elif rest:
+            directives.append([t.strip('"`') for t in rest.split()])
+    return directives
+
+
+def _go_local_dir(repo_path: Path, base_rel_dir: str, target: str) -> str | None:
+    """Repo-relative POSIX dir for a local path in a go.work `use` / go.mod `replace`
+    (relative to the file that names it), or None when it points outside the repo."""
+    if not (target.startswith(("./", "../", ".\\", "..\\")) or target in (".", "..")):
+        return None
+    joined = posixpath.normpath(posixpath.join(base_rel_dir, target.replace("\\", "/")))
+    if joined == ".." or joined.startswith("../") or posixpath.isabs(joined):
+        return None
+    return joined
+
+
+def _load_go_modules(repo_path: Path) -> tuple[tuple, ...]:
     """Every Go module in the repository as (module path, repo-relative dir),
-    longest module path first. A repo can hold several modules (a go.mod in a
+    longest module path first. A local `replace` is a third element, the directory
+    whose files it applies to ("." for go.work and the root go.mod), because Go applies
+    a go.mod's replaces to that module only. A repo can hold several modules (a go.mod in a
     subdirectory, several side by side, or a go.work listing them); go.mod
-    files are found at any depth, skipping vendored and ignored directories."""
+    files are found at any depth, skipping vendored and ignored directories.
+    Directories a go.work `use`s are added even when discovery skipped them, and
+    a `replace` that points a module path at a local directory maps that path to
+    the directory (the imports name the replaced path)."""
     from aletheore.manifests import discover_manifests
 
-    modules: list[tuple[str, str]] = []
+    modules: dict[str, str] = {}
+    replaces: dict[tuple[str, str], str] = {}
+    go_files: list[tuple[str, str]] = []  # (repo-relative dir, "go.mod" | "go.work")
+
+    def add(module_path: str, rel_dir: str) -> None:
+        modules.setdefault(module_path.strip('"'), rel_dir)
+
     discovery = discover_manifests(repo_path)
     for rel_dir in discovery["dirs"]:
-        if "go.mod" not in discovery["files"][rel_dir]:
-            continue
+        names = discovery["files"][rel_dir]
         directory = repo_path if rel_dir == "." else repo_path / rel_dir
-        module_path = _load_go_module_prefix(directory)
-        if module_path:
-            modules.append((module_path.strip('"'), rel_dir))
-    modules.sort(key=lambda item: (-len(item[0]), item[1]))
-    return tuple(modules)
+        if "go.mod" in names:
+            go_files.append((rel_dir, "go.mod"))
+            module_path = _load_go_module_prefix(directory)
+            if module_path:
+                add(module_path, rel_dir)
+    # go.work is not a manifest file; look for it at the root, where Go requires it
+    # to live for the workspace to apply.
+    if (repo_path / "go.work").is_file():
+        go_files.append((".", "go.work"))
+
+    for rel_dir, name in list(go_files):
+        directory = repo_path if rel_dir == "." else repo_path / rel_dir
+        text = read_text_lenient(directory / name)
+        if name == "go.work":
+            for tokens in _go_directives(text, "use"):
+                used = _go_local_dir(repo_path, rel_dir, tokens[0]) if tokens else None
+                if used is None:
+                    continue
+                used_dir = repo_path if used == "." else repo_path / Path(*used.split("/"))
+                module_path = _load_go_module_prefix(used_dir) if (used_dir / "go.mod").is_file() else None
+                if module_path:
+                    add(module_path, used)
+        for tokens in _go_directives(text, "replace"):
+            if "=>" not in tokens:
+                continue
+            arrow = tokens.index("=>")
+            if arrow < 1 or arrow + 1 >= len(tokens):
+                continue
+            local = _go_local_dir(repo_path, rel_dir, tokens[arrow + 1])
+            if local is None:
+                continue
+            local_dir = repo_path if local == "." else repo_path / Path(*local.split("/"))
+            if local_dir.is_dir():
+                replaces.setdefault((tokens[0].strip('"'), "*" if name == "go.work" else rel_dir), local)
+                inner = _load_go_module_prefix(local_dir) if (local_dir / "go.mod").is_file() else None
+                if inner:
+                    add(inner, local)
+
+    entries = [(path, rel_dir) for path, rel_dir in modules.items()]
+    entries.extend((path, local, scope) for (path, scope), local in replaces.items())
+    return tuple(sorted(entries, key=lambda item: (-len(item[0]), item[2:] != ("*",), item[1], item[2:])))
 
 
-def _resolve_go_import(repo_path: Path, module_prefix, import_path: str) -> list[str]:
+def _go_replace_applies(scope: str, from_rel: str | None, module_prefix=()) -> bool:
+    """A replace declared in the go.mod at `scope` applies to files of that module: under its
+    directory and not under a deeper module of their own. "*" (go.work) applies everywhere."""
+    if scope == "*" or from_rel is None:
+        return True
+    if scope != "." and not from_rel.startswith(scope + "/"):
+        return False
+    for entry in module_prefix:
+        inner = entry[1]
+        if len(entry) == 2 and inner != scope and inner != "." and from_rel.startswith(inner + "/"):
+            if scope == "." or inner.startswith(scope + "/"):
+                return False
+    return True
+
+
+def _resolve_go_import(repo_path: Path, module_prefix, import_path: str, from_rel: str | None = None) -> list[str]:
     # Go doesn't import individual files, it imports whole packages (directories) - every
     # non-test .go file in that directory is part of what gets pulled in, so one import
     # statement can fan out to several edges. An import that doesn't start with the
@@ -1128,9 +1227,10 @@ def _resolve_go_import(repo_path: Path, module_prefix, import_path: str) -> list
         )
     else:
         candidates = [
-            (path, rel_dir)
-            for path, rel_dir in module_prefix
-            if import_path == path or import_path.startswith(path.rstrip("/") + "/")
+            (entry[0], entry[1])
+            for entry in module_prefix
+            if (import_path == entry[0] or import_path.startswith(entry[0].rstrip("/") + "/"))
+            and (len(entry) < 3 or _go_replace_applies(entry[2], from_rel, module_prefix))
         ]
     if not candidates:
         return []
@@ -3334,6 +3434,211 @@ def _load_js_workspaces(repo_path: Path) -> dict[str, str]:
     return found
 
 
+def _strip_jsonc(text: str) -> str:
+    """JSON with comments and trailing commas (tsconfig.json's dialect) as plain JSON."""
+    text = text.lstrip("﻿")
+    out: list[str] = []
+    i, n = 0, len(text)
+    in_string = False
+    while i < n:
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == '"':
+                in_string = False
+            i += 1
+        elif ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+        elif text.startswith("//", i):
+            while i < n and text[i] not in "\r\n":
+                i += 1
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = n if end == -1 else end + 2
+        else:
+            out.append(ch)
+            i += 1
+    stripped = "".join(out)
+    # Trailing commas: a comma whose next non-space character closes an object or array.
+    result: list[str] = []
+    in_string = False
+    i, n = 0, len(stripped)
+    while i < n:
+        ch = stripped[i]
+        if in_string:
+            result.append(ch)
+            if ch == "\\" and i + 1 < n:
+                result.append(stripped[i + 1])
+                i += 2
+                continue
+            if ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+            result.append(ch)
+        elif ch == ",":
+            j = i + 1
+            while j < n and stripped[j] in " \t\r\n":
+                j += 1
+            if j >= n or stripped[j] not in "}]":
+                result.append(ch)
+        else:
+            result.append(ch)
+        i += 1
+    return "".join(result)
+
+
+def _read_tsconfig(path: Path) -> dict | None:
+    try:
+        data = json.loads(_strip_jsonc(read_text_lenient(path)))
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _tsconfig_extends_targets(config_dir: Path, value) -> list[Path]:
+    """Config files named by an `extends` value (a string, or a list since TS 5.0).
+    Only relative and absolute paths are followed; a bare package name lives in
+    node_modules, which is never scanned."""
+    if isinstance(value, str):
+        names = [value]
+    elif isinstance(value, list):
+        names = [v for v in value if isinstance(v, str)]
+    else:
+        names = []
+    targets: list[Path] = []
+    for name in names:
+        if not (name.startswith(".") or os.path.isabs(name)):
+            continue
+        base = Path(os.path.normpath(config_dir / name))
+        for candidate in (base, base.with_name(base.name + ".json")):
+            if candidate.is_file():
+                targets.append(candidate)
+                break
+    return targets
+
+
+def _effective_ts_options(path: Path, top_dir: Path, seen: frozenset, depth: int = 0) -> dict:
+    """{"base_url", "paths", "paths_dir"} of one tsconfig after resolving `extends`
+    (a child's baseUrl / paths replace the parent's wholesale, as in TypeScript)."""
+    options: dict = {"base_url": None, "paths": None, "paths_dir": None}
+    key = os.path.normcase(str(path))
+    if key in seen or depth > 10:
+        return options
+    data = _read_tsconfig(path)
+    if data is None:
+        return options
+    config_dir = path.parent
+    template = top_dir.as_posix()
+    for parent in _tsconfig_extends_targets(config_dir, data.get("extends")):
+        inherited = _effective_ts_options(parent, top_dir, seen | {key}, depth + 1)
+        for field in ("base_url", "paths", "paths_dir"):
+            if inherited[field] is not None:
+                options[field] = inherited[field]
+    compiler = data.get("compilerOptions")
+    if isinstance(compiler, dict):
+        base_url = compiler.get("baseUrl")
+        if isinstance(base_url, str):
+            options["base_url"] = os.path.normpath(config_dir / base_url.replace("${configDir}", template))
+        paths = compiler.get("paths")
+        if isinstance(paths, dict):
+            options["paths"] = {
+                pattern: [t.replace("${configDir}", template) for t in targets if isinstance(t, str)]
+                for pattern, targets in paths.items()
+                if isinstance(pattern, str) and isinstance(targets, list)
+            }
+            options["paths_dir"] = str(config_dir)
+    return options
+
+
+def _load_ts_aliases(repo_path: Path) -> list[dict]:
+    """One entry per tsconfig.json / jsconfig.json that defines `paths` or `baseUrl`
+    (its own or inherited through `extends`), deepest directory first:
+    {"dir": repo-relative dir, "base_url": absolute dir or None,
+     "paths": [(pattern, [absolute target paths])]}. A file is resolved against the
+    configs in its own ancestor directories, so a package's tsconfig wins over the root's."""
+    from aletheore.manifests import discover_named_files
+
+    scopes: list[dict] = []
+    seen_dirs: set[str] = set()
+    found = discover_named_files(repo_path, frozenset({"tsconfig.json", "jsconfig.json"}))
+    # tsconfig.json wins over jsconfig.json in the same directory.
+    found.sort(key=lambda rel: (rel.count("/"), rel.endswith("jsconfig.json"), rel))
+    for rel in found:
+        rel_dir = rel.rpartition("/")[0] or "."
+        if rel_dir in seen_dirs:
+            continue
+        config_path = repo_path / Path(*rel.split("/"))
+        options = _effective_ts_options(config_path, config_path.parent, frozenset())
+        if options["base_url"] is None and not options["paths"]:
+            continue
+        seen_dirs.add(rel_dir)
+        paths_root = options["base_url"] or options["paths_dir"]
+        entries = []
+        for pattern, targets in (options["paths"] or {}).items():
+            entries.append((pattern, [os.path.normpath(os.path.join(paths_root, t)) for t in targets]))
+        scopes.append({"dir": rel_dir, "base_url": options["base_url"], "paths": entries})
+    scopes.sort(key=lambda scope: (-(0 if scope["dir"] == "." else scope["dir"].count("/") + 1), scope["dir"]))
+    return scopes
+
+
+def _alias_file(repo_path: Path, base: str) -> str | None:
+    """The repo file an alias target names: as written, with a JS-family extension
+    added, or as a directory's index file. Never inside node_modules."""
+    candidates = [base]
+    candidates.extend(base + ext for ext in JS_FAMILY_EXTENSIONS)
+    candidates.extend(os.path.join(base, "index" + ext) for ext in JS_FAMILY_EXTENSIONS)
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            rel = _rel(repo_path, Path(candidate))
+            if rel is not None and "node_modules" not in rel.split("/"):
+                return rel
+    return None
+
+
+def _match_ts_pattern(pattern: str, spec: str) -> str | None:
+    """The text a `*` in the pattern stands for ("" with no star), or None if no match."""
+    if "*" not in pattern:
+        return "" if pattern == spec else None
+    prefix, _, suffix = pattern.partition("*")
+    if len(spec) >= len(prefix) + len(suffix) and spec.startswith(prefix) and spec.endswith(suffix):
+        return spec[len(prefix): len(spec) - len(suffix)]
+    return None
+
+
+def _resolve_ts_alias(repo_path: Path, from_file: Path, spec: str, scopes: list[dict]) -> str | None:
+    from_rel = _rel(repo_path, from_file)
+    if from_rel is None:
+        return None
+    for scope in scopes:
+        scope_dir = scope["dir"]
+        if scope_dir != "." and not from_rel.startswith(scope_dir + "/"):
+            continue
+        best = None
+        for pattern, targets in scope["paths"]:
+            star = _match_ts_pattern(pattern, spec)
+            prefix_len = len(pattern.partition("*")[0])
+            if star is not None and (best is None or prefix_len > best[0]):
+                best = (prefix_len, star, targets)
+        if best is not None:
+            _, star, targets = best
+            for target in targets:
+                hit = _alias_file(repo_path, target.replace("*", star, 1))
+                if hit:
+                    return hit
+        if scope["base_url"] and not spec.startswith("/"):
+            hit = _alias_file(repo_path, os.path.normpath(os.path.join(scope["base_url"], spec)))
+            if hit:
+                return hit
+    return None
+
+
 _BUILD_OUTPUT_DIRS = ("dist", "build", "out", "lib", "esm", "cjs", "types")
 
 
@@ -3444,9 +3749,18 @@ def _resolve_js_workspace_import(
 
 
 def _resolve_js_import(
-    repo_path: Path, from_file: Path, spec: str, js_workspaces: dict[str, str] | None = None
+    repo_path: Path,
+    from_file: Path,
+    spec: str,
+    js_workspaces: dict[str, str] | None = None,
+    ts_aliases: list[dict] | None = None,
 ) -> str | None:
     if not spec.startswith("."):
+        # tsconfig `paths` / `baseUrl` win over a same-named package, as in TypeScript.
+        if ts_aliases and not spec.startswith("/"):
+            hit = _resolve_ts_alias(repo_path, from_file, spec, ts_aliases)
+            if hit is not None:
+                return hit
         if js_workspaces and not spec.startswith("/"):
             return _resolve_js_workspace_import(repo_path, spec, js_workspaces)
         return None
@@ -3479,6 +3793,7 @@ def _extract_module(
     csharp_implicit_usings: dict[Path, list[str]] | None = None,
     swift_target_files: dict[str, list[Path]] | None = None,
     js_workspaces: dict[str, str] | None = None,
+    ts_aliases: list[dict] | None = None,
 ) -> dict:
     """Turns one already-parsed (tree, source) into a module dict - the
     per-language dispatch every file eventually goes through, whether it
@@ -3550,7 +3865,7 @@ def _extract_module(
     elif language_name == "go":
         raw_imports, functions, classes = _extract_go(tree.root_node, source)
         for spec in raw_imports:
-            for target in _resolve_go_import(repo_path, go_module_prefix, spec):
+            for target in _resolve_go_import(repo_path, go_module_prefix, spec, rel_path):
                 if target != rel_path:
                     resolved_imports.append(target)
     elif language_name == "rust":
@@ -3654,7 +3969,7 @@ def _extract_module(
     else:
         raw_imports, functions, classes = _extract_javascript(tree.root_node, source)
         for spec in raw_imports:
-            target = _resolve_js_import(repo_path, path, spec, js_workspaces)
+            target = _resolve_js_import(repo_path, path, spec, js_workspaces, ts_aliases)
             # Same target != rel_path guard every other language branch
             # already has - see the Python branch's comment above (audit
             # finding 35). A JS file require()-ing or importing its own
@@ -3696,6 +4011,7 @@ def _parse_and_extract_one(
     has_rust_crate_root: bool,
     php_psr4_map: dict[str, Path],
     js_workspaces: dict[str, str] | None = None,
+    ts_aliases: list[dict] | None = None,
 ) -> dict:
     """Reads, parses, and extracts one file - java/csharp excluded by
     construction (see build_module_graph: only non-java/csharp paths ever
@@ -3715,6 +4031,7 @@ def _parse_and_extract_one(
         has_rust_crate_root=has_rust_crate_root,
         php_psr4_map=php_psr4_map,
         js_workspaces=js_workspaces,
+        ts_aliases=ts_aliases,
     )
 
 
@@ -3761,6 +4078,7 @@ def _init_worker(
     has_rust_crate_root: bool,
     php_psr4_map: dict[str, Path],
     js_workspaces: dict[str, str] | None = None,
+    ts_aliases: list[dict] | None = None,
 ) -> None:
     _worker_state["repo_path"] = repo_path
     _worker_state["python_source_roots"] = python_source_roots
@@ -3768,6 +4086,7 @@ def _init_worker(
     _worker_state["has_rust_crate_root"] = has_rust_crate_root
     _worker_state["php_psr4_map"] = php_psr4_map
     _worker_state["js_workspaces"] = js_workspaces
+    _worker_state["ts_aliases"] = ts_aliases
     # One Parser per worker process, reused across every file that worker
     # ever handles - not recreated per file, same discipline the sequential
     # path's own single `parser` variable already follows today.
@@ -3801,6 +4120,7 @@ def _worker_parse_and_extract_one(path: Path) -> tuple[bool, dict]:
             _worker_state["has_rust_crate_root"],
             _worker_state["php_psr4_map"],
             _worker_state.get("js_workspaces"),
+            _worker_state.get("ts_aliases"),
         )
     except OSError as exc:
         return False, {
@@ -3944,6 +4264,7 @@ def _parse_many_in_parallel(
     has_rust_crate_root: bool,
     php_psr4_map: dict[str, Path],
     js_workspaces: dict[str, str] | None = None,
+    ts_aliases: list[dict] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     # map (not submit+as_completed) so results come back in input order - not
     # load-bearing for correctness (module/edge order was already unasserted
@@ -3953,7 +4274,7 @@ def _parse_many_in_parallel(
         _worker_parse_and_extract_one,
         paths,
         initializer=_init_worker,
-        initargs=(repo_path, python_source_roots, go_module_prefix, has_rust_crate_root, php_psr4_map, js_workspaces),
+        initargs=(repo_path, python_source_roots, go_module_prefix, has_rust_crate_root, php_psr4_map, js_workspaces, ts_aliases),
     )
     if not complete:
         # Workers kept dying even one at a time, so these files were never
@@ -4096,6 +4417,7 @@ def build_module_graph(
 
     php_psr4_map = _load_php_psr4_map(repo_path)
     js_workspaces = _load_js_workspaces(repo_path)
+    ts_aliases = _load_ts_aliases(repo_path)
 
     # Same reasoning and mechanism as Java's pre-pass above - C# has no repo-root
     # config either, and namespace-mirrors-directory is only a convention here, not
@@ -4249,6 +4571,7 @@ def build_module_graph(
             has_rust_crate_root,
             php_psr4_map,
             js_workspaces,
+            ts_aliases,
         )
         modules.extend(parsed_modules)
         unparseable.extend(parse_failures)
@@ -4264,6 +4587,7 @@ def build_module_graph(
                     has_rust_crate_root,
                     php_psr4_map,
                     js_workspaces,
+                    ts_aliases,
                 )
             except OSError as exc:
                 # Same reasoning as the pre-pass loops above.

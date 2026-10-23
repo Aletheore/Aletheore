@@ -57,8 +57,10 @@ from aletheore import skill_hub
 from rich.markup import escape as escape_markup
 from aletheore.sentry_reporting import init_cli_sentry
 from aletheore.evidence import (
+    EvidenceWriteError,
     IncompatibleEvidenceVersionError,
     MalformedEvidenceError,
+    check_evidence_writable,
     load_evidence,
     load_evidence_file,
     scan_repository,
@@ -644,6 +646,14 @@ def _resolve_bearer_toggle(check_bearer: bool | None) -> bool:
     return _confirm("Include Bearer in this scan? [y/N]: ")
 
 
+def _os_error_text(exc: Exception) -> str:
+    """A short lowercase reason for an OSError (or a decode error), without the file name
+    the caller already prints."""
+    if isinstance(exc, OSError):
+        return (exc.strerror or exc.__class__.__name__).lower()
+    return str(exc)
+
+
 def _scan(
     repo_path: str,
     check_vulnerabilities: bool | None,
@@ -674,6 +684,14 @@ def _scan(
     # annoying than useful. Plain opt-in flag only.
     resolved_joern = resolved_static_analysis and bool(check_joern)
 
+    if repo.is_dir():
+        # A read-only folder fails here, in a second, instead of after the scan.
+        try:
+            check_evidence_writable(repo)
+        except EvidenceWriteError as exc:
+            _stderr_console.print(f"[bold red]error:[/bold red] {escape_markup(str(exc))}")
+            return 1, {}, repo
+
     _stderr_console.print(f"Scanning {repo}...")
     try:
         evidence = scan_repository(
@@ -691,8 +709,20 @@ def _scan(
     except GitAnalysisError as exc:
         console.print(f"[bold red]error:[/bold red] {exc}")
         return GIT_ANALYSIS_RESOURCE_EXIT_CODE, {}, repo
-    evidence_path = write_evidence(evidence, repo)
-    snapshot_path = save_snapshot(evidence, repo)
+    try:
+        evidence_path = write_evidence(evidence, repo)
+    except EvidenceWriteError as exc:
+        _stderr_console.print(f"[bold red]error:[/bold red] {escape_markup(str(exc))}")
+        return 1, {}, repo
+    try:
+        snapshot_path = save_snapshot(evidence, repo)
+    except OSError as exc:
+        _stderr_console.print(
+            f"[bold red]error:[/bold red] evidence was written to {escape_markup(str(evidence_path))} but the "
+            f"snapshot could not be saved to {escape_markup(str(repo / '.aletheore' / 'history'))}: "
+            f"{escape_markup((exc.strerror or exc.__class__.__name__).lower())}"
+        )
+        return 1, {}, repo
     result_lines = [f"Evidence written to {evidence_path}", f"Snapshot saved to {snapshot_path}"]
     if evidence.get("security", {}).get("secrets", {}).get("history_scan_timed_out"):
         result_lines.append(
@@ -762,11 +792,22 @@ def _audit(
         console.print(f"[bold red]error:[/bold red] {exc}")
         console.print(f"Evidence is still available at {evidence_path} for manual use.")
         return 1
+    except OSError as exc:
+        _stderr_console.print(f"[bold red]error:[/bold red] could not write the audit report: {escape_markup(_os_error_text(exc))}")
+        console.print(f"Evidence is still available at {evidence_path} for manual use.")
+        return 1
 
     report_file = Path(report_path)
-    report_text = report_file.read_text(encoding="utf-8")
-    verification_section = citation_verification_section(report_text, repo)
-    report_file.write_text(report_text + verification_section, encoding="utf-8")
+    try:
+        report_text = report_file.read_text(encoding="utf-8")
+        verification_section = citation_verification_section(report_text, repo)
+        report_file.write_text(report_text + verification_section, encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        _stderr_console.print(
+            f"[bold red]error:[/bold red] could not update {escape_markup(str(report_file))}: "
+            f"{escape_markup(_os_error_text(exc))}"
+        )
+        return 1
 
     result_lines = [f"Report written to {report_path}"]
     if "could not be verified" in verification_section:
@@ -825,7 +866,15 @@ def _managed_audit(
         return 1
 
     report_path = repo / ".aletheore" / "audit-report.md"
-    report_path.write_text(report_text, encoding="utf-8")
+    try:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(report_text, encoding="utf-8")
+    except OSError as exc:
+        _stderr_console.print(
+            f"[bold red]error:[/bold red] could not write {escape_markup(str(report_path))}: "
+            f"{escape_markup(_os_error_text(exc))}"
+        )
+        return 1
     _print_result("Managed audit complete", [f"Report written to {report_path}"])
     return 0
 
@@ -1879,34 +1928,39 @@ def _mcp_install(path: str, targets: list[str], yes: bool = False) -> int:
     written: set[str] = set()
     failed: list[str] = []
     for target in selected:
-        if target == "codex-cli":
-            config_path = repo_path / ".codex" / "config.toml"
-            entry = {"command": _aletheore_command(), "args": ["mcp", str(repo_path)]}
-            message, security_skip = _write_toml_mcp_client_config(
-                config_path, "mcp_servers", entry, repo_path=repo_path
-            )
-        elif target == "claude-desktop":
-            config_path = _claude_desktop_config_path()
-            if config_path is None:
-                message, security_skip = "skipped (Claude Desktop is only available on macOS and Windows)", False
-            else:
-                entry = _stdio_entry(repo_path, include_type=False)
-                # Global file shared across every project on this machine -
-                # unlike every other target's per-repo file, keying this
-                # entry as plain "aletheore" would mean installing for a
-                # second repo silently overwrites the first repo's entry
-                # under the same key. See _claude_desktop_server_name.
-                message, security_skip = _write_json_mcp_client_config(
-                    config_path, "mcpServers", entry,
-                    server_name=_claude_desktop_server_name(repo_path),
+        config_path = None
+        try:
+            if target == "codex-cli":
+                config_path = repo_path / ".codex" / "config.toml"
+                entry = {"command": _aletheore_command(), "args": ["mcp", str(repo_path)]}
+                message, security_skip = _write_toml_mcp_client_config(
+                    config_path, "mcp_servers", entry, repo_path=repo_path
                 )
-        else:
-            relative_path, top_level_key, entry_builder = _MCP_CLIENT_CONFIGS[target]
-            config_path = repo_path / relative_path
-            entry = entry_builder(repo_path)
-            message, security_skip = _write_json_mcp_client_config(
-                config_path, top_level_key, entry, repo_path=repo_path
-            )
+            elif target == "claude-desktop":
+                config_path = _claude_desktop_config_path()
+                if config_path is None:
+                    message, security_skip = "skipped (Claude Desktop is only available on macOS and Windows)", False
+                else:
+                    entry = _stdio_entry(repo_path, include_type=False)
+                    # Global file shared across every project on this machine -
+                    # unlike every other target's per-repo file, keying this
+                    # entry as plain "aletheore" would mean installing for a
+                    # second repo silently overwrites the first repo's entry
+                    # under the same key. See _claude_desktop_server_name.
+                    message, security_skip = _write_json_mcp_client_config(
+                        config_path, "mcpServers", entry,
+                        server_name=_claude_desktop_server_name(repo_path),
+                    )
+            else:
+                relative_path, top_level_key, entry_builder = _MCP_CLIENT_CONFIGS[target]
+                config_path = repo_path / relative_path
+                entry = entry_builder(repo_path)
+                message, security_skip = _write_json_mcp_client_config(
+                    config_path, top_level_key, entry, repo_path=repo_path
+                )
+        except OSError as exc:
+            where = f" {config_path}" if config_path is not None else ""
+            message, security_skip = f"skipped (could not write{where}: {_os_error_text(exc)})", False
         any_security_skip = any_security_skip or security_skip
         console.print(f"[bold green]{target}[/bold green]: {escape(message)}")
         if message.startswith(("wrote ", "updated ")):
@@ -2613,7 +2667,14 @@ def init(
         "disabled_checks": [],
         "severity_threshold": None,
     }
-    config_path.write_text(json.dumps(default_config, indent=2) + "\n", encoding="utf-8")
+    try:
+        config_path.write_text(json.dumps(default_config, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        _stderr_console.print(
+            f"[bold red]error:[/bold red] could not write {escape_markup(str(config_path))}: "
+            f"{escape_markup(_os_error_text(exc))}"
+        )
+        raise typer.Exit(code=1)
     console.print(f"[bold green]Wrote {config_path}[/bold green]")
     # A Table (not console.print per key) so a description that wraps to a
     # second line lands under the key column instead of the terminal's left

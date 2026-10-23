@@ -51,6 +51,12 @@ _ESCAPING_PATTERN = re.compile(
     r"`?(?<![\w./-])((?:\.\./)+[\w./-]+|\.\.|/(?:[\w.-]+/)*[A-Za-z_.][\w.-]*):(\d+)(?:-(\d+))?`?"
 )
 
+# Windows-style citations (`app\util.py:5`, `C:\repo\a.py:3`, `..\..\x:1`): the path part,
+# which must contain a backslash, is rewritten with forward slashes before the
+# patterns above run, so the existing inside-the-repo and outside-the-repo rules
+# apply to it unchanged. A drive letter or UNC prefix becomes an absolute path.
+_BACKSLASH_PATH_PATTERN = re.compile(r"(?<![\w.\\/-])((?:\\\\\?\\)?(?:[A-Za-z]:)?(?:\\\\)?[\w.\-]*(?:\\[\w.\-]+)+):(?=\d)")
+
 # URLs are not citations: `http://x.com/a.py:5` must not become `//x.com/a.py:5`.
 _URL_PATTERN = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://[^\s`)>\]]+")
 
@@ -152,6 +158,7 @@ def extract_citations(report_text: str, known_paths: set[str] | None = None) -> 
     citations = []
     seen: set[tuple[str, int, int | None]] = set()
     report_text = _URL_PATTERN.sub(lambda m: " " * len(m.group(0)), report_text)
+    report_text = _BACKSLASH_PATH_PATTERN.sub(lambda m: m.group(1).replace("\\", "/") + ":", report_text)
 
     patterns = [_CITATION_PATTERN, _ESCAPING_PATTERN]
     if known_paths:
