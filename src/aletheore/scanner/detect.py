@@ -599,6 +599,24 @@ def _package_name(directory: Path, file_names: list[str]) -> str | None:
     return None
 
 
+# Directories whose manifests belong to documentation, samples or test support rather
+# than to a package of the project, so a docs/requirements.txt next to the root
+# manifest does not make a plain repository a monorepo. Matched on any path
+# segment, case-insensitively. Declared workspaces are unaffected (they are a
+# monorepo by declaration).
+NON_PROJECT_DIR_NAMES = frozenset(
+    {
+        "docs", "doc", "documentation", "examples", "example", "samples", "sample",
+        "demo", "demos", "tests", "test", "__tests__", "spec", "specs", "fixtures",
+        "__fixtures__", "testdata", "benchmarks", "benchmark",
+    }
+)
+
+
+def _is_non_project_dir(rel_dir: str) -> bool:
+    return any(part.lower() in NON_PROJECT_DIR_NAMES for part in rel_dir.split("/"))
+
+
 def detect_monorepo(repo_path: Path) -> dict:
     """{"detected", "workspaces", ...} plus additive fields:
 
@@ -606,7 +624,9 @@ def detect_monorepo(repo_path: Path) -> dict:
     "ecosystems", "name"?}, "." for the root), `reason`, and `manifests_truncated`
     when the manifest discovery cap was hit. A repository is a monorepo when it
     declares workspaces (package.json "workspaces", pnpm/lerna/nx/Cargo/go.work)
-    or holds project manifests in two or more different directories.
+    or holds project manifests in two or more different directories (manifests under
+    docs/, examples/, tests/ and similar folders are listed in `packages` but do not
+    count towards that).
     """
     from aletheore.manifests import discover_manifests, is_project_manifest, manifest_ecosystems
 
@@ -643,7 +663,7 @@ def detect_monorepo(repo_path: Path) -> dict:
         if package_name:
             entry["name"] = package_name
         packages.append(entry)
-        if any(is_project_manifest(n) for n in names):
+        if any(is_project_manifest(n) for n in names) and not _is_non_project_dir(rel_dir):
             project_dirs += 1
 
     multiple = project_dirs >= 2

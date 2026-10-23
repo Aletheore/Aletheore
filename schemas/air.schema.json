@@ -63,6 +63,15 @@
       ],
       "type": "object"
     },
+    "cli_version": {
+      "type": "string"
+    },
+    "config_warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "git": {
       "properties": {
         "available": {
@@ -135,6 +144,9 @@
             "type": "object"
           },
           "type": "array"
+        },
+        "reason": {
+          "type": "string"
         },
         "recently_updated": {
           "type": "array"
@@ -620,6 +632,18 @@
             "detected": {
               "type": "boolean"
             },
+            "manifests_truncated": {
+              "type": "boolean"
+            },
+            "packages": {
+              "type": "array"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "workspaces": {
               "type": "array"
             }
@@ -634,6 +658,24 @@
           "type": "array"
         },
         "unparseable_files": {
+          "type": "array"
+        },
+        "unreadable_files": {
+          "items": {
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "reason"
+            ],
+            "type": "object"
+          },
           "type": "array"
         }
       },
@@ -667,6 +709,21 @@
             },
             "findings": {
               "type": "array"
+            },
+            "manifest_dirs": {
+              "type": "array"
+            },
+            "note": {
+              "type": "string"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "unreadable_manifest_dirs": {
+              "type": "array"
             }
           },
           "required": [
@@ -681,6 +738,21 @@
               "type": "boolean"
             },
             "findings": {
+              "type": "array"
+            },
+            "manifest_dirs": {
+              "type": "array"
+            },
+            "note": {
+              "type": "string"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "unreadable_manifest_dirs": {
               "type": "array"
             }
           },

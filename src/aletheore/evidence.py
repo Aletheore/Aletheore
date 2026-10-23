@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import tempfile
 import threading
 import time
 import warnings
@@ -51,7 +52,16 @@ from aletheore.static_analysis import check_static_analysis as run_static_analys
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.vulnerabilities import check_vulnerabilities as check_dependency_vulnerabilities
 
-EVIDENCE_VERSION = "0.8.1"
+EVIDENCE_VERSION = "0.9.0"
+
+# Earlier (major, minor) versions this build still reads, keyed by its own (major, minor).
+# A minor goes here only when the bump added optional keys and nothing else: 0.9.0 declared
+# cli_version, config_warnings, repository.unreadable_files, the extra monorepo and
+# dependency-check fields and git.reason, all optional, and every reader treats a missing
+# one as "not recorded". Anything that removes or retypes a key must not be listed.
+_READABLE_EARLIER_MINORS: dict[tuple[int, int], frozenset[tuple[int, int]]] = {
+    (0, 9): frozenset({(0, 8)}),
+}
 
 
 def _version_compatibility_key(version: str) -> tuple[int, int] | None:
@@ -88,7 +98,9 @@ def is_evidence_version_compatible(version: object) -> bool:
         return False
     current = _version_compatibility_key(EVIDENCE_VERSION)
     given = _version_compatibility_key(version)
-    return current is not None and current == given
+    if current is None or given is None:
+        return False
+    return current == given or given in _READABLE_EARLIER_MINORS.get(current, frozenset())
 
 
 class IncompatibleEvidenceVersionError(Exception):
@@ -119,6 +131,20 @@ def _evidence_write_error(aletheore_dir: Path, exc: OSError) -> EvidenceWriteErr
         + (" - make the folder writable, or scan a copy of it" if isinstance(exc, PermissionError) else ""),
         exc.errno,
     )
+
+
+def check_evidence_writable(repo_path: Path) -> None:
+    """Raises EvidenceWriteError when <repo>/.aletheore cannot be created or written
+    to. Called before a scan starts so a read-only folder fails in a second, not
+    after the whole scan has run; the message is the one write_evidence gives."""
+    aletheore_dir = Path(repo_path) / ".aletheore"
+    try:
+        aletheore_dir.mkdir(parents=True, exist_ok=True)
+        handle, probe_name = tempfile.mkstemp(prefix=".write-check-", dir=aletheore_dir)
+        os.close(handle)
+        os.unlink(probe_name)
+    except OSError as exc:
+        raise _evidence_write_error(aletheore_dir, exc) from exc
 
 
 def load_evidence_file(evidence_path: Path) -> dict:

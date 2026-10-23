@@ -22,6 +22,7 @@ from aletheore.adapters.base import AgentAdapter
 from aletheore.answer import answer_question
 from aletheore.credentials import get_api_key
 from aletheore.evidence import (
+    EvidenceWriteError,
     IncompatibleEvidenceVersionError,
     MalformedEvidenceError,
     load_evidence_file,
@@ -30,6 +31,7 @@ from aletheore.evidence import (
 )
 from aletheore.healthcheck import run_healthcheck, save_healthcheck
 from aletheore.history import compute_diff, list_snapshots, save_snapshot
+from aletheore.mcp_arguments import describe_arguments
 from aletheore.managed_audit_client import run_managed_audit_request
 from aletheore.mcp_budget import BudgetError, apply_budget, budget_chars
 from aletheore.query import (
@@ -1411,8 +1413,14 @@ def _register_scan_tool(
                 check_licenses=check_licenses,
                 map_endpoints=map_endpoints,
             )
-            write_evidence(evidence, repo_path)
-            save_snapshot(evidence, repo_path)
+            try:
+                write_evidence(evidence, repo_path)
+                save_snapshot(evidence, repo_path)
+            except OSError as exc:
+                # A read-only .aletheore/ is the caller's environment, not a server fault:
+                # say what to fix instead of surfacing a raw exception.
+                reason = str(exc) if isinstance(exc, EvidenceWriteError) else f"cannot save the scan: {exc}"
+                return _error_result({"error": reason})
         if after_scan is not None:
             # After the lock is released: the first scan on a fresh repository is
             # what gives the watcher evidence to keep current.
@@ -1755,7 +1763,7 @@ def build_server(
         decorator = register_tool(*args, **kwargs)
 
         def register(fn):
-            return decorator(_flag_error_results(fn))
+            return decorator(describe_arguments(kwargs.get("name") or fn.__name__, _flag_error_results(fn)))
 
         return register
 
