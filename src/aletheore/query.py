@@ -1,6 +1,6 @@
 import re
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from aletheore.evidence_resolution import resolve_code_evidence
@@ -460,6 +460,72 @@ def find_symbol_path(
 
 def find_dead_code_evidence(evidence: dict, target: str | None) -> dict:
     return evidence["repository"]["dead_code"]
+
+
+# Display caps for find_unimported_modules. Every total is counted over the whole scope first; only the lists
+# are cut, and a *_truncated flag says so (the find_blast_radius lesson).
+_UNIMPORTED_MAX_LISTED = 80
+_UNIMPORTED_MAX_TEST_ONLY = 20
+
+_UNIMPORTED_DEFINITION = (
+    "unimported = no other module in the scan's import graph imports the file; test files and __init__.py are "
+    "never listed. This is not dead_code.unreachable_modules, which also drops entry points, main-guard scripts "
+    "and files named by a dotted string (settings, URLconfs), so it lists fewer files."
+)
+
+
+def find_unimported_modules(
+    evidence: dict,
+    scope: str | None = None,
+    languages: list[str] | None = None,
+    ignore_test_importers: bool = False,
+) -> dict:
+    """Modules that no other module imports, optionally limited to a directory (or one file) and languages.
+
+    The scan's own dead_code.unreachable_modules answers a different question ("is this reachable at all"):
+    it drops entry points, main-guard scripts and dotted-string references, and it is repo-wide. This reads
+    the raw imported_by edges instead, so "which files under X does nothing import" is exact. Test files are
+    not candidates; a file imported only by tests is reported separately, since whether that counts as
+    imported depends on the question. With `ignore_test_importers` (a "non-test" question) such a file counts
+    as unimported and the separate list is empty.
+    """
+    prefix = (scope or "").strip("/")
+    wanted = {lang.lower() for lang in languages or []}
+    unimported: list[str] = []
+    tests_only: list[str] = []
+    for module in evidence["repository"]["modules"]:
+        path = module.get("path") or ""
+        if prefix and path != prefix and not path.startswith(prefix + "/"):
+            continue
+        if wanted and str(module.get("language") or "").lower() not in wanted:
+            continue
+        if _BLAST_TEST_PATH.search(path) or PurePosixPath(path).name.startswith("__init__."):
+            continue
+        importers = module.get("imported_by") or []
+        if not importers:
+            unimported.append(path)
+        elif all(_BLAST_TEST_PATH.search(p) for p in importers):
+            (unimported if ignore_test_importers else tests_only).append(path)
+    unimported.sort()
+    tests_only.sort()
+    scan_unreachable = [
+        entry["path"]
+        for entry in evidence["repository"]["dead_code"].get("unreachable_modules", [])
+        if not prefix or entry["path"] == prefix or entry["path"].startswith(prefix + "/")
+    ]
+    return {
+        "scope": prefix or "(whole repo)",
+        "languages": sorted(wanted) or "any",
+        "definition": _UNIMPORTED_DEFINITION,
+        "importers_counted": "non-test only" if ignore_test_importers else "all",
+        "unimported_total": len(unimported),
+        "imported_only_by_tests_total": len(tests_only),
+        "scan_unreachable_total": len(scan_unreachable),
+        "unimported": unimported[:_UNIMPORTED_MAX_LISTED],
+        "unimported_truncated": len(unimported) > _UNIMPORTED_MAX_LISTED,
+        "imported_only_by_tests": tests_only[:_UNIMPORTED_MAX_TEST_ONLY],
+        "imported_only_by_tests_truncated": len(tests_only) > _UNIMPORTED_MAX_TEST_ONLY,
+    }
 
 
 def find_database(evidence: dict, target: str | None) -> dict:

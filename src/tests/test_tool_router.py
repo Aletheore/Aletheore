@@ -84,3 +84,58 @@ def test_answer_runs_the_query_and_names_it():
     assert none["confidence"] == "none" and none["try"]
     low = tr.answer("is it safe to rename this", None, evidence, __import__("pathlib").Path("."))
     assert low["confidence"] == "low" and "file path" in low["next"]
+
+
+_TEST_DEFINITION = (
+    "Test files are any path containing a tests/, test/ or testing/ directory, or a file named test_*.py or *_test.py, "
+    "or conftest.py."
+)
+_UNREACHABLE_QUESTION = (
+    "Under the directory `pkg/setup_wizard` (including subdirectories), list the NON-TEST Python modules, other than "
+    "__init__.py, that no other Python module in the repository imports. " + _TEST_DEFINITION + " "
+    "Answer with ONE JSON array of repo-relative paths and nothing else."
+)
+
+
+def _scoped_evidence():
+    def mod(path, imported_by=(), language="python"):
+        return {"path": path, "language": language, "imported_by": list(imported_by), "imports": []}
+
+    modules = [
+        mod("pkg/setup_wizard/__init__.py"),
+        mod("pkg/setup_wizard/run.py"),
+        mod("pkg/setup_wizard/ops/defaults.py", ["pkg/setup_wizard/tests/test_defaults.py"]),
+        mod("pkg/setup_wizard/ops/used.py", ["pkg/app.py"]),
+        mod("pkg/setup_wizard/tests/test_defaults.py"),
+        mod("pkg/setup_wizard/ui.js", language="javascript"),
+        mod("pkg/elsewhere/orphan.py"),
+        mod("pkg/app.py"),
+    ]
+    return {"repository": {"modules": modules, "dead_code": {"unreachable_modules": []}}}
+
+
+def test_a_non_test_unreachable_question_routes_to_dead_code_not_tests():
+    paths = [m["path"] for m in _scoped_evidence()["repository"]["modules"]]
+    decision = tr.route(_UNREACHABLE_QUESTION, None, paths)
+    assert (decision.confidence, decision.intent) == ("high", "dead_code")
+    assert decision.scope == "pkg/setup_wizard"
+
+
+def test_a_directory_scoped_import_question_is_answered_for_that_directory_only():
+    import pathlib
+
+    out = tr.answer(_UNREACHABLE_QUESTION, None, _scoped_evidence(), pathlib.Path("."))
+    assert out["routed_to"] == "aletheore_dead_code" and out["scope"] == "pkg/setup_wizard"
+    answer = out["answer"]
+    # Python only, test files skipped, a file imported only by its own tests still counts for a non-test question.
+    assert answer["unimported"] == ["pkg/setup_wizard/ops/defaults.py", "pkg/setup_wizard/run.py"]
+    assert answer["unimported_total"] == 2
+    assert answer["importers_counted"] == "non-test only"
+    assert "pkg/elsewhere/orphan.py" not in answer["unimported"]
+
+
+def test_test_qualifiers_and_paths_do_not_pick_the_intent():
+    assert "test" not in tr.intent_text_of(_UNREACHABLE_QUESTION).lower()
+    assert tr.route("which modules under src/api have no importers", None, PATHS).intent == "dead_code"
+    # a snake_case directory name is not an environment variable
+    assert tr.route("who owns src/api/setup_wizard", "src/api/users.py", PATHS).intent == "owner"

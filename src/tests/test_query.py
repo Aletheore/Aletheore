@@ -1,6 +1,7 @@
 import pytest
 
 from aletheore.query import (
+    find_unimported_modules,
     QUERY_FUNCTIONS,
     BranchNotFoundInEvidenceError,
     ModuleNotFoundInEvidenceError,
@@ -956,3 +957,47 @@ def test_find_symbol_path_raises_for_unknown_target_symbol(tmp_path):
         find_symbol_path(
             _symbol_path_evidence(), tmp_path, "core/util.py", "parse_config", "core/util.py", "does_not_exist"
         )
+
+
+def _unimported_evidence(extra=()):
+    def mod(path, imported_by=(), language="python"):
+        return {"path": path, "language": language, "imported_by": list(imported_by)}
+
+    modules = [
+        mod("pkg/tags/__init__.py"),
+        mod("pkg/tags/log.py"),
+        mod("pkg/tags/used.py", ["pkg/views.py"]),
+        mod("pkg/tags/only_tested.py", ["tests/test_tags.py"]),
+        mod("pkg/tags/sub/leaf.py"),
+        mod("pkg/tags/tests/test_log.py"),
+        mod("pkg/tags/widget.js", language="javascript"),
+        mod("pkg/other/orphan.py"),
+        mod("pkg/views.py"),
+        *extra,
+    ]
+    unreachable = [{"path": "pkg/views.py", "reason": "r"}, {"path": "pkg/other/orphan.py", "reason": "r"}]
+    return {"repository": {"modules": modules, "dead_code": {"unreachable_modules": unreachable}}}
+
+
+def test_find_unimported_modules_is_scoped_to_a_directory_and_skips_tests_and_init():
+    result = find_unimported_modules(_unimported_evidence(), "pkg/tags/", ["python"])
+    assert result["unimported"] == ["pkg/tags/log.py", "pkg/tags/sub/leaf.py"]
+    assert result["unimported_total"] == 2
+    assert result["imported_only_by_tests"] == ["pkg/tags/only_tested.py"]
+    assert result["scan_unreachable_total"] == 0
+    assert "unreachable_modules" in result["definition"]
+
+
+def test_find_unimported_modules_can_ignore_test_importers_and_filter_language():
+    result = find_unimported_modules(_unimported_evidence(), "pkg/tags", ignore_test_importers=True)
+    assert result["unimported"] == ["pkg/tags/log.py", "pkg/tags/only_tested.py", "pkg/tags/sub/leaf.py", "pkg/tags/widget.js"]
+    assert result["imported_only_by_tests_total"] == 0
+    assert result["importers_counted"] == "non-test only"
+    assert find_unimported_modules(_unimported_evidence(), None, ["javascript"])["unimported"] == ["pkg/tags/widget.js"]
+
+
+def test_find_unimported_modules_totals_stay_exact_when_the_list_is_capped():
+    extra = [{"path": f"big/m{i:03}.py", "language": "python", "imported_by": []} for i in range(120)]
+    result = find_unimported_modules(_unimported_evidence(extra), "big")
+    assert result["unimported_total"] == 120
+    assert len(result["unimported"]) < 120 and result["unimported_truncated"] is True

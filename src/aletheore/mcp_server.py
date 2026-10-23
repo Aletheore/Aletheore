@@ -137,10 +137,12 @@ NAV_INSTRUCTIONS = (
 )
 
 ROUTER_INSTRUCTIONS = (
-    "Aletheore code evidence through one tool. Call aletheore_ask with a plain question (and a file path as target "
-    "when you have one): what breaks if I change a file, which tests cover it, who owns it, what changes most, where "
-    "something is defined, what the repo is. It picks the right query, runs it and says which one it ran. When it "
-    "answers 'no clear match', carry on without it instead of rephrasing."
+    "Exact code evidence from a scan of the whole repo, through one tool. Prefer aletheore_ask to grep for the "
+    "shape of the code, where grep only samples: who imports a file and how many modules a change reaches, "
+    "modules in a directory that nothing imports, tests for a file, owners, churn, secrets, vulnerabilities, dead "
+    "code, layer violations, endpoints, definitions, repo overview. Give a plain question and a file or "
+    "directory as target. Counts it returns are exact even when a list is capped. On 'no clear match', carry on "
+    "without it instead of rephrasing."
 )
 
 SERVER_INSTRUCTIONS = """Aletheore is a deterministic, evidence-grounded code intelligence tool for \

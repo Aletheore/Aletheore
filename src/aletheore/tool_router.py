@@ -117,7 +117,8 @@ INTENTS: tuple[Intent, ...] = (
         "dead_code",
         "aletheore_dead_code",
         (
-            r"\bnobody (?:imports|uses|calls|references)\b", r"\bsafely delete\b", r"\bcut the fat\b", r"\bdead (?:files?|modules?|functions?)\b", r"\borphan\w*\b",r"\bdead code\b", r"\bunused (?:code|files?|modules?|functions?)\b", r"\bunreachable\b", r"\bnever (?:used|called|imported)\b", r"\bsafe to delete\b"),
+            r"\bnobody (?:imports|uses|calls|references)\b", r"\bno other (?:\w+ ){0,3}(?:modules?|files?)\b[^.?]*\bimports?\b",
+            r"\b(?:un-?imported|no importers?|zero importers?|not imported by (?:any|anything))\b", r"\bsafely delete\b", r"\bcut the fat\b", r"\bdead (?:files?|modules?|functions?)\b", r"\borphan\w*\b",r"\bdead code\b", r"\bunused (?:code|files?|modules?|functions?)\b", r"\bunreachable\b", r"\bnever (?:used|called|imported)\b", r"\bsafe to delete\b"),
         weight=1.2,
     ),
     Intent(
@@ -136,7 +137,7 @@ INTENTS: tuple[Intent, ...] = (
         "env",
         "aletheore_environment_variables",
         (
-            r"\.env\b", r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]{2,}\b", r"\bboot\w* (?:this|the)\b.*\benv\b",r"\benv(?:ironment)? (?:vars?|variables?)\b", r"\bconfig(?:uration)? (?:keys?|options?|settings?)\b", r"\bos\.environ\b", r"\bprocess\.env\b"),
+            r"\.env\b", r"(?-i:\b[A-Z][A-Z0-9]*_[A-Z0-9_]{2,}\b)", r"\bboot\w* (?:this|the)\b.*\benv\b",r"\benv(?:ironment)? (?:vars?|variables?)\b", r"\bconfig(?:uration)? (?:keys?|options?|settings?)\b", r"\bos\.environ\b", r"\bprocess\.env\b"),
     ),
     Intent(
         "database",
@@ -343,6 +344,54 @@ class Route:
     symbol: str | None = None
     reason: str = ""
     candidates: list[str] = field(default_factory=list)
+    scope: str | None = None  # a directory (or file) the question limits itself to; set for repo-wide listings
+
+
+# A test qualifier ("NON-TEST modules", "excluding tests") or a pasted definition of what a test file is ("Test
+# files are any path containing a tests/ directory ...") describes how to filter the answer. It says nothing about
+# what is being asked, but its "test" word used to win the "tests" intent over the real one.
+_TEST_QUALIFIER = re.compile(
+    r"\btest[- ]files?\s+(?:are|is|means?|include)\b.*?\.(?=\s|$)"
+    r"|\bnon[- ]?tests?\b(?:\s+files?)?"
+    r"|\b(?:excluding|excluded|ignoring|without|skipping|not counting)\s+(?:the\s+)?tests?(?:\s+files?)?\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def strip_test_qualifiers(question: str) -> str:
+    return _TEST_QUALIFIER.sub(" ", question)
+
+
+# A multi-segment path names where to look, not what to look for. Its words (a `setup/` directory, a `deploy_config`
+# file) used to score as intents of their own.
+_SLASH_PATH = re.compile(r"[\w@.+-]+(?:/[\w@.+-]+)+/?")
+
+
+def intent_text_of(question: str) -> str:
+    """The question with test qualifiers and directory-style paths removed, for intent scoring only."""
+    return _SLASH_PATH.sub(" ", strip_test_qualifiers(question))
+
+
+def resolve_scope(question: str, explicit: str | None, paths: list[str]) -> str | None:
+    """The directory the question limits itself to: an explicit target or a path in the text that is a prefix
+    of known modules. A path that is itself a module is a file target, handled by resolve_target, not a scope."""
+    known = set(paths)
+    candidates = ([explicit] if explicit else []) + _PATH_TOKEN.findall(question)
+    for token in candidates:
+        token = token.strip().strip("`'\"()[],;:").removeprefix("./").rstrip("/")
+        if not token or token in known:
+            continue
+        if any(p.startswith(token + "/") for p in paths):
+            return token
+    return None
+
+
+def resolve_languages(question: str, languages: set[str]) -> list[str]:
+    """Languages the scan knows that the question names ("Python modules"). Short names like go are skipped
+    because they are ordinary words."""
+    return sorted(
+        lang for lang in languages if len(lang) >= 4 and re.search(rf"\b{re.escape(lang)}\b", question, re.IGNORECASE)
+    )
 
 
 def _score(question: str) -> list[tuple[float, Intent]]:
@@ -410,13 +459,14 @@ def route(question: str, explicit_target: str | None, paths: list[str]) -> Route
     question = (question or "").strip()
     if not question:
         return Route("none", reason="empty question", candidates=_menu())
-    scored = _score(question)
+    intent_text = intent_text_of(question)
+    scored = _score(intent_text)
     target, ambiguous = resolve_target(question, explicit_target, paths)
     if _ACTION.match(question) and not (scored and scored[0][1].name in _ACTION_OK):
         # "run the test suite", "deploy this": a request to act, which a read-only scan cannot do.
         return Route("none", reason="a request to act, not a question about the code", candidates=_menu())
     if not scored:
-        fallback = bm25_intent(question)
+        fallback = bm25_intent(intent_text)
         if fallback is not None:
             scored = [(1.0, fallback)]
     if not scored:
@@ -426,7 +476,7 @@ def route(question: str, explicit_target: str | None, paths: list[str]) -> Route
         return Route("none", reason="no intent matched", candidates=_menu())
     top_score, top = scored[0]
     # "tests" and "impact" often co-occur ("which tests break if I change x"): tests wins when it is named explicitly.
-    if top.name == "impact" and any(i.name == "tests" for _, i in scored) and re.search(r"\btests?\b", question, re.I):
+    if top.name == "impact" and any(i.name == "tests" for _, i in scored) and re.search(r"\btests?\b", intent_text, re.I):
         top = _INTENTS_BY_NAME["tests"]
     if top.name == "skill" and target:
         # A concrete file in the question means a code question, not a how-to.
@@ -443,7 +493,8 @@ def route(question: str, explicit_target: str | None, paths: list[str]) -> Route
             "low", top.name, top.tool, target, reason="the question fits more than one query",
             candidates=[i.tool for _, i in scored[:3]],
         )
-    return Route("high", top.name, top.tool, target, reason=f"matched {top.name}")
+    scope = (resolve_scope(question, explicit_target, paths) or target) if top.name == "dead_code" else None
+    return Route("high", top.name, top.tool, target, reason=f"matched {top.name}", scope=scope)
 
 
 def _menu() -> list[str]:
@@ -481,12 +532,15 @@ def answer(question: str, target: str | None, evidence: dict, repo_path: Path) -
         return result
 
     result["target"] = decision.target
+    if decision.scope:
+        result["scope"] = decision.scope
     runner = _RUNNERS.get(decision.intent or "")
     if runner is None:
         result["answer"] = f"matched {decision.intent}; call {decision.tool} directly"
         return result
     try:
-        result["answer"] = runner(q, evidence, repo_path, decision.target, question)
+        # A repo-wide listing takes its directory limit as the target slot; the others take a single file.
+        result["answer"] = runner(q, evidence, repo_path, decision.scope or decision.target, question)
         if decision.intent == "skill" and isinstance(result["answer"], dict):
             # find_skill carries its own calibrated confidence; the router must not overstate it.
             result["confidence"] = result["answer"].get("confidence", result["confidence"])
@@ -537,6 +591,16 @@ def _hotspot(q, evidence, repo_path, target, question):
     return spots[:10]
 
 
+def _dead_code(q, evidence, repo_path, target, question):
+    # `target` is the directory (or file) the question is limited to, or None for the whole repo.
+    languages = {str(m.get("language") or "").lower() for m in evidence["repository"]["modules"]} - {""}
+    cleaned = strip_test_qualifiers(question)
+    # A "non-test" question counts only non-test importers: a file only its own tests import is still unimported.
+    return q.find_unimported_modules(
+        evidence, target, resolve_languages(cleaned, languages), ignore_test_importers=cleaned != question
+    )
+
+
 def _secrets(q, evidence, repo_path, target, question):
     return q.find_secrets_for_file(evidence, target) if target else q.find_secrets_for_file(evidence, None)
 
@@ -549,7 +613,7 @@ _RUNNERS: dict[str, Callable] = {
     "secrets": _secrets,
     "vulnerabilities": lambda q, e, r, t, qu: q.find_vulnerabilities(e, None),
     "static_analysis": lambda q, e, r, t, qu: q.find_static_analysis(e, None),
-    "dead_code": lambda q, e, r, t, qu: q.find_dead_code_evidence(e, None),
+    "dead_code": _dead_code,
     "layers": lambda q, e, r, t, qu: q.find_layer_violations(e, None),
     "endpoints": lambda q, e, r, t, qu: q.find_endpoints(e, None),
     "env": lambda q, e, r, t, qu: q.find_environment_variables(e, None),
