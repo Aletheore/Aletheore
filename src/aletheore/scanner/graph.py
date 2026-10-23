@@ -1187,7 +1187,7 @@ def _load_go_modules(repo_path: Path) -> tuple[tuple, ...]:
 
     entries = [(path, rel_dir) for path, rel_dir in modules.items()]
     entries.extend((path, local, scope) for (path, scope), local in replaces.items())
-    return tuple(sorted(entries, key=lambda item: (-len(item[0]), item[1], item[2:] )))
+    return tuple(sorted(entries, key=lambda item: (-len(item[0]), item[2:] != ("*",), item[1], item[2:])))
 
 
 def _go_replace_applies(scope: str, from_rel: str | None, module_prefix=()) -> bool:

@@ -746,3 +746,14 @@ def test_a_root_go_mod_replace_does_not_reach_a_nested_module(tmp_path):
     edges = _edges(tmp_path)
     assert ("main.go", "vendored/lib/sub/sub.go") in edges
     assert ("nested/main.go", "vendored/lib/sub/sub.go") not in edges
+
+
+def test_a_go_work_replace_wins_over_a_go_mod_replace_for_the_same_path(tmp_path):
+    _write(tmp_path, {
+        "go.work": "go 1.21\nuse .\nreplace example.com/lib => ./from-work\n",
+        "go.mod": "module example.com/root\n\nreplace example.com/lib => ./from-mod\n",
+        "main.go": GO_IMPORTER,
+        "from-work/sub/sub.go": "package sub\n",
+        "from-mod/sub/sub.go": "package sub\n",
+    })
+    assert _edges(tmp_path) == {("main.go", "from-work/sub/sub.go")}
