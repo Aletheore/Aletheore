@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import subprocess
 import time
 
 from aletheore import evidence_hook as eh
@@ -157,6 +158,44 @@ def test_named_test_files_are_found_when_the_scan_skipped_the_test_folder(tmp_pa
     # app/cli.py has no importers/churn, so nothing notable: still silent
     assert text is None
     assert eh._fs_named_tests(repo, "app/cli.py") == ["tests/test_cli.py"]
+
+
+def _git(repo, *args):
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@x", "-c", "commit.gpgsign=false", *args],
+        cwd=repo, check=True, capture_output=True,
+    )
+
+
+def test_history_from_git_covers_files_the_scan_left_out_and_skips_sweeps(tmp_path):
+    repo = _repo(tmp_path)
+    _git(repo, "init", "-q")
+    for i in range(3):  # cli and main change together three times
+        (repo / "app" / "cli.py").write_text(f"x = {i}\n")
+        (repo / "app" / "main.py").write_text(f"x = {i}\n")
+        _git(repo, "add", "app/cli.py", "app/main.py")
+        _git(repo, "commit", "-qm", f"c{i}")
+    for i in range(30):  # a sweep touching everything says nothing about what belongs together
+        (repo / f"f{i}.txt").write_text("s")
+    for name in ("core", "api", "cli", "main", "lonely"):
+        (repo / "app" / f"{name}.py").write_text("y = 2\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "sweep")
+
+    index = eh.write_index(repo)
+
+    cli = index["files"]["app/cli.py"]
+    assert cli["co_change"] == [{"path": "app/main.py", "n": 3}]
+    assert cli["churn"] == 4
+    assert "co_change" not in index["files"]["app/lonely.py"]  # only ever in the sweep
+    # the scan's own hotspot data is kept, not overwritten
+    assert index["files"]["app/core.py"]["co_change"] == [{"path": "app/api.py", "n": 22}]
+
+
+def test_history_is_skipped_quietly_without_git(tmp_path):
+    repo = _repo(tmp_path)
+    index = eh.write_index(repo)
+    assert "co_change" not in index["files"]["app/cli.py"]
 
 
 def test_main_always_exits_zero_and_prints_json_only_with_evidence(tmp_path):

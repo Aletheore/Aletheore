@@ -45,7 +45,11 @@ _INLINE_BUILD_MAX_BYTES = 25 * 1024 * 1024
 _MAX_IMPORTERS_STORED = 300
 _MAX_NAMED = 3
 _MAX_TRANSITIVE_WALK = 5000
-_TOOLS_AT_FILE_TOUCH = frozenset({"Read", "Edit", "MultiEdit", "Write"})
+_GIT_LOG_COMMITS = 800
+_GIT_LOG_TIMEOUT = 20
+_GIT_MAX_FILES_PER_COMMIT = 25
+_GIT_MIN_PAIR = 2
+_TOOLS_AT_FILE_TOUCH =frozenset({"Read", "Edit", "MultiEdit", "Write"})
 
 # Same shape as tests_for._TEST_PATH, kept local so this module imports nothing from the package at hook time.
 _TEST_PATH = re.compile(
@@ -136,6 +140,54 @@ def build_index(evidence: dict) -> dict:
     }
 
 
+def _fill_history_from_git(repo_path: Path, index: dict) -> None:
+    """Give every file a change count and its closest co-change partners, not only the scan's few hotspots.
+
+    The scan keeps co-change for its hotspot list alone, so most files would show no history. One bounded
+    `git log` over the recent commits covers them all. Commits that touch many files (mass renames, formatting
+    sweeps) say nothing about which files belong together and are skipped. Silent when git is unavailable.
+    """
+    files = index.get("files") or {}
+    try:
+        result = subprocess.run(  # noqa: S603 - fixed argv
+            ["git", "-C", str(repo_path), "log", "--no-merges", "--name-only", "--format=%x00", f"-n{_GIT_LOG_COMMITS}"],
+            capture_output=True,
+            text=True,
+            timeout=_GIT_LOG_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return
+    if result.returncode != 0:
+        return
+    changes: dict[str, int] = {}
+    pairs: dict[str, dict[str, int]] = {}
+    for block in result.stdout.split("\x00"):
+        touched = [line for line in block.split("\n") if line.strip()]
+        for path in touched:
+            changes[path] = changes.get(path, 0) + 1
+        if not 2 <= len(touched) <= _GIT_MAX_FILES_PER_COMMIT:
+            continue
+        for path in touched:
+            if path not in files:
+                continue
+            partners = pairs.setdefault(path, {})
+            for other in touched:
+                if other != path:
+                    partners[other] = partners.get(other, 0) + 1
+    for path, entry in files.items():
+        if entry.get("co_change") or path not in pairs:
+            continue
+        # Partners must exist in the scan, or the agent is told to open a file that is gone.
+        ranked = sorted(
+            ((other, n) for other, n in pairs[path].items() if n >= _GIT_MIN_PAIR and other in files),
+            key=lambda item: (-item[1], item[0]),
+        )[:_MAX_NAMED]
+        if ranked:
+            entry["co_change"] = [{"path": other, "n": n} for other, n in ranked]
+            entry.setdefault("churn", changes.get(path, 0))
+
+
 def _evidence_stamp(aletheore_dir: Path) -> tuple[float, int] | None:
     try:
         stat = (aletheore_dir / "air.json").stat()
@@ -157,6 +209,7 @@ def write_index(repo_path: Path) -> dict | None:
     if not isinstance(evidence, dict):
         return None
     index = build_index(evidence)
+    _fill_history_from_git(repo_path, index)
     index["air_stamp"] = list(stamp)
     target = aletheore_dir / INDEX_NAME
     tmp = target.with_name(INDEX_NAME + f".{os.getpid()}.tmp")
@@ -336,7 +389,7 @@ def render(
     else:
         lines.append("- Tests: no test file imports it or is named after it.")
     if churn:
-        partners = ", ".join(f"{PurePosixPath(c['path']).name} ({c['n']}x)" for c in co_change)
+        partners = ", ".join(f"{c['path']} ({c['n']}x)" for c in co_change)
         lines.append(f"- History: {churn} changes" + (f", usually edited with {partners}." if partners else "."))
     if owners:
         top = owners[0]
