@@ -549,16 +549,16 @@ def test_every_bundled_skill_is_under_an_allowed_license_and_has_a_source():
 @pytest.mark.parametrize(
     "task, expected",
     [
-        ("The agent keeps ignoring our project conventions and hallucinating APIs it shouldn't know about",
-         "agent-workflows/context-engineering"),
+        ("How should I plan private cluster addresses and internet access?",
+         "platforms/gke-networking"),
         ("I need a launch brief that keeps a coding agent on task for days without drifting.",
          "agent-workflows/long-horizon-prompting"),
         ("Break down this big feature into smaller pieces my agent team can work on in parallel, with dependencies between them",
          "agent-workflows/task-coordination-strategies"),
         ("Add a small dashboard widget to my server that renders inline in the chat when the tool runs",
          "ai-engineering/build-mcp-app"),
-        ("Build me a boilerplate Go MCP service with a couple of tools, tests, and instructions for running it",
-         "ai-engineering/go-mcp-server-generator"),
+        ("Can you write a few ad headlines and descriptions for my campaign?",
+         "marketing/ad-creative"),
     ],
 )
 def test_find_skill_is_high_confidence_for_clear_benchmark_tasks(task, expected):
@@ -619,8 +619,8 @@ def test_agent_instruction_snippet_points_at_find_skill():
 
 HOOK_HIGH_CONFIDENCE_QUERIES = (
     "Rewrite this blog post intro to feel more human and less stiff.",
-    "I'm worried about injection flaws in our Python backend — trace the user input flows and flag anything exploitable.",
-    "We need reusable IaC modules for our AWS setup with proper versioning — can you build them out?",
+    "How should I write Javadoc comments for Java classes and methods?",
+    "How do I clamp, map, and snap numbers in an animation?",
 )
 
 

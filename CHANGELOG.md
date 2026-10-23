@@ -5,6 +5,13 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+**Changed: fewer confident Hallbook answers that are only partly on topic**
+
+A high-confidence result now has to cover at least four in five of the task's content words, not just score well
+and beat the runner-up. A skill that matches only a few scattered words stays at "low", so the agent is not told
+a partial match is the answer. On the held-out test half high-confidence precision rose from 0.7755 to 0.8608
+while the number of correct high results fell by 10.5%, inside the 15% budget.
+
 **Changed: Hallbook says "none" when a prompt is not a task**
 
 `find_skill` now returns confidence "none" with no skill for small talk, one-word replies, trivial local edits

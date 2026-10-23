@@ -64,3 +64,15 @@ def test_a_clear_task_is_never_none():
 def test_weak_scattered_matches_are_none():
     # "with" and "the" carry no signal, so there is nothing to rank.
     assert skill_hub.find_skill("something with the")["confidence"] == "none"
+
+
+def test_scattered_match_is_not_reported_as_high_confidence():
+    # The top skill covers only a third of the task's content words.
+    result = skill_hub.find_skill("Can you draw a diagram showing how my cloud services connect?")
+    assert result["confidence"] == "low"
+
+
+def test_a_fully_covered_strong_match_is_high_confidence():
+    result = skill_hub.find_skill("How should I write Javadoc comments for Java classes and methods?")
+    assert result["confidence"] == "high"
+    assert result["top"]["skill_id"] == "documentation/java-docs"

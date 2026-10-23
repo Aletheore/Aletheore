@@ -77,6 +77,10 @@ FIND_SKILL_MIN_RATIO = 1.3
 # benchmark has no task query under 14.2, so a floor here turns weak, scattered
 # matches into an honest "none" without losing a real task.
 FIND_SKILL_NONE_SCORE = 14.0
+# A strong top score still is not a confident answer when the skill covers only a few
+# of the task's content words. Requiring four in five keeps the genuinely scattered
+# matches at "low" (dev precision 0.851, 63 of 66 correct highs kept).
+FIND_SKILL_MIN_COVERAGE = 0.8
 FIND_SKILL_MAX_CONTENT_CHARS = 14_000
 # UserPromptSubmit hook limits. A prompt shorter than HOOK_MIN_WORDS is a fragment, not a task;
 # a prompt longer than HOOK_MAX_PROMPT_CHARS is usually a pasted log, so only its first
@@ -858,6 +862,7 @@ class _RankIndex:
     def __init__(self, metas: tuple[CuratedSkillMeta, ...]) -> None:
         self.metas = metas
         self.ids = [meta.skill_id for meta in metas]
+        self.id_to_index = {skill_id: index for index, skill_id in enumerate(self.ids)}
         self.categories = [meta.category for meta in metas]
         self.quality = [meta.quality for meta in metas]
         self.texts: list[tuple[str, ...]] = []
@@ -908,6 +913,22 @@ class _RankIndex:
         for token in self.vocab:
             if len(token) >= 4:
                 self.vocab_by_first[token[0]][len(token)].append(token)
+
+    def coverage(self, query_tokens: list[str], skill_id: str) -> float:
+        """The share of query tokens the skill's text contains, counting a typo recovery."""
+        index = self.id_to_index.get(skill_id)
+        if index is None:
+            return 1.0
+        joined = self.joined[index]
+        matched = 0
+        for token in query_tokens:
+            if f" {token} " in joined:
+                matched += 1
+                continue
+            recovered = self._fuzzy_match(token)
+            if recovered is not None and f" {recovered} " in joined:
+                matched += 1
+        return matched / len(query_tokens) if query_tokens else 0.0
 
     def _fuzzy_match(self, token: str) -> str | None:
         """The closest vocabulary token to an unmatched query token, or None.
@@ -1271,8 +1292,17 @@ def _find_skill_candidate(meta: SkillMeta) -> dict:
     return {"skill_id": meta.skill_id, "title": meta.title, "description": _one_line(meta.description, 140)}
 
 
-def _is_high_confidence(results: list[tuple[SkillMeta, float]]) -> bool:
-    """The strict find_skill bar: strong top score and clearly ahead of the runner-up."""
+def _query_coverage(task: str, skill_id: str) -> float:
+    tokens = list(dict.fromkeys(_tokens(task)))
+    return _search_index(str(bundled_skills_dir())).coverage(tokens, skill_id)
+
+
+def _is_high_confidence(results: list[tuple[SkillMeta, float]], task: str | None = None) -> bool:
+    """The strict find_skill bar: strong top score, ahead of the runner-up and on-topic.
+
+    Coverage is checked last and only when the task is known, so callers that only
+    have scores (and tests with synthetic results) keep the score-only behaviour.
+    """
     if not results:
         return False
     top_score = results[0][1]
@@ -1282,9 +1312,11 @@ def _is_high_confidence(results: list[tuple[SkillMeta, float]]) -> bool:
     second_score = next((score for meta, score in results[1:] if not meta.skill_id.startswith(_CUSTOM_PREFIX)), 0.0)
     gap = top_score - second_score
     ratio = top_score / second_score if second_score > 0 else math.inf
-    return top_score >= FIND_SKILL_MIN_SCORE and (
-        gap >= FIND_SKILL_MIN_GAP or ratio >= FIND_SKILL_MIN_RATIO
-    )
+    if not (top_score >= FIND_SKILL_MIN_SCORE and (gap >= FIND_SKILL_MIN_GAP or ratio >= FIND_SKILL_MIN_RATIO)):
+        return False
+    if task is not None and _query_coverage(task, results[0][0].skill_id) < FIND_SKILL_MIN_COVERAGE:
+        return False
+    return True
 
 
 def find_skill(task: str, category: str | None = None) -> dict:
@@ -1304,7 +1336,7 @@ def find_skill(task: str, category: str | None = None) -> dict:
     top_meta, top_score = results[0]
     if top_score < FIND_SKILL_NONE_SCORE:
         return {"confidence": "none", "note": FIND_SKILL_NONE_NOTE}
-    confident = _is_high_confidence(results)
+    confident = _is_high_confidence(results, task)
 
     result = {
         "confidence": "high" if confident else "low",
@@ -1374,7 +1406,7 @@ def hook_suggestion(prompt: str, mode: str = "hint") -> str | None:
             # The fast pass only prunes candidates; a near-high top score may still
             # clear the strict bar with the full ranking (prefix and phrase terms).
             full_results = search_skills_scored(text, limit=5)
-            if _is_high_confidence(full_results):
+            if _is_high_confidence(full_results, text):
                 top_meta = full_results[0][0]
                 return (
                     f"Hallbook skill that fits this task: {top_meta.skill_id} ({top_meta.title}).\n"
