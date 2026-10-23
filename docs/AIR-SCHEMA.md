@@ -56,7 +56,7 @@ A reader normally refuses evidence from a different `(major, minor)`. The one
 exception is a minor whose bump added optional keys and nothing else: such a
 minor is listed in `_READABLE_EARLIER_MINORS` in `src/aletheore/evidence.py`
 under the build that can still read it, and evidence from it loads without a
-rescan. Today that is `0.9` reading `0.8`. A minor that removes, renames or
+re-scan. Today that is `0.9` reading `0.8`. A minor that removes, renames or
 retypes a key must never be listed there.
 
 ## Migration rules
