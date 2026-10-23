@@ -29,6 +29,17 @@ _PAGING = {
 _TARGET_FILE = {"target": _FILE_PATH}
 
 ARGUMENT_DESCRIPTIONS: dict[str, dict[str, str]] = {
+    "aletheore_ask": {
+        "question": (
+            "The question in plain words, e.g. 'which modules under src/api does nothing import' or "
+            "'what breaks if I change src/core/db.py'. It is routed to the matching exact query."
+        ),
+        "target": (
+            "Optional file or directory the question is about, repo-relative as listed in the evidence "
+            "(a file for impact, tests, owner and dependency questions; a directory to limit a list). "
+            "Leave empty when the question names it or covers the whole repo."
+        ),
+    },
     "aletheore_locate": {
         "query": "The names to find, as plain words: function, class or variable names, e.g. 'write_usage HelpFormatter'.",
     },
