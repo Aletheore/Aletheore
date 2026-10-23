@@ -24,8 +24,9 @@ up on the next search without a restart.
 The UserPromptSubmit hook stays silent for follow-up questions about the chat itself, such as "what did you do
 in the last step", "please continue with what you were saying" and "thanks, that works now". A medium hint also
 has to cover at least half of the prompt's content words, so a single shared word is not enough. In a session,
-each skill is suggested at most once, using a small state file under `~/.config/aletheore/hallbook_sessions/`;
-files are pruned after seven days, and a missing or unreadable state file only means a suggestion may repeat.
+each skill is suggested at most once and at most one hint is printed every three prompts in the same session,
+using a small state file under `~/.config/aletheore/hallbook_sessions/`; files are pruned after seven days, and a
+missing or unreadable state file only means a suggestion may repeat.
 On the new hook cases all 12 follow-ups stayed silent; six of nine clear task prompts fired, and the other three
 were left silent because the top two skills were within the existing 5% ambiguity guard.
 

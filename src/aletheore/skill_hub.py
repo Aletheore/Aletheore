@@ -1517,6 +1517,7 @@ def find_skill(task: str, category: str | None = None) -> dict:
 # may repeat a suggestion, never that it crashes or prints a traceback.
 _SESSION_DIRNAME = "hallbook_sessions"
 _SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+_SESSION_HINT_GAP = 3
 _SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
@@ -1544,16 +1545,25 @@ def _prune_session_state() -> None:
         return
 
 
-def _load_session_skills(path: Path) -> set[str]:
+def _load_session_state(path: Path) -> tuple[set[str], int, int]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return set()
-    values = data.get("suggested") if isinstance(data, dict) else None
-    return {value for value in values if isinstance(value, str)} if isinstance(values, list) else set()
+        return set(), 0, 0
+    if not isinstance(data, dict):
+        return set(), 0, 0
+    values = data.get("suggested")
+    skills = {value for value in values if isinstance(value, str)} if isinstance(values, list) else set()
+    prompts = data.get("prompts")
+    last_suggest = data.get("last_suggest")
+    return (
+        skills,
+        prompts if isinstance(prompts, int) and prompts >= 0 else 0,
+        last_suggest if isinstance(last_suggest, int) and last_suggest >= 0 else 0,
+    )
 
 
-def _write_session_skills(path: Path, skills: set[str]) -> None:
+def _write_session_state(path: Path, skills: set[str], prompts: int, last_suggest: int) -> None:
     import tempfile
 
     tmp_name = None
@@ -1561,7 +1571,7 @@ def _write_session_skills(path: Path, skills: set[str]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=".session-", suffix=".tmp")
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            json.dump({"suggested": sorted(skills)}, handle)
+            json.dump({"suggested": sorted(skills), "prompts": prompts, "last_suggest": last_suggest}, handle)
         os.replace(tmp_name, path)
         tmp_name = None
     except OSError:
@@ -1574,20 +1584,44 @@ def _write_session_skills(path: Path, skills: set[str]) -> None:
                 pass
 
 
-def _new_session_suggestions(session_id: object, skill_ids: list[str]) -> list[str]:
+def _begin_session_prompt(session_id: object) -> tuple[Path, set[str], int, int, bool] | None:
+    """Count this prompt and say whether the 3-prompt hint gap still applies.
+
+    Returns None when there is no usable session id. Every read and write is best
+    effort, so a broken state file can allow an extra hint but never break the hook.
+    """
+    path = _session_state_path(session_id)
+    if path is None:
+        return None
+    _prune_session_state()
+    seen, prompts, last_suggest = _load_session_state(path)
+    prompts += 1
+    throttled = bool(last_suggest and prompts - last_suggest < _SESSION_HINT_GAP)
+    _write_session_state(path, seen, prompts, last_suggest)
+    return path, seen, prompts, last_suggest, throttled
+
+
+def _new_session_suggestions(
+    session_id: object,
+    skill_ids: list[str],
+    session: tuple[Path, set[str], int, int, bool] | None = None,
+) -> list[str]:
     """The ids not already suggested in this session, recorded as suggested now.
 
     Returns every id when there is no usable session id, so a direct caller such as
     `aletheore hallbook suggest` keeps working without state.
     """
-    path = _session_state_path(session_id)
-    if path is None:
-        return list(skill_ids)
-    _prune_session_state()
-    seen = _load_session_skills(path)
+    if session is None:
+        path = _session_state_path(session_id)
+        if path is None:
+            return list(skill_ids)
+        _prune_session_state()
+        seen, prompts, _ = _load_session_state(path)
+    else:
+        path, seen, prompts, _, _ = session
     new = [skill_id for skill_id in skill_ids if skill_id not in seen]
     if new:
-        _write_session_skills(path, seen | set(new))
+        _write_session_state(path, seen | set(new), prompts, prompts)
     return new
 
 
@@ -1621,6 +1655,9 @@ def hook_suggestion(prompt: str, mode: str = "hint", session_id: str | None = No
     """
     if mode not in HOOK_MODES:
         raise ValueError(f"unknown hook mode: {mode!r}")
+    session = _begin_session_prompt(session_id)
+    if session is not None and session[4]:
+        return None
     text = _hook_prompt_text(prompt)
     if text is None:
         return None
@@ -1637,7 +1674,7 @@ def hook_suggestion(prompt: str, mode: str = "hint", session_id: str | None = No
             full_results = search_skills_scored(text, limit=5)
             if _is_high_confidence(full_results, text):
                 top_meta = full_results[0][0]
-                if not _new_session_suggestions(session_id, [top_meta.skill_id]):
+                if not _new_session_suggestions(session_id, [top_meta.skill_id], session):
                     return None
                 return (
                     f"Hallbook skill that fits this task: {top_meta.skill_id} ({top_meta.title}).\n"
@@ -1655,7 +1692,7 @@ def hook_suggestion(prompt: str, mode: str = "hint", session_id: str | None = No
         if _query_coverage(text, first.skill_id) < HOOK_MIN_COVERAGE:
             return None
         by_id = {first.skill_id: first, second.skill_id: second}
-        suggested = _new_session_suggestions(session_id, [first.skill_id, second.skill_id])
+        suggested = _new_session_suggestions(session_id, [first.skill_id, second.skill_id], session)
         if not suggested:
             return None
         names = " or ".join(f"{by_id[skill_id].skill_id} ({by_id[skill_id].title})" for skill_id in suggested)
@@ -1671,7 +1708,7 @@ def hook_suggestion(prompt: str, mode: str = "hint", session_id: str | None = No
     skill_id = top.get("skill_id") or skill.get("skill_id")
     if not skill_id:
         return None
-    if not _new_session_suggestions(session_id, [skill_id]):
+    if not _new_session_suggestions(session_id, [skill_id], session):
         return None
     content = skill.get("content") or ""
     if len(content) > FIND_SKILL_MAX_CONTENT_CHARS:

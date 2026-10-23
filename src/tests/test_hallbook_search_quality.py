@@ -271,3 +271,32 @@ def test_fuzzy_and_prefix_candidates_are_sorted_for_stable_results():
 def test_hand_picked_queries_keep_the_expected_skill_in_the_top_three(query, expected):
     ids = [meta.skill_id for meta in skill_hub.search_skills(query, limit=3)]
     assert expected in ids, (query, ids)
+
+
+def test_hook_suggests_at_most_one_hint_per_three_prompts_in_a_session(monkeypatch, tmp_path):
+    import json
+
+    monkeypatch.setattr(skill_hub, "user_home", lambda: tmp_path)
+    first = "can you look at why my login test is flaky"
+    second = "please add a stripe webhook handler for payments"
+    third = "trace the user input flows and flag anything exploitable"
+
+    assert skill_hub.hook_suggestion(first, session_id="throttled") is not None
+    assert skill_hub.hook_suggestion(second, session_id="throttled") is None
+    assert skill_hub.hook_suggestion(third, session_id="throttled") is None
+    assert skill_hub.hook_suggestion(second, session_id="throttled") is not None
+
+    state = tmp_path / ".config" / "aletheore" / "hallbook_sessions" / "throttled.json"
+    saved = json.loads(state.read_text(encoding="utf-8"))
+    assert saved["prompts"] == 4
+    assert saved["last_suggest"] == 4
+
+
+def test_hook_throttle_is_per_session(monkeypatch, tmp_path):
+    monkeypatch.setattr(skill_hub, "user_home", lambda: tmp_path)
+    first = "can you look at why my login test is flaky"
+    second = "please add a stripe webhook handler for payments"
+
+    assert skill_hub.hook_suggestion(first, session_id="one") is not None
+    assert skill_hub.hook_suggestion(second, session_id="one") is None
+    assert skill_hub.hook_suggestion(second, session_id="two") is not None
