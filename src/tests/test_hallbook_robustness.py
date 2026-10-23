@@ -63,14 +63,14 @@ def test_add_binary_and_latin1_files(skills_dir, tmp_path):
 
 def test_add_a_300_character_name(skills_dir, tmp_path):
     source = tmp_path / "s.md"
-    source.write_text("steps")
+    source.write_text("steps", encoding="utf-8")
     _assert_clean_error(_add("a" * 300, source), "64 characters")
 
 
 @pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")
 def test_read_only_folder_for_add_and_remove(skills_dir, tmp_path):
     source = tmp_path / "s.md"
-    source.write_text("steps")
+    source.write_text("steps", encoding="utf-8")
     assert _add("keep", source).exit_code == 0
     skills_dir.chmod(0o500)
     try:
@@ -84,9 +84,9 @@ def test_read_only_folder_for_add_and_remove(skills_dir, tmp_path):
 
 def test_custom_skills_path_blocked_by_a_file(skills_dir, tmp_path):
     skills_dir.parent.mkdir(parents=True)
-    skills_dir.write_text("in the way")
+    skills_dir.write_text("in the way", encoding="utf-8")
     source = tmp_path / "s.md"
-    source.write_text("steps")
+    source.write_text("steps", encoding="utf-8")
     _assert_clean_error(_add("x", source), "custom skills folder")
 
 
@@ -117,7 +117,7 @@ def test_a_name_differing_only_by_case_is_rejected(skills_dir):
 
 
 def test_a_preexisting_long_named_skill_can_still_be_removed(skills_dir):
-    name = "l" * 200
+    name = "l" * 90  # over the 64 cap; kept short so the path stays under the Windows limit
     skills_dir.mkdir(parents=True)
     (skills_dir / f"{name}.md").write_text("legacy", encoding="utf-8")
     assert skill_hub.read_custom_skill_file(name) == "legacy"
@@ -151,7 +151,7 @@ def _offline(monkeypatch):
 def test_offline_add_prints_one_line_and_no_traceback(logged_in, monkeypatch, tmp_path, caplog):
     _offline(monkeypatch)
     source = tmp_path / "s.md"
-    source.write_text("steps")
+    source.write_text("steps", encoding="utf-8")
     with caplog.at_level(logging.WARNING):
         result = _add("offline-skill", source)
     assert result.exit_code == 0
@@ -168,7 +168,7 @@ def test_offline_add_prints_one_line_and_no_traceback(logged_in, monkeypatch, tm
 
 def test_offline_remove_says_the_account_copy_still_exists_and_leaves_a_tombstone(logged_in, monkeypatch, tmp_path):
     source = tmp_path / "s.md"
-    source.write_text("steps")
+    source.write_text("steps", encoding="utf-8")
     assert _add("gone", source).exit_code == 0
     _offline(monkeypatch)
     result = runner.invoke(app, ["hallbook", "remove", "gone"])
@@ -236,8 +236,8 @@ def bundled_root(tmp_path, monkeypatch):
     (folder / "scripts" / "__pycache__").mkdir(parents=True)
     (folder / "SKILL.md").write_text(
         "---\nskill_id: tools/scripted\ntitle: Scripted\ndescription: D\nsource_url: https://example.com/s\nlicense: MIT\n---\nbody"
-    )
-    (folder / "scripts" / "run.py").write_text("print(1)")
+    , encoding="utf-8", newline="\n")  # the frontmatter parser wants LF, which Windows would otherwise rewrite
+    (folder / "scripts" / "run.py").write_text("print(1)", encoding="utf-8")
     (folder / "scripts" / "__pycache__" / "run.cpython-312.pyc").write_bytes(b"\x00\x01")
     (folder / "scripts" / "old.pyo").write_bytes(b"\x00")
     monkeypatch.setattr(skill_hub, "bundled_skills_dir", lambda: root)
@@ -379,13 +379,13 @@ def test_unusable_content_is_rejected(skills_dir, text, word):
 
 def test_cli_rejects_a_large_file(skills_dir, tmp_path):
     big = tmp_path / "big.md"
-    big.write_text("x" * (6 * 1024 * 1024))
+    big.write_text("x" * (6 * 1024 * 1024), encoding="utf-8")
     _assert_clean_error(_add("x", big), "1 MB")
 
 
 def test_secret_looking_content_warns_but_is_saved(skills_dir, tmp_path):
     source = tmp_path / "s.md"
-    source.write_text(f"use {AWS_KEY} and {GH_TOKEN}\n-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA7\n")
+    source.write_text(f"use {AWS_KEY} and {GH_TOKEN}\n-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA7\n", encoding="utf-8")
     result = _add("secretive", source)
     assert result.exit_code == 0
     assert "WARNING" in result.output and "plain" in result.output and "credential" in result.output
@@ -395,7 +395,7 @@ def test_secret_looking_content_warns_but_is_saved(skills_dir, tmp_path):
 
 def test_plain_content_has_no_warning(skills_dir, tmp_path):
     source = tmp_path / "s.md"
-    source.write_text("# Steps\n1. Do the thing\n")
+    source.write_text("# Steps\n1. Do the thing\n", encoding="utf-8")
     assert "WARNING" not in _add("calm", source).output
 
 
@@ -477,3 +477,27 @@ def test_get_with_the_wrong_case_is_a_plain_not_found_with_a_suggestion(caplog):
 def test_hook_hints_include_the_cli_fallback():
     hint = skill_hub.hook_suggestion("git commit message conventions for my team repository")
     assert hint is not None and "aletheore hallbook get" in hint
+
+
+def test_crlf_text_is_stored_with_unix_line_endings_and_round_trips(skills_dir, tmp_path):
+    source = tmp_path / "crlf.md"
+    source.write_bytes(b"# Steps\r\n1. one\r\n")
+    assert _add("crlf", source).exit_code == 0
+    assert (skills_dir / "crlf.md").read_bytes() == b"# Steps\n1. one\n"
+    assert skill_hub.read_custom_skill_file("crlf") == "# Steps\n1. one\n"
+
+
+def test_non_ascii_text_round_trips_as_utf8(skills_dir):
+    skill_hub.add_custom_skill("accents", "caf\u00e9 \u2014 na\u00efve")
+    assert (skills_dir / "accents.md").read_bytes().decode("utf-8") == "caf\u00e9 \u2014 na\u00efve"
+
+
+def test_a_backup_that_cannot_be_deleted_is_skipped_not_fatal(skills_dir, monkeypatch):
+    for number in range(8):
+        skill_hub.write_backup("locked", "bak", f"v{number}")
+
+    def locked(self, *args, **kwargs):
+        raise PermissionError("file in use")  # what Windows says for a file another process has open
+
+    monkeypatch.setattr(type(skills_dir), "unlink", locked)
+    skill_hub.prune_backups("locked")  # must not raise

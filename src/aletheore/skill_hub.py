@@ -216,6 +216,8 @@ def custom_skill_warnings(content: str) -> list[str]:
 def read_custom_skill_source(path: Path) -> str:
     """The text of a file given to `hallbook add`, or CustomSkillError saying what is wrong with it."""
     try:
+        if Path(path).is_dir():  # Windows reports PermissionError, not IsADirectoryError, when opening a folder
+            raise IsADirectoryError(str(path))
         with open(path, "rb") as handle:
             data = handle.read(MAX_CUSTOM_SKILL_BYTES + 1)
     except FileNotFoundError:
@@ -264,7 +266,7 @@ def _atomic_write(path: Path, text: str) -> None:
     tmp_name = None
     try:
         fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=".skill-", suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:  # same bytes on every OS
             handle.write(text)
         try:
             os.chmod(tmp_name, 0o600)
@@ -1362,6 +1364,10 @@ def add_custom_skill_with_sync(name: str, content: str) -> tuple[str, str | None
     Raises ValueError (CustomSkillError for the storage and content problems) with a one-line message.
     """
     safe = sanitize_skill_name(name)
+    # One line-ending convention on every OS (the file is read back with universal newlines), so the text that is
+    # pushed and hashed is the text that is read later.
+    if isinstance(content, str):
+        content = content.replace("\r\n", "\n")
     validate_custom_skill_content(content)
     for other in list_custom_skill_names():
         if other != safe and other.lower() == safe.lower():
