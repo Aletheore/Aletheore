@@ -1586,8 +1586,18 @@ def _write_config_file_no_symlink_follow(config_path: Path, content: str) -> Non
         # Windows has no O_NOFOLLOW; refuse a symlinked leaf explicitly instead.
         raise OSError("refusing to write through a symlink")
     fd = os.open(str(config_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | no_follow, 0o644)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
+    # newline="": write exactly the line endings in `content` (callers keep a file's existing CRLF) instead of
+    # letting Windows translate every "\n" again.
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
         f.write(content)
+
+
+def _read_config_text(config_path: Path) -> tuple[str, str]:
+    """(text, newline) of an existing config file. The text is decoded with its BOM dropped and normalised to
+    "\n"; newline is "\r\n" when the file used CRLF, so a rewrite keeps the user's line endings."""
+    raw = config_path.read_bytes()
+    text = raw.decode("utf-8-sig")
+    return text.replace("\r\n", "\n"), ("\r\n" if b"\r\n" in raw else "\n")
 
 
 def _loads_jsonc(text: str) -> object:
@@ -1678,9 +1688,10 @@ def _write_json_mcp_client_config(
     # every other target writes a per-repo path and must pass repo_path.
     if repo_path is not None and _config_path_escapes_repo(config_path, repo_path):
         return f"skipped (path escapes the repo via a symlink): {config_path}", True
+    newline = "\n"
     if config_path.exists():
         try:
-            existing_text = config_path.read_text(encoding="utf-8-sig")
+            existing_text, newline = _read_config_text(config_path)
             data = _loads_jsonc(existing_text)
         except (UnicodeDecodeError, json.JSONDecodeError):
             return f"skipped (existing file is not valid JSON): {config_path}", False
@@ -1710,7 +1721,7 @@ def _write_json_mcp_client_config(
     data[top_level_key] = servers
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    content = json.dumps(data, indent=2) + "\n"
+    content = (json.dumps(data, indent=2) + "\n").replace("\n", newline)
     if repo_path is not None:
         try:
             _write_config_file_no_symlink_follow(config_path, content)
@@ -1721,7 +1732,8 @@ def _write_json_mcp_client_config(
         # a symlink here is the user's own, legitimate choice (e.g.
         # dotfiles synced through a symlinked config directory), not
         # attacker-controlled repo content, so it's followed as before.
-        config_path.write_text(content, encoding="utf-8")
+        with open(config_path, "w", encoding="utf-8", newline="") as handle:
+            handle.write(content)
     return f"{'updated' if already_present else 'wrote'} {config_path}", False
 
 
@@ -1732,9 +1744,11 @@ def _write_toml_mcp_client_config(
     docstring."""
     if repo_path is not None and _config_path_escapes_repo(config_path, repo_path):
         return f"skipped (path escapes the repo via a symlink): {config_path}", True
+    newline = "\n"
     if config_path.exists():
         try:
-            data = tomllib.loads(config_path.read_text(encoding="utf-8-sig"))
+            toml_text, newline = _read_config_text(config_path)
+            data = tomllib.loads(toml_text)
         except (UnicodeDecodeError, tomllib.TOMLDecodeError):
             return f"skipped (existing file is not valid TOML): {config_path}", False
         if not isinstance(data, dict):
@@ -1751,10 +1765,10 @@ def _write_toml_mcp_client_config(
     data[top_level_key] = servers
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    content = tomli_w.dumps(data)
+    content = tomli_w.dumps(data).replace("\n", newline)
     if config_path.exists():
-        original = config_path.read_text(encoding="utf-8-sig")
-        if "#" in original:
+        original = config_path.read_bytes()  # bytes: the backup must be exact, CRLF and BOM included
+        if b"#" in original:
             console.print(
                 f"[yellow]Warning:[/yellow] {escape(str(config_path))} has comments; rewriting it as TOML "
                 "does not preserve them. The original is kept next to it as "
@@ -1762,10 +1776,9 @@ def _write_toml_mcp_client_config(
             )
         backup_path = config_path.with_name(config_path.name + ".bak")
         try:
-            if repo_path is not None:
-                _write_config_file_no_symlink_follow(backup_path, original)
-            else:
-                backup_path.write_text(original, encoding="utf-8")
+            if repo_path is not None and (backup_path.is_symlink() or _config_path_escapes_repo(backup_path, repo_path)):
+                raise OSError("refusing to write a backup through a symlink")
+            backup_path.write_bytes(original)
         except OSError:
             return f"skipped (could not write a backup, so the file was left untouched): {config_path}", False
     if repo_path is not None:
@@ -1774,7 +1787,8 @@ def _write_toml_mcp_client_config(
         except OSError:
             return f"skipped (path escapes the repo via a symlink): {config_path}", True
     else:
-        config_path.write_text(content, encoding="utf-8")
+        with open(config_path, "w", encoding="utf-8", newline="") as handle:
+            handle.write(content)
     return f"{'updated' if already_present else 'wrote'} {config_path}", False
 
 

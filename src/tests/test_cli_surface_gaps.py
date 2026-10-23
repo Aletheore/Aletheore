@@ -49,7 +49,7 @@ def test_mcp_nav_notice_goes_to_stderr_and_stdout_starts_with_jsonrpc(tmp_path):
     repo.mkdir()
     (repo / "a.py").write_text("x = 1\n")
     src = str(Path(cli.__file__).resolve().parent.parent)
-    env = {**os.environ, "PYTHONPATH": src, "ALETHEORE_CRASH_REPORTING": "0", "HOME": str(tmp_path)}
+    env = {**os.environ, "PYTHONPATH": src, "ALETHEORE_CRASH_REPORTING": "0", "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)}
     initialize = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -692,3 +692,35 @@ def test_mcp_instructions_say_answer_needs_agent():
     from aletheore.mcp_server import SERVER_INSTRUCTIONS
 
     assert "only when the server was started with --agent" in SERVER_INSTRUCTIONS
+
+
+# --- line endings: rewrites keep a file's CRLF and the backup is byte-exact ---------------------------------------
+
+
+def test_mcp_install_keeps_crlf_line_endings_in_json_and_toml_and_backs_up_exact_bytes(tmp_path):
+    cursor = tmp_path / ".cursor" / "mcp.json"
+    cursor.parent.mkdir()
+    cursor.write_bytes(b'{\r\n  "mcpServers": {\r\n    "other": {"command": "x"}\r\n  }\r\n}\r\n')
+    codex = tmp_path / ".codex" / "config.toml"
+    codex.parent.mkdir()
+    original = b"# note\r\n[mcp_servers.other]\r\ncommand = 'z'\r\n"
+    codex.write_bytes(original)
+    result = runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "cursor", "--target", "codex-cli"])
+    assert result.exit_code == 0, result.output
+    for written in (cursor.read_bytes(), codex.read_bytes()):
+        assert b"\r\n" in written and b"\n" not in written.replace(b"\r\n", b"")
+    assert (tmp_path / ".codex" / "config.toml.bak").read_bytes() == original
+
+
+def test_mcp_install_writes_lf_for_new_files_on_every_platform(tmp_path):
+    result = runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "cursor"])
+    assert result.exit_code == 0
+    assert b"\r" not in (tmp_path / ".cursor" / "mcp.json").read_bytes()
+
+
+def test_query_normalizes_backslash_free_relative_and_absolute_forms_via_pathlib(tmp_path):
+    from aletheore.query import normalize_module_target
+
+    evidence = {"repo_path": str(tmp_path)}
+    assert normalize_module_target(evidence, "./app//main.py") == "app/main.py"
+    assert normalize_module_target(evidence, str(tmp_path / "app" / "main.py")) == "app/main.py"

@@ -97,7 +97,7 @@ def _load_preferences(preferences_path: Path | None) -> dict:
         # ValueError covers json.JSONDecodeError (a subclass) and also
         # UnicodeDecodeError raised by read_text() on non-UTF-8 bytes -
         # both are "this file is unreadable", not a reason to crash.
-        data = json.loads(preferences_path.read_text())
+        data = json.loads(preferences_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -115,7 +115,7 @@ def _save_preference(preferences_path: Path | None, key: str, value: bool) -> bo
         preferences_path.parent.mkdir(parents=True, exist_ok=True)
         data = _load_preferences(preferences_path)
         data[key] = value
-        preferences_path.write_text(json.dumps(data, indent=2))
+        preferences_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         return True
     except OSError:
         # Best-effort: a read-only/unwritable HOME (sandboxed builds, some
