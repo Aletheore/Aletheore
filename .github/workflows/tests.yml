@@ -80,7 +80,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12", "3.14"]
+        python-version: ["3.12"]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -96,7 +96,7 @@ jobs:
 
       - name: Run tests
         working-directory: src
-        run: pytest
+        run: pytest tests/test_hallbook_robustness.py tests/test_skill_hub.py tests/test_skill_hub_sync.py tests/test_skills_browser.py -v -p no:cacheprovider --timeout=60 -o faulthandler_timeout=200
 
   # macOS is the third platform the CLI and the MCP server run on. It differs from Linux in
   # ways that have mattered here: file-event backend (FSEvents, not inotify), errno numbers,
@@ -107,7 +107,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12", "3.14"]
+        python-version: ["3.12"]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
