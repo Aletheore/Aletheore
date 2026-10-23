@@ -309,6 +309,7 @@ def _hash_file(path: Path) -> str | None:
 
 def _load_local_scan_cache(
     repo_path: Path,
+    signatures_out: dict[str, str] | None = None,
 ) -> tuple[dict[str, dict] | None, dict[str, list[dict]] | None]:
     cache_path = _local_scan_cache_path(repo_path)
     if not cache_path.exists():
@@ -329,6 +330,11 @@ def _load_local_scan_cache(
     if cache.get("aletheore_version") != __version__:
         return None, None
 
+    if signatures_out is not None:
+        # Fingerprints of the cross-file facts the cached import lists were resolved against; an older cache
+        # has none, which makes build_module_graph re-extract once instead of trusting stale edges.
+        signatures_out.update(cache.get("resolution_sigs") or {})
+
     cached_hashes = cache.get("hashes", {})
     cached_modules = cache.get("modules", {})
     cached_endpoints = cache.get("endpoints", {})
@@ -347,7 +353,10 @@ def _load_local_scan_cache(
 
 
 def _write_local_scan_cache(
-    repo_path: Path, modules: list[dict], api_endpoints: list[dict]
+    repo_path: Path,
+    modules: list[dict],
+    api_endpoints: list[dict],
+    resolution_sigs: dict[str, str] | None = None,
 ) -> None:
     hashes: dict[str, str] = {}
     modules_by_path: dict[str, dict] = {}
@@ -376,6 +385,7 @@ def _write_local_scan_cache(
             json.dumps(
                 {
                     "aletheore_version": __version__,
+                    "resolution_sigs": resolution_sigs or {},
                     "hashes": hashes,
                     "modules": modules_by_path,
                     "endpoints": endpoints_by_path,
@@ -579,8 +589,12 @@ def scan_repository(
     using_hosted_cache = bool(os.environ.get(_UNCHANGED_SCAN_CACHE_ENV))
     local_cache_disabled = bool(os.environ.get(_DISABLE_LOCAL_SCAN_CACHE_ENV))
     unchanged_modules, unchanged_endpoints = _load_unchanged_scan_cache()
+    # Saved with the local cache: None (the hosted cache cannot supply them) keeps reuse-always.
+    prior_signatures: dict[str, str] | None = None
+    current_signatures: dict[str, str] = {}
     if not using_hosted_cache and not local_cache_disabled:
-        unchanged_modules, unchanged_endpoints = _load_local_scan_cache(repo_path)
+        prior_signatures = {}
+        unchanged_modules, unchanged_endpoints = _load_local_scan_cache(repo_path, prior_signatures)
         # Surfaced here, not left implicit: a CLI user who only ever sees
         # "Scanning..." has no way to know a scan is cached at all, so a
         # fast repeat scan reads as suspicious (did it actually check
@@ -625,7 +639,11 @@ def scan_repository(
 
     report("Building module dependency graph (parsing source with tree-sitter)")
     modules, dependency_graph, unparseable_files = build_module_graph(
-        repo_path, unchanged_modules=unchanged_modules, ignored_paths=ignored_paths
+        repo_path,
+        unchanged_modules=unchanged_modules,
+        ignored_paths=ignored_paths,
+        prior_signatures=prior_signatures,
+        signatures_out=current_signatures,
     )
 
     # CPU-heavy (Trivy alone uses several cores), so it starts after the parse
@@ -816,7 +834,7 @@ def scan_repository(
         # normal scan would wrongly treat every file as having zero
         # endpoints instead of re-checking them.
         _write_local_scan_cache(
-            repo_path, modules, api_endpoints_data["endpoints"] if map_endpoints else []
+            repo_path, modules, api_endpoints_data["endpoints"] if map_endpoints else [], current_signatures
         )
 
     report("Done")

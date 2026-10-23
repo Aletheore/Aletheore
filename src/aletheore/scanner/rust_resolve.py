@@ -135,14 +135,49 @@ def crate_aliases(repo_path: Path, from_file: Path) -> dict[str, Path]:
 # ---------------------------------------------------------------- source cleaning
 
 
-_NOISE = re.compile(
-    r"//[^\n]*|/\*.*?\*/|r(#*)\".*?\"\1|\"(?:\\.|[^\"\\])*\"|'(?:\\.[^']*|[^\\'])'",
-    re.DOTALL,
-)
+_LITERAL = re.compile(r"r(#*)\".*?\"\1|\"(?:\\.|[^\"\\])*\"|'(?:\\.[^']*|[^\\'])'", re.DOTALL)
 
 
 def clean_source(text: str) -> str:
-    return _NOISE.sub(lambda m: '""' if m.group(0)[0] in "r\"" else " ", text)
+    """Blank out comments (block comments nest in Rust) and string/char literals; strings become `""`."""
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        two = text[i : i + 2]
+        if two == "//":
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+            out.append(" ")
+        elif two == "/*":
+            depth, i = 1, i + 2
+            while i < n and depth:
+                pair = text[i : i + 2]
+                if pair == "/*":
+                    depth, i = depth + 1, i + 2
+                elif pair == "*/":
+                    depth, i = depth - 1, i + 2
+                else:
+                    i += 1
+            out.append(" ")
+        else:
+            m = _LITERAL.match(text, i)
+            if m:
+                out.append('""' if m.group(0)[0] in "r\"" else " ")
+                i = m.end()
+            else:
+                out.append(text[i])
+                i += 1
+    return "".join(out)
+
+
+def clear_cache() -> None:
+    """Forget directory listings, Cargo manifests, macro registries and module summaries (called once per scan,
+    so edits between scans in one process are seen). Also clears the Go package cache."""
+    for cached in (dir_names, _workspace, _macro_registry, module_items):
+        cached.cache_clear()
+    from aletheore.scanner import go_resolve
+
+    go_resolve.clear_cache()
 
 
 def _balanced(text: str, open_index: int) -> int:
@@ -178,7 +213,7 @@ def _strip_macro_defs(text: str) -> str:
 # ---------------------------------------------------------------- use flattening
 
 
-def flatten_use(tree: str) -> list[str]:
+def flatten_use(tree: str, keep_glob: bool = False) -> list[str]:
     """`a::{b, c::{d, self}, e as f, g::*}` -> ['a::b', 'a::c::d', 'a::c', 'a::e', 'a::g'] (wildcards drop the star)."""
     tree = re.sub(r"\s+", " ", tree).strip()
 
@@ -205,6 +240,8 @@ def flatten_use(tree: str) -> list[str]:
                 out.extend(walk(full, part))
             return out
         s = re.sub(r"\s+as\s+\w+$", "", s).strip()
+        if keep_glob and (s == "*" or s.endswith("::*")):
+            return [f"{prefix}::{s}" if prefix and s != "*" else (f"{prefix}::*" if prefix else s)]
         if s.endswith("::*"):
             s = s[:-3]
         if s in ("*", "self", ""):
@@ -256,6 +293,26 @@ def _macro_registry(crate_dir: str) -> dict[str, tuple[list[str], list[str]]]:
     return registry
 
 
+_DECL = re.compile(r"\b(?:fn|struct|enum|trait|type|const|static|union|mod|macro_rules!)\s+([A-Za-z_]\w*)")
+_PUB_USE = re.compile(r"\bpub(?:\([^)]*\))?\s+use\s+([^;]+);")
+_INCLUDE = re.compile(r"\binclude!\s*\(\s*\"([^\"]+)\"\s*\)")
+
+
+@lru_cache(maxsize=2048)
+def module_items(file_path: str) -> tuple[frozenset[str], tuple[str, ...]]:
+    """(names declared in the file, flattened `pub use` paths with a trailing ::* kept for globs)."""
+    try:
+        text = clean_source(Path(file_path).read_text(encoding="utf-8", errors="ignore"))
+    except OSError:
+        return frozenset(), ()
+    text = _strip_macro_defs(text)
+    declared = frozenset(_DECL.findall(text))
+    uses: list[str] = []
+    for m in _PUB_USE.finditer(text):
+        uses.extend(flatten_use(m.group(1), keep_glob=True))
+    return declared, tuple(uses)
+
+
 _INVOKE = re.compile(r"(?m)^[ \t]*([A-Za-z_]\w*)!\s*(?:\(\s*\)|\{\s*\})")
 _INLINE_CRATE = re.compile(r"(?<![\w$:.])crate((?:::[A-Za-z_]\w*)+)")
 
@@ -264,6 +321,8 @@ def extra_imports(repo_path: Path, from_file: Path, source: str) -> list[str]:
     """Use-path strings the tree-sitter `use`/`mod` walk cannot see: modules and uses produced by zero-argument
     item macros, and fully qualified paths written inline."""
     out: list[str] = []
+    # include!("relative/file.rs") textually splices another file in.
+    out.extend(f"@path:{p}" for p in _INCLUDE.findall(re.sub(r"//[^\n]*", " ", source)))
     cleaned = clean_source(source)
     crate_dir = nearest_manifest_dir(repo_path, from_file) or repo_path
     registry = _macro_registry(str(crate_dir)) if "!" in cleaned else {}

@@ -14,8 +14,7 @@ from __future__ import annotations
 
 import json
 import os
-import re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 _SKIP_DIRS = {"node_modules", ".git", ".aletheore", "dist", "build", ".next", "coverage", "__pycache__"}
 _CONFIG_NAMES = ("tsconfig.json", "jsconfig.json")
@@ -51,10 +50,19 @@ def _strip_jsonc(text: str) -> str:
             end = text.find("*/", i + 2)
             i = n if end == -1 else end + 2
             continue
+        elif c in "}]":
+            # trailing comma: only ever looked for outside string literals (this branch is never reached
+            # inside one), so a string such as "done,}" is left alone
+            j = len(out) - 1
+            while j >= 0 and out[j].isspace():
+                j -= 1
+            if j >= 0 and out[j] == ",":
+                del out[j]
+            out.append(c)
         else:
             out.append(c)
         i += 1
-    return re.sub(r",(\s*[}\]])", r"\1", "".join(out))
+    return "".join(out)
 
 
 def _read_json(path: Path) -> dict:
@@ -84,10 +92,14 @@ def _load_tsconfig(path: Path, seen: set[Path] | None = None) -> dict:
         return {}
     seen.add(path)
     data = _read_json(path)
-    options = dict(data.get("compilerOptions") or {})
+    raw_options = data.get("compilerOptions")
+    options = _sanitize_options(raw_options if isinstance(raw_options, dict) else {})
     parent = data.get("extends")
+    parents = [parent] if isinstance(parent, str) else [p for p in parent if isinstance(p, str)] if isinstance(parent, list) else []
     merged: dict = {}
-    if isinstance(parent, str) and parent.startswith("."):
+    for parent in parents:
+        if not parent.startswith("."):
+            continue
         pp = (path.parent / parent).resolve()
         if not pp.suffix:
             pp = pp.with_suffix(".json")
@@ -99,9 +111,35 @@ def _load_tsconfig(path: Path, seen: set[Path] | None = None) -> dict:
     merged.update(options)
     if "paths" in options:
         merged["_base_dir"] = path.parent
-    if "baseUrl" in options and not str(options["baseUrl"]).startswith("/"):
+    if "baseUrl" in options and not _is_absolute(options["baseUrl"]):
         merged["baseUrl"] = str((path.parent / options["baseUrl"]).resolve())
     return merged
+
+
+def _is_absolute(value: str) -> bool:
+    """POSIX or Windows absolute path ("/x", "C:/repo/src", "C:\\repo", "\\\\host\\share")."""
+    return os.path.isabs(value) or PureWindowsPath(value).is_absolute()
+
+
+def _sanitize_options(options: dict) -> dict:
+    """Keep only well-typed values of the options this module reads; a malformed one is skipped, not raised on."""
+    clean: dict = {}
+    base = options.get("baseUrl")
+    if isinstance(base, str) and base:
+        clean["baseUrl"] = base
+    paths = options.get("paths")
+    if isinstance(paths, dict):
+        ok = {
+            k: [t for t in v if isinstance(t, str)]
+            for k, v in paths.items()
+            if isinstance(k, str) and isinstance(v, list)
+        }
+        if ok:
+            clean["paths"] = ok
+    cond = options.get("customConditions")
+    if isinstance(cond, list):
+        clean["customConditions"] = [c for c in cond if isinstance(c, str)]
+    return clean
 
 
 class _RepoConfig:
@@ -124,7 +162,10 @@ class _RepoConfig:
                     custom.extend(zshy["conditions"])
             for cfg in _CONFIG_NAMES:
                 if cfg in names:
-                    opts = _load_tsconfig((here / cfg).resolve())
+                    try:
+                        opts = _load_tsconfig((here / cfg).resolve())
+                    except Exception:  # one unreadable config must not abort the scan
+                        break
                     for cond in opts.get("customConditions") or []:
                         if isinstance(cond, str):
                             custom.append(cond)
@@ -141,7 +182,12 @@ def _config(repo: Path) -> _RepoConfig:
     key = str(repo)
     cfg = _CACHE.get(key)
     if cfg is None:
-        cfg = _CACHE[key] = _RepoConfig(repo)
+        try:
+            cfg = _RepoConfig(repo)
+        except Exception:  # cache an empty config so a broken repo is not re-walked for every specifier
+            cfg = _RepoConfig.__new__(_RepoConfig)
+            cfg.repo, cfg.packages, cfg.tsconfigs, cfg.conditions = repo.resolve(), {}, [], list(_STD_CONDITIONS)
+        _CACHE[key] = cfg
     return cfg
 
 
@@ -165,7 +211,8 @@ def _flatten(target, conditions: list[str]) -> list[str]:
 
 def _exists_as_file(repo: Path, candidate: Path) -> str | None:
     """candidate itself, its source-extension swaps, or a directory index, as a repo-relative path."""
-    options = [candidate]
+    # an exact path only counts when it is code (exports often list ./package.json or a css file)
+    options = [candidate] if candidate.suffix in _EXTS else []
     suffix = candidate.suffix
     swaps = {".js": (".ts", ".tsx", ".jsx"), ".mjs": (".mts",), ".cjs": (".cts",), ".jsx": (".tsx",)}
     for alt in swaps.get(suffix, ()):
@@ -258,5 +305,8 @@ def resolve_bare_import(repo_path: Path, from_file: Path, spec: str) -> str | No
     """Repo-relative path a non-relative specifier resolves to inside the repo, or None (external)."""
     if not spec or spec.startswith((".", "/")) or ":" in spec.split("/")[0]:
         return None
-    cfg = _config(repo_path)
-    return _from_paths(cfg, from_file.resolve(), spec) or _from_package(cfg, spec)
+    try:
+        cfg = _config(repo_path)
+        return _from_paths(cfg, from_file.resolve(), spec) or _from_package(cfg, spec)
+    except Exception:  # malformed package.json / tsconfig content: treat the specifier as external
+        return None
