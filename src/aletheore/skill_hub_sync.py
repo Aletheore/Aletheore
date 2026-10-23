@@ -480,6 +480,53 @@ def _check_server_name(name) -> None:
         skill_hub.sanitize_skill_name(name, existing=True)
 
 
+def _newer_entry(a: dict, b: dict) -> dict:
+    """Of two server entries whose names differ only in case, the one updated last; a tie (or an unreadable
+    timestamp) goes to the name that sorts first, so every machine keeps the same one."""
+    ta, tb = _parse_timestamp(a.get("updated_at")), _parse_timestamp(b.get("updated_at"))
+    if ta is not None and tb is not None and ta != tb:
+        return a if ta > tb else b
+    return a if a["name"] < b["name"] else b
+
+
+def _resolve_case_collisions(entries: list, local_names: list[str]) -> list:
+    """Drop the server entries that would share a file with another skill on a case-insensitive filesystem.
+
+    Two server names that differ only in case keep the newest one. A server name that differs only in case from a
+    skill already saved here is skipped, because writing it would overwrite that file. Each skipped name gets a
+    one-line warning; nothing is written or overwritten for it."""
+    groups: dict[str, list] = {}
+    for entry in entries:
+        groups.setdefault(skill_hub.name_key(entry["name"]), []).append(entry)
+    local_by_key: dict[str, list[str]] = {}
+    for local in local_names:
+        local_by_key.setdefault(skill_hub.name_key(local), []).append(local)
+    kept = []
+    for key, group in groups.items():
+        winner = group[0]
+        for other in group[1:]:
+            winner = _newer_entry(winner, other)
+        for entry in group:
+            if entry is not winner:
+                logger.warning(
+                    "skill hub sync: skipped custom skill '%s' from your account because '%s' differs from it only "
+                    "in capital letters and is newer (the two would share one file on macOS and Windows)",
+                    entry["name"],
+                    winner["name"],
+                )
+        clashing = [local for local in local_by_key.get(key, []) if local != winner["name"]]
+        if clashing:
+            logger.warning(
+                "skill hub sync: skipped custom skill '%s' from your account because '%s' is saved here and "
+                "differs from it only in capital letters",
+                winner["name"],
+                clashing[0],
+            )
+            continue
+        kept.append(winner)
+    return kept
+
+
 def pull_merge_custom_skills(timeout: float = 10.0) -> None:
     """Run once at login. Requires a saved personal token - returns
     immediately (no network call) without one, since login's caller only
@@ -519,6 +566,7 @@ def pull_merge_custom_skills(timeout: float = 10.0) -> None:
         sync_state = _load_sync_state()
         seen_names = set()
 
+        valid_entries = []
         for entry in server_skills:
             name = entry["name"]
             try:
@@ -526,6 +574,11 @@ def pull_merge_custom_skills(timeout: float = 10.0) -> None:
             except ValueError:
                 logger.warning("skill hub sync: ignoring unsafe skill name from server: %r", name)
                 continue
+            valid_entries.append(entry)
+        local_names = skill_hub.list_custom_skill_names()
+        server_keys = {skill_hub.name_key(e["name"]) for e in valid_entries}
+        for entry in _resolve_case_collisions(valid_entries, local_names):
+            name = entry["name"]
             seen_names.add(name)
             try:
                 _merge_one_server_skill(name, entry, still_pending, sync_state, headers, timeout)
@@ -536,8 +589,22 @@ def pull_merge_custom_skills(timeout: float = 10.0) -> None:
         # Any local custom skill the server's list didn't contain at all -
         # added locally while fully offline, never pushed. Same
         # push-and-record-state logic as the "never synced" branch above.
-        for name in skill_hub.list_custom_skill_names():
+        pushed_keys: set[str] = set()
+        for name in sorted(skill_hub.list_custom_skill_names()):
             if name in seen_names:
+                continue
+            key = skill_hub.name_key(name)
+            if key in server_keys or key in pushed_keys:
+                # The account already holds this name in another case, or an earlier local name with the same
+                # letters was pushed: uploading it would create a second skill that shares a file on macOS and
+                # Windows. Keep the local file, upload nothing.
+                logger.warning(
+                    "skill hub sync: did not upload custom skill '%s' because another skill differs from it only "
+                    "in capital letters (the account keeps the newest of such names). Rename '%s' to keep your "
+                    "local edits on your account",
+                    name,
+                    name,
+                )
                 continue
             try:
                 local_content = skill_hub.read_custom_skill_file(name)
@@ -552,6 +619,7 @@ def pull_merge_custom_skills(timeout: float = 10.0) -> None:
                     continue
                 # Never synced, or edited here after the remote delete: push.
                 _push_and_record(name, local_content, headers, timeout, sync_state)
+                pushed_keys.add(key)  # only a real upload uses up the name
             except Exception:
                 _log_failure("skill hub sync: could not merge custom skill '%s'", name)
     except Exception:

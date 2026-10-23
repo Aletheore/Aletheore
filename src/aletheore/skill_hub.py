@@ -134,6 +134,12 @@ class CustomSkillError(ValueError):
     """A custom-skill operation that cannot go ahead. The message is one line that says what is wrong and what to do."""
 
 
+def name_key(name: str) -> str:
+    """The form of a custom skill name used to decide whether two names are the same file on a case-insensitive
+    filesystem (macOS, Windows). Local adds, pulls and pushes all compare names through this one function."""
+    return name.casefold()
+
+
 def custom_skills_dir() -> Path:
     return user_home() / ".config" / "aletheore" / "custom_skills"
 
@@ -1368,7 +1374,7 @@ def add_custom_skill_with_sync(name: str, content: str) -> tuple[str, str | None
         content = content.replace("\r\n", "\n")
     validate_custom_skill_content(content)
     for other in list_custom_skill_names():
-        if other != safe and other.lower() == safe.lower():
+        if other != safe and name_key(other) == name_key(safe):
             raise CustomSkillError(
                 f"a custom skill named {other!r} already exists and differs from {safe!r} only in capital letters "
                 f"(many systems treat the two as one file). Use {other!r}, or remove it first"
@@ -1619,7 +1625,7 @@ def resolve_skill_id(text: str) -> tuple[str | None, list[str]]:
                 return text, []
         except ValueError:
             pass
-        return None, [f"{_CUSTOM_PREFIX}{other}" for other in list_custom_skill_names() if other.lower() == name.lower()][:5]
+        return None, [f"{_CUSTOM_PREFIX}{other}" for other in list_custom_skill_names() if name_key(other) == name_key(name)][:5]
     ids = _bundled_ids()
     if text in ids:
         return text, []

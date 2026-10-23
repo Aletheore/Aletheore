@@ -147,7 +147,7 @@ groups:
 
 Every alert must link to a runbook with clear remediation steps.
 
-```markdown
+````markdown
 # Runbook: Error Budget Burn Rate
 
 ## Alert: ErrorBudgetBurnRateFast
@@ -217,7 +217,7 @@ kubectl apply -f rate-limit-config.yaml
 ### Communication
 
 **Slack template:**
-```
+````
 :fire: INCIDENT: Error budget burn rate critical
 
 Service: api

@@ -4,7 +4,7 @@ Use this template to create comprehensive brand guidelines for any project.
 
 ## Document Structure
 
-```markdown
+````markdown
 # Brand Guidelines v{X.Y}
 
 ## Quick Reference
@@ -122,7 +122,7 @@ Minimum clear space = height of logo mark
 - Style: {outlined/filled/duotone}
 - Size: 24px base grid
 - Corner radius: {value}px
-```
+````
 
 ## Usage
 

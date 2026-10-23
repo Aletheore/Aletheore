@@ -3165,6 +3165,27 @@ def _skill_line(meta: skill_hub.SkillMeta, width: int) -> str:
     return head + ui.truncate(meta.title, width - len(head))
 
 
+_EXTRAS_MIN_WIDTH = 70  # below this a third line per result would wrap or crowd the list, so it is left out
+
+
+def _skill_extras_line(meta: skill_hub.SkillMeta, width: int) -> str | None:
+    """`    needs: a, b; also: x, y` for a skill that requires something or has alternates; None when it has
+    neither or the terminal is narrow. The full lists are always in the MCP search result."""
+    from aletheore import ui
+
+    if width < _EXTRAS_MIN_WIDTH:
+        return None
+    parts = []
+    if meta.requires:
+        parts.append("needs: " + ", ".join(meta.requires))
+    alternates = getattr(meta, "alternates", None)
+    if alternates:
+        parts.append("also: " + ", ".join(alternates))
+    if not parts:
+        return None
+    return "    " + ui.truncate("; ".join(parts), width - 4)
+
+
 skill_hub_app = typer.Typer(help="browse and manage Aletheore Hallbook, the skill hub")
 app.add_typer(skill_hub_app, name="hallbook")
 # The feature was called "skill-hub" before the rename to Hallbook. Kept as a
@@ -3258,6 +3279,9 @@ def skill_hub_search(
         typer.echo(_skill_line(meta, width))
         if " ".join(meta.description.split()):
             typer.echo("    " + ui.truncate(meta.description, width - 4))
+        extras = _skill_extras_line(meta, width)
+        if extras:
+            typer.echo(typer.style(extras, dim=True))
 
 
 @skill_hub_app.command(

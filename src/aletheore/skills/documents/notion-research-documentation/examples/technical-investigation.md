@@ -100,7 +100,7 @@ Our caching infrastructure uses a two-tier approach with Redis for API response 
 ```
 api:v1:{endpoint}:{params_hash}
 session:{user_id}:{session_id}
-```
+````
 
 ### Invalidation Strategy
 - **Event-driven**: Critical data changes trigger immediate invalidation
@@ -211,7 +211,7 @@ value = cache.get(key) or fetch_from_db(key)
 # Invalidate pattern
 cache.delete_pattern("api:v1:users:*")
 ```
-```
+````
 
 ## Key Success Factors
 

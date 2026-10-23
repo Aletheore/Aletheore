@@ -403,7 +403,7 @@ message User {
 
 ### Multi-Language Examples
 
-```markdown
+````markdown
 # Create User
 
 ## Python
@@ -456,11 +456,11 @@ user = client.users.create(
 )
 puts user.id
 ```
-```
+````
 
 ### SDK Reference Template
 
-```markdown
+````markdown
 # Users SDK
 
 ## Installation
@@ -517,7 +517,7 @@ try {
   }
 }
 ```
-```
+````
 
 ## Quick Reference
 

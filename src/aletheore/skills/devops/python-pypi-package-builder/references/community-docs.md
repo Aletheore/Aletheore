@@ -186,7 +186,7 @@ We aim to acknowledge within 48 hours and resolve within 14 days.
 
 ### `.github/ISSUE_TEMPLATE/bug_report.md`
 
-```markdown
+````markdown
 ---
 name: Bug Report
 about: Report a reproducible bug
@@ -206,7 +206,7 @@ labels: bug
 **Expected behavior:**
 
 **Actual behavior:**
-```
+````
 
 ### `.github/ISSUE_TEMPLATE/feature_request.md`
 

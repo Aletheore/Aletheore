@@ -4286,3 +4286,29 @@ def test_login_connection_error_still_shows_the_connection_hint(tmp_path, monkey
 
     assert result.exit_code == 1
     assert "check your connection and retry" in output
+
+
+def test_hallbook_search_adds_a_dim_third_line_for_needs_and_alternates(monkeypatch):
+    _fake_width(monkeypatch, 100)
+    metas = [
+        skill_hub.SkillMeta("a/one", "a", "One", "Short.", requires=["node", "git"], alternates=["a/uno"]),
+        skill_hub.SkillMeta("a/two", "a", "Two", "Plain."),
+    ]
+    monkeypatch.setattr(skill_hub, "search_skills", lambda *a, **k: metas)
+    assert runner.invoke(app, ["hallbook", "search", "xx"]).stdout.splitlines() == [
+        "a/one  One", "    Short.", "    needs: node, git; also: a/uno", "a/two  Two", "    Plain."]
+
+
+def test_hallbook_search_leaves_the_third_line_out_on_a_narrow_terminal(monkeypatch):
+    _fake_width(monkeypatch, 60)
+    metas = [skill_hub.SkillMeta("a/one", "a", "One", "Short.", requires=["node"], alternates=["a/uno"])]
+    monkeypatch.setattr(skill_hub, "search_skills", lambda *a, **k: metas)
+    assert runner.invoke(app, ["hallbook", "search", "xx"]).stdout.splitlines() == ["a/one  One", "    Short."]
+
+
+def test_hallbook_search_third_line_never_exceeds_the_width(monkeypatch):
+    _fake_width(monkeypatch, 80)
+    metas = [skill_hub.SkillMeta("a/one", "a", "One", "", requires=[f"tool-{i}" for i in range(30)])]
+    monkeypatch.setattr(skill_hub, "search_skills", lambda *a, **k: metas)
+    lines = runner.invoke(app, ["hallbook", "search", "xx"]).stdout.splitlines()
+    assert len(lines) == 2 and len(lines[1]) <= 80 and lines[1].startswith("    needs: tool-0")

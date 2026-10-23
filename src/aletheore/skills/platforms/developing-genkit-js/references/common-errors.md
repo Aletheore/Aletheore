@@ -98,6 +98,7 @@ Genkit v1.x introduced significant API changes. This section covers critical syn
 - **Incorrect (Pre-1.0)**: Importing `defineFlow` globally.
   ```ts
   import { defineFlow } from "@genkit-ai/flow"; // INCORRECT
+  ```
 
 You should never import `@genkit-ai/flow`, `@genkit-ai/ai` or `@genkit-ai/core` packages directly.
 

@@ -260,7 +260,7 @@ Response: 410 Gone
 
 ### Provide Migration Guide
 
-```markdown
+````markdown
 # Migrating from v1 to v2
 
 ## Breaking Changes
@@ -289,7 +289,7 @@ Response: 410 Gone
 **Migration:**
 - Split `name` field into `first_name` and `last_name`
 - Update client code to use new fields
-```
+````
 
 ### Offer Tools
 

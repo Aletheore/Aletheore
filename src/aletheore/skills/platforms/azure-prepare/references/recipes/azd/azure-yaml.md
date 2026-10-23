@@ -199,7 +199,6 @@ resource staticWebApp 'Microsoft.Web/staticSites@2022-09-01' = {
   name: name
   location: location
   tags: union(tags, { 'azd-service-name': 'web' })}
-```
 }
 ```
 
