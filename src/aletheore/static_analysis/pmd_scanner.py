@@ -77,7 +77,7 @@ def check_pmd(repo_path: Path, timeout: int | None = None) -> dict:
     # count_real_files used to be two separate full-tree walks here.
     has_java, file_count = file_census(repo_path, "*.java")
     if not has_java:
-        return {"checked": True, "reason": None, "findings": []}
+        return {"checked": True, "reason": None, "findings": [], "not_applicable": "no Java source files"}
 
     binary = shutil.which("pmd")
     if binary is None:

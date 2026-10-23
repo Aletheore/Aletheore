@@ -245,7 +245,7 @@ def test_build_module_graph_rust_grouped_use_resolves_both_names(tmp_path):
     # `mod foo;` declaration. `mod` is a genuine file dependency - it is how the
     # module tree is declared - and counting only `use` left crates whose lib.rs
     # is all `mod` statements with no edges at all.
-    assert len([e for e in dependency_graph["edges"] if e[0] == "src/main.rs"]) == 3
+    assert len([e for e in dependency_graph["edges"] if e[0] == "src/main.rs"]) == 1  # three `use` names, one target file: a single edge
 
 
 def test_build_module_graph_rust_wildcard_use_resolves(tmp_path):

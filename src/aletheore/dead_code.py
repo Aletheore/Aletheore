@@ -3,6 +3,7 @@ import tomllib
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from aletheore.safe_io import read_text_lenient
 from aletheore.repo_config import is_ignored
 from aletheore.scanner.detect import IGNORED_DIRS
 from aletheore.scanner.graph import _infer_swift_targets
@@ -1384,7 +1385,7 @@ def _python_console_script_entry_points(repo_path: Path) -> set[str]:
     if not pyproject.exists():
         return set()
     try:
-        data = tomllib.loads(pyproject.read_text(encoding="utf-8", errors="ignore"))
+        data = tomllib.loads(read_text_lenient(pyproject))
     except tomllib.TOMLDecodeError:
         return set()
 
@@ -1739,13 +1740,51 @@ def find_dead_code(
                 still_unreachable.append(entry)
         unreachable_modules = still_unreachable
 
-    imported_roots = _import_roots(modules) | _raw_external_import_roots(repo_path, modules)
+    # Manifests at any depth, each judged against the code under its own
+    # directory (the root manifest against the whole repository, since a
+    # root package.json commonly covers every workspace package).
+    from aletheore.manifests import manifest_dir_paths
+
+    imported_roots_by_scope: dict[str, set[str]] = {}
     unused_dependencies = []
-    for name, _version, ecosystem in _parse_pip_pins(repo_path) + _parse_npm_direct_pins(repo_path):
-        # Static import-name matching is intentionally conservative. Some packages expose
-        # different import roots than their package names; known common aliases live above.
-        if imported_roots.isdisjoint(_package_import_names(name)):
-            unused_dependencies.append({"ecosystem": ecosystem, "package": name})
+    seen_unused: set[tuple[str, str, str]] = set()
+    for rel_dir, directory in manifest_dir_paths(repo_path, ignored_paths):
+        # Each parser separately: an unreadable package.json must not drop the
+        # pins a readable requirements.txt in the same directory declared.
+        declared = []
+        for parse in (_parse_pip_pins, _parse_npm_direct_pins):
+            try:
+                declared += parse(directory)
+            except OSError:
+                continue
+        if not declared:
+            continue
+        scoped = (
+            modules
+            if rel_dir == "."
+            else [m for m in modules if m["path"].startswith(rel_dir + "/")]
+        )
+        if rel_dir != "." and not scoped:
+            # No indexed source under this manifest (config-only package.json,
+            # docs requirements): nothing to compare against, so claiming every
+            # dependency is unused would be a false positive.
+            continue
+        if rel_dir not in imported_roots_by_scope:
+            imported_roots_by_scope[rel_dir] = _import_roots(scoped) | _raw_external_import_roots(
+                repo_path, scoped
+            )
+        imported_roots = imported_roots_by_scope[rel_dir]
+        for name, _version, ecosystem in declared:
+            # Static import-name matching is intentionally conservative. Some packages expose
+            # different import roots than their package names; known common aliases live above.
+            if imported_roots.isdisjoint(_package_import_names(name)):
+                key = (ecosystem, name, rel_dir)
+                if key not in seen_unused:
+                    seen_unused.add(key)
+                    entry = {"ecosystem": ecosystem, "package": name}
+                    if rel_dir != ".":
+                        entry["manifest"] = rel_dir
+                    unused_dependencies.append(entry)
 
     return {
         "unreachable_modules": unreachable_modules,

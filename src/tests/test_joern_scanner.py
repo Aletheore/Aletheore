@@ -18,7 +18,7 @@ def test_check_joern_is_checked_true_with_no_findings_when_no_go_source(tmp_path
         result = check_joern(tmp_path)
 
     mock_which.assert_not_called()
-    assert result == {"checked": True, "reason": None, "findings": []}
+    assert result == {"checked": True, "reason": None, "findings": [], "not_applicable": "no Go source files"}
 
 
 def test_check_joern_reports_not_installed(tmp_path):
