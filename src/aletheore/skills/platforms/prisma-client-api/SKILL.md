@@ -6,7 +6,7 @@ metadata:
   author: prisma
   version: 7.9.1
 skill_id: platforms/prisma-client-api
-title: Prisma Client Api
+title: Prisma Client API
 source_url: https://github.com/prisma/skills/tree/ba3f9d73200bbb62e49733ab93a961fd138a2c18/prisma-client-api
 shelf: build
 aletheore: {"id": "platforms/prisma-client-api", "shelf": "build", "category": "platforms", "origin": "https://github.com/prisma/skills/tree/ba3f9d73200bbb62e49733ab93a961fd138a2c18/prisma-client-api", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "ba3f9d73200bbb62e49733ab93a961fd138a2c18", "quality": 4, "curation_note": "official Prisma skill", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 8, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

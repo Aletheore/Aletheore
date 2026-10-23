@@ -22,6 +22,7 @@ _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 def build_evidence_summary(evidence: dict) -> dict:
+    git = evidence.get("git") or {}
     findings = evidence["security"]["secrets"]["findings"]
     real_findings = [
         f for f in findings if not f.get("likely_placeholder", False) and not f.get("accepted", False)
@@ -34,11 +35,14 @@ def build_evidence_summary(evidence: dict) -> dict:
             "module_count": len(evidence["repository"]["modules"]),
             "monorepo": evidence["repository"]["monorepo"],
         },
+        # A folder that is not a git repository, or a repository with no commits yet, scans to
+        # {"git": {"available": False}} with none of the history fields.
         "git_activity": {
-            "total_commits": evidence["git"]["total_commits"],
-            "commit_cadence": evidence["git"]["commit_cadence"],
-            "ownership": evidence["git"]["ownership"],
-            "branches": evidence["git"]["branches"],
+            "available": bool(git.get("available", "total_commits" in git)),
+            "total_commits": git.get("total_commits", 0),
+            "commit_cadence": git.get("commit_cadence") or {"trend": "n/a"},
+            "ownership": git.get("ownership", []),
+            "branches": git.get("branches", []),
         },
         "security": {
             "secrets": {
@@ -219,15 +223,28 @@ def build_app(repo_path: Path) -> Starlette:
     async def index(request):
         return HTMLResponse(DASHBOARD_HTML)
 
+    def no_scan_response():
+        # The scan file can be missing or removed while the dashboard is up; say so instead of answering 500.
+        return JSONResponse(
+            {"error": "No scan found for this folder. Run 'aletheore scan' here, then reload this page."},
+            status_code=404,
+        )
+
     async def api_evidence(request):
-        evidence = read_evidence(repo_path)
+        try:
+            evidence = read_evidence(repo_path)
+        except FileNotFoundError:
+            return no_scan_response()
         return JSONResponse(build_evidence_summary(evidence))
 
     async def api_history(request):
         return JSONResponse(build_history_summary(repo_path))
 
     async def api_graph(request):
-        evidence = read_evidence(repo_path)
+        try:
+            evidence = read_evidence(repo_path)
+        except FileNotFoundError:
+            return no_scan_response()
         return JSONResponse(build_graph_summary(evidence))
 
     async def api_mcp_tools(request):
@@ -445,7 +462,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <script>
 async function fetchJSON(path) {
   const response = await fetch(path);
-  return response.json();
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || ('Request failed: HTTP ' + response.status));
+  return body;
 }
 
 function renderRepoOverview(data) {
@@ -459,6 +478,10 @@ function renderRepoOverview(data) {
 
 function renderGitActivity(data) {
   const el = document.getElementById('git-activity');
+  if (!data.available) {
+    el.innerHTML = '<div class="stat-row"><span>No git history to read (not a git repository, or no commits yet)</span></div>';
+    return;
+  }
   const staleBranches = data.branches.filter(b => b.ahead_of_main > 0).length;
   el.innerHTML =
     '<div class="stat">' + data.total_commits + ' commits</div>' +
@@ -1520,7 +1543,14 @@ function toggleTimezone() {
 }
 
 async function loadAll() {
-  const evidence = await fetchJSON('/api/evidence');
+  let evidence;
+  try {
+    evidence = await fetchJSON('/api/evidence');
+  } catch (err) {
+    // No scan yet (or it was removed): the page refreshes by itself when a scan appears.
+    document.getElementById('repo-overview').innerHTML = '<div class="stat-row"><span>' + err.message + '</span></div>';
+    return;
+  }
   lastScannedAtIso = evidence.scanned_at;
   renderScannedAt();
   renderRepoOverview(evidence.repo_overview);

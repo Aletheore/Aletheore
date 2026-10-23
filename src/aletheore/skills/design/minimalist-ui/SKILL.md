@@ -2,7 +2,7 @@
 name: minimalist-ui
 description: Clean editorial-style interfaces. Warm monochrome palette, typographic contrast, flat bento grids, muted pastels. No gradients, no heavy shadows.
 skill_id: design/minimalist-ui
-title: Minimalist Ui
+title: Minimalist UI
 source_url: https://github.com/Leonxlnx/taste-skill/tree/f624f37a8c650b9cc550253104925efe4c8de246/skills/minimalist-skill
 license: MIT
 shelf: product-design

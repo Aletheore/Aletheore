@@ -2,7 +2,7 @@
 name: create-prd
 description: 'Create a lean, decision-ready Product Requirements Document with an 8-section template: summary, contacts, background, objective, market segments, value propositions (6-part JTBD template), solution, and release. Lean by default (about one to two pages), with a fuller spec on request. Use when writing a PRD, documenting product requirements, preparing a feature spec, or reviewing an existing PRD.'
 skill_id: product/create-prd
-title: Create Prd
+title: Create PRD
 source_url: https://github.com/phuryn/pm-skills/tree/07b34f64ee828df08953f505b7f747aef85ae7c6/pm-execution/skills/create-prd
 license: MIT
 shelf: product-design

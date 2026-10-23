@@ -9,7 +9,7 @@ skill_id: platforms/azure-prepare
 title: Azure Prepare
 source_url: https://github.com/microsoft/azure-skills/tree/cf79ce8778ad063eeac19dbe8bf982d71b466ce0/skills/azure-prepare
 shelf: build
-aletheore: {"id": "platforms/azure-prepare", "shelf": "build", "category": "platforms", "origin": "https://github.com/microsoft/azure-skills/tree/cf79ce8778ad063eeac19dbe8bf982d71b466ce0/skills/azure-prepare", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "cf79ce8778ad063eeac19dbe8bf982d71b466ce0", "quality": 4, "curation_note": "Azure kusto/messaging/prepare/quotas/reliability", "needs_tool": null, "vet": {"injection_pattern_hits": ["pipe-to-shell"], "portability_flags": [], "companion_files": 165, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["mcp:azure", "mcp:check", "mcp:self-hosted", "mcp:when-azure"], "adapted": {"pipe-to-shell": 1}, "mentions": ["claude", "agents"], "status": "ready", "mentions_agents": []}
+aletheore: {"id": "platforms/azure-prepare", "shelf": "build", "category": "platforms", "origin": "https://github.com/microsoft/azure-skills/tree/cf79ce8778ad063eeac19dbe8bf982d71b466ce0/skills/azure-prepare", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "cf79ce8778ad063eeac19dbe8bf982d71b466ce0", "quality": 4, "curation_note": "Azure kusto/messaging/prepare/quotas/reliability", "needs_tool": null, "vet": {"injection_pattern_hits": ["pipe-to-shell"], "portability_flags": [], "companion_files": 165, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["mcp:azure", "mcp:check", "mcp:self-hosted", "mcp:when-azure", "scripts"], "adapted": {"pipe-to-shell": 1}, "mentions": ["claude", "agents"], "status": "ready", "mentions_agents": []}
 ---
 
 # Azure Prepare

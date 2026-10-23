@@ -16,6 +16,8 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from aletheore.git_exec import git_executable
+
 TOP_K = 3
 MAX_IDENTIFIERS = 25
 MIN_SCORE = 4.0  # below this the best file is not worth mentioning
@@ -102,8 +104,8 @@ def _symbols_of(module: dict) -> list[Symbol]:
 
 
 def _git_files_containing(repo: Path, ident: str, candidates: set[str], timeout: float) -> list[str] | None:
-    r = subprocess.run(
-        ["git", "grep", "-l", "-w", "-F", "-e", ident], cwd=repo, capture_output=True, text=True, timeout=timeout
+    r = subprocess.run(  # nosec B603 - argv[0] is git_executable()'s absolute path, args are fixed
+        [git_executable(), "grep", "-l", "-w", "-F", "-e", ident], cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout
     )
     if r.returncode not in (0, 1):
         return None

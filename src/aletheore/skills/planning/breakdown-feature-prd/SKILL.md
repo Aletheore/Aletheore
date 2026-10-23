@@ -2,7 +2,7 @@
 name: breakdown-feature-prd
 description: Prompt for creating Product Requirements Documents (PRDs) for new features, based on an Epic.
 skill_id: planning/breakdown-feature-prd
-title: Breakdown Feature Prd
+title: Breakdown Feature PRD
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/breakdown-feature-prd
 license: MIT
 shelf: build

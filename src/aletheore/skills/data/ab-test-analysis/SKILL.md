@@ -2,7 +2,7 @@
 name: ab-test-analysis
 description: Analyze A/B test results with statistical significance, sample size validation, confidence intervals, and ship/extend/stop recommendations. Use when evaluating experiment results, checking if a test reached significance, interpreting split test data, or deciding whether to ship a variant.
 skill_id: data/ab-test-analysis
-title: Ab Test Analysis
+title: A/B Test Analysis
 source_url: https://github.com/phuryn/pm-skills/tree/07b34f64ee828df08953f505b7f747aef85ae7c6/pm-data-analytics/skills/ab-test-analysis
 license: MIT
 shelf: build

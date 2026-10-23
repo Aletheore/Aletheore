@@ -2,7 +2,7 @@
 name: pr-writer
 description: Create or refresh reviewer-facing PR titles and descriptions. Use when opening a PR, updating its title or body, or preparing branch changes for review.
 skill_id: git-workflow/pr-writer
-title: Pr Writer
+title: PR Writer
 source_url: https://github.com/getsentry/skills/tree/f57ada2d0b640406ea7e25b11d636c530e77c58b/skills/pr-writer
 license: Apache-2.0
 shelf: ship-operate

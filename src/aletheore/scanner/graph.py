@@ -24,8 +24,9 @@ import tree_sitter_swift as tsswift
 import tree_sitter_typescript as tstypescript
 from tree_sitter import Language, Node, Parser, Tree
 
+from aletheore.safe_io import read_text_lenient
 from aletheore.repo_config import is_ignored
-from aletheore.scanner.detect import IGNORED_DIRS, _nested_git_roots
+from aletheore.scanner.detect import IGNORED_DIRS, _nested_git_roots, git_visible_paths, visible_key
 
 PY_LANGUAGE = Language(tspython.language())
 JS_LANGUAGE = Language(tsjavascript.language())
@@ -102,6 +103,7 @@ def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
     root_str = str(repo_path)
     root_prefix_len = len(root_str) + 1
     sep = os.sep
+    visible = git_visible_paths(repo_path)
     found: list[tuple[str, str]] = []
     for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
         if dirpath == root_str:
@@ -115,6 +117,7 @@ def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
             for d in dirnames
             if d not in IGNORED_DIRS
             and not is_ignored(f"{rel_dir}/{d}" if rel_dir != "." else d, patterns)
+            and (visible is None or visible_key(f"{rel_dir}/{d}" if rel_dir != "." else d) in visible[1])
         ]
         if any(dirpath == root or dirpath.startswith(root + sep) for root in nested_git_roots):
             dirnames[:] = []
@@ -130,6 +133,8 @@ def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
             rel_path = f"{rel_dir}/{filename}" if rel_dir != "." else filename
             if is_ignored(rel_path, patterns):
                 continue
+            if visible is not None and visible_key(rel_path) not in visible[0]:
+                continue  # ignored by a .gitignore (and not tracked)
             found.append((rel_path, full))
     if os.name == "nt":
         # Windows paths compare case-insensitively; keep pathlib's own order.
@@ -1078,25 +1083,65 @@ def _load_go_module_prefix(repo_path: Path) -> str | None:
     go_mod = repo_path / "go.mod"
     if not go_mod.exists():
         return None
-    for line in go_mod.read_text(encoding="utf-8", errors="ignore").splitlines():
+    for line in read_text_lenient(go_mod).splitlines():
         line = line.strip()
         if line.startswith("module "):
             return line[len("module "):].strip()
     return None
 
 
-def _resolve_go_import(repo_path: Path, module_prefix: str | None, import_path: str) -> list[str]:
+def _load_go_modules(repo_path: Path) -> tuple[tuple[str, str], ...]:
+    """Every Go module in the repository as (module path, repo-relative dir),
+    longest module path first. A repo can hold several modules (a go.mod in a
+    subdirectory, several side by side, or a go.work listing them); go.mod
+    files are found at any depth, skipping vendored and ignored directories."""
+    from aletheore.manifests import discover_manifests
+
+    modules: list[tuple[str, str]] = []
+    discovery = discover_manifests(repo_path)
+    for rel_dir in discovery["dirs"]:
+        if "go.mod" not in discovery["files"][rel_dir]:
+            continue
+        directory = repo_path if rel_dir == "." else repo_path / rel_dir
+        module_path = _load_go_module_prefix(directory)
+        if module_path:
+            modules.append((module_path.strip('"'), rel_dir))
+    modules.sort(key=lambda item: (-len(item[0]), item[1]))
+    return tuple(modules)
+
+
+def _resolve_go_import(repo_path: Path, module_prefix, import_path: str) -> list[str]:
     # Go doesn't import individual files, it imports whole packages (directories) - every
     # non-test .go file in that directory is part of what gets pulled in, so one import
     # statement can fan out to several edges. An import that doesn't start with the
     # module's own declared prefix is external (stdlib or a third-party module) and never
     # resolves to a local file, matching how an unresolved Python/JS import is silently
     # dropped rather than treated as an error.
-    if not module_prefix or not import_path.startswith(module_prefix):
+    #
+    # module_prefix is either the single root module path (str, the original
+    # form) or a tuple of (module path, repo-relative dir) pairs from
+    # _load_go_modules, longest module path first; the first module whose path
+    # is the import path or a "/"-bounded prefix of it owns the import.
+    if not module_prefix:
         return []
-
-    remainder = import_path[len(module_prefix):].lstrip("/")
-    package_dir = repo_path if not remainder else repo_path / Path(*remainder.split("/"))
+    if isinstance(module_prefix, str):
+        candidates = (
+            [(module_prefix, ".")]
+            if import_path == module_prefix or import_path.startswith(module_prefix.rstrip("/") + "/")
+            else []
+        )
+    else:
+        candidates = [
+            (path, rel_dir)
+            for path, rel_dir in module_prefix
+            if import_path == path or import_path.startswith(path.rstrip("/") + "/")
+        ]
+    if not candidates:
+        return []
+    owner_path, owner_dir = candidates[0]
+    remainder = import_path[len(owner_path):].lstrip("/")
+    base_dir = repo_path if owner_dir == "." else repo_path / Path(*owner_dir.split("/"))
+    package_dir = base_dir if not remainder else base_dir / Path(*remainder.split("/"))
     if not package_dir.is_dir():
         return []
 
@@ -2812,7 +2857,7 @@ def _load_php_psr4_map(repo_path: Path) -> dict[str, Path]:
     if not composer_json.exists():
         return {}
     try:
-        data = json.loads(composer_json.read_text(encoding="utf-8", errors="ignore"))
+        data = json.loads(read_text_lenient(composer_json))
     except json.JSONDecodeError:
         return {}
     if not isinstance(data, dict):
@@ -3713,9 +3758,148 @@ def _resolve_python_from_import(
 JS_FAMILY_EXTENSIONS = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts")
 
 
-def _resolve_js_import(repo_path: Path, from_file: Path, spec: str) -> str | None:
+def _load_js_workspaces(repo_path: Path) -> dict[str, str]:
+    """name -> repo-relative dir for every package.json that declares a "name"
+    (npm/yarn/pnpm workspace packages, or any in-repo package). A bare import
+    naming one of them is an import of that package's source, not of a
+    published copy."""
+    import json
+
+    from aletheore.manifests import discover_manifests
+
+    found: dict[str, str] = {}
+    discovery = discover_manifests(repo_path)
+    for rel_dir in discovery["dirs"]:
+        if rel_dir == "." or "package.json" not in discovery["files"][rel_dir]:
+            continue
+        try:
+            data = json.loads(read_text_lenient(repo_path / rel_dir / "package.json"))
+        except json.JSONDecodeError:
+            continue
+        name = data.get("name") if isinstance(data, dict) else None
+        if isinstance(name, str) and name:
+            found.setdefault(name, rel_dir)
+    return found
+
+
+_BUILD_OUTPUT_DIRS = ("dist", "build", "out", "lib", "esm", "cjs", "types")
+
+
+def _js_file_candidates(base: Path) -> list[Path]:
+    candidates = [base]
+    for ext in JS_FAMILY_EXTENSIONS:
+        candidates.append(base.with_suffix(ext) if base.suffix else Path(str(base) + ext))
+        candidates.append(base / f"index{ext}")
+    return candidates
+
+
+def _first_existing_file(repo_path: Path, base: Path) -> str | None:
+    for candidate in _js_file_candidates(base):
+        if candidate.is_file():
+            return _rel(repo_path, candidate)
+    return None
+
+
+def _export_target(value) -> str | None:
+    """A string target out of a package.json `exports`/`main`-style value,
+    preferring source-ish conditions."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("source", "import", "module", "default", "require", "types"):
+            if key in value:
+                target = _export_target(value[key])
+                if target:
+                    return target
+    return None
+
+
+def _resolve_js_workspace_import(
+    repo_path: Path, spec: str, workspaces: dict[str, str]
+) -> str | None:
+    import json
+
+    name = None
+    for candidate in workspaces:
+        if spec == candidate or spec.startswith(candidate + "/"):
+            if name is None or len(candidate) > len(name):
+                name = candidate
+    if name is None:
+        return None
+    package_dir = repo_path / workspaces[name]
+    subpath = spec[len(name):].lstrip("/")
+
+    try:
+        manifest = json.loads(read_text_lenient(package_dir / "package.json"))
+    except json.JSONDecodeError:
+        manifest = {}
+    if not isinstance(manifest, dict):
+        manifest = {}
+
+    def under_package(relative: str) -> Path:
+        return (package_dir / relative).resolve()
+
+    def prefer_source(relative: str) -> str | None:
+        """Resolve a manifest-declared entry, mapping a build-output path
+        (dist/index.js) back to the package's source (src/index.ts)."""
+        relative = relative[2:] if relative.startswith("./") else relative
+        parts = relative.split("/")
+        base = under_package(relative)
+        if parts and parts[0] in _BUILD_OUTPUT_DIRS:
+            rest = "/".join(parts[1:])
+            for source_root in ("src", "."):
+                stem = Path(rest).with_suffix("") if Path(rest).suffix in (".js", ".mjs", ".cjs", ".ts", ".d.ts") else Path(rest)
+                hit = _first_existing_file(repo_path, under_package(f"{source_root}/{stem}" if source_root != "." else str(stem)))
+                if hit:
+                    return hit
+        return _first_existing_file(repo_path, base)
+
+    if not subpath:
+        exports = manifest.get("exports")
+        entries: list[str] = []
+        if isinstance(exports, dict):
+            target = _export_target(exports.get(".", exports if "import" in exports or "default" in exports else None))
+            if target:
+                entries.append(target)
+        elif isinstance(exports, str):
+            entries.append(exports)
+        for key in ("source", "module", "main", "types"):
+            value = manifest.get(key)
+            if isinstance(value, str):
+                entries.append(value)
+        for entry in entries:
+            hit = prefer_source(entry)
+            if hit:
+                return hit
+        for fallback in ("src/index", "index", "lib/index"):
+            hit = _first_existing_file(repo_path, package_dir / fallback)
+            if hit:
+                return hit
+        return None
+
+    exports = manifest.get("exports")
+    if isinstance(exports, dict):
+        target = _export_target(exports.get("./" + subpath))
+        if target:
+            hit = prefer_source(target)
+            if hit:
+                return hit
+    for root in ("", "src/"):
+        hit = _first_existing_file(repo_path, package_dir / f"{root}{subpath}")
+        if hit:
+            return hit
+    return None
+
+
+def _resolve_js_import(
+    repo_path: Path, from_file: Path, spec: str, js_workspaces: dict[str, str] | None = None
+) -> str | None:
     if not spec.startswith("."):
-        # workspace / self-referenced package names, tsconfig paths (see js_resolve)
+        if js_workspaces and not spec.startswith("/"):
+            hit = _resolve_js_workspace_import(repo_path, spec, js_workspaces)
+            if hit:
+                return hit
+        # self-referenced package names, exports conditions and tsconfig paths (see js_resolve)
         from aletheore.scanner.js_resolve import resolve_bare_import
 
         return resolve_bare_import(repo_path, from_file, spec)
@@ -3749,6 +3933,7 @@ def _extract_module(
     swift_target_files: dict[str, list[Path]] | None = None,
     java_package_types: dict[str, dict[str, list[Path]]] | None = None,
     csharp_index: dict | None = None,
+    js_workspaces: dict[str, str] | None = None,
 ) -> dict:
     """Turns one already-parsed (tree, source) into a module dict - the
     per-language dispatch every file eventually goes through, whether it
@@ -3961,7 +4146,7 @@ def _extract_module(
     else:
         raw_imports, functions, classes = _extract_javascript(tree.root_node, source)
         for spec in raw_imports:
-            target = _resolve_js_import(repo_path, path, spec)
+            target = _resolve_js_import(repo_path, path, spec, js_workspaces)
             # Same target != rel_path guard every other language branch
             # already has - see the Python branch's comment above (audit
             # finding 35). A JS file require()-ing or importing its own
@@ -3979,6 +4164,12 @@ def _extract_module(
     }
     if import_confidence:
         module["import_confidence"] = import_confidence
+    if language_name == "python" and tree.root_node.has_error:
+        # Python's grammar is complete enough that a parse error means the
+        # file really has a syntax error (or cannot be parsed by 3.x rules);
+        # the symbols found around it are kept, but the file is reported in
+        # unparseable_files so it is not mistaken for a clean index.
+        module["has_syntax_errors"] = True
     return module
 
 
@@ -3996,6 +4187,7 @@ def _parse_and_extract_one(
     go_module_prefix: str | None,
     has_rust_crate_root: bool,
     php_psr4_map: dict[str, Path],
+    js_workspaces: dict[str, str] | None = None,
 ) -> dict:
     """Reads, parses, and extracts one file - java/csharp excluded by
     construction (see build_module_graph: only non-java/csharp paths ever
@@ -4014,6 +4206,7 @@ def _parse_and_extract_one(
         go_module_prefix=go_module_prefix,
         has_rust_crate_root=has_rust_crate_root,
         php_psr4_map=php_psr4_map,
+        js_workspaces=js_workspaces,
     )
 
 
@@ -4059,12 +4252,14 @@ def _init_worker(
     go_module_prefix: str | None,
     has_rust_crate_root: bool,
     php_psr4_map: dict[str, Path],
+    js_workspaces: dict[str, str] | None = None,
 ) -> None:
     _worker_state["repo_path"] = repo_path
     _worker_state["python_source_roots"] = python_source_roots
     _worker_state["go_module_prefix"] = go_module_prefix
     _worker_state["has_rust_crate_root"] = has_rust_crate_root
     _worker_state["php_psr4_map"] = php_psr4_map
+    _worker_state["js_workspaces"] = js_workspaces
     # One Parser per worker process, reused across every file that worker
     # ever handles - not recreated per file, same discipline the sequential
     # path's own single `parser` variable already follows today.
@@ -4097,6 +4292,7 @@ def _worker_parse_and_extract_one(path: Path) -> tuple[bool, dict]:
             _worker_state["go_module_prefix"],
             _worker_state["has_rust_crate_root"],
             _worker_state["php_psr4_map"],
+            _worker_state.get("js_workspaces"),
         )
     except OSError as exc:
         return False, {
@@ -4239,6 +4435,7 @@ def _parse_many_in_parallel(
     go_module_prefix: str | None,
     has_rust_crate_root: bool,
     php_psr4_map: dict[str, Path],
+    js_workspaces: dict[str, str] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     # map (not submit+as_completed) so results come back in input order - not
     # load-bearing for correctness (module/edge order was already unasserted
@@ -4248,7 +4445,7 @@ def _parse_many_in_parallel(
         _worker_parse_and_extract_one,
         paths,
         initializer=_init_worker,
-        initargs=(repo_path, python_source_roots, go_module_prefix, has_rust_crate_root, php_psr4_map),
+        initargs=(repo_path, python_source_roots, go_module_prefix, has_rust_crate_root, php_psr4_map, js_workspaces),
     )
     if not complete:
         # Workers kept dying even one at a time, so these files were never
@@ -4467,7 +4664,7 @@ def build_module_graph(
     from aletheore.scanner import js_resolve as _js_resolve
 
     _js_resolve.clear_cache()  # package.json / tsconfig are re-read once per scan
-    go_module_prefix = _load_go_module_prefix(repo_path)
+    go_module_prefix = _load_go_modules(repo_path) or _load_go_module_prefix(repo_path)
     has_rust_crate_root = _rust_has_any_crate_root(repo_path)
     python_source_roots = _python_source_roots(repo_path)
 
@@ -4571,6 +4768,7 @@ def build_module_graph(
     kotlin_source_roots.sort(key=lambda p: (len(p.parts), str(p)))
 
     php_psr4_map = _load_php_psr4_map(repo_path)
+    js_workspaces = _load_js_workspaces(repo_path)
 
     # Same reasoning and mechanism as Java's pre-pass above - C# has no repo-root
     # config either, and namespace-mirrors-directory is only a convention here, not
@@ -4731,6 +4929,7 @@ def build_module_graph(
             go_module_prefix,
             has_rust_crate_root,
             php_psr4_map,
+            js_workspaces,
         )
         modules.extend(parsed_modules)
         unparseable.extend(parse_failures)
@@ -4745,6 +4944,7 @@ def build_module_graph(
                     go_module_prefix,
                     has_rust_crate_root,
                     php_psr4_map,
+                    js_workspaces,
                 )
             except OSError as exc:
                 # Same reasoning as the pre-pass loops above.
@@ -4765,12 +4965,23 @@ def build_module_graph(
 
     for module in modules:
         rel_path = module["path"]
+        # De-duplicated, order kept: `from . import a, b` and a plain import
+        # of the same file both resolve to one target, and listing it twice
+        # doubled the edge as well.
+        if "imports" in module:
+            module["imports"] = list(dict.fromkeys(module["imports"]))
         for target in module.get("imports", []):
             edges.append([rel_path, target])
             imported_by_map.setdefault(target, []).append(rel_path)
 
     for module in modules:
         module["imported_by"] = sorted(imported_by_map.get(module["path"], []))
+
+    for module in modules:
+        if module.get("has_syntax_errors"):
+            unparseable.append(
+                {"path": module["path"], "reason": "syntax error (symbols found around it are still indexed)"}
+            )
 
     nodes = sorted({m["path"] for m in modules})
     dependency_graph = {"nodes": nodes, "edges": edges}

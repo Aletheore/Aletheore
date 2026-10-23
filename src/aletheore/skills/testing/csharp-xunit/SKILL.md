@@ -2,7 +2,7 @@
 name: csharp-xunit
 description: Get best practices for XUnit unit testing, including data-driven tests
 skill_id: testing/csharp-xunit
-title: Csharp Xunit
+title: Csharp xUnit
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/csharp-xunit
 license: MIT
 shelf: quality

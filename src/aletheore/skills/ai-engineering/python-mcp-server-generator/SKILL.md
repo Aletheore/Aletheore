@@ -3,7 +3,7 @@ name: python-mcp-server-generator
 description: Use this skill when the user wants to create a new Model Context Protocol (MCP) server in Python. Also use it to expose Python functions, an API, or a database to AI clients as MCP tools. The skill makes a uv project with the MCP Python SDK v2 (MCPServer), typed tools, in-memory tests, and client configuration. Do not use it for an MCP client or for a server in another language.
 compatibility: Requires uv, Python 3.10 or later, and network access to install packages. The MCP Inspector also requires Node.js.
 skill_id: ai-engineering/python-mcp-server-generator
-title: Python Mcp Server Generator
+title: Python MCP Server Generator
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/python-mcp-server-generator
 license: MIT
 shelf: ai-agents

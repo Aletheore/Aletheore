@@ -2,7 +2,7 @@
 name: azure-container-registry-cli
 description: Manage Azure Container Registry via the az acr CLI including registries, images, cloud builds, ACR Tasks, authentication, tokens, geo-replication, and networking. Use when working with ACR, az acr commands, pushing/importing/purging container images in Azure, or when the user mentions Azure Container Registry.
 skill_id: platforms/azure-container-registry-cli
-title: Azure Container Registry Cli
+title: Azure Container Registry CLI
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/azure-container-registry-cli
 license: MIT
 shelf: build

@@ -92,10 +92,23 @@ def _redact_home(text: object) -> object:
     return "".join(pieces)
 
 
-def _scrub_event(event: dict, hint: dict) -> dict:
+def _is_connection_noise(event: dict) -> bool:
+    """h11's LocalProtocolError ("can't handle event type Response when role=SERVER and state=CLOSED") is what the
+    local dashboard server logs when a client drops the connection mid-request, most often on Windows. It is not a
+    crash of Aletheore and nothing in it is actionable."""
+    for exc_value in event.get("exception", {}).get("values", []):
+        if exc_value.get("type") == "LocalProtocolError" and str(exc_value.get("module", "")).startswith("h11"):
+            return True
+    return False
+
+
+def _scrub_event(event: dict, hint: dict) -> dict | None:
     """Strip anything that identifies the user or their machine, while
     keeping the OS/Python-version signal this feature exists to collect.
+    Returns None (the event is dropped) for dashboard connection noise.
     """
+    if _is_connection_noise(event):
+        return None
     event.pop("request", None)
     event.pop("server_name", None)
     # The default ArgvIntegration attaches the full argv - including

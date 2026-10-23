@@ -5,7 +5,7 @@ metadata:
   version: 1.0.0
   category: Storage
 skill_id: platforms/gke-backup-dr
-title: Gke Backup Dr
+title: GKE Backup Dr
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/gke-backup-dr
 license: Apache-2.0
 shelf: build

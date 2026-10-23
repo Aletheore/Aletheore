@@ -4,7 +4,7 @@ description: When the user wants to optimize, improve, or increase conversions o
 metadata:
   version: 2.0.3
 skill_id: marketing/cro
-title: Cro
+title: CRO
 source_url: https://github.com/coreyhaines31/marketingskills/tree/365b412152b9542499ca1439426f7fc3cc92bb65/skills/cro
 license: MIT
 shelf: content-media

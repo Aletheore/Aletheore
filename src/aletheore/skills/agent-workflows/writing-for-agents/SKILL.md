@@ -2,7 +2,7 @@
 name: writing-for-agents
 description: Writing documents for agents. Use when creating or editing skills, or modifying AGENTS.md or CLAUDE.md.
 skill_id: agent-workflows/writing-for-agents
-title: Writing For Agents
+title: Writing for Agents
 source_url: https://github.com/mattpocock/skills/tree/49dd158d1076134a641b33efb035946536778336/skills/productivity/writing-for-agents
 license: MIT
 shelf: ai-agents

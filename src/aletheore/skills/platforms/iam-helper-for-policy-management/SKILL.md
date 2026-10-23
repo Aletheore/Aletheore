@@ -5,7 +5,7 @@ metadata:
   version: 1.0.0
   category: Security
 skill_id: platforms/iam-helper-for-policy-management
-title: Iam Helper For Policy Management
+title: IAM Helper for Policy Management
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/iam-helper-for-policy-management
 license: Apache-2.0
 shelf: build

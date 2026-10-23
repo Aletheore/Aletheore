@@ -5,7 +5,7 @@ metadata:
   version: 1.0.0
   category: CloudObservabilityAndMonitoring
 skill_id: platforms/gke-ai-troubleshooting-tpu-vbar-oom
-title: Gke Ai Troubleshooting Tpu Vbar Oom
+title: GKE AI Troubleshooting TPU Vbar OOM
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/gke-ai-troubleshooting-tpu-vbar-oom
 license: Apache-2.0
 shelf: build

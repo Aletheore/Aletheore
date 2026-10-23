@@ -10,7 +10,7 @@ skill_id: platforms/azure-upgrade
 title: Azure Upgrade
 source_url: https://github.com/microsoft/azure-skills/tree/cf79ce8778ad063eeac19dbe8bf982d71b466ce0/skills/azure-upgrade
 shelf: build
-aletheore: {"id": "platforms/azure-upgrade", "shelf": "build", "category": "platforms", "origin": "https://github.com/microsoft/azure-skills/tree/cf79ce8778ad063eeac19dbe8bf982d71b466ce0/skills/azure-upgrade", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "cf79ce8778ad063eeac19dbe8bf982d71b466ce0", "quality": 4, "curation_note": "Azure visualizer/storage/upgrade", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 49, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "mentions": ["claude", "agents"], "adapted": {}, "status": "ready", "mentions_agents": ["Claude Code", "GitHub Copilot"]}
+aletheore: {"id": "platforms/azure-upgrade", "shelf": "build", "category": "platforms", "origin": "https://github.com/microsoft/azure-skills/tree/cf79ce8778ad063eeac19dbe8bf982d71b466ce0/skills/azure-upgrade", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "cf79ce8778ad063eeac19dbe8bf982d71b466ce0", "quality": 4, "curation_note": "Azure visualizer/storage/upgrade", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 49, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["scripts"], "mentions": ["claude", "agents"], "adapted": {}, "status": "ready", "mentions_agents": ["Claude Code", "GitHub Copilot"]}
 ---
 
 # Azure Upgrade

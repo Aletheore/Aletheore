@@ -2,7 +2,7 @@
 name: quarkus-native-and-container
 description: Build Quarkus native executables (Mandrel/GraalVM), fix native failures with reflection registration, test the native binary, and produce container images and Kubernetes/OpenShift manifests. Use for native, Docker, Jib or Kubernetes work in a Quarkus project.
 skill_id: devops/quarkus-native-and-container
-title: Quarkus Native And Container
+title: Quarkus Native and Container
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/quarkus-native-and-container
 license: MIT
 shelf: ship-operate

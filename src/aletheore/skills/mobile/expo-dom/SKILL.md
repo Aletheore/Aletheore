@@ -4,7 +4,7 @@ description: Use Expo DOM components to run web code in a webview on native and 
 version: 1.0.0
 license: MIT
 skill_id: mobile/expo-dom
-title: Expo Dom
+title: Expo DOM
 source_url: https://github.com/expo/skills/tree/7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1/plugins/expo/skills/expo-dom
 shelf: build
 aletheore: {"id": "mobile/expo-dom", "shelf": "build", "category": "mobile", "origin": "https://github.com/expo/skills/tree/7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1/plugins/expo/skills/expo-dom", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1", "quality": 4, "curation_note": "official Expo/EAS skill", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 1, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

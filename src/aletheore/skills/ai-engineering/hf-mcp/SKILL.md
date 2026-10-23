@@ -2,7 +2,7 @@
 name: hf-mcp
 description: Use Hugging Face Hub via MCP server tools. Search models, datasets, Spaces, papers. Get repo details, fetch documentation, run compute jobs, and use Gradio Spaces as AI tools. Available when connected to the HF MCP server.
 skill_id: ai-engineering/hf-mcp
-title: Hf Mcp
+title: HF MCP
 source_url: https://github.com/huggingface/skills/tree/c3ff942be3e07116b475253f0a8fc4f54682c1a8/hf-mcp/skills/hf-mcp
 license: Apache-2.0
 shelf: ai-agents

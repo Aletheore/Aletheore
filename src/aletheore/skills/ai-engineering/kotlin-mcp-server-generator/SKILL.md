@@ -2,7 +2,7 @@
 name: kotlin-mcp-server-generator
 description: Generate a complete Kotlin MCP server project with proper structure, dependencies, and implementation using the official io.modelcontextprotocol:kotlin-sdk library.
 skill_id: ai-engineering/kotlin-mcp-server-generator
-title: Kotlin Mcp Server Generator
+title: Kotlin MCP Server Generator
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/kotlin-mcp-server-generator
 license: MIT
 shelf: ai-agents

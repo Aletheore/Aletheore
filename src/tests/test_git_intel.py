@@ -59,14 +59,14 @@ def test_analyze_git_no_history_returns_unavailable(tmp_path):
     repo.mkdir()
     run(repo, "init", "-b", "main")
     result = analyze_git(repo)
-    assert result == {"available": False}
+    assert result == {"available": False, "reason": "no commits yet"}
 
 
 def test_analyze_git_not_a_repo_returns_unavailable(tmp_path):
     repo = tmp_path / "not_a_repo"
     repo.mkdir()
     result = analyze_git(repo)
-    assert result == {"available": False}
+    assert result == {"available": False, "reason": "not a git repository"}
 
 
 def test_analyze_git_branches_and_staleness(tmp_path):
@@ -836,7 +836,7 @@ def test_history_facts_stay_exact_across_incremental_updates(tmp_path, monkeypat
     real_run = history_meta.subprocess.run
 
     def spy(args, *a, **k):
-        if args[:2] == ["git", "rev-list"]:
+        if args[1:2] == ["rev-list"]:
             walks.append(args[-1])
         return real_run(args, *a, **k)
 

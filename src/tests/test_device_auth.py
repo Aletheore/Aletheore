@@ -14,6 +14,7 @@ from aletheore.device_auth import (
     poll_for_access_token,
     request_device_code,
     resolve_installation,
+    revoke_managed_audit_token,
     revoke_personal_token,
 )
 
@@ -302,3 +303,51 @@ def test_revoke_personal_token_raises_on_server_error():
     )
     with pytest.raises(httpx.HTTPStatusError):
         revoke_personal_token("my-token", http_client=client)
+
+
+def test_revoke_managed_audit_token_calls_delete_cli_tokens_self():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["auth"] = request.headers.get("Authorization")
+        return httpx.Response(204)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://app.aletheore.com")
+    revoke_managed_audit_token("managed-token", http_client=client)
+    assert seen == {"method": "DELETE", "path": "/v1/cli-tokens/self", "auth": "Bearer managed-token"}
+
+
+def test_revoke_managed_audit_token_raises_on_401_and_server_error():
+    for status in (401, 500):
+        client = httpx.Client(
+            transport=httpx.MockTransport(lambda r, status=status: httpx.Response(status)),
+            base_url="https://app.aletheore.com",
+        )
+        with pytest.raises(httpx.HTTPStatusError):
+            revoke_managed_audit_token("managed-token", http_client=client)
+
+
+def test_revoke_managed_audit_token_uses_the_api_url_override(monkeypatch):
+    monkeypatch.setenv("ALETHEORE_API_URL", "http://localhost:9999")
+    seen = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            seen["closed"] = True
+
+        def delete(self, path, headers):
+            return httpx.Response(204, request=httpx.Request("DELETE", "http://localhost:9999" + path))
+
+    monkeypatch.setattr("aletheore.device_auth.httpx.Client", FakeClient)
+    revoke_managed_audit_token("managed-token")
+    assert seen["base_url"].startswith("http://localhost:9999")
+    assert seen["timeout"] <= 10
+    assert seen["closed"] is True  # the client is closed, not left to garbage collection

@@ -319,6 +319,48 @@ async def test_personal_token_cap_is_per_identity_not_global(test_app, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_personal_token_mint_limits_by_ip_before_calling_github(test_app, monkeypatch, redis_conn):
+    # The per-account limit needs the verified user id, so garbage tokens must be stopped
+    # per IP before any outbound GitHub call is made.
+    import app_server.skill_hub_api as skill_hub_api_module
+    from app_server.rate_limit import is_rate_limited as real_is_rate_limited
+
+    monkeypatch.setattr(skill_hub_api_module, "is_rate_limited", real_is_rate_limited)
+    monkeypatch.setattr(skill_hub_api_module, "PERSONAL_TOKEN_IP_RATE_LIMIT", 2)
+    monkeypatch.setattr(skill_hub_api_module, "get_redis_client", lambda: redis_conn)
+
+    github_calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        github_calls.append(request.url.path)
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    statuses = []
+    for _ in range(4):
+        response = await test_app.post(
+            "/v1/personal-tokens",
+            headers={"Authorization": "Bearer made-up", "X-Forwarded-For": "203.0.113.9"},
+            json={"label": "x"},
+        )
+        statuses.append(response.status_code)
+
+    assert statuses == [401, 401, 429, 429]
+    assert len(github_calls) == 2  # the throttled requests never reached GitHub
+
+    other_ip = await test_app.post(
+        "/v1/personal-tokens",
+        headers={"Authorization": "Bearer made-up", "X-Forwarded-For": "203.0.113.10"},
+        json={"label": "x"},
+    )
+    assert other_ip.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_personal_token_mint_rate_limited_per_github_account(test_app, monkeypatch, redis_conn):
     # Mirrors test_auth.py's test_login_rate_limits_after_threshold: swap the
     # real limiter back in (conftest stubs it out suite-wide), point it at
@@ -346,6 +388,28 @@ async def test_personal_token_mint_rate_limited_per_github_account(test_app, mon
         "/v1/personal-tokens", headers={"Authorization": "Bearer fake-github-token"}, json={"label": "x"}
     )
     assert other.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_put_custom_skill_authenticates_before_parsing_the_body(test_app):
+    # An invalid body (NUL byte, which the model rejects with a 422) must not be parsed for a
+    # caller who never authenticated: 401, not 422.
+    response = await test_app.put("/v1/custom-skills/whatever", json={"content": "a\u0000b"})
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_put_custom_skill_has_a_pre_routing_body_cap(test_app, personal_token_header):
+    from app_server.ingest_limits import CUSTOM_SKILL_MAX_BODY_BYTES
+
+    response = await test_app.put(
+        "/v1/custom-skills/big",
+        headers={**personal_token_header, "Content-Length": str(CUSTOM_SKILL_MAX_BODY_BYTES + 1)},
+        content=b"{}",
+    )
+
+    assert response.status_code == 413
 
 
 @pytest.mark.asyncio
@@ -489,3 +553,27 @@ async def test_custom_skill_listing_carries_the_account_id(test_app, personal_to
 async def test_put_custom_skill_rejects_nul_bytes_instead_of_500(test_app, personal_token_header):
     response = await test_app.put("/v1/custom-skills/nul-skill", headers=personal_token_header, json={"content": "before\u0000after"})
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "status, expected_level",
+    [(404, "WARNING"), (401, "ERROR"), (403, "ERROR"), (500, "ERROR"), (502, "ERROR")],
+)
+def test_check_a_token_failures_are_errors_unless_the_token_is_simply_unknown(monkeypatch, caplog, status, expected_level):
+    # A 404 is what any foreign or made-up token gets. A rejected client secret or a GitHub outage breaks every
+    # login, so it must be an ERROR log (which Sentry turns into an event), not a quiet warning.
+    from app_server.skill_hub_api import _github_token_issued_to_aletheore
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(status, json={"message": "x"})),
+            base_url="https://api.github.com",
+        ),
+    )
+    with caplog.at_level("WARNING", logger="app_server.skill_hub_api"):
+        assert _github_token_issued_to_aletheore("some-token") is False
+
+    records = [r for r in caplog.records if "check-a-token" in r.getMessage()]
+    assert [r.levelname for r in records] == [expected_level]
+    assert "some-token" not in records[0].getMessage()

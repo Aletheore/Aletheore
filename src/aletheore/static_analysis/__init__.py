@@ -177,7 +177,11 @@ def check_static_analysis(
             results = [future.result() for future in futures]
 
     for (name, _scanner), result in zip(_SCANNERS, results):
-        if result["checked"]:
+        if result.get("not_applicable"):
+            # Nothing for this tool to analyze here: it did not run, so it is
+            # not listed as having run.
+            tools_skipped.append({"tool": name, "reason": result["not_applicable"]})
+        elif result["checked"]:
             tools_run.append(name)
             findings.extend(result["findings"])
         else:
@@ -186,7 +190,9 @@ def check_static_analysis(
     for name, scanner, skip_reason in _OPTIONAL_SCANNERS:
         if opted_in[name]:
             result = _run_scanner_safely(name, scanner, repo_path)
-            if result["checked"]:
+            if result.get("not_applicable"):
+                tools_skipped.append({"tool": name, "reason": result["not_applicable"]})
+            elif result["checked"]:
                 tools_run.append(name)
                 findings.extend(result["findings"])
             else:

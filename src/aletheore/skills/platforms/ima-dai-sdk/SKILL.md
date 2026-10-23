@@ -7,7 +7,7 @@ metadata:
   version: 1.0.0
   category: GoogleAds
 skill_id: platforms/ima-dai-sdk
-title: Ima Dai Sdk
+title: IMA Dai SDK
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/ads/ima-dai-sdk
 shelf: build
 aletheore: {"id": "platforms/ima-dai-sdk", "shelf": "build", "category": "platforms", "origin": "https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/ads/ima-dai-sdk", "license": "Apache-2.0", "license_source": "frontmatter", "upstream_commit": "e86adb9e2b80220a593c2be9a68627171fd17afb", "quality": 3, "curation_note": "Google Mobile Ads / IMA short skills with refs", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 5, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

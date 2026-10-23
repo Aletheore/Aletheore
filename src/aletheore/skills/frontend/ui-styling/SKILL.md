@@ -7,7 +7,7 @@ metadata:
   author: claudekit
   version: 1.0.0
 skill_id: frontend/ui-styling
-title: Ui Styling
+title: UI Styling
 source_url: https://github.com/nextlevelbuilder/ui-ux-pro-max-skill/tree/56ea9cf174ed86786187daa9de0e6247cb0747e4/.claude/skills/ui-styling
 shelf: build
 aletheore: {"id": "frontend/ui-styling", "shelf": "build", "category": "frontend", "origin": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill/tree/56ea9cf174ed86786187daa9de0e6247cb0747e4/.claude/skills/ui-styling", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "56ea9cf174ed86786187daa9de0e6247cb0747e4", "quality": 4, "curation_note": "shadcn+Tailwind UI styling, 97 files", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 97, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["scripts"], "mentions_agents": ["Claude Code"], "mentions": ["claude", "agents"], "adapted": {}, "status": "ready"}

@@ -2,7 +2,7 @@
 name: avoid-ai-writing
 description: Audit and rewrite prose so it stops reading as machine-generated. Use this skill when asked to remove AI-isms, clean up AI writing, edit a draft for AI tells, audit a README, changelog, release note, PR description, or blog post for machine-sounding prose, or make text sound less like AI. Supports a detect-only mode, a rewrite mode, and an edit-in-place mode, with optional voice and context profiles.
 skill_id: documentation/avoid-ai-writing
-title: Avoid Ai Writing
+title: Avoid AI Writing
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/avoid-ai-writing/skills/avoid-ai-writing
 license: MIT
 shelf: ship-operate

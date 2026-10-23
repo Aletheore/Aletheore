@@ -5,7 +5,7 @@ metadata:
   category: AiAndMachineLearning
 description: Configures Google Cloud API Gateway to act as a remote Model Context Protocol (MCP) server (Public Preview) that exposes REST APIs as agent tools over HTTP (POST /mcp). Use when migrating OpenAPI 2.0 specs to OpenAPI 3.x for MCP, annotating specs with x-google-api-management.mcp and x-google-mcp-tool, securing tools/list with JWTs or API keys, connecting Google ADK (McpToolset) or Apigee API hub and Agent Registry, or troubleshooting MCP JSON-RPC errors (-32601, -32602, -32000). Do not use for Apigee X proxy bundles, outbound LLM model routing, or GKE Gateway API.
 skill_id: platforms/api-gateway-mcp-server
-title: Api Gateway Mcp Server
+title: API Gateway MCP Server
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/api-gateway-mcp-server
 license: Apache-2.0
 shelf: build

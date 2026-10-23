@@ -4,7 +4,7 @@ description: Build beautiful, native-feeling Expo screens. Covers Apple HIG styl
 version: 1.1.1
 license: MIT
 skill_id: mobile/expo-native-ui
-title: Expo Native Ui
+title: Expo Native UI
 source_url: https://github.com/expo/skills/tree/7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1/plugins/expo/skills/expo-native-ui
 shelf: build
 aletheore: {"id": "mobile/expo-native-ui", "shelf": "build", "category": "mobile", "origin": "https://github.com/expo/skills/tree/7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1/plugins/expo/skills/expo-native-ui", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1", "quality": 4, "curation_note": "official Expo/EAS skill", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": ["skill-ref", "slash"], "companion_files": 8, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "mentions_agents": [], "adapted": {"slash-skill": 1}, "status": "ready"}

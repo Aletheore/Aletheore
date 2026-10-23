@@ -12,8 +12,13 @@ async function load() {
 describe("hallbook launch switch", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("keeps Hallbook out of the nav until it has launched", async () => {
+  it("is launched by default, and NEXT_PUBLIC_HALLBOOK_LAUNCHED=0 is the way back", async () => {
     vi.stubEnv("NEXT_PUBLIC_HALLBOOK_LAUNCHED", "");
+    expect((await load()).navLinks.map((l) => l.href)).toContain("/hallbook");
+  });
+
+  it("keeps Hallbook out of the nav when switched off", async () => {
+    vi.stubEnv("NEXT_PUBLIC_HALLBOOK_LAUNCHED", "0");
     const { navLinks } = await load();
     expect(navLinks.map((l) => l.href)).not.toContain("/hallbook");
   });
@@ -27,12 +32,13 @@ describe("hallbook launch switch", () => {
   });
 
   it("the page stays a known route either way, so a direct visit works", async () => {
-    vi.stubEnv("NEXT_PUBLIC_HALLBOOK_LAUNCHED", "");
+    vi.stubEnv("NEXT_PUBLIC_HALLBOOK_LAUNCHED", "0");
     const { internalPaths } = await load();
     expect(internalPaths).toContain("/hallbook");
   });
 
   it("the sitemap and llms.txt list the page exactly when it has launched", async () => {
+    vi.resetModules();
     const { HALLBOOK_LAUNCHED } = await import("@/data/launch");
     for (const f of ["public/sitemap.xml", "public/llms.txt"]) {
       const text = read(f);

@@ -5,7 +5,7 @@ metadata:
   category: WellArchitectedFramework
 description: Generates security-focused guidance for Google Cloud workloads based on the design principles and recommendations in the Google Cloud Well-Architected Framework (WAF). Use this skill to evaluate workloads, identify security requirements, and provide actionable recommendations for IAM, network security, data protection, and operational security.
 skill_id: platforms/google-cloud-waf-security
-title: Google Cloud Waf Security
+title: Google Cloud WAF Security
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/google-cloud-waf-security
 license: Apache-2.0
 shelf: build

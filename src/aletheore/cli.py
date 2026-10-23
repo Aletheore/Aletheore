@@ -403,6 +403,22 @@ _COMMAND_SUMMARIES = [
 ]
 
 
+# Two commands the banner does not list but the "All commands" picker does. The banner (and so the plain `aletheore`
+# output) keeps its own list exactly as it was.
+_PICKER_ONLY_SUMMARIES = [
+    ("hallbook", "browse and search the library of vetted agent skills"),
+    ("config", "manage local CLI preferences, such as crash reporting"),
+]
+_COMMAND_DESCRIPTIONS = dict(_COMMAND_SUMMARIES + _PICKER_ONLY_SUMMARIES)
+# The picker groups every command above by task, each exactly once.
+_COMMAND_GROUPS = [
+    ("Scan and explore", ["scan", "query", "diff", "verify", "healthcheck"]),
+    ("Agents and skills", ["mcp", "mcp-install", "audit", "hallbook"]),
+    ("Dashboard and watch", ["dashboard", "watch", "init"]),
+    ("Account", ["login", "logout", "status", "config"]),
+]
+
+
 def _banner_panel() -> Panel:
     intro = Text(
         "Evidence-grounded repository audit — a deterministic scanner (tree-sitter + "
@@ -1755,6 +1771,27 @@ def _watch(repo_path: str, debounce: float) -> int:
     return 0
 
 
+def _offer_scan_before_dashboard(repo: Path) -> bool:
+    """The dashboard only shows what a scan wrote, so with no scan it would open empty and say nothing. In a terminal
+    offer to scan first; anywhere else say what to run. True when there is now evidence to show."""
+    from aletheore import ui
+
+    hint = f"aletheore scan {repo}"
+    console.print(f"[bold]No scan found for {repo}.[/bold] The dashboard shows what a scan finds, so it would open empty.")
+    if not ui.is_interactive():
+        console.print(f"Run this first, then open the dashboard again:\n\n  {hint}\n")
+        return False
+    try:
+        scan_now = typer.confirm("Scan it now?", default=True)
+    except EOFError:  # input closed: treated as "no". Ctrl-C (click.Abort) is left to abort as it does at any prompt.
+        scan_now = False
+    if not scan_now:
+        console.print(f"Run this when you are ready, then open the dashboard again:\n\n  {hint}\n")
+        return False
+    exit_code, _evidence, _evidence_path = _scan(str(repo), None, None)
+    return exit_code == 0
+
+
 def _dashboard(repo_path: str, port: int) -> int:
     from aletheore.dashboard import build_app
 
@@ -1778,6 +1815,10 @@ def _dashboard(repo_path: str, port: int) -> int:
             f"Pass --port to use a different one, or stop whatever's using {port}."
         )
         return 1
+
+    if not (repo / ".aletheore" / "air.json").exists():
+        if not _offer_scan_before_dashboard(repo):
+            return 1
 
     app = build_app(repo)
     url = f"http://{host}:{port}"
@@ -1863,10 +1904,18 @@ def _menu_header() -> Text:
         shown = "~"
     elif shown.startswith(home + os.sep):
         shown = "~" + shown[len(home):]
-    header.append(f"\nversion {version}   folder {shown}", style="dim")
     reason = ui.broad_directory_reason(folder)
-    if reason:
-        header.append(f"   ({reason}, not a project)", style="bold")
+    note = f"   ({reason}, not a project)" if reason else ""
+    lead = f"version {version}   folder "
+    # A deep path would wrap and push the menu down: keep its tail, which is the part that names the project.
+    room = console.width - len(lead) - len(note)
+    mark = "…" if ui.supports_unicode(console.file) else "..."
+    if len(shown) > room:
+        # Keep at least a few characters of the tail; on a terminal too narrow even for that, show only the mark.
+        shown = mark + shown[-(room - len(mark)):] if room > len(mark) + 2 else mark
+    header.append("\n" + lead + shown, style="dim")
+    if note:
+        header.append(note, style="bold")
     return header
 
 
@@ -1878,17 +1927,150 @@ def _pause() -> None:
         pass
 
 
+def _clear_screen() -> None:
+    """Wipe the visible screen before the menu is drawn again, so earlier output never piles up above a new logo.
+    Only in a real interactive terminal: a pipe, a log or a test never gets control codes."""
+    from aletheore import ui
+
+    if console.is_terminal and ui.is_interactive():
+        console.clear()
+
+
+def _ask(question: str) -> str:
+    """Ask one question on the terminal; an empty answer (or Ctrl-C) means "never mind"."""
+    try:
+        return typer.prompt(question, default="", show_default=False).strip()
+    except (click.Abort, EOFError):
+        return ""
+
+
 _MAIN_MENU = [
     ("scan", "Scan this folder", "build the evidence, no LLM call"),
     ("query", "Explore the evidence", "see what you can ask about the code"),
     ("audit", "Audit with an agent", "scan, then a grounded written report"),
-    ("skills", "Find a Hallbook skill", "curated skills your agent can use"),
+    ("skills", "Find a Hallbook skill", "search or browse the skills your agent can use"),
     ("connect", "Connect your coding agent", "Claude Code, Codex, Cursor, Antigravity, ..."),
     ("dashboard", "Open the dashboard", "a live local view"),
     ("account", "Account", "sign in, sign out, status"),
-    ("commands", "All commands", "the full list"),
+    ("commands", "All commands", "every command, grouped by task"),
     ("quit", "Quit", ""),
 ]
+
+# What Enter does on a command in the "All commands" picker. Commands that need nothing run as they are; the three
+# in _COMMAND_PROMPTS ask for their one required argument first; the rest print their own --help.
+_COMMAND_RUNS = {
+    "scan": ["scan", "."], "audit": ["audit", "."], "query": ["query"], "dashboard": ["dashboard", "."],
+    "init": ["init", "."], "login": ["login"], "logout": ["logout"], "status": ["status"],
+}
+_COMMAND_PROMPTS = {
+    "diff": ["Baseline evidence file (old air.json)", "Evidence file to compare (new air.json)"],
+    "verify": ["Report to check (path to a markdown file)"],
+    "healthcheck": ["Base URL of the running server (for example http://localhost:8000)"],
+}
+_COMMAND_HELP = ("mcp", "watch", "config")
+
+
+def _command_args(name: str, answers: list[str]) -> list[str]:
+    if name == "healthcheck":
+        return ["healthcheck", ".", "--base-url", answers[0]]
+    return [name, *answers]
+
+
+def _connect_flow(kwargs: dict) -> bool:
+    """Pick one coding agent to connect to this folder. True when something ran."""
+    from aletheore import ui
+
+    targets = [*_MCP_CLIENT_CONFIGS.keys(), "codex-cli", "claude-desktop"]
+    # Single agents first: Enter on the first row must not fan out to every agent. Claude Desktop keeps one
+    # global config outside the folder, so say so.
+    sub = [ui.MenuItem(name, name, "global config, outside this folder" if name == "claude-desktop" else "")
+           for name in targets]
+    sub.append(ui.MenuItem("all", "All of them", f"writes config for all {len(targets)} above, including Claude Desktop's global one"))
+    sub.append(ui.MenuItem("back", "Back"))
+    choice = ui.choose(sub, console, header=Text("Connect which coding agent to this folder?", style="bold"),
+                       footer="up/down to move, enter to choose, q to go back", **kwargs)
+    if choice is None or choice.key == "back":
+        return False
+    _run_cli(["mcp-install", "."] if choice.key == "all" else ["mcp-install", ".", "--target", choice.key])
+    return True
+
+
+def _account_flow(kwargs: dict) -> bool:
+    from aletheore import ui
+
+    sub = [ui.MenuItem("status", "Status", "version and sign-in state"),
+           ui.MenuItem("login", "Sign in", "with your GitHub account"),
+           ui.MenuItem("logout", "Sign out", ""),
+           ui.MenuItem("back", "Back")]
+    choice = ui.choose(sub, console, header=Text("Account", style="bold"),
+                       footer="up/down to move, enter to choose, q to go back", **kwargs)
+    if choice is None or choice.key == "back":
+        return False
+    _run_cli([choice.key])
+    return True
+
+
+def _skills_flow(kwargs: dict) -> None:
+    from aletheore.skills_browser import SkillsBrowser
+
+    SkillsBrowser(console, read_key=kwargs.get("read_key"), ask=_ask, clear=_clear_screen).run()
+
+
+def _run_command(name: str, kwargs: dict) -> bool:
+    """Run one command picked from the "All commands" list. True when it printed something worth reading."""
+    if name == "mcp-install":
+        return _connect_flow(kwargs)
+    if name == "hallbook":
+        _skills_flow(kwargs)
+        return False
+    if name in _COMMAND_RUNS:
+        _run_cli(_COMMAND_RUNS[name])
+        return True
+    if name in _COMMAND_PROMPTS:
+        answers = []
+        for question in _COMMAND_PROMPTS[name]:
+            answer = _ask(question)
+            if not answer:
+                return False
+            answers.append(answer)
+        _run_cli(_command_args(name, answers))
+        return True
+    _run_cli([name, "--help"])
+    return True
+
+
+def _commands_flow(kwargs: dict, pause: Callable[[], None]) -> None:
+    """The "All commands" picker: the task groups first, then the commands in the chosen group."""
+    from aletheore import ui
+
+    groups = [ui.MenuItem(title, title, ", ".join(names)) for title, names in _COMMAND_GROUPS]
+    groups.append(ui.MenuItem("", "Back"))
+    group_start = 0
+    while True:
+        _clear_screen()
+        header = Text("All commands\n", style="bold")
+        header.append("grouped by what you are doing", style="dim")
+        picked = ui.choose(groups, console, header=header, start=group_start,
+                           footer="up/down to move, enter to open, q to go back", numbers=False, **kwargs)
+        if picked is None or not picked.key:
+            return
+        group_start = [g.key for g in groups].index(picked.key)
+        names = dict(_COMMAND_GROUPS)[picked.key]
+        rows = [ui.MenuItem(name, name, _COMMAND_DESCRIPTIONS[name]) for name in names]
+        rows.append(ui.MenuItem("", "Back"))
+        start = 0
+        while True:
+            _clear_screen()
+            header = Text(f"{picked.label}\n", style="bold")
+            header.append("enter runs a command or opens it", style="dim")
+            command = ui.choose(rows, console, header=header, start=start, numbers=False,
+                                footer="up/down to move, enter to run, q to go back", **kwargs)
+            if command is None or not command.key:
+                break
+            start = [r.key for r in rows].index(command.key)
+            if _run_command(command.key, kwargs):
+                pause()
+                return
 
 
 def _run_menu(read_key=None, pause=None) -> None:
@@ -1899,7 +2081,11 @@ def _run_menu(read_key=None, pause=None) -> None:
     pause = _pause if pause is None else pause
     items = [ui.MenuItem(*row) for row in _MAIN_MENU]
     start = 0
+    first = True
     while True:
+        if not first:
+            _clear_screen()
+        first = False
         picked = ui.choose(items, console, header=_menu_header(), start=start, **kwargs)
         if picked is None or picked.key == "quit":
             return
@@ -1911,38 +2097,20 @@ def _run_menu(read_key=None, pause=None) -> None:
         elif picked.key == "audit":
             _run_cli(["audit", "."])
         elif picked.key == "skills":
-            try:
-                wanted = typer.prompt("What are you about to do? (for example: flaky test)", default="", show_default=False)
-            except (click.Abort, EOFError):
-                wanted = ""
-            if wanted.strip():
-                _run_cli(["hallbook", "search", wanted.strip()])
-            else:
-                continue
+            _skills_flow(kwargs)
+            continue
         elif picked.key == "connect":
-            targets = [*_MCP_CLIENT_CONFIGS.keys(), "codex-cli", "claude-desktop"]
-            sub = [ui.MenuItem("all", "All of them", "write config for every agent above")]
-            sub += [ui.MenuItem(name, name) for name in targets]
-            sub.append(ui.MenuItem("back", "Back"))
-            choice = ui.choose(sub, console, header=Text("Connect which coding agent to this folder?", style="bold"), **kwargs)
-            if choice is None or choice.key == "back":
+            if not _connect_flow(kwargs):
                 continue
-            _run_cli(["mcp-install", "."] if choice.key == "all" else ["mcp-install", ".", "--target", choice.key])
         elif picked.key == "dashboard":
             _run_cli(["dashboard", "."])
         elif picked.key == "account":
-            sub = [ui.MenuItem("status", "Status", "version and sign-in state"),
-                   ui.MenuItem("login", "Sign in", "with your GitHub account"),
-                   ui.MenuItem("logout", "Sign out", ""),
-                   ui.MenuItem("back", "Back")]
-            choice = ui.choose(sub, console, header=Text("Account", style="bold"), **kwargs)
-            if choice is None or choice.key == "back":
+            if not _account_flow(kwargs):
                 continue
-            _run_cli([choice.key])
         elif picked.key == "commands":
-            console.print(_banner_panel())
+            _commands_flow(kwargs, pause)
+            continue
         pause()
-
 
 
 @app.callback(invoke_without_command=True)
@@ -2673,6 +2841,21 @@ def config_crash_reporting(
     console.print(f"[bold green]Crash reporting turned {normalized}.[/bold green]")
 
 
+def _plain_width() -> int:
+    """Columns available to plain command output: the terminal's width, or 100 when there is no terminal."""
+    return max(shutil.get_terminal_size((100, 24)).columns, 40)
+
+
+def _skill_line(meta: skill_hub.SkillMeta, width: int) -> str:
+    """`id  Title` on one line: the id is never cut unless it alone is wider than the line, the title gives way."""
+    from aletheore import ui
+
+    head = f"{meta.skill_id}  "
+    if len(head) >= width - 1:
+        return ui.truncate(meta.skill_id, width)
+    return head + ui.truncate(meta.title, width - len(head))
+
+
 skill_hub_app = typer.Typer(help="browse and manage Aletheore Hallbook, the skill hub")
 app.add_typer(skill_hub_app, name="hallbook")
 # The feature was called "skill-hub" before the rename to Hallbook. Kept as a
@@ -2686,8 +2869,13 @@ def skill_hub_list(
 ) -> None:
     # typer.echo, not console.print: titles come from skill frontmatter (or a
     # custom skill's file name) and must not be parsed as Rich markup.
+    from aletheore import ui
+
+    # A pipe gets every line whole; a terminal gets lines cut to its width so none wraps.
+    width = _plain_width() if sys.stdout.isatty() else None
     for meta in skill_hub.list_skills(category):
-        typer.echo(f"{meta.skill_id}  {meta.title}")
+        line = f"{meta.skill_id}  {meta.title}"
+        typer.echo(line if width is None else _skill_line(meta, width))
 
 
 @skill_hub_app.command("get", help="print a skill's content")
@@ -2723,11 +2911,13 @@ def skill_hub_search(
     if not results:
         typer.echo("No skills matched. Try fewer or different words, or run 'aletheore hallbook categories'.")
         return
+    from aletheore import ui
+
+    width = _plain_width()
     for meta in results:
-        typer.echo(f"{meta.skill_id}  {meta.title}")
-        description = " ".join(meta.description.split())
-        if description:
-            typer.echo(f"    {description[:140]}{'...' if len(description) > 140 else ''}")
+        typer.echo(_skill_line(meta, width))
+        if " ".join(meta.description.split()):
+            typer.echo("    " + ui.truncate(meta.description, width - 4))
 
 
 @skill_hub_app.command(
@@ -2964,6 +3154,13 @@ def login() -> None:
     except DeviceFlowError as exc:
         console.print(f"[bold red]error:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
+    except httpx.HTTPStatusError as exc:
+        # The server answered with an error status, so the connection is fine: show its reason instead of a
+        # misleading "check your connection" hint.
+        from aletheore.device_auth import describe_login_http_error
+
+        console.print(f"[bold red]error:[/bold red] {describe_login_http_error(exc)}", soft_wrap=True)
+        raise typer.Exit(code=1) from exc
     except (httpx.HTTPError, KeyError, ValueError) as exc:
         console.print(f"[bold red]error:[/bold red] login failed ({type(exc).__name__}: {exc}) - check your connection and retry")
         raise typer.Exit(code=1) from exc
@@ -2989,6 +3186,33 @@ def _logout_revoke_failed(exc: Exception, all_devices: bool) -> None:
         "this machine, but it has no expiry and stays valid on the server "
         "until it is revoked. To revoke it, log in again and run "
         "`aletheore logout --all-devices`."
+    )
+
+
+def _revoke_managed_audit_token_best_effort() -> None:
+    """Revokes the locally saved managed-audit token on the server so a login/logout cycle does not leak an active
+    token toward the installation's cap. Never blocks logout: any failure prints one line and the caller still clears
+    the local token. Only the token saved by `aletheore login` is revoked, never one supplied via ALETHEORE_API_TOKEN."""
+    import aletheore.credentials as credentials
+    from aletheore.device_auth import revoke_managed_audit_token
+
+    managed_token = credentials._load_saved_key("aletheore-managed-audit", credentials.DEFAULT_CREDENTIALS_PATH)
+    if not managed_token:
+        return
+    try:
+        revoke_managed_audit_token(managed_token)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 401:
+            return  # already revoked on the server; nothing left to do
+        reason = f"HTTP {exc.response.status_code}"
+    except Exception as exc:  # noqa: BLE001 - best-effort by design
+        reason = type(exc).__name__
+    else:
+        return
+    console.print(
+        f"[bold yellow]warning:[/bold yellow] couldn't revoke the CLI token on the server ({reason}) - it was "
+        "removed from this machine but may still count toward your token limit. You can revoke it in the "
+        "dashboard at https://aletheore.com."
     )
 
 
@@ -3041,6 +3265,8 @@ def logout(
             "run `aletheore logout` (without --all-devices) to remove that too."
         )
         return
+
+    _revoke_managed_audit_token_best_effort()
 
     removed_any = False
     for slot in ("aletheore-managed-audit", personal_slot):

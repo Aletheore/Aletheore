@@ -10,6 +10,7 @@ in one call, so it does not need to be re-derived with grep plus a read per hit.
 from __future__ import annotations
 
 import difflib
+import os
 import re
 import shutil
 import subprocess
@@ -72,6 +73,7 @@ def _git_grep_usages(repo_path: Path, symbol: str) -> list[tuple[str, int, str]]
     git = shutil.which("git")
     if not git:
         return None
+    git = os.path.abspath(git)
     try:
         result = subprocess.run(
             [git, "grep", "-n", "-w", "-I", "-F", "-z", "-e", symbol],
@@ -84,7 +86,7 @@ def _git_grep_usages(repo_path: Path, symbol: str) -> list[tuple[str, int, str]]
     if result.returncode not in (0, 1):
         return None
     out = []
-    for raw in result.stdout.decode(errors="replace").split("\n"):
+    for raw in result.stdout.decode("utf-8", errors="replace").split("\n"):
         if not raw:
             continue
         path, sep, rest = raw.partition("\0")
@@ -109,7 +111,7 @@ def _plain_scan_usages(repo_path: Path, evidence: dict, symbol: str) -> list[tup
             full = Path(repo_path) / path
             if full.stat().st_size > _MAX_FILE_BYTES:
                 continue
-            text = full.read_text(errors="replace")
+            text = full.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         for lineno, line in enumerate(text.split("\n"), start=1):

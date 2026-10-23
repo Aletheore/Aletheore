@@ -2,7 +2,7 @@
 name: intended-vs-implemented
 description: The method for finding the gap between what a system is supposed to do and what the code actually does — the class of bug generic scanners miss because they have no model of intent. Defines what counts as documented intent, what counts as implementation evidence, which mismatches matter, and how to avoid hand-wavy findings. Use when auditing AI-built code, reviewing access control against documented permissions, or checking whether a codebase matches its own documentation.
 skill_id: verification/intended-vs-implemented
-title: Intended Vs Implemented
+title: Intended vs Implemented
 source_url: https://github.com/phuryn/pm-skills/tree/07b34f64ee828df08953f505b7f747aef85ae7c6/pm-ai-shipping/skills/intended-vs-implemented
 license: MIT
 shelf: quality

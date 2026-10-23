@@ -2,7 +2,7 @@
 name: aspnet-core
 description: Build, review, refactor, or architect ASP.NET Core web applications using current official guidance for .NET web development. Use when working on Blazor Web Apps, Razor Pages, MVC, Minimal APIs, controller-based Web APIs, SignalR, gRPC, middleware, dependency injection, configuration, authentication, authorization, testing, performance, deployment, or ASP.NET Core upgrades.
 skill_id: backend/aspnet-core
-title: Aspnet Core
+title: ASP.NET Core
 source_url: https://github.com/openai/skills/tree/49f948faa9258a0c61caceaf225e179651397431/skills/.curated/aspnet-core
 license: Apache-2.0
 shelf: build

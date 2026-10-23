@@ -3,7 +3,7 @@ name: iterate-pr
 description: Iterate on a PR until actionable CI passes and high/medium review feedback is addressed. Use for PR CI failures, review feedback, or green-check loops; do not wait for human approval, draft status, or merge gates.
 disable-model-invocation: false
 skill_id: git-workflow/iterate-pr
-title: Iterate Pr
+title: Iterate PR
 source_url: https://github.com/getsentry/skills/tree/f57ada2d0b640406ea7e25b11d636c530e77c58b/skills/iterate-pr
 license: Apache-2.0
 shelf: ship-operate

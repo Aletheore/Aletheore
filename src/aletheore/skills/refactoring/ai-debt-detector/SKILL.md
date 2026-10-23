@@ -2,7 +2,7 @@
 name: ai-debt-detector
 description: Use after generating code, after accepting AI suggestions, or when reviewing AI-written modules. Also use when code works but feels brittle, when error handling seems thin, when orphaned resources or missing cleanup are suspected, or when the agent claims done but hidden debt may exist. Catches the specific failure patterns AI agents produce that humans would not.
 skill_id: refactoring/ai-debt-detector
-title: Ai Debt Detector
+title: AI Debt Detector
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/skill-forge-essentials/skills/ai-debt-detector
 license: MIT
 shelf: quality

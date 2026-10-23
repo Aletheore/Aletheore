@@ -2,7 +2,7 @@
 name: agents-sdk
 description: Build, debug, or review Cloudflare Agents SDK applications using the agents package.
 skill_id: platforms/agents-sdk
-title: Agents Sdk
+title: Agents SDK
 source_url: https://github.com/cloudflare/skills/tree/86505e44f87d801aa1864a3c4109e9a8ae5c409f/skills/agents-sdk
 license: Apache-2.0
 shelf: build

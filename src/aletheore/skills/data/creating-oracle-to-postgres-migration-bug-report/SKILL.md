@@ -2,7 +2,7 @@
 name: creating-oracle-to-postgres-migration-bug-report
 description: Creates structured bug reports for defects found during Oracle-to-PostgreSQL migration. Use when documenting behavioral differences between Oracle and PostgreSQL as actionable bug reports with severity, root cause, and remediation steps.
 skill_id: data/creating-oracle-to-postgres-migration-bug-report
-title: Creating Oracle To Postgres Migration Bug Report
+title: Creating Oracle to Postgres Migration Bug Report
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/creating-oracle-to-postgres-migration-bug-report
 license: MIT
 shelf: build

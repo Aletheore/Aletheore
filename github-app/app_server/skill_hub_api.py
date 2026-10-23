@@ -21,6 +21,8 @@ from app_server.db import (
     revoke_personal_token,
     upsert_custom_skill,
 )
+from app_server.ingest_limits import parse_validated_body_after_auth
+from app_server.paddle_ip_allowlist import client_ip_from_forwarded_for
 from app_server.rate_limit import is_rate_limited
 from app_server.redis_client import get_redis_client
 
@@ -42,6 +44,41 @@ MAX_CUSTOM_SKILL_CONTENT_CHARS = 256 * 1024
 # real logins, and still a hard stop on a minting loop.
 PERSONAL_TOKEN_RATE_LIMIT = 10
 PERSONAL_TOKEN_RATE_LIMIT_WINDOW_SECONDS = 3600
+
+
+# Per client IP, checked BEFORE the GitHub verification below. The per-account limit above
+# needs the verified GitHub user id, so it cannot protect that verification itself: each
+# request with a made-up bearer token costs one outbound call to GitHub's check-a-token
+# endpoint, which is authenticated with the app's own client credentials and shares the
+# app's rate limit with every real `aletheore login`. Generous for a shared office address
+# (a real login mints one token), a hard stop on a loop of garbage tokens.
+PERSONAL_TOKEN_IP_RATE_LIMIT = 30
+PERSONAL_TOKEN_IP_RATE_LIMIT_WINDOW_SECONDS = 3600
+
+
+async def _enforce_mint_ip_rate_limit(request: Request) -> None:
+    client_ip = client_ip_from_forwarded_for(
+        request.headers.get("x-forwarded-for"),
+        request.client.host if request.client else "",
+    )
+    try:
+        limited = await asyncio.to_thread(
+            is_rate_limited,
+            get_redis_client(),
+            f"ratelimit:personal-token-ip:{client_ip}",
+            PERSONAL_TOKEN_IP_RATE_LIMIT,
+            PERSONAL_TOKEN_IP_RATE_LIMIT_WINDOW_SECONDS,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Fails open like every other rate limit here: a Redis outage costs this throttle, not login.
+        logger.warning("personal token IP rate limit check failed (%s); allowing request", exc)
+        return
+    if limited:
+        raise HTTPException(
+            status_code=429,
+            detail="too many token requests - try again later",
+            headers={"Retry-After": str(PERSONAL_TOKEN_IP_RATE_LIMIT_WINDOW_SECONDS)},
+        )
 
 
 class CreatePersonalTokenRequest(BaseModel):
@@ -78,22 +115,26 @@ def _github_token_issued_to_aletheore(github_token: str) -> bool:
         headers={"Accept": "application/vnd.github+json"},
     )
     if response.status_code != 200:
-        # 404: GitHub does not know this token as one issued to this app. 401/403: our client id and secret were
-        # rejected (a misconfigured server), which would make every login fail. Status code only, never the token.
-        logger.warning("GitHub check-a-token returned %s for the personal-token mint", response.status_code)
+        # 404: GitHub does not know this token as one issued to this app, which is what any foreign or made-up token
+        # gets, so it stays a warning. Anything else (401/403: our client id and secret were rejected; 5xx: GitHub is
+        # failing) makes every login fail while looking like "not issued to Aletheore" to the user, so it is logged at
+        # ERROR to reach Sentry. Status code only, never the token.
+        level = logging.WARNING if response.status_code == 404 else logging.ERROR
+        logger.log(level, "GitHub check-a-token returned %s for the personal-token mint", response.status_code)
         return False
     app = response.json().get("app") or {}
     return app.get("client_id") == settings.github_client_id
 
 
 @skill_hub_router.post("/v1/personal-tokens")
-async def mint_personal_token(request: Request, body: CreatePersonalTokenRequest):
+async def mint_personal_token(request: Request):
     # Deliberately independent of any Aletheore installation: this mints an
     # identity token for ANY GitHub account, unlike the paid-only
     # /v1/cli-tokens flow (admin.py's create_cli_token), which requires an
     # administered, paid installation. No installation lookup and no plan
     # check belong anywhere in this path.
     github_token = _bearer_github_token(request)
+    await _enforce_mint_ip_rate_limit(request)
     if not await asyncio.to_thread(_github_token_issued_to_aletheore, github_token):
         raise HTTPException(status_code=401, detail="that GitHub token was not issued to Aletheore - run `aletheore login`")
     user = await asyncio.to_thread(_fetch_github_user, github_token)
@@ -113,6 +154,10 @@ async def mint_personal_token(request: Request, body: CreatePersonalTokenRequest
         rate_limited = False
     if rate_limited:
         raise HTTPException(status_code=429, detail="too many token requests - try again later")
+
+    # Parsed after the GitHub token check, not bound as a handler parameter, so an
+    # unauthenticated caller never pays for body parsing (see ingest_limits).
+    body = await parse_validated_body_after_auth(request, CreatePersonalTokenRequest)
 
     pool = request.app.state.db_pool
     identity = await get_or_create_personal_identity(pool, user["id"], user["login"])
@@ -188,13 +233,17 @@ async def get_custom_skill_route(request: Request, name: str):
 
 
 @skill_hub_router.put("/v1/custom-skills/{name}")
-async def put_custom_skill_route(request: Request, name: str, body: PutCustomSkillRequest):
+async def put_custom_skill_route(request: Request, name: str):
     identity = await _authenticate_personal_token(request)
     if not _SAFE_SKILL_NAME.fullmatch(name):
         raise HTTPException(
             status_code=400,
             detail="invalid skill name: use 1-128 letters, digits, '-' or '_'",
         )
+    # Parsed after auth, not bound as a handler parameter: a bound `body: Model` is parsed and
+    # validated before the first line of the handler runs, so an unauthenticated caller would
+    # pay for it (see ingest_limits.parse_validated_body_after_auth).
+    body = await parse_validated_body_after_auth(request, PutCustomSkillRequest)
     return await upsert_custom_skill(request.app.state.db_pool, identity["id"], name, body.content)
 
 

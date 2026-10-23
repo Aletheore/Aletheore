@@ -124,7 +124,7 @@ export const toolInfo: ToolInfo[] = (tools.tools as { name: string; group: strin
   ...x,
   optional: (tools.optional as string[]).includes(x.name),
 }));
-const GROUP_ORDER = ["Navigate", "Structure", "Security", "Runtime", "History", "Evidence", "Search", "Run", "AI-assisted"];
+const GROUP_ORDER = ["Navigate", "Structure", "Security", "Runtime", "History", "Evidence", "Search", "Hallbook", "Run", "AI-assisted"];
 export const toolGroups: string[] = [...new Set(toolInfo.map((x) => x.group))].sort(
   (a, b) => (GROUP_ORDER.indexOf(a) + 100) % 100 - (GROUP_ORDER.indexOf(b) + 100) % 100,
 );

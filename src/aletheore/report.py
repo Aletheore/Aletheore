@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 from aletheore.adapters.base import AgentAdapter
@@ -9,6 +10,23 @@ class NoAdapterAvailableError(Exception):
 
 class AmbiguousAdapterError(Exception):
     pass
+
+
+NO_AGENT_MESSAGE = (
+    "no coding agent found. Install one (Claude Code, Codex CLI, OpenCode, Gemini CLI or Ollama) so its command is "
+    "on your PATH, or set an API key such as ANTHROPIC_API_KEY or OPENAI_API_KEY, then run the audit again. "
+    "To pick one explicitly, pass --agent NAME."
+)
+
+
+def _usable(adapter: AgentAdapter) -> bool:
+    """Whether to offer this adapter when nobody named one. A local model server that merely answers on its port is
+    not enough for Ollama: the `ollama` command has to be installed too, like every other agent CLI."""
+    if not adapter.is_available():
+        return False
+    if adapter.name == "ollama":
+        return shutil.which("ollama") is not None
+    return True
 
 
 def select_adapter(
@@ -24,15 +42,13 @@ def select_adapter(
             f"requested adapter '{forced_name}' is not available on PATH"
         )
 
+    available = [a for a in available if _usable(a)]
     if not available:
-        names = ", ".join(a.name for a in adapters)
-        raise NoAdapterAvailableError(
-            f"no supported agent CLI found on PATH (checked: {names})"
-        )
+        raise NoAdapterAvailableError(NO_AGENT_MESSAGE)
 
     if interactive:
         names = [a.name for a in available]
-        print("Available agent providers:")
+        print("Coding agents found on this machine:")
         for i, name in enumerate(names, start=1):
             print(f"  {i}. {name}")
         # Real bug found via audit: a non-numeric answer raised a raw

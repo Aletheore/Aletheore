@@ -2,7 +2,7 @@
 name: aws-resource-health-diagnose
 description: Analyze AWS resource health, diagnose issues from CloudWatch logs and metrics, and create a remediation plan for identified problems.
 skill_id: reliability/aws-resource-health-diagnose
-title: Aws Resource Health Diagnose
+title: AWS Resource Health Diagnose
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/aws-resource-health-diagnose
 license: MIT
 shelf: ship-operate

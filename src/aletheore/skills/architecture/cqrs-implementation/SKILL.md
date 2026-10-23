@@ -2,7 +2,7 @@
 name: cqrs-implementation
 description: Implement Command Query Responsibility Segregation for scalable architectures. Use when separating read and write models, optimizing query performance, or building event-sourced systems.
 skill_id: architecture/cqrs-implementation
-title: Cqrs Implementation
+title: CQRS Implementation
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/backend-development/skills/cqrs-implementation
 license: MIT
 shelf: build

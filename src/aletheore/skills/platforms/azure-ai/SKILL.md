@@ -6,7 +6,7 @@ metadata:
   author: Microsoft
   version: 1.2.2
 skill_id: platforms/azure-ai
-title: Azure Ai
+title: Azure AI
 source_url: https://github.com/microsoft/azure-skills/tree/cf79ce8778ad063eeac19dbe8bf982d71b466ce0/skills/azure-ai
 shelf: build
 aletheore: {"id": "platforms/azure-ai", "shelf": "build", "category": "platforms", "origin": "https://github.com/microsoft/azure-skills/tree/cf79ce8778ad063eeac19dbe8bf982d71b466ce0/skills/azure-ai", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "cf79ce8778ad063eeac19dbe8bf982d71b466ce0", "quality": 4, "curation_note": "official Azure", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": ["slash"], "companion_files": 15, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["mcp:azure", "mcp:when-azure"], "mentions": ["claude", "agents"], "adapted": {}, "status": "ready", "mentions_agents": ["Claude Code", "Copilot CLI"]}

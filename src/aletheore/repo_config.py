@@ -93,13 +93,104 @@ def parse_repo_config(raw_text: str | None) -> dict:
 
     disabled_checks = data.get("disabled_checks", [])
     if isinstance(disabled_checks, list):
-        result["disabled_checks"] = [c for c in disabled_checks if c in DISABLEABLE_CHECKS]
+        result["disabled_checks"] = [c for c in disabled_checks if isinstance(c, str) and c in DISABLEABLE_CHECKS]
 
     severity_threshold = data.get("severity_threshold")
-    if severity_threshold in SEVERITY_LEVELS:
+    if isinstance(severity_threshold, str) and severity_threshold in SEVERITY_LEVELS:
         result["severity_threshold"] = severity_threshold
 
     return result
+
+
+def validate_repo_config_text(raw_text: str | None) -> list[str]:
+    """Human-readable problems with a .aletheore.json's text. Empty when the
+    text is None (no file) or fully valid. parse_repo_config still applies the
+    defaults for whatever is wrong; this only reports it, so a typo is visible
+    instead of being silently ignored."""
+    if raw_text is None:
+        return []
+    try:
+        data = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        return [
+            f".aletheore.json is not valid JSON ({exc.msg} at line {exc.lineno}, column {exc.colno}); "
+            "every setting falls back to its default"
+        ]
+    if not isinstance(data, dict):
+        return [
+            f".aletheore.json must be a JSON object, not {type(data).__name__}; "
+            "every setting falls back to its default"
+        ]
+    problems: list[str] = []
+    for key in data:
+        if key not in DEFAULT_CONFIG:
+            problems.append(
+                f".aletheore.json: unknown key {key!r} ignored (known keys: {', '.join(sorted(DEFAULT_CONFIG))})"
+            )
+
+    def is_number(value: object) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+    if "layer_markers" in data:
+        markers = data["layer_markers"]
+        if not isinstance(markers, dict):
+            problems.append(".aletheore.json: layer_markers must be an object of name to integer rank; ignored")
+        else:
+            for name, rank in markers.items():
+                if not isinstance(name, str):
+                    problems.append(f".aletheore.json: layer_markers key {name!r} must be a string; entry ignored")
+                elif not (isinstance(rank, int) and not isinstance(rank, bool)):
+                    problems.append(f".aletheore.json: layer_markers[{name!r}] must be an integer rank; entry ignored")
+    if "cluster_resolution" in data:
+        value = data["cluster_resolution"]
+        if not is_number(value):
+            problems.append(f".aletheore.json: cluster_resolution must be a number, got {value!r}; using 1.0")
+        elif value <= 0:
+            problems.append(f".aletheore.json: cluster_resolution must be greater than 0, got {value!r}")
+    for key, item_type in (("dead_code_entry_points", str), ("ignored_paths", str), ("accepted_secrets", dict)):
+        if key not in data:
+            continue
+        value = data[key]
+        if not isinstance(value, list):
+            problems.append(f".aletheore.json: {key} must be a list; ignored")
+        else:
+            bad = sum(1 for entry in value if not isinstance(entry, item_type))
+            if bad:
+                problems.append(
+                    f".aletheore.json: {key} has {bad} entr{'y' if bad == 1 else 'ies'} that "
+                    f"{'is' if bad == 1 else 'are'} not {'a string' if item_type is str else 'an object'}; ignored"
+                )
+    if "disabled_checks" in data:
+        value = data["disabled_checks"]
+        if not isinstance(value, list):
+            problems.append(".aletheore.json: disabled_checks must be a list; ignored")
+        else:
+            for check in value:
+                if not isinstance(check, str) or check not in DISABLEABLE_CHECKS:
+                    problems.append(
+                        f".aletheore.json: disabled_checks has unknown value {check!r} ignored "
+                        f"(valid: {', '.join(sorted(DISABLEABLE_CHECKS))})"
+                    )
+    if "severity_threshold" in data:
+        value = data["severity_threshold"]
+        if value is not None and not (isinstance(value, str) and value in SEVERITY_LEVELS):
+            problems.append(
+                f".aletheore.json: severity_threshold must be one of {', '.join(SEVERITY_LEVELS)} or null, "
+                f"got {value!r}; no threshold applied"
+            )
+    return problems
+
+
+def load_repo_config_warnings(repo_path: Path) -> list[str]:
+    """validate_repo_config_text for the repository's own .aletheore.json."""
+    config_file = repo_path / ".aletheore.json"
+    if not config_file.exists():
+        return []
+    try:
+        text = config_file.read_text(encoding="utf-8", errors="ignore")
+    except OSError as exc:
+        return [f".aletheore.json could not be read ({exc.strerror or exc.__class__.__name__}); every setting falls back to its default"]
+    return validate_repo_config_text(text)
 
 
 def _segments_match(pattern_segments: list[str], candidate_segments: list[str]) -> bool:

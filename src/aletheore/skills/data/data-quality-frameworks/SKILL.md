@@ -6,7 +6,7 @@ title: Data Quality Frameworks
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/data-engineering/skills/data-quality-frameworks
 license: MIT
 shelf: build
-aletheore: {"id": "data/data-quality-frameworks", "shelf": "build", "category": "data", "origin": "https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/data-engineering/skills/data-quality-frameworks", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "0874a27b17a22e2b7c2e2bcd725768e0803cad06", "quality": 4, "curation_note": "data quality frameworks", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 1, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "data/data-quality-frameworks", "shelf": "build", "category": "data", "origin": "https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/data-engineering/skills/data-quality-frameworks", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "0874a27b17a22e2b7c2e2bcd725768e0803cad06", "quality": 4, "curation_note": "data quality frameworks", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 1, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {"SKILL.md": "the tail of a code sample (from its Summary report line to the closing fence) was left in the skill body when it was trimmed to a pointer; it was removed and restored to references/details.md", "references/details.md": "the end of the DataQualityPipeline sample, cut off mid-string by the same trim, was restored and its code fence closed"}, "status": "ready", "mentions_agents": []}
 ---
 
 # Data Quality Frameworks
@@ -87,43 +87,6 @@ results = context.run_checkpoint(checkpoint_name="daily_orders")
 ## Detailed patterns and worked examples
 
 Detailed pattern documentation lives in `references/details.md`. Read that file when the navigation tier above is insufficient.
-
-## Summary: {total_passed}/{total_tables} tables passed")
-        report.append("")
-
-        for table, result in results.items():
-            status = "✅" if result.passed else "❌"
-            report.append(f"### {status} {table}")
-            report.append(f"- Expectations: {result.total_expectations}")
-            report.append(f"- Failed: {result.failed_expectations}")
-
-            if not result.passed:
-                report.append("- Failed checks:")
-                for detail in result.details:
-                    if not detail["success"]:
-                        report.append(f"  - {detail['expectation']}: {detail['observed_value']}")
-            report.append("")
-
-        return "\n".join(report)
-
-# Usage
-context = gx.get_context()
-pipeline = DataQualityPipeline(context)
-
-tables_to_validate = {
-    "orders": "orders_suite",
-    "customers": "customers_suite",
-    "products": "products_suite",
-}
-
-results = pipeline.run_all(tables_to_validate)
-report = pipeline.generate_report(results)
-
-# Fail pipeline if any table failed
-if not all(r.passed for r in results.values()):
-    print(report)
-    raise ValueError("Data quality checks failed!")
-```
 
 ## Best Practices
 

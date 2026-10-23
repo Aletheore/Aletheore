@@ -2,7 +2,7 @@
 name: aws-well-architected-review
 description: Perform an AWS Well-Architected Framework review of the current workload IaC and architecture, generating findings and GitHub issues for improvements.
 skill_id: architecture/aws-well-architected-review
-title: Aws Well Architected Review
+title: AWS Well Architected Review
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/aws-well-architected-review
 license: MIT
 shelf: build

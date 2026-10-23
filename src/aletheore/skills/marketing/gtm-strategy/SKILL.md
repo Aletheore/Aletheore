@@ -2,7 +2,7 @@
 name: gtm-strategy
 description: Create a go-to-market strategy covering marketing channels, messaging, success metrics, and launch timeline. Use when planning a product launch, creating a GTM plan from scratch, or defining a launch strategy for a new market.
 skill_id: marketing/gtm-strategy
-title: Gtm Strategy
+title: GTM Strategy
 source_url: https://github.com/phuryn/pm-skills/tree/07b34f64ee828df08953f505b7f747aef85ae7c6/pm-go-to-market/skills/gtm-strategy
 license: MIT
 shelf: content-media

@@ -2,7 +2,7 @@
 name: migrating-oracle-to-postgres-data-access-code
 description: Migrates .NET/C# data access code from Oracle to PostgreSQL (Npgsql). Replaces Oracle NuGet packages, rewrites OracleConnection/OracleCommand/OracleDataReader usage, fixes DbType mappings, updates stored procedure invocation patterns, and adapts connection string configuration. Use when migrating the application code layer of a .NET project during an Oracle-to-PostgreSQL database migration.
 skill_id: data/migrating-oracle-to-postgres-data-access-code
-title: Migrating Oracle To Postgres Data Access Code
+title: Migrating Oracle to Postgres Data Access Code
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/migrating-oracle-to-postgres-data-access-code
 license: MIT
 shelf: build

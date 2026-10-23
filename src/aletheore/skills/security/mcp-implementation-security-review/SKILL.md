@@ -14,7 +14,7 @@ description: 'Review the implementation source code of MCP (Model Context Protoc
 
   - Requests like "review this MCP server for security" or "is my MCP server implementation secure?"'
 skill_id: security/mcp-implementation-security-review
-title: Mcp Implementation Security Review
+title: MCP Implementation Security Review
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/mcp-implementation-security-review
 license: MIT
 shelf: quality

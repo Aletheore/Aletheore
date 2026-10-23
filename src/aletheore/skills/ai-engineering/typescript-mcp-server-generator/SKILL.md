@@ -2,7 +2,7 @@
 name: typescript-mcp-server-generator
 description: Generate a complete MCP server project in TypeScript using the MCP TypeScript SDK v2 (@modelcontextprotocol/server) with tools, resources, and proper configuration
 skill_id: ai-engineering/typescript-mcp-server-generator
-title: Typescript Mcp Server Generator
+title: TypeScript MCP Server Generator
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/typescript-mcp-server-generator
 license: MIT
 shelf: ai-agents

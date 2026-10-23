@@ -2,7 +2,7 @@
 name: ci-cd-and-automation
 description: Automates CI/CD pipeline setup. Use when setting up or modifying build and deployment pipelines. Use when you need to automate quality gates, configure test runners in CI, or establish deployment strategies.
 skill_id: devops/ci-cd-and-automation
-title: Ci Cd And Automation
+title: CI CD and Automation
 source_url: https://github.com/addyosmani/agent-skills/tree/aeac41d4d005999432bb7312f7ff06383a91d59d/skills/ci-cd-and-automation
 license: MIT
 shelf: ship-operate

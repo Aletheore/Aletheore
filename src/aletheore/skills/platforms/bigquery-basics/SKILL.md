@@ -5,7 +5,7 @@ metadata:
   category: BigDataAndAnalytics
 description: Manages datasets, tables, and jobs in BigQuery. Use when you need to interact with BigQuery, run SQL queries, manage BigQuery resources (datasets, tables, views), or perform basic data ingestion and analysis.
 skill_id: platforms/bigquery-basics
-title: Bigquery Basics
+title: BigQuery Basics
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/bigquery-basics
 license: Apache-2.0
 shelf: build

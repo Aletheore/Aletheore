@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import click
+from rich.cells import cell_len
 from rich.console import Console, Group
 from rich.live import Live
 from rich.text import Text
@@ -84,27 +85,97 @@ def _read_key() -> str:
     return click.getchar()
 
 
+def truncate(text: str, width: int, *, unicode_ok: bool | None = None) -> str:
+    """One line of `text` that fits in `width` terminal cells: whitespace collapsed, never wrapped.
+
+    A line that is too long ends in an ellipsis character when the stream can show one, otherwise in three dots. A cut
+    never leaves a dangling space or full stop in front of the ellipsis, so the result never contains "..".
+    """
+    text = " ".join(str(text).split())
+    if width <= 0:
+        return ""
+    if cell_len(text) <= width:
+        return text
+    if unicode_ok is None:
+        unicode_ok = supports_unicode()
+    mark = "…" if unicode_ok else "..."
+    room = width - len(mark)
+    if room <= 0:
+        return mark if width >= len(mark) else ""
+    kept = ""
+    used = 0
+    for char in text:
+        step = cell_len(char)
+        if used + step > room:
+            break
+        kept += char
+        used += step
+    return kept.rstrip(" .") + mark
+
+
+def _row(label: str, hint: str, *, width: int | None, label_w: int, unicode_ok: bool) -> tuple[str, str]:
+    """The label cell (padded to `label_w`) and the hint for one menu row, both already fitted to the width."""
+    shown = truncate(label, label_w - 2, unicode_ok=unicode_ok) if cell_len(label) > label_w - 2 else label
+    padded = shown + " " * (label_w - cell_len(shown))
+    if not hint:
+        return padded, ""
+    if width is None:
+        return padded, hint
+    room = width - 2 - 2 - label_w - 1
+    return padded, (truncate(hint, room, unicode_ok=unicode_ok) if room >= 4 else "")
+
+
 def render_menu(items: Sequence[MenuItem], selected: int, *, unicode_ok: bool, header: Text | None = None,
-                footer: str = "up/down to move, enter to choose, q to quit") -> Group:
+                footer: str = "up/down to move, enter to choose, q to quit", width: int | None = None,
+                height: int | None = None) -> Group:
+    """The menu as renderable lines. With a `width`, every row is fitted to it (labels and hints are cut with an
+    ellipsis, nothing wraps); with a `height`, a list taller than the screen shows a window around the selection."""
     pointer = "❯" if unicode_ok else ">"
-    width = max(len(i.label) for i in items) + 2
+    if width is not None:
+        width -= 1  # never write into the last column: some terminals wrap there and the redraw drifts
+    label_w = max(cell_len(i.label) for i in items) + 2
+    if width is not None:
+        # Long labels (skill ids) may take at most about 60% of the row, so a hint always keeps some room.
+        cap = max(14, int((width - 4) * 0.6)) if any(i.hint for i in items) else max(14, width - 4)
+        label_w = min(label_w, cap)
     lines: list[Text] = []
+    used = 0
     if header is not None:
         lines.append(header)
         lines.append(Text(""))
-    for index, item in enumerate(items):
+        columns = max(width or 80, 1)
+        used += sum(max(1, -(-cell_len(part) // columns)) for part in header.plain.split("\n")) + 1
+    first, last = 0, len(items)
+    windowed = False
+    if height is not None:
+        rows = height - used - 3  # the blank line and footer below, and a spare line for the cursor
+        if len(items) > rows:
+            windowed = True
+            rows = max(rows - 2, 3)  # two more lines for the "more above / below" markers
+            # A window shorter than the list can still be taller than a very short menu: never start below row 0.
+            first = max(min(max(selected - rows // 2, 0), len(items) - rows), 0)
+            last = min(first + rows, len(items))
+    arrow_up, arrow_down = ("↑", "↓") if unicode_ok else ("^", "v")
+    if windowed:
+        lines.append(Text(f"    {arrow_up} {first} more" if first else "", style="dim"))
+    for index in range(first, last):
+        item = items[index]
+        label, hint = _row(item.label, item.hint, width=width, label_w=label_w, unicode_ok=unicode_ok)
         line = Text("  ")
         if index == selected:
             line.append(f"{pointer} ", style="bold")
-            line.append(item.label.ljust(width), style="bold reverse")
+            line.append(label, style="bold reverse")
         else:
             line.append("  ")
-            line.append(item.label.ljust(width))
-        if item.hint:
-            line.append(f" {item.hint}", style="dim")
+            line.append(label)
+        if hint:
+            line.append(f" {hint}", style="dim")
         lines.append(line)
+    if windowed:
+        lines.append(Text(f"    {arrow_down} {len(items) - last} more" if last < len(items) else "", style="dim"))
     lines.append(Text(""))
-    lines.append(Text("  " + footer.replace("up/down", "↑ ↓" if unicode_ok else "up/down"), style="dim"))
+    text = footer.replace("up/down", "↑ ↓" if unicode_ok else "up/down")
+    lines.append(Text("  " + (truncate(text, width - 2, unicode_ok=unicode_ok) if width is not None else text), style="dim"))
     return Group(*lines)
 
 
@@ -116,16 +187,21 @@ def choose(
     footer: str = "up/down to move, enter to choose, q to quit",
     read_key: Callable[[], str] = _read_key,
     start: int = 0,
+    numbers: bool = True,
 ) -> MenuItem | None:
-    """Show an arrow-key menu and return the chosen item, or None if the person quit."""
+    """Show an arrow-key menu and return the chosen item, or None if the person quit.
+
+    Rows are fitted to the console width and a long list scrolls inside the console height. Pass numbers=False for
+    a long list, where a stray digit must not pick a row.
+    """
     unicode_ok = supports_unicode(console.file)
+
+    def draw(position: int) -> Group:
+        return render_menu(items, position, unicode_ok=unicode_ok, header=header, footer=footer,
+                           width=console.width, height=console.height)
+
     selected = start
-    with Live(
-        render_menu(items, selected, unicode_ok=unicode_ok, header=header, footer=footer),
-        console=console,
-        auto_refresh=False,
-        transient=True,
-    ) as live:
+    with Live(draw(selected), console=console, auto_refresh=False, transient=True) as live:
         while True:
             try:
                 key = read_key()
@@ -139,9 +215,9 @@ def choose(
                 return items[selected]
             elif key in _QUIT:
                 return None
-            elif key.isdigit() and 1 <= int(key) <= len(items):
+            elif numbers and key.isdigit() and 1 <= int(key) <= len(items):
                 return items[int(key) - 1]
-            live.update(render_menu(items, selected, unicode_ok=unicode_ok, header=header, footer=footer), refresh=True)
+            live.update(draw(selected), refresh=True)
 
 
 # --- the "is this really a project?" guard -----------------------------------------------------------------------

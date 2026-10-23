@@ -6,7 +6,7 @@ title: Writing Skills
 source_url: https://github.com/obra/superpowers/tree/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/writing-skills
 license: MIT
 shelf: ai-agents
-aletheore: {"id": "agent-workflows/writing-skills", "shelf": "ai-agents", "category": "agent-workflows", "origin": "https://github.com/obra/superpowers/tree/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/writing-skills", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3", "quality": 4, "curation_note": "writing and testing skills", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": ["claude-tools", "skill-ref"], "companion_files": 6, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["subagents"], "mentions": ["claude", "agents"], "adapted": {}, "status": "ready", "mentions_agents": ["Claude Code", "Codex", "Copilot CLI", "Gemini CLI"]}
+aletheore: {"id": "agent-workflows/writing-skills", "shelf": "ai-agents", "category": "agent-workflows", "origin": "https://github.com/obra/superpowers/tree/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/writing-skills", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3", "quality": 4, "curation_note": "writing and testing skills", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": ["claude-tools", "skill-ref"], "companion_files": 6, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["scripts", "subagents"], "mentions": ["claude", "agents"], "adapted": {}, "status": "ready", "mentions_agents": ["Claude Code", "Codex", "Copilot CLI", "Gemini CLI"]}
 ---
 
 # Writing Skills

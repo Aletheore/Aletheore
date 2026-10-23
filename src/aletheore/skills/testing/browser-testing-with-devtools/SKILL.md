@@ -2,7 +2,7 @@
 name: browser-testing-with-devtools
 description: Tests in real browsers via Chrome DevTools MCP. Use when building or debugging anything that runs in a browser. Use when you need to inspect the DOM, capture console errors, analyze network requests, profile performance, or verify visual output with real runtime data. Requires the chrome-devtools MCP server to be configured.
 skill_id: testing/browser-testing-with-devtools
-title: Browser Testing With Devtools
+title: Browser Testing with Devtools
 source_url: https://github.com/addyosmani/agent-skills/tree/aeac41d4d005999432bb7312f7ff06383a91d59d/skills/browser-testing-with-devtools
 license: MIT
 shelf: quality

@@ -5,7 +5,7 @@ allowed-tools: Read,Write,Bash(node:*),Bash(npx *eas-cli@*)
 version: 1.0.0
 license: MIT
 skill_id: mobile/eas-workflows
-title: Eas Workflows
+title: EAS Workflows
 source_url: https://github.com/expo/skills/tree/7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1/plugins/expo/skills/eas-workflows
 shelf: build
 aletheore: {"id": "mobile/eas-workflows", "shelf": "build", "category": "mobile", "origin": "https://github.com/expo/skills/tree/7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1/plugins/expo/skills/eas-workflows", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1", "quality": 4, "curation_note": "official Expo/EAS skill", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 3, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["scripts"], "adapted": {}, "status": "ready", "mentions_agents": []}

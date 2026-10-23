@@ -37,6 +37,33 @@ def test_denies_a_full_reread_of_an_unchanged_file(tmp_path: Path):
     assert str(target) in spec["permissionDecisionReason"]
 
 
+@pytest.mark.parametrize(
+    "content",
+    ["x = 1\n" * 2001, "y" * 2001 + "\n"],
+    ids=["too-many-lines", "too-long-line"],
+)
+def test_a_file_one_read_would_only_partly_show_is_never_denied(tmp_path: Path, content: str):
+    repo = _scanned_repo(tmp_path)
+    target = repo / "big.py"
+    target.write_text(content)
+    payload = {"session_id": "s1", "cwd": str(repo), "tool_input": {"file_path": str(target)}}
+
+    read_guard.record_read(payload)
+
+    assert read_guard.pre_read_decision(payload) is None
+
+
+def test_a_file_of_exactly_the_read_limit_is_still_tracked(tmp_path: Path):
+    repo = _scanned_repo(tmp_path)
+    target = repo / "edge.py"
+    target.write_text("x = 1\n" * 2000)
+    payload = {"session_id": "s1", "cwd": str(repo), "tool_input": {"file_path": str(target)}}
+
+    read_guard.record_read(payload)
+
+    assert read_guard.pre_read_decision(payload) is not None
+
+
 def test_allows_again_after_the_file_changes(tmp_path: Path):
     repo = _scanned_repo(tmp_path)
     target = repo / "a.py"

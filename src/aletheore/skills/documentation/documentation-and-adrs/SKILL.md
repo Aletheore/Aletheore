@@ -2,7 +2,7 @@
 name: documentation-and-adrs
 description: Records decisions and documentation. Use when you need to document an architecture decision (ADR) or the reasoning behind a design choice, when changing public APIs, shipping features, or when you need to record context that future engineers and agents will need to understand the codebase.
 skill_id: documentation/documentation-and-adrs
-title: Documentation And Adrs
+title: Documentation and ADRs
 source_url: https://github.com/addyosmani/agent-skills/tree/aeac41d4d005999432bb7312f7ff06383a91d59d/skills/documentation-and-adrs
 license: MIT
 shelf: ship-operate

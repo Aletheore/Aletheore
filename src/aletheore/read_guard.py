@@ -62,11 +62,30 @@ def _save_state(path: Path, state: dict[str, Any]) -> None:
         pass
 
 
+# A Read with no offset/limit returns at most this many lines, and cuts a longer line at this
+# many characters, so a bigger file was only partly shown by it.
+_READ_TOOL_MAX_LINES = 2000
+_READ_TOOL_MAX_LINE_CHARS = 2000
+
+
+def _fits_in_one_read(data: bytes) -> bool:
+    """True when a single whole-file Read returns all of `data` (see the limits above)."""
+    lines = data.split(b"\n")
+    if len(lines) > _READ_TOOL_MAX_LINES + (1 if data.endswith(b"\n") else 0):
+        return False
+    return all(len(line) <= _READ_TOOL_MAX_LINE_CHARS for line in lines)
+
+
 def _file_digest(path: Path) -> tuple[str, int] | None:
-    """(sha256 hex, size) of the file's current bytes on disk, or None if it can't be read."""
+    """(sha256 hex, size) of the file's current bytes on disk, or None if it can't be read or if
+    one whole-file Read would not have shown all of it. Without the second check a file over the
+    Read limits would be recorded as read in full after its head was shown, and a later read of
+    the rest would be denied with a reason that says the whole file was already seen."""
     try:
         data = path.read_bytes()
     except OSError:
+        return None
+    if not _fits_in_one_read(data):
         return None
     return hashlib.sha256(data).hexdigest(), len(data)
 

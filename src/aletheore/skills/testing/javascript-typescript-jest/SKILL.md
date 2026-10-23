@@ -2,7 +2,7 @@
 name: javascript-typescript-jest
 description: Best practices for writing JavaScript/TypeScript tests using Jest, including mocking strategies, test structure, and common patterns.
 skill_id: testing/javascript-typescript-jest
-title: Javascript Typescript Jest
+title: JavaScript TypeScript Jest
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/javascript-typescript-jest
 license: MIT
 shelf: quality

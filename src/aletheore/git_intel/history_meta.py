@@ -26,6 +26,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from aletheore.git_exec import git_executable
+
 META_FILENAME = "git-meta.json"
 _META_VERSION = 1
 _DISABLE_LOCAL_CACHE_ENV = "ALETHEORE_DISABLE_LOCAL_SCAN_CACHE"
@@ -42,8 +44,8 @@ _memo: dict[tuple[str, str, str], HistoryFacts] = {}
 
 
 def _git(repo_path: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", *args], cwd=repo_path, capture_output=True, text=True, errors="ignore"
+    return subprocess.run(  # nosec B603 - argv[0] is git_executable()'s absolute path, args are fixed
+        [git_executable(), *args], cwd=repo_path, capture_output=True, text=True, errors="ignore"
     )
 
 

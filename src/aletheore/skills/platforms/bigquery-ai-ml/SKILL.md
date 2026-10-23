@@ -5,7 +5,7 @@ metadata:
   category: AiAndMachineLearning
 description: Leverages BigQuery's built-in machine learning and GenAI capabilities for advanced data analytics. Use when you need to write SQL queries that perform time-series forecasting, predict values, detect outliers or anomalies, find key drivers, perform semantic search or vector search, classify text, calculate similarity, summarize content, translate language, evaluate models, filter by semantic conditions, measure the causal effect of an intervention, compute correlations between columns, detect change points or structural breaks, extract trend or seasonality components, or leverage generative AI capabilities in BigQuery. Do not use for general BigQuery dataset, table, or job management requests.
 skill_id: platforms/bigquery-ai-ml
-title: Bigquery Ai Ml
+title: BigQuery AI ML
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/bigquery-ai-ml
 license: Apache-2.0
 shelf: build

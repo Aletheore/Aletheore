@@ -656,3 +656,34 @@ def test_render_mcp_tools_escapes_name_and_description():
     # Guards against a regression back to the original unescaped shape:
     # `t.name` concatenated directly with no escapeHtml() wrapping it.
     assert "+ t.name +" not in body
+
+
+def test_build_evidence_summary_without_git_history():
+    # A folder that is not a git repository, or one with no commits yet, scans to {"git": {"available": False}}.
+    evidence = make_evidence("2026-07-15T12:00:00+00:00")
+    evidence["git"] = {"available": False}
+
+    summary = build_evidence_summary(evidence)
+
+    assert summary["git_activity"] == {
+        "available": False,
+        "total_commits": 0,
+        "commit_cadence": {"trend": "n/a"},
+        "ownership": [],
+        "branches": [],
+    }
+
+
+def test_build_evidence_summary_marks_git_available_when_there_is_history():
+    evidence = make_evidence("2026-07-15T12:00:00+00:00")
+
+    assert build_evidence_summary(evidence)["git_activity"]["available"] is True
+
+
+def test_evidence_routes_answer_404_with_a_message_when_there_is_no_scan(tmp_path):
+    client = TestClient(build_app(tmp_path), base_url="http://127.0.0.1")
+
+    for route in ("/api/evidence", "/api/graph"):
+        response = client.get(route)
+        assert response.status_code == 404
+        assert "aletheore scan" in response.json()["error"]

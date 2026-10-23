@@ -2,7 +2,7 @@
 name: dotnet-design-pattern-review
 description: Review the C#/.NET code for design pattern implementation and suggest improvements.
 skill_id: architecture/dotnet-design-pattern-review
-title: Dotnet Design Pattern Review
+title: .NET Design Pattern Review
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/dotnet-design-pattern-review
 license: MIT
 shelf: build
