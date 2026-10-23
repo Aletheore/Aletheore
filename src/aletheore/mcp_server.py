@@ -143,7 +143,8 @@ ROUTER_INSTRUCTIONS = (
     "shape of the code, where grep only samples: who imports a file and how many modules a change reaches, "
     "modules in a directory that nothing imports, tests for a file, owners, churn, secrets, vulnerabilities, dead "
     "code, layer violations, endpoints, definitions, repo overview. Give a plain question and a file or "
-    "directory as target. Counts it returns are exact even when a list is capped. On 'no clear match', carry on "
+    "directory as target. Its counts and lists are exact; report them as returned, not filtered by what you know "
+    "of the framework. On 'no clear match', carry on "
     "without it instead of rephrasing."
 )
 

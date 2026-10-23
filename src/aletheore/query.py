@@ -624,6 +624,14 @@ _UNIMPORTED_DEFINITION = (
     "never listed. This is not dead_code.unreachable_modules, which also drops entry points, main-guard scripts "
     "and files named by a dotted string (settings, URLconfs), so it lists fewer files."
 )
+# What to do with the list. Agents asked "which modules does nothing import" took the framework conventions they
+# knew (middleware, cache and email backends named in settings) and removed those files from the tool's list, which
+# answered "is it used" instead of the question. Both questions are legitimate, so say which one this list answers.
+_UNIMPORTED_ANSWERING_NOTE = (
+    "Report `unimported` as returned when asked which modules nothing imports. A file a framework loads by name "
+    "(a middleware, backend or plugin named in settings) is still unimported: it just has no importer. That is a "
+    "separate question from whether it is used; mention such files beside the list rather than removing them."
+)
 
 
 def find_unimported_modules(
@@ -674,6 +682,7 @@ def find_unimported_modules(
         "scope": prefix or "(whole repo)",
         "languages": sorted(wanted) or "any",
         "definition": _UNIMPORTED_DEFINITION,
+        "answering_note": _UNIMPORTED_ANSWERING_NOTE,
         "importers_counted": "non-test only" if ignore_test_importers else "all",
         "unimported_total": len(unimported),
         "imported_only_by_tests_total": len(tests_only),
