@@ -370,8 +370,13 @@ def test_browser_detail_view_has_a_copyright_line():
 # --- 8. content checks -------------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("text, word", [("", "empty"), ("  \n\t ", "empty"), ("a\0b", "NUL"), ("x" * (1024 * 1024 + 1), "1 MB")])
-def test_unusable_content_is_rejected(skills_dir, text, word):
+@pytest.mark.parametrize(
+    "kind, word",
+    [("empty", "empty"), ("blank", "empty"), ("nul", "NUL"), ("over-1mb", "1 MB")],
+)
+def test_unusable_content_is_rejected(skills_dir, kind, word):
+    # Short ids on purpose: a megabyte string as a parameter becomes a megabyte test id, which stalls CI log output.
+    text = {"empty": "", "blank": "  \n\t ", "nul": "a\0b", "over-1mb": "x" * (1024 * 1024 + 1)}[kind]
     with pytest.raises(skill_hub.CustomSkillError, match=word):
         skill_hub.add_custom_skill("x", text)
     assert skill_hub.list_custom_skill_names() == []
