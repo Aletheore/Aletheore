@@ -1,0 +1,26 @@
+{
+  "split": "all",
+  "queries": 994,
+  "top1": 0.4678,
+  "top3": 0.6509,
+  "top5": 0.6982,
+  "typo_queries": 990,
+  "typo_clean_top3": 0.6525,
+  "typo_top3": 0.6384,
+  "confidence": {
+    "high": 145,
+    "low": 846,
+    "none": 3
+  },
+  "high_precision": 0.8759,
+  "wrong_high": 18,
+  "non_task_prompts": 63,
+  "non_task_quiet": 63,
+  "non_task_none": 63,
+  "task_prompts": 60,
+  "task_none": 0,
+  "hook_silent_prompts": 12,
+  "hook_silent_quiet": 12,
+  "hook_useful_prompts": 9,
+  "hook_useful_fired": 8
+}
