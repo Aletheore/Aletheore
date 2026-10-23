@@ -5,6 +5,13 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+**Changed: custom Hallbook skills are searchable by their content**
+
+Custom skills now match on their title, frontmatter description and body, not only their file name. They are
+ranked with the same fields as the bundled skills, kept below the high-confidence bar and still left out of the
+runner-up check. The index caches each file by path, modification time and size, so an edit, add or removal shows
+up on the next search without a restart.
+
 **Changed: the Hallbook prompt hook is quieter and does not repeat itself**
 
 The UserPromptSubmit hook stays silent for follow-up questions about the chat itself, such as "what did you do

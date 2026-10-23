@@ -1132,6 +1132,101 @@ def _search_index(skills_dir: str) -> _RankIndex:
     return _RankIndex(_bundled_index(skills_dir))
 
 
+# Custom skills are read from disk on demand. Each file is cached by (path, mtime, size), so
+# a search only pays for the files that changed since the previous one, and an add, edit or
+# removal shows up on the next search without restarting the process.
+_CUSTOM_DOC_CACHE: dict[str, tuple[int, int, CuratedSkillMeta]] = {}
+_CUSTOM_INDEX_CACHE: tuple[tuple[tuple[str, int, int], ...], _RankIndex | None] = ((), None)
+
+
+def _custom_frontmatter(text: str) -> tuple[str, str, str]:
+    """(title, description, body) from a custom skill's optional frontmatter."""
+    if not text.startswith("---\n"):
+        return "", "", text
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        return "", "", text
+    title = description = ""
+    for line in text[4:end].splitlines():
+        key, separator, value = line.partition(":")
+        if not separator:
+            continue
+        key = key.strip().lower()
+        value = value.strip().strip("'\"")
+        if key == "title":
+            title = value
+        elif key == "description":
+            description = value
+    return title, description, text[end + 5:]
+
+
+def _custom_meta(path: Path) -> CuratedSkillMeta | None:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    title, description, body = _custom_frontmatter(text)
+    name = path.stem
+    headings = " ".join(line.lstrip("#").strip() for line in body.splitlines() if line.lstrip().startswith("#"))
+
+    def tokens(value: str) -> str:
+        return " ".join(_tokens(value))
+
+    return CuratedSkillMeta(
+        skill_id=f"{_CUSTOM_PREFIX}{name}",
+        category=_CUSTOM_CATEGORY,
+        title=title or name,
+        description=description,
+        search_tokens={
+            "name": tokens(name.replace("-", " ").replace("_", " ")),
+            "title": tokens(title or name),
+            "description": tokens(description),
+            "intents": "",
+            "headings": tokens(headings),
+            "body": tokens(body),
+            "category": tokens(_CUSTOM_CATEGORY),
+        },
+    )
+
+
+def _custom_index() -> _RankIndex | None:
+    """The custom-skill index, rebuilt only when a file's path, mtime or size changed."""
+    global _CUSTOM_INDEX_CACHE
+    directory = custom_skills_dir()
+    try:
+        paths = sorted(directory.glob("*.md"))
+    except OSError:
+        return None
+    signature: list[tuple[str, int, int]] = []
+    metas: list[CuratedSkillMeta] = []
+    live_paths = set()
+    for path in paths:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        key = (str(path), stat.st_mtime_ns, stat.st_size)
+        signature.append(key)
+        live_paths.add(str(path))
+        cached = _CUSTOM_DOC_CACHE.get(str(path))
+        if cached is not None and cached[0] == key[1] and cached[1] == key[2]:
+            meta = cached[2]
+        else:
+            meta = _custom_meta(path)
+            if meta is not None:
+                _CUSTOM_DOC_CACHE[str(path)] = (key[1], key[2], meta)
+        if meta is not None:
+            metas.append(meta)
+    for stale in set(_CUSTOM_DOC_CACHE) - live_paths:
+        del _CUSTOM_DOC_CACHE[stale]
+    signature_tuple = tuple(signature)
+    if _CUSTOM_INDEX_CACHE[0] == signature_tuple:
+        return _CUSTOM_INDEX_CACHE[1]
+    index = _RankIndex(tuple(metas)) if metas else None
+    _CUSTOM_INDEX_CACHE = (signature_tuple, index)
+    return index
+
+
 _CURATION_FILE = "_curation.json"
 
 
@@ -1179,12 +1274,12 @@ def search_skills_scored(
         return []
     min_matches = min(min_matches, len(query_tokens))
     index = _search_index(str(bundled_skills_dir()))
-    custom_names = list_custom_skill_names() if (category is None or category == _CUSTOM_CATEGORY) else []
+    custom_index = _custom_index() if (category is None or category == _CUSTOM_CATEGORY) else None
     scored: list[tuple[float, str, SkillMeta]] = []
     for meta, score in index.rank_scored(
         query_tokens,
         category,
-        limit * 3 + len(custom_names),
+        limit * 3 + (len(custom_index.metas) if custom_index is not None else 0),
         min_matches=min_matches,
         prefix=prefix,
         phrase=phrase,
@@ -1192,18 +1287,39 @@ def search_skills_scored(
     ):
         if score:
             scored.append((score, meta.skill_id, _meta(meta)))
-    if category is None or category == _CUSTOM_CATEGORY:
-        for name in custom_names:
-            name_tokens = _tokens(name.replace("-", " ").replace("_", " "))
-            matched = {token for token in query_tokens if token in name_tokens}
-            # A custom skill is the user's own, unvetted text. It can be found by
-            # name, but its score is capped under the "high confidence" bar so it
-            # is never handed over as a confident answer or injected by the hook.
-            score = min(20.0 * len(matched), FIND_SKILL_MIN_SCORE - 1.0)
+    if custom_index is not None:
+        # A custom skill is the user's own, unvetted text. It is searched by its name,
+        # title, description and body like a bundled skill, but its score is capped
+        # under the "high confidence" bar so it is never handed over as a confident
+        # answer or injected by the hook. It also never counts as the runner-up.
+        for meta, score in custom_index.rank_scored(
+            query_tokens,
+            None,
+            limit * 3,
+            min_matches=min_matches,
+            prefix=prefix,
+            phrase=phrase,
+            fuzzy=fuzzy,
+        ):
             if score:
-                skill_id = f"{_CUSTOM_PREFIX}{name}"
+                # The custom corpus is tiny, so its IDF makes an otherwise good match
+                # score far below the bundled results. A coverage floor keeps a custom
+                # skill that covers much of the query visible next to them, while the
+                # cap still keeps every custom result under the high-confidence bar.
+                cap = FIND_SKILL_MIN_SCORE - 1.0
+                coverage = custom_index.coverage(query_tokens, meta.skill_id)
+                custom_score = min(cap, max(score, cap * (0.4 + 0.6 * coverage)))
                 scored.append(
-                    (score, skill_id, SkillMeta(skill_id=skill_id, category=_CUSTOM_CATEGORY, title=name, description=""))
+                    (
+                        custom_score,
+                        meta.skill_id,
+                        SkillMeta(
+                            skill_id=meta.skill_id,
+                            category=_CUSTOM_CATEGORY,
+                            title=meta.title,
+                            description=meta.description,
+                        ),
+                    )
                 )
     scored.sort(key=lambda item: (-item[0], item[1]))
     redirect, alternates_of = _curation(str(bundled_skills_dir()))
@@ -1327,7 +1443,7 @@ def _is_high_confidence(results: list[tuple[SkillMeta, float]], task: str | None
     Coverage is checked last and only when the task is known, so callers that only
     have scores (and tests with synthetic results) keep the score-only behaviour.
     """
-    if not results:
+    if not results or results[0][0].skill_id.startswith(_CUSTOM_PREFIX):
         return False
     top_score = results[0][1]
     # A custom skill is the user's own unvetted text and can never be the confident answer, so it must not

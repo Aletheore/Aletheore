@@ -175,3 +175,62 @@ def test_hallbook_hook_accepts_plain_text_without_a_session_id(monkeypatch):
 
     monkeypatch.setattr(sys, "stdin", FakeStdin())
     assert hallbook_hook._read_payload() == ("a plain prompt", None)
+
+
+def _use_custom_dir(monkeypatch, tmp_path):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    skill_hub._CUSTOM_DOC_CACHE.clear()
+    skill_hub._CUSTOM_INDEX_CACHE = ((), None)
+    return tmp_path
+
+
+def test_a_custom_skill_body_is_searchable(monkeypatch, tmp_path):
+    _use_custom_dir(monkeypatch, tmp_path)
+    (tmp_path / "release.md").write_text("# Release\n\nDeploy the canary and rollback with feature flags.", encoding="utf-8")
+
+    ids = [meta.skill_id for meta in skill_hub.search_skills("canary rollback feature flags", limit=5)]
+
+    assert "custom/release" in ids
+
+
+def test_a_custom_skill_frontmatter_title_and_description_are_searchable(monkeypatch, tmp_path):
+    _use_custom_dir(monkeypatch, tmp_path)
+    (tmp_path / "costs.md").write_text(
+        "---\ntitle: Azure Cost Review\ndescription: find anomaly spikes in cloud spend\n---\n# Steps\n",
+        encoding="utf-8",
+    )
+
+    results = skill_hub.search_skills("azure anomaly spikes", limit=5)
+
+    assert "custom/costs" in [meta.skill_id for meta in results]
+    assert next(meta for meta in results if meta.skill_id == "custom/costs").description == "find anomaly spikes in cloud spend"
+
+
+def test_custom_skill_search_updates_after_an_edit_and_a_removal(monkeypatch, tmp_path):
+    import os
+
+    _use_custom_dir(monkeypatch, tmp_path)
+    path = tmp_path / "notes.md"
+    path.write_text("# Notes\n\nzebra crossing", encoding="utf-8")
+    assert "custom/notes" in [meta.skill_id for meta in skill_hub.search_skills("zebra crossing", limit=5)]
+
+    path.write_text("# Notes\n\nunicorn pasture", encoding="utf-8")
+    newer = path.stat().st_mtime + 2
+    os.utime(path, (newer, newer))
+
+    assert "custom/notes" not in [meta.skill_id for meta in skill_hub.search_skills("zebra crossing", limit=5)]
+    assert "custom/notes" in [meta.skill_id for meta in skill_hub.search_skills("unicorn pasture", limit=5)]
+
+    path.unlink()
+    assert "custom/notes" not in [meta.skill_id for meta in skill_hub.search_skills("unicorn pasture", limit=5)]
+
+
+def test_a_custom_skill_content_match_can_never_be_high_confidence(monkeypatch, tmp_path):
+    _use_custom_dir(monkeypatch, tmp_path)
+    (tmp_path / "canary.md").write_text(
+        "---\ndescription: deploy canary and rollback safely with feature flags\n---\n", encoding="utf-8"
+    )
+
+    result = skill_hub.find_skill("deploy canary rollback feature flags")
+
+    assert result["confidence"] != "high"

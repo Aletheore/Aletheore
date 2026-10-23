@@ -3908,9 +3908,10 @@ def test_hallbook_snippet_prints_the_agent_instruction_and_names_real_tools():
         assert tool in result.stdout
 
 
-def test_hallbook_suggest_reads_json_stdin_and_prints_the_hint():
+def test_hallbook_suggest_reads_json_stdin_and_prints_the_hint(monkeypatch, tmp_path):
     query = "Rewrite this blog post intro to feel more human and less stiff."
     payload = json.dumps({"prompt": query, "session_id": "s", "cwd": "."})
+    monkeypatch.setattr(skill_hub, "user_home", lambda: tmp_path)
 
     result = runner.invoke(app, ["hallbook", "suggest"], input=payload)
 
