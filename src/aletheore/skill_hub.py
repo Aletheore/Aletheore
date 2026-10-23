@@ -893,7 +893,7 @@ class _RankIndex:
         self.joined: list[str] = []
         self.doc_len: list[dict[str, int]] = []
         self.name_sizes: list[int] = []
-        self.prefix_tokens: dict[str, set[str]] | None = None
+        self.prefix_tokens: dict[str, tuple[str, ...]] | None = None
         for meta in metas:
             texts = meta.search_tokens or {
                 "name": meta.skill_id.split("/", 1)[-1].replace("-", " ").replace("_", " "),
@@ -934,7 +934,7 @@ class _RankIndex:
             for text in texts:
                 self.vocab.update(text.split())
         self.vocab_by_first: dict[str, dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
-        for token in self.vocab:
+        for token in sorted(self.vocab):
             if len(token) >= 4:
                 self.vocab_by_first[token[0]][len(token)].append(token)
 
@@ -987,11 +987,11 @@ class _RankIndex:
         for texts in self.texts:
             for text in texts:
                 vocab.update(text.split())
-        prefix: dict[str, set[str]] = defaultdict(set)
-        for token in vocab:
+        prefix: dict[str, list[str]] = defaultdict(list)
+        for token in sorted(vocab):
             if len(token) >= 5:
-                prefix[token[:5]].add(token)
-        self.prefix_tokens = prefix
+                prefix[token[:5]].append(token)
+        self.prefix_tokens = {key: tuple(value) for key, value in prefix.items()}
 
     def rank_scored(
         self,

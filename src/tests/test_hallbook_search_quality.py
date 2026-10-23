@@ -234,3 +234,12 @@ def test_a_custom_skill_content_match_can_never_be_high_confidence(monkeypatch, 
     result = skill_hub.find_skill("deploy canary rollback feature flags")
 
     assert result["confidence"] != "high"
+
+
+def test_fuzzy_and_prefix_candidates_are_sorted_for_stable_results():
+    index = skill_hub._search_index(str(skill_hub.bundled_skills_dir()))
+    for by_length in index.vocab_by_first.values():
+        for candidates in by_length.values():
+            assert candidates == sorted(candidates)
+    index._ensure_prefix_tokens()
+    assert all(candidates == tuple(sorted(candidates)) for candidates in index.prefix_tokens.values())
