@@ -135,7 +135,8 @@ ARGUMENT_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "language": "Optional language filter, matching repository.languages in the evidence, e.g. python.",
     },
     "aletheore_managed_audit": {
-        "token": "Optional Aletheore API token; by default the saved login or ALETHEORE_API_TOKEN is used.",
+        # Description text only, not a credential.
+        "token": "Optional Aletheore API token; by default the saved login or ALETHEORE_API_TOKEN is used.",  # nosec B105
     },
     "aletheore_add_custom_skill": {
         "name": "Name for the skill: letters, digits, '-' and '_' only, at most 64 characters.",
