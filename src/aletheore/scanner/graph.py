@@ -48,6 +48,10 @@ LANGUAGE_BY_EXTENSION = {
     ".jsx": ("javascript", JS_LANGUAGE),
     ".ts": ("typescript", TS_LANGUAGE),
     ".tsx": ("typescript", TSX_LANGUAGE),
+    ".mjs": ("javascript", JS_LANGUAGE),
+    ".cjs": ("javascript", JS_LANGUAGE),
+    ".mts": ("typescript", TS_LANGUAGE),
+    ".cts": ("typescript", TS_LANGUAGE),
     ".go": ("go", GO_LANGUAGE),
     ".rs": ("rust", RUST_LANGUAGE),
     ".java": ("java", JAVA_LANGUAGE),
@@ -1202,6 +1206,37 @@ def _leading_rust_doc_comment(source: bytes, enclosing_node: Node) -> str | None
     return "\n".join(lines) or None
 
 
+def _rust_inline_mod_depth(node: Node) -> int:
+    """How many inline `mod x { ... }` bodies enclose this node (they change what self:: and super:: mean)."""
+    depth = 0
+    parent = node.parent
+    while parent is not None:
+        if parent.type == "declaration_list" and parent.parent is not None and parent.parent.type == "mod_item":
+            depth += 1
+        parent = parent.parent
+    return depth
+
+
+def _rust_adjust_for_inline_mod(path: str, depth: int) -> str | None:
+    """Rewrite a use path written inside `depth` inline modules so it is relative to the enclosing file's
+    module. None when the path only names something defined in the same file."""
+    if depth == 0:
+        return path
+    segments = path.split("::")
+    if segments[0] == "self":
+        return None
+    if segments[0] != "super":
+        return path
+    supers = 0
+    while supers < len(segments) and segments[supers] == "super":
+        supers += 1
+    if supers < depth:
+        return None
+    rest = segments[supers:]
+    head = ["super"] * (supers - depth) or ["self"]
+    return "::".join(head + rest)
+
+
 def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], list[dict]]:
     """Return flattened use-path strings, function/method names, and type names."""
     imports: list[str] = []
@@ -1225,7 +1260,11 @@ def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], lis
                 # public re-export surface, not a corner case).
                 for child in n.children:
                     if child.type not in ("use", ";", "visibility_modifier"):
-                        imports.extend(_rust_use_paths(child, source))
+                        inline_depth = _rust_inline_mod_depth(n)
+                        for use_path in _rust_use_paths(child, source):
+                            adjusted = _rust_adjust_for_inline_mod(use_path, inline_depth)
+                            if adjusted is not None:
+                                imports.append(adjusted)
                         break
             elif n.type == "mod_item" and not any(
                 c.type == "declaration_list" for c in n.children
@@ -1242,6 +1281,14 @@ def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], lis
                     name = source[name_node.start_byte:name_node.end_byte].decode(errors="ignore")
                     if name:
                         imports.append(f"self::{name}")
+                        # #[path = "..."] (also inside cfg_attr) names the module file explicitly.
+                        sibling = n.prev_sibling
+                        while sibling is not None and sibling.type in ("attribute_item", "line_comment", "block_comment"):
+                            if sibling.type == "attribute_item":
+                                attr_text = source[sibling.start_byte:sibling.end_byte].decode(errors="ignore")
+                                for attr_path in re.findall(r'\bpath\s*=\s*"([^"]+)"', attr_text):
+                                    imports.append(f"@path:{attr_path}")
+                            sibling = sibling.prev_sibling
             elif n.type in ("function_item", "function_signature_item"):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
@@ -1339,15 +1386,26 @@ def _rust_module_search_dir(repo_path: Path, file_path: Path) -> Path:
     src_dir = _rust_crate_src_dir(repo_path, file_path)
     if file_path.name in ("lib.rs", "main.rs") and file_path.parent == src_dir:
         return src_dir
+    # Cargo target roots (tests/*.rs, examples/*.rs, benches/*.rs, src/bin/*.rs, build.rs) are crate roots of
+    # their own, so their `mod x;` files sit beside them.
+    parent = file_path.parent
+    if (parent.name in ("tests", "examples", "benches") and (parent.parent / "Cargo.toml").exists()) or (
+        parent.name == "bin" and parent.parent == src_dir
+    ) or (file_path.name == "build.rs" and (parent / "Cargo.toml").exists()):
+        return parent
     if file_path.name == "mod.rs":
         return file_path.parent
     return file_path.parent / file_path.stem
 
 
 def _resolve_rust_module_dir(search_dir: Path, name: str) -> Path | None:
-    if (search_dir / f"{name}.rs").exists():
+    # Exact-case directory entries, not Path.exists(): on a case-insensitive filesystem a type name such as
+    # `Ctxt` matched `ctxt.rs` and produced an edge to a module path that does not exist.
+    from aletheore.scanner import rust_resolve
+
+    if rust_resolve.file_exists_exact(search_dir, f"{name}.rs"):
         return search_dir / f"{name}.rs"
-    if (search_dir / name / "mod.rs").exists():
+    if rust_resolve.dir_exists_exact(search_dir, name) and rust_resolve.file_exists_exact(search_dir / name, "mod.rs"):
         return search_dir / name / "mod.rs"
     return None
 
@@ -1378,8 +1436,22 @@ def _resolve_rust_path(repo_path: Path, from_file: Path, path: str) -> str | Non
     head = segments[0]
     rest = segments[1:]
 
+    from aletheore.scanner import rust_resolve
+
+    if head == "@path:" or path.startswith("@path:"):
+        # #[path = "..."] on a `mod x;`: relative to the declaring file's directory, symlinks followed.
+        candidate = os.path.realpath(os.path.join(os.path.dirname(from_file), path[len("@path:"):]))
+        real_root = os.path.realpath(repo_path)
+        if os.path.isfile(candidate) and candidate.startswith(real_root + os.sep):
+            return candidate[len(real_root) + 1:].replace(os.sep, "/")
+        return None
+
     if head == "crate":
-        target = _walk_rust_segments(_rust_crate_src_dir(repo_path, from_file), rest)
+        src_dir = _rust_crate_src_dir(repo_path, from_file)
+        target = _walk_rust_segments(src_dir, rest)
+        if target is None and rest:
+            # `use crate::Item;` where Item is defined in the crate root file itself.
+            target = rust_resolve.crate_root_file(src_dir)
     elif head == "self":
         target = _walk_rust_segments(_rust_module_search_dir(repo_path, from_file), rest)
     elif head == "super":
@@ -1391,7 +1463,20 @@ def _resolve_rust_path(repo_path: Path, from_file: Path, path: str) -> str | Non
             search_dir = search_dir.parent
             rest = rest[1:]
         target = _walk_rust_segments(search_dir, rest)
+        if target is None:
+            # `use super::Item;` / `use super::*;`: Item lives in the parent module's own file.
+            target = rust_resolve.module_file_for_dir(search_dir, _rust_crate_src_dir(repo_path, from_file))
     else:
+        # Names relative to the current module (2018 uniform paths), then a workspace crate named in this
+        # package's Cargo.toml (`use serde_core::de::Deserialize`).
+        target = _walk_rust_segments(_rust_module_search_dir(repo_path, from_file), segments)
+        if target is None:
+            aliases = rust_resolve.crate_aliases(repo_path, from_file)
+            if head in aliases:
+                lib_root = aliases[head]
+                target = _walk_rust_segments(lib_root.parent, rest) or lib_root
+        if target is not None:
+            return _rel(repo_path, target)
         # No crate/self/super prefix: could be an implicit crate-relative path
         # ("use handlers::Handler;" from the crate root, valid since the 2018
         # edition) or an external crate name (std, or a real third-party
@@ -1815,13 +1900,34 @@ def _java_class_file(root: Path, segments: list[str]) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
+def _path_closeness(a: Path, b: Path) -> int:
+    """Number of leading path components `a` and `b` share."""
+    n = 0
+    for x, y in zip(a.parts, b.parts):
+        if x != y:
+            break
+        n += 1
+    return n
+
+
+def _nearest_first(importer: Path | None, candidates: list[Path]) -> list[Path]:
+    """Candidates ordered by how much path the importing file shares with them (stable, so
+    with no importer or a tie the caller's own order still decides). A repo can carry two
+    source sets declaring the same packages (lib/java and a trimmed lib/javame copy); a file
+    belongs to the set it lives in, not to whichever root happens to be shallowest."""
+    if importer is None or len(candidates) < 2:
+        return candidates
+    return sorted(candidates, key=lambda c: -_path_closeness(importer, c))
+
+
 def _resolve_java_import(
-    source_roots: list[Path], dotted: str, is_static: bool, is_wildcard: bool
+    source_roots: list[Path], dotted: str, is_static: bool, is_wildcard: bool, importer: Path | None = None
 ) -> tuple[list[Path], bool]:
     """Returns (resolved files, was_ambiguous) - was_ambiguous is True when
     more than one source root had a matching candidate and a fixed tiebreak
-    (source_roots' own order - see its sort in build_module_graph) had to
-    pick one, as opposed to there only ever having been one candidate.
+    had to pick one, as opposed to there only ever having been one candidate.
+    The tiebreak is the candidate nearest the importing file (when `importer`
+    is given), then source_roots' own order - see its sort in build_module_graph.
     """
     segments = dotted.split(".")
     if not segments:
@@ -1855,12 +1961,16 @@ def _resolve_java_import(
         # in that package's directory is what a wildcard import pulls in,
         # the same "import the whole package" fan-out Go's package-level
         # imports need.
-        matching_roots = [root for root in source_roots if root.joinpath(*segments).is_dir()]
+        matching_roots = _nearest_first(
+            importer, [root for root in source_roots if root.joinpath(*segments).is_dir()]
+        )
         if not matching_roots:
             return [], False
         return sorted(matching_roots[0].joinpath(*segments).glob("*.java")), len(matching_roots) > 1
 
-    matches = [target for root in source_roots if (target := _java_class_file(root, segments)) is not None]
+    matches = _nearest_first(
+        importer, [target for root in source_roots if (target := _java_class_file(root, segments)) is not None]
+    )
     if matches:
         return [matches[0]], len(matches) > 1
 
@@ -1868,13 +1978,117 @@ def _resolve_java_import(
     # segment might be a nested class rather than its own top-level file, in
     # which case the containing class's own file is the real target.
     if len(segments) > 1:
-        matches = [
-            target for root in source_roots if (target := _java_class_file(root, segments[:-1])) is not None
-        ]
+        matches = _nearest_first(
+            importer,
+            [target for root in source_roots if (target := _java_class_file(root, segments[:-1])) is not None],
+        )
         if matches:
             return [matches[0]], len(matches) > 1
 
     return [], False
+
+
+_JAVA_TYPE_DECLS = (
+    "class_declaration", "interface_declaration", "enum_declaration", "record_declaration",
+    "annotation_type_declaration",
+)
+
+
+def _java_top_level_type_names(root: Node, source: bytes) -> list[str]:
+    """Names of the types declared at the top level of this file (what other files of the same package can name)."""
+    names: list[str] = []
+    for child in root.children:
+        if child.type in _JAVA_TYPE_DECLS:
+            name_node = child.child_by_field_name("name")
+            if name_node is not None:
+                names.append(source[name_node.start_byte:name_node.end_byte].decode(errors="ignore"))
+    return names
+
+
+def _java_type_references(root: Node, source: bytes) -> tuple[set[str], set[str], set[str]]:
+    """(capitalized identifiers used in the body, type names declared anywhere in the file, type parameters).
+
+    The identifier rule that keeps same-package edges conservative: only identifiers that start with an
+    uppercase letter count; the package and import lines are skipped; in `a.B.c` / `A.b` / `pkg.Type` only the
+    leftmost part can name a same-package type; a method's own name is not a reference. Comments and string
+    literals are never identifiers in the tree.
+    """
+    used: set[str] = set()
+    declared: set[str] = set()
+    tparams: set[str] = set()
+    stack = [root]
+    while stack:
+        n = stack.pop()
+        t = n.type
+        if t in ("import_declaration", "package_declaration"):
+            continue
+        if t in _JAVA_TYPE_DECLS:
+            name_node = n.child_by_field_name("name")
+            if name_node is not None:
+                declared.add(source[name_node.start_byte:name_node.end_byte].decode(errors="ignore"))
+        elif t == "type_parameter":
+            for c in n.children:
+                if c.type in ("type_identifier", "identifier"):
+                    tparams.add(source[c.start_byte:c.end_byte].decode(errors="ignore"))
+                    break
+        if t in ("identifier", "type_identifier"):
+            text = source[n.start_byte:n.end_byte].decode(errors="ignore")
+            if text[:1].isupper():
+                used.add(text)
+            continue
+        if t in ("scoped_type_identifier", "scoped_identifier") and n.children:
+            stack.append(n.children[0])
+            continue
+        if t == "field_access":
+            obj = n.child_by_field_name("object")
+            if obj is not None:
+                stack.append(obj)
+            continue
+        if t == "method_invocation":
+            name_node = n.child_by_field_name("name")
+            stack.extend(c for c in n.children if name_node is None or c.id != name_node.id)
+            continue
+        stack.extend(n.children)
+    return used, declared, tparams
+
+
+def _java_same_package_targets(
+    path: Path,
+    package: str | None,
+    tree_root: Node,
+    source: bytes,
+    explicit_imports: set[str],
+    package_types: dict[str, dict[str, list[Path]]],
+) -> list[tuple[Path, bool]]:
+    """Files this one depends on without any import: Java needs none for a type of the same package.
+
+    Rule (conservative, so a wrong edge stays rarer than a missing one): the file's capitalized identifiers
+    are matched against types declared at the top level of other files of the SAME package. Not an edge when
+    the file declares a type of that name itself (nested, local), the name is a type parameter, or a
+    single-type import brings a different class of that simple name in (an import shadows the package).
+    When several source sets declare the type, the file nearest to the importer wins. The default package
+    only matches files in the same directory.
+    """
+    pkg = package or ""
+    candidates = package_types.get(pkg)
+    if not candidates:
+        return []
+    used, declared, tparams = _java_type_references(tree_root, source)
+    out: list[tuple[Path, bool]] = []
+    for name in sorted(used):
+        if name in declared or name in tparams or name in explicit_imports:
+            continue
+        files = candidates.get(name)
+        if not files:
+            continue
+        if not pkg:
+            files = [f for f in files if f.parent == path.parent]
+            if not files:
+                continue
+        best = _nearest_first(path, [f for f in files if f != path])
+        if best:
+            out.append((best[0], len(best) > 1))
+    return out
 
 
 def _leading_swift_doc_comment(source: bytes, enclosing_node: Node) -> str | None:
@@ -2391,7 +2605,7 @@ def _extract_ruby(node: Node, source: bytes) -> tuple[list[tuple[str, str]], lis
                 # the stdlib Kernel#require this resolver means to handle.
                 if receiver_node is None and method_node is not None and method_node.type == "identifier":
                     method_name = text(method_node)
-                    if method_name in ("require", "require_relative"):
+                    if method_name in ("require", "require_relative", "require_all", "autoload"):
                         args_node = n.child_by_field_name("arguments")
                         if args_node is not None:
                             for arg in args_node.children:
@@ -2399,6 +2613,10 @@ def _extract_ruby(node: Node, source: bytes) -> tuple[list[tuple[str, str]], lis
                                     for part in arg.children:
                                         if part.type == "string_content":
                                             imports.append((method_name, text(part)))
+                                    if method_name in ("autoload", "require_all"):
+                                        # autoload :Const, "path" carries one path;
+                                        # require_all "dir" one directory.
+                                        break
             elif n.type == "method":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
@@ -2422,24 +2640,40 @@ def _extract_ruby(node: Node, source: bytes) -> tuple[list[tuple[str, str]], lis
 
 
 def _resolve_ruby_require(repo_path: Path, from_file: Path, kind: str, spec: str) -> Path | None:
+    spec_with_ext = spec if spec.endswith(".rb") else f"{spec}.rb"
     if kind == "require_relative":
         # Always relative to the current file's own directory - unambiguous,
         # exactly like a relative JS import.
-        base_dir = from_file.parent
-    else:
-        # Plain "require" is genuinely ambiguous - the overwhelming majority of
-        # real-world uses are gems (external), but a project's own lib/ directory
-        # is the near-universal Ruby convention for what else a bare require can
-        # name (that's what ends up on $LOAD_PATH for a gem's own internal
-        # requires). No lib/ directory at all -> nothing local to resolve to,
-        # treated as external the same way an unrecognized Go/Rust/Java import is.
-        base_dir = repo_path / "lib"
-        if not base_dir.is_dir():
-            return None
+        candidate = (from_file.parent / spec_with_ext).resolve()
+        return candidate if candidate.is_file() else None
+    # Plain "require" / autoload is genuinely ambiguous - the overwhelming majority
+    # of real-world uses are gems (external), but a project's own lib/ directory
+    # is the near-universal Ruby convention for what else a bare require can
+    # name (that's what ends up on $LOAD_PATH for a gem's own internal
+    # requires). test/ and spec/ are put on the load path by rake/rspec
+    # (`require "helper"`, `require "spec_helper"`), and the repo root by `-I.`.
+    # Tried in that order; the first existing file wins. Nothing found ->
+    # treated as external the same way an unrecognized Go/Rust/Java import is.
+    for base_name in _RUBY_LOAD_PATHS:
+        base_dir = repo_path / base_name if base_name else repo_path
+        candidate = (base_dir / spec_with_ext).resolve()
+        if candidate.is_file():
+            return candidate
+    return None
 
-    spec_with_ext = spec if spec.endswith(".rb") else f"{spec}.rb"
-    candidate = (base_dir / spec_with_ext).resolve()
-    return candidate if candidate.is_file() else None
+
+_RUBY_LOAD_PATHS = ("lib", "test", "spec")
+
+
+def _resolve_ruby_require_all(repo_path: Path, spec: str) -> list[Path]:
+    """`require_all "jekyll/commands"` (a project-defined helper that requires every
+    .rb file under a directory): all .rb files under that directory, first load
+    path that has it."""
+    for base_name in _RUBY_LOAD_PATHS:
+        base_dir = (repo_path / base_name if base_name else repo_path) / spec
+        if base_dir.is_dir():
+            return sorted(p.resolve() for p in base_dir.rglob("*.rb") if p.is_file())
+    return []
 
 
 def _php_string_content(n: Node, source: bytes) -> str | None:
@@ -2894,12 +3128,210 @@ def _csharp_declared_type_names(node: Node, source: bytes) -> list[str]:
     return names
 
 
+_CSHARP_TOP_TYPE_DECLS = _CSHARP_TYPE_DECLS + ("record_struct_declaration",)
+_CSHARP_GLOBAL_USING_RE = re.compile(r"^\s*global\s+using\s+(?!static\b)(?:\w+\s*=\s*)?([\w.]+)\s*;", re.MULTILINE)
+_CSHARP_EXTENSION_RE = re.compile(r"\b([A-Za-z_]\w*)\s*(?:<[^>()]*>)?\s*\(\s*this\s+[A-Za-z_]")
+
+
+def _csharp_file_summary(root: Node, source: bytes) -> dict:
+    """Namespaces this file declares, its TOP-LEVEL types (name -> namespace; nested types are reachable only
+    through their outer type), whether it defines extension methods, and its `global using` namespaces."""
+
+    def text(n: Node) -> str:
+        return source[n.start_byte:n.end_byte].decode(errors="ignore")
+
+    namespaces: list[str] = []
+    types: dict[str, str] = {}
+
+    def walk(children, ns: str) -> None:
+        for c in children:
+            if c.type in ("namespace_declaration", "file_scoped_namespace_declaration"):
+                name_node = c.child_by_field_name("name")
+                if name_node is None:
+                    continue
+                full = f"{ns}.{text(name_node)}" if ns else text(name_node)
+                namespaces.append(full)
+                if c.type == "file_scoped_namespace_declaration":
+                    ns = full
+                    walk(c.children, full)
+                else:
+                    body = c.child_by_field_name("body")
+                    walk(body.children if body is not None else c.children, full)
+            elif c.type in _CSHARP_TOP_TYPE_DECLS:
+                name_node = c.child_by_field_name("name")
+                if name_node is not None:
+                    types.setdefault(text(name_node), ns)
+            elif c.type == "declaration_list":
+                walk(c.children, ns)
+
+    walk(root.children, "")
+    decoded = source.decode("utf-8", "ignore")
+    ext_methods = (
+        sorted(set(_CSHARP_EXTENSION_RE.findall(decoded))) if types and "static class" in decoded else []
+    )
+    return {
+        "ns": namespaces,
+        "types": types,
+        "ext_methods": ext_methods,
+        "ext_ns": next(iter(types.values())) if types else "",
+        "global_usings": _CSHARP_GLOBAL_USING_RE.findall(decoded),
+    }
+
+
+def _csharp_code_identifiers(root: Node, source: bytes) -> list[str]:
+    """Identifier tokens of the code in first-appearance order. `using` directives, namespace names, comments and
+    string literals are not part of it, so `Microsoft.Extensions.X` does not look like a use of a type `Extensions`."""
+    out: list[str] = []
+    seen: set[str] = set()
+    stack = [root]
+    while stack:
+        n = stack.pop()
+        if n.type == "using_directive":
+            continue
+        if n.type in ("namespace_declaration", "file_scoped_namespace_declaration"):
+            name_node = n.child_by_field_name("name")
+            stack.extend(reversed([c for c in n.children if name_node is None or c.id != name_node.id]))
+            continue
+        if n.type == "identifier":
+            text = source[n.start_byte:n.end_byte].decode(errors="ignore")
+            if text not in seen:
+                seen.add(text)
+                out.append(text)
+            continue
+        stack.extend(reversed(n.children))
+    return out
+
+
+def _csharp_project_index(repo_path: Path, source_paths: list[Path]) -> tuple[dict[Path, Path | None], dict]:
+    """(project dir of each .cs file, project dir -> set of project dirs it can see).
+
+    A file belongs to the project of its nearest ancestor directory holding a .csproj. A project sees itself and,
+    transitively, the projects its <ProjectReference> items name. A repo with no .csproj has no boundary
+    information (every file maps to None and sees everything)."""
+    project_dirs: dict[Path, Path] = {}
+    for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+        for filename in filenames:
+            if filename.endswith(".csproj"):
+                project_dirs.setdefault(Path(dirpath), Path(dirpath) / filename)
+    direct: dict[Path, set[Path]] = {}
+    for directory, csproj in project_dirs.items():
+        refs: set[Path] = set()
+        try:
+            root = ET.parse(csproj).getroot()
+        except (ET.ParseError, OSError):
+            direct[directory] = refs
+            continue
+        for element in root.iter():
+            if element.tag.rsplit("}", 1)[-1] == "ProjectReference":
+                include = element.attrib.get("Include", "").strip().replace("\\", "/")
+                if include:
+                    target = Path(os.path.normpath(directory / include)).parent
+                    if target in project_dirs:
+                        refs.add(target)
+        direct[directory] = refs
+    visible: dict[Path, set[Path]] = {}
+    for directory in project_dirs:
+        seen = {directory}
+        queue = [directory]
+        while queue:
+            for nxt in direct.get(queue.pop(), ()):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    queue.append(nxt)
+        visible[directory] = seen
+    project_of: dict[Path, Path | None] = {}
+    for source_path in source_paths:
+        project: Path | None = None
+        for ancestor in (source_path.parent, *source_path.parent.parents):
+            if ancestor in project_dirs:
+                project = ancestor
+                break
+        project_of[source_path] = project
+    return project_of, visible
+
+
+def _build_csharp_index(repo_path: Path, summaries: dict[Path, dict]) -> dict:
+    project_of, visible = _csharp_project_index(repo_path, list(summaries))
+    global_usings: dict[Path | None, set[str]] = {}
+    ext_owners: dict[str, set[Path]] = {}
+    for path, summary in summaries.items():
+        global_usings.setdefault(project_of.get(path), set()).update(summary["global_usings"])
+        for method in summary["ext_methods"]:
+            ext_owners.setdefault(method, set()).add(path)
+    return {
+        "files": summaries, "project_of": project_of, "visible": visible,
+        "global_usings": global_usings, "ext_owners": ext_owners,
+    }
+
+
+def _csharp_project_sees(index: dict, importer: Path, other: Path) -> bool:
+    p_imp = index["project_of"].get(importer)
+    p_oth = index["project_of"].get(other)
+    if p_imp is None or p_oth is None:
+        return True
+    return p_oth in index["visible"].get(p_imp, {p_imp})
+
+
+def _csharp_visibility_scope(importer: Path, index: dict, usings: list[str] | None) -> dict:
+    info = index["files"].get(importer) or {"ns": []}
+    chain: dict[str, int] = {"": 0}
+    for ns in info["ns"]:
+        parts = ns.split(".")
+        for k in range(1, len(parts) + 1):
+            chain[".".join(parts[:k])] = k
+    imported = set(usings or [])
+    imported |= index["global_usings"].get(index["project_of"].get(importer), set())
+    imported |= index["global_usings"].get(None, set())
+    return {"chain": chain, "imported": imported}
+
+
+def _csharp_visible_owners(
+    name: str, owners: set[Path], importer: Path, index: dict, scope: dict, text: str
+) -> list[Path]:
+    """The declaring files of `name` the importer can reach (see _csharp_type_reference_targets)."""
+    best_rank: tuple[int, int] | None = None
+    best: list[Path] = []
+    for owner in sorted(owners):
+        if owner == importer or not _csharp_project_sees(index, importer, owner):
+            continue
+        owner_info = index["files"].get(owner) or {"types": {}, "ext_methods": []}
+        ns = owner_info["types"].get(name)
+        if ns is None and name in owner_info["ext_methods"]:
+            ns = owner_info["ext_ns"]
+        if ns is None:
+            continue
+        if ns in scope["chain"]:
+            rank = (2, scope["chain"][ns])
+        elif ns in scope["imported"]:
+            rank = (1, 0)
+        elif f"{ns}.{name}" in text:
+            rank = (0, 0)
+        else:
+            continue
+        if best_rank is None or rank > best_rank:
+            best_rank, best = rank, [owner]
+        elif rank == best_rank:
+            best.append(owner)
+    return best
+
+
 def _csharp_type_reference_targets(
     source: bytes,
     own_types: set[str],
     type_owners: dict[str, set[Path]],
+    importer: Path | None = None,
+    index: dict | None = None,
+    usings: list[str] | None = None,
+    tree_root: Node | None = None,
 ) -> list[tuple[Path, bool]]:
     """Files this one depends on by *naming their types*, not by importing them.
+
+    With `index` (see _build_csharp_index) the owners of a name are filtered by what the importing file can
+    actually see: the owner's project must be the importer's or one it references, and the type's namespace must
+    be one of the importer's enclosing namespaces, a namespace it `using`s (or a global using), or written out in
+    full at the use. Of the owners left, the innermost enclosing namespace wins over a `using`; every part of a
+    partial type is linked. Without `index` the old name-only rule applies.
 
     C# needs no `using` to reference a type in the same namespace, so an
     import-derived graph is near-empty for the language. Measured on
@@ -2917,8 +3349,14 @@ def _csharp_type_reference_targets(
     """
     referenced: list[tuple[Path, bool]] = []
     seen: set[str] = set()
-    for match in _IDENTIFIER_RE.finditer(source.decode("utf-8", "ignore")):
-        name = match.group(0)
+    text = source.decode("utf-8", "ignore")
+    scope = _csharp_visibility_scope(importer, index, usings) if index is not None and importer is not None else None
+    if scope is not None and tree_root is not None:
+        # Identifier tokens of the code only: comments, strings and `using`/namespace names are not references.
+        names = _csharp_code_identifiers(tree_root, source)
+    else:
+        names = (m.group(0) for m in _IDENTIFIER_RE.finditer(text))
+    for name in names:
         if (
             name in seen
             or name in own_types
@@ -2926,9 +3364,19 @@ def _csharp_type_reference_targets(
         ):
             continue
         owners = type_owners.get(name)
+        if scope is not None:
+            # an extension method is "owned" by the file that declares it and reached by calling it by name
+            owners = (owners or set()) | index["ext_owners"].get(name, set())
         if not owners:
             continue
         seen.add(name)
+        if scope is not None:
+            chosen = _csharp_visible_owners(name, owners, importer, index, scope, text)
+            for owner in chosen:
+                referenced.append((owner, len(chosen) > 1))
+            if len(referenced) >= _CSHARP_MAX_TYPE_EDGES:
+                break
+            continue
         # More than one declaring file: still an edge (more informative than
         # dropping it - the reader loses nothing that a dropped edge would
         # have preserved), just to a deterministically-chosen one, flagged
@@ -3262,12 +3710,15 @@ def _resolve_python_from_import(
     return _resolve_python_module(repo_path, module_name, from_file, source_roots)
 
 
-JS_FAMILY_EXTENSIONS = (".js", ".jsx", ".ts", ".tsx")
+JS_FAMILY_EXTENSIONS = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts")
 
 
 def _resolve_js_import(repo_path: Path, from_file: Path, spec: str) -> str | None:
     if not spec.startswith("."):
-        return None
+        # workspace / self-referenced package names, tsconfig paths (see js_resolve)
+        from aletheore.scanner.js_resolve import resolve_bare_import
+
+        return resolve_bare_import(repo_path, from_file, spec)
     base = (from_file.parent / spec).resolve()
     candidates = [base]
     for ext in JS_FAMILY_EXTENSIONS:
@@ -3296,6 +3747,8 @@ def _extract_module(
     csharp_type_owners: dict[str, set[Path]] | None = None,
     csharp_implicit_usings: dict[Path, list[str]] | None = None,
     swift_target_files: dict[str, list[Path]] | None = None,
+    java_package_types: dict[str, dict[str, list[Path]]] | None = None,
+    csharp_index: dict | None = None,
 ) -> dict:
     """Turns one already-parsed (tree, source) into a module dict - the
     per-language dispatch every file eventually goes through, whether it
@@ -3373,19 +3826,42 @@ def _extract_module(
     elif language_name == "rust":
         raw_imports, functions, classes = _extract_rust(tree.root_node, source)
         if has_rust_crate_root:
-            for use_path in raw_imports:
+            from aletheore.scanner import rust_resolve
+
+            # Macro-declared modules and inline `crate::a::b` / `workspace_crate::a::b` paths are not `use` items.
+            extra_paths = rust_resolve.extra_imports(repo_path, path, source.decode(errors="ignore"))
+            for use_path in [*raw_imports, *extra_paths]:
                 target = _resolve_rust_path(repo_path, path, use_path)
                 if target is not None and target != rel_path:
                     resolved_imports.append(target)
     elif language_name == "java":
         raw_imports, functions, classes = _extract_java(tree.root_node, source)
         for dotted, is_static, is_wildcard in raw_imports:
-            targets, ambiguous = _resolve_java_import(java_source_roots, dotted, is_static, is_wildcard)
+            targets, ambiguous = _resolve_java_import(
+                java_source_roots, dotted, is_static, is_wildcard, importer=path
+            )
             for target_path in targets:
                 target = _rel(repo_path, target_path)
                 if target is not None and target != rel_path:
                     resolved_imports.append(target)
                     if ambiguous:
+                        import_confidence[target] = "inferred"
+        if java_package_types:
+            # Same-package references need no import - see _java_same_package_targets.
+            explicit_names = {
+                dotted.rsplit(".", 1)[-1] for dotted, is_static, is_wildcard in raw_imports
+                if not is_static and not is_wildcard
+            }
+            already = set(resolved_imports)
+            for target_path, tie in _java_same_package_targets(
+                path, _extract_java_package(tree.root_node, source), tree.root_node, source,
+                explicit_names, java_package_types,
+            ):
+                target = _rel(repo_path, target_path)
+                if target is not None and target != rel_path and target not in already:
+                    already.add(target)
+                    resolved_imports.append(target)
+                    if tie:
                         import_confidence[target] = "inferred"
     elif language_name == "kotlin":
         raw_imports, functions, classes = _extract_kotlin(tree.root_node, source)
@@ -3400,6 +3876,12 @@ def _extract_module(
     elif language_name == "ruby":
         raw_imports, functions, classes = _extract_ruby(tree.root_node, source)
         for kind, spec in raw_imports:
+            if kind == "require_all":
+                for extra_path in _resolve_ruby_require_all(repo_path, spec):
+                    extra = _rel(repo_path, extra_path)
+                    if extra is not None and extra != rel_path and extra not in resolved_imports:
+                        resolved_imports.append(extra)
+                continue
             target_path = _resolve_ruby_require(repo_path, path, kind, spec)
             if target_path is not None:
                 target = _rel(repo_path, target_path)
@@ -3431,7 +3913,14 @@ def _extract_module(
         raw_imports, functions, classes = _extract_csharp(tree.root_node, source)
         raw_imports.extend((csharp_implicit_usings or {}).get(path, []))
         for dotted in raw_imports:
-            targets, ambiguous = _resolve_csharp_using(csharp_prefix_map or {}, dotted)
+            if csharp_index is not None:
+                # `using X;` names a namespace, not a file, so it creates no edge of its own here. What the file
+                # really depends on is found by _csharp_type_reference_targets below: a type it names, or an
+                # extension method it calls, in a namespace it can see.
+                targets = []
+                ambiguous = False
+            else:
+                targets, ambiguous = _resolve_csharp_using(csharp_prefix_map or {}, dotted)
             for target_path in targets:
                 target = _rel(repo_path, target_path)
                 if target is not None and target != rel_path:
@@ -3453,7 +3942,8 @@ def _extract_module(
         own_type_names = set(_csharp_declared_type_names(tree.root_node, source))
         already = set(resolved_imports)
         for target_path, type_ref_ambiguous in _csharp_type_reference_targets(
-            source, own_type_names, csharp_type_owners or {}
+            source, own_type_names, csharp_type_owners or {},
+            importer=path, index=csharp_index, usings=list(raw_imports), tree_root=tree.root_node,
         ):
             target = _rel(repo_path, target_path)
             if target is not None and target != rel_path and target not in already:
@@ -3781,6 +4271,180 @@ def _parse_many_in_parallel(
     return modules, failures
 
 
+# --- Cross-file edge pass for PHP (implicit class references) and C/C++ (include search paths) ---
+#
+# Both need the whole module list (a class index / a header index), so they run once after
+# every file is parsed instead of inside the per-file resolver. They only ever ADD targets
+# that are modules of this scan, and never add a self edge.
+
+_PHP_NOISE_RE = re.compile(
+    r"/\*.*?\*/|//[^\n]*|#(?!\[)[^\n]*|'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"", re.DOTALL
+)
+_PHP_NAMESPACE_RE = re.compile(r"(?m)^\s*namespace\s+([\w\\]+)\s*[;{]")
+_PHP_DECL_RE = re.compile(
+    r"(?m)^\s*(?:(?:final|abstract|readonly)\s+)*(?:class|interface|trait|enum)\s+(\w+)"
+)
+# Column-0 `use` is a namespace import (already an edge); an indented one is a trait use, which
+# is a real reference, so it stays in the scanned text.
+_PHP_TOP_USE_RE = re.compile(r"(?m)^use\s+[^;]+;")
+_PHP_NS_LINE_RE = re.compile(r"(?m)^\s*namespace\s+[^;{\n]+[;{]")
+_PHP_NAME_RE = re.compile(r"(?<![\w$>:\\])(\\?[A-Z]\w*(?:\\\w+)*)")
+
+
+def _php_code_only(source: str) -> str:
+    """Source with comments and string literals blanked out."""
+    return _PHP_NOISE_RE.sub(" ", source)
+
+
+def _php_aliases(code: str) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for match in re.finditer(r"(?m)^\s*use\s+(?!function\b|const\b)([^;]+);", code):
+        body = match.group(1)
+        if "{" in body:
+            prefix, _, group = body.partition("{")
+            prefix = prefix.strip().lstrip("\\")
+            names = [prefix + item.strip() for item in group.rstrip("} \n").split(",") if item.strip()]
+        else:
+            names = [item.strip().lstrip("\\") for item in body.split(",")]
+        for name in names:
+            parsed = re.match(r"([\w\\]+)(?:\s+as\s+(\w+))?$", name)
+            if parsed and "\\" in parsed.group(1):
+                aliases[parsed.group(2) or parsed.group(1).split("\\")[-1]] = parsed.group(1)
+    return aliases
+
+
+def _add_php_implicit_edges(repo_path: Path, modules: list[dict], php_psr4_map: dict[str, Path]) -> None:
+    """Edges for class references that need no `use`: a bare name resolved in the file's own
+    namespace (`new RequestOptions`, `extends Base`, a type hint), a fully qualified inline name
+    (`\\Foo\\Bar::x()`), or a `use`d namespace alias followed by a sub-name (`Bar\\Baz`).
+
+    False-edge rule: a name only becomes an edge when it is outside comments and string
+    literals, starts with an uppercase letter, is not a member access (`->x`, `::X`, `$x`), and
+    resolves to a class/interface/trait/enum that exactly one scanned file declares (by the
+    declarations' namespace) or that the composer.json PSR-4 map places in a scanned file. Names
+    that resolve to nothing in the repo (framework classes, builtins) add nothing.
+    """
+    php_modules = [m for m in modules if m.get("language") == "php"]
+    if not php_modules:
+        return
+    known = {m["path"] for m in modules}
+    parsed: dict[str, tuple[str, str]] = {}
+    index: dict[str, set[str]] = {}
+    for module in php_modules:
+        try:
+            raw = (repo_path / module["path"]).read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        code = _php_code_only(raw)
+        ns_match = _PHP_NAMESPACE_RE.search(code)
+        namespace = ns_match.group(1) if ns_match else ""
+        parsed[module["path"]] = (code, namespace)
+        for decl in _PHP_DECL_RE.finditer(code):
+            index.setdefault((namespace + "\\" if namespace else "") + decl.group(1), set()).add(module["path"])
+
+    def lookup(fqcn: str) -> str | None:
+        owners = index.get(fqcn)
+        if owners:
+            return next(iter(owners)) if len(owners) == 1 else None
+        if php_psr4_map:
+            target, _ = _resolve_php_use(php_psr4_map, fqcn)
+            if target is not None:
+                rel = _rel(repo_path, target)
+                if rel in known:
+                    return rel
+        return None
+
+    for module in php_modules:
+        entry = parsed.get(module["path"])
+        if entry is None:
+            continue
+        code, namespace = entry
+        aliases = _php_aliases(code)
+        body = _PHP_NS_LINE_RE.sub(" ", _PHP_TOP_USE_RE.sub(" ", code))
+        present = set(module.get("imports", []))
+        for match in _PHP_NAME_RE.finditer(body):
+            name = match.group(1)
+            if name.startswith("\\"):
+                fqcn = name[1:]
+            else:
+                first, _, rest = name.partition("\\")
+                if first in aliases:
+                    fqcn = aliases[first] + ("\\" + rest if rest else "")
+                else:
+                    fqcn = (namespace + "\\" if namespace else "") + name
+            target = lookup(fqcn)
+            if target and target != module["path"] and target not in present:
+                present.add(target)
+                module.setdefault("imports", []).append(target)
+
+
+_C_INCLUDE_RE = re.compile(r'(?m)^[ \t]*#[ \t]*include[ \t]*([<"])([^>"\n]+)[>"]')
+_C_HEADER_EXTS = (".h", ".hh", ".hpp", ".hxx", ".inc")
+_C_SEARCH_DIRS = ("include", "src", "")
+
+
+def _add_c_include_edges(repo_path: Path, modules: list[dict]) -> None:
+    """Resolve #include lines the per-file resolver (includer's directory only) cannot.
+
+    Search order: the includer's directory (quoted form only), then include/, src/, the repo
+    root, then any scanned header whose path ends with the spec (only when exactly one does, or
+    one shares the longest directory prefix with the includer). Angle includes skip the
+    includer's directory and src/ (include/ and the root only), and only use the suffix fallback
+    when the spec has a directory part (`<fmt/base.h>`), so `<stdio.h>`-style system headers
+    never bind to a same-named file under src/. Unresolved includes are dropped.
+    Also scans lines the AST walk misses (an #include inside an initializer or other odd spot).
+    """
+    c_modules = [m for m in modules if m.get("language") in ("c", "cpp")]
+    if not c_modules:
+        return
+    known = {m["path"] for m in modules}
+    by_base: dict[str, list[str]] = {}
+    for path in known:
+        if path.endswith(_C_HEADER_EXTS):
+            by_base.setdefault(path.rsplit("/", 1)[-1], []).append(path)
+
+    for module in c_modules:
+        includer = module["path"]
+        includer_dir = includer.rsplit("/", 1)[0] if "/" in includer else ""
+        try:
+            source = (repo_path / includer).read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        present = set(module.get("imports", []))
+        for match in _C_INCLUDE_RE.finditer(source):
+            quoted = match.group(1) == '"'
+            spec = match.group(2).strip()
+            # Angle form: include/ and the root only, so <config.h>/<util.h> style system
+            # headers do not bind to a same-named file under src/.
+            bases = [includer_dir, *_C_SEARCH_DIRS] if quoted else ["include", ""]
+            target = None
+            for base in bases:
+                candidate = os.path.normpath(f"{base}/{spec}" if base else spec).replace(os.sep, "/")
+                if candidate in known and not candidate.startswith(".."):
+                    target = candidate
+                    break
+            if target is None and (quoted or "/" in spec):
+                suffix = os.path.normpath(spec).replace(os.sep, "/")
+                matches = [p for p in by_base.get(suffix.rsplit("/", 1)[-1], []) if p == suffix or p.endswith("/" + suffix)]
+                if len(matches) == 1:
+                    target = matches[0]
+                elif len(matches) > 1:
+                    def shared(p: str) -> int:
+                        n = 0
+                        for a, b in zip(p.split("/")[:-1], includer_dir.split("/")):
+                            if a != b:
+                                break
+                            n += 1
+                        return n
+                    best = max(shared(p) for p in matches)
+                    top = [p for p in matches if shared(p) == best]
+                    if len(top) == 1:
+                        target = top[0]
+            if target and target != includer and target not in present:
+                present.add(target)
+                module.setdefault("imports", []).append(target)
+
+
 def build_module_graph(
     repo_path: Path,
     *,
@@ -3800,6 +4464,9 @@ def build_module_graph(
     unparseable: list[dict] = []
     imported_by_map: dict[str, list[str]] = {}
     edges: list[list[str]] = []
+    from aletheore.scanner import js_resolve as _js_resolve
+
+    _js_resolve.clear_cache()  # package.json / tsconfig are re-read once per scan
     go_module_prefix = _load_go_module_prefix(repo_path)
     has_rust_crate_root = _rust_has_any_crate_root(repo_path)
     python_source_roots = _python_source_roots(repo_path)
@@ -3820,6 +4487,8 @@ def build_module_graph(
     # declaration implies about its directory, so every .java file needs a quick
     # pre-parse before any of them can have their imports resolved.
     java_source_roots: list[Path] = []
+    # package -> top-level type name -> declaring files, for same-package references (no import needed).
+    java_package_types: dict[str, dict[str, list[Path]]] = {}
     oversized_paths: set[Path] = set()
     # Every .java file's (source, Tree) used to be kept alive here for the
     # main loop below to reuse, parsing each file once per scan instead of
@@ -3861,6 +4530,8 @@ def build_module_graph(
         root = _java_source_root_for(path, package)
         if root is not None and root not in java_source_roots:
             java_source_roots.append(root)
+        for declared_type in _java_top_level_type_names(tree.root_node, pre_source):
+            java_package_types.setdefault(package or "", {}).setdefault(declared_type, []).append(path)
     # Appended in _iter_source_files walk order, which is filesystem-dependent
     # and not guaranteed stable across runs/platforms - an ambiguous import
     # (resolvable via more than one root) could otherwise resolve differently
@@ -3910,6 +4581,7 @@ def build_module_graph(
     csharp_source_paths: list[Path] = []
     # Which file declares each type name, for the type-reference edges below.
     csharp_type_owners: dict[str, set[Path]] = {}
+    csharp_summaries: dict[Path, dict] = {}
     # Same reasoning as java_source_roots' pre-pass above - nothing here is
     # retained past its own loop iteration either, for the same audit
     # finding 15 memory-peak reason.
@@ -3937,9 +4609,14 @@ def build_module_graph(
         if result is not None:
             prefix, root = result
             csharp_prefix_map.setdefault(prefix, root)
-        for declared in _csharp_declared_type_names(tree.root_node, pre_source):
+        summary = _csharp_file_summary(tree.root_node, pre_source)
+        csharp_summaries[path] = summary
+        # Top-level types only: a nested type is reached through its outer type, and indexing it made every
+        # test-local `Source`/`Destination` a candidate owner for the whole repo.
+        for declared in summary["types"]:
             csharp_type_owners.setdefault(declared, set()).add(path)
     csharp_implicit_usings = _load_csharp_implicit_usings(repo_path, csharp_source_paths)
+    csharp_index = _build_csharp_index(repo_path, csharp_summaries) if csharp_summaries else None
 
     # Swift needs no per-file pre-parse the way Java/C# do - target membership
     # is directory/manifest-derived (see _infer_swift_targets), not read off
@@ -4025,6 +4702,8 @@ def build_module_graph(
                 csharp_type_owners=csharp_type_owners,
                 csharp_implicit_usings=csharp_implicit_usings,
                 swift_target_files=swift_target_files,
+                java_package_types=java_package_types,
+                csharp_index=csharp_index,
             )
         )
 
@@ -4081,6 +4760,9 @@ def build_module_graph(
     # sequential/parallel fresh parse) - the same reconstruction the
     # unchanged_modules cache-hit branch always did, just applied once here
     # instead of inline per module.
+    _add_php_implicit_edges(repo_path, modules, php_psr4_map)
+    _add_c_include_edges(repo_path, modules)
+
     for module in modules:
         rel_path = module["path"]
         for target in module.get("imports", []):

@@ -279,8 +279,10 @@ def test_build_module_graph_java_jdk_import_does_not_resolve(tmp_path):
     repo = make_java_repo(tmp_path)
     _, dependency_graph, _ = build_module_graph(repo)
 
-    sources_with_edges = {edge[0] for edge in dependency_graph["edges"]}
-    assert "src/main/java/com/example/store/Store.java" not in sources_with_edges
+    # Changed with same-package edges: Store names User (same package, no import needed), so its only
+    # edge is that one; the java.util imports still resolve to nothing.
+    store_targets = {edge[1] for edge in dependency_graph["edges"] if edge[0] == "src/main/java/com/example/store/Store.java"}
+    assert store_targets <= {"src/main/java/com/example/store/User.java"}
 
 
 def test_build_module_graph_java_leaf_files_have_no_outgoing_edges(tmp_path):

@@ -522,16 +522,19 @@ def test_csharp_ambiguous_using_prefix_is_flagged_inferred(tmp_path):
         "namespace App.Extra.Sub\n{\n    public class Thing\n    {\n    }\n}\n"
     )
     (repo / "Extra" / "Foo" / "Bar.cs").write_text(
-        "namespace App.Extra.Foo\n{\n    public class Bar\n    {\n    }\n}\n"
+        "namespace App.Extra.Foo\n{\n    public class BarWidget\n    {\n    }\n}\n"
     )
-    (repo / "Main.cs").write_text("using App.Extra.Foo;\n\nclass Program\n{\n}\n")
+    # Changed with the namespace-aware resolver: a bare `using` no longer fans out to every file of the
+    # namespace's directory; the edge comes from the type Main.cs actually names (BarWidget), resolved
+    # through the visible namespace, so there is a single candidate and no "inferred" flag.
+    (repo / "Main.cs").write_text("using App.Extra.Foo;\n\nclass Program\n{\n    BarWidget w;\n}\n")
 
     modules, _dependency_graph, _unparseable = build_module_graph(repo)
     by_path = {m["path"]: m for m in modules}
 
     main = by_path["Main.cs"]
     assert main["imports"] == ["Extra/Foo/Bar.cs"]
-    assert main["import_confidence"] == {"Extra/Foo/Bar.cs": "inferred"}
+    assert "import_confidence" not in main
 
 
 def test_csharp_ambiguous_type_name_declared_twice_creates_a_flagged_edge(tmp_path):
@@ -546,13 +549,17 @@ def test_csharp_ambiguous_type_name_declared_twice_creates_a_flagged_edge(tmp_pa
         (repo / sub / "Duplicate.cs").write_text(
             f"namespace App.{sub};\npublic class Duplicated {{ public int X => 1; }}\n"
         )
+    # Changed with the namespace-aware resolver: user.cs must be able to see the namespaces, and when both
+    # are equally visible every candidate is linked (flagged ambiguous) instead of sorted()[0] winning blindly.
     (repo / "user.cs").write_text(
-        "namespace App;\npublic class User { private Duplicated d; }\n"
+        "using App.a;\nusing App.b;\nnamespace App;\npublic class User { private Duplicated d; }\n"
     )
     modules, _edges = build_module_graph(repo)[:2]
     by_path = {m["path"]: m for m in modules}
-    assert by_path["user.cs"]["imports"] == ["a/Duplicate.cs"]
-    assert by_path["user.cs"]["import_confidence"] == {"a/Duplicate.cs": "ambiguous"}
+    assert by_path["user.cs"]["imports"] == ["a/Duplicate.cs", "b/Duplicate.cs"]
+    assert by_path["user.cs"]["import_confidence"] == {
+        "a/Duplicate.cs": "ambiguous", "b/Duplicate.cs": "ambiguous"
+    }
 
 
 def test_csharp_short_type_names_are_not_matched(tmp_path):
