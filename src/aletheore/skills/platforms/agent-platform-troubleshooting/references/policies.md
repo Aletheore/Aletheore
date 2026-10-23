@@ -778,4 +778,4 @@ gcloud logging read   'protoPayload.serviceName="iap.googleapis.com"'   --projec
              Identify denying rule         Verify destination.is_registered
              (Check for blanket DENY       and check CEL conditions
               or denylisted domain)        (Check null guard on .tool.*)
-```
+````

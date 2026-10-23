@@ -225,3 +225,18 @@ def test_the_detail_view_works_against_the_real_bundled_skills():
     print_detail(console, skill)
     out = console.file.getvalue()
     assert skill.title in out and skill.skill_id in out
+
+
+def test_detail_view_shows_needs_and_alternates(monkeypatch):
+    skill = _skill(skill_hub.SkillMeta("a/b", "a", "T", "desc"))
+    skill.requires = ["node", "git"]
+    monkeypatch.setattr(skill_hub, "skill_alternates", lambda skill_id: ["a/c", "a/d"])
+    assert ("Needs", "node, git") in detail_lines(skill) and ("Also", "a/c, a/d") in detail_lines(skill)
+    console = _console(100)
+    print_detail(console, skill)
+    assert "a/c, a/d" in console.file.getvalue()
+
+
+def test_detail_view_of_a_real_skill_with_alternates_lists_them():
+    skill = skill_hub.get_skill("ai-engineering/prompt-engineering-patterns")
+    assert ("Also", "ai-engineering/prompt-engineer") in detail_lines(skill)

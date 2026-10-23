@@ -34,7 +34,7 @@ parent: { page_id: "deployment-section-id" }
 
 ## Output
 
-```markdown
+````markdown
 # How to Deploy to Production
 
 ## Overview
@@ -100,7 +100,7 @@ Production deployment using GitHub Actions with zero-downtime rolling updates.
 ## Related Docs
 - <mention-page url="...">Rollback Procedure</mention-page>
 - <mention-page url="...">Database Migration Guide</mention-page>
-```
+````
 
 ### 5. Make Discoverable
 ```

@@ -150,7 +150,7 @@ export default defineConfig({
 
 ### Migration Guides
 
-```markdown
+````markdown
 # Migration Guide: v1 to v2
 
 ## Breaking Changes
@@ -176,7 +176,7 @@ client = Client(api_key=api_key)  # Pass in constructor
 - v1.x: Supported until Dec 2025
 - v2.0: Released Jan 2025
 - v2.1: Current (June 2025)
-```
+````
 
 ## Search Implementation
 

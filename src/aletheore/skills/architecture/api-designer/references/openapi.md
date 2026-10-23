@@ -751,7 +751,7 @@ paths:
 
 ### Markdown Support
 
-```yaml
+````yaml
 description: |
   # User Management
 
@@ -772,7 +772,7 @@ description: |
     "email": "john@example.com"
   }
   ```
-```
+````
 
 ## Code Generation
 

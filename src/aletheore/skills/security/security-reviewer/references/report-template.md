@@ -2,7 +2,7 @@
 
 ## Full Report Template
 
-```markdown
+````markdown
 # Security Review Report
 
 ## Executive Summary
@@ -49,9 +49,9 @@ const query = `SELECT * FROM users WHERE name LIKE '%${searchTerm}%'`;
 ```
 
 **Proof of Concept**
-```
+````
 GET /api/users?search=' OR '1'='1
-```
+````
 
 **Impact**
 - Full database access
@@ -148,7 +148,7 @@ const isValid =
 - OWASP Top 10 2021
 - CWE Database
 - CVSS Calculator
-```
+````
 
 ## Severity Definitions
 

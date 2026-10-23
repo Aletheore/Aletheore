@@ -43,7 +43,8 @@ def detail_lines(skill: skill_hub.Skill) -> list[tuple[str, str]]:
     """The labelled facts of a skill, in display order; a fact the skill does not have is left out."""
     category = skill.skill_id.split("/", 1)[0]
     facts = [("Shelf", shelf_title(skill.shelf)), ("Category", category), ("License", skill.license or ""),
-             ("Copyright", skill.copyright or ""), ("Source", skill.source_url or ""), ("Needs", ", ".join(skill.requires))]
+             ("Copyright", skill.copyright or ""), ("Source", skill.source_url or ""), ("Needs", ", ".join(skill.requires)),
+             ("Also", ", ".join(skill_hub.skill_alternates(skill.skill_id)))]
     return [(label, value) for label, value in facts if value]
 
 

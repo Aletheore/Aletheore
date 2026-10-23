@@ -58,6 +58,27 @@ Manifests under `docs/`, `examples/`, `samples/`, `tests/`, `fixtures/`, `benchm
 listed in `monorepo.packages` but no longer count towards "multiple manifests". A repo that declares workspaces (for
 example `"workspaces": ["examples/*"]`) is a monorepo as before.
 
+**Fixed: custom skills whose names differ only in capital letters no longer overwrite each other when syncing**
+
+If your account lists two custom skills whose names differ only in case (`Review` and `review`), `aletheore login` now
+keeps the one updated last (the name that sorts first when the times match) and skips the other with a one-line warning,
+instead of writing both to the same file on macOS and Windows. A name from your account that differs only in case from a
+skill already saved here is skipped the same way and never overwrites it, and a local skill is not uploaded when your
+account already holds the same name in another case. `hallbook add` applies the same rule.
+
+**Changed: `hallbook search` shows what a skill needs and its alternates**
+
+A result that needs something installed, or that has alternates (other skills that do the same job), gets a third line
+such as `needs: node, npm; also: a/b`. It is left out on terminals narrower than 70 columns, so the two-line result never
+wraps. The skill detail view of the skills browser shows the alternates next to what the skill needs. The MCP search
+result already carried both lists in full.
+
+**Fixed: code fences in 32 bundled reference files**
+
+Templates that show a code block inside a code block now use a longer outer fence, and fences that were left open or
+closed early (a missing opening or closing line, a stray closing line) are repaired, so the files render as written. A
+test now checks every bundled reference file for balanced and unnested fences.
+
 **Added: `aletheore hallbook info`**
 
 `aletheore hallbook info debugging/systematic-debugging` (or just `systematic-debugging` when the name is unambiguous)

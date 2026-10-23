@@ -113,7 +113,7 @@ ResourceGroupNotFound: Resource group 'xxx' could not be found.
 3. Skip what-if for this scope
 
 **Report Entry:**
-```markdown
+````markdown
 #### ❌ Resource Group Does Not Exist
 
 - **Severity:** Error
@@ -123,7 +123,7 @@ ResourceGroupNotFound: Resource group 'xxx' could not be found.
   ```bash
   az group create --name my-rg --location eastus
   ```
-```
+````
 
 ### Subscription Access Denied
 
