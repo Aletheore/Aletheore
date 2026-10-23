@@ -65,7 +65,7 @@ Approach every review with professional skepticism. Verify claims independently.
 | Were error scenarios addressed? | Look for try/catch, error boundaries, validation |
 | Is the happy path complete? | Trace through primary use case manually |
 
-```markdown
+````markdown
 ## Example Review Finding
 
 **Missing Requirement:** Issue #42 requested "password must be at least 8 characters"
@@ -79,7 +79,7 @@ function validatePassword(password: string) {
 ```
 
 **Status:** ❌ Incomplete - minimum length validation missing
-```
+````
 
 #### Category 2: Unnecessary Additions
 
@@ -92,7 +92,7 @@ function validatePassword(password: string) {
 | Premature optimization? | Is performance cited without measurements? |
 | Unrequested abstractions? | Are there helpers/utils for one-time use? |
 
-```markdown
+````markdown
 ## Example Review Finding
 
 **Unnecessary Addition:** Added caching layer not in requirements
@@ -113,7 +113,7 @@ class CachedUserRepository {  // Not requested
 ```
 
 **Status:** ⚠️ Scope creep - discuss before merging
-```
+````
 
 #### Category 3: Interpretation Gaps
 

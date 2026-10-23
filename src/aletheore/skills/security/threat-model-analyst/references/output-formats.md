@@ -223,6 +223,7 @@ Threats are classified into three exploitability tiers based on the prerequisite
 > “Abuse” covers: business logic abuse, workflow manipulation, feature misuse, unintended use of legitimate features.
 > The model frequently generates “Authorization” for the A column — this is WRONG. If you see “Authorization” anywhere as a STRIDE category label, replace it with “Abuse”. The Category column in threat rows MUST say “Abuse” (not “Authorization”). N/A entries must also say “Abuse — N/A” (not “Authorization — N/A”).
 
+```markdown
 ## Summary
 | Component | Link | S | T | R | I | D | E | A | Total | T1 | T2 | T3 | Risk |
 |-----------|------|---|---|---|---|---|---|---|-------|----|----|----|------|

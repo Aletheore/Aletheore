@@ -248,6 +248,7 @@ Rules:
 
 ## Focus paths for security review
 - A table: Path | Why it matters | Related Threat IDs
+```
 
 ## Notes on use
 

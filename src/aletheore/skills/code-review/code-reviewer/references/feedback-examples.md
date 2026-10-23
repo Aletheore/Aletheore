@@ -72,7 +72,7 @@ This is vulnerable to SQL injection. Use parameterized query:
 
 ### Major (Should Fix)
 
-```markdown
+````markdown
 **[MAJOR] Performance: N+1 Query**
 Location: `src/posts/service.ts:23`
 
@@ -89,7 +89,7 @@ const posts = await Post.findAll({ include: [User] });
 ```
 
 Impact: ~100 extra DB queries per request with current approach.
-```
+````
 
 ### Minor (Nice to Have)
 

@@ -2,7 +2,7 @@
 
 ## Documentation Coverage Report Template
 
-```markdown
+````markdown
 # Documentation Report: {project_name}
 
 ## Summary
@@ -60,7 +60,7 @@
 - name: Generate API docs
   run: npm run docs:generate
 ```
-```
+````
 
 ## Checklist During Documentation
 

@@ -339,4 +339,3 @@ psql -c "VACUUM FULL large_table;"
 # If emergency, delete old data or expand disk
 ```
 
-```
