@@ -162,7 +162,7 @@ def cycles_report(
 
     runtime = runtime_import_examples({m.get("language") or "" for m in evidence["repository"]["modules"]})
 
-    fresh = fresh[0].upper() + fresh[1:]  # always starts a sentence below
+    fresh = fresh[:1].upper() + fresh[1:]  # always starts a sentence below
 
     if not groups:
         return (

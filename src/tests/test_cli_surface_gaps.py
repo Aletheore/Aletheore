@@ -724,3 +724,135 @@ def test_query_normalizes_backslash_free_relative_and_absolute_forms_via_pathlib
     evidence = {"repo_path": str(tmp_path)}
     assert normalize_module_target(evidence, "./app//main.py") == "app/main.py"
     assert normalize_module_target(evidence, str(tmp_path / "app" / "main.py")) == "app/main.py"
+
+
+# --- review follow-ups ---------------------------------------------------------------------------------------
+
+
+def test_mcp_error_flag_is_structural_and_survives_the_json_fallback(tmp_path):
+    from aletheore import mcp_server
+
+    assert isinstance(mcp_server._toon_result({"error": "x"}), mcp_server._ErrorText)
+    assert not isinstance(mcp_server._toon_result({"found": []}), mcp_server._ErrorText)
+    with patch("aletheore.mcp_server.to_toon", side_effect=mcp_server.ToonEncodingError("boom")):
+        fallback = mcp_server._toon_result({"error": "x"})
+    assert isinstance(fallback, mcp_server._ErrorText) and fallback.startswith('{"result"')
+    server = _mcp_server_with_evidence(tmp_path)
+    assert _call(server, "aletheore_symbols", {"target": "nope.py"}).is_error is True
+    assert not _call(server, "aletheore_symbols", {"target": "app/main.py"}).is_error
+
+
+def test_diff_tolerates_snapshots_without_a_checked_key(tmp_path):
+    # load_evidence_file's schema check already rejects such a file from the CLI (exit 2, tested above); the
+    # diff code itself must still not raise a KeyError if it is handed one.
+    from aletheore.history import compute_diff
+
+    def legacy():
+        evidence = minimal_air_evidence()
+        del evidence["security"]["dependency_vulnerabilities"]["checked"]
+        return evidence
+
+    assert "vulnerabilities" in compute_diff(legacy(), legacy())
+
+
+def test_locate_exit_code_uses_a_structured_signal_not_the_wording(tmp_path):
+    repo = _scanned_repo(tmp_path)
+    with patch("aletheore.code_locator.locate_result", return_value=("No match for x; try grep", False)):
+        assert runner.invoke(app, ["locate", "x", str(repo)]).exit_code == 1
+    with patch("aletheore.code_locator.locate_result", return_value=("no match for the best part", True)):
+        assert runner.invoke(app, ["locate", "x", str(repo)]).exit_code == 0
+
+
+def test_cycles_report_survives_an_empty_freshness_string(tmp_path):
+    from aletheore import cycles
+
+    evidence = _evidence_with(["a.py"])
+    with patch.object(cycles, "_files_changed_since_scan", return_value=[]):
+        assert cycles.cycles_report(evidence, tmp_path, [], []).startswith("No circular")
+
+
+def test_paths_with_rich_markup_characters_print_literally(tmp_path):
+    weird = tmp_path / "weird[bold]dir"
+    result = runner.invoke(app, ["dependents", "x.py", str(weird)])
+    assert result.exit_code == 1
+    assert "weird[bold]dir" in result.output
+    result = runner.invoke(app, ["query", "imports", "a.py", "--path", str(weird)])
+    assert "weird[bold]dir" in result.output
+
+
+def test_mcp_install_preserves_a_bom_and_backs_up_through_o_nofollow(tmp_path):
+    cursor = tmp_path / ".cursor" / "mcp.json"
+    cursor.parent.mkdir()
+    cursor.write_bytes(b'\xef\xbb\xbf{"mcpServers": {}}')
+    codex = tmp_path / ".codex" / "config.toml"
+    codex.parent.mkdir()
+    codex.write_bytes(b"\xef\xbb\xbf[mcp_servers.other]\ncommand = 'z'\n")
+    runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "cursor", "--target", "codex-cli"])
+    assert cursor.read_bytes().startswith(b"\xef\xbb\xbf") and codex.read_bytes().startswith(b"\xef\xbb\xbf")
+    assert (tmp_path / ".codex" / "config.toml.bak").read_bytes().startswith(b"\xef\xbb\xbf")
+    calls = []
+    real = cli._write_bytes_no_symlink_follow
+    codex.write_bytes(b"[mcp_servers.other]\ncommand = 'z'\n")
+    with patch.object(cli, "_write_bytes_no_symlink_follow", side_effect=lambda p, d: calls.append(p.name) or real(p, d)):
+        runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "codex-cli"])
+    assert "config.toml.bak" in calls  # the backup goes through the no-follow helper
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="creating symlinks needs privileges on Windows")
+def test_mcp_install_will_not_write_a_backup_through_a_symlink(tmp_path):
+    outside = tmp_path / "outside.txt"
+    outside.write_text("keep")
+    repo = tmp_path / "r"
+    (repo / ".codex").mkdir(parents=True)
+    (repo / ".codex" / "config.toml").write_text("[mcp_servers.other]\ncommand = 'z'\n")
+    (repo / ".codex" / "config.toml.bak").symlink_to(outside)
+    result = runner.invoke(app, ["mcp-install", str(repo), "--target", "codex-cli"])
+    assert result.exit_code == 1
+    assert outside.read_text() == "keep"
+
+
+def test_toml_comment_detection_ignores_hash_inside_strings():
+    assert cli._toml_has_comment("# c\n[a]\n")
+    assert cli._toml_has_comment("x = 1  # trailing\n")
+    assert not cli._toml_has_comment('color = "#fff"\nurl = \'http://x/#frag\'\nm = """a # b\nc"""\n')
+
+
+def test_query_treats_backslashes_as_separators():
+    from aletheore.query import normalize_module_target
+
+    assert normalize_module_target({}, "src\\app.py") == "src/app.py"
+    assert normalize_module_target({}, ".\\src\\\\app.py") == "src/app.py"
+
+
+def test_endpoint_method_case_does_not_matter(tmp_path):
+    repo = _scanned_repo(tmp_path)
+    for target in ("get /users", "GET /users", "/users"):
+        result = runner.invoke(app, ["query", "evidence-for-endpoint", target, "--path", str(repo)])
+        assert result.exit_code == 0, (target, result.output)
+
+
+def test_out_of_bounds_citations_always_carry_a_reason():
+    evidence = _evidence_with(["app.py"])
+    result = verify_citations("app.py:999", evidence, fetch_line_count=lambda path: 50)
+    assert result["unverified"][0]["reason"] == "file has 50 lines"
+
+
+def test_bare_parent_directory_citation_is_reported_as_outside_the_repo():
+    result = verify_citations("see ..:1 here", _evidence_with(["a.py"]))
+    assert result["total_citations"] == 1
+    assert result["unverified"][0]["reason"] == "path outside the repository"
+
+
+def test_runtime_import_note_ignores_unlabelled_files():
+    from aletheore.scope_filter import runtime_import_examples
+
+    assert "importlib" in runtime_import_examples({"python", ""})
+    assert "importlib" in runtime_import_examples({"python", "ruby"})
+    assert "importlib" not in runtime_import_examples({"python", "go"})
+
+
+def test_tokens_profile_distinguishes_a_file_from_a_missing_directory(tmp_path):
+    a_file = tmp_path / "f"
+    a_file.write_text("x")
+    result = runner.invoke(app, ["tokens", "profile", "core", "--path", str(a_file), "--yes"])
+    assert result.exit_code == 1 and "not a directory" in result.output and "does not exist" not in result.output

@@ -30,10 +30,13 @@ _RUNTIME_IMPORT_EXAMPLES = {
 
 def runtime_import_examples(languages: set[str]) -> str:
     """What 'imports built at run time' means for these languages, so a Go or TypeScript answer does not cite
-    Python's importlib."""
-    examples = {_RUNTIME_IMPORT_EXAMPLES.get((lang or "").lower()) for lang in languages}
-    if len(examples) == 1 and None not in examples:
-        return examples.pop()
+    Python's importlib. Empty or unknown languages are ignored (Python plus a few unlabelled files still gets the
+    Python wording); two different known mechanisms get the generic one."""
+    examples = {
+        _RUNTIME_IMPORT_EXAMPLES[lang.lower()] for lang in languages if lang and lang.lower() in _RUNTIME_IMPORT_EXAMPLES
+    }
+    if len(examples) == 1:
+        return next(iter(examples))
     return "dynamic loading, reflection, generated code"
 
 
@@ -114,7 +117,7 @@ def scope_result(kind: str, result: dict, exclude: list[str], under: list[str], 
 def _recount_error_types(scoped: dict) -> list[dict]:
     """by_error_type rebuilt from the already-filtered lists, so a scope that
     leaves no handlers cannot still report caught counts."""
-    from aletheore.error_handling import _NON_TYPES, _last
+    from aletheore.error_handling import NON_TYPES as _NON_TYPES, short_error_name as _last
 
     summary: dict[str, dict] = {}
 

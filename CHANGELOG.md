@@ -50,7 +50,7 @@ targets that were actually written. A `.vscode/mcp.json` (or any JSON target) co
 left untouched, with the exact entry to paste. Rewriting a Codex `config.toml` now warns about lost comments before it
 writes, and keeps the original next to it as `config.toml.bak`. With no `--target`, a terminal run lists every file it
 will write, marks the machine-global Claude Desktop config, and asks `Write these? [y/N]`; `--yes` skips the question
-and scripts behave as before.
+and scripts behave as before. Rewrites keep a file's CRLF line endings and BOM.
 
 **Fixed: `query` answered "not found" with a block of empty fields**
 

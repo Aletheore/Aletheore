@@ -62,7 +62,8 @@ def normalize_module_target(evidence: dict, file_path: str | None) -> str | None
                     except ValueError:
                         continue
         return text
-    return posixpath.normpath(path.as_posix())
+    # Backslashes are separators too (a Windows user types src\\app.py); evidence paths always use "/".
+    return posixpath.normpath(text.replace("\\", "/"))
 
 
 def _module_path_suggestions(evidence: dict, wanted: str) -> list[str]:
@@ -197,7 +198,7 @@ def find_code_evidence_for_endpoint(
             return resolve_code_evidence(evidence, repo_path, kind="endpoint")
         first = matches[0]
         result = resolve_code_evidence(
-            evidence, repo_path, kind="endpoint", method=first.get("method") or "GET", path=wanted
+            evidence, repo_path, kind="endpoint", method=(first.get("method") or "GET").upper(), path=wanted
         )
         result["methods"] = sorted({(e.get("method") or "?").upper() for e in matches})
         return result

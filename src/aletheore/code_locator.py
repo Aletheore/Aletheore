@@ -290,13 +290,20 @@ def _files_changed_since_scan(repo_path: Path, paths: list[str], scanned_at: obj
     return changed
 
 
-def locate_report(evidence: dict, repo_path: Path, query: str, *, no_match_hint: str = "try grep or a literal search") -> str:
-    """What the `aletheore locate` command and the `aletheore_locate` MCP tool return for `query`."""
+def locate_result(
+    evidence: dict, repo_path: Path, query: str, *, no_match_hint: str = "try grep or a literal search"
+) -> tuple[str, bool]:
+    """(report text, whether anything matched). Callers that need an exit status use the flag, not the text."""
     cands = locate(query, repo_path, evidence["repository"]["modules"], all_words=True, require_confidence=False)
     text = render_locate(cands, repo_path) if cands else ""
     if not text:
-        return f"no match for {query!r}; {no_match_hint}"
+        return f"no match for {query!r}; {no_match_hint}", False
     changed = _files_changed_since_scan(repo_path, [c.path for c in cands], evidence.get("scanned_at"))
     if changed:
         text = f"note: {', '.join(changed)} changed since the last scan; line ranges may be off\n\n{text}"
-    return text
+    return text, True
+
+
+def locate_report(evidence: dict, repo_path: Path, query: str, *, no_match_hint: str = "try grep or a literal search") -> str:
+    """What the `aletheore locate` command and the `aletheore_locate` MCP tool return for `query`."""
+    return locate_result(evidence, repo_path, query, no_match_hint=no_match_hint)[0]

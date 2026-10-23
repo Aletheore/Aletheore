@@ -223,7 +223,12 @@ def _package_version() -> str:
         return "0.0.0"
 
 
-_ERROR_RESULT_PREFIXES = ("result:\n  error:", '{"result": {"error"')
+class _ErrorText(str):
+    """A tool result `_toon_result` produced from an error dict. The type, not the encoded text, is what marks a
+    failure, so it holds whichever encoding (TOON or the JSON fallback) the result ended up in."""
+
+
+_ERROR_KEYS = {"error", "sections", "hint"}
 
 
 def _flag_error_results(tool_func: Callable[..., Any]) -> Callable[..., Any]:
@@ -232,7 +237,7 @@ def _flag_error_results(tool_func: Callable[..., Any]) -> Callable[..., Any]:
     from mcp.types import CallToolResult, TextContent
 
     def flag(result: Any) -> Any:
-        if isinstance(result, str) and result.startswith(_ERROR_RESULT_PREFIXES):
+        if isinstance(result, _ErrorText):
             return CallToolResult(content=[TextContent(type="text", text=result)], is_error=True)
         return result
 
@@ -259,10 +264,12 @@ def _toon_result(data: object) -> str:
     # everywhere) is exactly TOON's best case. Falls back to plain JSON on a
     # TOON encoding failure rather than raising - a tool call returning a
     # slightly less compact result beats it crashing outright.
+    is_error = isinstance(data, dict) and "error" in data and set(data) <= _ERROR_KEYS
     try:
-        return to_toon({"result": data})
+        text = to_toon({"result": data})
     except ToonEncodingError:
-        return json.dumps({"result": data})
+        text = json.dumps({"result": data})
+    return _ErrorText(text) if is_error else text
 
 
 _TOOL_NAME_TO_QUERY_KIND = {

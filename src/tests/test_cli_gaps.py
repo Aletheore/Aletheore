@@ -72,7 +72,8 @@ def test_bom_configs_are_merged(tmp_path):
     msg, security_skip = cli._write_json_mcp_client_config(cfg, "servers", {"command": "c"})
     assert msg.startswith("wrote")
     assert security_skip is False
-    data = json.loads(cfg.read_text(encoding="utf-8"))
+    assert cfg.read_bytes().startswith(b"\xef\xbb\xbf")  # the BOM is kept
+    data = json.loads(cfg.read_text(encoding="utf-8-sig"))
     assert data["servers"]["x"] == {"a": 1} and data["servers"]["aletheore"] == {"command": "c"}
 
 

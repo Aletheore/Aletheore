@@ -181,7 +181,7 @@ check("commented vscode config untouched", (repo / ".vscode" / "mcp.json").read_
 (repo / ".vscode" / "mcp.json").write_text('{"servers": {}}', encoding="utf-8")
 rc, out = run(["mcp-install", str(repo)])
 check("mcp-install all targets", rc == 0, out)
-c = json.loads((cursor / "mcp.json").read_text(encoding="utf-8"))
+c = json.loads((cursor / "mcp.json").read_text(encoding="utf-8-sig"))
 check("mcp-install merged BOM cursor config", "other" in c["mcpServers"] and "aletheore" in c["mcpServers"], c)
 check("mcp-install merged vscode config", "aletheore" in json.loads((repo / ".vscode" / "mcp.json").read_text(encoding="utf-8"))["servers"])
 cmd = json.loads((repo / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["aletheore"]["command"]

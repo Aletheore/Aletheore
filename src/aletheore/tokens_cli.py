@@ -19,8 +19,12 @@ def _project_dir(path: Path | None, project: Path | None) -> Path:
         typer.echo("error: --path and --project name different folders; give only one of them", err=True)
         raise typer.Exit(2)
     chosen = path if path is not None else project if project is not None else Path(".")
-    if not chosen.is_dir():
+    # Exit 1 for both, matching the other commands' path checks (_checked_dir); 2 is for conflicting flags.
+    if not chosen.exists():
         typer.echo(f"error: project directory does not exist: {chosen}", err=True)
+        raise typer.Exit(1)
+    if not chosen.is_dir():
+        typer.echo(f"error: project path is not a directory: {chosen}", err=True)
         raise typer.Exit(1)
     return chosen
 

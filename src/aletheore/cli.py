@@ -236,10 +236,10 @@ def _load_evidence_or_exit(repo: Path) -> dict:
     """The repo's evidence, or a one-line `error:` on stderr and exit 1 (never a traceback, and the
     'run aletheore scan' hint exactly once)."""
     if not repo.exists():
-        _stderr_console.print(f"[bold red]error:[/bold red] path does not exist: {repo}", markup=True)
+        _stderr_console.print(f"[bold red]error:[/bold red] path does not exist: {escape(str(repo))}")
         raise typer.Exit(code=1)
     if not repo.is_dir():
-        _stderr_console.print(f"[bold red]error:[/bold red] path is not a directory: {repo}")
+        _stderr_console.print(f"[bold red]error:[/bold red] path is not a directory: {escape(str(repo))}")
         raise typer.Exit(code=1)
     try:
         return load_evidence(repo)
@@ -253,10 +253,10 @@ def _checked_dir(path: str) -> str:
     """Exit with a one-line error, not a traceback, when PATH isn't a directory."""
     p = Path(path)
     if not p.exists():
-        _stderr_console.print(f"[bold red]error:[/bold red] path does not exist: {p}")
+        _stderr_console.print(f"[bold red]error:[/bold red] path does not exist: {escape(str(p))}")
         raise typer.Exit(code=1)
     if not p.is_dir():
-        _stderr_console.print(f"[bold red]error:[/bold red] path is not a directory: {p}")
+        _stderr_console.print(f"[bold red]error:[/bold red] path is not a directory: {escape(str(p))}")
         raise typer.Exit(code=1)
     return path
 
@@ -1039,7 +1039,7 @@ def _query(
         return 1
 
     if not Path(repo_path).exists():
-        _stderr_console.print(f"[bold red]error:[/bold red] path does not exist: {Path(repo_path).resolve()}")
+        _stderr_console.print(f"[bold red]error:[/bold red] path does not exist: {escape(str(Path(repo_path).resolve()))}")
         return 1
 
     if kind == "schema":
@@ -1266,8 +1266,8 @@ def _diff(
             should_fail = should_fail or bool(new_real_secrets or new_real_history_secrets)
 
         if fail_on_new_vulnerabilities:
-            checked_old = old["security"]["dependency_vulnerabilities"]["checked"]
-            checked_new = new["security"]["dependency_vulnerabilities"]["checked"]
+            checked_old = old["security"]["dependency_vulnerabilities"].get("checked", True)
+            checked_new = new["security"]["dependency_vulnerabilities"].get("checked", True)
             if not (checked_old and checked_new):
                 # The vulnerability check was off in at least one snapshot, so
                 # "new" findings only reflect it being toggled, not a real change.
@@ -1557,6 +1557,10 @@ def _config_path_escapes_repo(config_path: Path, repo_path: Path) -> bool:
 
 
 def _write_config_file_no_symlink_follow(config_path: Path, content: str) -> None:
+    _write_bytes_no_symlink_follow(config_path, content.encode("utf-8"))
+
+
+def _write_bytes_no_symlink_follow(config_path: Path, data: bytes) -> None:
     """Writes content to config_path's leaf file without ever following a
     symlink there, closing the TOCTOU gap _config_path_escapes_repo's
     separate resolve()-then-check-then-write shape leaves open: a plain
@@ -1586,18 +1590,19 @@ def _write_config_file_no_symlink_follow(config_path: Path, content: str) -> Non
         # Windows has no O_NOFOLLOW; refuse a symlinked leaf explicitly instead.
         raise OSError("refusing to write through a symlink")
     fd = os.open(str(config_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | no_follow, 0o644)
-    # newline="": write exactly the line endings in `content` (callers keep a file's existing CRLF) instead of
-    # letting Windows translate every "\n" again.
-    with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
-        f.write(content)
+    # Bytes, so the line endings and BOM the caller chose are written exactly (no per-platform translation).
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
 
 
-def _read_config_text(config_path: Path) -> tuple[str, str]:
-    """(text, newline) of an existing config file. The text is decoded with its BOM dropped and normalised to
-    "\n"; newline is "\r\n" when the file used CRLF, so a rewrite keeps the user's line endings."""
+def _read_config_text(config_path: Path) -> tuple[str, str, str]:
+    """(text, newline, bom) of an existing config file. The text is decoded without its BOM and normalised to
+    "\n"; newline is "\r\n" when the file used CRLF and bom is "\ufeff" when it started with one, so a rewrite
+    keeps both."""
     raw = config_path.read_bytes()
     text = raw.decode("utf-8-sig")
-    return text.replace("\r\n", "\n"), ("\r\n" if b"\r\n" in raw else "\n")
+    bom = "\ufeff" if raw.startswith(b"\xef\xbb\xbf") else ""
+    return text.replace("\r\n", "\n"), ("\r\n" if b"\r\n" in raw else "\n"), bom
 
 
 def _loads_jsonc(text: str) -> object:
@@ -1689,9 +1694,10 @@ def _write_json_mcp_client_config(
     if repo_path is not None and _config_path_escapes_repo(config_path, repo_path):
         return f"skipped (path escapes the repo via a symlink): {config_path}", True
     newline = "\n"
+    bom = ""
     if config_path.exists():
         try:
-            existing_text, newline = _read_config_text(config_path)
+            existing_text, newline, bom = _read_config_text(config_path)
             data = _loads_jsonc(existing_text)
         except (UnicodeDecodeError, json.JSONDecodeError):
             return f"skipped (existing file is not valid JSON): {config_path}", False
@@ -1721,7 +1727,7 @@ def _write_json_mcp_client_config(
     data[top_level_key] = servers
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    content = (json.dumps(data, indent=2) + "\n").replace("\n", newline)
+    content = bom + (json.dumps(data, indent=2) + "\n").replace("\n", newline)
     if repo_path is not None:
         try:
             _write_config_file_no_symlink_follow(config_path, content)
@@ -1737,6 +1743,30 @@ def _write_json_mcp_client_config(
     return f"{'updated' if already_present else 'wrote'} {config_path}", False
 
 
+def _toml_has_comment(text: str) -> bool:
+    """True when the TOML text has a real comment: a `#` outside any string (so "#fff" or a URL fragment in a
+    value does not count)."""
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "#":
+            return True
+        if text.startswith('"' * 3, i) or text.startswith("'" * 3, i):
+            end = text.find(text[i : i + 3], i + 3)
+            i = n if end == -1 else end + 3
+        elif c == '"':
+            i += 1
+            while i < n and text[i] not in '"\n':
+                i += 2 if text[i] == "\\" else 1
+            i += 1
+        elif c == "'":
+            end = text.find("'", i + 1)
+            i = n if end == -1 else end + 1
+        else:
+            i += 1
+    return False
+
+
 def _write_toml_mcp_client_config(
     config_path: Path, top_level_key: str, entry: dict, *, repo_path: Path | None = None
 ) -> tuple[str, bool]:
@@ -1745,9 +1775,10 @@ def _write_toml_mcp_client_config(
     if repo_path is not None and _config_path_escapes_repo(config_path, repo_path):
         return f"skipped (path escapes the repo via a symlink): {config_path}", True
     newline = "\n"
+    bom = ""
     if config_path.exists():
         try:
-            toml_text, newline = _read_config_text(config_path)
+            toml_text, newline, bom = _read_config_text(config_path)
             data = tomllib.loads(toml_text)
         except (UnicodeDecodeError, tomllib.TOMLDecodeError):
             return f"skipped (existing file is not valid TOML): {config_path}", False
@@ -1765,10 +1796,10 @@ def _write_toml_mcp_client_config(
     data[top_level_key] = servers
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    content = tomli_w.dumps(data).replace("\n", newline)
+    content = bom + tomli_w.dumps(data).replace("\n", newline)
     if config_path.exists():
         original = config_path.read_bytes()  # bytes: the backup must be exact, CRLF and BOM included
-        if b"#" in original:
+        if _toml_has_comment(original.decode("utf-8", errors="replace")):
             console.print(
                 f"[yellow]Warning:[/yellow] {escape(str(config_path))} has comments; rewriting it as TOML "
                 "does not preserve them. The original is kept next to it as "
@@ -1776,9 +1807,12 @@ def _write_toml_mcp_client_config(
             )
         backup_path = config_path.with_name(config_path.name + ".bak")
         try:
-            if repo_path is not None and (backup_path.is_symlink() or _config_path_escapes_repo(backup_path, repo_path)):
-                raise OSError("refusing to write a backup through a symlink")
-            backup_path.write_bytes(original)
+            if repo_path is not None:
+                # One atomic O_NOFOLLOW open, same as the config itself: a check followed by a write would
+                # leave a window for a symlink to be swapped in.
+                _write_bytes_no_symlink_follow(backup_path, original)
+            else:
+                backup_path.write_bytes(original)
         except OSError:
             return f"skipped (could not write a backup, so the file was left untouched): {config_path}", False
     if repo_path is not None:
@@ -2837,13 +2871,13 @@ def locate(
     path: str = typer.Argument(".", help="repository path"),
     path_option: Optional[str] = _PATH_OPTION,
 ) -> None:
-    from aletheore.code_locator import locate_report
+    from aletheore.code_locator import locate_result
 
     repo = Path(_resolve_path(path, path_option)).resolve()
     evidence = _load_evidence_or_exit(repo)
-    report = locate_report(evidence, repo, query)
+    report, matched = locate_result(evidence, repo, query)
     print(report)
-    if report.startswith("no match for"):
+    if not matched:
         # Same convention as `usages`: nothing found is a non-zero exit.
         raise typer.Exit(code=1)
 

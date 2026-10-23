@@ -48,7 +48,7 @@ _CITATION_PATTERN = re.compile(r"`?([\w./-]+\.[A-Za-z0-9]+):(\d+)(?:-(\d+))?`?")
 # or not (`/etc/passwd:2`, `../../etc/passwd:1`). They can never be valid, and
 # silently dropping them hid the attempt, so they are extracted to be reported.
 _ESCAPING_PATTERN = re.compile(
-    r"`?(?<![\w./-])((?:\.\./)+[\w./-]+|/(?:[\w.-]+/)*[A-Za-z_.][\w.-]*):(\d+)(?:-(\d+))?`?"
+    r"`?(?<![\w./-])((?:\.\./)+[\w./-]+|\.\.|/(?:[\w.-]+/)*[A-Za-z_.][\w.-]*):(\d+)(?:-(\d+))?`?"
 )
 
 # URLs are not citations: `http://x.com/a.py:5` must not become `//x.com/a.py:5`.
@@ -233,8 +233,7 @@ def verify_citations(
                 # its report was actually bounds-checked.
                 line_bounds_checked += 1
                 if max(citation["line"], end_line or 0) > line_count:
-                    if end_line is not None:
-                        citation["reason"] = f"file has {line_count} lines"
+                    citation["reason"] = f"file has {line_count} lines"
                     unverified.append(citation)
                     continue
         verified.append(citation)
