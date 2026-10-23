@@ -802,3 +802,94 @@ def test_push_401_tells_the_user_to_log_in_again(tmp_path, monkeypatch, caplog):
     outcome = skill_hub_sync.push_custom_skill_best_effort("b-skill", "content")
     assert outcome == skill_hub_sync.UNAUTHORIZED
     assert "aletheore login" in skill_hub_sync.push_note(outcome)
+
+
+# --- names that differ only in case ------------------------------------------------------------------------------
+
+
+def _fake_case_server(monkeypatch, listing, puts=None):
+    contents = {entry["name"]: f"content of {entry['name']}" for entry in listing}
+
+    def _get(url, **kwargs):
+        if url.endswith("/v1/custom-skills"):
+            return _resp("GET", url, skills=listing)
+        name = url.rsplit("/", 1)[-1]
+        if name in contents:
+            return _resp("GET", url, name=name, content=contents[name], updated_at="2026-01-01T00:00:00+00:00")
+        raise AssertionError(f"unexpected GET {url}")
+
+    def _put(url, **kwargs):
+        name = url.rsplit("/", 1)[-1]
+        if puts is None:
+            raise AssertionError(f"unexpected PUT {url}")
+        puts[name] = kwargs["json"]["content"]
+        return _resp("PUT", url, name=name, content=puts[name], updated_at="2026-01-03T00:00:00+00:00")
+
+    monkeypatch.setattr(skill_hub_sync.httpx, "get", _get)
+    monkeypatch.setattr(skill_hub_sync.httpx, "put", _put)
+
+
+def _case_setup(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_hub, "custom_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skill_hub_sync, "_personal_token", lambda: "tok")
+
+
+def test_pull_keeps_only_the_newest_of_two_server_names_that_differ_in_case(tmp_path, monkeypatch, caplog):
+    _case_setup(tmp_path, monkeypatch)
+    _fake_case_server(monkeypatch, [
+        {"name": "Review", "updated_at": "2026-01-02T00:00:00+00:00"},
+        {"name": "review", "updated_at": "2026-01-01T00:00:00+00:00"},
+    ])
+    with caplog.at_level("WARNING"):
+        skill_hub_sync.pull_merge_custom_skills()
+    assert skill_hub.list_custom_skill_names() == ["Review"]
+    assert skill_hub.read_custom_skill_file("Review") == "content of Review"
+    notes = [r.getMessage() for r in caplog.records if "capital letters" in r.getMessage()]
+    assert len(notes) == 1 and "'review'" in notes[0] and "'Review'" in notes[0]
+
+
+def test_pull_case_collision_is_the_same_whatever_order_the_server_lists_them(tmp_path, monkeypatch):
+    _case_setup(tmp_path, monkeypatch)
+    tie = "2026-01-01T00:00:00+00:00"
+    _fake_case_server(monkeypatch, [{"name": "b-skill", "updated_at": tie}, {"name": "B-Skill", "updated_at": tie}])
+    skill_hub_sync.pull_merge_custom_skills()
+    assert skill_hub.list_custom_skill_names() == ["B-Skill"]  # a tie goes to the name that sorts first
+
+
+def test_pull_does_not_overwrite_a_local_skill_with_a_case_variant_from_the_server(tmp_path, monkeypatch, caplog):
+    _case_setup(tmp_path, monkeypatch)
+    skill_hub.write_custom_skill_file("notes", "my local text")
+    _fake_case_server(monkeypatch, [{"name": "Notes", "updated_at": "2026-01-02T00:00:00+00:00"}], puts={})
+    with caplog.at_level("WARNING"):
+        skill_hub_sync.pull_merge_custom_skills()
+    assert skill_hub.read_custom_skill_file("notes") == "my local text"
+    assert skill_hub.list_custom_skill_names() == ["notes"]
+    assert any("capital letters" in r.getMessage() for r in caplog.records)
+
+
+def test_push_does_not_upload_a_local_name_that_differs_from_a_server_name_only_in_case(tmp_path, monkeypatch):
+    _case_setup(tmp_path, monkeypatch)
+    skill_hub.write_custom_skill_file("notes", "my local text")
+    puts: dict = {}
+    _fake_case_server(monkeypatch, [{"name": "Notes", "updated_at": "2026-01-02T00:00:00+00:00"}], puts=puts)
+    skill_hub_sync.pull_merge_custom_skills()
+    assert puts == {}
+
+
+def test_local_add_and_sync_use_the_same_case_rule(tmp_path, monkeypatch):
+    _case_setup(tmp_path, monkeypatch)
+    skill_hub.write_custom_skill_file("notes", "x")
+    assert skill_hub.name_key("Notes") == skill_hub.name_key("notes")
+    with pytest.raises(skill_hub.CustomSkillError, match="capital letters"):
+        skill_hub.add_custom_skill_with_sync("Notes", "other text")
+
+
+def test_push_key_is_only_used_up_by_a_real_upload(tmp_path, monkeypatch):
+    _case_setup(tmp_path, monkeypatch)
+    # Two local names that differ only in case (a case-sensitive filesystem); the first has no readable content.
+    monkeypatch.setattr(skill_hub, "list_custom_skill_names", lambda: ["Alpha", "alpha"])
+    monkeypatch.setattr(skill_hub, "read_custom_skill_file", lambda name: None if name == "Alpha" else "text")
+    puts: dict = {}
+    _fake_case_server(monkeypatch, [], puts=puts)
+    skill_hub_sync.pull_merge_custom_skills()
+    assert puts == {"alpha": "text"}

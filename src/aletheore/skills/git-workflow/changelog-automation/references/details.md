@@ -1,5 +1,6 @@
 # changelog-automation — detailed patterns and worked examples
 
+```markdown
 ## [Unreleased]
 
 ### Added
@@ -456,3 +457,4 @@ cz check --rev-range HEAD~5..HEAD
 
 ```markdown
 # Release v2.1.0 - January 15, 2024
+```

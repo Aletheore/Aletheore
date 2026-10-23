@@ -65,14 +65,18 @@ EXTRA_SKIPPED_DIRS = frozenset(
 MAX_MANIFEST_DIRS = 200
 
 
-@lru_cache(maxsize=32)
-def _discover(repo_path: Path, ignored_key: tuple[str, ...]) -> dict:
-    patterns = list(ignored_key)
+def _is_manifest_name(name: str) -> bool:
+    return name in MANIFEST_FILENAMES or name.endswith(MANIFEST_SUFFIXES)
+
+
+def _collect_named(repo_path: Path, patterns: list[str], matches) -> dict[str, set[str]]:
+    """{repo-relative dir: {file names}} for every file whose name `matches`,
+    skipping vendored, build, dependency and ignored paths."""
     visible = git_visible_paths(repo_path)
     found: dict[str, set[str]] = {}
 
     def note(rel_dir: str, name: str) -> None:
-        if name in MANIFEST_FILENAMES or name.endswith(MANIFEST_SUFFIXES):
+        if matches(name):
             found.setdefault(rel_dir, set()).add(name)
 
     def dir_skipped(rel_dir_parts: list[str]) -> bool:
@@ -81,7 +85,7 @@ def _discover(repo_path: Path, ignored_key: tuple[str, ...]) -> dict:
     if visible is not None:
         for rel in visible[0]:
             parent, _, name = rel.rpartition("/")
-            if not (name in MANIFEST_FILENAMES or name.endswith(MANIFEST_SUFFIXES)):
+            if not matches(name):
                 continue
             if parent and dir_skipped(parent.split("/")):
                 continue
@@ -105,7 +109,23 @@ def _discover(repo_path: Path, ignored_key: tuple[str, ...]) -> dict:
                 if is_ignored(f"{rel_dir}/{filename}" if rel_dir != "." else filename, patterns):
                     continue
                 note(rel_dir, filename)
+    return found
 
+
+def discover_named_files(repo_path: Path, names: frozenset[str], ignored_paths: list[str] | None = None) -> list[str]:
+    """Repo-relative POSIX paths of every file called one of `names`, at any
+    depth, shallowest first (same skipping rules as manifest discovery)."""
+    repo_path = Path(repo_path)
+    if ignored_paths is None:
+        ignored_paths = load_repo_config(repo_path)["ignored_paths"]
+    found = _collect_named(repo_path, list(ignored_paths), lambda name: name in names)
+    paths = [name if d == "." else f"{d}/{name}" for d, files in found.items() for name in files]
+    return sorted(paths, key=lambda p: (p.count("/"), p))
+
+
+@lru_cache(maxsize=32)
+def _discover(repo_path: Path, ignored_key: tuple[str, ...]) -> dict:
+    found = _collect_named(repo_path, list(ignored_key), _is_manifest_name)
     dirs = sorted(found, key=lambda d: ((0, "") if d == "." else (1 + d.count("/"), d)))
     total = len(dirs)
     truncated = total > MAX_MANIFEST_DIRS

@@ -252,3 +252,4 @@ function cleanupAds(): void {
 
 ```bash
     npm install --save-dev @types/google_interactive_media_ads_types
+```

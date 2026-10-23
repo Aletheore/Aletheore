@@ -93,7 +93,8 @@ def fence_problems(text: str) -> list[str]:
                 if closing and closing.group(1)[0] == char and len(closing.group(1)) >= length:
                     opened = None
                 continue
-        fence = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", rest)
+        # A fence may open on a list item line ("2. ```sh"); its closing fence is then on its own line.
+        fence = re.match(r"^ {0,3}(?:(?:[-*+]|\d{1,9}[.)]) {1,4})?(`{3,}|~{3,})(.*)$", rest)
         if fence and not (fence.group(1)[0] == "`" and "`" in fence.group(2)):
             opened = (fence.group(1)[0], len(fence.group(1)), depth, number)
     if opened is not None:
@@ -138,6 +139,55 @@ def test_every_skill_md_has_balanced_code_fences():
         problems = fence_problems(body)
         if problems:
             offenders[_skill_id(skill_dir)] = problems
+    assert not offenders, offenders
+
+
+def nested_fence_problems(text: str) -> list[str]:
+    """A fence with a language that opens inside a fence that is not longer than it. A renderer ends the outer fence at
+    the next bare fence line, so a template that shows a code block needs an outer fence of more backticks."""
+    problems: list[str] = []
+    opened: tuple[str, int, int] | None = None  # (char, length, opening line)
+    for number, line in enumerate(text.split("\n"), start=1):
+        rest = re.sub(r"^(?: {0,3}> ?)*", "", line)
+        fence = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", rest)
+        if opened is None:
+            if fence and not (fence.group(1)[0] == "`" and "`" in fence.group(2)):
+                opened = (fence.group(1)[0], len(fence.group(1)), number)
+            continue
+        char, length, start = opened
+        if fence and fence.group(1)[0] == char and len(fence.group(1)) >= length:
+            if fence.group(2).strip():
+                problems.append(f"line {number}: a fence with a language opens inside the fence from line {start}")
+            else:
+                opened = None
+    return problems
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("````md\n```bash\nx\n```\n````\n", 0),
+        ("```md\n```bash\nx\n```\n```\n", 1),
+        ("```bash\nx\n```\n\n```python\ny\n```\n", 0),
+        ("1. ```sh\n   x\n   ```\n", 0),
+    ],
+)
+def test_nested_fence_checker(text, expected):
+    assert len(nested_fence_problems(text)) == expected
+
+
+def test_every_bundled_markdown_file_has_balanced_and_unnested_code_fences():
+    """Every companion .md file (references, examples, templates): no fence is left open, none ends inside a block
+    quote, and a template that contains a code block uses a longer outer fence. (SKILL.md bodies are covered for
+    balance by test_every_skill_md_has_balanced_code_fences.)"""
+    offenders = {}
+    for path in sorted(SKILLS_DIR.rglob("*.md")):
+        if path.is_symlink() or not path.is_file() or path.name == "SKILL.md":
+            continue
+        text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+        problems = fence_problems(text) + nested_fence_problems(text)
+        if problems:
+            offenders[path.relative_to(SKILLS_DIR).as_posix()] = problems
     assert not offenders, offenders
 
 

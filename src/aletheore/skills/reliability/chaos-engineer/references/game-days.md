@@ -82,7 +82,7 @@ game_day:
 
 ## Game Day Runbook
 
-```markdown
+````markdown
 # Database Failover Game Day Runbook
 
 **Date**: January 15, 2025
@@ -212,7 +212,7 @@ for i in range(100):
 - [ ] Send thank-you to participants
 - [ ] Create action item tickets
 - [ ] Update runbooks based on learnings
-```
+````
 
 ## Game Day Observation Template
 

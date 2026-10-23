@@ -4,7 +4,7 @@
 
 ### Progressive Learning Path
 
-```markdown
+````markdown
 # Getting Started with API
 
 ## Prerequisites
@@ -47,11 +47,11 @@ Run the code and you should see a list of users.
 - [Authentication Guide](/docs/auth) - Learn about OAuth and API keys
 - [Advanced Queries](/docs/queries) - Filtering, sorting, pagination
 - [Error Handling](/docs/errors) - Handle errors gracefully
-```
+````
 
 ### Step-by-Step Tutorial
 
-```markdown
+````markdown
 # Tutorial: Building a User Dashboard
 
 **What you'll learn:**
@@ -155,7 +155,7 @@ At this point, you have:
 ## Next: Adding Pagination
 
 [Continue to Step 5 →](/docs/tutorial/step-5)
-```
+````
 
 ## Information Architecture
 
@@ -201,7 +201,7 @@ Documentation/
 
 ### Task-Based Writing
 
-```markdown
+````markdown
 # How to Upload a File
 
 **Goal:** Upload an image file to your account storage
@@ -240,11 +240,11 @@ Only .jpg, .png, .gif are allowed. Check the file extension.
 ## Related
 - [File API Reference](/api/files)
 - [Handling Upload Progress](/guides/upload-progress)
-```
+````
 
 ### Progressive Disclosure
 
-```markdown
+````markdown
 # Authentication
 
 ## Basic: API Keys (Recommended for Getting Started)
@@ -306,13 +306,13 @@ const client = new Client({ jwt });
 
 [JWT setup guide →](/guides/jwt)
 </details>
-```
+````
 
 ## Visual Communication
 
 ### Diagram Integration
 
-```markdown
+````markdown
 # System Architecture
 
 ## Request Flow
@@ -355,7 +355,7 @@ erDiagram
         text content
     }
 ```
-```
+````
 
 ### Screenshot Annotations
 
@@ -387,7 +387,7 @@ erDiagram
 
 ### Problem-Solution Format
 
-```markdown
+````markdown
 # Troubleshooting
 
 ## Authentication Errors
@@ -460,7 +460,7 @@ Instead of 100 individual requests, use batch endpoints.
 
 **3. Upgrade your plan:**
 [View plans](/pricing) - Higher tiers have increased limits.
-```
+````
 
 ## FAQ Section
 

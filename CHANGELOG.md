@@ -5,6 +5,80 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+**Fixed: a read-only `.aletheore/` folder no longer ends a command with a traceback**
+
+`scan` checks that `.aletheore/` can be written before it starts scanning, so a read-only folder fails in a second
+instead of after the whole scan, with `error: cannot write evidence to ...` on stderr and exit code 1. A write failure
+after the scan is reported with the same message, and one while saving the snapshot says the evidence was written and
+the snapshot was not. `audit`, `audit --managed` and `watch`
+stop the same way, `watch` keeps running after a failed rebuild and prints that one line again on the next change,
+`init` and `mcp-install` say which file they could not write instead of crashing, and the `aletheore_scan` MCP tool
+returns the message as a tool error.
+
+**Fixed: TypeScript path aliases now resolve to repo files**
+
+`paths` and `baseUrl` from `tsconfig.json` and `jsconfig.json` turn `import x from "@app/x"` and `import y from
+"src/util"` into edges in the module graph, so `imports`, `imported-by`, dependents and dead-code results see them.
+Comments and trailing commas in the config are accepted, `extends` (one config or a list, with or without `.json`) is
+followed, and a nested package's own `tsconfig.json` applies to its files before the root one. An alias wins over a
+workspace package of the same name, as in TypeScript, and a target inside `node_modules` is never linked.
+
+**Fixed: Go `go.work` and local `replace` directives resolve to in-repo modules**
+
+Directories named by a `use` directive in `go.work` count as modules even when the scan would otherwise skip them (for
+example `third_party/`). A `replace example.com/lib => ./local/lib` in `go.mod` or `go.work` links imports of
+`example.com/lib/...` to that directory, with or without its own `go.mod`. A replace that points outside the repository
+stays external.
+
+**Changed: evidence version 0.9.0 declares the optional fields added by the scanner work**
+
+`schemas/air.schema.json` now declares `cli_version`, `config_warnings`, `repository.unreadable_files`,
+`repository.monorepo.packages`, `reason` and `manifests_truncated`, `manifest_dirs`, `unreadable_manifest_dirs`, `note`
+and `reason` on the vulnerability and license checks, and `git.reason`. Every one is optional. The schema changed, so
+`EVIDENCE_VERSION` moved from 0.8.1 to 0.9.0 as the migration rules in `docs/AIR-SCHEMA.md` require. Evidence written
+by 0.8.x still loads without a re-scan (the compatibility check lists 0.8 as readable by 0.9, because 0.9.0 only added
+optional keys); evidence from 0.7 and earlier still asks for a re-scan.
+
+**Fixed: `verify` recognizes Windows-style citations**
+
+`app\util.py:5`, `.\app\util.py:2` and `src\deep\mod.py:3-4` are read as the forward-slash paths they name, with the same
+existence and line-range checks. `..\..\etc\passwd:1`, `C:\Windows\x.dll:7` and UNC paths are listed as "path outside the
+repository" and never read.
+
+**Fixed: MCP tool arguments are described**
+
+Every argument of every MCP tool now carries a short description in the tool schema, for example that `target` is a
+repo-relative file path for `aletheore_imports` but a branch name for `aletheore_branch`, and what `section`, `offset`,
+`limit` and `filter` page through. No argument was renamed. A test fails when a tool gains an argument without a
+description.
+
+**Fixed: a plain repo with `docs/requirements.txt` was reported as a monorepo**
+
+Manifests under `docs/`, `examples/`, `samples/`, `tests/`, `fixtures/`, `benchmarks/` and similar folders are still
+listed in `monorepo.packages` but no longer count towards "multiple manifests". A repo that declares workspaces (for
+example `"workspaces": ["examples/*"]`) is a monorepo as before.
+
+**Fixed: custom skills whose names differ only in capital letters no longer overwrite each other when syncing**
+
+If your account lists two custom skills whose names differ only in case (`Review` and `review`), `aletheore login` now
+keeps the one updated last (the name that sorts first when the times match) and skips the other with a one-line warning,
+instead of writing both to the same file on macOS and Windows. A name from your account that differs only in case from a
+skill already saved here is skipped the same way and never overwrites it, and a local skill is not uploaded when your
+account already holds the same name in another case. `hallbook add` applies the same rule.
+
+**Changed: `hallbook search` shows what a skill needs and its alternates**
+
+A result that needs something installed, or that has alternates (other skills that do the same job), gets a third line
+such as `needs: node, npm; also: a/b`. It is left out on terminals narrower than 70 columns, so the two-line result never
+wraps. The skill detail view of the skills browser shows the alternates next to what the skill needs. The MCP search
+result already carried both lists in full.
+
+**Fixed: code fences in 32 bundled reference files**
+
+Templates that show a code block inside a code block now use a longer outer fence, and fences that were left open or
+closed early (a missing opening or closing line, a stray closing line) are repaired, so the files render as written. A
+test now checks every bundled reference file for balanced and unnested fences.
+
 **Added: `aletheore hallbook info`**
 
 `aletheore hallbook info debugging/systematic-debugging` (or just `systematic-debugging` when the name is unambiguous)
