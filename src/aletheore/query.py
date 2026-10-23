@@ -1,4 +1,5 @@
 import re
+from collections import deque
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -61,9 +62,9 @@ def find_transitive_imports(evidence: dict, target: str | None) -> dict:
     direct = [p for p in _unique(module.get("imports") or []) if p != target]
     seen = {target, *direct}
     reached: list[str] = []
-    queue = list(direct)
+    queue = deque(direct)
     while queue:
-        current = queue.pop(0)
+        current = queue.popleft()
         for dependency in by_path.get(current, {}).get("imports") or []:
             if dependency in seen:
                 continue
@@ -285,9 +286,9 @@ def find_blast_radius(
     # only the list handed back is capped. Stopping the walk at the cap, as this once did, left a hub's real
     # reach unknown and made "how many modules does this affect" unanswerable.
     all_transitive: list[str] = []
-    queue = list(direct_dependents)
+    queue = deque(direct_dependents)
     while queue:
-        current = queue.pop(0)
+        current = queue.popleft()
         for dependent in by_path.get(current, {}).get("imported_by") or []:
             if dependent in visited:
                 continue
@@ -508,7 +509,7 @@ def find_dead_code_evidence(evidence: dict, target: str | None) -> dict:
 
 # Display caps for find_unimported_modules. Every total is counted over the whole scope first; only the lists
 # are cut, and a *_truncated flag says so (the find_blast_radius lesson).
-_UNIMPORTED_MAX_LISTED = 80
+_UNIMPORTED_MAX_LISTED = 200
 _UNIMPORTED_MAX_TEST_ONLY = 20
 
 _UNIMPORTED_DEFINITION = (
@@ -552,11 +553,16 @@ def find_unimported_modules(
             (unimported if ignore_test_importers else tests_only).append(path)
     unimported.sort()
     tests_only.sort()
-    scan_unreachable = [
-        entry["path"]
-        for entry in evidence["repository"]["dead_code"].get("unreachable_modules", [])
-        if not prefix or entry["path"] == prefix or entry["path"].startswith(prefix + "/")
-    ]
+    # The scan's own list gets the same scope and language filter, so the two totals are comparable.
+    language_of = {m.get("path"): str(m.get("language") or "").lower() for m in evidence["repository"]["modules"]}
+    scan_unreachable = []
+    for entry in evidence["repository"].get("dead_code", {}).get("unreachable_modules", []):
+        entry_path = entry.get("path") or ""
+        if not entry_path or (prefix and entry_path != prefix and not entry_path.startswith(prefix + "/")):
+            continue
+        if wanted and language_of.get(entry_path, "") not in wanted:
+            continue
+        scan_unreachable.append(entry_path)
     return {
         "scope": prefix or "(whole repo)",
         "languages": sorted(wanted) or "any",

@@ -17,11 +17,14 @@ The router is deterministic, built the way `find_skill` was: keyword rules with 
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Callable
+
+_LOG = logging.getLogger(__name__)
 
 # Intent -> (keyword patterns, tool the answer comes from, whether a file target is required).
 # Order matters only for ties; scoring decides. Patterns are written for how developers phrase a request to an
@@ -309,7 +312,10 @@ def _load_bank() -> dict:
     docs: dict[str, dict[str, int]] = {}
     try:
         raw = json.loads(_PHRASINGS_PATH.read_text())
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        # Without the bank the fallback ranking never fires and the router is keyword-only for the life of the
+        # process, so say so once instead of degrading silently.
+        _LOG.warning("router phrasing bank unavailable (%s); falling back to keyword matching only", exc)
         raw = {}
     for intent, phrases in raw.items():
         if intent not in _INTENTS_BY_NAME or not isinstance(phrases, list):
@@ -381,6 +387,12 @@ _TEST_QUALIFIER = re.compile(
     r"|\bnon[- ]?tests?\b(?:\s+files?)?"
     r"|\b(?:excluding|excluded|ignoring|without|skipping|not counting)\s+(?:the\s+)?tests?(?:\s+files?)?\b",
     re.IGNORECASE | re.DOTALL,
+)
+
+
+_NON_TEST_QUALIFIER = re.compile(
+    r"\bnon[- ]?tests?\b|\b(?:excluding|excluded|ignoring|without|skipping|not counting)\s+(?:the\s+)?tests?\b",
+    re.IGNORECASE,
 )
 
 
@@ -482,7 +494,7 @@ def resolve_target(question: str, explicit: str | None, paths: list[str]) -> tup
 
 _ACTION = re.compile(
     r"^\s*(?:please\s+)?(?:run|execute|start|stop|restart|deploy|ship|push|merge|commit|build|install|write|create|add|implement|"
-    r"fix|generate|delete|remove|rename|refactor|update|upgrade|tell me a|make|send|open|close|draft|translate|summari[sz]e|explain)\b",
+    r"fix|generate|delete|remove|rename|refactor|update|upgrade|tell me a|make|send|open|close|draft|translate)\b",
     re.IGNORECASE,
 )
 
@@ -579,6 +591,9 @@ def answer(question: str, target: str | None, evidence: dict, repo_path: Path) -
             result["confidence"] = result["answer"].get("confidence", result["confidence"])
     except q.ModuleNotFoundInEvidenceError as exc:
         result["error"] = str(exc)
+    except Exception as exc:  # noqa: BLE001 - one broken query must come back as a result, not kill the tool call
+        _LOG.warning("router query %s failed", decision.intent, exc_info=True)
+        result["error"] = f"{decision.tool} failed: {type(exc).__name__}: {exc}"
     return result
 
 
@@ -633,8 +648,10 @@ def _dead_code(q, evidence, repo_path, target, question):
     languages = {str(m.get("language") or "").lower() for m in evidence["repository"]["modules"]} - {""}
     cleaned = strip_test_qualifiers(question)
     # A "non-test" question counts only non-test importers: a file only its own tests import is still unimported.
+    # Only that qualifier does it. A pasted definition of what a test file is also changes the text, but it says
+    # how to filter the answer, not whether a test importer counts.
     return q.find_unimported_modules(
-        evidence, target, resolve_languages(cleaned, languages), ignore_test_importers=cleaned != question
+        evidence, target, resolve_languages(cleaned, languages), ignore_test_importers=bool(_NON_TEST_QUALIFIER.search(question))
     )
 
 

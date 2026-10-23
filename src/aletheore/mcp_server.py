@@ -959,7 +959,7 @@ def _skill_summary(meta: skill_hub.SkillMeta) -> dict:
     return summary
 
 
-def _register_ask_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+def _register_ask_tool(mcp_instance: MCPServer, repo_path: Path, *, only_tool: bool = False) -> None:
     @mcp_instance.tool(name="aletheore_ask", annotations=READ_ONLY_ANNOTATIONS)
     @_guard_evidence_read_errors
     def aletheore_ask(question: str, target: str | None = None) -> str:
@@ -977,8 +977,13 @@ def _register_ask_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
         result = tool_router.answer(question, target, evidence, repo_path)
         text = _toon_result(result)
         if len(text) > tool_router.ANSWER_MAX_CHARS:
-            routed = result.get("routed_to") or "the specific tool"
-            text = text[: tool_router.ANSWER_MAX_CHARS] + f"\n... truncated; call {routed} directly for the full result"
+            cut = text[: tool_router.ANSWER_MAX_CHARS]
+            if only_tool:
+                # The tool named in routed_to is not registered in this profile, so it cannot be called.
+                text = cut + "\n... truncated; ask again with a narrower question or a more specific target"
+            else:
+                routed = result.get("routed_to") or "the specific tool"
+                text = cut + f"\n... truncated; call {routed} directly for the full result"
         return text
 
 
@@ -1726,7 +1731,7 @@ def build_server(
     if profile == "router":
         # One tool: the point is a single definition in the agent's context. aletheore_ask routes to the same
         # queries the full profile exposes one by one.
-        _register_ask_tool(mcp_instance, repo_path)
+        _register_ask_tool(mcp_instance, repo_path, only_tool=True)
         return mcp_instance
     if profile == "nav":
         # Three tools, small enough to load up front instead of behind a search step: find code, read one symbol,

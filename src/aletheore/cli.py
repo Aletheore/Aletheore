@@ -2627,9 +2627,17 @@ def hook_evidence_snippet(
     mode: str = typer.Option("inject", "--mode", help="inject (short block) or pointer (one line)"),
 ) -> None:
     import json as _json
+    import shlex as _shlex
+    import subprocess as _subprocess
     import sys as _sys
 
-    command = f"{_sys.executable} -m aletheore.evidence_hook --mode {mode}"
+    if mode not in ("inject", "pointer"):
+        console.print(f"[bold red]error:[/bold red] unknown mode {mode!r}; choose inject or pointer")
+        raise typer.Exit(code=2)
+    # The interpreter path can hold spaces (a pipx venv lives under "Application Support" on macOS), so the
+    # command is built from an argv list and quoted for the shell that will run it.
+    argv = [_sys.executable, "-m", "aletheore.evidence_hook", "--mode", mode]
+    command = _subprocess.list2cmdline(argv) if _sys.platform == "win32" else _shlex.join(argv)
     entry = lambda matcher: [{"matcher": matcher, "hooks": [{"type": "command", "command": command}]}]  # noqa: E731
     typer.echo(
         _json.dumps(

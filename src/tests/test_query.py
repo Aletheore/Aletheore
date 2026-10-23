@@ -1076,7 +1076,7 @@ def test_find_unimported_modules_can_ignore_test_importers_and_filter_language()
 
 
 def test_find_unimported_modules_totals_stay_exact_when_the_list_is_capped():
-    extra = [{"path": f"big/m{i:03}.py", "language": "python", "imported_by": []} for i in range(120)]
+    extra = [{"path": f"big/m{i:03}.py", "language": "python", "imported_by": []} for i in range(250)]
     result = find_unimported_modules(_unimported_evidence(extra), "big")
-    assert result["unimported_total"] == 120
-    assert len(result["unimported"]) < 120 and result["unimported_truncated"] is True
+    assert result["unimported_total"] == 250
+    assert len(result["unimported"]) < 250 and result["unimported_truncated"] is True

@@ -82,6 +82,10 @@ class SQLiteRepoGraphStore:
         says they are current, so an incremental sync never fills them and every file shows no owner. Files with
         recorded changes and not one owner among them can only be that state, whether the column was added just
         now or by an earlier version, so the recorded sync is dropped and the analyzer rebuilds the history once.
+
+        It cannot repeat: incremental.fold records an owner for the author of every commit that bumps a file's
+        churn_count, so a rebuilt store always has at least one non-empty owner map. The owners column is written
+        with json.dumps, so an empty map is exactly '{}'.
         """
         changed, with_owner = self._conn.execute(
             "SELECT COUNT(*), COALESCE(SUM(owners != '{}'), 0) FROM file_churn WHERE churn_count > 0"

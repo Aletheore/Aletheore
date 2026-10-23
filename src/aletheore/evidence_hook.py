@@ -46,7 +46,9 @@ _MAX_IMPORTERS_STORED = 300
 _MAX_NAMED = 3
 _MAX_TRANSITIVE_WALK = 5000
 _GIT_LOG_COMMITS = 800
-_GIT_LOG_TIMEOUT = 20
+# The history read runs on the first file touch, inside the hook's time budget. A slow disk or a huge history gives
+# up and the hook simply shows no history, rather than holding up the agent's tool call.
+_GIT_LOG_TIMEOUT = 5
 _GIT_MAX_FILES_PER_COMMIT = 25
 _GIT_MIN_PAIR = 2
 _TOOLS_AT_FILE_TOUCH = frozenset({"Read", "Edit", "MultiEdit", "Write"})
@@ -540,6 +542,12 @@ def main(argv: list[str] | None = None, stdin=None, stdout=None) -> int:
             (stdout or sys.stdout).write(json.dumps(out))
     except BaseException:  # a hook must never break the tool call; keep the reason for debugging
         _LOG.debug("evidence hook failed; staying silent", exc_info=True)
+        if os.environ.get("ALETHEORE_HOOK_DEBUG"):
+            # No logging handler exists in a hook process, so the debug record above goes nowhere. Stderr is not
+            # part of the JSON on stdout, so it is safe to use when someone is asking why the hook said nothing.
+            import traceback
+
+            traceback.print_exc(file=sys.stderr)
     return 0
 
 
