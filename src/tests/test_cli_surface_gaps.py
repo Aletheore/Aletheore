@@ -729,17 +729,21 @@ def test_query_normalizes_backslash_free_relative_and_absolute_forms_via_pathlib
 # --- review follow-ups ---------------------------------------------------------------------------------------
 
 
-def test_mcp_error_flag_is_structural_and_survives_the_json_fallback(tmp_path):
+def test_mcp_error_flag_is_set_where_the_failure_is_built_not_inferred(tmp_path):
     from aletheore import mcp_server
 
-    assert isinstance(mcp_server._toon_result({"error": "x"}), mcp_server._ErrorText)
-    assert not isinstance(mcp_server._toon_result({"found": []}), mcp_server._ErrorText)
-    with patch("aletheore.mcp_server.to_toon", side_effect=mcp_server.ToonEncodingError("boom")):
-        fallback = mcp_server._toon_result({"error": "x"})
-    assert isinstance(fallback, mcp_server._ErrorText) and fallback.startswith('{"result"')
+    assert isinstance(mcp_server._error_result({"error": "x"}), mcp_server._ToolError)
+    # a successful payload that merely has an "error" key (or looks like an error) is never flagged
+    assert isinstance(mcp_server._toon_result({"error": "this is data"}), str)
+    assert not isinstance(mcp_server._toon_result({"error": "this is data"}), mcp_server._ToolError)
+    # string operations on a flagged result do not matter: the flag is not in the text
+    flagged = mcp_server._error_result({"error": "x"})
+    assert flagged.text.strip().upper() and mcp_server._flag_error_results(lambda: flagged)().is_error is True
     server = _mcp_server_with_evidence(tmp_path)
     assert _call(server, "aletheore_symbols", {"target": "nope.py"}).is_error is True
     assert not _call(server, "aletheore_symbols", {"target": "app/main.py"}).is_error
+    assert _call(server, "aletheore_dead_code", {"limit": -5}).is_error is True
+    assert _call(server, "aletheore_dead_code", {}).is_error is not True
 
 
 def test_diff_tolerates_snapshots_without_a_checked_key(tmp_path):
@@ -815,6 +819,10 @@ def test_toml_comment_detection_ignores_hash_inside_strings():
     assert cli._toml_has_comment("# c\n[a]\n")
     assert cli._toml_has_comment("x = 1  # trailing\n")
     assert not cli._toml_has_comment('color = "#fff"\nurl = \'http://x/#frag\'\nm = """a # b\nc"""\n')
+    # a backslash-escaped quote inside a multi-line basic string does not end it
+    assert not cli._toml_has_comment('m = """say \\""" # still text\nend"""\n')
+    assert cli._toml_has_comment('m = """say \\""" # still text\nend"""  # real\n')
+    assert not cli._toml_has_comment('p = \'C:\\dir # x\'\n')
 
 
 def test_query_treats_backslashes_as_separators():

@@ -211,10 +211,12 @@ def _section_view(
     sort_by: Mapping[str, Callable[[Any], Any]] | None,
 ) -> dict:
     if section not in lists:
-        return {
-            "error": f"unknown section {section!r}",
-            "sections": {p: len(l) for p, l in lists.items()},
-        }
+        return BudgetError(
+            {
+                "error": f"unknown section {section!r}",
+                "sections": {p: len(l) for p, l in lists.items()},
+            }
+        )
     items = _ordered(section, lists[section], sort_by)
     unfiltered_total = len(items)
     if needle:
@@ -259,6 +261,12 @@ def _dump(item: Any) -> str:
     return json.dumps(item, ensure_ascii=False, default=str)
 
 
+class BudgetError(dict):
+    """The `{"error": ...}` apply_budget returns for bad paging arguments. A distinct type (it still compares equal
+    to a plain dict) so the MCP layer can flag the call as failed where the result is built, instead of guessing from
+    the payload's keys."""
+
+
 def apply_budget(
     data: Any,
     *,
@@ -279,13 +287,18 @@ def apply_budget(
     """
     # Range errors first: with no section, a bad limit used to be reported as "pass section".
     if limit is not None and limit < 1:
-        return {"error": f"limit must be at least 1, got {limit}"}
+        return BudgetError({"error": f"limit must be at least 1, got {limit}"})
     if offset < 0:
-        return {"error": f"offset must be at least 0, got {offset}"}
+        return BudgetError({"error": f"offset must be at least 0, got {offset}"})
     lists = _find_lists(data)
     if section is None:
         if offset or limit is not None or filter:
-            return {"error": "offset, limit and filter apply to one list: pass section=<path> too", "sections": {p: len(l) for p, l in lists.items()}}
+            return BudgetError(
+                {
+                    "error": "offset, limit and filter apply to one list: pass section=<path> too",
+                    "sections": {p: len(l) for p, l in lists.items()},
+                }
+            )
         if size_of(data) <= budget_chars:
             return data
         return _overview(data, lists, size_of, budget_chars, sort_by) if lists else data

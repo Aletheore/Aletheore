@@ -1745,23 +1745,27 @@ def _write_json_mcp_client_config(
 
 def _toml_has_comment(text: str) -> bool:
     """True when the TOML text has a real comment: a `#` outside any string (so "#fff" or a URL fragment in a
-    value does not count)."""
+    value does not count). Follows TOML's string forms: basic "..." and multi-line \"\"\"...\"\"\" (both honour
+    backslash escapes, so an escaped quote does not close them) and literal '...' / '''...''' (no escapes)."""
     i, n = 0, len(text)
     while i < n:
         c = text[i]
         if c == "#":
             return True
-        if text.startswith('"' * 3, i) or text.startswith("'" * 3, i):
-            end = text.find(text[i : i + 3], i + 3)
-            i = n if end == -1 else end + 3
-        elif c == '"':
-            i += 1
-            while i < n and text[i] not in '"\n':
-                i += 2 if text[i] == "\\" else 1
-            i += 1
-        elif c == "'":
-            end = text.find("'", i + 1)
-            i = n if end == -1 else end + 1
+        if c in "\"'":
+            multi = text.startswith(c * 3, i)
+            delimiter = c * 3 if multi else c
+            i += len(delimiter)
+            while i < n:
+                if c == '"' and text[i] == "\\":
+                    i += 2
+                    continue
+                if text.startswith(delimiter, i):
+                    i += len(delimiter)
+                    break
+                if not multi and text[i] == "\n":
+                    break  # an unterminated single-line string ends at the line
+                i += 1
         else:
             i += 1
     return False

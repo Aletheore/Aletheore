@@ -77,9 +77,11 @@ def citation_location(citation: dict) -> str:
     return f"{citation['file']}:{span}"
 
 
-def format_citation(citation: dict) -> str:
+def format_citation(citation: dict, *, markdown: bool = False) -> str:
+    """The location plus its reason, if any. markdown=True puts only the location in a code span."""
+    location = citation_location(citation)
     reason = citation.get("reason")
-    return citation_location(citation) + (f" ({reason})" if reason else "")
+    return (f"`{location}`" if markdown else location) + (f" ({reason})" if reason else "")
 
 
 # Dotted hostnames and IPs ("api.example.com:443", "10.0.0.1:5432") satisfy
@@ -372,8 +374,6 @@ def citation_verification_section(report_text: str, repo_path: Path) -> str:
             f"\n**{len(unverified)} citation(s) could not be verified** — treat the "
             "claims attached to these as unconfirmed:\n"
         )
-        lines.extend(
-            f"- `{citation_location(c)}`" + (f" ({c['reason']})" if c.get("reason") else "") for c in unverified
-        )
+        lines.extend(f"- {format_citation(c, markdown=True)}" for c in unverified)
         lines.append("")
     return "\n".join(lines)
