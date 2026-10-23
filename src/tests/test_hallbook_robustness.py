@@ -564,3 +564,9 @@ def test_legacy_backups_of_a_long_named_skill_are_listed_and_pruned(skills_dir):
     for number in range(5):
         skill_hub.write_backup(name, "bak", f"v{number}")
     assert not legacy.exists() and len(skill_hub.list_backups(name)) == 5
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_info_with_a_blank_name_asks_for_one(blank):
+    result = runner.invoke(app, ["hallbook", "info", blank])
+    assert result.exit_code == 1 and "skill name is required" in result.output

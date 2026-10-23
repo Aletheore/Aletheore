@@ -3053,6 +3053,8 @@ def skill_hub_info(
     width = _plain_width()
     if skill is not None:
         skill = skill.strip()
+        if not skill:
+            _hallbook_error("a skill name is required, for example: aletheore hallbook info debugging/systematic-debugging")
     if skill is None:
         if licence:
             _hallbook_error("--licence needs a skill: aletheore hallbook info SKILL --licence")
