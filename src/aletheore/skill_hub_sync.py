@@ -600,11 +600,12 @@ def pull_merge_custom_skills(timeout: float = 10.0) -> None:
                 # Windows. Keep the local file, upload nothing.
                 logger.warning(
                     "skill hub sync: did not upload custom skill '%s' because another skill differs from it only "
-                    "in capital letters",
+                    "in capital letters (the account keeps the newest of such names). Rename '%s' to keep your "
+                    "local edits on your account",
+                    name,
                     name,
                 )
                 continue
-            pushed_keys.add(key)
             try:
                 local_content = skill_hub.read_custom_skill_file(name)
                 if local_content is None:
@@ -618,6 +619,7 @@ def pull_merge_custom_skills(timeout: float = 10.0) -> None:
                     continue
                 # Never synced, or edited here after the remote delete: push.
                 _push_and_record(name, local_content, headers, timeout, sync_state)
+                pushed_keys.add(key)  # only a real upload uses up the name
             except Exception:
                 _log_failure("skill hub sync: could not merge custom skill '%s'", name)
     except Exception:

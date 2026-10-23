@@ -882,3 +882,14 @@ def test_local_add_and_sync_use_the_same_case_rule(tmp_path, monkeypatch):
     assert skill_hub.name_key("Notes") == skill_hub.name_key("notes")
     with pytest.raises(skill_hub.CustomSkillError, match="capital letters"):
         skill_hub.add_custom_skill_with_sync("Notes", "other text")
+
+
+def test_push_key_is_only_used_up_by_a_real_upload(tmp_path, monkeypatch):
+    _case_setup(tmp_path, monkeypatch)
+    # Two local names that differ only in case (a case-sensitive filesystem); the first has no readable content.
+    monkeypatch.setattr(skill_hub, "list_custom_skill_names", lambda: ["Alpha", "alpha"])
+    monkeypatch.setattr(skill_hub, "read_custom_skill_file", lambda name: None if name == "Alpha" else "text")
+    puts: dict = {}
+    _fake_case_server(monkeypatch, [], puts=puts)
+    skill_hub_sync.pull_merge_custom_skills()
+    assert puts == {"alpha": "text"}
