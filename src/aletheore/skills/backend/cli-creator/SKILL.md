@@ -2,7 +2,7 @@
 name: cli-creator
 description: Build a composable CLI for Codex from API docs, an OpenAPI spec, existing curl examples, an SDK, a web app, an admin tool, or a local script. Use when the user wants Codex to create a command-line tool that can run from any repo, expose composable read/write commands, return stable JSON, manage auth, and pair with a companion skill.
 skill_id: backend/cli-creator
-title: Cli Creator
+title: CLI Creator
 source_url: https://github.com/openai/skills/tree/49f948faa9258a0c61caceaf225e179651397431/skills/.curated/cli-creator
 license: Apache-2.0
 shelf: build

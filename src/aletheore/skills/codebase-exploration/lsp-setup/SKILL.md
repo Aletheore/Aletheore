@@ -2,7 +2,7 @@
 name: lsp-setup
 description: Enable code intelligence (go-to-definition, find-references, hover, type info) for any programming language by installing and configuring an LSP server for Copilot CLI. Detects the OS, installs the right server, and generates the JSON configuration (user-level or repo-level). Use when you need deeper code understanding and no LSP server is configured, or when the user asks to set up, install, or configure an LSP server.
 skill_id: codebase-exploration/lsp-setup
-title: Lsp Setup
+title: LSP Setup
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/lsp-setup
 license: MIT
 shelf: build

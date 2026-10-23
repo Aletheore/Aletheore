@@ -5,7 +5,7 @@ metadata:
   version: 1.0.0
   category: Containers
 skill_id: platforms/gke-ai-troubleshooting-tpu-partition-overlap
-title: Gke Ai Troubleshooting Tpu Partition Overlap
+title: GKE AI Troubleshooting TPU Partition Overlap
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/gke-ai-troubleshooting-tpu-partition-overlap
 license: Apache-2.0
 shelf: build

@@ -5,7 +5,7 @@ metadata:
   version: 1.0.0
   category: BigDataAndAnalytics
 skill_id: platforms/managed-airflow-dag-troubleshooting
-title: Managed Airflow Dag Troubleshooting
+title: Managed Airflow DAG Troubleshooting
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/managed-airflow-dag-troubleshooting
 license: Apache-2.0
 shelf: build

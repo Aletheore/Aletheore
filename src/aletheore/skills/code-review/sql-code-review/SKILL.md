@@ -2,7 +2,7 @@
 name: sql-code-review
 description: Universal SQL code review assistant that performs comprehensive security, maintainability, and code quality analysis across all SQL databases (MySQL, PostgreSQL, SQL Server, Oracle). Focuses on SQL injection prevention, access control, code standards, and anti-pattern detection. Complements SQL optimization prompt for complete development coverage.
 skill_id: code-review/sql-code-review
-title: Sql Code Review
+title: SQL Code Review
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/sql-code-review
 license: MIT
 shelf: quality

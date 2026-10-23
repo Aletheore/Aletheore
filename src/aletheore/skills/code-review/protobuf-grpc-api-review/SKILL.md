@@ -2,7 +2,7 @@
 name: protobuf-grpc-api-review
 description: Review Protocol Buffer (.proto) and gRPC API changes for wire and JSON compatibility, safe schema evolution, rollout hazards, and RPC contract quality. Use when reviewing proto diffs, adding or changing messages and services, planning migrations, or diagnosing cross-version failures.
 skill_id: code-review/protobuf-grpc-api-review
-title: Protobuf Grpc Api Review
+title: Protobuf gRPC API Review
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/protobuf-grpc-api-review
 license: MIT
 shelf: quality

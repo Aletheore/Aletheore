@@ -2,7 +2,7 @@
 name: pptx-reference-deck-analysis
 description: Use when analyzing a reference PPTX for read-only structure, theme, typography, layout rhythm, diagnostics, derived template catalogs, or safe OOXML package inspection.
 skill_id: documents/pptx-reference-deck-analysis
-title: Pptx Reference Deck Analysis
+title: PPTX Reference Deck Analysis
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/pptx-deck-creation/skills/pptx-reference-deck-analysis
 license: MIT
 shelf: content-media

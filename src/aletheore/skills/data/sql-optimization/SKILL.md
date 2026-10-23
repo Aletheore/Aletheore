@@ -2,7 +2,7 @@
 name: sql-optimization
 description: Universal SQL performance optimization assistant for comprehensive query tuning, indexing strategies, and database performance analysis across all SQL databases (MySQL, PostgreSQL, SQL Server, Oracle). Provides execution plan analysis, pagination optimization, batch operations, and performance monitoring guidance.
 skill_id: data/sql-optimization
-title: Sql Optimization
+title: SQL Optimization
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/sql-optimization
 license: MIT
 shelf: build

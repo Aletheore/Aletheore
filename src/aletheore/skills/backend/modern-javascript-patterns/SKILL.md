@@ -2,7 +2,7 @@
 name: modern-javascript-patterns
 description: Master ES6+ features including async/await, destructuring, spread operators, arrow functions, promises, modules, iterators, generators, and functional programming patterns for writing clean, efficient JavaScript code. Use when refactoring legacy code, implementing modern patterns, or optimizing JavaScript applications.
 skill_id: backend/modern-javascript-patterns
-title: Modern Javascript Patterns
+title: Modern JavaScript Patterns
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/javascript-typescript/skills/modern-javascript-patterns
 license: MIT
 shelf: build

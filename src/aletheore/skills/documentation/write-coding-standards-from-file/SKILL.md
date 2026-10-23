@@ -2,7 +2,7 @@
 name: write-coding-standards-from-file
 description: Write a coding standards document for a project using the coding styles from the file(s) and/or folder(s) passed as arguments in the prompt.
 skill_id: documentation/write-coding-standards-from-file
-title: Write Coding Standards From File
+title: Write Coding Standards from File
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/write-coding-standards-from-file
 license: MIT
 shelf: ship-operate

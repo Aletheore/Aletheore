@@ -2,7 +2,7 @@
 name: dotnet-best-practices
 description: Ensure .NET/C# code meets best practices for the solution/project.
 skill_id: backend/dotnet-best-practices
-title: Dotnet Best Practices
+title: .NET Best Practices
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/dotnet-best-practices
 license: MIT
 shelf: build

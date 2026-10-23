@@ -6,7 +6,7 @@ metadata:
   version: 2026.9.25
   source: Generated from https://github.com/pnpm/pnpm, scripts located at https://github.com/antfu/skills
 skill_id: devops/pnpm
-title: Pnpm
+title: pnpm
 source_url: https://github.com/antfu/skills/tree/feb0f3aba6566426f12230e7fc7a10d97c1293bb/skills/pnpm
 license: MIT
 shelf: ship-operate

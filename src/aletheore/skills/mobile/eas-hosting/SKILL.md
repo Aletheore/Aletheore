@@ -4,7 +4,7 @@ description: Deploy Expo websites and Expo Router API routes to EAS Hosting - ex
 version: 1.0.0
 license: MIT
 skill_id: mobile/eas-hosting
-title: Eas Hosting
+title: EAS Hosting
 source_url: https://github.com/expo/skills/tree/7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1/plugins/expo/skills/eas-hosting
 shelf: build
 aletheore: {"id": "mobile/eas-hosting", "shelf": "build", "category": "mobile", "origin": "https://github.com/expo/skills/tree/7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1/plugins/expo/skills/eas-hosting", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1", "quality": 4, "curation_note": "official Expo/EAS skill", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": ["skill-ref"], "companion_files": 1, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

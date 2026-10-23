@@ -5,7 +5,7 @@ metadata:
   category: AiAndMachineLearning
 description: Manages custom Agent resources on Gemini Enterprise Agent Platform. Use when the user wants to programmatically create, configure, list, update, or delete stateful, server-managed Agent resources (including mounting files, skills, and tools) before executing conversations.
 skill_id: platforms/gemini-agents-api
-title: Gemini Agents Api
+title: Gemini Agents API
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/gemini-agents-api
 license: Apache-2.0
 shelf: build

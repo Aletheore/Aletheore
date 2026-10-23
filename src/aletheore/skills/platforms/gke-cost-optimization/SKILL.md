@@ -5,7 +5,7 @@ metadata:
   version: 1.0.0
   category: CloudObservabilityAndMonitoring
 skill_id: platforms/gke-cost-optimization
-title: Gke Cost Optimization
+title: GKE Cost Optimization
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/gke-cost-optimization
 license: Apache-2.0
 shelf: build

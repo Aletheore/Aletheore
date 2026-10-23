@@ -2,7 +2,7 @@
 name: containerize-aspnet-framework
 description: Containerize an ASP.NET .NET Framework project by creating Dockerfile and .dockerfile files customized for the project.
 skill_id: devops/containerize-aspnet-framework
-title: Containerize Aspnet Framework
+title: Containerize ASP.NET Framework
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/containerize-aspnet-framework
 license: MIT
 shelf: ship-operate

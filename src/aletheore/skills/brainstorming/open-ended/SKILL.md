@@ -1,9 +1,11 @@
 ---
+name: open-ended
 skill_id: brainstorming/open-ended
 title: Open-Ended Brainstorming
 description: Explore an unclear idea or request through questions before committing to a design or plan.
-source_url: https://github.com/obra/superpowers/blob/main/skills/brainstorming/SKILL.md
+source_url: https://github.com/obra/superpowers/blob/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/brainstorming/SKILL.md
 license: MIT
+shelf: build
 ---
 
 # Open-Ended Brainstorming

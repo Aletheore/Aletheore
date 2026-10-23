@@ -5,7 +5,7 @@ metadata:
   parent: neon
   source: https://github.com/neondatabase/agent-skills/tree/main/skills/neon-ai-gateway
 skill_id: platforms/neon-ai-gateway
-title: Neon Ai Gateway
+title: Neon AI Gateway
 source_url: https://github.com/neondatabase/agent-skills/tree/51c7d594c0568d52a15eede61cc43f9f1227607a/plugins/neon-postgres/skills/neon-ai-gateway
 license: Apache-2.0
 shelf: build

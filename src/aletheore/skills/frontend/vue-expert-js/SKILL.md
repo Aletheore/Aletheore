@@ -13,7 +13,7 @@ metadata:
   output-format: code
   related-skills: vue-expert, javascript-pro
 skill_id: frontend/vue-expert-js
-title: Vue Expert Js
+title: Vue Expert JS
 source_url: https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/vue-expert-js
 shelf: build
 aletheore: {"id": "frontend/vue-expert-js", "shelf": "build", "category": "frontend", "origin": "https://github.com/Jeffallan/claude-skills/tree/36f3fe8052da7c57083783268c6ea3265d075265/skills/vue-expert-js", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "36f3fe8052da7c57083783268c6ea3265d075265", "quality": 4, "curation_note": "vue", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 5, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

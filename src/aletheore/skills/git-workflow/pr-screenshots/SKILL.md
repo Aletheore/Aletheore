@@ -2,7 +2,7 @@
 name: pr-screenshots
 description: Embed before/after screenshots and annotated images in pull request descriptions. Covers PR description patterns, image upload for Azure DevOps and GitHub, and sizing best practices.
 skill_id: git-workflow/pr-screenshots
-title: Pr Screenshots
+title: PR Screenshots
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/pr-screenshots
 license: MIT
 shelf: ship-operate

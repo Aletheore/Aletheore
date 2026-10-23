@@ -2,7 +2,7 @@
 name: git-workflow-and-versioning
 description: Structures git workflow practices. Use when making any code change. Use when committing, branching, resolving conflicts, splitting uncommitted work in a messy working tree into clean atomic commits, opening or reviewing a pull request (PR), pushing to a remote, or when you need to organize work across multiple parallel streams. Use when cutting a release, choosing a semantic version bump, tagging, or writing a changelog.
 skill_id: git-workflow/git-workflow-and-versioning
-title: Git Workflow And Versioning
+title: Git Workflow and Versioning
 source_url: https://github.com/addyosmani/agent-skills/tree/aeac41d4d005999432bb7312f7ff06383a91d59d/skills/git-workflow-and-versioning
 license: MIT
 shelf: ship-operate

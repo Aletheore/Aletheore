@@ -2,7 +2,7 @@
 name: sql-server-table-reconciliation
 description: 'Use when: comparing SQL Server tables across instances, data migration validation, ETL verification, row mismatch detection, schema drift, reconciliation report, production vs staging comparison. Uses mssql-python driver with Apache Arrow for fast columnar data transfer and comparison.'
 skill_id: data/sql-server-table-reconciliation
-title: Sql Server Table Reconciliation
+title: SQL Server Table Reconciliation
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/sql-server-table-reconciliation
 license: MIT
 shelf: build

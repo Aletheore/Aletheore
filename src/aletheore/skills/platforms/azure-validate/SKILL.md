@@ -9,7 +9,7 @@ skill_id: platforms/azure-validate
 title: Azure Validate
 source_url: https://github.com/microsoft/azure-skills/tree/cf79ce8778ad063eeac19dbe8bf982d71b466ce0/skills/azure-validate
 shelf: build
-aletheore: {"id": "platforms/azure-validate", "shelf": "build", "category": "platforms", "origin": "https://github.com/microsoft/azure-skills/tree/cf79ce8778ad063eeac19dbe8bf982d71b466ce0/skills/azure-validate", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "cf79ce8778ad063eeac19dbe8bf982d71b466ce0", "quality": 3, "curation_note": "Azure pre-deploy validation", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 26, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["mcp:azure"], "adapted": {}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "platforms/azure-validate", "shelf": "build", "category": "platforms", "origin": "https://github.com/microsoft/azure-skills/tree/cf79ce8778ad063eeac19dbe8bf982d71b466ce0/skills/azure-validate", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "cf79ce8778ad063eeac19dbe8bf982d71b466ce0", "quality": 3, "curation_note": "Azure pre-deploy validation", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 26, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["mcp:azure", "scripts"], "adapted": {}, "status": "ready", "mentions_agents": []}
 ---
 
 # Azure Validate

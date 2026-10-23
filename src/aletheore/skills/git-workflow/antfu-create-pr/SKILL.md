@@ -5,7 +5,7 @@ metadata:
   author: Anthony Fu
   version: 2026.10.09
 skill_id: git-workflow/antfu-create-pr
-title: Antfu Create Pr
+title: Antfu Create PR
 source_url: https://github.com/antfu/skills/tree/feb0f3aba6566426f12230e7fc7a10d97c1293bb/skills/antfu-create-pr
 license: MIT
 shelf: ship-operate

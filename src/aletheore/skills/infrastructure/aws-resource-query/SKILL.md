@@ -2,7 +2,7 @@
 name: aws-resource-query
 description: Query AWS resources using natural language. Covers EC2, S3, RDS, Lambda, ECS, EKS, Secrets Manager, IAM, VPC, networking, messaging, and more. Strictly read-only — no writes, deletes, or mutations.
 skill_id: infrastructure/aws-resource-query
-title: Aws Resource Query
+title: AWS Resource Query
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/aws-resource-query
 license: MIT
 shelf: ship-operate

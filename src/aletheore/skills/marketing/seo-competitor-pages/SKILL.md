@@ -9,7 +9,7 @@ metadata:
   version: 2.4.2
   category: seo
 skill_id: marketing/seo-competitor-pages
-title: Seo Competitor Pages
+title: SEO Competitor Pages
 source_url: https://github.com/AgriciDaniel/claude-seo/tree/4b99de2f7de7e7d5247042e5fb5b4ea9368ef734/skills/seo-competitor-pages
 shelf: content-media
 aletheore: {"id": "marketing/seo-competitor-pages", "shelf": "content-media", "category": "marketing", "origin": "https://github.com/AgriciDaniel/claude-seo/tree/4b99de2f7de7e7d5247042e5fb5b4ea9368ef734/skills/seo-competitor-pages", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "4b99de2f7de7e7d5247042e5fb5b4ea9368ef734", "quality": 4, "curation_note": "SEO audit/backlinks/cluster/competitor pages/content/briefs", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 1, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

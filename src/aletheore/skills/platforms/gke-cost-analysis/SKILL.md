@@ -5,7 +5,7 @@ metadata:
   category: CloudObservabilityAndMonitoring
 description: Answer natural language questions and perform analysis on GKE cluster and workload costs using BigQuery billing exports, cost allocation data, and live cluster monitoring metrics. Use when querying GKE costs across projects, namespaces, or workloads, analyzing billing reports in BigQuery (`bq`), checking cluster cost budgets (`gcloud billing`), or diagnosing cost drivers like pod requests vs. actual utilization (`kubectl top`). Don't use for applying cost optimization changes, creating rightsizing manifests (VPA/MPA), or selecting ComputeClasses (use gke-cost-optimization instead).
 skill_id: platforms/gke-cost-analysis
-title: Gke Cost Analysis
+title: GKE Cost Analysis
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/gke-cost-analysis
 license: Apache-2.0
 shelf: build

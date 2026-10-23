@@ -2,7 +2,7 @@
 name: java-junit
 description: Get best practices for JUnit 5 unit testing, including data-driven tests
 skill_id: testing/java-junit
-title: Java Junit
+title: Java JUnit
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/java-junit
 license: MIT
 shelf: quality

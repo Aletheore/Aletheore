@@ -5,7 +5,7 @@ metadata:
   category: AiAndMachineLearning
 description: Guides the usage of Gemini Interactions API on Gemini Enterprise Agent Platform. Use when the user wants to use the stateful, server-managed Interactions API for multi-turn conversations, background execution, streaming, structured output, and function calling on the Agent Platform.
 skill_id: platforms/gemini-interactions-api
-title: Gemini Interactions Api
+title: Gemini Interactions API
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/cloud/gemini-interactions-api
 license: Apache-2.0
 shelf: build

@@ -2,7 +2,7 @@
 name: postgresql-table-design
 description: Use this skill when designing or reviewing a PostgreSQL-specific schema. Covers best-practices, data types, indexing, constraints, performance patterns, and advanced features
 skill_id: data/postgresql-table-design
-title: Postgresql Table Design
+title: PostgreSQL Table Design
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/database-design/skills/postgresql-table-design
 license: MIT
 shelf: build

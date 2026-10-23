@@ -6,7 +6,7 @@ title: Update Specification
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/update-specification
 license: MIT
 shelf: build
-aletheore: {"id": "planning/update-specification", "shelf": "build", "category": "planning", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/update-specification", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 3, "curation_note": "update specification", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 0, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "planning/update-specification", "shelf": "build", "category": "planning", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/update-specification", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 3, "curation_note": "update specification", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 0, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {"SKILL.md": "the outer markdown template fence is four backticks so the inner code fences no longer end it early"}, "status": "ready", "mentions_agents": []}
 ---
 
 # Update Specification
@@ -31,7 +31,7 @@ The specification file must be formatted in well formed Markdown.
 
 Specification files must follow the template below, ensuring that all sections are filled out appropriately. The front matter for the markdown should be structured correctly as per the example following:
 
-```md
+````md
 ---
 title: [Concise Title Describing the Specification's Focus]
 version: [Optional: e.g., 1.0, Date]
@@ -130,4 +130,4 @@ tags: [Optional: List of relevant tags or categories, e.g., `infrastructure`, `p
 [Link to related spec 1]
 [Link to relevant external documentation]
 
-```
+````

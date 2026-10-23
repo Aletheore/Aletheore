@@ -10,7 +10,7 @@ metadata:
   version: 1.0.0
   category: seo
 skill_id: marketing/seo-content-brief
-title: Seo Content Brief
+title: SEO Content Brief
 source_url: https://github.com/AgriciDaniel/claude-seo/tree/4b99de2f7de7e7d5247042e5fb5b4ea9368ef734/skills/seo-content-brief
 shelf: content-media
 aletheore: {"id": "marketing/seo-content-brief", "shelf": "content-media", "category": "marketing", "origin": "https://github.com/AgriciDaniel/claude-seo/tree/4b99de2f7de7e7d5247042e5fb5b4ea9368ef734/skills/seo-content-brief", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "4b99de2f7de7e7d5247042e5fb5b4ea9368ef734", "quality": 4, "curation_note": "SEO audit/backlinks/cluster/competitor pages/content/briefs", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 4, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["mcp"], "adapted": {"slash-skill": 1}, "status": "ready", "mentions_agents": []}

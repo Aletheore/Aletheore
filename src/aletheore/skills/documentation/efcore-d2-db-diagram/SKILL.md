@@ -2,7 +2,7 @@
 name: efcore-d2-db-diagram
 description: 'Generate D2 database diagrams from Entity Framework Core models. USE FOR: EF Core database diagram, Entity Framework Core ERD, DbContext diagram, C# entity relationship diagram, PostgreSQL schema visualization, generate .d2 file from EF Core entities, Fluent API mapping diagram, migrations-based database diagram, table relationships, owned types, many-to-many join tables, indexes and constraints. DO NOT USE FOR: runtime debugging, database migration execution, schema deployment, SQL performance tuning, or draw.io diagrams.'
 skill_id: documentation/efcore-d2-db-diagram
-title: Efcore D2 Db Diagram
+title: Efcore D2 DB Diagram
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/efcore-d2-db-diagram
 license: MIT
 shelf: ship-operate

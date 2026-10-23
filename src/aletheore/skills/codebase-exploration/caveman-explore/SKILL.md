@@ -8,7 +8,7 @@ title: Caveman Explore
 source_url: https://github.com/JuliusBrussee/caveman/tree/bad48a0e1df55e05e3f52249afa35ecc1909ee76/skills/caveman-explore
 license: Apache-2.0
 shelf: build
-aletheore: {"id": "codebase-exploration/caveman-explore", "shelf": "build", "category": "codebase-exploration", "origin": "https://github.com/JuliusBrussee/caveman/tree/bad48a0e1df55e05e3f52249afa35ecc1909ee76/skills/caveman-explore", "license": "Apache-2.0", "license_source": "LICENSE", "upstream_commit": "bad48a0e1df55e05e3f52249afa35ecc1909ee76", "quality": 3, "curation_note": "read-only cold-start explorer", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 2, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "codebase-exploration/caveman-explore", "shelf": "build", "category": "codebase-exploration", "origin": "https://github.com/JuliusBrussee/caveman/tree/bad48a0e1df55e05e3f52249afa35ecc1909ee76/skills/caveman-explore", "license": "Apache-2.0", "license_source": "LICENSE", "upstream_commit": "bad48a0e1df55e05e3f52249afa35ecc1909ee76", "quality": 3, "curation_note": "read-only cold-start explorer", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 2, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["scripts"], "adapted": {}, "status": "ready", "mentions_agents": []}
 ---
 
 You are FastContext, a fast, cheap, read-only repository explorer. Another agent

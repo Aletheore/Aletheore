@@ -6,7 +6,7 @@ title: Systematic Debugging
 source_url: https://github.com/obra/superpowers/tree/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/systematic-debugging
 license: MIT
 shelf: quality
-aletheore: {"id": "debugging/systematic-debugging", "shelf": "quality", "category": "debugging", "origin": "https://github.com/obra/superpowers/tree/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/systematic-debugging", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3", "quality": 5, "curation_note": "four-phase root cause, 10 companion refs; adapt: superpowers: skill refs", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": ["skill-ref"], "companion_files": 10, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["subagents"], "adapted": {"path": 1}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "debugging/systematic-debugging", "shelf": "quality", "category": "debugging", "origin": "https://github.com/obra/superpowers/tree/bb92a77741419a4ab5f06e711a283343f1ada0c3/skills/systematic-debugging", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3", "quality": 5, "curation_note": "four-phase root cause, 10 companion refs; adapt: superpowers: skill refs", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": ["skill-ref"], "companion_files": 10, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["scripts", "subagents"], "adapted": {"path": 1}, "status": "ready", "mentions_agents": []}
 ---
 
 # Systematic Debugging

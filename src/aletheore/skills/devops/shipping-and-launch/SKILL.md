@@ -2,7 +2,7 @@
 name: shipping-and-launch
 description: Prepares production launches. Use when preparing to deploy to production, or when asking what needs to be in place before shipping. Use when you need a pre-launch checklist, when setting up monitoring, when planning a staged rollout, or when you need a rollback strategy.
 skill_id: devops/shipping-and-launch
-title: Shipping And Launch
+title: Shipping and Launch
 source_url: https://github.com/addyosmani/agent-skills/tree/aeac41d4d005999432bb7312f7ff06383a91d59d/skills/shipping-and-launch
 license: MIT
 shelf: ship-operate

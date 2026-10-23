@@ -7,7 +7,7 @@ metadata:
   version: 1.0.2
   category: GoogleAds
 skill_id: platforms/ima-sdk-client-side
-title: Ima Sdk Client Side
+title: IMA SDK Client Side
 source_url: https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/ads/ima-sdk-client-side
 shelf: build
 aletheore: {"id": "platforms/ima-sdk-client-side", "shelf": "build", "category": "platforms", "origin": "https://github.com/google/skills/tree/e86adb9e2b80220a593c2be9a68627171fd17afb/skills/ads/ima-sdk-client-side", "license": "Apache-2.0", "license_source": "frontmatter", "upstream_commit": "e86adb9e2b80220a593c2be9a68627171fd17afb", "quality": 3, "curation_note": "Google Mobile Ads / IMA short skills with refs", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 6, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

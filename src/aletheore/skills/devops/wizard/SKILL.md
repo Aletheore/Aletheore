@@ -6,7 +6,7 @@ title: Wizard
 source_url: https://github.com/mattpocock/skills/tree/49dd158d1076134a641b33efb035946536778336/skills/engineering/wizard
 license: MIT
 shelf: ship-operate
-aletheore: {"id": "devops/wizard", "shelf": "ship-operate", "category": "devops", "origin": "https://github.com/mattpocock/skills/tree/49dd158d1076134a641b33efb035946536778336/skills/engineering/wizard", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "49dd158d1076134a641b33efb035946536778336", "quality": 3, "curation_note": "interactive bash wizard for human-only steps", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 2, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "devops/wizard", "shelf": "ship-operate", "category": "devops", "origin": "https://github.com/mattpocock/skills/tree/49dd158d1076134a641b33efb035946536778336/skills/engineering/wizard", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "49dd158d1076134a641b33efb035946536778336", "quality": 3, "curation_note": "interactive bash wizard for human-only steps", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 2, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["scripts"], "adapted": {}, "status": "ready", "mentions_agents": []}
 ---
 
 # Wizard

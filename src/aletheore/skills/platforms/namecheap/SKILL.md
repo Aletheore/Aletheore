@@ -6,7 +6,7 @@ title: Namecheap
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/namecheap
 license: MIT
 shelf: build
-aletheore: {"id": "platforms/namecheap", "shelf": "build", "category": "platforms", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/namecheap", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 3, "curation_note": "Namecheap DNS API; needs API key", "needs_tool": "API key", "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 2, "has_scripts": false}, "curated_on": "2026-10-18", "requires": ["tool:api-key"], "adapted": {}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "platforms/namecheap", "shelf": "build", "category": "platforms", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/namecheap", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 3, "curation_note": "Namecheap DNS API; needs API key", "needs_tool": "API key", "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 2, "has_scripts": true}, "curated_on": "2026-10-18", "requires": ["scripts", "tool:api-key"], "adapted": {}, "status": "ready", "mentions_agents": []}
 ---
 
 # Namecheap DNS Management

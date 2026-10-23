@@ -2,7 +2,7 @@
 name: postgresql-code-review
 description: PostgreSQL-specific code review assistant focusing on PostgreSQL best practices, anti-patterns, and unique quality standards. Covers JSONB operations, array usage, custom types, schema design, function optimization, and PostgreSQL-exclusive security features like Row Level Security (RLS).
 skill_id: data/postgresql-code-review
-title: Postgresql Code Review
+title: PostgreSQL Code Review
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/postgresql-code-review
 license: MIT
 shelf: build

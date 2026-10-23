@@ -1,9 +1,11 @@
 ---
+name: security-focused
 skill_id: code-review/security-focused
 title: Security-Focused Code Review
 description: Review a diff for injection, auth, secrets, and unsafe deserialization issues.
-source_url: https://github.com/borkweb/skills/blob/main/skills/core/review-security/SKILL.md
+source_url: https://github.com/borkweb/skills/blob/46d2091b6da43e3afe0c22c5f04a92afa28d8590/skills/core/review-security/SKILL.md
 license: MIT
+shelf: quality
 ---
 
 # Security-Focused Code Review

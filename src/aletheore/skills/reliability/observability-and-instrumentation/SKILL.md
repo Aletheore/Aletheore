@@ -2,7 +2,7 @@
 name: observability-and-instrumentation
 description: Instruments code so production behavior is visible and diagnosable. Use when adding logging, metrics, tracing, or alerting. Use when shipping any feature that runs in production and you need evidence it works. Use when production issues are reported but you can't tell what happened from the available data.
 skill_id: reliability/observability-and-instrumentation
-title: Observability And Instrumentation
+title: Observability and Instrumentation
 source_url: https://github.com/addyosmani/agent-skills/tree/aeac41d4d005999432bb7312f7ff06383a91d59d/skills/observability-and-instrumentation
 license: MIT
 shelf: ship-operate

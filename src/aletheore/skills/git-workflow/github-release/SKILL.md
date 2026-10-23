@@ -3,7 +3,7 @@ name: github-release
 description: Guides IA through releasing a new version of a GitHub library end-to-end. Handles SemVer versioning and Keep a Changelog formatting automatically.
 compatibility: 'requires: gh CLI and git'
 skill_id: git-workflow/github-release
-title: Github Release
+title: GitHub Release
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/github-release
 license: MIT
 shelf: ship-operate

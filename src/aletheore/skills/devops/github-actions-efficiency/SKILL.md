@@ -2,7 +2,7 @@
 name: github-actions-efficiency
 description: Audit GitHub Actions workflow efficiency and recommend fixes to reduce CI minutes and costs.
 skill_id: devops/github-actions-efficiency
-title: Github Actions Efficiency
+title: GitHub Actions Efficiency
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/github-actions-efficiency
 license: MIT
 shelf: ship-operate

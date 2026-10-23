@@ -2,7 +2,7 @@
 name: pptx-deck-context
 description: Use when preparing the narrative, sources, and design context for a new editable PPTX deck.
 skill_id: documents/pptx-deck-context
-title: Pptx Deck Context
+title: PPTX Deck Context
 source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/pptx-deck-creation/skills/pptx-deck-context
 license: MIT
 shelf: content-media

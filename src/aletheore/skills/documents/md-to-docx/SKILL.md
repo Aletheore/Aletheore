@@ -2,7 +2,7 @@
 name: md-to-docx
 description: Convert Markdown files to professionally formatted Word (.docx) documents with embedded PNG images — pure JavaScript, no external tools required
 skill_id: documents/md-to-docx
-title: Md To Docx
+title: MD to DOCX
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/md-to-docx
 license: MIT
 shelf: content-media

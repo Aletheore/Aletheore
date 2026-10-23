@@ -2,7 +2,7 @@
 name: deprecation-and-migration
 description: Manages deprecation and migration. Use when removing old systems, APIs, or features. Use when migrating users from one implementation to another. Use when migrating a database schema in production, such as renaming or dropping a column without downtime (expand/contract). Use when deciding whether to maintain or sunset existing code.
 skill_id: refactoring/deprecation-and-migration
-title: Deprecation And Migration
+title: Deprecation and Migration
 source_url: https://github.com/addyosmani/agent-skills/tree/aeac41d4d005999432bb7312f7ff06383a91d59d/skills/deprecation-and-migration
 license: MIT
 shelf: quality

@@ -2,18 +2,18 @@
 name: postgresql-optimization
 description: PostgreSQL-specific development assistant focusing on unique PostgreSQL features, advanced data types, and PostgreSQL-exclusive capabilities. Covers JSONB operations, array types, custom types, range/geometric types, full-text search, window functions, and PostgreSQL extensions ecosystem.
 skill_id: data/postgresql-optimization
-title: Postgresql Optimization
+title: PostgreSQL Optimization
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/postgresql-optimization
 license: MIT
 shelf: build
-aletheore: {"id": "data/postgresql-optimization", "shelf": "build", "category": "data", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/postgresql-optimization", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 4, "curation_note": "PostgreSQL review and optimization", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 0, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}
+aletheore: {"id": "data/postgresql-optimization", "shelf": "build", "category": "data", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/postgresql-optimization", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 4, "curation_note": "PostgreSQL review and optimization", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 0, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {"SKILL.md": "three section headings began with a corrupted emoji (U+FFFD replacement characters, already present in the pinned upstream file); the glyph was dropped"}, "status": "ready", "mentions_agents": []}
 ---
 
 # PostgreSQL Development Assistant
 
 Expert PostgreSQL guidance for ${selection} (or entire project if no selection). Focus on PostgreSQL-specific features, optimization patterns, and advanced capabilities.
 
-## � PostgreSQL-Specific Features
+## PostgreSQL-Specific Features
 
 ### JSONB Operations
 ```sql
@@ -100,7 +100,7 @@ WHERE search_vector @@ plainto_tsquery('postgresql')
 ORDER BY rank DESC;
 ```
 
-## � PostgreSQL Performance Tuning
+## PostgreSQL Performance Tuning
 
 ### Query Optimization
 ```sql
@@ -148,7 +148,7 @@ FROM pg_settings
 WHERE name IN ('shared_buffers', 'work_mem', 'maintenance_work_mem');
 ```
 
-## �️ PostgreSQL Advanced Data Types
+## PostgreSQL Advanced Data Types
 
 ### Custom Types & Domains
 ```sql

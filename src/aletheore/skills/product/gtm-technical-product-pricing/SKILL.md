@@ -6,7 +6,7 @@ metadata:
   author: Smit Patel (https://linkedin.com/in/smitkpatel)
   source: https://github.com/beingsmit/technical-product-gtm
 skill_id: product/gtm-technical-product-pricing
-title: Gtm Technical Product Pricing
+title: GTM Technical Product Pricing
 source_url: https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/gtm-technical-product-pricing
 shelf: product-design
 aletheore: {"id": "product/gtm-technical-product-pricing", "shelf": "product-design", "category": "product", "origin": "https://github.com/github/awesome-copilot/tree/cb64ad12e32737ae764becd6885462e9b4c7cb00/skills/gtm-technical-product-pricing", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "cb64ad12e32737ae764becd6885462e9b4c7cb00", "quality": 4, "curation_note": "technical product pricing", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 0, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {}, "status": "ready", "mentions_agents": []}

@@ -4,7 +4,7 @@ description: Migrate an existing web React app to a native iOS/Android app with 
 version: 1.0.0
 license: MIT
 skill_id: mobile/expo-web-to-native
-title: Expo Web To Native
+title: Expo Web to Native
 source_url: https://github.com/expo/skills/tree/7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1/plugins/expo/skills/expo-web-to-native
 shelf: build
 aletheore: {"id": "mobile/expo-web-to-native", "shelf": "build", "category": "mobile", "origin": "https://github.com/expo/skills/tree/7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1/plugins/expo/skills/expo-web-to-native", "license": "MIT", "license_source": "frontmatter", "upstream_commit": "7ddc1f5796996e5c7efe2fc3fa9168eb24e8dac1", "quality": 4, "curation_note": "official Expo skill", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": ["slash"], "companion_files": 5, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "mentions": ["claude", "agents"], "adapted": {}, "mentions_agents": ["Claude Code", "Codex"], "status": "ready"}
