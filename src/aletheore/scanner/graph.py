@@ -1180,7 +1180,7 @@ def _load_go_modules(repo_path: Path) -> tuple[tuple, ...]:
                 continue
             local_dir = repo_path if local == "." else repo_path / Path(*local.split("/"))
             if local_dir.is_dir():
-                replaces.setdefault((tokens[0].strip('"'), rel_dir), local)
+                replaces.setdefault((tokens[0].strip('"'), "*" if name == "go.work" else rel_dir), local)
                 inner = _load_go_module_prefix(local_dir) if (local_dir / "go.mod").is_file() else None
                 if inner:
                     add(inner, local)
@@ -1190,12 +1190,19 @@ def _load_go_modules(repo_path: Path) -> tuple[tuple, ...]:
     return tuple(sorted(entries, key=lambda item: (-len(item[0]), item[1], item[2:] )))
 
 
-def _go_replace_applies(scope: str, from_rel: str | None) -> bool:
-    """A replace declared in the go.mod at `scope` applies to files under that directory
-    (everywhere for the root, which is also where go.work lives)."""
-    if scope == "." or from_rel is None:
+def _go_replace_applies(scope: str, from_rel: str | None, module_prefix=()) -> bool:
+    """A replace declared in the go.mod at `scope` applies to files of that module: under its
+    directory and not under a deeper module of their own. "*" (go.work) applies everywhere."""
+    if scope == "*" or from_rel is None:
         return True
-    return from_rel.startswith(scope + "/")
+    if scope != "." and not from_rel.startswith(scope + "/"):
+        return False
+    for entry in module_prefix:
+        inner = entry[1]
+        if len(entry) == 2 and inner != scope and inner != "." and from_rel.startswith(inner + "/"):
+            if scope == "." or inner.startswith(scope + "/"):
+                return False
+    return True
 
 
 def _resolve_go_import(repo_path: Path, module_prefix, import_path: str, from_rel: str | None = None) -> list[str]:
@@ -1223,7 +1230,7 @@ def _resolve_go_import(repo_path: Path, module_prefix, import_path: str, from_re
             (entry[0], entry[1])
             for entry in module_prefix
             if (import_path == entry[0] or import_path.startswith(entry[0].rstrip("/") + "/"))
-            and (len(entry) < 3 or _go_replace_applies(entry[2], from_rel))
+            and (len(entry) < 3 or _go_replace_applies(entry[2], from_rel, module_prefix))
         ]
     if not candidates:
         return []

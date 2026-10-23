@@ -733,3 +733,16 @@ def test_an_existing_read_only_air_json_fails_the_early_check(tmp_path):
             check_evidence_writable(repo)
     finally:
         air.chmod(0o644)
+
+
+def test_a_root_go_mod_replace_does_not_reach_a_nested_module(tmp_path):
+    _write(tmp_path, {
+        "go.mod": "module example.com/root\n\nreplace example.com/lib => ./vendored/lib\n",
+        "main.go": GO_IMPORTER,
+        "nested/go.mod": "module example.com/nested\n",
+        "nested/main.go": GO_IMPORTER,
+        "vendored/lib/sub/sub.go": "package sub\n",
+    })
+    edges = _edges(tmp_path)
+    assert ("main.go", "vendored/lib/sub/sub.go") in edges
+    assert ("nested/main.go", "vendored/lib/sub/sub.go") not in edges
