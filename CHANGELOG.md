@@ -5,6 +5,12 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+**Changed: Hallbook says "none" when a prompt is not a task**
+
+`find_skill` now returns confidence "none" with no skill for small talk, one-word replies, trivial local edits
+("rename this variable") and questions about the current line or chat. A match whose best score is too weak to be
+about a real task is also "none" instead of a low-confidence guess.
+
 **Fixed: Hallbook search recovers from a typo in a task word**
 
 `find_skill`, `search_skills` and the prompt hook now match a query word that is one letter away from a word in

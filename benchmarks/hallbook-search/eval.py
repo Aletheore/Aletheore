@@ -109,8 +109,11 @@ def measure(split: str = "all", limit: int | None = None) -> dict:
     typo_hits = sum(_top3_hit(row, perturbed) for row, perturbed in typo_rows)
     typos = len(typo_rows)
     chatty = json.loads((HERE / "chatty_prompts.json").read_text(encoding="utf-8"))
-    non_task_quiet = sum(skill_hub.find_skill(q).get("confidence") in ("none", "low") for q in chatty["non_task"])
-    non_task_none = sum(skill_hub.find_skill(q).get("confidence") == "none" for q in chatty["non_task"])
+    non_task_results = [skill_hub.find_skill(q) for q in chatty["non_task"]]
+    task_results = [skill_hub.find_skill(q) for q in chatty["task"]]
+    non_task_quiet = sum(result.get("confidence") in ("none", "low") for result in non_task_results)
+    non_task_none = sum(result.get("confidence") == "none" for result in non_task_results)
+    task_none = sum(result.get("confidence") == "none" for result in task_results)
     n = len(rows) or 1
     return {
         "split": split,
@@ -127,6 +130,8 @@ def measure(split: str = "all", limit: int | None = None) -> dict:
         "non_task_prompts": len(chatty["non_task"]),
         "non_task_quiet": non_task_quiet,
         "non_task_none": non_task_none,
+        "task_prompts": len(chatty["task"]),
+        "task_none": task_none,
     }
 
 

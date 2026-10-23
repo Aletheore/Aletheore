@@ -34,3 +34,33 @@ def test_fuzzy_matching_only_runs_for_words_with_no_exact_hit():
     clean = [meta.skill_id for meta in skill_hub.search_skills("postgres migration", limit=5)]
     typo = [meta.skill_id for meta in skill_hub.search_skills("postgress migrations", limit=5)]
     assert clean[0] == typo[0]
+
+
+def test_small_talk_and_trivial_edits_are_none():
+    for prompt in (
+        "hi",
+        "thanks",
+        "what is 2+2",
+        "rename this variable",
+        "what does this function do",
+        "can you explain this line",
+        "yes go ahead",
+    ):
+        result = skill_hub.find_skill(prompt)
+        assert result["confidence"] == "none", prompt
+        assert "top" not in result
+        assert "skill" not in result
+
+
+def test_a_clear_task_is_never_none():
+    for prompt in (
+        "can you look at why my login test is flaky",
+        "add pagination to the users list endpoint",
+        "write a migration that adds an index on orders.created_at",
+    ):
+        assert skill_hub.find_skill(prompt)["confidence"] != "none", prompt
+
+
+def test_weak_scattered_matches_are_none():
+    # "with" and "the" carry no signal, so there is nothing to rank.
+    assert skill_hub.find_skill("something with the")["confidence"] == "none"

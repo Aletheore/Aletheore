@@ -73,6 +73,10 @@ AGENT_INSTRUCTION_SNIPPET = (
 FIND_SKILL_MIN_SCORE = 34.0
 FIND_SKILL_MIN_GAP = 10.0
 FIND_SKILL_MIN_RATIO = 1.3
+# Below this score even the best result is a keyword accident. The dev half of the
+# benchmark has no task query under 14.2, so a floor here turns weak, scattered
+# matches into an honest "none" without losing a real task.
+FIND_SKILL_NONE_SCORE = 14.0
 FIND_SKILL_MAX_CONTENT_CHARS = 14_000
 # UserPromptSubmit hook limits. A prompt shorter than HOOK_MIN_WORDS is a fragment, not a task;
 # a prompt longer than HOOK_MAX_PROMPT_CHARS is usually a pasted log, so only its first
@@ -97,6 +101,50 @@ HOOK_ACKNOWLEDGEMENTS = frozenset(
         "right", "no", "nope", "stop", "wait", "cancel", "now", "that", "worked",
     }
 )
+
+# Prompts that are small talk, one-word replies, trivial local edits or questions about the
+# immediate code or chat rather than a task. They never need a skill, whatever the ranker finds.
+_SMALL_TALK_WORDS = frozenset(
+    "hi hello hey there bye goodbye cheers thanks thank much appreciated so cool great perfect nice "
+    "ok okay sure yeah yep yes no nope done agreed lgtm see later going good morning night well hmm "
+    "sounds fine alright right now then please go ahead continue next stop wait awesome got worked "
+    "cancel proceed thx".split()
+)
+_TRIVIAL_PATTERNS = (
+    re.compile(
+        r"^(?:rename|delete|remove|change|fix|make|add|move|update|reword|shorten|capitalize)\s+"
+        r"(?:this|that|the)\s+(?:variable|line|comment|typo|semicolon|word|sentence|text|label|"
+        r"string|import|function|method|name|value|color|colour|spelling|indentation|whitespace|"
+        r"bracket|quote|comma|dot|space|character|number)\b"
+    ),
+    re.compile(r"^fix the (?:typo|spelling|wording|grammar)\b"),
+    re.compile(r"^change (?:this|that|it) to (?:lowercase|uppercase|camelcase|title case|snake case)\b"),
+    re.compile(r"^(?:make|change) (?:this|that) (?:bold|italic|bigger|smaller|red|blue|green)\b"),
+    re.compile(r"^add (?:a|an) (?:semicolon|comma|period|dot|space|bracket|quote)\b"),
+    re.compile(r"^(?:what does|what is|what's) (?:this|that|it)\b"),
+    re.compile(r"^(?:why is|why does) (?:this|that|it)\b"),
+    re.compile(r"^can you (?:explain|show|repeat|say)(?: me)? (?:this|that|it|the line|the code|the function|the error)\b"),
+    re.compile(r"^is this (?:working|on|ready|right|correct)\b"),
+    re.compile(r"^are you (?:there|ok|okay|sure|ready)\b"),
+    re.compile(r"^can you hear me\b"),
+    re.compile(r"^(?:repeat|say) (?:that|this)\b"),
+    re.compile(r"^what (?:model|version) are you\b"),
+    re.compile(r"^what is the (?:date|time|weather|day)\b"),
+)
+
+
+def _is_trivial_prompt(text: str) -> bool:
+    """True for small talk, one-word replies and local edits that deserve no skill suggestion."""
+    lowered = text.strip().lower()
+    if not lowered:
+        return True
+    words = [word for word in re.findall(r"[a-z]+", lowered) if len(word) > 1]
+    if len(words) <= 2:
+        return True
+    if all(word in _STOPWORDS or word in _SMALL_TALK_WORDS for word in words):
+        return True
+    return any(pattern.search(lowered) for pattern in _TRIVIAL_PATTERNS)
+
 
 FIND_SKILL_HIGH_NOTE = (
     "Apply this guidance to the current project. Examples use sample values; do not copy them blindly. "
@@ -1244,13 +1292,18 @@ def find_skill(task: str, category: str | None = None) -> dict:
 
     Returns "high" confidence with the full skill only when the top result is strong and
     clearly ahead of the runner-up; otherwise "low" with compact candidates, or "none"
-    when nothing matched. The thresholds are calibrated offline on the search benchmark.
+    for small talk, trivial edits and matches too weak to be about a real task. The
+    thresholds are calibrated offline on the search benchmark.
     """
+    if _is_trivial_prompt(task):
+        return {"confidence": "none", "note": FIND_SKILL_NONE_NOTE}
     results = search_skills_scored(task, category=category, limit=5)
     if not results:
         return {"confidence": "none", "note": FIND_SKILL_NONE_NOTE}
 
     top_meta, top_score = results[0]
+    if top_score < FIND_SKILL_NONE_SCORE:
+        return {"confidence": "none", "note": FIND_SKILL_NONE_NOTE}
     confident = _is_high_confidence(results)
 
     result = {

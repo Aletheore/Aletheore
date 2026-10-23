@@ -576,8 +576,15 @@ def test_find_skill_returns_none_for_gibberish():
     assert "skill" not in result
 
 
-def test_find_skill_returns_low_for_a_vague_request():
+def test_find_skill_returns_none_for_small_talk():
     result = skill_hub.find_skill("help me")
+    assert result["confidence"] == "none"
+    assert "top" not in result
+    assert result["note"] == skill_hub.FIND_SKILL_NONE_NOTE
+
+
+def test_find_skill_returns_low_for_a_weak_but_real_task():
+    result = skill_hub.find_skill("can you look at why my login test is flaky")
     assert result["confidence"] == "low"
     assert result["candidates"]
     assert result["note"] == skill_hub.FIND_SKILL_LOW_NOTE
@@ -595,7 +602,7 @@ def test_find_skill_caps_long_content_and_says_how_to_fetch_the_rest(monkeypatch
     )
     monkeypatch.setattr(skill_hub, "get_skill", lambda skill_id: long_skill)
 
-    result = skill_hub.find_skill("anything")
+    result = skill_hub.find_skill("anything at all about this task")
 
     assert result["confidence"] == "high"
     assert len(result["skill"]["content"]) == skill_hub.FIND_SKILL_MAX_CONTENT_CHARS
