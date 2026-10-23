@@ -25,6 +25,16 @@ PATHS = [
         ("what is this repo", "overview"),
         ("where is the retry logic implemented", "locate"),
         ("list unused files", "dead_code"),
+        # forward vs reverse: what a file needs is not what needs it
+        ("what does src/api/users.py depend on", "dependencies"),
+        ("how many modules does src/api/users.py depend on through imports, directly or transitively?", "dependencies"),
+        ("transitive dependencies of src/core/query_builder.py", "dependencies"),
+        ("what depends on src/core/query_builder.py", "impact"),
+        ("who depends on src/api/users.py", "impact"),
+        # ownership asked as a commit count must not become a hotspot question
+        ("who has made the most commits touching src/api/users.py?", "owner"),
+        ("which author has the most commits on src/api/users.py", "owner"),
+        ("which files have the most commits", "hotspot"),
     ],
 )
 def test_routes_clear_questions_with_high_confidence(question, intent):

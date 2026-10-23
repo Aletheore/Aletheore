@@ -429,6 +429,62 @@ def test_find_blast_radius_truncates_transitive_dependents_past_the_cap(tmp_path
     assert result["transitive_dependents_truncated"] is True
 
 
+def _chain_evidence():
+    # app -> svc -> core, svc -> tests/test_helpers; imports repeated per statement as the scan records them
+    modules = [
+        {"path": "app.py", "imports": ["svc.py", "svc.py"], "imported_by": []},
+        {"path": "svc.py", "imports": ["core.py", "tests/test_helpers.py"], "imported_by": ["app.py", "app.py"]},
+        {"path": "core.py", "imports": [], "imported_by": ["svc.py", "svc.py", "other.py"]},
+        {"path": "other.py", "imports": ["core.py"], "imported_by": []},
+        {"path": "tests/test_helpers.py", "imports": [], "imported_by": ["svc.py"]},
+    ]
+    return {"repository": {"modules": modules}, "architecture": {}}
+
+
+def test_find_blast_radius_counts_each_importer_once():
+    from pathlib import Path
+
+    from aletheore.query import find_blast_radius
+
+    result = find_blast_radius(_chain_evidence(), Path("."), "core.py")
+
+    assert result["direct_total"] == 2  # svc.py imports core in two statements but is one module
+    assert result["affected_total"] == 3  # svc.py, other.py, then app.py through svc.py
+
+
+def test_find_transitive_imports_gives_exact_totals_and_separates_test_files():
+    from aletheore.query import find_transitive_imports
+
+    result = find_transitive_imports(_chain_evidence(), "app.py")
+
+    assert result["depends_on_total"] == 3  # svc.py, then core.py and tests/test_helpers.py through it
+    assert result["depends_on_non_test_total"] == 2
+    assert result["depends_on_test_files"] == 1
+    assert result["direct_total"] == 1 and result["transitive_total"] == 2
+    assert result["direct_imports"] == ["svc.py"]
+
+
+def test_find_transitive_imports_caps_the_lists_but_not_the_totals(monkeypatch):
+    import aletheore.query as query_module
+
+    monkeypatch.setattr(query_module, "_TRANSITIVE_IMPORTS_SHOWN", 1)
+    result = query_module.find_transitive_imports(_chain_evidence(), "app.py")
+
+    assert len(result["transitive_imports"]) == 1 and result["transitive_imports_truncated"] is True
+    assert result["depends_on_total"] == 3
+
+
+def test_find_transitive_imports_survives_import_cycles():
+    from aletheore.query import find_transitive_imports
+
+    evidence = {"repository": {"modules": [
+        {"path": "a.py", "imports": ["b.py"], "imported_by": ["b.py"]},
+        {"path": "b.py", "imports": ["a.py"], "imported_by": ["a.py"]},
+    ]}}
+
+    assert find_transitive_imports(evidence, "a.py")["depends_on_total"] == 1
+
+
 def test_find_blast_radius_totals_stay_exact_when_the_list_is_capped(tmp_path, monkeypatch):
     # Capping the list once also stopped the walk, so a hub's real reach was unknowable and "how many modules
     # does this affect" had no answer. The totals now cover the whole closure whatever the display cap is.

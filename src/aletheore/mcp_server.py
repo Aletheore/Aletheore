@@ -194,6 +194,12 @@ aletheore_layer_violations). Reach for aletheore_search_codebase/ \
 aletheore_answer only for open-ended "how does this work" questions the \
 exact tools can't answer directly.
 
+For questions about whole-repo shape, ask aletheore_ask once instead of \
+walking files one at a time with aletheore_imports/aletheore_imported_by: \
+how many modules a change reaches, how many modules a file depends on \
+transitively, which modules in a directory nothing imports, who has the most \
+commits on a file. It returns exact totals in one call.
+
 Hallbook (skills): Aletheore also carries Hallbook, a library of over a \
 thousand vetted agent skills - specialist instructions for debugging, code \
 review, testing, planning, security, API and platform integrations, SEO, \

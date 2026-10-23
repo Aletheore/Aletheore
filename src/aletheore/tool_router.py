@@ -39,6 +39,22 @@ class Intent:
 
 INTENTS: tuple[Intent, ...] = (
     Intent(
+        # Forward direction: what a file needs. "what depends on X" is the opposite question and stays with impact.
+        "dependencies",
+        "aletheore_imports",
+        (
+            r"\b(?:what|which|how many)\b[^?.]{0,80}\b(?:does|do|will)\b[^?.]{0,60}\b(?:depend|rely) on\b",
+            r"\b(?:does|do)\b[^?.]{0,60}\b(?:depend|rely) on\b[^?.]{0,40}\b(?:through|via) imports?\b",
+            r"\bwhat (?:does|do) \S+ (?:import|need|require|use)\b",
+            r"\bhow many (?:modules|files)\b[^?.]{0,60}\b(?:does|do)\b[^?.]{0,40}\bimport\b",
+            r"\b(?:transitive|indirect|recursive) (?:dependencies|imports)\b",
+            r"\bdependencies of\b",
+            r"\b(?:its|their) dependencies\b",
+        ),
+        needs_file=True,
+        weight=1.6,
+    ),
+    Intent(
         "impact",
         "aletheore_get_blast_radius",
         (
@@ -69,6 +85,10 @@ INTENTS: tuple[Intent, ...] = (
         (
             r"\bwho do i ask\b", r"\bmain person\b", r"\bwho knows\b", r"\bwhich (?:engineer|developer|dev|person|team)\b", r"\bknows the most\b", r"\bwho(?:\'s| is) responsible\b",
             r"\bwho (?:owns|wrote|maintains|authored|knows|should review)\b",
+            r"\bwho (?:has |have )?(?:made|makes|written|committed|contributed|changed|edited|touched)\b",
+            r"\b(?:author|contributor|committer|developer|person)\b[^?.]{0,50}\bmost (?:commits|changes|edits)\b",
+            r"\bmost (?:commits|changes|edits)\b[^?.]{0,50}\b(?:author|contributor|committer|developer|person|who)\b",
+            r"\btop (?:author|contributor|committer)s?\b",
             r"\bowner(?:s|ship)?\b",
             r"\bmaintainers?\b",
             r"\bblame\b",
@@ -487,7 +507,7 @@ def route(question: str, explicit_target: str | None, paths: list[str]) -> Route
         if ambiguous:
             reason = "several files match: " + ", ".join(ambiguous)
         return Route("low", top.name, top.tool, None, reason=reason, candidates=ambiguous)
-    if top_score - runner_up < 0.5 and len(scored) > 1 and top.name not in ("impact", "tests", "owner"):
+    if top_score - runner_up < 0.5 and len(scored) > 1 and top.name not in ("impact", "tests", "owner", "dependencies"):
         # A near tie between unrelated intents is not worth a confident wrong answer.
         return Route(
             "low", top.name, top.tool, target, reason="the question fits more than one query",
@@ -571,6 +591,10 @@ def _impact(q, evidence, repo_path, target, question):
     return q.find_blast_radius(evidence, repo_path, target)
 
 
+def _dependencies(q, evidence, repo_path, target, question):
+    return q.find_transitive_imports(evidence, target)
+
+
 def _neighborhood(q, evidence, repo_path, target, question):
     return {
         "imports": q.find_imports(evidence, target),
@@ -607,6 +631,7 @@ def _secrets(q, evidence, repo_path, target, question):
 
 _RUNNERS: dict[str, Callable] = {
     "impact": _impact,
+    "dependencies": _dependencies,
     "tests": _tests_for,
     "owner": _owner,
     "hotspot": _hotspot,

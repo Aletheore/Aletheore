@@ -46,6 +46,47 @@ def find_imported_by(evidence: dict, target: str | None) -> list[str]:
     return _unique(_find_module(evidence, target)["imported_by"])
 
 
+_TRANSITIVE_IMPORTS_SHOWN = 80
+
+
+def find_transitive_imports(evidence: dict, target: str | None) -> dict:
+    """Everything `target` depends on through imports: the modules it imports, the modules those import, and so on.
+
+    The forward counterpart of find_blast_radius. The walk covers the whole closure so the totals are exact;
+    only the lists handed back are capped. `transitive_non_test_total` leaves out test files, which is what
+    "how many modules does this depend on" usually means.
+    """
+    module = _find_module(evidence, target)
+    by_path = {m["path"]: m for m in evidence["repository"]["modules"] if m.get("path")}
+    direct = [p for p in _unique(module.get("imports") or []) if p != target]
+    seen = {target, *direct}
+    reached: list[str] = []
+    queue = list(direct)
+    while queue:
+        current = queue.pop(0)
+        for dependency in by_path.get(current, {}).get("imports") or []:
+            if dependency in seen:
+                continue
+            seen.add(dependency)
+            reached.append(dependency)
+            queue.append(dependency)
+    everything = [*direct, *reached]
+    tests = [p for p in everything if _BLAST_TEST_PATH.search(p)]
+    return {
+        "target": target,
+        "depends_on_total": len(everything),
+        "depends_on_non_test_total": len(everything) - len(tests),
+        "depends_on_test_files": len(tests),
+        "direct_total": len(direct),
+        "transitive_total": len(reached),
+        "direct_imports": direct[:_TRANSITIVE_IMPORTS_SHOWN],
+        "direct_imports_truncated": len(direct) > _TRANSITIVE_IMPORTS_SHOWN,
+        "transitive_imports": reached[:_TRANSITIVE_IMPORTS_SHOWN],
+        "transitive_imports_truncated": len(reached) > _TRANSITIVE_IMPORTS_SHOWN,
+        "definition": "modules reachable by following imports from the target, not counting the target itself",
+    }
+
+
 def find_symbols(evidence: dict, target: str | None) -> dict:
     return _find_module(evidence, target)["symbols"]
 
@@ -233,7 +274,8 @@ def find_blast_radius(
     this scanner doesn't have.
     """
     module = _find_module(evidence, target)
-    direct_dependents = list(module.get("imported_by") or [])
+    # imported_by lists a file once per import statement; counting it raw inflated every total.
+    direct_dependents = _unique(module.get("imported_by") or [])
     by_path = {m["path"]: m for m in evidence["repository"]["modules"] if m.get("path")}
 
     visited = {target, *direct_dependents}
