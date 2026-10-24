@@ -73,7 +73,7 @@ def _perturb_word(word: str, rng: random.Random) -> str | None:
 
 def perturb_query(query: str) -> str | None:
     """The query with one content word mistyped, deterministically for the same text."""
-    rng = random.Random(zlib.crc32(query.encode("utf-8")))
+    rng = random.Random(zlib.crc32(query.encode("utf-8")))  # nosec B311 - seeded typo generator for a benchmark, not security
     matches = list(_WORD.finditer(query))
     rng.shuffle(matches)
     for match in matches:

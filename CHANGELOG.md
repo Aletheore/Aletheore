@@ -7,14 +7,14 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 **Changed: a long, specific skill name no longer beats the general skill**
 
-The name bonus bypassed BM25's length normalisation, so a skill whose long name happened to repeat the query could
+The name bonus bypassed BM25's length normalization, so a skill whose long name happened to repeat the query could
 outrank a shorter skill that covered the task more broadly. Each name word the query did not ask for now carries a
 small penalty. "postgres migration" puts `data/database-migration` in the top three instead of behind the
 Oracle-to-Postgres and Neon skills. Top1, top3, top5 and typo recovery all improved on both dev and test.
 
 **Changed: custom Hallbook skills are searchable by their content**
 
-Custom skills now match on their title, frontmatter description and body, not only their file name. They are
+Custom skills now match on their title, front-matter description and body, not only their file name. They are
 ranked with the same fields as the bundled skills, kept below the high-confidence bar and still left out of the
 runner-up check. The index caches each file by path, modification time and size, so an edit, add or removal shows
 up on the next search without a restart.
@@ -46,7 +46,7 @@ about a real task is also "none" instead of a low-confidence guess.
 **Fixed: Hallbook search recovers from a typo in a task word**
 
 `find_skill`, `search_skills` and the prompt hook now match a query word that is one letter away from a word in
-the catalog. A transposed, missing or doubled letter, as in "kuberentes deployment" or "webhoks", finds the same
+the catalog. A transposed, missing or doubled letter, as in "kubernetes deployment" with a letter swapped, or "webhooks" missing one, finds the same
 skills as the correct spelling. The match is down-weighted and only used when the word has no exact match, so
 queries with no typos rank exactly as before.
 
