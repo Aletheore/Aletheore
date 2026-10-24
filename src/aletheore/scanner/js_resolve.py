@@ -117,8 +117,11 @@ def _load_tsconfig(path: Path, seen: set[Path] | None = None) -> dict:
 
 
 def _is_absolute(value: str) -> bool:
-    """POSIX or Windows absolute path ("/x", "C:/repo/src", "C:\\repo", "\\\\host\\share")."""
-    return os.path.isabs(value) or PureWindowsPath(value).is_absolute()
+    """POSIX or Windows absolute path ("/x", "C:/repo/src", "C:\\repo", "\\\\host\\share").
+
+    A leading slash counts on every platform: tsconfig files are written with POSIX paths, and from Python 3.13 on
+    Windows os.path.isabs("/x") is False (no drive), which would join the value onto the config's directory."""
+    return value.startswith("/") or os.path.isabs(value) or PureWindowsPath(value).is_absolute()
 
 
 def _sanitize_options(options: dict) -> dict:
