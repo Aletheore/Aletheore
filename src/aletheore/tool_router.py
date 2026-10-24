@@ -140,10 +140,12 @@ INTENTS: tuple[Intent, ...] = (
         "dead_code",
         "aletheore_dead_code",
         (
-            r"\bnobody (?:imports|uses|calls|references)\b", r"\bno other (?:[\w#+.]+ ){0,3}(?:modules?|files?)\b[^.?]*\bimports?\b",
+            r"\bnobody (?:imports|uses|calls|references)\b", r"\bno other (?:[\w#+.]+ ){0,3}(?:modules?|files?)\b[^.?]*\b(?:imports?|depends? on|uses?|references?|requires?)\b",
             r"\b(?:un-?imported|no importers?|zero importers?|not imported by (?:any|anything))\b", r"\bsafely delete\b",
             r"\bnot imported (?:by|anywhere)\b", r"\b(?:isn'?t|aren'?t|is not|are not|never|not) (?:being )?imported\b",
             r"\bnothing (?:imports|depends on|uses|references)\b", r"\bno one (?:imports|uses|references)\b",
+            # "depends on" alone also reads as an impact question; a negated subject makes it unambiguous
+            r"\b(?:no|none of the) (?:other )?(?:[\w#+.]+ ){0,3}(?:modules?|files?)\b[^.?]*\bdepends? on\b",
             r"\b(?:no|zero) (?:other )?(?:modules?|files?) (?:import|use|reference)s?\b",
             r"\b(?:with|has|have|without) (?:no|zero|any) (?:importers?|dependents?)\b",
             r"\bno one importing\b", r"\bimported (?:by )?(?:no ?one|nothing|nobody)\b", r"\bcut the fat\b", r"\bdead (?:files?|modules?|functions?)\b", r"\borphan\w*\b",r"\bdead code\b", r"\bunused (?:code|files?|modules?|functions?)\b", r"\bunreachable\b", r"\bnever (?:used|called|imported)\b", r"\bsafe to delete\b"),
@@ -266,7 +268,9 @@ _INTENTS_BY_NAME = {intent.name: intent for intent in INTENTS}
 _COMPILED = {intent.name: tuple(re.compile(p, re.IGNORECASE) for p in intent.patterns) for intent in INTENTS}
 
 # A path-looking token: contains a slash or ends in a known source extension.
-_PATH_TOKEN = re.compile(r"[\w@./+-]+\.(?:py|pyi|js|jsx|ts|tsx|mjs|cjs|go|rs|rb|php|java|kt|swift|cs|cpp|cc|c|h|hpp|scala|sql|sh|vue|svelte)\b|[\w@.+-]+(?:/[\w@.+-]+)+")
+# A path segment is a plain name, or a framework route segment: `(group)`, `[id]`, `[[...slug]]` (Next.js, SvelteKit).
+_SEG = r"(?:\([\w.-]+\)|\[{1,2}\.{0,3}[\w.-]+\]{1,2}|[\w@.+-]+)"
+_PATH_TOKEN = re.compile(r"[\w@./+-]+\.(?:py|pyi|js|jsx|ts|tsx|mjs|cjs|go|rs|rb|php|java|kt|swift|cs|cpp|cc|c|h|hpp|scala|sql|sh|vue|svelte)\b|" + _SEG + rf"(?:/{_SEG})+")
 # Ways a question marks a one-word directory as a place, kept narrow because the result narrows the answer: a
 # quoted word counts only right after a place cue (so `retry` in "how does `retry` work" is an identifier, not a
 # scope), "under/inside/within/below X" is a place on its own, and a plain "in X" needs a directory word beside it.
@@ -416,7 +420,7 @@ def strip_test_qualifiers(question: str) -> str:
 
 # A multi-segment path names where to look, not what to look for. Its words (a `setup/` directory, a `deploy_config`
 # file) used to score as intents of their own.
-_SLASH_PATH = re.compile(r"[\w@.+-]+(?:/[\w@.+-]+)+/?")
+_SLASH_PATH = re.compile(rf"{_SEG}(?:/{_SEG})+/?")
 
 
 def intent_text_of(question: str) -> str:

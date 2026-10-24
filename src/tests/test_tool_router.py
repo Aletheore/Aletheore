@@ -57,6 +57,36 @@ def test_cpp_and_csharp_unimported_questions_route_to_dead_code():
         assert (decision.confidence, decision.intent) == ("high", "dead_code"), language
 
 
+@pytest.mark.parametrize("verb", ["depends on", "uses", "references", "requires", "imports"])
+def test_unreachable_questions_route_to_dead_code_whatever_verb_they_use(verb):
+    question = f"List the NON-TEST Go source files that no other source file in the repository {verb} (ignore string references)."
+    decision = tr.route(question, None, PATHS)
+    assert (decision.confidence, decision.intent) == ("high", "dead_code")
+
+
+NEXT_PATHS = [*PATHS, "docs/app/(doc)/[[...slug]]/page.tsx", "docs/app/(shop)/[id]/page.tsx", "docs/app/(shop)/layout.tsx"]
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["docs/app/(doc)/[[...slug]]/page.tsx", "docs/app/(shop)/[id]/page.tsx"],
+)
+def test_framework_route_paths_with_groups_and_brackets_are_file_targets(target):
+    question = (
+        f"How many NON-TEST TypeScript/JavaScript source files does `{target}` depend on through imports, "
+        "directly or transitively (files it imports, the files those import, and so on, within this repository)? "
+        "Give your best estimate."
+    )
+    decision = tr.route(question, None, NEXT_PATHS)
+    assert (decision.confidence, decision.intent, decision.target) == ("high", "dependencies", target)
+    assert tr.route(f"what breaks if I change {target}", None, NEXT_PATHS).target == target
+
+
+def test_parentheses_in_prose_next_to_a_slash_are_not_a_path():
+    decision = tr.route("who owns src/api/users.py (and/or src/api/orders.py)", None, PATHS)
+    assert decision.intent == "owner"
+
+
 def test_a_root_level_file_name_does_not_misroute_a_dependency_question():
     paths = ["auth.go", "internal/store.go"]
     decision = tr.route("How many modules does auth.go depend on through imports, directly or transitively?", None, paths)
