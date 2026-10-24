@@ -865,7 +865,12 @@ def _build_unchanged_scan_cache(
         path: m for path, m in all_modules.items()
         if path not in changed_files and m.get("language") not in stale_languages
     }
-    unchanged_endpoints = {path: e for path, e in all_endpoints.items() if path not in changed_files}
+    # Endpoints are tied to a file's language the same way: one in a language the diff could have affected is
+    # re-extracted together with its modules.
+    unchanged_endpoints = {
+        path: e for path, e in all_endpoints.items()
+        if path not in changed_files and (all_modules.get(path) or {}).get("language") not in stale_languages
+    }
     if not unchanged_modules and not unchanged_endpoints:
         return None
 

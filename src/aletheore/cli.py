@@ -3202,7 +3202,7 @@ def hook_evidence_snippet(
     if _sys.platform == "win32":
         # cmd.exe style: quote an argument that is empty or holds a space, tab, quote or cmd metacharacter
         command = " ".join(
-            '"' + arg.replace('"', '\\"') + '"' if not arg or any(c in arg for c in ' \t"&^|<>()%') else arg
+            '"' + arg.replace('"', '\\"') + '"' if not arg or any(c in arg for c in ' \t"&^|<>()') else arg
             for arg in argv
         )
     else:

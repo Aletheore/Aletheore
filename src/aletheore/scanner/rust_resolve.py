@@ -259,7 +259,7 @@ def flatten_use(tree: str, keep_glob: bool = False) -> list[str]:
 # ---------------------------------------------------------------- macro-declared modules and paths
 
 
-@lru_cache(maxsize=64)
+@lru_cache(maxsize=1024)
 def _macro_registry(crate_dir: str) -> dict[str, tuple[list[str], list[str]]]:
     """macro name -> (module names declared at the top of its expansion, flattened `use` paths), for zero-argument
     macros (`() => { ... }` as the only arm) defined anywhere in the crate directory."""
@@ -326,7 +326,7 @@ _REPEAT_PATTERN = re.compile(
 _FIXED_ITEM = re.compile(r"^\$(\w+)\s*:\s*ident$")
 _MOD_VAR = re.compile(r"\bmod\s+\$(\w+)\s*;")
 _IDENT = re.compile(r"^[A-Za-z_]\w*$")
-_INVOKE_ARGS = re.compile(r"(?m)^[ \t]*([A-Za-z_]\w*)!\s*([({\[])")
+_INVOKE_ARGS = re.compile(r"(?<![\w$])([A-Za-z_]\w*)!\s*([({\[])")
 
 
 def _parse_arm_pattern(pattern: str):
@@ -339,12 +339,14 @@ def _parse_arm_pattern(pattern: str):
         return ("repeat", [repeat.group(1)], repeat.group(2) or ",")
     for sep in (",", ";"):
         parts = [p.strip() for p in pattern.split(sep)] if pattern else []
+        if len(parts) > 1 and parts[-1] == "":  # a trailing separator, as _expand_arg_macro tolerates in the call
+            parts.pop()
         if parts and all(_FIXED_ITEM.match(p) for p in parts):
             return ("fixed", [_FIXED_ITEM.match(p).group(1) for p in parts], sep)
     return None
 
 
-@lru_cache(maxsize=64)
+@lru_cache(maxsize=1024)
 def _arg_macro_registry(crate_dir: str) -> dict[str, list[tuple]]:
     """macro name -> arms (spec, module variables) for macros whose arms bind plain `$x:ident` fragments and
     contain `mod $x;` in the body."""

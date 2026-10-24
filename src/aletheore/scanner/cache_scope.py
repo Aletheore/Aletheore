@@ -82,14 +82,41 @@ def _family(language: str) -> frozenset[str]:
     return frozenset({language})
 
 
+_GIT_ESCAPES = {"n": 10, "t": 9, '"': 34, "\\": 92, "a": 7, "b": 8, "f": 12, "r": 13, "v": 11}
+
+
+def _unquote_git_path(path: str) -> str:
+    """Git prints a path with non-ASCII or special characters as a C-style quoted string ("src/\\316\\bb.py");
+    return the real path. An unquoted path is returned as is."""
+    if len(path) < 2 or not (path.startswith('"') and path.endswith('"')):
+        return path
+    body, out, i = path[1:-1], bytearray(), 0
+    while i < len(body):
+        ch = body[i]
+        if ch != "\\" or i + 1 >= len(body):
+            out += ch.encode("utf-8")
+            i += 1
+        elif body[i + 1] in "01234567":
+            j = i + 1
+            while j < min(i + 4, len(body)) and body[j] in "01234567":
+                j += 1
+            out.append(int(body[i + 1 : j], 8) & 0xFF)
+            i = j
+        else:
+            out.append(_GIT_ESCAPES.get(body[i + 1], ord(body[i + 1])))
+            i += 2
+    return out.decode("utf-8", errors="replace")
+
+
 def parse_name_status(text: str) -> list[tuple[str, str]]:
     """(status letter, path) pairs from `git diff --name-status --no-renames`; a rename or copy is not expected
-    with that flag, but if one appears both paths are returned so nothing is missed."""
+    with that flag, but if one appears both paths are returned so nothing is missed. Quoted paths are unquoted."""
     changes: list[tuple[str, str]] = []
     for line in text.splitlines():
         parts = line.split("\t")
         if len(parts) < 2 or not parts[0]:
             continue
+        parts = [parts[0], *(_unquote_git_path(p) for p in parts[1:])]
         status = parts[0][0]
         if status in ("R", "C") and len(parts) >= 3:
             changes.append(("D", parts[1]))

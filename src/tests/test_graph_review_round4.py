@@ -87,6 +87,33 @@ def test_rust_bare_glob_keeps_nothing_without_a_prefix():
     assert rust_resolve.flatten_use("a::{*, b}", keep_glob=True) == ["a::*", "a::b"]
 
 
+def test_git_quoted_paths_are_unquoted():
+    from aletheore.scanner.cache_scope import languages_to_reextract, parse_name_status
+
+    changes = parse_name_status('A\t"src/\\316\\261.go"\nM\tplain.py\nA\t"tab\\there.rs"\n')
+    assert changes == [("A", "src/α.go"), ("M", "plain.py"), ("A", "tab\there.rs")]
+    assert languages_to_reextract(changes[:1]) == frozenset({"go"})
+
+
+def test_rust_macro_arm_with_a_trailing_separator_and_an_inline_invocation(tmp_path):
+    _write(tmp_path, "Cargo.toml", '[package]\nname = "c"\nversion = "0.1.0"\n')
+    _write(tmp_path, "src/lib.rs", "macro_rules! mods { ($a:ident, $b:ident,) => { mod $a; mod $b; }; }\n")
+    rust_resolve.clear_cache()
+    src = "let _x = mods!(alpha, beta,);\n"
+    assert rust_resolve.extra_imports(tmp_path, tmp_path / "src/lib.rs", src) == ["self::alpha", "self::beta"]
+
+
+def test_go_members_off_skips_the_member_analysis(tmp_path, monkeypatch):
+    _write(tmp_path, "p/a.go", "package p\n\ntype T struct{}\n\nfunc (t T) Run() {}\n")
+    monkeypatch.setenv("ALETHEORE_GO_MEMBERS", "off")
+    go_resolve.clear_cache()
+    info = go_resolve._package_files(str(tmp_path / "p"))["a.go"]
+    assert info[5] == (frozenset(),) * 9
+    monkeypatch.delenv("ALETHEORE_GO_MEMBERS")
+    go_resolve.clear_cache()
+    assert go_resolve._package_files(str(tmp_path / "p"))["a.go"][5] != (frozenset(),) * 9
+
+
 def test_java_own_declaration_shadows_a_wildcard_import(tmp_path):
     _write(tmp_path, "src/a/Foo.java", "package a;\npublic class Foo {}\n")
     _write(tmp_path, "src/b/Use.java", "package b;\nimport a.*;\npublic class Use { Foo f; }\nclass Foo {}\n")

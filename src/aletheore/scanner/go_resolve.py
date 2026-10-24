@@ -371,7 +371,7 @@ def _package_files(directory: str) -> dict[str, tuple]:
             package, declared, uses, local = analyse_file(data)
         except OSError:
             continue
-        members = analyse_members(data) if MEMBERS_MODE_DEFAULT != "off" or os.environ.get("ALETHEORE_GO_MEMBERS") else ((),) * 9
+        members = analyse_members(data) if os.environ.get("ALETHEORE_GO_MEMBERS", MEMBERS_MODE_DEFAULT) != "off" else (frozenset(),) * 9
         out[name] = (package, frozenset(declared), frozenset(uses), frozenset(local), build_constrained(name, source_head),
                      tuple(frozenset(m) for m in members))
     return out
