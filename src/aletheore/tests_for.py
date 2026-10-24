@@ -15,7 +15,11 @@ import re
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
-_TEST_PATH = re.compile(r"(^|/)(tests?|testing|__tests__|spec)/|_test\.|\.test\.|\.spec\.|(^|/)test_[^/]*$|/testdata/|conftest")
+_TEST_PATH = re.compile(
+    r"(^|/)(tests?|testing|__tests__|spec)/|_test\.|\.test\.|\.spec\.|(^|/)test_[^/]*$|/testdata/|conftest"
+    # PascalCase test files and test projects: FooTests.cs, FooTest.java, UnitTests/, Foo.Tests/
+    r"|[A-Za-z0-9]Tests?\.(?:cs|java|kt|kts|php|scala|swift)$|(^|/)[\w.\-]*Tests?/"
+)
 _EXT = re.compile(r"\.[A-Za-z0-9]+$")
 
 

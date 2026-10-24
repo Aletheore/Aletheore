@@ -1,6 +1,7 @@
 import pytest
 
 from aletheore.query import (
+    find_unimported_modules,
     QUERY_FUNCTIONS,
     BranchNotFoundInEvidenceError,
     ModuleNotFoundInEvidenceError,
@@ -426,6 +427,100 @@ def test_find_blast_radius_truncates_transitive_dependents_past_the_cap(tmp_path
 
     assert len(result["transitive_dependents"]) == 1
     assert result["transitive_dependents_truncated"] is True
+
+
+def test_pascal_case_test_files_and_projects_count_as_tests_but_lookalikes_do_not():
+    from aletheore import code_locator, dead_code, evidence_hook, query, tests_for
+
+    tests = [
+        "src/AutoMapper.UnitTests/Mappers.cs",
+        "src/IntegrationTests/Setup.cs",
+        "src/Foo/BarTests.cs",
+        "src/main/java/FooTest.java",
+        "app/Http/UserTest.php",
+    ]
+    sources = ["src/Contests/Entry.cs", "src/Foo/Latest.cs", "src/Foo/Bar.cs", "src/Protests.txt"]
+    for path in tests:
+        assert query._BLAST_TEST_PATH.search(path), path
+        assert tests_for._TEST_PATH.search(path), path
+        assert code_locator._TEST_PATH.search(path), path
+        assert evidence_hook.is_test_path(path), path
+        assert dead_code.is_test_file(path), path
+    for path in sources:
+        assert not query._BLAST_TEST_PATH.search(path), path
+        assert not tests_for._TEST_PATH.search(path), path
+        assert not evidence_hook.is_test_path(path), path
+
+
+def _chain_evidence():
+    # app -> svc -> core, svc -> tests/test_helpers; imports repeated per statement as the scan records them
+    modules = [
+        {"path": "app.py", "imports": ["svc.py", "svc.py"], "imported_by": []},
+        {"path": "svc.py", "imports": ["core.py", "tests/test_helpers.py"], "imported_by": ["app.py", "app.py"]},
+        {"path": "core.py", "imports": [], "imported_by": ["svc.py", "svc.py", "other.py"]},
+        {"path": "other.py", "imports": ["core.py"], "imported_by": []},
+        {"path": "tests/test_helpers.py", "imports": [], "imported_by": ["svc.py"]},
+    ]
+    return {"repository": {"modules": modules}, "architecture": {}}
+
+
+def test_find_blast_radius_counts_each_importer_once():
+    from pathlib import Path
+
+    from aletheore.query import find_blast_radius
+
+    result = find_blast_radius(_chain_evidence(), Path("."), "core.py")
+
+    assert result["direct_total"] == 2  # svc.py imports core in two statements but is one module
+    assert result["affected_total"] == 3  # svc.py, other.py, then app.py through svc.py
+
+
+def test_find_transitive_imports_gives_exact_totals_and_separates_test_files():
+    from aletheore.query import find_transitive_imports
+
+    result = find_transitive_imports(_chain_evidence(), "app.py")
+
+    assert result["depends_on_total"] == 3  # svc.py, then core.py and tests/test_helpers.py through it
+    assert result["depends_on_non_test_total"] == 2
+    assert result["depends_on_test_files"] == 1
+    assert result["direct_total"] == 1 and result["transitive_total"] == 2
+    assert result["direct_imports"] == ["svc.py"]
+
+
+def test_find_transitive_imports_caps_the_lists_but_not_the_totals(monkeypatch):
+    import aletheore.query as query_module
+
+    monkeypatch.setattr(query_module, "_TRANSITIVE_IMPORTS_SHOWN", 1)
+    result = query_module.find_transitive_imports(_chain_evidence(), "app.py")
+
+    assert len(result["transitive_imports"]) == 1 and result["transitive_imports_truncated"] is True
+    assert result["depends_on_total"] == 3
+
+
+def test_find_transitive_imports_survives_import_cycles():
+    from aletheore.query import find_transitive_imports
+
+    evidence = {"repository": {"modules": [
+        {"path": "a.py", "imports": ["b.py"], "imported_by": ["b.py"]},
+        {"path": "b.py", "imports": ["a.py"], "imported_by": ["a.py"]},
+    ]}}
+
+    assert find_transitive_imports(evidence, "a.py")["depends_on_total"] == 1
+
+
+def test_find_blast_radius_totals_stay_exact_when_the_list_is_capped(tmp_path, monkeypatch):
+    # Capping the list once also stopped the walk, so a hub's real reach was unknowable and "how many modules
+    # does this affect" had no answer. The totals now cover the whole closure whatever the display cap is.
+    import aletheore.query as query_module
+
+    full = find_blast_radius(_blast_radius_evidence(), tmp_path, "core/util.py")
+    monkeypatch.setattr(query_module, "_BLAST_RADIUS_MAX_TRANSITIVE", 1)
+    capped = find_blast_radius(_blast_radius_evidence(), tmp_path, "core/util.py")
+
+    assert capped["transitive_total"] == full["transitive_total"] == len(full["transitive_dependents"])
+    assert capped["direct_total"] == len(full["direct_dependents"])
+    assert capped["affected_total"] == capped["direct_total"] + capped["transitive_total"]
+    assert capped["affected_test_files"] == 0
 
 
 def test_find_blast_radius_truncates_direct_dependents_past_the_cap(tmp_path, monkeypatch):
@@ -941,3 +1036,47 @@ def test_find_symbol_path_raises_for_unknown_target_symbol(tmp_path):
         find_symbol_path(
             _symbol_path_evidence(), tmp_path, "core/util.py", "parse_config", "core/util.py", "does_not_exist"
         )
+
+
+def _unimported_evidence(extra=()):
+    def mod(path, imported_by=(), language="python"):
+        return {"path": path, "language": language, "imported_by": list(imported_by)}
+
+    modules = [
+        mod("pkg/tags/__init__.py"),
+        mod("pkg/tags/log.py"),
+        mod("pkg/tags/used.py", ["pkg/views.py"]),
+        mod("pkg/tags/only_tested.py", ["tests/test_tags.py"]),
+        mod("pkg/tags/sub/leaf.py"),
+        mod("pkg/tags/tests/test_log.py"),
+        mod("pkg/tags/widget.js", language="javascript"),
+        mod("pkg/other/orphan.py"),
+        mod("pkg/views.py"),
+        *extra,
+    ]
+    unreachable = [{"path": "pkg/views.py", "reason": "r"}, {"path": "pkg/other/orphan.py", "reason": "r"}]
+    return {"repository": {"modules": modules, "dead_code": {"unreachable_modules": unreachable}}}
+
+
+def test_find_unimported_modules_is_scoped_to_a_directory_and_skips_tests_and_init():
+    result = find_unimported_modules(_unimported_evidence(), "pkg/tags/", ["python"])
+    assert result["unimported"] == ["pkg/tags/log.py", "pkg/tags/sub/leaf.py"]
+    assert result["unimported_total"] == 2
+    assert result["imported_only_by_tests"] == ["pkg/tags/only_tested.py"]
+    assert result["scan_unreachable_total"] == 0
+    assert "unreachable_modules" in result["definition"]
+
+
+def test_find_unimported_modules_can_ignore_test_importers_and_filter_language():
+    result = find_unimported_modules(_unimported_evidence(), "pkg/tags", ignore_test_importers=True)
+    assert result["unimported"] == ["pkg/tags/log.py", "pkg/tags/only_tested.py", "pkg/tags/sub/leaf.py", "pkg/tags/widget.js"]
+    assert result["imported_only_by_tests_total"] == 0
+    assert result["importers_counted"] == "non-test only"
+    assert find_unimported_modules(_unimported_evidence(), None, ["javascript"])["unimported"] == ["pkg/tags/widget.js"]
+
+
+def test_find_unimported_modules_totals_stay_exact_when_the_list_is_capped():
+    extra = [{"path": f"big/m{i:03}.py", "language": "python", "imported_by": []} for i in range(250)]
+    result = find_unimported_modules(_unimported_evidence(extra), "big")
+    assert result["unimported_total"] == 250
+    assert len(result["unimported"]) < 250 and result["unimported_truncated"] is True
