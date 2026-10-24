@@ -296,10 +296,10 @@ def analyse_members(source: bytes) -> tuple:
                 continue
             lefts = [c for c in left.children if c.is_named]
             rights = [c for c in right.children if c.is_named]
-            for i, l in enumerate(lefts):
-                if l.type != "identifier":
+            for i, target in enumerate(lefts):
+                if target.type != "identifier":
                     continue
-                var = _text(source, l)
+                var = _text(source, target)
                 desc = expr_desc(rights[i]) if len(lefts) == len(rights) else None
                 if var in conflicted:
                     continue
