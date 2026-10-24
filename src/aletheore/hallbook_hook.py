@@ -14,16 +14,25 @@ import json
 import sys
 
 
-def _read_prompt() -> str:
+def _read_payload() -> tuple[str, str | None]:
+    """The prompt and, when the hook payload carries one, the session id."""
     raw = sys.stdin.buffer.read()
     try:
         payload = json.loads(raw)
     except (TypeError, ValueError):
-        return raw.decode("utf-8", "replace")
-    prompt = payload.get("prompt") if isinstance(payload, dict) else payload
-    if isinstance(prompt, str):
-        return prompt
-    return "" if prompt is None else str(prompt)
+        return raw.decode("utf-8", "replace"), None
+    if not isinstance(payload, dict):
+        return (payload if isinstance(payload, str) else str(payload or "")), None
+    prompt = payload.get("prompt")
+    session_id = payload.get("session_id")
+    return (
+        prompt if isinstance(prompt, str) else ("" if prompt is None else str(prompt)),
+        session_id if isinstance(session_id, str) else None,
+    )
+
+
+def _read_prompt() -> str:
+    return _read_payload()[0]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,7 +52,8 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(f"aletheore hallbook suggest: unknown mode {mode!r}; use one of: {', '.join(HOOK_MODES)}\n")
             return 0
 
-        suggestion = hook_suggestion(_read_prompt(), mode=mode)
+        prompt, session_id = _read_payload()
+        suggestion = hook_suggestion(prompt, mode=mode, session_id=session_id)
         if suggestion:
             sys.stdout.write(suggestion + "\n")
             sys.stdout.flush()
