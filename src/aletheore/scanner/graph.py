@@ -1445,7 +1445,12 @@ def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], lis
                 if name_node is not None:
                     name = source[name_node.start_byte:name_node.end_byte].decode(errors="ignore")
                     if name:
-                        imports.append(f"self::{name}")
+                        declared_in = _rust_inline_mod_names(n, source)
+                        if declared_in:
+                            # `mod outer { mod x; }` lives in <module dir>/outer/x.rs (or x/mod.rs)
+                            imports.append(f"@imod:{'/'.join(declared_in)}|{name}")
+                        else:
+                            imports.append(f"self::{name}")
                         # #[path = "..."] (also inside cfg_attr) names the module file explicitly.
                         sibling = n.prev_sibling
                         while sibling is not None and sibling.type in ("attribute_item", "line_comment", "block_comment"):
@@ -1657,6 +1662,12 @@ def _resolve_rust_path(repo_path: Path, from_file: Path, path: str) -> str | Non
     rest = segments[1:]
 
     from aletheore.scanner import rust_resolve
+
+    if path.startswith("@imod:"):
+        inline_part, _, mod_name = path[len("@imod:"):].partition("|")
+        base = _rust_module_search_dir(repo_path, from_file) / inline_part
+        found = _resolve_rust_module_dir(base, mod_name)
+        return _rel(repo_path, found) if found is not None else None
 
     if path.startswith("@ipath:"):
         inline_part, _, attr_path = path[len("@ipath:"):].partition("|")
