@@ -930,6 +930,103 @@ def test_build_index_creates_lancedb_table(mock_embed_texts, tmp_path):
     assert (tmp_path / ".aletheore" / "index.lancedb").exists()
 
 
+def test_build_index_leaves_a_queryable_keyword_table_when_embedding_fails(tmp_path):
+    """Embedding a large repo takes minutes; the keyword-only table is written
+    before the first embedding call, so a build that dies partway through
+    still leaves the repo searchable without any provider being reachable."""
+    (tmp_path / "auth.py").write_text("def login():\n    return True\n")
+    evidence = _evidence_with_module(
+        "auth.py", [{"name": "login", "start_line": 1, "end_line": 2}]
+    )
+
+    with patch(
+        "aletheore.search_index.embed_texts", side_effect=RuntimeError("provider died")
+    ):
+        with pytest.raises(RuntimeError):
+            build_index(tmp_path, evidence, allow_hosted=False)
+
+    from aletheore.search_index import FTS_TABLE_NAME, _index_path
+    import lancedb
+
+    db = lancedb.connect(str(_index_path(tmp_path)))
+    assert FTS_TABLE_NAME in db.table_names()
+    keyword_table = db.open_table(FTS_TABLE_NAME)
+    assert "vector" not in keyword_table.schema.names
+    assert keyword_table.search("login", query_type="fts").limit(5).to_list()
+
+    with patch("aletheore.search_index.embed_texts") as embed:
+        results = search_index(tmp_path, "login", k=5)
+
+    assert results
+    assert any(result["module_path"] == "auth.py" for result in results)
+    embed.assert_not_called()
+
+
+def test_successful_build_drops_the_keyword_table_and_normal_search_still_works(tmp_path):
+    (tmp_path / "auth.py").write_text("def login():\n    return True\n")
+    evidence = _evidence_with_module(
+        "auth.py", [{"name": "login", "start_line": 1, "end_line": 2}]
+    )
+
+    with patch(
+        "aletheore.search_index.embed_texts",
+        side_effect=lambda texts: [[0.1, 0.2] for _ in texts],
+    ):
+        build_index(tmp_path, evidence, allow_hosted=False)
+
+    from aletheore.search_index import FTS_TABLE_NAME, _index_path
+    import lancedb
+
+    db = lancedb.connect(str(_index_path(tmp_path)))
+    assert FTS_TABLE_NAME not in db.table_names()
+
+    with patch(
+        "aletheore.search_index.embed_texts",
+        side_effect=lambda texts: [[0.1, 0.2] for _ in texts],
+    ):
+        results = search_index(tmp_path, "login", k=5)
+
+    assert results
+    assert all("keyword_only" not in result for result in results)
+
+
+def test_search_index_raises_when_neither_table_exists(tmp_path):
+    with pytest.raises(IndexNotFoundError):
+        search_index(tmp_path, "anything")
+
+
+def test_keyword_only_results_carry_the_marker(tmp_path):
+    """Callers (the CLI especially) need to know the answer came from the
+    stand-in table while embeddings were still building."""
+    from aletheore.search_index import _index_path
+
+    search_index_module._write_keyword_index(
+        _index_path(tmp_path),
+        [
+            {
+                "module_path": "auth.py",
+                "symbol_name": "login",
+                "start_line": 1,
+                "end_line": 2,
+                "language": "python",
+                "imports": [],
+                "is_declaration_only": False,
+                "is_barrel_file": False,
+                "text": "auth.py::login (python)\ndef login():\n    return True",
+                "chunk_hash": "abc",
+            }
+        ],
+    )
+
+    with patch("aletheore.search_index.embed_texts") as embed:
+        results = search_index(tmp_path, "login", k=5)
+
+    assert results
+    assert all(result["keyword_only"] is True for result in results)
+    assert results[0]["module_path"] == "auth.py"
+    embed.assert_not_called()
+
+
 def test_open_index_raises_when_missing(tmp_path):
     with pytest.raises(IndexNotFoundError):
         open_index(tmp_path)
