@@ -25,11 +25,12 @@ Design points, all measured or forced by the hook contract:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
-import subprocess
+import subprocess  # nosec B404 - runs git and this module with fixed argument lists, never a shell
 import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -157,7 +158,7 @@ def _fill_history_from_git(repo_path: Path, index: dict) -> None:
     try:
         # An absolute git, as everywhere else git runs against a repository we did not write: a bare name is
         # re-resolved against PATH and a relative entry could let the repository shadow it.
-        result = subprocess.run(  # noqa: S603 - fixed argv, absolute executable
+        result = subprocess.run(  # noqa: S603  # nosec B603 - fixed argv, absolute git, no shell
             [git_executable(), "-C", str(repo_path), "log", "--no-merges", "--name-only", "--format=%x00", f"-n{_GIT_LOG_COMMITS}"],
             capture_output=True,
             text=True,
@@ -256,7 +257,7 @@ def load_index(repo_path: Path) -> dict | None:
 
 def _spawn_background_build(repo_path: Path) -> None:
     try:
-        subprocess.Popen(  # noqa: S603 - fixed argv, our own module
+        subprocess.Popen(  # noqa: S603  # nosec B603 - fixed argv, our own module, no shell
             [sys.executable, "-m", "aletheore.evidence_hook", "--build-index", str(repo_path)],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -424,21 +425,25 @@ def _session_state_path(repo_path: Path, session_id: str) -> Path | None:
     return repo_path / ".aletheore" / _STATE_DIRNAME / f"{session_id}.shown"
 
 
+def _shown_marker(state_path: Path, rel_path: str) -> Path:
+    return state_path / hashlib.sha1(rel_path.encode("utf-8"), usedforsecurity=False).hexdigest()[:24]
+
+
 def _already_shown(state_path: Path, rel_path: str) -> bool:
     try:
-        return rel_path in state_path.read_text().splitlines()
+        return _shown_marker(state_path, rel_path).exists()
     except OSError:
         return False
 
 
 def _mark_shown(state_path: Path, rel_path: str) -> None:
-    # One path per line, appended: Claude Code can run tool calls in parallel inside one session, and a
-    # read-modify-write of a single list would let one call's entry overwrite another's. An append of a short
-    # line is a single write, so concurrent hook calls cannot lose each other's paths.
+    # One empty marker file per shown path, in a directory per session. Claude Code can run tool calls in parallel
+    # inside one session, and any shared file would lose entries: a read-modify-write of a list lets one call
+    # overwrite another's, and an append is not atomic on Windows, where the C runtime seeks to the end and then
+    # writes. Creating distinct files has no shared write to lose.
     try:
-        state_path.parent.mkdir(parents=True, exist_ok=True)
-        with state_path.open("a", encoding="utf-8") as handle:
-            handle.write(rel_path + "\n")
+        state_path.mkdir(parents=True, exist_ok=True)
+        _shown_marker(state_path, rel_path).touch()
     except OSError:
         pass
 
