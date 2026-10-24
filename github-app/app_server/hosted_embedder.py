@@ -52,7 +52,13 @@ BACKOFF_SECONDS = 0.5
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 # Process-wide cap on simultaneous calls to the provider, so many requests at once
 # queue here instead of fanning out into a burst of 429s that the retries amplify.
-MAX_IN_FLIGHT_CALLS = 8
+#
+# 16, not 8: measured on the production host with 3,000 real chunks sent as 8
+# concurrent requests, 8 gave 122 chunks/s, 16 gave 217 and 32 gave 246, with no
+# errors at any setting. At 8 this cap, not DeepInfra, was the ceiling. Across the
+# app-server and the two scan workers 16 allows about 48 concurrent calls at most,
+# a quarter of DeepInfra's documented 200 per model; 32 bought only 13% more.
+MAX_IN_FLIGHT_CALLS = 16
 _IN_FLIGHT = threading.BoundedSemaphore(MAX_IN_FLIGHT_CALLS)
 
 
