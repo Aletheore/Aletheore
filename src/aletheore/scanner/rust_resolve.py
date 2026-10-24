@@ -138,8 +138,9 @@ def crate_aliases(repo_path: Path, from_file: Path) -> dict[str, Path]:
 _LITERAL = re.compile(r"r(#*)\".*?\"\1|\"(?:\\.|[^\"\\])*\"|'(?:\\.[^']*|[^\\'])'", re.DOTALL)
 
 
-def clean_source(text: str) -> str:
-    """Blank out comments (block comments nest in Rust) and string/char literals; strings become `""`."""
+def clean_source(text: str, keep_literals: bool = False) -> str:
+    """Blank out comments (block comments nest in Rust) and string/char literals; strings become `""`.
+    With keep_literals only the comments go, so a path inside a string literal can still be read."""
     out: list[str] = []
     i, n = 0, len(text)
     while i < n:
@@ -162,7 +163,7 @@ def clean_source(text: str) -> str:
         else:
             m = _LITERAL.match(text, i)
             if m:
-                out.append('""' if m.group(0)[0] in "r\"" else " ")
+                out.append(m.group(0) if keep_literals else '""' if m.group(0)[0] in "r\"" else " ")
                 i = m.end()
             else:
                 out.append(text[i])
@@ -241,7 +242,9 @@ def flatten_use(tree: str, keep_glob: bool = False) -> list[str]:
             return out
         s = re.sub(r"\s+as\s+\w+$", "", s).strip()
         if keep_glob and (s == "*" or s.endswith("::*")):
-            return [f"{prefix}::{s}" if prefix and s != "*" else (f"{prefix}::*" if prefix else s)]
+            if s == "*":
+                return [f"{prefix}::*"] if prefix else []
+            return [f"{prefix}::{s}" if prefix else s]
         if s.endswith("::*"):
             s = s[:-3]
         if s in ("*", "self", ""):
@@ -403,7 +406,7 @@ def extra_imports(repo_path: Path, from_file: Path, source: str) -> list[str]:
     item macros, and fully qualified paths written inline."""
     out: list[str] = []
     # include!("relative/file.rs") textually splices another file in.
-    out.extend(f"@path:{p}" for p in _INCLUDE.findall(re.sub(r"//[^\n]*", " ", source)))
+    out.extend(f"@path:{p}" for p in _INCLUDE.findall(clean_source(source, keep_literals=True)))
     cleaned = clean_source(source)
     crate_dir = nearest_manifest_dir(repo_path, from_file) or repo_path
     registry = _macro_registry(str(crate_dir)) if "!" in cleaned else {}

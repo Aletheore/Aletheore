@@ -356,7 +356,8 @@ def build_constrained(filename: str, head: str) -> bool:
 
 
 @lru_cache(maxsize=512)
-def _package_files(directory: str) -> dict[str, tuple[str, frozenset, frozenset, frozenset]]:
+def _package_files(directory: str) -> dict[str, tuple]:
+    # name -> (package, declared, uses, local, build_constrained, member sets)
     out = {}
     try:
         names = sorted(n for n in os.listdir(directory) if n.endswith(".go"))
@@ -511,12 +512,12 @@ def same_package_targets(repo_path: Path, file_path: Path) -> list[str]:
     mode = os.environ.get("ALETHEORE_GO_MEMBERS", MEMBERS_MODE_DEFAULT)
     if mode and mode != "off":
         targets.update(_member_targets(file_path.name, me, peers, mode))
-    root = str(repo_path)
+    root = os.path.abspath(repo_path)
     result = []
     for n in sorted(targets):
-        full = os.path.join(directory, n)
-        if full.startswith(root + os.sep):
-            result.append(full[len(root) + 1:].replace(os.sep, "/"))
+        rel = os.path.relpath(os.path.abspath(os.path.join(directory, n)), root)
+        if not (rel == os.pardir or rel.startswith(os.pardir + os.sep)):
+            result.append(rel.replace(os.sep, "/"))
     return result
 
 

@@ -4586,7 +4586,8 @@ def _extract_module(
             if is_wildcard and not is_static and java_refs is not None:
                 # `import a.b.*;` makes every type of the package nameable, not every file a dependency: keep
                 # the files whose top-level types this file actually uses (same identifier rule as same-package).
-                wanted = java_refs[0]
+                # A type the file declares itself, or a type parameter, shadows an on-demand import.
+                wanted = java_refs[0] - java_refs[1] - java_refs[2]
                 names_by_file: dict[Path, set[str]] = {}
                 for type_name, files in java_package_types.get(dotted, {}).items():
                     for declaring in files:
@@ -5474,6 +5475,59 @@ def _add_c_include_edges(repo_path: Path, modules: list[dict]) -> None:
                 module.setdefault("imports", []).append(target)
 
 
+# Config files that change how a language's imports resolve although they are not source files.
+_RESOLUTION_CONFIGS: dict[str, frozenset[str]] = {
+    "go": frozenset({"go.mod", "go.work"}),
+    "javascript": frozenset({"package.json", "tsconfig.json", "jsconfig.json"}),
+    "typescript": frozenset({"package.json", "tsconfig.json", "jsconfig.json"}),
+    "python": frozenset({"pyproject.toml", "setup.py", "setup.cfg"}),
+    "rust": frozenset({"Cargo.toml"}),
+}
+
+
+def _go_peer_facts(info: tuple) -> tuple:
+    """What a Go file offers its package siblings: package name, declared names, build constraint, and the
+    declared members, result types and embeddings. What it uses (its own edges) is not part of it."""
+    members = info[5] if len(info) > 5 else ()
+    declared = tuple(members[i] for i in (0, 1, 5, 6, 7, 8) if i < len(members))
+    return (info[0], info[1], info[4], declared)
+
+
+def _canonical(value: object) -> object:
+    """JSON-stable form of nested tuples and (frozen)sets, so a hash does not depend on set order."""
+    if isinstance(value, (set, frozenset)):
+        return sorted((_canonical(v) for v in value), key=repr)
+    if isinstance(value, (tuple, list)):
+        return [_canonical(v) for v in value]
+    return value
+
+
+def _config_file_hashes(repo_path: Path) -> dict[str, list]:
+    """language -> [(repo-relative config file, content hash)] for the config files that language's imports
+    resolve through (go.mod, package.json, tsconfig, packaging manifests, Cargo.toml)."""
+    import hashlib
+
+    from aletheore.manifests import discover_manifests, discover_named_files
+
+    wanted = frozenset().union(*_RESOLUTION_CONFIGS.values())
+    found: set[str] = set()
+    for rel_dir, names in discover_manifests(repo_path)["files"].items():
+        found.update(f"{rel_dir}/{n}" if rel_dir != "." else n for n in names if n in wanted)
+    found.update(discover_named_files(repo_path, frozenset({"tsconfig.json", "jsconfig.json"})))
+    if (repo_path / "go.work").is_file():
+        found.add("go.work")
+    hashes: dict[str, str] = {}
+    for rel_path in sorted(found):
+        try:
+            hashes[rel_path] = hashlib.blake2b((repo_path / rel_path).read_bytes(), digest_size=8).hexdigest()
+        except OSError:
+            continue
+    return {
+        language: [(rel_path, h) for rel_path, h in hashes.items() if rel_path.rsplit("/", 1)[-1] in names]
+        for language, names in _RESOLUTION_CONFIGS.items()
+    }
+
+
 def _compute_resolution_signatures(
     repo_path: Path,
     all_source_paths: list[Path],
@@ -5535,10 +5589,21 @@ def _compute_resolution_signatures(
             ns_match = _PHP_NAMESPACE_RE.search(code)
             decls[rel(path)] = [ns_match.group(1) if ns_match else "", sorted({m.group(1) for m in _PHP_DECL_RE.finditer(code)})]
         extras["php"] = [decls, sorted((k, rel(v)) for k, v in php_psr4_map.items())]
+    if "go" in paths_by_language:
+        # same-package edges read the declarations of the sibling files, so a sibling that gains or loses one
+        # changes this file's edges even though this file did not change
+        from aletheore.scanner import go_resolve
+
+        go_dirs = sorted({str(p.parent) for p in all_source_paths if p.suffix == ".go"})
+        extras["go"] = {
+            rel(Path(d)): {name: _canonical(_go_peer_facts(info)) for name, info in sorted(go_resolve._package_files(d).items())}
+            for d in go_dirs
+        }
+    config_hashes = _config_file_hashes(repo_path)
     out: dict[str, str] = {}
     for language, paths in paths_by_language.items():
         digest = hashlib.blake2b(digest_size=12)
-        digest.update(json.dumps([sorted(paths), extras.get(language)], default=str, sort_keys=True).encode())
+        digest.update(json.dumps([sorted(paths), extras.get(language), config_hashes.get(language)], default=str, sort_keys=True).encode())
         out[language] = digest.hexdigest()
     return out
 
