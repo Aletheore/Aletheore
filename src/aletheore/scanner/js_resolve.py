@@ -13,6 +13,7 @@ dependency). Config is read once per repo path and cached; build_module_graph ca
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path, PureWindowsPath
 
@@ -21,6 +22,7 @@ _CONFIG_NAMES = ("tsconfig.json", "jsconfig.json")
 _STD_CONDITIONS = ("import", "default", "node", "require")
 _EXTS = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts")
 _CACHE: dict[str, "_RepoConfig"] = {}
+logger = logging.getLogger(__name__)
 
 
 def clear_cache() -> None:
@@ -168,7 +170,8 @@ class _RepoConfig:
                     try:
                         opts = _load_tsconfig((here / cfg).resolve())
                     except Exception:  # one unreadable config must not abort the scan
-                        break
+                        logger.debug("skipping unreadable %s", here / cfg, exc_info=True)
+                        continue
                     for cond in opts.get("customConditions") or []:
                         if isinstance(cond, str):
                             custom.append(cond)
@@ -188,6 +191,7 @@ def _config(repo: Path) -> _RepoConfig:
         try:
             cfg = _RepoConfig(repo)
         except Exception:  # cache an empty config so a broken repo is not re-walked for every specifier
+            logger.debug("could not build the JS/TS resolution config for %s", repo, exc_info=True)
             cfg = _RepoConfig.__new__(_RepoConfig)
             cfg.repo, cfg.packages, cfg.tsconfigs, cfg.conditions = repo.resolve(), {}, [], list(_STD_CONDITIONS)
         _CACHE[key] = cfg
@@ -312,4 +316,5 @@ def resolve_bare_import(repo_path: Path, from_file: Path, spec: str) -> str | No
         cfg = _config(repo_path)
         return _from_paths(cfg, from_file.resolve(), spec) or _from_package(cfg, spec)
     except Exception:  # malformed package.json / tsconfig content: treat the specifier as external
+        logger.debug("could not resolve %r from %s", spec, from_file, exc_info=True)
         return None

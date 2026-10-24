@@ -833,13 +833,22 @@ def _build_unchanged_scan_cache(
     """
     if previous_sha is None:
         return None
-    diff_result = subprocess.run(
-        [_git_path(), "diff", "--name-only", previous_sha, current_sha],
+    # --no-renames reports a move as a delete plus an add, so both paths count as changed.
+    diff_result = subprocess.run(  # nosec B603 - absolute git from _git_path(), fixed argv, no shell
+        [_git_path(), "diff", "--name-status", "--no-renames", previous_sha, current_sha],
         cwd=checkout_dir, capture_output=True, text=True, errors="ignore",
     )
     if diff_result.returncode != 0:
         return None
-    changed_files = set(diff_result.stdout.splitlines())
+    from aletheore.scanner.cache_scope import languages_to_reextract, parse_name_status
+
+    changes = parse_name_status(diff_result.stdout)
+    changed_files = {path for _status, path in changes}
+    # A cached module's imports were resolved against OTHER files (types, namespaces, packages, whether a file
+    # exists), so they can be stale even though the module's own file did not change. The local scan cache guards
+    # against that with per-language fingerprints; this cache has none, so drop every cached module of a language
+    # the diff could have affected (see aletheore.scanner.cache_scope). Costs some re-parsing, never a wrong edge.
+    stale_languages = languages_to_reextract(changes)
 
     try:
         settings = get_settings()
@@ -852,8 +861,16 @@ def _build_unchanged_scan_cache(
         )
         return None
 
-    unchanged_modules = {path: m for path, m in all_modules.items() if path not in changed_files}
-    unchanged_endpoints = {path: e for path, e in all_endpoints.items() if path not in changed_files}
+    unchanged_modules = {
+        path: m for path, m in all_modules.items()
+        if path not in changed_files and m.get("language") not in stale_languages
+    }
+    # Endpoints are tied to a file's language the same way: one in a language the diff could have affected is
+    # re-extracted together with its modules.
+    unchanged_endpoints = {
+        path: e for path, e in all_endpoints.items()
+        if path not in changed_files and (all_modules.get(path) or {}).get("language") not in stale_languages
+    }
     if not unchanged_modules and not unchanged_endpoints:
         return None
 

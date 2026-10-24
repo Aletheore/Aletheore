@@ -3200,9 +3200,10 @@ def hook_evidence_snippet(
     # command is built from an argv list and quoted for the shell that will run it.
     argv = [_sys.executable, "-m", "aletheore.evidence_hook", "--mode", mode]
     if _sys.platform == "win32":
-        # cmd.exe style: quote an argument that is empty or holds a space, tab or quote
+        # cmd.exe style: quote an argument that is empty or holds a space, tab, quote or cmd metacharacter
         command = " ".join(
-            '"' + arg.replace('"', '\\"') + '"' if not arg or any(c in arg for c in ' \t"') else arg for arg in argv
+            '"' + arg.replace('"', '\\"') + '"' if not arg or any(c in arg for c in ' \t"&^|<>()') else arg
+            for arg in argv
         )
     else:
         command = _shlex.join(argv)

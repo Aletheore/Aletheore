@@ -138,8 +138,9 @@ def crate_aliases(repo_path: Path, from_file: Path) -> dict[str, Path]:
 _LITERAL = re.compile(r"r(#*)\".*?\"\1|\"(?:\\.|[^\"\\])*\"|'(?:\\.[^']*|[^\\'])'", re.DOTALL)
 
 
-def clean_source(text: str) -> str:
-    """Blank out comments (block comments nest in Rust) and string/char literals; strings become `""`."""
+def clean_source(text: str, keep_literals: bool = False) -> str:
+    """Blank out comments (block comments nest in Rust) and string/char literals; strings become `""`.
+    With keep_literals only the comments go, so a path inside a string literal can still be read."""
     out: list[str] = []
     i, n = 0, len(text)
     while i < n:
@@ -162,7 +163,7 @@ def clean_source(text: str) -> str:
         else:
             m = _LITERAL.match(text, i)
             if m:
-                out.append('""' if m.group(0)[0] in "r\"" else " ")
+                out.append(m.group(0) if keep_literals else '""' if m.group(0)[0] in "r\"" else " ")
                 i = m.end()
             else:
                 out.append(text[i])
@@ -173,7 +174,7 @@ def clean_source(text: str) -> str:
 def clear_cache() -> None:
     """Forget directory listings, Cargo manifests, macro registries and module summaries (called once per scan,
     so edits between scans in one process are seen). Also clears the Go package cache."""
-    for cached in (dir_names, _workspace, _macro_registry, module_items):
+    for cached in (dir_names, _workspace, _macro_registry, _arg_macro_registry, module_items):
         cached.cache_clear()
     from aletheore.scanner import go_resolve
 
@@ -241,7 +242,9 @@ def flatten_use(tree: str, keep_glob: bool = False) -> list[str]:
             return out
         s = re.sub(r"\s+as\s+\w+$", "", s).strip()
         if keep_glob and (s == "*" or s.endswith("::*")):
-            return [f"{prefix}::{s}" if prefix and s != "*" else (f"{prefix}::*" if prefix else s)]
+            if s == "*":
+                return [f"{prefix}::*"] if prefix else []
+            return [f"{prefix}::{s}" if prefix else s]
         if s.endswith("::*"):
             s = s[:-3]
         if s in ("*", "self", ""):
@@ -256,7 +259,7 @@ def flatten_use(tree: str, keep_glob: bool = False) -> list[str]:
 # ---------------------------------------------------------------- macro-declared modules and paths
 
 
-@lru_cache(maxsize=64)
+@lru_cache(maxsize=1024)
 def _macro_registry(crate_dir: str) -> dict[str, tuple[list[str], list[str]]]:
     """macro name -> (module names declared at the top of its expansion, flattened `use` paths), for zero-argument
     macros (`() => { ... }` as the only arm) defined anywhere in the crate directory."""
@@ -317,12 +320,95 @@ _INVOKE = re.compile(r"(?m)^[ \t]*([A-Za-z_]\w*)!\s*(?:\(\s*\)|\{\s*\})")
 _INLINE_CRATE = re.compile(r"(?<![\w$:.])crate((?:::[A-Za-z_]\w*)+)")
 
 
+_REPEAT_PATTERN = re.compile(
+    r"^\$\(\s*\$(\w+)\s*:\s*ident\s*\)\s*([,;]?)\s*[*+]\s*(?:\$\(\s*[,;]\s*\)\s*\?)?$"
+)
+_FIXED_ITEM = re.compile(r"^\$(\w+)\s*:\s*ident$")
+_MOD_VAR = re.compile(r"\bmod\s+\$(\w+)\s*;")
+_IDENT = re.compile(r"^[A-Za-z_]\w*$")
+_INVOKE_ARGS = re.compile(r"(?<![\w$])([A-Za-z_]\w*)!\s*([({\[])")
+
+
+def _parse_arm_pattern(pattern: str):
+    """("repeat", var, sep) for `$($x:ident),*`, ("fixed", [vars], sep) for `$a:ident, $b:ident`; None for
+    anything else. Deliberately tiny: literals, other fragment kinds, nested repetitions and tt-munching
+    patterns are not expanded because the module names they declare cannot be read off the invocation."""
+    pattern = re.sub(r"\s+", " ", pattern).strip()
+    repeat = _REPEAT_PATTERN.match(pattern)
+    if repeat:
+        return ("repeat", [repeat.group(1)], repeat.group(2) or ",")
+    for sep in (",", ";"):
+        parts = [p.strip() for p in pattern.split(sep)] if pattern else []
+        if len(parts) > 1 and parts[-1] == "":  # a trailing separator, as _expand_arg_macro tolerates in the call
+            parts.pop()
+        if parts and all(_FIXED_ITEM.match(p) for p in parts):
+            return ("fixed", [_FIXED_ITEM.match(p).group(1) for p in parts], sep)
+    return None
+
+
+@lru_cache(maxsize=1024)
+def _arg_macro_registry(crate_dir: str) -> dict[str, list[tuple]]:
+    """macro name -> arms (spec, module variables) for macros whose arms bind plain `$x:ident` fragments and
+    contain `mod $x;` in the body."""
+    registry: dict[str, list[tuple]] = {}
+    for dirpath, dirnames, filenames in os.walk(crate_dir):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        for name in filenames:
+            if not name.endswith(".rs"):
+                continue
+            try:
+                text = Path(dirpath, name).read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if "macro_rules!" not in text or "mod $" not in re.sub(r"\s+", " ", text):
+                continue
+            text = clean_source(text)
+            for m in _MACRO_DEF.finditer(text):
+                end = _balanced(text, m.end() - 1)
+                pos, arms = m.end(), []
+                while pos < end:
+                    open_p = text.find("(", pos, end)
+                    if open_p < 0:
+                        break
+                    close_p = _balanced(text, open_p)
+                    arrow = re.match(r"\s*=>\s*([{(\[])", text[close_p + 1 : end])
+                    if not arrow:
+                        break
+                    body_open = close_p + 1 + arrow.end() - 1
+                    body_close = _balanced(text, body_open)
+                    spec = _parse_arm_pattern(text[open_p + 1 : close_p])
+                    variables = _MOD_VAR.findall(text[body_open + 1 : body_close])
+                    if spec and variables and set(variables) <= set(spec[1]):
+                        arms.append((spec, tuple(dict.fromkeys(variables))))
+                    pos = body_close + 1
+                if arms:
+                    registry[m.group(1)] = arms
+    return registry
+
+
+def _expand_arg_macro(arms: list[tuple], args: str) -> list[str]:
+    """Module names declared by `name!(args)`: the first arm whose pattern matches plain identifiers."""
+    for (kind, variables, sep), mod_vars in arms:
+        parts = [p.strip() for p in args.split(sep)]
+        if parts and parts[-1] == "":
+            parts = parts[:-1]  # trailing separator
+        if not parts or not all(_IDENT.match(p) for p in parts):
+            continue
+        if kind == "fixed":
+            if len(parts) != len(variables):
+                continue
+            binding = dict(zip(variables, parts))
+            return [binding[v] for v in mod_vars]
+        return parts  # repeat: every bound identifier is declared by `mod $x;`
+    return []
+
+
 def extra_imports(repo_path: Path, from_file: Path, source: str) -> list[str]:
     """Use-path strings the tree-sitter `use`/`mod` walk cannot see: modules and uses produced by zero-argument
     item macros, and fully qualified paths written inline."""
     out: list[str] = []
     # include!("relative/file.rs") textually splices another file in.
-    out.extend(f"@path:{p}" for p in _INCLUDE.findall(re.sub(r"//[^\n]*", " ", source)))
+    out.extend(f"@path:{p}" for p in _INCLUDE.findall(clean_source(source, keep_literals=True)))
     cleaned = clean_source(source)
     crate_dir = nearest_manifest_dir(repo_path, from_file) or repo_path
     registry = _macro_registry(str(crate_dir)) if "!" in cleaned else {}
@@ -332,6 +418,15 @@ def extra_imports(repo_path: Path, from_file: Path, source: str) -> list[str]:
                 mods, uses = registry[name]
                 out.extend(f"self::{m}" for m in mods)
                 out.extend(uses)
+    if "!" in cleaned:
+        arg_registry = _arg_macro_registry(str(crate_dir))
+        if arg_registry:
+            body_without_defs = _strip_macro_defs(cleaned)
+            for m in _INVOKE_ARGS.finditer(body_without_defs):
+                if m.group(1) in arg_registry:
+                    close = _balanced(body_without_defs, m.end() - 1)
+                    args = body_without_defs[m.end() : close]
+                    out.extend(f"self::{n}" for n in _expand_arg_macro(arg_registry[m.group(1)], args))
     # `use` statements are already handled by the tree walk (strip them so paths are not counted twice).
     body = re.sub(r"\buse\s+[^;]+;", " ", _strip_macro_defs(cleaned))
     for m in _INLINE_CRATE.finditer(body):
