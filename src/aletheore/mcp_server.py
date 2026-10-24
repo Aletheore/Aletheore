@@ -381,11 +381,8 @@ def _severity_key(finding: object) -> int:
 
 _QUERY_BUDGET_SORT_BY = {"static-analysis": {"findings": _severity_key}}
 
-_QUERY_BUDGET_DOC_SUFFIX = (
-    " Output is capped to a size budget: if a list is cut, the result says how many items were left out "
-    "and call this tool again with section=<list path>, offset=<next_offset> (optional limit, filter) to page "
-    "through them."
-)
+# Said once per tool, so it stays short: a cut result states what was left out and the exact call to continue.
+_QUERY_BUDGET_DOC_SUFFIX = " Large output is size-capped and paged (section/offset); a cut result says how to continue."
 
 _SEARCH_MATCH_CAP = 200
 # Guards the whole regex search against catastrophic backtracking (e.g.
@@ -1733,6 +1730,34 @@ def _sonarqube_upload_configured() -> bool:
     return bool(os.environ.get("SONARQUBE_HOST_URL")) and shutil.which("sonar-scanner") is not None
 
 
+def _compact_tool_schemas(mcp_instance: MCPServer) -> None:
+    """Strip schema-generator boilerplate from every registered tool's input schema.
+
+    The agent receives these definitions on every turn, so each byte is paid for repeatedly. pydantic adds a `title` to
+    the schema and to every property, writes an optional argument as `anyOf: [X, null]`, and spells out `default: null`.
+    None of it changes what a client can send: an argument is optional because it is not in `required`, and `X` already
+    admits omitting it. Descriptions, types, enums, required lists and the tool annotations are left exactly as they are.
+    """
+    for tool in mcp_instance._tool_manager.list_tools():
+        hints = tool.annotations
+        if hints is not None and hints.read_only_hint is True:
+            # The spec defines destructiveHint and idempotentHint only for tools that are not read-only.
+            hints.destructive_hint = None
+            hints.idempotent_hint = None
+        schema = tool.parameters
+        schema.pop("title", None)
+        for prop in (schema.get("properties") or {}).values():
+            prop.pop("title", None)
+            options = prop.get("anyOf")
+            if options:
+                kept = [o for o in options if o.get("type") != "null"]
+                if len(kept) == 1 and len(kept) < len(options):
+                    del prop["anyOf"]
+                    prop.update(kept[0])
+            if "default" in prop and prop["default"] is None:
+                del prop["default"]
+
+
 def build_server(
     repo_path: Path,
     answer_adapter: AgentAdapter | None = None,
@@ -1818,6 +1843,7 @@ def build_server(
         # One tool: the point is a single definition in the agent's context. aletheore_ask routes to the same
         # queries the full profile exposes one by one.
         _register_ask_tool(mcp_instance, repo_path, only_tool=True)
+        _compact_tool_schemas(mcp_instance)
         return mcp_instance
     if profile == "nav":
         # Three tools, small enough to load up front instead of behind a search step: find code, read one symbol,
@@ -1825,6 +1851,7 @@ def build_server(
         _register_locate_tool(mcp_instance, repo_path)
         _register_symbol_source_tool(mcp_instance, repo_path)
         _register_search_tool(mcp_instance, repo_path)
+        _compact_tool_schemas(mcp_instance)
         return mcp_instance
     _register_ask_tool(mcp_instance, repo_path)
     _register_locate_tool(mcp_instance, repo_path)
@@ -1895,4 +1922,5 @@ def build_server(
             f"Set {_ALLOW_ENV_VAR}={','.join(sorted(effects | set(missing)))} to enable.",
             file=sys.stderr,
         )
+    _compact_tool_schemas(mcp_instance)
     return mcp_instance

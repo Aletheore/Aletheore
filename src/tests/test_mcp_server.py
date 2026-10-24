@@ -298,6 +298,42 @@ def test_build_server_surfaces_instructions_in_the_handshake(tmp_path):
     assert "vocabulary" in server.instructions.lower()
 
 
+# Every tool definition is sent to the agent on every turn, so their size is a recurring token cost. Measured on the
+# full profile: 51,242 characters of compact JSON before the schema boilerplate was stripped, 36,769 after. The
+# ceiling leaves room for a few new tools; raise it deliberately, not by accident.
+FULL_PROFILE_DEFINITION_CHAR_CEILING = 40_000
+
+
+@pytest.mark.asyncio
+async def test_tool_definitions_carry_no_generator_boilerplate_and_stay_small(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    tools = await build_server(repo).list_tools()
+    for tool in tools:
+        schema = tool.input_schema
+        assert "title" not in schema, tool.name
+        for name, prop in (schema.get("properties") or {}).items():
+            assert "title" not in prop, (tool.name, name)
+            assert prop.get("default", 0) is not None, (tool.name, name)  # no `default: null`
+            assert not any(o.get("type") == "null" for o in prop.get("anyOf", [])), (tool.name, name)
+    size = sum(len(json.dumps(t.model_dump(by_alias=True, exclude_none=True), separators=(",", ":"))) for t in tools)
+    assert size <= FULL_PROFILE_DEFINITION_CHAR_CEILING, size
+
+
+@pytest.mark.asyncio
+async def test_compaction_keeps_what_a_client_needs_to_call_the_tools(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    by_name = {t.name: t for t in await build_server(repo).list_tools()}
+    imports = by_name["aletheore_imports"]
+    assert imports.input_schema["required"] == ["target"]
+    props = imports.input_schema["properties"]
+    # optional arguments stay typed (not a union with null) and keep their descriptions
+    assert props["section"]["type"] == "string" and props["section"]["description"]
+    assert props["offset"]["type"] == "integer" and props["limit"]["type"] == "integer"
+    # read-only tools keep the hints a client uses to skip a permission prompt
+    assert imports.annotations.read_only_hint is True and imports.annotations.open_world_hint is False
+    assert imports.annotations.destructive_hint is None and imports.annotations.idempotent_hint is None
+
+
 @pytest.mark.asyncio
 async def test_dynamic_query_tools_have_distinct_non_generic_descriptions(tmp_path):
     # Before this fix, every one of these 16 tools shared the same templated
