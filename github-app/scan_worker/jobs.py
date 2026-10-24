@@ -834,7 +834,7 @@ def _build_unchanged_scan_cache(
     if previous_sha is None:
         return None
     # --no-renames reports a move as a delete plus an add, so both paths count as changed.
-    diff_result = subprocess.run(
+    diff_result = subprocess.run(  # nosec B603 - absolute git from _git_path(), fixed argv, no shell
         [_git_path(), "diff", "--name-status", "--no-renames", previous_sha, current_sha],
         cwd=checkout_dir, capture_output=True, text=True, errors="ignore",
     )
