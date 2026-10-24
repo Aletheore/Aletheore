@@ -80,6 +80,10 @@ HOSTED_EMBEDDING_PATH = "/v1/embeddings"
 DEFAULT_API_BASE_URL = "https://app.aletheore.com"
 INDEX_DIRNAME = "index.lancedb"
 TABLE_NAME = "chunks"
+# Written before any embedding call, so a repo is keyword-searchable while the
+# vectors are still being built - see build_index and search_index. Dropped
+# once the full table lands successfully.
+FTS_TABLE_NAME = f"{TABLE_NAME}_fts"
 
 
 class EmbeddingProviderUnavailableError(Exception):
@@ -1633,6 +1637,28 @@ def _embed_stale_by_hash(
     return dict(zip(stale_hashes, fresh_vectors)), embedder
 
 
+def _write_keyword_index(index_path: Path, chunks: list[dict]) -> None:
+    """Write the vector-free, keyword-only table a search can fall back to.
+
+    Chunk text and metadata are known before any embedding call, so this
+    makes a repo searchable in seconds while the vectors are still building.
+    Deliberately no "vector" column: this table exists to be searched by
+    full-text alone, and it is dropped once the real index lands.
+    """
+    rows = [
+        {key: value for key, value in chunk.items() if key not in ("vector", "embedder")}
+        for chunk in chunks
+    ]
+    db = lancedb.connect(str(index_path))
+    table = db.create_table(FTS_TABLE_NAME, data=rows, mode="overwrite")
+    # Same best-effort contract as the full table's index below: without it
+    # this table still exists, it just cannot answer a keyword query.
+    try:
+        table.create_index("text", config=FTS(), replace=True)
+    except Exception:  # noqa: BLE001 - any backend failure degrades, never fails the build
+        pass
+
+
 def build_index(
     repo_path: Path,
     evidence: dict,
@@ -1647,6 +1673,14 @@ def build_index(
     for chunk in chunks:
         chunk["chunk_hash"] = _chunk_hash(chunk["text"])
 
+    # Keyword-only index first, before the embedding calls below - embedding
+    # a large repo takes minutes, and without this nothing is searchable
+    # until the very last write. If the build raises partway through, this
+    # table is what remains and search_index falls back to it.
+    index_path = _index_path(repo_path)
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_keyword_index(index_path, chunks)
+
     # Embedding is the whole cost of indexing - 16-80 ms per chunk against
     # microseconds for everything else - so the only optimization that
     # matters is not embedding a chunk whose text has not changed. Editing
@@ -1657,7 +1691,6 @@ def build_index(
     # is cheap, and it deletes rows for chunks that no longer exist for
     # free, where an upsert would leave a deleted function searchable
     # forever.
-    index_path = _index_path(repo_path)
     reusable, reusable_embedder = _reusable_vectors(index_path)
     stale = [chunk for chunk in chunks if chunk["chunk_hash"] not in reusable]
     repo = _repo_id(repo_path)
@@ -1770,6 +1803,14 @@ def build_index(
         table.create_index("text", config=FTS(), replace=True)
     except Exception:  # noqa: BLE001 - any backend failure degrades, never fails the build
         pass
+    # The real table is now complete, so the keyword-only stand-in has done
+    # its job. Best-effort: a leftover _fts table is harmless (search prefers
+    # the full table whenever it opens successfully) and never worth failing
+    # a finished build over.
+    try:
+        db.drop_table(FTS_TABLE_NAME)
+    except Exception:  # noqa: BLE001
+        pass
     return len(rows)
 
 
@@ -1819,6 +1860,22 @@ def open_index(repo_path: Path):
         table = db.open_table(TABLE_NAME)
         _TABLE_CACHE[key] = table
         return table
+
+
+def _open_fts_table(repo_path: Path):
+    """The keyword-only table build_index writes before embedding, or None.
+
+    Best-effort: a missing index directory, a missing table, or a corrupt
+    one all mean "no keyword-only fallback", which is exactly the state
+    search_index handled before this table existed.
+    """
+    index_path = _index_path(repo_path)
+    if not index_path.exists():
+        return None
+    try:
+        return lancedb.connect(str(index_path)).open_table(FTS_TABLE_NAME)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 # How many chunks one file may contribute to a single result set, and how
@@ -2031,6 +2088,45 @@ def _table_embedder(table) -> str | None:
         return None
 
 
+def _shape_results(candidates: list[dict], k: int, *, keyword_only: bool = False) -> list[dict]:
+    """Cap chunks per file and project candidates into the public result shape.
+
+    Shared by the normal hybrid path and the keyword-only fallback, so the
+    two cannot drift in how they thin a file or which fields they expose.
+    The marker is added only on the fallback path, keeping ordinary results
+    byte-for-byte what they were before keyword-only indexing existed.
+    """
+    per_file: dict[str, int] = {}
+    raw_results = []
+    for candidate in candidates:
+        path = candidate["module_path"]
+        if per_file.get(path, 0) >= MAX_CHUNKS_PER_FILE:
+            continue
+        per_file[path] = per_file.get(path, 0) + 1
+        raw_results.append(candidate)
+        if len(raw_results) == k:
+            break
+    results = [
+        {
+            "module_path": result["module_path"],
+            "symbol_name": result["symbol_name"],
+            "start_line": result["start_line"],
+            "end_line": result["end_line"],
+            "language": result["language"],
+            "imports": result.get("imports") or [],
+            "text": result["text"],
+            # Full-text hits carry _score, vector hits _distance; neither
+            # retriever ran on the keyword-only path but only the former.
+            "score": result.get("_score" if keyword_only else "_distance"),
+        }
+        for result in raw_results
+    ]
+    if keyword_only:
+        for result in results:
+            result["keyword_only"] = True
+    return results
+
+
 def search_index(
     repo_path: Path,
     query_text: str,
@@ -2041,7 +2137,23 @@ def search_index(
     if language is None:
         # The question may name its own language - see _detect_query_language.
         language = _detect_query_language(query_text)
-    table = open_index(repo_path)
+    try:
+        table = open_index(repo_path)
+    except Exception:  # noqa: BLE001
+        # No full table yet (or it is unreadable), but the build may still be
+        # embedding - answer from the keyword-only table instead of failing.
+        # No query embedding happens on this path, so it needs no provider,
+        # token, or consent. If neither table exists, re-raise the original
+        # error unchanged: that is still "no index".
+        fts_table = _open_fts_table(repo_path)
+        if fts_table is None:
+            raise
+        limit = k * _OVERFETCH_FACTOR
+        return _shape_results(
+            _rrf_fuse([], _fts_candidates(fts_table, query_text, limit, language)),
+            k,
+            keyword_only=True,
+        )
     # Must use the same hosted-vs-local preference as build_index - see
     # _embed_in_batches. Previously this called embed_texts() directly,
     # which is always local: a hosted-built index searched with a local
@@ -2115,27 +2227,4 @@ def search_index(
     candidates = _rrf_fuse(
         vector_query.to_list(), _fts_candidates(table, query_text, limit, language)
     )
-
-    per_file: dict[str, int] = {}
-    raw_results = []
-    for candidate in candidates:
-        path = candidate["module_path"]
-        if per_file.get(path, 0) >= MAX_CHUNKS_PER_FILE:
-            continue
-        per_file[path] = per_file.get(path, 0) + 1
-        raw_results.append(candidate)
-        if len(raw_results) == k:
-            break
-    return [
-        {
-            "module_path": result["module_path"],
-            "symbol_name": result["symbol_name"],
-            "start_line": result["start_line"],
-            "end_line": result["end_line"],
-            "language": result["language"],
-            "imports": result.get("imports") or [],
-            "text": result["text"],
-            "score": result.get("_distance"),
-        }
-        for result in raw_results
-    ]
+    return _shape_results(candidates, k)
