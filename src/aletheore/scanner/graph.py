@@ -2139,18 +2139,37 @@ def _path_closeness(a: Path, b: Path) -> int:
     return n
 
 
-def _nearest_first(importer: Path | None, candidates: list[Path]) -> list[Path]:
+def _nearest_first(
+    importer: Path | None, candidates: list[Path], coverage: dict[Path, int] | None = None
+) -> list[Path]:
     """Candidates ordered by how much path the importing file shares with them (stable, so
     with no importer or a tie the caller's own order still decides). A repo can carry two
     source sets declaring the same packages (lib/java and a trimmed lib/javame copy); a file
-    belongs to the set it lives in, not to whichever root happens to be shallowest."""
+    belongs to the set it lives in, not to whichever root happens to be shallowest.
+
+    `coverage` (source root -> how many of the importer's own imports that root can resolve) breaks the
+    tie for a file equidistant from several source sets (an example under tutorial/ importing lib/java and
+    lib/javame): one compilation uses one classpath, so the set that can satisfy the most of the file's imports
+    is the one it was written against."""
     if importer is None or len(candidates) < 2:
         return candidates
-    return sorted(candidates, key=lambda c: -_path_closeness(importer, c))
+
+    def covered(candidate: Path) -> int:
+        if not coverage:
+            return 0
+        best = [r for r in coverage if candidate == r or candidate.is_relative_to(r)]
+        return coverage[max(best, key=lambda r: len(r.parts))] if best else 0
+
+    return sorted(candidates, key=lambda c: (-_path_closeness(importer, c), -covered(c)))
 
 
 def _resolve_java_import(
-    source_roots: list[Path], dotted: str, is_static: bool, is_wildcard: bool, importer: Path | None = None
+    source_roots: list[Path],
+    dotted: str,
+    is_static: bool,
+    is_wildcard: bool,
+    importer: Path | None = None,
+    coverage: dict[Path, int] | None = None,
 ) -> tuple[list[Path], bool]:
     """Returns (resolved files, was_ambiguous) - was_ambiguous is True when
     more than one source root had a matching candidate and a fixed tiebreak
@@ -2191,18 +2210,22 @@ def _resolve_java_import(
         # the same "import the whole package" fan-out Go's package-level
         # imports need.
         matching_roots = _nearest_first(
-            importer, [root for root in source_roots if root.joinpath(*segments).is_dir()]
+            importer, [root for root in source_roots if root.joinpath(*segments).is_dir()], coverage
         )
         if not matching_roots:
             # `import a.b.Outer.*;` names the nested types of a class, not a package directory.
             nested = _nearest_first(
-                importer, [t for root in source_roots if (t := _java_class_file(root, segments)) is not None]
+                importer,
+                [t for root in source_roots if (t := _java_class_file(root, segments)) is not None],
+                coverage,
             )
             return nested[:1], len(nested) > 1
         return sorted(matching_roots[0].joinpath(*segments).glob("*.java")), len(matching_roots) > 1
 
     matches = _nearest_first(
-        importer, [target for root in source_roots if (target := _java_class_file(root, segments)) is not None]
+        importer,
+        [target for root in source_roots if (target := _java_class_file(root, segments)) is not None],
+        coverage,
     )
     if matches:
         return [matches[0]], len(matches) > 1
@@ -2214,6 +2237,7 @@ def _resolve_java_import(
         matches = _nearest_first(
             importer,
             [target for root in source_roots if (target := _java_class_file(root, segments[:-1])) is not None],
+            coverage,
         )
         if matches:
             return [matches[0]], len(matches) > 1
@@ -2283,6 +2307,39 @@ def _java_type_references(root: Node, source: bytes) -> tuple[set[str], set[str]
             continue
         stack.extend(n.children)
     return used, declared, tparams
+
+
+_JAVA_QUALIFIED_RE = re.compile(r"^[a-z_]\w*(?:\.[a-z_]\w*)*\.[A-Z]\w*")
+
+
+def _java_inline_qualified_targets(
+    root: Node, source: bytes, importer: Path, package_types: dict[str, dict[str, list[Path]]],
+    coverage: dict[Path, int] | None,
+) -> list[tuple[Path, bool]]:
+    """Files named by a fully qualified type written inline (`org.apache.thrift.TException e`), which needs
+    no import. The dotted text must start lower-case, as packages do, and name a top-level type that a scanned
+    file declares in exactly that package."""
+    found: dict[Path, bool] = {}
+    stack = [root]
+    scoped = ("scoped_type_identifier", "scoped_identifier", "field_access")
+    while stack:
+        n = stack.pop()
+        if n.type in ("import_declaration", "package_declaration"):
+            continue
+        if n.type in scoped:
+            dotted = source[n.start_byte:n.end_byte].decode(errors="ignore")
+            dotted = "".join(dotted.split())
+            if _JAVA_QUALIFIED_RE.match(dotted):
+                parts = dotted.split(".")
+                for k in range(len(parts) - 1, 0, -1):
+                    files = package_types.get(".".join(parts[:k]), {}).get(parts[k])
+                    if files:
+                        best = _nearest_first(importer, [f for f in files if f != importer], coverage)
+                        if best:
+                            found.setdefault(best[0], len(best) > 1)
+                        break
+        stack.extend(n.children)
+    return list(found.items())
 
 
 def _java_same_package_targets(
@@ -3371,7 +3428,7 @@ def _csharp_declared_type_names(node: Node, source: bytes) -> list[str]:
 
 _CSHARP_TOP_TYPE_DECLS = _CSHARP_TYPE_DECLS + ("record_struct_declaration",)
 _CSHARP_GLOBAL_USING_RE = re.compile(r"^\s*global\s+using\s+(?!static\b)(?:\w+\s*=\s*)?([\w.]+)\s*;", re.MULTILINE)
-_CSHARP_EXTENSION_RE = re.compile(r"\b([A-Za-z_]\w*)\s*(?:<[^>()]*>)?\s*\(\s*this\s+[A-Za-z_]")
+_CSHARP_EXTENSION_RE = re.compile(r"\b([A-Za-z_]\w*)\s*(<[^>()]*>)?\s*\(\s*this\s+[A-Za-z_]")
 
 
 def _csharp_file_summary(root: Node, source: bytes) -> dict:
@@ -3412,13 +3469,14 @@ def _csharp_file_summary(root: Node, source: bytes) -> dict:
 
     walk(root.children, "")
     decoded = source.decode("utf-8", "ignore")
-    ext_methods = (
-        sorted(set(_CSHARP_EXTENSION_RE.findall(decoded))) if types and "static class" in decoded else []
-    )
+    ext_found = _CSHARP_EXTENSION_RE.findall(decoded) if types and "static class" in decoded else []
+    ext_methods = sorted({name for name, _generic in ext_found})
+    ext_generic = sorted({name for name, generic in ext_found if generic})
     return {
         "ns": namespaces,
         "types": types,
         "ext_methods": ext_methods,
+        "ext_generic": ext_generic,
         "ext_ns": next(iter(types.values())) if types else "",
         "global_usings": _CSHARP_GLOBAL_USING_RE.findall(decoded),
     }
@@ -3501,13 +3559,23 @@ def _build_csharp_index(repo_path: Path, summaries: dict[Path, dict]) -> dict:
     project_of, visible = _csharp_project_index(repo_path, list(summaries))
     global_usings: dict[Path | None, set[str]] = {}
     ext_owners: dict[str, set[Path]] = {}
+    ext_generic_owners: dict[str, set[Path]] = {}
     for path, summary in summaries.items():
         global_usings.setdefault(project_of.get(path), set()).update(summary["global_usings"])
         for method in summary["ext_methods"]:
             ext_owners.setdefault(method, set()).add(path)
+        for method in summary["ext_generic"]:
+            ext_generic_owners.setdefault(method, set()).add(path)
+    # Names under four characters (Add, Has) are mostly BCL instance methods, so a bare `.Add(` proves nothing.
+    # A short name counts only when exactly one file declares it, it is a GENERIC extension, and the caller
+    # supplies explicit type arguments (`.Has<Attr>()`), which an instance List.Add never takes.
+    ext_short_generic = {
+        name for name, owners in ext_generic_owners.items()
+        if len(name) < _CSHARP_MIN_TYPE_NAME and len(ext_owners.get(name, ())) == 1
+    }
     return {
         "files": summaries, "project_of": project_of, "visible": visible,
-        "global_usings": global_usings, "ext_owners": ext_owners,
+        "global_usings": global_usings, "ext_owners": ext_owners, "ext_short_generic": ext_short_generic,
     }
 
 
@@ -3603,13 +3671,17 @@ def _csharp_type_reference_targets(
     else:
         names = (m.group(0) for m in _IDENTIFIER_RE.finditer(text))
     for name in names:
-        if (
-            name in seen
-            or name in own_types
-            or len(name) < _CSHARP_MIN_TYPE_NAME
-        ):
+        if name in seen or name in own_types:
             continue
-        owners = type_owners.get(name)
+        if len(name) < _CSHARP_MIN_TYPE_NAME:
+            # only a unique generic extension called with explicit type arguments (see _build_csharp_index)
+            if (
+                scope is None
+                or name not in index["ext_short_generic"]
+                or not re.search(r"\.\s*" + re.escape(name) + r"\s*<[^>()]*>\s*\(", text)
+            ):
+                continue
+        owners = type_owners.get(name) if len(name) >= _CSHARP_MIN_TYPE_NAME else None
         if scope is not None:
             # an extension method is "owned" by the file that declares it and reached by calling it by name
             owners = (owners or set()) | index["ext_owners"].get(name, set())
@@ -4354,6 +4426,7 @@ def _extract_module(
     csharp_implicit_usings: dict[Path, list[str]] | None = None,
     swift_target_files: dict[str, list[Path]] | None = None,
     java_package_types: dict[str, dict[str, list[Path]]] | None = None,
+    java_root_sizes: dict[Path, int] | None = None,
     csharp_index: dict | None = None,
     js_workspaces: dict[str, str] | None = None,
     ts_aliases: list[dict] | None = None,
@@ -4460,9 +4533,24 @@ def _extract_module(
     elif language_name == "java":
         raw_imports, functions, classes = _extract_java(tree.root_node, source)
         java_refs = _java_type_references(tree.root_node, source) if java_package_types else None
+        java_coverage: dict[Path, int] | None = None
+        if len(java_source_roots) > 1:
+            # how many of this file's imports each source root can satisfy (tie-break between source sets)
+            # the fraction (<1) is the root's share of all Java files: equal coverage prefers the primary set
+            total_files = sum((java_root_sizes or {}).values()) + 1
+            java_coverage = {r: (java_root_sizes or {}).get(r, 0) / total_files for r in java_source_roots}
+            for dotted, is_static, is_wildcard in raw_imports:
+                segs = dotted.split(".")
+                for root in java_source_roots:
+                    if is_wildcard and not is_static:
+                        hit = root.joinpath(*segs).is_dir()
+                    else:
+                        hit = _java_class_file(root, segs[:-1] if is_static and not is_wildcard else segs) is not None
+                    if hit:
+                        java_coverage[root] = java_coverage.get(root, 0) + 1
         for dotted, is_static, is_wildcard in raw_imports:
             targets, ambiguous = _resolve_java_import(
-                java_source_roots, dotted, is_static, is_wildcard, importer=path
+                java_source_roots, dotted, is_static, is_wildcard, importer=path, coverage=java_coverage
             )
             if is_wildcard and not is_static and java_refs is not None:
                 # `import a.b.*;` makes every type of the package nameable, not every file a dependency: keep
@@ -4490,6 +4578,15 @@ def _extract_module(
             for target_path, tie in _java_same_package_targets(
                 path, _extract_java_package(tree.root_node, source), tree.root_node, source,
                 explicit_names, java_package_types, refs=java_refs,
+            ):
+                target = _rel(repo_path, target_path)
+                if target is not None and target != rel_path and target not in already:
+                    already.add(target)
+                    resolved_imports.append(target)
+                    if tie:
+                        import_confidence[target] = "inferred"
+            for target_path, tie in _java_inline_qualified_targets(
+                tree.root_node, source, path, java_package_types, java_coverage
             ):
                 target = _rel(repo_path, target_path)
                 if target is not None and target != rel_path and target not in already:
@@ -5388,7 +5485,7 @@ def _compute_resolution_signatures(
         ]
     if "csharp" in paths_by_language:
         extras["csharp"] = [
-            {rel(p): [s["ns"], sorted(s["types"].items()), s["ext_methods"], s["global_usings"]]
+            {rel(p): [s["ns"], sorted(s["types"].items()), s["ext_methods"], s["ext_generic"], s["global_usings"]]
              for p, s in sorted(csharp_summaries.items(), key=lambda kv: rel(kv[0]))},
             sorted((k, rel(v)) for k, v in csharp_prefix_map.items()),
             sorted((rel(p), rel(q) if q else None) for p, q in (csharp_index or {}).get("project_of", {}).items()),
@@ -5469,6 +5566,7 @@ def build_module_graph(
     java_source_roots: list[Path] = []
     # package -> top-level type name -> declaring files, for same-package references (no import needed).
     java_package_types: dict[str, dict[str, list[Path]]] = {}
+    java_root_sizes: dict[Path, int] = {}  # files per source root: the larger set is the primary one on a tie
     oversized_paths: set[Path] = set()
     # Every .java file's (source, Tree) used to be kept alive here for the
     # main loop below to reuse, parsing each file once per scan instead of
@@ -5510,6 +5608,8 @@ def build_module_graph(
         root = _java_source_root_for(path, package)
         if root is not None and root not in java_source_roots:
             java_source_roots.append(root)
+        if root is not None:
+            java_root_sizes[root] = java_root_sizes.get(root, 0) + 1
         for declared_type in _java_top_level_type_names(tree.root_node, pre_source):
             java_package_types.setdefault(package or "", {}).setdefault(declared_type, []).append(path)
     # Appended in _iter_source_files walk order, which is filesystem-dependent
@@ -5706,6 +5806,7 @@ def build_module_graph(
                 csharp_implicit_usings=csharp_implicit_usings,
                 swift_target_files=swift_target_files,
                 java_package_types=java_package_types,
+                java_root_sizes=java_root_sizes,
                 csharp_index=csharp_index,
             )
         )
