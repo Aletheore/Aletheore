@@ -3191,7 +3191,6 @@ def hook_evidence_snippet(
 ) -> None:
     import json as _json
     import shlex as _shlex
-    import subprocess as _subprocess
     import sys as _sys
 
     if mode not in ("inject", "pointer"):
@@ -3200,7 +3199,13 @@ def hook_evidence_snippet(
     # The interpreter path can hold spaces (a pipx venv lives under "Application Support" on macOS), so the
     # command is built from an argv list and quoted for the shell that will run it.
     argv = [_sys.executable, "-m", "aletheore.evidence_hook", "--mode", mode]
-    command = _subprocess.list2cmdline(argv) if _sys.platform == "win32" else _shlex.join(argv)
+    if _sys.platform == "win32":
+        # cmd.exe style: quote an argument that is empty or holds a space, tab or quote
+        command = " ".join(
+            '"' + arg.replace('"', '\\"') + '"' if not arg or any(c in arg for c in ' \t"') else arg for arg in argv
+        )
+    else:
+        command = _shlex.join(argv)
     entry = lambda matcher: [{"matcher": matcher, "hooks": [{"type": "command", "command": command}]}]  # noqa: E731
     typer.echo(
         _json.dumps(

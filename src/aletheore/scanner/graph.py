@@ -3448,6 +3448,26 @@ def _csharp_code_identifiers(root: Node, source: bytes) -> list[str]:
     return out
 
 
+_PROJECT_XML_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _parse_project_xml(path: Path) -> ET.Element:
+    """Root element of a project file (.csproj) read from a repository we did not write.
+
+    ElementTree does not fetch external entities, but a document can still try to blow up in memory through
+    entity expansion, and a build file never needs a DOCTYPE or an entity. So a file that declares either, or that
+    is implausibly large, is refused (ValueError) and treated as having no references. Bandit's generic
+    "parsing untrusted XML" warning is suppressed only at the parse itself, after those checks.
+    """
+    data = path.read_bytes()
+    if len(data) > _PROJECT_XML_MAX_BYTES:
+        raise ValueError("project file is too large")
+    head = data.lower()
+    if b"<!doctype" in head or b"<!entity" in head:
+        raise ValueError("project file declares a DOCTYPE or entity")
+    return ET.fromstring(data)  # nosec B314 - DOCTYPE and entity declarations were refused above
+
+
 def _csharp_project_index(repo_path: Path, source_paths: list[Path]) -> tuple[dict[Path, Path | None], dict]:
     """(project dir of each .cs file, project dir -> set of project dirs it can see).
 
@@ -3464,8 +3484,8 @@ def _csharp_project_index(repo_path: Path, source_paths: list[Path]) -> tuple[di
     for directory, csproj in project_dirs.items():
         refs: set[Path] = set()
         try:
-            root = ET.parse(csproj).getroot()
-        except (ET.ParseError, OSError):
+            root = _parse_project_xml(csproj)
+        except (ET.ParseError, OSError, ValueError):
             direct[directory] = refs
             continue
         for element in root.iter():
@@ -3726,8 +3746,8 @@ def _load_csharp_implicit_usings(repo_path: Path, source_paths: list[Path]) -> d
     values_by_config: dict[Path, list[str]] = {}
     for config_path in config_paths:
         try:
-            root = ET.parse(config_path).getroot()
-        except (ET.ParseError, OSError):
+            root = _parse_project_xml(config_path)
+        except (ET.ParseError, OSError, ValueError):
             continue
         values = []
         for element in root.iter():
