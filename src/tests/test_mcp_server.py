@@ -334,6 +334,38 @@ async def test_compaction_keeps_what_a_client_needs_to_call_the_tools(tmp_path):
     assert imports.annotations.destructive_hint is None and imports.annotations.idempotent_hint is None
 
 
+LEAN_TOOL_NAMES = {
+    "aletheore_ask", "aletheore_imports", "aletheore_imported_by", "aletheore_symbols", "aletheore_get_blast_radius",
+    "aletheore_list", "aletheore_overview", "aletheore_locate", "aletheore_symbol_source",
+}
+
+
+@pytest.mark.asyncio
+async def test_lean_profile_exposes_exactly_the_direct_tools_agents_use_and_is_far_smaller(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    lean = await build_server(repo, profile="lean").list_tools()
+    full = await build_server(repo).list_tools()
+    assert {t.name for t in lean} == LEAN_TOOL_NAMES
+    assert LEAN_TOOL_NAMES < {t.name for t in full}  # nothing is lean-only: it is a subset of the full profile
+
+    def size(tools):
+        return sum(len(json.dumps(t.model_dump(by_alias=True, exclude_none=True), separators=(",", ":"))) for t in tools)
+
+    assert size(lean) * 3 < size(full)
+    assert size(lean) <= 11_000, size(lean)
+
+
+@pytest.mark.asyncio
+async def test_lean_profile_tools_answer_and_the_profile_is_selectable(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo, profile="lean")
+    # the router tool in the lean profile does not point at tools the profile lacks
+    result = await server.call_tool("aletheore_ask", {"question": "what is this repo"})
+    assert "overview" in str(result).lower() or "repository" in str(result).lower()
+    with pytest.raises(ValueError, match="lean"):
+        build_server(repo, profile="nonsense")
+
+
 @pytest.mark.asyncio
 async def test_dynamic_query_tools_have_distinct_non_generic_descriptions(tmp_path):
     # Before this fix, every one of these 16 tools shared the same templated

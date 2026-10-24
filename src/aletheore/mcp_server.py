@@ -140,6 +140,19 @@ NAV_INSTRUCTIONS = (
     "aletheore_symbol_source returns one function or class; aletheore_search is a literal or regex search."
 )
 
+# The lean profile: the router plus the few direct tools agents actually reach for (measured on benchmark runs of the full
+# profile: 8 of its 44 tools accounted for every Aletheore call). Everything else stays in the full profile.
+LEAN_TOOLS = frozenset({"aletheore_imports", "aletheore_imported_by", "aletheore_symbols"})
+LEAN_INSTRUCTIONS = (
+    "Exact code evidence from a scan of the whole repo. Prefer aletheore_ask to grep for the shape of the code, where "
+    "grep only samples: who imports a file and how many modules a change reaches, the most imported files, circular "
+    "imports, modules that nothing imports, tests for a file, owners, secrets, vulnerabilities, endpoints, layer "
+    "violations. Its counts and lists are exact; report them as returned. For one file use aletheore_imports and "
+    "aletheore_imported_by (direct neighbours), aletheore_symbols (its functions and classes), aletheore_get_blast_radius "
+    "(everything a change reaches); aletheore_locate finds where names are defined and aletheore_symbol_source returns one "
+    "function; aletheore_list and aletheore_overview describe the repo."
+)
+
 ROUTER_INSTRUCTIONS = (
     "Exact code evidence from a scan of the whole repo, through one tool. Prefer aletheore_ask to grep for the "
     "shape of the code, where grep only samples: who imports a file and how many modules a change reaches, "
@@ -611,7 +624,8 @@ READ_ONLY_ANNOTATIONS = ToolAnnotations(
 )
 
 
-def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
+def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path, only: frozenset[str] | None = None) -> None:
+    # `only` limits registration to the named tools (the lean profile); None registers all of them.
     # Query kinds whose function treats `target` as an optional refinement (None ->
     # repo-wide aggregate, a real value -> scoped result) rather than an unused
     # parameter kept only for signature uniformity - find_ownership branches on
@@ -629,6 +643,8 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
     query_budget_chars = budget_chars()
 
     for tool_name, kind in _TOOL_NAME_TO_QUERY_KIND.items():
+        if only is not None and tool_name not in only:
+            continue
         func, requires_target = QUERY_FUNCTIONS[kind]
 
         def make_tool(func=func, requires_target=requires_target, kind=kind):
@@ -1779,8 +1795,8 @@ def build_server(
     also needs the `write` effect, the same permission aletheore_scan needs to
     rewrite .aletheore/, so an operator who withheld write gets no watcher.
     """
-    if profile not in ("full", "nav", "router"):
-        raise ValueError(f"unknown MCP profile {profile!r}; choose full, nav or router")
+    if profile not in ("full", "nav", "router", "lean"):
+        raise ValueError(f"unknown MCP profile {profile!r}; choose full, nav, router or lean")
     effects = allowed_effects(os.environ.get(_ALLOW_ENV_VAR)) if allow is None else allow
     # A per-server copy, not the module-level TOOL_REQUIRED_EFFECTS directly:
     # aletheore_answer only needs `external` added when the selected adapter
@@ -1813,7 +1829,9 @@ def build_server(
 
     mcp_instance = MCPServer(
         "aletheore",
-        instructions={"nav": NAV_INSTRUCTIONS, "router": ROUTER_INSTRUCTIONS}.get(profile, SERVER_INSTRUCTIONS),
+        instructions={"nav": NAV_INSTRUCTIONS, "router": ROUTER_INSTRUCTIONS, "lean": LEAN_INSTRUCTIONS}.get(
+            profile, SERVER_INSTRUCTIONS
+        ),
         version=_package_version(),
     )
     # A tool that returns a string would otherwise also send a JSON-wrapped structured copy, and the model is shown
@@ -1843,6 +1861,17 @@ def build_server(
         # One tool: the point is a single definition in the agent's context. aletheore_ask routes to the same
         # queries the full profile exposes one by one.
         _register_ask_tool(mcp_instance, repo_path, only_tool=True)
+        _compact_tool_schemas(mcp_instance)
+        return mcp_instance
+    if profile == "lean":
+        # The router plus the direct tools agents reach for most; about a fifth of the full profile's definitions.
+        _register_ask_tool(mcp_instance, repo_path, only_tool=True)
+        _register_query_wrapper_tools(mcp_instance, repo_path, only=LEAN_TOOLS)
+        _register_blast_radius_tool(mcp_instance, repo_path)
+        _register_list_tool(mcp_instance, repo_path)
+        _register_overview_tool(mcp_instance, repo_path)
+        _register_locate_tool(mcp_instance, repo_path)
+        _register_symbol_source_tool(mcp_instance, repo_path)
         _compact_tool_schemas(mcp_instance)
         return mcp_instance
     if profile == "nav":
