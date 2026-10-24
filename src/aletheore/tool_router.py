@@ -152,6 +152,28 @@ INTENTS: tuple[Intent, ...] = (
         weight=1.2,
     ),
     Intent(
+        # Fan-in: the files many others import. The opposite end of the import graph from dead_code.
+        "hubs",
+        "most_imported",
+        (
+            r"\bmost[- ](?:depended[- ]on|imported|used|referenced|connected|central|widely[- ]used)\b",
+            r"\b(?:depended on|imported|used|referenced) by the most\b",
+            r"\b(?:imported|depended on|used|referenced)\b[^?.]{0,20}\bthe most\b",
+            r"\bmost (?:important|central|core|critical) (?:modules?|files?)\b",
+            r"\bhubs?\b", r"\bfan-?in\b", r"\bhighest (?:in-?degree|number of importers)\b",
+        ),
+        weight=1.5,
+    ),
+    Intent(
+        "cycles",
+        "import_cycles",
+        (
+            r"\bcircular\b", r"\bcycles?\b", r"\bcyclic\b", r"\b(?:import|dependency) loops?\b",
+            r"\bimport (?:each other|one another)\b", r"\bmutual(?:ly)? import",
+        ),
+        weight=1.5,
+    ),
+    Intent(
         "layers",
         "aletheore_layer_violations",
         (
@@ -555,13 +577,13 @@ def route(question: str, explicit_target: str | None, paths: list[str]) -> Route
     # An intent that needs a file cannot run when the question names none, so it is not a real rival: a question
     # about a directory that matches both "nothing imports it" and "what imports this file" is the first one.
     rivals = [i for s, i in scored[1:] if top_score - s < 0.5 and not (i.needs_file and target is None)]
-    if rivals and top.name not in ("impact", "tests", "owner", "dependencies"):
+    if rivals and top.name not in ("impact", "tests", "owner", "dependencies", "hubs", "cycles"):
         # A near tie between unrelated intents is not worth a confident wrong answer.
         return Route(
             "low", top.name, top.tool, target, reason="the question fits more than one query",
             candidates=[i.tool for _, i in scored[:3]],
         )
-    scope = (resolve_scope(question, explicit_target, paths) or target) if top.name == "dead_code" else None
+    scope = (resolve_scope(question, explicit_target, paths) or target) if top.name in ("dead_code", "hubs", "cycles") else None
     return Route("high", top.name, top.tool, target, reason=f"matched {top.name}", scope=scope)
 
 
@@ -678,6 +700,25 @@ def _dead_code(q, evidence, repo_path, target, question):
     )
 
 
+def _wanted_count(question: str, default: int = 10) -> int:
+    """How many items the question asks for ("top 5", "which 3 files", "the 10 most imported"), else `default`."""
+    match = re.search(r"\b(?:top|which|list|show|name|give me|the)\s+(\d{1,2})\b", question, re.I) or re.search(
+        r"\b(\d{1,2})\s+(?:most|files?|modules?|source)", question, re.I
+    )
+    return int(match.group(1)) if match else default
+
+
+def _hubs(q, evidence, repo_path, target, question):
+    # `target` is the directory the question is limited to, or None for the whole repo.
+    return q.find_most_imported_modules(
+        evidence, target, _wanted_count(question), ignore_test_importers=bool(_NON_TEST_QUALIFIER.search(question))
+    )
+
+
+def _cycles(q, evidence, repo_path, target, question):
+    return q.find_import_cycles(evidence, target, ignore_test_files=bool(_NON_TEST_QUALIFIER.search(question)))
+
+
 def _secrets(q, evidence, repo_path, target, question):
     return q.find_secrets_for_file(evidence, target) if target else q.find_secrets_for_file(evidence, None)
 
@@ -692,6 +733,8 @@ _RUNNERS: dict[str, Callable] = {
     "vulnerabilities": lambda q, e, r, t, qu: q.find_vulnerabilities(e, None),
     "static_analysis": lambda q, e, r, t, qu: q.find_static_analysis(e, None),
     "dead_code": _dead_code,
+    "hubs": _hubs,
+    "cycles": _cycles,
     "layers": lambda q, e, r, t, qu: q.find_layer_violations(e, None),
     "endpoints": lambda q, e, r, t, qu: q.find_endpoints(e, None),
     "env": lambda q, e, r, t, qu: q.find_environment_variables(e, None),
