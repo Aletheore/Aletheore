@@ -33,6 +33,7 @@ export const toc = [
   { id: "compact-context", label: "Prompt size", fresh: false },
   { id: "locating-code", label: "Locating code", fresh: false },
   { id: "graphify", label: "Graphify", fresh: true },
+  { id: "graph-questions", label: "Graph questions", fresh: true },
   { id: "comprehension", label: "Comprehension", fresh: true },
   { id: "deterministic-vs-llm", label: "vs a bare LLM", fresh: true },
   { id: "scanner-accuracy", label: "Scanner accuracy", fresh: true },
@@ -148,6 +149,23 @@ export const graphify = {
   href: "https://github.com/Aletheore/aletheore-benchmarks/tree/master/graphify_comparison",
 };
 
+export const graphQuestions = {
+  eyebrow: "Graph questions, 14 repositories, 12 languages",
+  title: "On whole-repo questions Aletheore beats grep, and answering costs less.",
+  intro:
+    "The same cheap model (claude-haiku-5-5) answers each question with grep alone, with Aletheore's router tool, with Aletheore's full tool set, and with Graphify, three times each. Every answer is scored against a ground truth built by the language's own tooling (compiler APIs and parsers), never by Aletheore: who imports this file, how many files does a change reach, which files does nothing import, who owns it, where is it defined, which files are imported the most, is there a circular import. 4,830 raw runs.",
+  read: [
+    "Across 192 questions on 12 repositories in 9 more languages, Aletheore's router and full tool set score 0.88 and 0.89 against 0.74 for grep: +0.14 and +0.15 (95% intervals +0.10 to +0.18 and +0.11 to +0.19). On Python (Django, ERPNext) the gap is +0.25 and +0.24.",
+    "The clearest win is blast radius, \"how many files does a change to X reach\": grep 0.59, Aletheore 0.95. Grep has to chase imports file by file; the graph answers it exactly.",
+    "The router used 40 to 50% of grep's input tokens and cost a fifth to a third as much per correct answer: $0.0017 against $0.0083 on Python, $0.0027 against $0.0079 on the 12 repositories.",
+    "Graphify, run in code-only mode, was level with grep (0.74 against 0.74) and below it on Python (0.55 against 0.64). Its LLM mode, which cost roughly Rs 300 to run over 12 repositories, did not beat Aletheore's deterministic graph, which makes no LLM calls to build: on the two question sets where we ran it, 0.90 and 0.82 against 0.93 and 0.82 for Aletheore's full tool set.",
+    "Where grep finds the answer in one or two searches (where a uniquely named symbol is defined, callers by name, short import cycles), nothing beats it, and Aletheore does not either: grep 0.84 to 0.90, Aletheore 0.82 to 0.93.",
+    "Two earlier results on this page, setup time and cost on flat symbol queries, showed Graphify ahead. They predate the changes since and have not been re-run; we expect them to look better and have not measured it.",
+  ],
+  note: "Ownership scores for grep and Graphify are understated by tool refusals in the test harness (31 of 144 grep runs and 21 of 144 Graphify runs were refused): on runs that produced an answer grep scored 0.85 to 0.97. Do not read that row as a tool difference. The questions are graph-shaped and we chose them, one cheap model answers them, and Ruby, C, C++, Rust and C# have one repository each.",
+  href: "https://github.com/Aletheore/aletheore-benchmarks/tree/master/graph_questions",
+};
+
 export const comprehension = {
   eyebrow: "Explaining code, \"how does X work?\"",
   title: "Roughly at parity with RepoWise, leaning ahead.",
@@ -248,7 +266,8 @@ export const lose = {
     "\"How does X work?\" comprehension is close, not a clean win: 2.00 against 1.77 averaged across five languages, but most per-corpus gaps sit inside the judge's own noise.",
     "On SWE-PRBench our absolute recall (22.3%) and precision (20.5%) are low, as they are for every model; the score is above the published cluster by a margin close to our own run-to-run variance.",
     "The Graphify comparison rests on 15 questions on one corpus, of which only 2 discriminate between conditions.",
-    "Our local setup was slower than Graphify's: scanning and indexing ERPNext took about 23 minutes against their about 1 minute. We found the real bottleneck (dead-code detection, 77% of scan time, not parsing) and fixed it in aletheore 0.9.5: 53.23 s against the old 236.02 s, verified against the installed release. Indexing (about 19 minutes, a separate I/O-bound step) is now the honest remaining gap.",
+    "On graph questions grep can already answer (where a uniquely named symbol is defined, callers by name, short import cycles) Aletheore does not beat it. C is barely helped (0.51 against 0.59 to 0.62) and Ruby is weak for every tool. The graph-question benchmark uses questions we chose, one cheap model, and a single repository for each of Ruby, C, C++, Rust and C#.",
+    "Our local setup was slower than Graphify's: scanning and indexing ERPNext took about 23 minutes against their about 1 minute. We found the real bottleneck (dead-code detection, 77% of scan time, not parsing) and fixed it in aletheore 0.9.5: 53.23 s against the old 236.02 s, verified against the installed release. Indexing (about 19 minutes, a separate I/O-bound step) is now the honest remaining gap. Not re-run since: with the hosted index and concurrent batches (an open pull request) ERPNext indexed in about 2.4 minutes, and the tool-definition overhead has been cut; we expect this comparison to look better and have not measured it.",
     "The PR-review comparison rests on 13 pull requests, so its intervals are wide and small differences between tools are noise. Our fix for cross-file false positives was developed while looking at these same pull requests and has not been checked on unseen ones. \"Precision\" counts any accurate, specific claim about the diff, so it measures accuracy of claims, not how important they are. The head-to-head runs the diff-only generation path; a separate four-run measurement of the production call scored 89.2% precision, and it too was developed while looking at these pull requests. The other tools' rows are single runs from before 2026-09-23.",
   ],
 };

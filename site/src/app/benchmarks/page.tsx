@@ -195,6 +195,19 @@ export default function BenchmarksPage() {
         <p className="mt-4 text-[12.5px]"><a className="text-ink underline" href={B.graphify.href} rel="noopener">Method, both corrections made before publishing, and the setup-time comparison &rarr;</a></p>
       </Section>
 
+      <Section id="graph-questions" eyebrow={B.graphQuestions.eyebrow} title={B.graphQuestions.title} intro={<>{B.graphQuestions.intro} <FreshBadge /></>}>
+        <DataTable caption="Accuracy by question set: grep, Aletheore router, Aletheore full, Graphify (share of questions answered exactly right)" {...asRecords(T.graphQuestions)} />
+        <div className="mt-8 grid gap-8 lg:grid-cols-2">
+          <DataTable caption="Accuracy by question kind on the 12-repository set" {...asRecords(T.graphQuestionsKind)} />
+          <DataTable caption="Input tokens and cost per correct answer" {...asRecords(T.graphQuestionsCost)} />
+        </div>
+        <ul className="mt-8 flex max-w-[76ch] flex-col gap-3 text-[13.5px] leading-[1.65] text-muted">
+          {B.graphQuestions.read.map((r) => (<li key={r} className="flex gap-2.5"><span className="mt-[9px] size-1.5 flex-none bg-stamp" aria-hidden="true" /><span>{r}</span></li>))}
+        </ul>
+        <Prose className="mt-4 text-[12.5px] text-faint">{B.graphQuestions.note}</Prose>
+        <p className="mt-4 text-[12.5px]"><a className="text-ink underline" href={B.graphQuestions.href} rel="noopener">Method, ground truth, every loss, and the raw runs with a one-command reproduction &rarr;</a></p>
+      </Section>
+
       <Section id="comprehension" eyebrow={B.comprehension.eyebrow} title={B.comprehension.title} intro={<>{B.comprehension.intro} <FreshBadge /></>}>
         <BarList caption="Blind-judge score, 0 to 3, per corpus (higher is better)" max={3} rows={comprehensionRows()} />
         <Prose className="mt-6">{B.comprehension.note}</Prose>

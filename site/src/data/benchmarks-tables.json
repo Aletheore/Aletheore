@@ -906,5 +906,149 @@
   "sources": [
    "README.md"
   ]
+ },
+ "graphQuestions": {
+  "columns": [
+   "Question set",
+   "Tasks",
+   "Grep",
+   "Aletheore router",
+   "Aletheore full",
+   "Graphify"
+  ],
+  "rows": [
+   [
+    "Python: Django, ERPNext",
+    "44",
+    "0.64",
+    "0.89",
+    "0.88",
+    "0.55"
+   ],
+   [
+    "12 other repositories, 9 more languages",
+    "192",
+    "0.74",
+    "0.88",
+    "0.89",
+    "0.74"
+   ],
+   [
+    "where is X defined / shortest import chain",
+    "69",
+    "0.90",
+    "0.87",
+    "0.93",
+    "0.89"
+   ],
+   [
+    "hubs, cycles, duplicate names, callers, subclasses",
+    "67",
+    "0.84",
+    "0.82",
+    "0.85",
+    "0.79"
+   ]
+  ],
+  "sources": [
+   "graph_questions/README.md"
+  ]
+ },
+ "graphQuestionsKind": {
+  "columns": [
+   "Question kind (192 tasks)",
+   "Tasks",
+   "Grep",
+   "Aletheore router",
+   "Aletheore full",
+   "Graphify"
+  ],
+  "rows": [
+   [
+    "blast radius (size)",
+    "31",
+    "0.59",
+    "0.95",
+    "0.95",
+    "0.52"
+   ],
+   [
+    "direct importers",
+    "58",
+    "0.79",
+    "0.83",
+    "0.83",
+    "0.79"
+   ],
+   [
+    "dependency counts",
+    "34",
+    "0.85",
+    "0.84",
+    "0.88",
+    "0.81"
+   ],
+   [
+    "unreachable files",
+    "21",
+    "0.70",
+    "0.71",
+    "0.73",
+    "0.73"
+   ],
+   [
+    "ownership",
+    "48",
+    "0.71",
+    "0.99",
+    "0.98",
+    "0.78"
+   ]
+  ],
+  "sources": [
+   "graph_questions/README.md"
+  ]
+ },
+ "graphQuestionsCost": {
+  "columns": [
+   "Set and measure",
+   "Grep",
+   "Aletheore router",
+   "Aletheore full",
+   "Graphify"
+  ],
+  "rows": [
+   [
+    "Python (44 tasks), input tokens",
+    "70,900",
+    "27,800",
+    "80,700",
+    "57,300"
+   ],
+   [
+    "Python (44 tasks), cost per correct answer",
+    "$0.0083",
+    "$0.0017",
+    "$0.0023",
+    "$0.0066"
+   ],
+   [
+    "12 other repositories (192 tasks), input tokens",
+    "84,300",
+    "41,800",
+    "100,700",
+    "83,900"
+   ],
+   [
+    "12 other repositories (192 tasks), cost per correct answer",
+    "$0.0079",
+    "$0.0027",
+    "$0.0037",
+    "$0.0069"
+   ]
+  ],
+  "sources": [
+   "graph_questions/README.md"
+  ]
  }
 }
