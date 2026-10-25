@@ -2147,6 +2147,10 @@ def search_index(
         language = _detect_query_language(query_text)
     try:
         table = open_index(repo_path)
+    except IndexDimensionMismatchError:
+        # An incompatible index must remain actionable; keyword fallback is
+        # reserved for unavailable or unreadable indexes.
+        raise
     except Exception:  # noqa: BLE001
         # No full table yet (or it is unreadable), but the build may still be
         # embedding - answer from the keyword-only table instead of failing.

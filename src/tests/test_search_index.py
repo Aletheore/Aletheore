@@ -1011,6 +1011,20 @@ def test_search_index_does_not_hide_dimension_mismatch_behind_keyword_fallback(t
         open_fts.assert_not_called()
 
 
+def test_search_index_does_not_fallback_when_open_index_reports_dimension_mismatch(tmp_path):
+    from aletheore.search_index import IndexDimensionMismatchError
+
+    mismatch = IndexDimensionMismatchError("index dimension mismatch")
+    with patch("aletheore.search_index.open_index", side_effect=mismatch), patch(
+        "aletheore.search_index._open_fts_table"
+    ) as open_fts:
+        with pytest.raises(IndexDimensionMismatchError) as exc_info:
+            search_index(tmp_path, "anything")
+
+    assert exc_info.value is mismatch
+    open_fts.assert_not_called()
+
+
 def test_keyword_only_results_carry_the_marker(tmp_path):
     """Callers (the CLI especially) need to know the answer came from the
     stand-in table while embeddings were still building."""
