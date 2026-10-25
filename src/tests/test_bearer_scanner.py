@@ -140,3 +140,16 @@ def test_check_bearer_exit_0_with_an_empty_report_is_still_a_clean_scan(tmp_path
 
     assert result["checked"] is True
     assert result["findings"] == []
+
+
+def test_check_bearer_rejects_a_valid_non_object_report(tmp_path):
+    mock_result = _mock_run(0, stdout="[]")
+
+    with patch("aletheore.static_analysis.bearer_scanner.shutil.which", return_value="bearer"), patch(
+        "aletheore.static_analysis.bearer_scanner._has_commits", return_value=True
+    ), patch("aletheore.static_analysis.bearer_scanner.subprocess.run", return_value=mock_result):
+        result = check_bearer(tmp_path)
+
+    assert result["checked"] is False
+    assert "non-object report" in result["reason"]
+    assert result["findings"] == []

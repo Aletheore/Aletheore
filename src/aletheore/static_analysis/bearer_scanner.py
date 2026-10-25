@@ -123,6 +123,13 @@ def check_bearer(repo_path: Path, timeout: int | None = None) -> dict:
             "findings": [],
         }
 
+    if not isinstance(payload, dict):
+        return {
+            "checked": False,
+            "reason": f"bearer produced a non-object report: {type(payload).__name__}",
+            "findings": [],
+        }
+
     # Bearer exits 1 when it reports findings, and 1 with an empty report is an error instead (checked live:
     # a directory with no supported source prints "{}" on stdout, "Error: report error: 0 rules found ..." on
     # stderr, and exits 1), which would otherwise pass as a clean scan.
