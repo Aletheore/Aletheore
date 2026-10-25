@@ -703,8 +703,13 @@ def _dead_code(q, evidence, repo_path, target, question):
 
 def _wanted_count(question: str, default: int = 10) -> int:
     """Return a limit only when the number is explicitly part of a ranking cue."""
-    match = re.search(r"\b(?:top|which|show|list)\s+(\d{1,2})\b", question, re.I) or re.search(
+    match = re.search(r"\btop\s+(\d{1,2})\b", question, re.I) or re.search(
         r"\b(\d{1,2})\s+most\b", question, re.I
+    ) or re.search(
+        r"\bwhich\s+(\d{1,2})\s+(?:non[- ]?test\s+)?(?:files?|modules?)\s+"
+        r"(?:are|is)\s+(?:imported|depended on|used|referenced)\s+by\s+the\s+most\b",
+        question,
+        re.I,
     )
     return int(match.group(1)) if match else default
 
