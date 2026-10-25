@@ -95,3 +95,61 @@ def test_check_bearer_treats_a_fatal_exit_code_as_a_real_failure(tmp_path):
         result = check_bearer(tmp_path)
 
     assert result["checked"] is False
+
+
+def test_check_bearer_does_not_report_a_crash_as_a_clean_scan(tmp_path):
+    # Bearer prints "{}" for a clean scan, so empty stdout means it died before reporting; that used to be
+    # parsed as {} and reported as a clean scan.
+    for returncode in (0, 1):
+        mock_result = _mock_run(returncode, stdout="", stderr="panic: out of memory")
+
+        with patch("aletheore.static_analysis.bearer_scanner.shutil.which", return_value="/usr/bin/bearer"), \
+             patch("aletheore.static_analysis.bearer_scanner._has_commits", return_value=True), \
+             patch("aletheore.static_analysis.bearer_scanner.subprocess.run", return_value=mock_result):
+            result = check_bearer(tmp_path)
+
+        assert result["checked"] is False
+        assert result["findings"] == []
+        assert "without any output" in result["reason"]
+
+
+def test_check_bearer_exit_1_with_an_empty_report_is_an_error_not_a_clean_scan(tmp_path):
+    # Checked live: a directory with no supported source prints "{}" on stdout, "Error: report error: 0 rules
+    # found for supported language ..." on stderr, and exits 1. Exit 1 means findings, so an empty report
+    # with exit 1 is a failure that used to pass as a clean scan.
+    mock_result = _mock_run(1, stdout="{}", stderr="Error: report error: 0 rules found for supported language")
+
+    with patch("aletheore.static_analysis.bearer_scanner.shutil.which", return_value="/usr/bin/bearer"), \
+         patch("aletheore.static_analysis.bearer_scanner._has_commits", return_value=True), \
+         patch("aletheore.static_analysis.bearer_scanner.subprocess.run", return_value=mock_result):
+        result = check_bearer(tmp_path)
+
+    assert result["checked"] is False
+    assert "no findings in its report" in result["reason"]
+    assert "0 rules found" in result["reason"]
+
+
+def test_check_bearer_exit_0_with_an_empty_report_is_still_a_clean_scan(tmp_path):
+    # The guard above is only for exit 1: a genuine clean run exits 0 with "{}".
+    mock_result = _mock_run(0, stdout="{}")
+
+    with patch("aletheore.static_analysis.bearer_scanner.shutil.which", return_value="/usr/bin/bearer"), \
+         patch("aletheore.static_analysis.bearer_scanner._has_commits", return_value=True), \
+         patch("aletheore.static_analysis.bearer_scanner.subprocess.run", return_value=mock_result):
+        result = check_bearer(tmp_path)
+
+    assert result["checked"] is True
+    assert result["findings"] == []
+
+
+def test_check_bearer_rejects_a_valid_non_object_report(tmp_path):
+    mock_result = _mock_run(0, stdout="[]")
+
+    with patch("aletheore.static_analysis.bearer_scanner.shutil.which", return_value="bearer"), patch(
+        "aletheore.static_analysis.bearer_scanner._has_commits", return_value=True
+    ), patch("aletheore.static_analysis.bearer_scanner.subprocess.run", return_value=mock_result):
+        result = check_bearer(tmp_path)
+
+    assert result["checked"] is False
+    assert "non-object report" in result["reason"]
+    assert result["findings"] == []
