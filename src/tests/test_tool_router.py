@@ -200,3 +200,17 @@ def test_test_qualifiers_and_paths_do_not_pick_the_intent():
     assert tr.route("which modules under src/api have no importers", None, PATHS).intent == "dead_code"
     # a snake_case directory name is not an environment variable
     assert tr.route("who owns src/api/setup_wizard", "src/api/users.py", PATHS).intent == "owner"
+
+
+def test_graph_terms_require_graph_context():
+    assert tr.route("how does the render cycle work?", None, PATHS).intent != "cycles"
+    assert tr.route("what are the retry hubs?", None, PATHS).intent != "hubs"
+    assert tr.route("show import cycles", None, PATHS).intent == "cycles"
+    assert tr.route("which files are imported the most?", None, PATHS).intent == "hubs"
+
+
+def test_wanted_count_only_reads_explicit_ranking_cues():
+    assert tr._wanted_count("show 5 usages of the hub module") == 10
+    assert tr._wanted_count("which 3 files import auth the most") == 10
+    assert tr._wanted_count("top 3 files") == 3
+    assert tr._wanted_count("the 10 most imported") == 10
