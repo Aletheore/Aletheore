@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import hashlib
 import ipaddress
 import os
@@ -77,6 +78,8 @@ HOSTED_EMBEDDING_MODEL = "jina-embeddings-v2-base-code"
 # as distinct providers regardless, since their outputs are not proven
 # identical; switching between them rebuilds the index, correctly.
 HOSTED_EMBEDDING_PATH = "/v1/embeddings"
+# Mirrors MAX_CHARS_PER_TEXT in github-app/app_server/embeddings_api.py.
+HOSTED_MAX_CHARS_PER_TEXT = 8_000
 DEFAULT_API_BASE_URL = "https://app.aletheore.com"
 INDEX_DIRNAME = "index.lancedb"
 TABLE_NAME = "chunks"
@@ -829,6 +832,11 @@ def embed_texts_hosted(
     changes mid-session is honoured without the CLI knowing anything.
     """
     client = http_client or httpx.Client(base_url=api_base_url, timeout=120.0)
+    # The endpoint rejects any text over its 8,000-char ceiling with a 413,
+    # which used to fail the first batch of any repo with a long function and
+    # drop the whole index to local Ollama. Clamp rather than fail: the
+    # opening of a chunk (signature, docstring) is what carries its meaning.
+    texts = [text[:HOSTED_MAX_CHARS_PER_TEXT] for text in texts]
     body: dict = {"texts": texts}
     if repo_id:
         body["repo_id"] = repo_id
@@ -1515,55 +1523,94 @@ def _embed_in_batches(
             "context; using local provider",
             file=sys.stderr,
         )
-    vectors: list[list[float]] = []
-    # Default for the zero-batch case (empty texts): no embedding call ever
-    # runs, so this label is never actually observed against a real vector -
-    # a caller with reusable vectors to compare against always has at least
-    # one chunk to probe first (see build_index).
-    embedder = f"local:{DEFAULT_EMBEDDING_MODEL}"
-    total = len(texts)
 
-    # Recomputed when the provider changes: the hosted spans are character-
-    # bounded, the local ones are not, and a fallback mid-run must not keep
-    # using the hosted shape.
+    total = len(texts)
+    if total == 0:
+        return [], f"local:{DEFAULT_EMBEDDING_MODEL}"
+
     spans = _hosted_batches(texts, batch_size) if use_hosted else [
         (s, min(s + batch_size, len(texts))) for s in range(0, len(texts), batch_size)
     ]
-    span_index = 0
-    while span_index < len(spans):
-        start, end = spans[span_index]
-        span_index += 1
-        batch = texts[start:end]
-        if use_hosted:
-            try:
-                vectors.extend(embed_texts_hosted(batch, token, repo_id=repo_id))
-                embedder = f"hosted:{HOSTED_EMBEDDING_MODEL}"
-                if on_progress is not None:
-                    on_progress(len(vectors), total)
-                continue
-            except HostedEmbeddingUnavailableError as exc:
-                if vectors:
-                    raise
-                # Nothing embedded yet, so falling back costs no consistency.
-                # Printed rather than swallowed: a 402 means the plan
-                # changed, which the user needs to see.
-                print(f"aletheore: hosted embeddings unavailable ({exc}); using local provider")
-                use_hosted = False
-                # range(end, ...), not range(start, ...): the current batch
-                # (texts[start:end]) is about to be embedded locally by the
-                # fallthrough below - rebuilding remaining spans from `start`
-                # put that same batch back at the front of the queue, so the
-                # next loop iteration embedded it a second time via the local
-                # path. Confirmed: 10 texts, batch_size=5, hosted fails on the
-                # first batch -> 15 vectors returned for 10 input texts, with
-                # _embed_stale_by_hash's zip(stale_hashes, fresh_vectors)
-                # silently misaligning every hash after the duplicate.
-                spans = [(s, min(s + batch_size, len(texts))) for s in range(end, len(texts), batch_size)]
-                span_index = 0
-        vectors.extend(embed_texts(batch))
+
+    # Embed first batch sequentially to settle the provider.
+    first_start, first_end = spans[0]
+    first_batch = texts[first_start:first_end]
+    vectors: list[list[float]] = []
+
+    if use_hosted:
+        try:
+            vectors.extend(embed_texts_hosted(first_batch, token, repo_id=repo_id))
+            embedder = f"hosted:{HOSTED_EMBEDDING_MODEL}"
+            if on_progress is not None:
+                on_progress(len(vectors), total)
+        except HostedEmbeddingUnavailableError as exc:
+            # First batch failed on hosted - fall back to local for all batches.
+            print(f"aletheore: hosted embeddings unavailable ({exc}); using local provider")
+            use_hosted = False
+            vectors.extend(embed_texts(first_batch))
+            embedder = f"local:{DEFAULT_EMBEDDING_MODEL}"
+            if on_progress is not None:
+                on_progress(len(vectors), total)
+    else:
+        vectors.extend(embed_texts(first_batch))
         embedder = f"local:{DEFAULT_EMBEDDING_MODEL}"
         if on_progress is not None:
             on_progress(len(vectors), total)
+
+    # Remaining batches: run in parallel with the settled provider.
+    if use_hosted:
+        remaining_spans = spans[1:]
+    else:
+        # A hosted batch can be smaller than batch_size because of its token
+        # cap. If that first batch falls back to the local provider, rebuild
+        # the remaining spans using the local count-based contract instead of
+        # sending hosted-shaped oversized batches to the local endpoint.
+        remaining_spans = [
+            (start, min(start + batch_size, total))
+            for start in range(first_end, total, batch_size)
+        ]
+    if not remaining_spans:
+        return vectors, embedder
+
+    # Worker count: env var, else 4 hosted, 1 local. Ollama serves one slot, and
+    # two concurrent local requests crashed its runner (measured).
+    try:
+        workers = int(os.environ.get("ALETHEORE_EMBED_WORKERS", "0"))
+        if workers < 1:
+            workers = 4 if use_hosted else 1
+    except ValueError:
+        workers = 4 if use_hosted else 1
+
+    # Prepare batches with their original indices to preserve order.
+    batch_args: list[tuple[int, list[str]]] = []
+    for i, (start, end) in enumerate(remaining_spans):
+        batch_args.append((i, texts[start:end]))
+
+    def embed_batch(indexed_batch: tuple[int, list[str]]) -> tuple[int, list[list[float]]]:
+        idx, batch = indexed_batch
+        if use_hosted:
+            return idx, embed_texts_hosted(batch, token, repo_id=repo_id)
+        return idx, embed_texts(batch)
+
+    # Results land by batch index so output order matches input order no
+    # matter which request finishes first; progress ticks as each completes.
+    results: list[list[list[float]] | None] = [None] * len(batch_args)
+    done_count = len(vectors)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(embed_batch, arg) for arg in batch_args]
+        try:
+            for fut in concurrent.futures.as_completed(futures):
+                idx, batch_vectors = fut.result()
+                results[idx] = batch_vectors
+                done_count += len(batch_vectors)
+                if on_progress is not None:
+                    on_progress(done_count, total)
+        except BaseException:
+            for f in futures:
+                f.cancel()
+            raise
+    for batch_vectors in results:
+        vectors.extend(batch_vectors)
 
     return vectors, embedder
 
