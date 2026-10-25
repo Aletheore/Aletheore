@@ -932,7 +932,22 @@
     "0.88",
     "0.89",
     "0.74"
-   ],
+   ]
+  ],
+  "sources": [
+   "graph_questions/README.md"
+  ]
+ },
+ "graphQuestionsExtra": {
+  "columns": [
+   "Additional question set",
+   "Tasks",
+   "Grep",
+   "Aletheore router",
+   "Aletheore full",
+   "Graphify"
+  ],
+  "rows": [
    [
     "where is X defined / shortest import chain",
     "69",

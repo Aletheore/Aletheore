@@ -196,7 +196,8 @@ export default function BenchmarksPage() {
       </Section>
 
       <Section id="graph-questions" eyebrow={B.graphQuestions.eyebrow} title={B.graphQuestions.title} intro={<>{B.graphQuestions.intro} <FreshBadge /></>}>
-        <DataTable caption="Accuracy by question set: grep, Aletheore router, Aletheore full, Graphify (share of questions answered exactly right)" {...asRecords(T.graphQuestions)} />
+        <DataTable caption="Accuracy on the initial 236 tasks (44 Python and 192 across 12 other repositories)" {...asRecords(T.graphQuestions)} />
+        <DataTable caption="Additional non-overlapping question sets added later (136 tasks total)" {...asRecords(T.graphQuestionsExtra)} />
         <div className="mt-8 grid gap-8 lg:grid-cols-2">
           <DataTable caption="Accuracy by question kind on the 12-repository set" {...asRecords(T.graphQuestionsKind)} />
           <DataTable caption="Input tokens and cost per correct answer" {...asRecords(T.graphQuestionsCost)} />
