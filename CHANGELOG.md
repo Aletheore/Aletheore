@@ -50,6 +50,26 @@ the catalog. A transposed, missing or doubled letter, as in "kubernetes deployme
 skills as the correct spelling. The match is down-weighted and only used when the word has no exact match, so
 queries with no typos rank exactly as before.
 
+**Added: `aletheore_ask` answers "which files are imported the most" and "is there a circular import"**
+
+Two questions the router could not answer, and that a grep can only approximate, now come straight from the scan's
+import graph. "Which 5 files are depended on by the most other files" returns the ranking with a count per file; the
+number is taken from the question ("top 5", "which 3 files"), a directory in the question limits it, "non-test" counts
+only non-test importers, and `tied_at_cutoff` says when the cut falls inside a tie. "Is there a circular dependency"
+returns every group of modules that import each other (strongly connected components) with an ordered shortest cycle
+for each group; edges the scan marks as inferred, such as build-tag alternatives, are not followed. On 27 benchmark
+questions over 14 repositories, none were routed before and all are now; 21 match the independent reference, and the
+rest are repositories whose import graph differs from it. The router tool's accuracy on those questions went from 0.70
+to 0.86 and its cost per correct answer from $0.0145 to $0.0075.
+
+**Fixed: "no other file depends on / uses / references X" routes to dead code, and `(group)` / `[id]` path segments
+are file paths**
+
+"List the files that no other file depends on" tied with the impact question on the words "depends on" and came back as
+a low-confidence guess; the dead-code intent now takes "depends on", "uses", "references" and "requires" after "no
+other file". Route-group and dynamic-route path segments (`app/(doc)/[[...slug]]/page.tsx`, `routes/[id]/+page.ts`)
+are read as one file path instead of breaking the question at the brackets.
+
 - **License changed from PolyForm Noncommercial 1.0.0 to AGPL-3.0, with a separate
   commercial license.** Aletheore is now open source: companies can use it internally
   without a paid license. Modified versions that are distributed or offered over a

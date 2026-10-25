@@ -143,6 +143,7 @@ NAV_INSTRUCTIONS = (
 ROUTER_INSTRUCTIONS = (
     "Exact code evidence from a scan of the whole repo, through one tool. Prefer aletheore_ask to grep for the "
     "shape of the code, where grep only samples: who imports a file and how many modules a change reaches, "
+    "the most imported files, circular imports, "
     "modules in a directory that nothing imports, tests for a file, owners, churn, secrets, vulnerabilities, dead "
     "code, layer violations, endpoints, definitions, repo overview. Give a plain question and a file or "
     "directory as target. Its counts and lists are exact; report them as returned, not filtered by what you know "

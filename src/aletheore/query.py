@@ -694,6 +694,190 @@ def find_unimported_modules(
     }
 
 
+_MOST_IMPORTED_DEFAULT = 10
+_MOST_IMPORTED_MAX = 50
+
+
+def find_most_imported_modules(
+    evidence: dict,
+    scope: str | None = None,
+    limit: int = _MOST_IMPORTED_DEFAULT,
+    ignore_test_importers: bool = False,
+) -> dict:
+    """The modules the most other modules import (highest fan-in), optionally limited to a directory.
+
+    Test files are never candidates. Every importer counts by default; with `ignore_test_importers` (a "non-test"
+    question) only non-test importers do, which is the usual meaning of "depended on by the most files".
+    `tied_at_cutoff` says when the module just past the cut has the same count as the last one listed, so a
+    caller can tell an arbitrary tie-break from a clear top.
+    """
+    limit = max(1, min(int(limit), _MOST_IMPORTED_MAX))
+    prefix = (scope or "").strip("/")
+    counted: list[tuple[int, str]] = []
+    for module in evidence["repository"]["modules"]:
+        path = module.get("path") or ""
+        if prefix and path != prefix and not path.startswith(prefix + "/"):
+            continue
+        if _BLAST_TEST_PATH.search(path):
+            continue
+        importers = {p for p in (module.get("imported_by") or []) if p != path}
+        if ignore_test_importers:
+            importers = {p for p in importers if not _BLAST_TEST_PATH.search(p)}
+        if importers:
+            counted.append((len(importers), path))
+    counted.sort(key=lambda item: (-item[0], item[1]))
+    top = counted[:limit]
+    return {
+        "scope": prefix or "(whole repo)",
+        "definition": "fan-in: the number of distinct modules that import the file; test files are not candidates",
+        "importers_counted": "non-test only" if ignore_test_importers else "all",
+        "limit": limit,
+        "most_imported": [{"path": path, "imported_by_count": count} for count, path in top],
+        "tied_at_cutoff": len(counted) > limit and counted[limit][0] == top[-1][0] if top else False,
+        "candidates_with_importers": len(counted),
+    }
+
+
+def _strongly_connected(nodes: set[str], graph: dict[str, list[str]]) -> list[list[str]]:
+    """Tarjan's algorithm, iterative so a deep import chain cannot hit the recursion limit."""
+    index: dict[str, int] = {}
+    low: dict[str, int] = {}
+    on_stack: set[str] = set()
+    stack: list[str] = []
+    components: list[list[str]] = []
+    counter = 0
+    for root in sorted(nodes):
+        if root in index:
+            continue
+        work = [(root, iter(graph.get(root, ())))]
+        index[root] = low[root] = counter
+        counter += 1
+        stack.append(root)
+        on_stack.add(root)
+        while work:
+            node, children = work[-1]
+            advanced = False
+            for child in children:
+                if child not in nodes:
+                    continue
+                if child not in index:
+                    index[child] = low[child] = counter
+                    counter += 1
+                    stack.append(child)
+                    on_stack.add(child)
+                    work.append((child, iter(graph.get(child, ()))))
+                    advanced = True
+                    break
+                if child in on_stack:
+                    low[node] = min(low[node], index[child])
+            if advanced:
+                continue
+            work.pop()
+            if work:
+                parent = work[-1][0]
+                low[parent] = min(low[parent], low[node])
+            if low[node] == index[node]:
+                component = []
+                while True:
+                    member = stack.pop()
+                    on_stack.discard(member)
+                    component.append(member)
+                    if member == node:
+                        break
+                components.append(sorted(component))
+    return components
+
+
+def _shortest_cycle(component: list[str], graph: dict[str, list[str]]) -> list[str]:
+    """A shortest cycle inside one strongly connected component, as an ordered list: each module imports the next
+    and the last imports the first."""
+    members = set(component)
+    best: list[str] = []
+    for start in component[:60]:  # a sample is enough to find a short one; the cost stays bounded for huge components
+        parent = {start: None}
+        queue = deque([start])
+        found = None
+        while queue and found is None:
+            node = queue.popleft()
+            for child in graph.get(node, ()):
+                if child not in members:
+                    continue
+                if child == start:
+                    found = node
+                    break
+                if child not in parent:
+                    parent[child] = node
+                    queue.append(child)
+        if found is None:
+            continue
+        path = [found]
+        while parent[path[-1]] is not None:
+            path.append(parent[path[-1]])
+        path.reverse()
+        if not best or len(path) < len(best):
+            best = path
+        if len(best) == 2:
+            break
+    return best
+
+
+_CYCLES_LISTED = 5
+_CYCLE_MEMBERS_LISTED = 25
+
+
+def find_import_cycles(evidence: dict, scope: str | None = None, ignore_test_files: bool = False) -> dict:
+    """Circular imports: groups of modules that import each other, directly or through a chain.
+
+    Each group is a strongly connected component of the import graph with at least two modules (or a module that
+    imports itself). For every group an ordered `example_cycle` is given (each module imports the next, the last
+    imports the first), the shortest one found. Test files are included unless `ignore_test_files` (a "non-test"
+    question) removes them from the graph. `scope` limits the graph to a directory.
+    """
+    prefix = (scope or "").strip("/")
+    modules = evidence["repository"]["modules"]
+    keep: set[str] = set()
+    for module in modules:
+        path = module.get("path") or ""
+        if prefix and path != prefix and not path.startswith(prefix + "/"):
+            continue
+        if ignore_test_files and _BLAST_TEST_PATH.search(path):
+            continue
+        keep.add(path)
+    # Edges the scan marks "inferred" (build-tag alternatives, an ambiguous resolution) are not followed: a loop that
+    # exists only through alternative builds of one file is not a real circular import.
+    graph = {
+        m["path"]: [
+            i for i in (m.get("imports") or [])
+            if i in keep and (m.get("import_confidence") or {}).get(i) != "inferred"
+        ]
+        for m in modules
+        if m.get("path") in keep
+    }
+    groups = [c for c in _strongly_connected(keep, graph) if len(c) >= 2]
+    self_importers = sorted(p for p, targets in graph.items() if p in targets)
+    groups.sort(key=lambda c: (-len(c), c[0]))
+    listed = []
+    for component in groups[:_CYCLES_LISTED]:
+        listed.append(
+            {
+                "size": len(component),
+                "example_cycle": _shortest_cycle(component, graph),
+                "members": component[:_CYCLE_MEMBERS_LISTED],
+                "members_truncated": len(component) > _CYCLE_MEMBERS_LISTED,
+            }
+        )
+    return {
+        "scope": prefix or "(whole repo)",
+        "test_files": "excluded" if ignore_test_files else "included",
+        "edges_followed": "certain imports only (inferred edges, such as build-tag alternatives, are not followed)",
+        "has_cycle": bool(groups or self_importers),
+        "cycle_groups_total": len(groups),
+        "self_importing_modules": self_importers[:20],
+        "cycle_groups": listed,
+        "cycle_groups_truncated": len(groups) > _CYCLES_LISTED,
+    }
+
+
 def find_database(evidence: dict, target: str | None) -> dict:
     return evidence["repository"]["database"]
 
