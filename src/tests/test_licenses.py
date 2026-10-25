@@ -302,7 +302,7 @@ def test_detect_repo_license_from_pom_xml_without_a_namespace_declaration(tmp_pa
 # The real, verbatim opening of the Apache License 2.0 (as published at
 # apache.org/licenses/LICENSE-2.0.txt) - not a hand-typed guess at what an
 # Apache license file looks like. This used to be read live from this
-# repo's own LICENSE file, but that file is PolyForm Noncommercial as of
+# repo's own LICENSE file, but that file is AGPL-3.0 as of
 # this project's own license change; embedding the real text here keeps the
 # test's original intent (verify against genuine license text) without
 # coupling a dependency-license-detection test to this repo's own license.
