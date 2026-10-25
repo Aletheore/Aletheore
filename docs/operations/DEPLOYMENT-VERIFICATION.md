@@ -4,8 +4,43 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-10-22
-**Snapshot Freshness:** CURRENT as of 2026-10-22 - `app-server`, both scan workers, `health-worker` and `scheduler`
+**Last Updated:** 2026-10-25
+**Snapshot Freshness:** CURRENT as of 2026-10-25 - all six app services (`app-server`, both scan workers,
+`health-worker`, `scheduler` and `jina-embed`) run `master` at commit `64d80b2f` (tag `github-app-deploy-2026-10-25`);
+`postgres`, `redis`, `caddy` and `autoheal` were not touched. 87 commits since the previous deploy (`aa967773`, which
+is where the server's checkout stood; the last tagged deploy was `github-app-deploy-2026-10-22-2`). No migration
+(newest applied row is still `074_skill_hub_personal_identity.sql`). Done after a database backup
+(`backups/aletheore_app_2026-10-25T12-58-28Z.dump`): all six images were built first (exit 0), then replaced with
+`--no-deps`, `app-server` first, then both scan workers, `health-worker`, `scheduler` and `jina-embed` one at a time,
+each waiting for `healthy` and for every RQ worker to be idle before it was touched.
+
+Verified live over SSH: `docker ps` shows all ten containers up and the six app services `healthy`; `/healthz` returns
+`200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`; zero lines matching `error|traceback|exception` in the
+six services' logs since restart; `aletheore.__version__` is 0.10.2 in the running `app-server` and scan-worker
+containers; `https://aletheore.com/` returns 200.
+
+One slip, caught by that version check: the first attempt ran `git fetch --tags` and `git reset --hard` as one `&&`
+chain, the fetch failed, the reset was skipped, and the build and restart that followed ran the old checkout (still
+0.10.1). Nothing was harmed, but the services restarted twice. Fetch without `--tags` and check
+`git log -1` and `aletheore.__version__` on the server before building.
+
+2026-10-25 deploy (`64d80b2f`, tag `github-app-deploy-2026-10-25`; `git log aa967773..64d80b2f` is the exact range):
+
+- **License:** the project moved from PolyForm Noncommercial to AGPL-3.0 with a separate commercial license (#1130).
+  `src/LICENSE`, which still carried Apache 2.0 text, now matches the root file. The only outside contributor's
+  written consent is on file.
+- **Search and MCP:** a repository is keyword-searchable before its embeddings finish, with errors preserved in the
+  keyword fallback; embedding batches run concurrently and hosted chunks are clamped to 8,000 characters; the
+  DeepInfra in-flight limit is 16 per `app-server` process with a 1 GiB memory limit; the MCP tool definitions are 28
+  percent smaller and a lean profile (the router plus nine direct code tools) was added.
+- **Router and Hallbook:** the router answers "most imported files" and "circular imports", routes "no other file
+  depends on" to dead code, and has an `aletheore_ask` tool and an evidence hook for file actions; Hallbook search
+  covers custom skills, ranks general skills correctly, and throttles hook hints.
+- **Scanner:** the known graph gaps are closed (hosted scan cache, Go members, Rust macros, Java and C# edges, #1120).
+- **Dependencies:** `docker-compose.yml` and `requirements.lock.txt` changed (the semgrep MCP pin and the telemetry
+  lock), which is why every image was rebuilt.
+
+**Previous:** CURRENT as of 2026-10-22 - `app-server`, both scan workers, `health-worker` and `scheduler`
 run `master` at commit `9fa87511` (tag `github-app-deploy-2026-10-22`); `jina-embed`, `postgres` and `redis` were not
 touched. No migration (the start log says `no pending migrations`). One deploy, after a database backup
 (`backups/aletheore_app_2026-10-22T06-24-04Z.dump`). All five changed images were built first and import-tested
