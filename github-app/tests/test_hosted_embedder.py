@@ -444,3 +444,34 @@ def test_a_non_positive_dimension_value_is_logged_not_silently_replaced(monkeypa
     with caplog.at_level("ERROR"):
         assert he.deepinfra_dimensions() == 1024
     assert "DEEPINFRA_EMBED_DIMENSIONS" in caplog.text
+
+
+def test_in_flight_cap_holds_under_load_and_is_actually_reached(monkeypatch):
+    # The cap is what protects the provider from a burst, so check both directions: no
+    # more than MAX_IN_FLIGHT_CALLS calls overlap, and the cap is really used (a cap
+    # that silently allowed fewer would throttle indexing without anyone noticing).
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    lock = threading.Lock()
+    running = 0
+    peak = 0
+
+    def slow_post(*args, **kwargs):
+        nonlocal running, peak
+        with lock:
+            running += 1
+            peak = max(peak, running)
+        time.sleep(0.05)
+        with lock:
+            running -= 1
+        return _response(200, [[1.0]])
+
+    monkeypatch.setattr(he.httpx, "post", slow_post)
+    monkeypatch.setattr(he, "_IN_FLIGHT", threading.BoundedSemaphore(he.MAX_IN_FLIGHT_CALLS))
+
+    with ThreadPoolExecutor(he.MAX_IN_FLIGHT_CALLS * 3) as pool:
+        list(pool.map(lambda _: he.embed_batch(["x"]), range(he.MAX_IN_FLIGHT_CALLS * 3)))
+
+    assert peak == he.MAX_IN_FLIGHT_CALLS

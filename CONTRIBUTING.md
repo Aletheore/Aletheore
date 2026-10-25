@@ -14,14 +14,20 @@ being triaged right now.
 - **Questions and discussion** via [GitHub
   Discussions](https://github.com/Aletheore/Aletheore/discussions).
 
-## Commercial use and licensing
+## Licensing
 
-Aletheore is licensed under the
-[PolyForm Noncommercial License 1.0.0](LICENSE), free for personal use,
-research, and evaluation. Use within or for a company — including internal
-tooling — requires a separate commercial license. Reach out at
-[arihantkaul@outlook.com](mailto:arihantkaul@outlook.com) for commercial
-licensing.
+Aletheore is licensed under the [GNU Affero General Public License v3.0](LICENSE), and a
+separate commercial license is available (see [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md)).
+Because the project is also offered under commercial terms, code cannot be accepted until the
+contributor or relevant rights holder provides written confirmation using this statement, or
+equivalent wording:
+
+> I authorize Aletheore, Arihant Kaul, and successors to distribute my contribution under
+> AGPL-3.0 and to include it in commercial licenses for Aletheore.
+
+The maintainer records the contributor or rights-holder identity, contribution scope or commit,
+date, and consent location before merging. This permission does not transfer copyright unless a
+separate assignment is signed. Open an issue before sending code so that the record can be set up.
 
 This policy may change as the project matures — if you're interested in
 contributing code, opening an issue to ask is a reasonable way to check
