@@ -5,6 +5,10 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Local scan caches now invalidate when parser/endpoint code or installed tree-sitter
+  grammars change, even without a package-version bump. Older unstamped caches rebuild
+  once instead of serving stale modules or API endpoints.
+
 ## 0.11.0 - 2026-10-25
 
 **Changed: a long, specific skill name no longer beats the general skill**
