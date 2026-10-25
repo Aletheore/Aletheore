@@ -1,6 +1,7 @@
 {
   "name": "aletheore",
   "private": true,
+  "license": "AGPL-3.0-only",
   "version": "0.0.0",
   "description": "Formatting, linting, and doc-check tooling for the Aletheore monorepo.",
   "scripts": {

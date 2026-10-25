@@ -44,7 +44,7 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     cpus: "1.0"
-    mem_limit: 768m
+    mem_limit: 1g
     # Own Python code, not a third-party image whose internal capability
     # needs are unaudited - it does nothing (no raw sockets, no chroot, no
     # binding a privileged <1024 port) that needs any Linux capability, so

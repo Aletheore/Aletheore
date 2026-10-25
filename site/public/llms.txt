@@ -10,7 +10,7 @@ The free tier is genuinely free: `scan`, `query`, `diff`, the MCP server, and th
 - Benchmarks (separate repo, reproducible): https://github.com/Aletheore/aletheore-benchmarks
 - Install: `pip install aletheore`
 - Hallbook (1,129 vetted agent skills bundled with Aletheore, searchable offline through the MCP server): https://www.aletheore.com/hallbook
-- License: PolyForm Noncommercial 1.0.0 (source-available; commercial use requires a separate license)
+- License: AGPL-3.0, with a separate commercial license available (COMMERCIAL-LICENSE.md)
 
 ## The deterministic scanner
 

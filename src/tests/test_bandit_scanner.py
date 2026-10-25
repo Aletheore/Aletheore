@@ -309,3 +309,21 @@ def test_check_bandit_keeps_a_real_b608_true_positive(tmp_path):
     assert len(result["findings"]) == 1
     assert result["findings"][0]["rule_id"] == "B608"
     assert result["findings"][0]["line"] == 2
+
+
+def test_check_bandit_does_not_report_a_crash_as_a_clean_scan(tmp_path):
+    # A Bandit that dies before printing its report exits 1 ("issues found") with empty stdout; that used
+    # to be parsed as {} and reported as a clean scan. Bandit prints a JSON document on every real run.
+    (tmp_path / "app.py").write_text("import os\n")
+
+    for returncode in (0, 1):
+        mock_result = _mock_run(returncode, stdout="", stderr="ModuleNotFoundError: No module named 'stevedore'")
+
+        with patch("aletheore.static_analysis.bandit_scanner.shutil.which", return_value="/usr/bin/bandit"), \
+             patch("aletheore.static_analysis.bandit_scanner.subprocess.run", return_value=mock_result):
+            result = check_bandit(tmp_path)
+
+        assert result["checked"] is False
+        assert result["findings"] == []
+        assert "without any output" in result["reason"]
+        assert "stevedore" in result["reason"]

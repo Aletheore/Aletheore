@@ -248,8 +248,18 @@ def check_bandit(repo_path: Path, timeout: int = DEFAULT_BANDIT_TIMEOUT_SECONDS)
             "findings": [],
         }
 
+    # Bandit prints a JSON document on every real run, even with no Python files. Empty stdout means
+    # it died before that (exit 1 with a traceback), which the exit-code check above reads as "issues
+    # found"; parsing it as {} reported a clean scan for a scanner that did not run.
+    if not result.stdout.strip():
+        return {
+            "checked": False,
+            "reason": f"bandit exited {result.returncode} without any output: {(result.stderr or '')[-500:]}",
+            "findings": [],
+        }
+
     try:
-        payload = json.loads(result.stdout or "{}")
+        payload = json.loads(result.stdout)
     except json.JSONDecodeError:
         return {
             "checked": False,
