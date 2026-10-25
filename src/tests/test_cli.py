@@ -3908,9 +3908,10 @@ def test_hallbook_snippet_prints_the_agent_instruction_and_names_real_tools():
         assert tool in result.stdout
 
 
-def test_hallbook_suggest_reads_json_stdin_and_prints_the_hint():
+def test_hallbook_suggest_reads_json_stdin_and_prints_the_hint(monkeypatch, tmp_path):
     query = "Rewrite this blog post intro to feel more human and less stiff."
     payload = json.dumps({"prompt": query, "session_id": "s", "cwd": "."})
+    monkeypatch.setattr(skill_hub, "user_home", lambda: tmp_path)
 
     result = runner.invoke(app, ["hallbook", "suggest"], input=payload)
 
@@ -4093,11 +4094,9 @@ def test_dashboard_can_skip_opening_browser_for_headless_runs(tmp_path, monkeypa
 
     with patch("aletheore.cli._port_is_available", return_value=True), patch(
         "aletheore.cli._offer_scan_before_dashboard"
-    ), patch(
-        "aletheore.dashboard.build_app"
-    ), patch("aletheore.cli.threading.Timer") as timer, patch(
-        "aletheore.cli.uvicorn.Server", return_value=server
-    ):
+    ), patch("aletheore.dashboard.build_app"), patch(
+        "aletheore.cli.threading.Timer"
+    ) as timer, patch("aletheore.cli.uvicorn.Server", return_value=server):
         assert _dashboard(str(tmp_path), 8420) == 0
 
     timer.assert_not_called()

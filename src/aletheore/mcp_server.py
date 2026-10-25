@@ -140,6 +140,19 @@ NAV_INSTRUCTIONS = (
     "aletheore_symbol_source returns one function or class; aletheore_search is a literal or regex search."
 )
 
+# The lean profile: the router plus the few direct tools agents actually reach for (measured on benchmark runs of the full
+# profile: 8 of its 44 tools accounted for every Aletheore call). Everything else stays in the full profile.
+LEAN_TOOLS = frozenset({"aletheore_imports", "aletheore_imported_by", "aletheore_symbols"})
+LEAN_INSTRUCTIONS = (
+    "Exact code evidence from a scan of the whole repo. Prefer aletheore_ask to grep for the shape of the code, where "
+    "grep only samples: who imports a file and how many modules a change reaches, the most imported files, circular "
+    "imports, modules that nothing imports, tests for a file, owners, secrets, vulnerabilities, endpoints, layer "
+    "violations. Its counts and lists are exact; report them as returned. For one file use aletheore_imports and "
+    "aletheore_imported_by (direct neighbours), aletheore_symbols (its functions and classes), aletheore_get_blast_radius "
+    "(everything a change reaches); aletheore_locate finds where names are defined and aletheore_symbol_source returns one "
+    "function; aletheore_list and aletheore_overview describe the repo."
+)
+
 ROUTER_INSTRUCTIONS = (
     "Exact code evidence from a scan of the whole repo, through one tool. Prefer aletheore_ask to grep for the "
     "shape of the code, where grep only samples: who imports a file and how many modules a change reaches, "
@@ -382,11 +395,8 @@ def _severity_key(finding: object) -> int:
 
 _QUERY_BUDGET_SORT_BY = {"static-analysis": {"findings": _severity_key}}
 
-_QUERY_BUDGET_DOC_SUFFIX = (
-    " Output is capped to a size budget: if a list is cut, the result says how many items were left out "
-    "and call this tool again with section=<list path>, offset=<next_offset> (optional limit, filter) to page "
-    "through them."
-)
+# Said once per tool, so it stays short: a cut result states what was left out and the exact call to continue.
+_QUERY_BUDGET_DOC_SUFFIX = " Large output is size-capped and paged (section/offset); a cut result says how to continue."
 
 _SEARCH_MATCH_CAP = 200
 # Guards the whole regex search against catastrophic backtracking (e.g.
@@ -615,7 +625,8 @@ READ_ONLY_ANNOTATIONS = ToolAnnotations(
 )
 
 
-def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
+def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path, only: frozenset[str] | None = None) -> None:
+    # `only` limits registration to the named tools (the lean profile); None registers all of them.
     # Query kinds whose function treats `target` as an optional refinement (None ->
     # repo-wide aggregate, a real value -> scoped result) rather than an unused
     # parameter kept only for signature uniformity - find_ownership branches on
@@ -633,6 +644,8 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
     query_budget_chars = budget_chars()
 
     for tool_name, kind in _TOOL_NAME_TO_QUERY_KIND.items():
+        if only is not None and tool_name not in only:
+            continue
         func, requires_target = QUERY_FUNCTIONS[kind]
 
         def make_tool(func=func, requires_target=requires_target, kind=kind):
@@ -1734,6 +1747,34 @@ def _sonarqube_upload_configured() -> bool:
     return bool(os.environ.get("SONARQUBE_HOST_URL")) and shutil.which("sonar-scanner") is not None
 
 
+def _compact_tool_schemas(mcp_instance: MCPServer) -> None:
+    """Strip schema-generator boilerplate from every registered tool's input schema.
+
+    The agent receives these definitions on every turn, so each byte is paid for repeatedly. pydantic adds a `title` to
+    the schema and to every property, writes an optional argument as `anyOf: [X, null]`, and spells out `default: null`.
+    None of it changes what a client can send: an argument is optional because it is not in `required`, and `X` already
+    admits omitting it. Descriptions, types, enums, required lists and the tool annotations are left exactly as they are.
+    """
+    for tool in mcp_instance._tool_manager.list_tools():
+        hints = tool.annotations
+        if hints is not None and hints.read_only_hint is True:
+            # The spec defines destructiveHint and idempotentHint only for tools that are not read-only.
+            hints.destructive_hint = None
+            hints.idempotent_hint = None
+        schema = tool.parameters
+        schema.pop("title", None)
+        for prop in (schema.get("properties") or {}).values():
+            prop.pop("title", None)
+            options = prop.get("anyOf")
+            if options:
+                kept = [o for o in options if o.get("type") != "null"]
+                if len(kept) == 1 and len(kept) < len(options) and isinstance(kept[0], dict) and "type" in kept[0]:
+                    del prop["anyOf"]
+                    prop.update(kept[0])
+            if "default" in prop and prop["default"] is None:
+                del prop["default"]
+
+
 def build_server(
     repo_path: Path,
     answer_adapter: AgentAdapter | None = None,
@@ -1755,8 +1796,8 @@ def build_server(
     also needs the `write` effect, the same permission aletheore_scan needs to
     rewrite .aletheore/, so an operator who withheld write gets no watcher.
     """
-    if profile not in ("full", "nav", "router"):
-        raise ValueError(f"unknown MCP profile {profile!r}; choose full, nav or router")
+    if profile not in ("full", "nav", "router", "lean"):
+        raise ValueError(f"unknown MCP profile {profile!r}; choose full, nav, router or lean")
     effects = allowed_effects(os.environ.get(_ALLOW_ENV_VAR)) if allow is None else allow
     # A per-server copy, not the module-level TOOL_REQUIRED_EFFECTS directly:
     # aletheore_answer only needs `external` added when the selected adapter
@@ -1789,7 +1830,9 @@ def build_server(
 
     mcp_instance = MCPServer(
         "aletheore",
-        instructions={"nav": NAV_INSTRUCTIONS, "router": ROUTER_INSTRUCTIONS}.get(profile, SERVER_INSTRUCTIONS),
+        instructions={"nav": NAV_INSTRUCTIONS, "router": ROUTER_INSTRUCTIONS, "lean": LEAN_INSTRUCTIONS}.get(
+            profile, SERVER_INSTRUCTIONS
+        ),
         version=_package_version(),
     )
     # A tool that returns a string would otherwise also send a JSON-wrapped structured copy, and the model is shown
@@ -1819,6 +1862,18 @@ def build_server(
         # One tool: the point is a single definition in the agent's context. aletheore_ask routes to the same
         # queries the full profile exposes one by one.
         _register_ask_tool(mcp_instance, repo_path, only_tool=True)
+        _compact_tool_schemas(mcp_instance)
+        return mcp_instance
+    if profile == "lean":
+        # The router plus the direct tools agents reach for most; about a fifth of the full profile's definitions.
+        _register_ask_tool(mcp_instance, repo_path, only_tool=True)
+        _register_query_wrapper_tools(mcp_instance, repo_path, only=LEAN_TOOLS)
+        _register_blast_radius_tool(mcp_instance, repo_path)
+        _register_list_tool(mcp_instance, repo_path)
+        _register_overview_tool(mcp_instance, repo_path)
+        _register_locate_tool(mcp_instance, repo_path)
+        _register_symbol_source_tool(mcp_instance, repo_path)
+        _compact_tool_schemas(mcp_instance)
         return mcp_instance
     if profile == "nav":
         # Three tools, small enough to load up front instead of behind a search step: find code, read one symbol,
@@ -1826,6 +1881,7 @@ def build_server(
         _register_locate_tool(mcp_instance, repo_path)
         _register_symbol_source_tool(mcp_instance, repo_path)
         _register_search_tool(mcp_instance, repo_path)
+        _compact_tool_schemas(mcp_instance)
         return mcp_instance
     _register_ask_tool(mcp_instance, repo_path)
     _register_locate_tool(mcp_instance, repo_path)
@@ -1896,4 +1952,5 @@ def build_server(
             f"Set {_ALLOW_ENV_VAR}={','.join(sorted(effects | set(missing)))} to enable.",
             file=sys.stderr,
         )
+    _compact_tool_schemas(mcp_instance)
     return mcp_instance

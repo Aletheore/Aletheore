@@ -3038,12 +3038,15 @@ def mcp(
         help=(
             "tool set to expose: full (every tool, with background watching), nav (three "
             "code-navigation tools, small enough to load up front, with background watching off) or "
-            "router (one tool, aletheore_ask, that picks the right query; watching off)"
+            "router (one tool, aletheore_ask, that picks the right query; watching off) or "
+            "lean (the router plus nine direct code tools, about a fifth of full's definitions; watching off)"
         ),
     ),
 ) -> None:
-    if profile not in ("full", "nav", "router"):
-        _stderr_console.print(f"[bold red]error:[/bold red] unknown profile {profile!r}; choose full, nav or router")
+    if profile not in ("full", "nav", "router", "lean"):
+        _stderr_console.print(
+            f"[bold red]error:[/bold red] unknown profile {profile!r}; choose full, nav, router or lean"
+        )
         raise typer.Exit(code=2)
     path = _resolve_path(path, path_option)
     _checked_dir(path)

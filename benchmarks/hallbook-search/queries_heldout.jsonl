@@ -1,0 +1,994 @@
+{"key": "agent-workflows/autoresearch|1", "skill_id": "agent-workflows/autoresearch", "query": "Can you help me set up an autonomous loop to improve my code?"}
+{"key": "agent-workflows/autoresearch|2", "skill_id": "agent-workflows/autoresearch", "query": "Can you keep improving my code automatically until it meets my goals?"}
+{"key": "agent-workflows/context-fundamentals|1", "skill_id": "agent-workflows/context-fundamentals", "query": "Why does the middle of a long conversation get ignored?"}
+{"key": "agent-workflows/context-fundamentals|2", "skill_id": "agent-workflows/context-fundamentals", "query": "Why does the AI forget things in long conversations?"}
+{"key": "agent-workflows/context-engineering|1", "skill_id": "agent-workflows/context-engineering", "query": "How should I set up your instructions before starting a new task?"}
+{"key": "agent-workflows/context-engineering|2", "skill_id": "agent-workflows/context-engineering", "query": "Help me set up the rules for a new project."}
+{"key": "agent-workflows/agent-skill-stack|1", "skill_id": "agent-workflows/agent-skill-stack", "query": "How do I organize different abilities to work together on a big task?"}
+{"key": "agent-workflows/agent-skill-stack|2", "skill_id": "agent-workflows/agent-skill-stack", "query": "How do I combine several helper abilities to get a big task done?"}
+{"key": "agent-workflows/quasi-coder|1", "skill_id": "agent-workflows/quasi-coder", "query": "Can you turn this rough outline into working code?"}
+{"key": "agent-workflows/quasi-coder|2", "skill_id": "agent-workflows/quasi-coder", "query": "Can you turn this rough code outline into working code?"}
+{"key": "agent-workflows/parallel-feature-development|1", "skill_id": "agent-workflows/parallel-feature-development", "query": "How do I split a big project among several helpers without conflicts?"}
+{"key": "agent-workflows/parallel-feature-development|2", "skill_id": "agent-workflows/parallel-feature-development", "query": "How do I split a big task among several agents without conflicts?"}
+{"key": "agent-workflows/filesystem-context|1", "skill_id": "agent-workflows/filesystem-context", "query": "Can you save our notes in a file and clean them up later?"}
+{"key": "agent-workflows/filesystem-context|2", "skill_id": "agent-workflows/filesystem-context", "query": "Can you save notes in a file so I can pick up later?"}
+{"key": "agent-workflows/retro|1", "skill_id": "agent-workflows/retro", "query": "Help me review how my coding session went and what to improve."}
+{"key": "agent-workflows/retro|2", "skill_id": "agent-workflows/retro", "query": "Help me review what went well and what to improve in my coding session."}
+{"key": "agent-workflows/multi-agent-patterns|1", "skill_id": "agent-workflows/multi-agent-patterns", "query": "How should I split this job across separate helpers that hand off work?"}
+{"key": "agent-workflows/multi-agent-patterns|2", "skill_id": "agent-workflows/multi-agent-patterns", "query": "How do I split a big task across several helpers safely?"}
+{"key": "agent-workflows/self-improvement-loops|1", "skill_id": "agent-workflows/self-improvement-loops", "query": "How can I make my setup learn from its own mistakes?"}
+{"key": "agent-workflows/self-improvement-loops|2", "skill_id": "agent-workflows/self-improvement-loops", "query": "How can I set up a loop where my workflow improves itself over time?"}
+{"key": "agent-workflows/task-coordination-strategies|1", "skill_id": "agent-workflows/task-coordination-strategies", "query": "Can you break this big project into smaller tasks and show what depends on what?"}
+{"key": "agent-workflows/task-coordination-strategies|2", "skill_id": "agent-workflows/task-coordination-strategies", "query": "How do I split a big project into smaller tasks for my team?"}
+{"key": "agent-workflows/long-horizon-prompting|1", "skill_id": "agent-workflows/long-horizon-prompting", "query": "Help me write a clear starting prompt for a long-running autonomous agent."}
+{"key": "agent-workflows/long-horizon-prompting|2", "skill_id": "agent-workflows/long-horizon-prompting", "query": "Help me write a clear task brief for a long-running autonomous agent?"}
+{"key": "agent-workflows/session-guard|1", "skill_id": "agent-workflows/session-guard", "query": "How do I keep you focused and consistent during a long, complicated task?"}
+{"key": "agent-workflows/session-guard|2", "skill_id": "agent-workflows/session-guard", "query": "Can you help me keep track of the rules for this long task?"}
+{"key": "agent-workflows/writing-skills|1", "skill_id": "agent-workflows/writing-skills", "query": "How do I check if my new instructions work before I share them?"}
+{"key": "agent-workflows/writing-skills|2", "skill_id": "agent-workflows/writing-skills", "query": "How do I check my new instructions work before sharing them?"}
+{"key": "agent-workflows/skill-creator|1", "skill_id": "agent-workflows/skill-creator", "query": "Help me build and test a reusable workflow for my team."}
+{"key": "agent-workflows/skill-creator|2", "skill_id": "agent-workflows/skill-creator", "query": "How do I improve my current abilities and check how well they perform?"}
+{"key": "ai-engineering/advanced-evaluation|1", "skill_id": "ai-engineering/advanced-evaluation", "query": "How can I make an AI judge compare two answers fairly?"}
+{"key": "ai-engineering/advanced-evaluation|2", "skill_id": "ai-engineering/advanced-evaluation", "query": "How can I tell if an AI's answers are good and fair?"}
+{"key": "ai-engineering/agentic-eval|1", "skill_id": "ai-engineering/agentic-eval", "query": "How can I check and improve the answers my AI gives?"}
+{"key": "ai-engineering/agentic-eval|2", "skill_id": "ai-engineering/agentic-eval", "query": "How can I check and improve my AI's answers before using them?"}
+{"key": "ai-engineering/build-mcp-app|1", "skill_id": "ai-engineering/build-mcp-app", "query": "How do I make a chat message show a clickable form?"}
+{"key": "ai-engineering/build-mcp-app|2", "skill_id": "ai-engineering/build-mcp-app", "query": "How do I make my chat assistant show an interactive form?"}
+{"key": "agent-workflows/handoff|1", "skill_id": "agent-workflows/handoff", "query": "Please summarize this conversation so another assistant can continue it."}
+{"key": "agent-workflows/handoff|2", "skill_id": "agent-workflows/handoff", "query": "How do I transfer this chat to a human agent?"}
+{"key": "ai-engineering/chatgpt-apps|1", "skill_id": "ai-engineering/chatgpt-apps", "query": "Can you help me build an app with a server and a widget interface?"}
+{"key": "ai-engineering/chatgpt-apps|2", "skill_id": "ai-engineering/chatgpt-apps", "query": "Can you help me build an app with a server and a widget?"}
+{"key": "ai-engineering/agent-architecture|1", "skill_id": "ai-engineering/agent-architecture", "query": "Help me plan how my AI assistant should be structured."}
+{"key": "ai-engineering/agent-architecture|2", "skill_id": "ai-engineering/agent-architecture", "query": "Can you help me figure out what my AI system needs before building it?"}
+{"key": "ai-engineering/ai-prompt-engineering-safety-review|1", "skill_id": "ai-engineering/ai-prompt-engineering-safety-review", "query": "Can you check my instructions for hidden bias and security problems?"}
+{"key": "ai-engineering/ai-prompt-engineering-safety-review|2", "skill_id": "ai-engineering/ai-prompt-engineering-safety-review", "query": "How can I make my instructions clearer and more effective?"}
+{"key": "ai-engineering/eval-driven-dev|1", "skill_id": "ai-engineering/eval-driven-dev", "query": "How do I test and improve my AI app using real examples?"}
+{"key": "ai-engineering/eval-driven-dev|2", "skill_id": "ai-engineering/eval-driven-dev", "query": "How can I use evaluations to improve my AI application step by step?"}
+{"key": "ai-engineering/checkpoint-promotion|1", "skill_id": "ai-engineering/checkpoint-promotion", "query": "How do I decide if a newly tuned model is safe to ship?"}
+{"key": "ai-engineering/checkpoint-promotion|2", "skill_id": "ai-engineering/checkpoint-promotion", "query": "How can I tell if my updated model is safe to release?"}
+{"key": "ai-engineering/claude-api|1", "skill_id": "ai-engineering/claude-api", "query": "Can you explain how to choose the right AI model for my app?"}
+{"key": "ai-engineering/claude-api|2", "skill_id": "ai-engineering/claude-api", "query": "How can I estimate costs and count tokens for my app?"}
+{"key": "ai-engineering/eval-harness-first|1", "skill_id": "ai-engineering/eval-harness-first", "query": "How do I set up tests to check if fine-tuning is working?"}
+{"key": "ai-engineering/eval-harness-first|2", "skill_id": "ai-engineering/eval-harness-first", "query": "How do I test whether my fine-tuned model is actually better?"}
+{"key": "agent-workflows/writing-for-agents|1", "skill_id": "agent-workflows/writing-for-agents", "query": "Help me write clear instructions for an AI agent to follow."}
+{"key": "agent-workflows/writing-for-agents|2", "skill_id": "agent-workflows/writing-for-agents", "query": "How should I write instructions so an AI agent can follow them?"}
+{"key": "ai-engineering/hf-cloud-sagemaker-iam-preflight|1", "skill_id": "ai-engineering/hf-cloud-sagemaker-iam-preflight", "query": "How do I make sure the right permissions role exists before I deploy or train a model?"}
+{"key": "ai-engineering/hf-cloud-sagemaker-iam-preflight|2", "skill_id": "ai-engineering/hf-cloud-sagemaker-iam-preflight", "query": "Can you make sure I have the right permissions before I train my model?"}
+{"key": "ai-engineering/hosted-agents|1", "skill_id": "ai-engineering/hosted-agents", "query": "How do I keep a coding session alive when my computer sleeps?"}
+{"key": "ai-engineering/hosted-agents|2", "skill_id": "ai-engineering/hosted-agents", "query": "How do I set up secure sandboxed coding sessions that persist for multiple users?"}
+{"key": "ai-engineering/build-mcp-server|1", "skill_id": "ai-engineering/build-mcp-server", "query": "How do I set up a system that lets my assistant use outside data?"}
+{"key": "ai-engineering/build-mcp-server|2", "skill_id": "ai-engineering/build-mcp-server", "query": "How do I connect my own tools to an AI assistant?"}
+{"key": "ai-engineering/hf-cloud-sagemaker-production-defaults|1", "skill_id": "ai-engineering/hf-cloud-sagemaker-production-defaults", "query": "How do I set up an autoscaling endpoint with alarms and tags?"}
+{"key": "ai-engineering/hf-cloud-sagemaker-production-defaults|2", "skill_id": "ai-engineering/hf-cloud-sagemaker-production-defaults", "query": "Set up a live endpoint with auto-scaling, alerts, and tags automatically."}
+{"key": "ai-engineering/huggingface-llm-trainer|1", "skill_id": "ai-engineering/huggingface-llm-trainer", "query": "How do I fine-tune a language model with reinforcement learning?"}
+{"key": "ai-engineering/huggingface-llm-trainer|2", "skill_id": "ai-engineering/huggingface-llm-trainer", "query": "How can I fine-tune a vision model using reinforcement learning?"}
+{"key": "ai-engineering/build-mcpb|1", "skill_id": "ai-engineering/build-mcpb", "query": "How do I package my local server into a distributable bundle?"}
+{"key": "ai-engineering/build-mcpb|2", "skill_id": "ai-engineering/build-mcpb", "query": "How do I package a local server so others can install it easily?"}
+{"key": "ai-engineering/huggingface-trackio|1", "skill_id": "ai-engineering/huggingface-trackio", "query": "How can I track and visualize my machine learning training runs?"}
+{"key": "ai-engineering/huggingface-trackio|2", "skill_id": "ai-engineering/huggingface-trackio", "query": "How can I track and visualize my machine learning training metrics?"}
+{"key": "ai-engineering/huggingface-spaces|1", "skill_id": "ai-engineering/huggingface-spaces", "query": "How do I build and deploy a web app with machine learning?"}
+{"key": "ai-engineering/huggingface-spaces|2", "skill_id": "ai-engineering/huggingface-spaces", "query": "How do I put my machine learning demo online for others to try?"}
+{"key": "ai-engineering/huggingface-paper-publisher|1", "skill_id": "ai-engineering/huggingface-paper-publisher", "query": "How do I share my research write-up and link it to related models?"}
+{"key": "ai-engineering/huggingface-paper-publisher|2", "skill_id": "ai-engineering/huggingface-paper-publisher", "query": "How do I share my research write-up and link it to my model?"}
+{"key": "ai-engineering/huggingface-datasets|1", "skill_id": "ai-engineering/huggingface-datasets", "query": "Show me the first few rows and basic size statistics?"}
+{"key": "ai-engineering/huggingface-datasets|2", "skill_id": "ai-engineering/huggingface-datasets", "query": "Can you show me how to search and filter rows in a dataset?"}
+{"key": "ai-engineering/huggingface-tool-builder|1", "skill_id": "ai-engineering/huggingface-tool-builder", "query": "Can you help me find and combine some useful public data?"}
+{"key": "ai-engineering/huggingface-tool-builder|2", "skill_id": "ai-engineering/huggingface-tool-builder", "query": "Can you help me find and use public machine learning datasets?"}
+{"key": "ai-engineering/hybrid-search-implementation|1", "skill_id": "ai-engineering/hybrid-search-implementation", "query": "How do I combine meaning-based and keyword matching for better results?"}
+{"key": "ai-engineering/hybrid-search-implementation|2", "skill_id": "ai-engineering/hybrid-search-implementation", "query": "How do I combine meaning-based and keyword matching to find better results?"}
+{"key": "ai-engineering/langchain-architecture|1", "skill_id": "ai-engineering/langchain-architecture", "query": "How do I build an AI assistant that remembers past chats and uses external tools?"}
+{"key": "ai-engineering/langchain-architecture|2", "skill_id": "ai-engineering/langchain-architecture", "query": "How can I make a chatbot remember what I told it?"}
+{"key": "ai-engineering/llm-evaluation|1", "skill_id": "ai-engineering/llm-evaluation", "query": "How can I test whether my AI app gives good answers?"}
+{"key": "ai-engineering/llm-evaluation|2", "skill_id": "ai-engineering/llm-evaluation", "query": "How can I test and improve my AI app's answers with scores and user feedback?"}
+{"key": "ai-engineering/java-mcp-server-generator|1", "skill_id": "ai-engineering/java-mcp-server-generator", "query": "How do I let an AI assistant use my Java application's features?"}
+{"key": "ai-engineering/java-mcp-server-generator|2", "skill_id": "ai-engineering/java-mcp-server-generator", "query": "How do I let my AI assistant use my Java code?"}
+{"key": "ai-engineering/huggingface-papers|1", "skill_id": "ai-engineering/huggingface-papers", "query": "Can you find the authors and related code for this research article?"}
+{"key": "ai-engineering/huggingface-papers|2", "skill_id": "ai-engineering/huggingface-papers", "query": "Can you look up a research paper and summarize its authors and links?"}
+{"key": "ai-engineering/mcp-builder|1", "skill_id": "ai-engineering/mcp-builder", "query": "How do I connect an AI assistant to an external service?"}
+{"key": "ai-engineering/mcp-builder|2", "skill_id": "ai-engineering/mcp-builder", "query": "How do I make a server that lets AI use outside services?"}
+{"key": "ai-engineering/preference-optimization|1", "skill_id": "ai-engineering/preference-optimization", "query": "How do I train my model to follow thumbs-up and thumbs-down feedback?"}
+{"key": "ai-engineering/preference-optimization|2", "skill_id": "ai-engineering/preference-optimization", "query": "How do I tune my model using thumbs-up and thumbs-down feedback?"}
+{"key": "ai-engineering/dotnet-mcp-builder|1", "skill_id": "ai-engineering/dotnet-mcp-builder", "query": "How do I build a server that lets an AI use my app's features?"}
+{"key": "ai-engineering/dotnet-mcp-builder|2", "skill_id": "ai-engineering/dotnet-mcp-builder", "query": "How can I make my code project work with an AI assistant?"}
+{"key": "ai-engineering/trace-to-training-data|1", "skill_id": "ai-engineering/trace-to-training-data", "query": "Can you turn these logs and examples into data for teaching a model?"}
+{"key": "ai-engineering/trace-to-training-data|2", "skill_id": "ai-engineering/trace-to-training-data", "query": "How do I turn logged model outputs into examples and ranked pairs?"}
+{"key": "ai-engineering/mini-context-graph|1", "skill_id": "ai-engineering/mini-context-graph", "query": "How can I build a knowledge base that keeps improving as I add documents?"}
+{"key": "ai-engineering/mini-context-graph|2", "skill_id": "ai-engineering/mini-context-graph", "query": "How do I turn my notes into connected pages I can search later?"}
+{"key": "ai-engineering/quantized-export|1", "skill_id": "ai-engineering/quantized-export", "query": "How do I save my fine-tuned model in the best format for deployment?"}
+{"key": "ai-engineering/quantized-export|2", "skill_id": "ai-engineering/quantized-export", "query": "Which file format should I use to deploy my fine-tuned model?"}
+{"key": "ai-engineering/webmcpify|1", "skill_id": "ai-engineering/webmcpify", "query": "Please make my web app's actions usable by AI assistants."}
+{"key": "ai-engineering/webmcpify|2", "skill_id": "ai-engineering/webmcpify", "query": "Can you make my web app work with AI agents and check it in a browser?"}
+{"key": "ai-engineering/vision-sft|1", "skill_id": "ai-engineering/vision-sft", "query": "How do I fine-tune a model on images and text?"}
+{"key": "ai-engineering/vision-sft|2", "skill_id": "ai-engineering/vision-sft", "query": "How do I fine-tune an image-and-text model for my own photos?"}
+{"key": "ai-engineering/semantic-kernel|1", "skill_id": "ai-engineering/semantic-kernel", "query": "Can you help me organize and improve my code project?"}
+{"key": "ai-engineering/semantic-kernel|2", "skill_id": "ai-engineering/semantic-kernel", "query": "Can you help me organize multiple AI steps into one workflow?"}
+{"key": "ai-engineering/php-mcp-server-generator|1", "skill_id": "ai-engineering/php-mcp-server-generator", "query": "Can you build a complete PHP project with tools, resources, prompts, and tests?"}
+{"key": "architecture/api-designer|1", "skill_id": "architecture/api-designer", "query": "How should I organize pagination and errors in a new API?"}
+{"key": "architecture/api-designer|2", "skill_id": "architecture/api-designer", "query": "How should I structure pagination and errors in a new API?"}
+{"key": "architecture/codebase-design|1", "skill_id": "architecture/codebase-design", "query": "How can I make this module easier to test and navigate?"}
+{"key": "architecture/codebase-design|2", "skill_id": "architecture/codebase-design", "query": "How can I make this module easier to test and understand?"}
+{"key": "architecture/architecture-blueprint-generator|1", "skill_id": "architecture/architecture-blueprint-generator", "query": "Can you look at my code and make diagrams of how it all fits together?"}
+{"key": "architecture/architecture-blueprint-generator|2", "skill_id": "architecture/architecture-blueprint-generator", "query": "Can you explain how this codebase works and draw a diagram?"}
+{"key": "ai-engineering/lora-qlora-recipes|1", "skill_id": "ai-engineering/lora-qlora-recipes", "query": "How should I set up fine-tuning settings for a small language model?"}
+{"key": "ai-engineering/lora-qlora-recipes|2", "skill_id": "ai-engineering/lora-qlora-recipes", "query": "How do I set up low-rank fine-tuning with the best settings?"}
+{"key": "architecture/cqrs-implementation|1", "skill_id": "architecture/cqrs-implementation", "query": "How can I separate reads and writes to make my app scale better?"}
+{"key": "architecture/cqrs-implementation|2", "skill_id": "architecture/cqrs-implementation", "query": "How do I separate reads and writes to make my app scale better?"}
+{"key": "architecture/aws-well-architected-review|1", "skill_id": "architecture/aws-well-architected-review", "query": "Check my cloud setup and suggest fixes, then create tasks for them."}
+{"key": "architecture/aws-well-architected-review|2", "skill_id": "architecture/aws-well-architected-review", "query": "Can you check my cloud setup and suggest improvements?"}
+{"key": "architecture/domain-modeling|1", "skill_id": "architecture/domain-modeling", "query": "Help me clarify the terms we use in this codebase?"}
+{"key": "architecture/domain-modeling|2", "skill_id": "architecture/domain-modeling", "query": "Help me write a glossary of terms for my project."}
+{"key": "architecture/microservices-architect|1", "skill_id": "architecture/microservices-architect", "query": "How should I split a large application into smaller services?"}
+{"key": "architecture/microservices-architect|2", "skill_id": "architecture/microservices-architect", "query": "How should I split my app into separate services?"}
+{"key": "architecture/event-store-design|1", "skill_id": "architecture/event-store-design", "query": "How do I save and replay changes over time?"}
+{"key": "architecture/event-store-design|2", "skill_id": "architecture/event-store-design", "query": "How do I keep a history of changes for my app?"}
+{"key": "ai-engineering/mcp-release-qa|1", "skill_id": "ai-engineering/mcp-release-qa", "query": "How do I check a server works before I ship it?"}
+{"key": "ai-engineering/mcp-release-qa|2", "skill_id": "ai-engineering/mcp-release-qa", "query": "How do I check if a new software version works correctly?"}
+{"key": "architecture/microservices-patterns|1", "skill_id": "architecture/microservices-patterns", "query": "How should I split a big app into smaller services?"}
+{"key": "architecture/microservices-patterns|2", "skill_id": "architecture/microservices-patterns", "query": "How should I break a large app into separate services?"}
+{"key": "architecture/projection-patterns|1", "skill_id": "architecture/projection-patterns", "query": "How do I build faster query views from event streams?"}
+{"key": "architecture/projection-patterns|2", "skill_id": "architecture/projection-patterns", "query": "How do I build fast query views from event streams?"}
+{"key": "architecture/poka-yoke|1", "skill_id": "architecture/poka-yoke", "query": "How can I design my form so users can't enter invalid combinations?"}
+{"key": "architecture/poka-yoke|2", "skill_id": "architecture/poka-yoke", "query": "Can you help me design this so wrong use can't happen?"}
+{"key": "architecture/python-project-structure|1", "skill_id": "architecture/python-project-structure", "query": "How should I organize my code files and folders for a new app?"}
+{"key": "architecture/python-project-structure|2", "skill_id": "architecture/python-project-structure", "query": "How should I organize my code files and folders?"}
+{"key": "backend/auth-implementation-patterns|1", "skill_id": "backend/auth-implementation-patterns", "query": "How do I keep user logins secure and manage who can access what?"}
+{"key": "backend/auth-implementation-patterns|2", "skill_id": "backend/auth-implementation-patterns", "query": "How do I keep user logins secure and control who can access what?"}
+{"key": "backend/api-breaking-change-detector|1", "skill_id": "backend/api-breaking-change-detector", "query": "How can I tell if my API changes will break frontend code?"}
+{"key": "backend/api-breaking-change-detector|2", "skill_id": "backend/api-breaking-change-detector", "query": "How can I check if my API and frontend types still match?"}
+{"key": "backend/cli-developer|1", "skill_id": "backend/cli-developer", "query": "How do I add command-line flags and progress bars to my script?"}
+{"key": "backend/cli-developer|2", "skill_id": "backend/cli-developer", "query": "How do I add command-line options and progress bars to my script?"}
+{"key": "backend/django-expert|1", "skill_id": "backend/django-expert", "query": "How should I set up database models and indexes for a web app?"}
+{"key": "backend/django-expert|2", "skill_id": "backend/django-expert", "query": "How do I set up a database model with proper indexes for my web app?"}
+{"key": "backend/aspnet-core|1", "skill_id": "backend/aspnet-core", "query": "How do I build a simple web app with login and a database?"}
+{"key": "backend/aspnet-core|2", "skill_id": "backend/aspnet-core", "query": "How do I build and review a modern web app safely?"}
+{"key": "architecture/dotnet-design-pattern-review|1", "skill_id": "architecture/dotnet-design-pattern-review", "query": "How can I organize reusable code so changes are easier to manage?"}
+{"key": "architecture/dotnet-design-pattern-review|2", "skill_id": "architecture/dotnet-design-pattern-review", "query": "How can I make my code easier to reuse and maintain?"}
+{"key": "ai-engineering/typescript-mcp-server-generator|1", "skill_id": "ai-engineering/typescript-mcp-server-generator", "query": "How do I make a tool that connects my app to an AI assistant?"}
+{"key": "ai-engineering/typescript-mcp-server-generator|2", "skill_id": "ai-engineering/typescript-mcp-server-generator", "query": "Can you create a complete project with tools, resources, and setup instructions?"}
+{"key": "ai-engineering/rust-mcp-server-generator|1", "skill_id": "ai-engineering/rust-mcp-server-generator", "query": "How do I build a Rust app to connect AI assistants to my data?"}
+{"key": "ai-engineering/rust-mcp-server-generator|2", "skill_id": "ai-engineering/rust-mcp-server-generator", "query": "Can you build a full Rust project with tools, prompts, resources, and tests?"}
+{"key": "backend/fastapi-expert|1", "skill_id": "backend/fastapi-expert", "query": "How do I build a fast async Python API with validation and auth?"}
+{"key": "backend/fastapi-expert|2", "skill_id": "backend/fastapi-expert", "query": "How do I build a secure web API with async database access?"}
+{"key": "backend/dotnet-timezone|1", "skill_id": "backend/dotnet-timezone", "query": "How do I handle daylight saving changes in scheduled app times?"}
+{"key": "backend/dotnet-timezone|2", "skill_id": "backend/dotnet-timezone", "query": "How should I handle daylight saving time when scheduling across time zones?"}
+{"key": "backend/laravel-specialist|1", "skill_id": "backend/laravel-specialist", "query": "How do I set up user login and secure APIs for my app?"}
+{"key": "backend/laravel-specialist|2", "skill_id": "backend/laravel-specialist", "query": "How do I set up user login and background jobs for my web app?"}
+{"key": "backend/nitro|1", "skill_id": "backend/nitro", "query": "How do I set up server routes and caching for my web app?"}
+{"key": "backend/nitro|2", "skill_id": "backend/nitro", "query": "How do I set up a simple web server that runs anywhere?"}
+{"key": "backend/openapi-spec-generation|1", "skill_id": "backend/openapi-spec-generation", "query": "How can I keep my API docs accurate as code changes?"}
+{"key": "backend/openapi-spec-generation|2", "skill_id": "backend/openapi-spec-generation", "query": "How do I keep my API documentation in sync with my code?"}
+{"key": "backend/nodejs-backend-patterns|1", "skill_id": "backend/nodejs-backend-patterns", "query": "How do I build a secure web service with login and a database?"}
+{"key": "backend/nodejs-backend-patterns|2", "skill_id": "backend/nodejs-backend-patterns", "query": "How do I build a secure server that handles logins and saves data?"}
+{"key": "backend/memory-safety-patterns|1", "skill_id": "backend/memory-safety-patterns", "query": "How can I stop my program from reading data it shouldn't?"}
+{"key": "backend/memory-safety-patterns|2", "skill_id": "backend/memory-safety-patterns", "query": "How do I stop leaks and clean up resources automatically in my code?"}
+{"key": "backend/java-architect|1", "skill_id": "backend/java-architect", "query": "How do I make my Java app handle many users at once?"}
+{"key": "backend/java-architect|2", "skill_id": "backend/java-architect", "query": "How should I structure a large Java application for easy maintenance?"}
+{"key": "backend/python-error-handling|1", "skill_id": "backend/python-error-handling", "query": "How should I check user input and deal with failed batches?"}
+{"key": "backend/python-error-handling|2", "skill_id": "backend/python-error-handling", "query": "How should I check user input and deal with failures in a batch job?"}
+{"key": "backend/python-code-style|1", "skill_id": "backend/python-code-style", "query": "How should I format and name things in my code?"}
+{"key": "backend/python-code-style|2", "skill_id": "backend/python-code-style", "query": "How should I format my code and write comments so it is easy to read?"}
+{"key": "backend/python-background-jobs|1", "skill_id": "backend/python-background-jobs", "query": "How do I run long tasks without making users wait?"}
+{"key": "backend/python-background-jobs|2", "skill_id": "backend/python-background-jobs", "query": "How do I run tasks later without slowing my app?"}
+{"key": "backend/python-resource-management|1", "skill_id": "backend/python-resource-management", "query": "How do I make sure files close even when an error happens?"}
+{"key": "backend/python-resource-management|2", "skill_id": "backend/python-resource-management", "query": "How do I make sure files get closed automatically after use?"}
+{"key": "backend/openapi-to-application-code|1", "skill_id": "backend/openapi-to-application-code", "query": "Can you generate a complete app from my API description?"}
+{"key": "backend/openapi-to-application-code|2", "skill_id": "backend/openapi-to-application-code", "query": "Can you turn this API spec into a working app for me?"}
+{"key": "backend/spring-boot-engineer|1", "skill_id": "backend/spring-boot-engineer", "query": "How do I set up secure login and database access for my web app?"}
+{"key": "backend/spring-boot-engineer|2", "skill_id": "backend/spring-boot-engineer", "query": "How do I set up secure login and database access for my Java web app?"}
+{"key": "backend/workflow-orchestration-patterns|1", "skill_id": "backend/workflow-orchestration-patterns", "query": "How do I manage long-running steps across multiple services reliably?"}
+{"key": "backend/workflow-orchestration-patterns|2", "skill_id": "backend/workflow-orchestration-patterns", "query": "How do I design long-running distributed processes that can recover from failures?"}
+{"key": "brainstorming/open-ended|1", "skill_id": "brainstorming/open-ended", "query": "Can you ask me questions to clarify my vague idea before we plan?"}
+{"key": "brainstorming/open-ended|2", "skill_id": "brainstorming/open-ended", "query": "Help me figure out what I’m really trying to ask for here?"}
+{"key": "browser-automation/agentcore|1", "skill_id": "browser-automation/agentcore", "query": "Can you run browser tasks in a managed cloud session for me?"}
+{"key": "browser-automation/agentcore|2", "skill_id": "browser-automation/agentcore", "query": "Can you run my browser automation in a managed cloud session?"}
+{"key": "browser-automation/agent-browser|1", "skill_id": "browser-automation/agent-browser", "query": "Can you fill out this online form and take a screenshot for me?"}
+{"key": "browser-automation/agent-browser|2", "skill_id": "browser-automation/agent-browser", "query": "Can you open a website, fill out a form, and take a screenshot for me?"}
+{"key": "browser-automation/dogfood|1", "skill_id": "browser-automation/dogfood", "query": "Please test my web app for bugs and user experience issues."}
+{"key": "browser-automation/dogfood|2", "skill_id": "browser-automation/dogfood", "query": "Can you explore my web app and find bugs and usability problems?"}
+{"key": "browser-automation/chrome-devtools|1", "skill_id": "browser-automation/chrome-devtools", "query": "Can you check why this web page loads so slowly?"}
+{"key": "browser-automation/chrome-devtools|2", "skill_id": "browser-automation/chrome-devtools", "query": "Can you check why this webpage loads so slowly?"}
+{"key": "backend/java-springboot|1", "skill_id": "backend/java-springboot", "query": "How do I build a simple web app with Java and a database?"}
+{"key": "backend/java-springboot|2", "skill_id": "backend/java-springboot", "query": "What are best practices for building Java web applications?"}
+{"key": "browser-automation/playwright-cli|1", "skill_id": "browser-automation/playwright-cli", "query": "Can you help me automate browser actions and check that web pages work correctly?"}
+{"key": "browser-automation/playwright-cli|2", "skill_id": "browser-automation/playwright-cli", "query": "How can I automate clicking through a website and check that pages work?"}
+{"key": "browser-automation/playwright-expert|1", "skill_id": "browser-automation/playwright-expert", "query": "How can I make my browser tests stop failing randomly?"}
+{"key": "browser-automation/playwright-expert|2", "skill_id": "browser-automation/playwright-expert", "query": "How do I write reliable end-to-end browser tests and fix flaky ones?"}
+{"key": "browser-automation/core|1", "skill_id": "browser-automation/core", "query": "Can you walk me through using a web browser to fill out a form?"}
+{"key": "browser-automation/core|2", "skill_id": "browser-automation/core", "query": "How do I click a button and read text on a webpage?"}
+{"key": "browser-automation/slack|1", "skill_id": "browser-automation/slack", "query": "Can you check my unread team channels and summarize any important messages?"}
+{"key": "browser-automation/slack|2", "skill_id": "browser-automation/slack", "query": "Can you check my unread messages and summarize them?"}
+{"key": "browser-automation/browser-use|1", "skill_id": "browser-automation/browser-use", "query": "How can I automate clicking through a website and take screenshots?"}
+{"key": "browser-automation/browser-use|2", "skill_id": "browser-automation/browser-use", "query": "Can you open a website and take a screenshot for me?"}
+{"key": "browser-automation/vercel-sandbox|1", "skill_id": "browser-automation/vercel-sandbox", "query": "How do I run browser automation inside my hosted web app?"}
+{"key": "browser-automation/vercel-sandbox|2", "skill_id": "browser-automation/vercel-sandbox", "query": "How do I automate a browser from my hosted web application?"}
+{"key": "backend/rust-async-patterns|1", "skill_id": "backend/rust-async-patterns", "query": "How do I make Rust code handle many tasks at once?"}
+{"key": "backend/rust-async-patterns|2", "skill_id": "backend/rust-async-patterns", "query": "How do I make my Rust code wait for multiple tasks at once?"}
+{"key": "browser-automation/derive-client|1", "skill_id": "browser-automation/derive-client", "query": "How do I record a site's traffic and make a script that calls its API directly?"}
+{"key": "browser-automation/derive-client|2", "skill_id": "browser-automation/derive-client", "query": "How can I work out what a customer wants from a service?"}
+{"key": "backend/create-quarkus-project|1", "skill_id": "backend/create-quarkus-project", "query": "How do I scaffold a new"}
+{"key": "browser-automation/webmcp-gen|1", "skill_id": "browser-automation/webmcp-gen", "query": "Can you add page tools to my site and check they work?"}
+{"key": "browser-automation/webmcp-gen|2", "skill_id": "browser-automation/webmcp-gen", "query": "How do I turn my website's workflows into tools an assistant can use?"}
+{"key": "code-review/code-review-and-quality|1", "skill_id": "code-review/code-review-and-quality", "query": "Can you check my code for problems before I merge it?"}
+{"key": "code-review/code-review-and-quality|2", "skill_id": "code-review/code-review-and-quality", "query": "Can you check this code for bugs, security issues, and readability before I merge it?"}
+{"key": "code-review/requesting-code-review|1", "skill_id": "code-review/requesting-code-review", "query": "Please verify the work meets all requirements before we wrap up."}
+{"key": "code-review/requesting-code-review|2", "skill_id": "code-review/requesting-code-review", "query": "Can you check that everything works before I finish this task?"}
+{"key": "code-review/python-anti-patterns|1", "skill_id": "code-review/python-anti-patterns", "query": "Can you check my code for common bad practices?"}
+{"key": "code-review/python-anti-patterns|2", "skill_id": "code-review/python-anti-patterns", "query": "Can you check my code for common mistakes to avoid?"}
+{"key": "code-review/multi-reviewer-patterns|1", "skill_id": "code-review/multi-reviewer-patterns", "query": "How can I organize multiple code reviews and merge their findings?"}
+{"key": "code-review/multi-reviewer-patterns|2", "skill_id": "code-review/multi-reviewer-patterns", "query": "Can you help combine several code review results into one clear report?"}
+{"key": "code-review/sql-code-review|1", "skill_id": "code-review/sql-code-review", "query": "Can you check my SQL queries for security problems?"}
+{"key": "code-review/sql-code-review|2", "skill_id": "code-review/sql-code-review", "query": "Can you check my SQL queries for security and quality problems?"}
+{"key": "browser-automation/ui-screenshots|1", "skill_id": "browser-automation/ui-screenshots", "query": "How do I take a picture of what's on my computer screen?"}
+{"key": "browser-automation/ui-screenshots|2", "skill_id": "browser-automation/ui-screenshots", "query": "How can I save pictures of my web app while building it?"}
+{"key": "code-review/code-review-phuryn|1", "skill_id": "code-review/code-review-phuryn", "query": "Can you check this code for mistakes that could break it?"}
+{"key": "code-review/code-review-phuryn|2", "skill_id": "code-review/code-review-phuryn", "query": "Can you check my code for mistakes and suggest fixes?"}
+{"key": "codebase-exploration/project-workflow-analysis-blueprint-generator|1", "skill_id": "codebase-exploration/project-workflow-analysis-blueprint-generator", "query": "How do I map how data moves through my app?"}
+{"key": "codebase-exploration/project-workflow-analysis-blueprint-generator|2", "skill_id": "codebase-exploration/project-workflow-analysis-blueprint-generator", "query": "How do I map how data moves through my app from start to finish?"}
+{"key": "codebase-exploration/code-exemplars-blueprint-generator|1", "skill_id": "codebase-exploration/code-exemplars-blueprint-generator", "query": "Can you help me find good code examples in my project?"}
+{"key": "codebase-exploration/code-exemplars-blueprint-generator|2", "skill_id": "codebase-exploration/code-exemplars-blueprint-generator", "query": "Can you help me create prompts to find good code examples in my codebase?"}
+{"key": "data/ab-test-analysis|1", "skill_id": "data/ab-test-analysis", "query": "Did my A/B test win, and should I launch it?"}
+{"key": "data/ab-test-analysis|2", "skill_id": "data/ab-test-analysis", "query": "Can you tell me if my A/B test results are significant?"}
+{"key": "codebase-exploration/repo-story-time|1", "skill_id": "codebase-exploration/repo-story-time", "query": "Can you summarize this code repository's commit history into a clear narrative?"}
+{"key": "codebase-exploration/repo-story-time|2", "skill_id": "codebase-exploration/repo-story-time", "query": "Can you summarize a code repository's history and explain what happened over time?"}
+{"key": "codebase-exploration/technology-stack-blueprint-generator|1", "skill_id": "codebase-exploration/technology-stack-blueprint-generator", "query": "Can you look at my code and explain how it all fits together?"}
+{"key": "codebase-exploration/technology-stack-blueprint-generator|2", "skill_id": "codebase-exploration/technology-stack-blueprint-generator", "query": "Can you analyze my codebase and document its architecture?"}
+{"key": "data/data-quality-frameworks|1", "skill_id": "data/data-quality-frameworks", "query": "How do I check my data is correct before using it?"}
+{"key": "data/data-quality-frameworks|2", "skill_id": "data/data-quality-frameworks", "query": "How do I set up automatic checks to catch bad data before it spreads?"}
+{"key": "data/ef-core|1", "skill_id": "data/ef-core", "query": "What are best practices for using a database framework in my app?"}
+{"key": "data/ef-core|2", "skill_id": "data/ef-core", "query": "What are best practices for using an object-relational mapper in my app?"}
+{"key": "codebase-exploration/improve-codebase-architecture|1", "skill_id": "codebase-exploration/improve-codebase-architecture", "query": "How can I make my project easier to maintain and change?"}
+{"key": "codebase-exploration/improve-codebase-architecture|2", "skill_id": "codebase-exploration/improve-codebase-architecture", "query": "Can you find parts of my project worth deepening and show them in a visual report?"}
+{"key": "data/dummy-dataset|1", "skill_id": "data/dummy-dataset", "query": "Can you make realistic sample test data with custom columns and export options?"}
+{"key": "data/dummy-dataset|2", "skill_id": "data/dummy-dataset", "query": "Can you create realistic sample test data with custom columns and export formats?"}
+{"key": "data/postgresql-table-design|1", "skill_id": "data/postgresql-table-design", "query": "How should I organize my app's data so it stays fast?"}
+{"key": "data/postgresql-table-design|2", "skill_id": "data/postgresql-table-design", "query": "How should I organize fields and indexes for a new database?"}
+{"key": "code-review/caveman-review|1", "skill_id": "code-review/caveman-review", "query": "Was that prehistoric comedy movie any good?"}
+{"key": "code-review/caveman-review|2", "skill_id": "code-review/caveman-review", "query": "Can you check my code changes for problems and suggest fixes?"}
+{"key": "code-review/code-review|1", "skill_id": "code-review/code-review", "query": "Can you check my code for mistakes and suggest fixes?"}
+{"key": "code-review/code-review|2", "skill_id": "code-review/code-review", "query": "Can you look over my code and tell me what might break?"}
+{"key": "data/sql-optimization|1", "skill_id": "data/sql-optimization", "query": "How can I make my database queries run faster?"}
+{"key": "data/sql-optimization|2", "skill_id": "data/sql-optimization", "query": "How can I make my slow database queries run faster?"}
+{"key": "data/kpi-dashboard-design|1", "skill_id": "data/kpi-dashboard-design", "query": "Which numbers should I track to see if my business is growing?"}
+{"key": "data/kpi-dashboard-design|2", "skill_id": "data/kpi-dashboard-design", "query": "How can I show key performance numbers clearly to my team?"}
+{"key": "data/snowflake-semanticview|1", "skill_id": "data/snowflake-semanticview", "query": "Can you help me create and check a data view definition?"}
+{"key": "data/snowflake-semanticview|2", "skill_id": "data/snowflake-semanticview", "query": "How do I create and validate a semantic view definition?"}
+{"key": "data/jupyter-notebook|1", "skill_id": "data/jupyter-notebook", "query": "How do I run code one cell at a time and see the output?"}
+{"key": "data/jupyter-notebook|2", "skill_id": "data/jupyter-notebook", "query": "Can you set up a clean interactive document for my data experiment?"}
+{"key": "data/sql-optimization-patterns|1", "skill_id": "data/sql-optimization-patterns", "query": "Why is my database query so slow and how can I fix it?"}
+{"key": "data/sql-optimization-patterns|2", "skill_id": "data/sql-optimization-patterns", "query": "Why is my database query so slow and how can I make it faster?"}
+{"key": "data/planning-oracle-to-postgres-migration-integration-testing|1", "skill_id": "data/planning-oracle-to-postgres-migration-integration-testing", "query": "How do I check that data moved correctly between two databases?"}
+{"key": "data/planning-oracle-to-postgres-migration-integration-testing|2", "skill_id": "data/planning-oracle-to-postgres-migration-integration-testing", "query": "How do I check database code changes work correctly?"}
+{"key": "debugging/debugging-and-error-recovery|1", "skill_id": "debugging/debugging-and-error-recovery", "query": "Why did this stop working when it worked yesterday?"}
+{"key": "debugging/debugging-and-error-recovery|2", "skill_id": "debugging/debugging-and-error-recovery", "query": "Something that worked yesterday is broken now; how do I find the cause?"}
+{"key": "debugging/debugging-wizard|1", "skill_id": "debugging/debugging-wizard", "query": "Why does my app keep crashing when I open this page?"}
+{"key": "debugging/debugging-wizard|2", "skill_id": "debugging/debugging-wizard", "query": "Can you help me figure out why my program keeps crashing?"}
+{"key": "debugging/hunt|1", "skill_id": "debugging/hunt", "query": "Something broke and it used to work; can you find the root cause?"}
+{"key": "debugging/hunt|2", "skill_id": "debugging/hunt", "query": "Something that used to work now crashes—can you find the root cause?"}
+{"key": "debugging/bug-reproduction-brief|1", "skill_id": "debugging/bug-reproduction-brief", "query": "Help me reproduce this bug reliably before trying to fix it."}
+{"key": "debugging/bug-reproduction-brief|2", "skill_id": "debugging/bug-reproduction-brief", "query": "Can you help me make this bug happen every time?"}
+{"key": "data/creating-oracle-to-postgres-migration-integration-tests|1", "skill_id": "data/creating-oracle-to-postgres-migration-integration-tests", "query": "How do I check that data moves correctly between two databases?"}
+{"key": "data/creating-oracle-to-postgres-migration-integration-tests|2", "skill_id": "data/creating-oracle-to-postgres-migration-integration-tests", "query": "How do I check data moves correctly between two databases?"}
+{"key": "debugging/systematic-debugging|1", "skill_id": "debugging/systematic-debugging", "query": "Something broke and I don't know why; can you help find the cause before fixing it?"}
+{"key": "debugging/systematic-debugging|2", "skill_id": "debugging/systematic-debugging", "query": "Something is broken and I don't know why. Can you help me figure it out?"}
+{"key": "design/design-system|1", "skill_id": "design/design-system", "query": "Can you help me organize colors, spacing, and text styles for slides?"}
+{"key": "design/design-system|2", "skill_id": "design/design-system", "query": "Can you help me make my presentation styles and slides consistent?"}
+{"key": "design/break-ui|1", "skill_id": "design/break-ui", "query": "How do I test my screen with long names, missing fields, and huge numbers?"}
+{"key": "design/break-ui|2", "skill_id": "design/break-ui", "query": "How can I test this screen with unusually long names, missing fields, and huge numbers?"}
+{"key": "data/sql-queries|1", "skill_id": "data/sql-queries", "query": "Write a query to list customers who ordered last month?"}
+{"key": "data/sql-queries|2", "skill_id": "data/sql-queries", "query": "Can you turn this database diagram into SQL for a report?"}
+{"key": "design/design-system-patterns|1", "skill_id": "design/design-system-patterns", "query": "How do I set up reusable colors and themes for my app?"}
+{"key": "design/design-system-patterns|2", "skill_id": "design/design-system-patterns", "query": "How do I make my app's colors and themes easy to change later?"}
+{"key": "design/theme-factory|1", "skill_id": "design/theme-factory", "query": "How can I make my slides and reports look more polished and consistent?"}
+{"key": "design/theme-factory|2", "skill_id": "design/theme-factory", "query": "Can you make my slides and documents look nicely styled with matching colors and fonts?"}
+{"key": "design/stitch-design-taste|1", "skill_id": "design/stitch-design-taste", "query": "How can I make my app's interface look more polished and less generic?"}
+{"key": "design/stitch-design-taste|2", "skill_id": "design/stitch-design-taste", "query": "How can I make my app look premium and not generic?"}
+{"key": "design/ui|1", "skill_id": "design/ui", "query": "Can you make this screen look cleaner and more polished from the screenshot?"}
+{"key": "design/ui|2", "skill_id": "design/ui", "query": "Can you make this page look more polished and modern?"}
+{"key": "debugging/diagnosing-bugs|1", "skill_id": "debugging/diagnosing-bugs", "query": "Why does my program stop working after I make a small change?"}
+{"key": "debugging/diagnosing-bugs|2", "skill_id": "debugging/diagnosing-bugs", "query": "Can you help me find why my app crashes and runs slow?"}
+{"key": "design/minimalist-ui|1", "skill_id": "design/minimalist-ui", "query": "Can you design a clean editorial dashboard with warm neutral colors and flat bento boxes?"}
+{"key": "design/minimalist-ui|2", "skill_id": "design/minimalist-ui", "query": "Can you design a clean editorial dashboard with warm monochrome colors and flat bento grids?"}
+{"key": "devops/bazel-build-optimization|1", "skill_id": "devops/bazel-build-optimization", "query": "How can I make compiling a huge codebase faster?"}
+{"key": "devops/bazel-build-optimization|2", "skill_id": "devops/bazel-build-optimization", "query": "How can I make my huge code repository compile faster across many machines?"}
+{"key": "design/find-animation-opportunities|1", "skill_id": "design/find-animation-opportunities", "query": "Can you find places in my app that should animate but don't?"}
+{"key": "design/find-animation-opportunities|2", "skill_id": "design/find-animation-opportunities", "query": "Can you find interface spots that feel static and suggest exact motion values?"}
+{"key": "devops/automate-this|1", "skill_id": "devops/automate-this", "query": "Can you watch my screen recording and write scripts to speed up these steps?"}
+{"key": "devops/automate-this|2", "skill_id": "devops/automate-this", "query": "Can you turn my screen recording into step-by-step automation scripts?"}
+{"key": "devops/bash-defensive-patterns|1", "skill_id": "devops/bash-defensive-patterns", "query": "How can I make my scripts fail safely and handle mistakes?"}
+{"key": "devops/bash-defensive-patterns|2", "skill_id": "devops/bash-defensive-patterns", "query": "How do I make my shell scripts safer and more reliable?"}
+{"key": "devops/gem-devops-guidelines|1", "skill_id": "devops/gem-devops-guidelines", "query": "How do I safely roll back a bad deployment?"}
+{"key": "devops/gem-devops-guidelines|2", "skill_id": "devops/gem-devops-guidelines", "query": "How do I safely roll out a new app version and undo it if something breaks?"}
+{"key": "devops/github-actions-efficiency|1", "skill_id": "devops/github-actions-efficiency", "query": "Can you review my automated build setup and suggest ways to cut run time and costs?"}
+{"key": "devops/github-actions-efficiency|2", "skill_id": "devops/github-actions-efficiency", "query": "How can I make my automated build checks faster and cheaper?"}
+{"key": "devops/netlify-deploy|1", "skill_id": "devops/netlify-deploy", "query": "Can you help me put my website online for others to see?"}
+{"key": "devops/netlify-deploy|2", "skill_id": "devops/netlify-deploy", "query": "Can you help me put my website online for free?"}
+{"key": "devops/cloudflare-deploy|1", "skill_id": "devops/cloudflare-deploy", "query": "How do I put my website online for free?"}
+{"key": "devops/cloudflare-deploy|2", "skill_id": "devops/cloudflare-deploy", "query": "How do I publish my web app to the internet?"}
+{"key": "design/improve-animations|1", "skill_id": "design/improve-animations", "query": "How can I make my screen movements feel smoother and more natural?"}
+{"key": "design/improve-animations|2", "skill_id": "design/improve-animations", "query": "How can I make screen movements feel smoother and more natural?"}
+{"key": "devops/nx-workspace-patterns|1", "skill_id": "devops/nx-workspace-patterns", "query": "How do I set up a big codebase so only changed parts build?"}
+{"key": "devops/nx-workspace-patterns|2", "skill_id": "devops/nx-workspace-patterns", "query": "How can I make my big multi-project codebase build faster?"}
+{"key": "devops/devops-rollout-plan|1", "skill_id": "devops/devops-rollout-plan", "query": "How do I safely roll out a new deployment and roll back if something breaks?"}
+{"key": "devops/devops-rollout-plan|2", "skill_id": "devops/devops-rollout-plan", "query": "How do I safely release a new version and undo it if something breaks?"}
+{"key": "design/visual-design-foundations|1", "skill_id": "design/visual-design-foundations", "query": "How do I choose colors and fonts that look good together?"}
+{"key": "design/visual-design-foundations|2", "skill_id": "design/visual-design-foundations", "query": "What makes a layout look balanced and easy to read?"}
+{"key": "devops/turborepo-caching|1", "skill_id": "devops/turborepo-caching", "query": "How can I make builds in my multi-project codebase faster and share build results?"}
+{"key": "devops/turborepo-caching|2", "skill_id": "devops/turborepo-caching", "query": "How do I speed up builds across multiple projects in one repo?"}
+{"key": "devops/shipping-and-launch|1", "skill_id": "devops/shipping-and-launch", "query": "What should I check before putting my website live?"}
+{"key": "devops/shipping-and-launch|2", "skill_id": "devops/shipping-and-launch", "query": "What should I check before putting my app into production?"}
+{"key": "devops/nuget-manager|1", "skill_id": "devops/nuget-manager", "query": "How do I update the package versions in my project?"}
+{"key": "devops/nuget-manager|2", "skill_id": "devops/nuget-manager", "query": "How do I update the packages in my project?"}
+{"key": "devops/python-packaging|1", "skill_id": "devops/python-packaging", "query": "How do I share my code library so others can install it easily?"}
+{"key": "devops/python-packaging|2", "skill_id": "devops/python-packaging", "query": "How do I share my code so others can install it easily?"}
+{"key": "devops/vercel-deploy|1", "skill_id": "devops/vercel-deploy", "query": "Can you put my website online and send me the link?"}
+{"key": "devops/vercel-deploy|2", "skill_id": "devops/vercel-deploy", "query": "Can you put my website online and share the link?"}
+{"key": "devops/helm-chart-scaffolding|1", "skill_id": "devops/helm-chart-scaffolding", "query": "How do I organize reusable configuration files for deploying applications to a cluster?"}
+{"key": "devops/helm-chart-scaffolding|2", "skill_id": "devops/helm-chart-scaffolding", "query": "How do I set up reusable templates for packaging my Kubernetes app?"}
+{"key": "documentation/draw-io-diagram-generator|1", "skill_id": "documentation/draw-io-diagram-generator", "query": "Can you create a simple flowchart showing how a customer signs up?"}
+{"key": "documentation/draw-io-diagram-generator|2", "skill_id": "documentation/draw-io-diagram-generator", "query": "Can you draw a simple flowchart showing how a customer signs up?"}
+{"key": "documentation/hads|1", "skill_id": "documentation/hads", "query": "How can I make my technical docs easier for both people and AI to read?"}
+{"key": "documentation/hads|2", "skill_id": "documentation/hads", "query": "How do I make my technical docs readable by both people and AI?"}
+{"key": "documentation/avoid-ai-writing|1", "skill_id": "documentation/avoid-ai-writing", "query": "Can you make this draft sound less like a machine wrote it?"}
+{"key": "documentation/avoid-ai-writing|2", "skill_id": "documentation/avoid-ai-writing", "query": "Can you make this text sound less like a robot wrote it?"}
+{"key": "documentation/create-readme|1", "skill_id": "documentation/create-readme", "query": "Can you write a short overview file explaining what this project does?"}
+{"key": "documentation/create-readme|2", "skill_id": "documentation/create-readme", "query": "Can you write a simple guide for people using my project?"}
+{"key": "devops/vcpkg|1", "skill_id": "devops/vcpkg", "query": "How do I manage C++ dependency versions across different build setups?"}
+{"key": "devops/vcpkg|2", "skill_id": "devops/vcpkg", "query": "How do I manage library versions when building C++ projects across platforms?"}
+{"key": "documentation/efcore-d2-db-diagram|1", "skill_id": "documentation/efcore-d2-db-diagram", "query": "Can you show my database tables and relationships from C# code?"}
+{"key": "documentation/efcore-d2-db-diagram|2", "skill_id": "documentation/efcore-d2-db-diagram", "query": "How can I map out the tables and relationships in my database?"}
+{"key": "documentation/learn|1", "skill_id": "documentation/learn", "query": "Can you research a new field and compile a reference guide?"}
+{"key": "documentation/learn|2", "skill_id": "documentation/learn", "query": "Help me research a new field and compile a reference guide."}
+{"key": "documentation/plantuml-ascii|1", "skill_id": "documentation/plantuml-ascii", "query": "Can you draw a simple text diagram of my login flow?"}
+{"key": "documentation/plantuml-ascii|2", "skill_id": "documentation/plantuml-ascii", "query": "Can you draw a simple text-based diagram of my login flow?"}
+{"key": "documentation/spec-miner|1", "skill_id": "documentation/spec-miner", "query": "Can you explain what this old codebase actually does?"}
+{"key": "documentation/spec-miner|2", "skill_id": "documentation/spec-miner", "query": "Can you help me understand what this old code does?"}
+{"key": "documentation/java-docs|1", "skill_id": "documentation/java-docs", "query": "How should I write Javadoc comments for Java classes and methods?"}
+{"key": "documentation/java-docs|2", "skill_id": "documentation/java-docs", "query": "How should I write comments for my Java classes?"}
+{"key": "documentation/drawio|1", "skill_id": "documentation/drawio", "query": "Can you make a diagram file and export it as an image with editable data?"}
+{"key": "documentation/drawio|2", "skill_id": "documentation/drawio", "query": "Can you help me make a simple flowchart for a project?"}
+{"key": "documentation/source-driven-development|1", "skill_id": "documentation/source-driven-development", "query": "Can you check the official documentation before suggesting how to do this?"}
+{"key": "documentation/source-driven-development|2", "skill_id": "documentation/source-driven-development", "query": "Can you check the official docs before suggesting how to implement this?"}
+{"key": "documentation/shipping-artifacts|1", "skill_id": "documentation/shipping-artifacts", "query": "What documents should I prepare to review an AI-built app before launch?"}
+{"key": "documentation/shipping-artifacts|2", "skill_id": "documentation/shipping-artifacts", "query": "What documentation should I prepare before releasing an app built with AI?"}
+{"key": "documents/convert-excel-to-md|1", "skill_id": "documents/convert-excel-to-md", "query": "Can you pull the key numbers from this spreadsheet file?"}
+{"key": "documents/convert-excel-to-md|2", "skill_id": "documents/convert-excel-to-md", "query": "Can you pull the data from this spreadsheet into a readable summary?"}
+{"key": "documentation/write|1", "skill_id": "documentation/write", "query": "Can you make this paragraph sound more natural and less robotic?"}
+{"key": "documentation/write|2", "skill_id": "documentation/write", "query": "Can you rewrite this paragraph to sound more natural and less robotic?"}
+{"key": "devops/quarkus-native-and-container|1", "skill_id": "devops/quarkus-native-and-container", "query": "How do I turn my app into a fast standalone program and deploy it?"}
+{"key": "devops/quarkus-native-and-container|2", "skill_id": "devops/quarkus-native-and-container", "query": "How can I make my app start faster and use less memory?"}
+{"key": "documents/markdown-to-html|1", "skill_id": "documents/markdown-to-html", "query": "How can I turn my text files into web pages?"}
+{"key": "documents/markdown-to-html|2", "skill_id": "documents/markdown-to-html", "query": "How do I turn my plain text notes into a website?"}
+{"key": "documents/notion-knowledge-capture|1", "skill_id": "documents/notion-knowledge-capture", "query": "Can you turn my meeting notes into a clear help article?"}
+{"key": "documents/notion-knowledge-capture|2", "skill_id": "documents/notion-knowledge-capture", "query": "Can you turn our chat into a structured decision page with links?"}
+{"key": "documents/convert-word-to-md|1", "skill_id": "documents/convert-word-to-md", "query": "Can you read my Word document and summarize it for me?"}
+{"key": "documents/convert-word-to-md|2", "skill_id": "documents/convert-word-to-md", "query": "Can you turn this Word document into Markdown for me?"}
+{"key": "documents/notion-meeting-intelligence|1", "skill_id": "documents/notion-meeting-intelligence", "query": "Help me draft an agenda and background notes for my next team discussion."}
+{"key": "documents/notion-meeting-intelligence|2", "skill_id": "documents/notion-meeting-intelligence", "query": "Help me gather background and draft an agenda for my next team discussion."}
+{"key": "documents/pdftk-server|1", "skill_id": "documents/pdftk-server", "query": "How can I combine several PDF files into one document?"}
+{"key": "documents/pdftk-server|2", "skill_id": "documents/pdftk-server", "query": "Can you combine several PDF files into one document?"}
+{"key": "frontend/angular-migration|1", "skill_id": "frontend/angular-migration", "query": "How can I upgrade an old web app step by step?"}
+{"key": "frontend/angular-migration|2", "skill_id": "frontend/angular-migration", "query": "How do I upgrade an old web app piece by piece without breaking it?"}
+{"key": "frontend/gsap-performance|1", "skill_id": "frontend/gsap-performance", "query": "How can I make my web animations run smoothly without stuttering?"}
+{"key": "frontend/gsap-performance|2", "skill_id": "frontend/gsap-performance", "query": "How can I make my animations smoother and stop them from lagging?"}
+{"key": "frontend/mvvm-toolkit-di|1", "skill_id": "frontend/mvvm-toolkit-di", "query": "How do I connect my view models to dependency injection and manage their lifetimes?"}
+{"key": "frontend/mvvm-toolkit-di|2", "skill_id": "frontend/mvvm-toolkit-di", "query": "How do I connect my app's view models to dependency injection?"}
+{"key": "frontend/migrate-radix-to-base|1", "skill_id": "frontend/migrate-radix-to-base", "query": "How do I switch my project to a different component library?"}
+{"key": "frontend/migrate-radix-to-base|2", "skill_id": "frontend/migrate-radix-to-base", "query": "How do I move my app's components to another UI library?"}
+{"key": "frontend/gsap-utils|1", "skill_id": "frontend/gsap-utils", "query": "How do I clamp a number between a minimum and maximum?"}
+{"key": "frontend/gsap-utils|2", "skill_id": "frontend/gsap-utils", "query": "How do I clamp, map, and snap numbers in an animation?"}
+{"key": "frontend/mvvm-toolkit|1", "skill_id": "frontend/mvvm-toolkit", "query": "How do I automatically update the screen when my data changes?"}
+{"key": "frontend/mvvm-toolkit|2", "skill_id": "frontend/mvvm-toolkit", "query": "How do I automatically update my UI when a property changes in my app?"}
+{"key": "documentation/update-llms|1", "skill_id": "documentation/update-llms", "query": "Can you explain how large language models get better over time?"}
+{"key": "documentation/update-llms|2", "skill_id": "documentation/update-llms", "query": "How can I teach an AI model new information?"}
+{"key": "frontend/pick-ui-library|1", "skill_id": "frontend/pick-ui-library", "query": "Which option should I use for adding charts to my website?"}
+{"key": "frontend/pick-ui-library|2", "skill_id": "frontend/pick-ui-library", "query": "Which option should I use for adding toast notifications to my app?"}
+{"key": "frontend/premium-frontend-ui|1", "skill_id": "frontend/premium-frontend-ui", "query": "How can I make my website feel smooth, beautiful, and fast?"}
+{"key": "frontend/premium-frontend-ui|2", "skill_id": "frontend/premium-frontend-ui", "query": "How do I make my website feel smooth, beautiful, and fast?"}
+{"key": "frontend/mvvm-toolkit-messenger|1", "skill_id": "frontend/mvvm-toolkit-messenger", "query": "How do I let different parts of my app talk without tight coupling?"}
+{"key": "frontend/mvvm-toolkit-messenger|2", "skill_id": "frontend/mvvm-toolkit-messenger", "query": "How do I send messages between view models without them knowing each other?"}
+{"key": "frontend/gsap-react|1", "skill_id": "frontend/gsap-react", "query": "How do I add smooth animations to my web app and clean them up properly?"}
+{"key": "frontend/gsap-react|2", "skill_id": "frontend/gsap-react", "query": "How do I clean up animations when a component unmounts?"}
+{"key": "frontend/react-expert|1", "skill_id": "frontend/react-expert", "query": "How do I make my web page update automatically when data changes?"}
+{"key": "frontend/react-expert|2", "skill_id": "frontend/react-expert", "query": "Why does my component keep re-rendering every time I type?"}
+{"key": "frontend/gsap-frameworks|1", "skill_id": "frontend/gsap-frameworks", "query": "How do I clean up animations when a component unmounts?"}
+{"key": "frontend/gsap-frameworks|2", "skill_id": "frontend/gsap-frameworks", "query": "What is the best way to add smooth scroll animations to a website?"}
+{"key": "frontend/shadcn|1", "skill_id": "frontend/shadcn", "query": "How do I add a chat interface to my app?"}
+{"key": "frontend/shadcn|2", "skill_id": "frontend/shadcn", "query": "Can you help me build a clean chat interface with reusable UI components?"}
+{"key": "frontend/tailwind-design-system|1", "skill_id": "frontend/tailwind-design-system", "query": "How do I keep buttons and colors consistent across my whole app?"}
+{"key": "frontend/tailwind-design-system|2", "skill_id": "frontend/tailwind-design-system", "query": "How can I make reusable UI parts that look consistent on every screen?"}
+{"key": "frontend/react-state-management|1", "skill_id": "frontend/react-state-management", "query": "How do I keep my app's data in sync across screens?"}
+{"key": "frontend/react-state-management|2", "skill_id": "frontend/react-state-management", "query": "How should I manage shared data across different parts of my app?"}
+{"key": "frontend/vue-expert|1", "skill_id": "frontend/vue-expert", "query": "How do I make my web app work offline and load faster?"}
+{"key": "frontend/vue-expert|2", "skill_id": "frontend/vue-expert", "query": "How do I make my web app load faster and work offline?"}
+{"key": "frontend/responsive-design|1", "skill_id": "frontend/responsive-design", "query": "How do I make my website layout adapt to different screen sizes?"}
+{"key": "frontend/responsive-design|2", "skill_id": "frontend/responsive-design", "query": "How do I make my website look good on phones and big screens?"}
+{"key": "frontend/wcag-audit-patterns|1", "skill_id": "frontend/wcag-audit-patterns", "query": "How do I make my website accessible to screen reader users?"}
+{"key": "frontend/wcag-audit-patterns|2", "skill_id": "frontend/wcag-audit-patterns", "query": "How do I make my website accessible to people with disabilities?"}
+{"key": "frontend/vercel-react-view-transitions|1", "skill_id": "frontend/vercel-react-view-transitions", "query": "How can I make screen changes animate smoothly and feel native?"}
+{"key": "frontend/vercel-react-view-transitions|2", "skill_id": "frontend/vercel-react-view-transitions", "query": "How do I make my app's page changes animate smoothly?"}
+{"key": "documents/md-to-docx|1", "skill_id": "documents/md-to-docx", "query": "How can I turn my Markdown notes into a formatted Word document?"}
+{"key": "frontend/react19-source-patterns|1", "skill_id": "frontend/react19-source-patterns", "query": "How should I update my code for the new version's API and context changes?"}
+{"key": "frontend/react19-source-patterns|2", "skill_id": "frontend/react19-source-patterns", "query": "Can you explain how the newest version handles component updates?"}
+{"key": "git-workflow/finishing-a-development-branch|1", "skill_id": "git-workflow/finishing-a-development-branch", "query": "All tests pass—what should I do next to integrate the changes?"}
+{"key": "git-workflow/finishing-a-development-branch|2", "skill_id": "git-workflow/finishing-a-development-branch", "query": "How should I combine my completed and tested work into the main project?"}
+{"key": "frontend/vercel-react-best-practices|1", "skill_id": "frontend/vercel-react-best-practices", "query": "How can I make my website load faster and run smoother?"}
+{"key": "frontend/vercel-react-best-practices|2", "skill_id": "frontend/vercel-react-best-practices", "query": "How can I make my web app load faster and smoother?"}
+{"key": "frontend/web-component-design|1", "skill_id": "frontend/web-component-design", "query": "How do I make reusable UI components that work well together?"}
+{"key": "frontend/web-component-design|2", "skill_id": "frontend/web-component-design", "query": "How do I make reusable UI pieces that work across different frameworks?"}
+{"key": "git-workflow/gitmoji|1", "skill_id": "git-workflow/gitmoji", "query": "Can you write a commit message with an emoji for my change?"}
+{"key": "git-workflow/gitmoji|2", "skill_id": "git-workflow/gitmoji", "query": "Can you write a commit message with an emoji for my code change?"}
+{"key": "git-workflow/iterate-pr|1", "skill_id": "git-workflow/iterate-pr", "query": "Keep fixing my pull request until checks pass and feedback is addressed?"}
+{"key": "git-workflow/iterate-pr|2", "skill_id": "git-workflow/iterate-pr", "query": "Can you keep fixing my pull request until tests pass and feedback is handled?"}
+{"key": "git-workflow/make-repo-contribution|1", "skill_id": "git-workflow/make-repo-contribution", "query": "How do I find the right steps before changing code?"}
+{"key": "git-workflow/make-repo-contribution|2", "skill_id": "git-workflow/make-repo-contribution", "query": "What should I check before making changes to code?"}
+{"key": "git-workflow/git-workflow-and-versioning|1", "skill_id": "git-workflow/git-workflow-and-versioning", "query": "How do I split my messy uncommitted changes into clean commits?"}
+{"key": "git-workflow/git-workflow-and-versioning|2", "skill_id": "git-workflow/git-workflow-and-versioning", "query": "Can you help me turn my messy uncommitted changes into clean separate commits?"}
+{"key": "git-workflow/pr|1", "skill_id": "git-workflow/pr", "query": "Can you help me write a clear pull request description?"}
+{"key": "git-workflow/pr|2", "skill_id": "git-workflow/pr", "query": "Help me write a clear pull request description for my code changes."}
+{"key": "frontend/winui-app|1", "skill_id": "frontend/winui-app", "query": "How do I build a modern desktop app with a clean interface?"}
+{"key": "frontend/winui-app|2", "skill_id": "frontend/winui-app", "query": "How do I create a modern desktop app with a clean interface?"}
+{"key": "git-workflow/pr-writer|1", "skill_id": "git-workflow/pr-writer", "query": "Can you help me update the title and description for my pull request?"}
+{"key": "git-workflow/pr-writer|2", "skill_id": "git-workflow/pr-writer", "query": "Help me make a clear pull request title and description."}
+{"key": "git-workflow/commit-message-storyteller|1", "skill_id": "git-workflow/commit-message-storyteller", "query": "Can you turn these code changes into a clear summary?"}
+{"key": "git-workflow/commit-message-storyteller|2", "skill_id": "git-workflow/commit-message-storyteller", "query": "Can you explain why these code changes were made?"}
+{"key": "infrastructure/aws-cdk-python-setup|1", "skill_id": "infrastructure/aws-cdk-python-setup", "query": "How do I get started building cloud apps with code?"}
+{"key": "infrastructure/aws-cdk-python-setup|2", "skill_id": "infrastructure/aws-cdk-python-setup", "query": "How do I prepare my computer to start coding cloud applications?"}
+{"key": "git-workflow/yeet|1", "skill_id": "git-workflow/yeet", "query": "Please stage my changes, commit them, push, and open a pull request."}
+{"key": "git-workflow/yeet|2", "skill_id": "git-workflow/yeet", "query": "Can you stage, commit, push, and open a pull request for me?"}
+{"key": "infrastructure/azure-architecture-autopilot|1", "skill_id": "infrastructure/azure-architecture-autopilot", "query": "Can you turn my cloud setup into a diagram and help me improve it?"}
+{"key": "infrastructure/azure-architecture-autopilot|2", "skill_id": "infrastructure/azure-architecture-autopilot", "query": "Can you turn my plain-English setup idea into a cloud diagram and deploy it?"}
+{"key": "infrastructure/aws-resource-query|1", "skill_id": "infrastructure/aws-resource-query", "query": "Show me which of my cloud servers are currently running."}
+{"key": "infrastructure/aws-resource-query|2", "skill_id": "infrastructure/aws-resource-query", "query": "Which servers are running in my cloud account right now?"}
+{"key": "infrastructure/cloud-architect|1", "skill_id": "infrastructure/cloud-architect", "query": "How can I move my apps online and cut costs?"}
+{"key": "infrastructure/cloud-architect|2", "skill_id": "infrastructure/cloud-architect", "query": "How can I move my apps to another provider and save money?"}
+{"key": "infrastructure/linkerd-patterns|1", "skill_id": "infrastructure/linkerd-patterns", "query": "How do I set up a lightweight secure service mesh with low overhead?"}
+{"key": "infrastructure/linkerd-patterns|2", "skill_id": "infrastructure/linkerd-patterns", "query": "How do I set up a lightweight secure service mesh with minimal overhead?"}
+{"key": "infrastructure/import-infrastructure-as-code|1", "skill_id": "infrastructure/import-infrastructure-as-code", "query": "Can you turn my existing cloud setup into reusable code?"}
+{"key": "infrastructure/import-infrastructure-as-code|2", "skill_id": "infrastructure/import-infrastructure-as-code", "query": "Can you turn my existing cloud setup into code?"}
+{"key": "git-workflow/caveman-commit|1", "skill_id": "git-workflow/caveman-commit", "query": "Write a short conventional message describing what this change does."}
+{"key": "git-workflow/caveman-commit|2", "skill_id": "git-workflow/caveman-commit", "query": "Can you make my code change notes sound short and simple?"}
+{"key": "infrastructure/terraform-module-library|1", "skill_id": "infrastructure/terraform-module-library", "query": "How do I set up reusable cloud infrastructure code for multiple providers?"}
+{"key": "infrastructure/terraform-module-library|2", "skill_id": "infrastructure/terraform-module-library", "query": "How can I set up reusable cloud infrastructure templates for multiple providers?"}
+{"key": "infrastructure/multi-cloud-architecture|1", "skill_id": "infrastructure/multi-cloud-architecture", "query": "How do I choose services from different providers without getting locked in?"}
+{"key": "infrastructure/multi-cloud-architecture|2", "skill_id": "infrastructure/multi-cloud-architecture", "query": "How do I choose and connect services from different providers without getting locked in?"}
+{"key": "git-workflow/gh-address-comments|1", "skill_id": "git-workflow/gh-address-comments", "query": "Can you help me reply to feedback on my code changes?"}
+{"key": "git-workflow/gh-address-comments|2", "skill_id": "git-workflow/gh-address-comments", "query": "How do I reply to feedback on my code changes?"}
+{"key": "git-workflow/setup-pre-commit|1", "skill_id": "git-workflow/setup-pre-commit", "query": "How can I make my code automatically check formatting, types, and tests before saving changes?"}
+{"key": "git-workflow/setup-pre-commit|2", "skill_id": "git-workflow/setup-pre-commit", "query": "How do I make my code get checked automatically before I save changes?"}
+{"key": "marketing/ab-testing|1", "skill_id": "marketing/ab-testing", "query": "How should I set up an A/B experiment to compare two webpage versions?"}
+{"key": "marketing/ab-testing|2", "skill_id": "marketing/ab-testing", "query": "How do I plan an A/B test for my new signup page?"}
+{"key": "infrastructure/aws-cost-optimize|1", "skill_id": "infrastructure/aws-cost-optimize", "query": "Can you find ways to lower our cloud costs and log the fixes?"}
+{"key": "infrastructure/aws-cost-optimize|2", "skill_id": "infrastructure/aws-cost-optimize", "query": "Analyze my cloud resources and find ways to reduce costs?"}
+{"key": "marketing/ad-creative|1", "skill_id": "marketing/ad-creative", "query": "Can you write a few ad headlines and descriptions for my business?"}
+{"key": "marketing/ad-creative|2", "skill_id": "marketing/ad-creative", "query": "Can you write a few ad headlines and descriptions for my campaign?"}
+{"key": "marketing/ad-campaign-analyzer|1", "skill_id": "marketing/ad-campaign-analyzer", "query": "Where am I wasting my ad budget and what should I change?"}
+{"key": "marketing/ad-campaign-analyzer|2", "skill_id": "marketing/ad-campaign-analyzer", "query": "Which ads should I cut, scale, or test?"}
+{"key": "marketing/ads|1", "skill_id": "marketing/ads", "query": "How can I improve my paid ad campaign results without wasting budget?"}
+{"key": "marketing/ads|2", "skill_id": "marketing/ads", "query": "How can I make my online ads bring in more sales?"}
+{"key": "marketing/ads-meta|1", "skill_id": "marketing/ads-meta", "query": "How do I audit my social media ad campaigns and tracking?"}
+{"key": "marketing/ads-meta|2", "skill_id": "marketing/ads-meta", "query": "Can you check if my ad tracking and budget setup are correct?"}
+{"key": "marketing/churn-prevention|1", "skill_id": "marketing/churn-prevention", "query": "How can I keep more customers from canceling their subscriptions?"}
+{"key": "marketing/churn-prevention|2", "skill_id": "marketing/churn-prevention", "query": "How can I stop customers from canceling their subscriptions?"}
+{"key": "marketing/ads-google|1", "skill_id": "marketing/ads-google", "query": "Help me check my ad campaign spending and search terms."}
+{"key": "marketing/ads-google|2", "skill_id": "marketing/ads-google", "query": "Can you audit my online ads and tell me what to fix?"}
+{"key": "marketing/cold-email|1", "skill_id": "marketing/cold-email", "query": "How do I get more replies from business outreach messages?"}
+{"key": "marketing/cold-email|2", "skill_id": "marketing/cold-email", "query": "How do I get more replies from cold outreach to businesses?"}
+{"key": "marketing/competitor-profiling|1", "skill_id": "marketing/competitor-profiling", "query": "Can you look at this website and tell me what they do?"}
+{"key": "marketing/competitor-profiling|2", "skill_id": "marketing/competitor-profiling", "query": "Can you compare these rival websites and summarize their strengths?"}
+{"key": "marketing/competitors|1", "skill_id": "marketing/competitors", "query": "How do I create comparison pages for my product options?"}
+{"key": "marketing/competitors|2", "skill_id": "marketing/competitors", "query": "How do I create comparison and alternative pages for my product?"}
+{"key": "marketing/content-strategy|1", "skill_id": "marketing/content-strategy", "query": "What topics should I write about for my blog?"}
+{"key": "marketing/content-strategy|2", "skill_id": "marketing/content-strategy", "query": "What should I write about on my blog next month?"}
+{"key": "marketing/analytics|1", "skill_id": "marketing/analytics", "query": "How do I track which website visitors actually become customers?"}
+{"key": "marketing/analytics|2", "skill_id": "marketing/analytics", "query": "How do I track which ads bring in customers?"}
+{"key": "marketing/copywriting|1", "skill_id": "marketing/copywriting", "query": "Can you rewrite my homepage text to sound more persuasive?"}
+{"key": "marketing/copywriting|2", "skill_id": "marketing/copywriting", "query": "Can you write homepage text that sounds friendly and convincing?"}
+{"key": "marketing/cro|1", "skill_id": "marketing/cro", "query": "How can I get more people to fill out my contact form?"}
+{"key": "marketing/cro|2", "skill_id": "marketing/cro", "query": "How can I make my landing page get more sign-ups?"}
+{"key": "marketing/events|1", "skill_id": "marketing/events", "query": "How can I get more leads from a conference?"}
+{"key": "marketing/events|2", "skill_id": "marketing/events", "query": "How do I plan a webinar that generates qualified leads?"}
+{"key": "marketing/gtm-positioning-strategy|1", "skill_id": "marketing/gtm-positioning-strategy", "query": "How can I make my business stand out from competitors?"}
+{"key": "marketing/gtm-positioning-strategy|2", "skill_id": "marketing/gtm-positioning-strategy", "query": "How can I make my product stand out from competitors?"}
+{"key": "marketing/launch|1", "skill_id": "marketing/launch", "query": "How should I plan the announcement of our new feature?"}
+{"key": "marketing/launch|2", "skill_id": "marketing/launch", "query": "How do I plan announcing a new feature to customers?"}
+{"key": "marketing/competitive-battlecard|1", "skill_id": "marketing/competitive-battlecard", "query": "How do I compare my offer against rivals in a sales meeting?"}
+{"key": "marketing/competitive-battlecard|2", "skill_id": "marketing/competitive-battlecard", "query": "How do I prepare my sales team to beat a rival product?"}
+{"key": "marketing/customer-research|1", "skill_id": "marketing/customer-research", "query": "How do I figure out what my users really need?"}
+{"key": "marketing/customer-research|2", "skill_id": "marketing/customer-research", "query": "How do I find out what people think about my idea?"}
+{"key": "marketing/marketing-loops|1", "skill_id": "marketing/marketing-loops", "query": "How can I set up something that automatically repeats this task every week?"}
+{"key": "marketing/marketing-loops|2", "skill_id": "marketing/marketing-loops", "query": "How can I make this task repeat automatically every week?"}
+{"key": "marketing/linkedin-post-formatter|1", "skill_id": "marketing/linkedin-post-formatter", "query": "Help me write a catchy social media post with bold headings and emojis?"}
+{"key": "marketing/linkedin-post-formatter|2", "skill_id": "marketing/linkedin-post-formatter", "query": "Can you make my social media post look bold and engaging?"}
+{"key": "marketing/lead-magnets|1", "skill_id": "marketing/lead-magnets", "query": "Help me plan a free download to collect email addresses."}
+{"key": "marketing/lead-magnets|2", "skill_id": "marketing/lead-magnets", "query": "How can I create a freebie that gets people to join my email list?"}
+{"key": "marketing/public-relations|1", "skill_id": "marketing/public-relations", "query": "How do I get a journalist to cover my small business?"}
+{"key": "marketing/public-relations|2", "skill_id": "marketing/public-relations", "query": "How do I get journalists to cover my new business?"}
+{"key": "marketing/revops|1", "skill_id": "marketing/revops", "query": "How do I make sure sales gets the right leads from marketing?"}
+{"key": "marketing/revops|2", "skill_id": "marketing/revops", "query": "How should I hand off leads from marketing to sales?"}
+{"key": "marketing/paywalls|1", "skill_id": "marketing/paywalls", "query": "How can I make my app's upgrade screen more convincing?"}
+{"key": "marketing/paywalls|2", "skill_id": "marketing/paywalls", "query": "How can I make my app’s upgrade screen more convincing?"}
+{"key": "marketing/seo-audit-coreyhaines31|1", "skill_id": "marketing/seo-audit-coreyhaines31", "query": "Why is my website not showing up in search results?"}
+{"key": "marketing/seo-audit-coreyhaines31|2", "skill_id": "marketing/seo-audit-coreyhaines31", "query": "Why isn’t my website showing up in search results?"}
+{"key": "marketing/offers|1", "skill_id": "marketing/offers", "query": "How can I make my offer more compelling to customers?"}
+{"key": "marketing/offers|2", "skill_id": "marketing/offers", "query": "How can I make my offer more compelling with bonuses and a guarantee?"}
+{"key": "marketing/marketing-ideas|1", "skill_id": "marketing/marketing-ideas", "query": "How can I get more people to try my software?"}
+{"key": "marketing/marketing-ideas|2", "skill_id": "marketing/marketing-ideas", "query": "How can I get more people to notice my small bakery?"}
+{"key": "marketing/server-side-conversion-tracking|1", "skill_id": "marketing/server-side-conversion-tracking", "query": "How can I make sure my ads still report purchases accurately after privacy changes?"}
+{"key": "marketing/server-side-conversion-tracking|2", "skill_id": "marketing/server-side-conversion-tracking", "query": "How do I make sure my online sales are counted correctly after privacy changes?"}
+{"key": "marketing/seo-competitor-pages|1", "skill_id": "marketing/seo-competitor-pages", "query": "How do I create a side-by-side comparison chart for two similar services?"}
+{"key": "marketing/seo-competitor-pages|2", "skill_id": "marketing/seo-competitor-pages", "query": "How do I make a comparison page for two competing services?"}
+{"key": "marketing/seo-local|1", "skill_id": "marketing/seo-local", "query": "Can you check how my business shows up in nearby searches?"}
+{"key": "marketing/seo-local|2", "skill_id": "marketing/seo-local", "query": "Can you audit my business listings, reviews, and location pages?"}
+{"key": "mobile/eas-app-stores|1", "skill_id": "mobile/eas-app-stores", "query": "How do I release my iOS and Android app to testers and the public?"}
+{"key": "mobile/eas-app-stores|2", "skill_id": "mobile/eas-app-stores", "query": "How do I publish my mobile app to app marketplaces for testing and release?"}
+{"key": "mobile/apple-appstore-reviewer|1", "skill_id": "mobile/apple-appstore-reviewer", "query": "What in my code could get it rejected?"}
+{"key": "mobile/apple-appstore-reviewer|2", "skill_id": "mobile/apple-appstore-reviewer", "query": "What common issues could cause my mobile app to be rejected?"}
+{"key": "mobile/eas-workflows|1", "skill_id": "mobile/eas-workflows", "query": "How do I set up automated builds for my mobile app?"}
+{"key": "mobile/eas-workflows|2", "skill_id": "mobile/eas-workflows", "query": "How do I set up automated builds for my app?"}
+{"key": "mobile/eas-hosting|1", "skill_id": "mobile/eas-hosting", "query": "How do I publish my website and API routes with preview links and secrets?"}
+{"key": "mobile/eas-hosting|2", "skill_id": "mobile/eas-hosting", "query": "How do I put my website and API routes online with preview links?"}
+{"key": "marketing/value-prop-statements|1", "skill_id": "marketing/value-prop-statements", "query": "How do I explain why someone should choose my service?"}
+{"key": "marketing/value-prop-statements|2", "skill_id": "marketing/value-prop-statements", "query": "How do I explain why my service is worth choosing?"}
+{"key": "mobile/eas-simulator|1", "skill_id": "mobile/eas-simulator", "query": "Can you show me how to test my app on a cloud phone?"}
+{"key": "mobile/eas-simulator|2", "skill_id": "mobile/eas-simulator", "query": "Can you run my mobile app on a remote phone and show me what happens?"}
+{"key": "marketing/ads-landing|1", "skill_id": "marketing/ads-landing", "query": "Can you review my ad page for mobile issues and trust signals?"}
+{"key": "marketing/ads-landing|2", "skill_id": "marketing/ads-landing", "query": "How can I make my ad click page convert better?"}
+{"key": "mobile/expo-animation|1", "skill_id": "mobile/expo-animation", "query": "How do I make a screen element move smoothly and feel natural?"}
+{"key": "mobile/expo-animation|2", "skill_id": "mobile/expo-animation", "query": "How do I make smooth animations in my mobile app without them feeling laggy?"}
+{"key": "marketing/influencer-marketing|1", "skill_id": "marketing/influencer-marketing", "query": "How do I find and vet influencers to promote my product?"}
+{"key": "marketing/influencer-marketing|2", "skill_id": "marketing/influencer-marketing", "query": "How do I find creators to promote my new product?"}
+{"key": "mobile/expo-brownfield|1", "skill_id": "mobile/expo-brownfield", "query": "How do I add a cross-platform screen to my existing mobile app?"}
+{"key": "mobile/expo-brownfield|2", "skill_id": "mobile/expo-brownfield", "query": "How can I embed a screen built with JavaScript into my existing mobile app?"}
+{"key": "mobile/expo-dev-client|1", "skill_id": "mobile/expo-dev-client", "query": "How can I send a test version to people for internal testing?"}
+{"key": "mobile/expo-dev-client|2", "skill_id": "mobile/expo-dev-client", "query": "How do I build and share a test version of my mobile app?"}
+{"key": "mobile/expo-data-fetching|1", "skill_id": "mobile/expo-data-fetching", "query": "How do I load data from an API in my app?"}
+{"key": "mobile/expo-data-fetching|2", "skill_id": "mobile/expo-data-fetching", "query": "How do I show loading, empty, and error screens for network calls?"}
+{"key": "mobile/expo-module|1", "skill_id": "mobile/expo-module", "query": "How do I add custom native code and screens to my app?"}
+{"key": "mobile/expo-module|2", "skill_id": "mobile/expo-module", "query": "How do I add a custom native screen to my mobile app?"}
+{"key": "mobile/mobile-android-design|1", "skill_id": "mobile/mobile-android-design", "query": "How do I make my app screens look modern and consistent?"}
+{"key": "mobile/mobile-android-design|2", "skill_id": "mobile/mobile-android-design", "query": "How do I make an app screen look modern and easy to use?"}
+{"key": "mobile/expo-dom|1", "skill_id": "mobile/expo-dom", "query": "How can I run my web code inside a mobile app without rewriting it?"}
+{"key": "mobile/expo-dom|2", "skill_id": "mobile/expo-dom", "query": "How can I reuse my web code in a mobile app without rewriting everything?"}
+{"key": "mobile/expo-design-system|1", "skill_id": "mobile/expo-design-system", "query": "How do I create a reusable theme and component library for my app?"}
+{"key": "mobile/expo-design-system|2", "skill_id": "mobile/expo-design-system", "query": "How do I keep colors, spacing, and text styles consistent across my app?"}
+{"key": "mobile/expo-project-structure|1", "skill_id": "mobile/expo-project-structure", "query": "How should I organize the folders for a brand new mobile app?"}
+{"key": "mobile/expo-project-structure|2", "skill_id": "mobile/expo-project-structure", "query": "Where should I put my files when starting a brand new app?"}
+{"key": "mobile/react-native-design|1", "skill_id": "mobile/react-native-design", "query": "How do I make smooth screen transitions in a mobile app?"}
+{"key": "mobile/react-native-design|2", "skill_id": "mobile/react-native-design", "query": "How do I make smooth screen transitions and style a mobile app?"}
+{"key": "mobile/vercel-react-native-skills|1", "skill_id": "mobile/vercel-react-native-skills", "query": "How can I make my mobile app's long lists scroll more smoothly?"}
+{"key": "mobile/vercel-react-native-skills|2", "skill_id": "mobile/vercel-react-native-skills", "query": "How can I make my mobile app's long lists scroll smoothly?"}
+{"key": "performance/python-performance-optimization|1", "skill_id": "performance/python-performance-optimization", "query": "Why is my program running so slowly and how can I fix it?"}
+{"key": "performance/python-performance-optimization|2", "skill_id": "performance/python-performance-optimization", "query": "Why is my code running so slowly, and how can I fix it?"}
+{"key": "performance/web-perf|1", "skill_id": "performance/web-perf", "query": "Can you help me make my website load faster and feel smoother?"}
+{"key": "performance/web-perf|2", "skill_id": "performance/web-perf", "query": "Why is my website slow and how can I make it faster?"}
+{"key": "planning/breakdown-epic-arch|1", "skill_id": "planning/breakdown-epic-arch", "query": "Draft the high-level technical architecture for this epic from the requirements document?"}
+{"key": "planning/breakdown-epic-arch|2", "skill_id": "planning/breakdown-epic-arch", "query": "Help me outline the technical architecture for this epic from the requirements document."}
+{"key": "performance/performance-optimization|1", "skill_id": "performance/performance-optimization", "query": "Why is my app so slow and how can I make it faster?"}
+{"key": "performance/performance-optimization|2", "skill_id": "performance/performance-optimization", "query": "How can I make my website load faster and run smoother?"}
+{"key": "planning/breakdown-plan|1", "skill_id": "planning/breakdown-plan", "query": "Can you help me plan a project with tasks, dependencies, and priorities?"}
+{"key": "planning/breakdown-plan|2", "skill_id": "planning/breakdown-plan", "query": "Can you create a detailed project plan with tasks, dependencies, and priorities?"}
+{"key": "planning/breakdown-epic-pm|1", "skill_id": "planning/breakdown-epic-pm", "query": "Break down this epic into a product requirements document for architecture planning?"}
+{"key": "planning/breakdown-epic-pm|2", "skill_id": "planning/breakdown-epic-pm", "query": "Can you draft an epic product requirements document for a new feature?"}
+{"key": "planning/brainstorming|1", "skill_id": "planning/brainstorming", "query": "Help me brainstorm some fun ideas for a weekend family activity?"}
+{"key": "planning/brainstorming|2", "skill_id": "planning/brainstorming", "query": "Can you help me brainstorm ideas for a weekend community event?"}
+{"key": "marketing/product-marketing|1", "skill_id": "marketing/product-marketing", "query": "How can I get more people to buy my new item?"}
+{"key": "marketing/product-marketing|2", "skill_id": "marketing/product-marketing", "query": "How do I figure out what customers want before launching something new?"}
+{"key": "planning/incremental-implementation|1", "skill_id": "planning/incremental-implementation", "query": "Can you break this change into small steps I can check one at a time?"}
+{"key": "planning/incremental-implementation|2", "skill_id": "planning/incremental-implementation", "query": "How do I roll out this change in small safe steps?"}
+{"key": "planning/planning-and-task-breakdown|1", "skill_id": "planning/planning-and-task-breakdown", "query": "Can you split this project into small steps I can start today?"}
+{"key": "planning/planning-and-task-breakdown|2", "skill_id": "planning/planning-and-task-breakdown", "query": "Can you split this project into small steps I can do in order?"}
+{"key": "planning/grilling|1", "skill_id": "planning/grilling", "query": "Grill me on my plan to change careers."}
+{"key": "planning/grilling|2", "skill_id": "planning/grilling", "query": "Can you stress-test my business idea and challenge my assumptions?"}
+{"key": "mobile/kotlin-specialist|1", "skill_id": "mobile/kotlin-specialist", "query": "How do I run several tasks at the same time without slowing down?"}
+{"key": "mobile/kotlin-specialist|2", "skill_id": "mobile/kotlin-specialist", "query": "How do I run background tasks safely and update the screen?"}
+{"key": "planning/to-questionnaire|1", "skill_id": "planning/to-questionnaire", "query": "Help me create questions to ask someone about a decision I can't make alone."}
+{"key": "planning/to-questionnaire|2", "skill_id": "planning/to-questionnaire", "query": "Can you turn this decision into a form someone else can fill out?"}
+{"key": "platforms/agent-platform-endpoint-management|1", "skill_id": "platforms/agent-platform-endpoint-management", "query": "How do I deploy a model and check its status?"}
+{"key": "platforms/agent-platform-endpoint-management|2", "skill_id": "platforms/agent-platform-endpoint-management", "query": "How do I deploy my model and check its status?"}
+{"key": "planning/update-implementation-plan|1", "skill_id": "planning/update-implementation-plan", "query": "Can you revise the plan file to add the new features and design changes?"}
+{"key": "planning/update-implementation-plan|2", "skill_id": "planning/update-implementation-plan", "query": "Can you revise our existing plan file with the new feature requirements?"}
+{"key": "mobile/expo-native-ui|1", "skill_id": "mobile/expo-native-ui", "query": "How do I make my app screens look polished and feel familiar on phones?"}
+{"key": "planning/wayfinder|1", "skill_id": "planning/wayfinder", "query": "Help me break a big project into decision tickets we can resolve one by one."}
+{"key": "planning/wayfinder|2", "skill_id": "planning/wayfinder", "query": "Help me break this big project into decision tickets and resolve them one by one."}
+{"key": "platforms/alloydb-basics|1", "skill_id": "platforms/alloydb-basics", "query": "How do I set up automatic backups for my database?"}
+{"key": "platforms/alloydb-basics|2", "skill_id": "platforms/alloydb-basics", "query": "How do I set up automatic backups for my database cluster?"}
+{"key": "planning/create-implementation-plan|1", "skill_id": "planning/create-implementation-plan", "query": "What steps should I follow to get this plan working?"}
+{"key": "planning/create-implementation-plan|2", "skill_id": "planning/create-implementation-plan", "query": "Help me plan the steps to finish this project."}
+{"key": "platforms/agents-sdk|1", "skill_id": "platforms/agents-sdk", "query": "Can you help me build and debug a chat app with scheduled tasks?"}
+{"key": "platforms/agents-sdk|2", "skill_id": "platforms/agents-sdk", "query": "Help me build and debug a chatbot app with memory and tools?"}
+{"key": "platforms/appinsights-instrumentation|1", "skill_id": "platforms/appinsights-instrumentation", "query": "How do I add usage tracking and error monitoring to my web application?"}
+{"key": "platforms/appinsights-instrumentation|2", "skill_id": "platforms/appinsights-instrumentation", "query": "How do I add monitoring and usage tracking to my web application?"}
+{"key": "platforms/agent-platform-model-registry|1", "skill_id": "platforms/agent-platform-model-registry", "query": "How do I upload and manage versions of my machine learning models?"}
+{"key": "platforms/agent-platform-model-registry|2", "skill_id": "platforms/agent-platform-model-registry", "query": "How do I upload and manage different versions of my machine learning files?"}
+{"key": "platforms/arize-dataset|1", "skill_id": "platforms/arize-dataset", "query": "How can I organize my test examples and export them?"}
+{"key": "platforms/arize-dataset|2", "skill_id": "platforms/arize-dataset", "query": "How can I organize sample test cases for evaluating my model?"}
+{"key": "platforms/arize-instrumentation|1", "skill_id": "platforms/arize-instrumentation", "query": "Can you help me add tracing to my app?"}
+{"key": "platforms/arize-instrumentation|2", "skill_id": "platforms/arize-instrumentation", "query": "Can you review my app and then add tracing to it?"}
+{"key": "platforms/agent-platform-migrate-from-ai-studio|1", "skill_id": "platforms/agent-platform-migrate-from-ai-studio", "query": "How do I move my app"}
+{"key": "platforms/agent-platform-migrate-from-ai-studio|2", "skill_id": "platforms/agent-platform-migrate-from-ai-studio", "query": "How do I move my app to the cloud and use credits?"}
+{"key": "platforms/api-gateway-mcp-server|1", "skill_id": "platforms/api-gateway-mcp-server", "query": "How do I turn my web APIs into tools an AI agent can call?"}
+{"key": "platforms/api-gateway-mcp-server|2", "skill_id": "platforms/api-gateway-mcp-server", "query": "How can I let an AI assistant use my internal APIs safely?"}
+{"key": "platforms/azure-developer-cli|1", "skill_id": "platforms/azure-developer-cli", "query": "How do I set up and deploy my cloud project with the command-line templates?"}
+{"key": "platforms/azure-developer-cli|2", "skill_id": "platforms/azure-developer-cli", "query": "How do I move my cloud project to a new environment safely?"}
+{"key": "platforms/azure-devops-cli|1", "skill_id": "platforms/azure-devops-cli", "query": "How do I manage my project's repositories and build pipelines from the command line?"}
+{"key": "platforms/azure-devops-cli|2", "skill_id": "platforms/azure-devops-cli", "query": "How do I automate code builds and releases from the command line?"}
+{"key": "platforms/application-design-center-design-deploy|1", "skill_id": "platforms/application-design-center-design-deploy", "query": "How can I turn my idea into a working software setup?"}
+{"key": "platforms/application-design-center-design-deploy|2", "skill_id": "platforms/application-design-center-design-deploy", "query": "How can I turn my idea into something people can use?"}
+{"key": "planning/structured-autonomy-generate|1", "skill_id": "planning/structured-autonomy-generate", "query": "Can you help me plan a simple weekly meal schedule?"}
+{"key": "planning/structured-autonomy-generate|2", "skill_id": "planning/structured-autonomy-generate", "query": "Can you help me plan a weekly meal prep schedule?"}
+{"key": "platforms/azure-app-onboard|1", "skill_id": "platforms/azure-app-onboard", "query": "Can you turn my app idea into a cost estimate and deployment plan?"}
+{"key": "platforms/azure-app-onboard|2", "skill_id": "platforms/azure-app-onboard", "query": "Can you help me plan and deploy my app with cost estimates and approval?"}
+{"key": "platforms/azure-resource-lookup|1", "skill_id": "platforms/azure-resource-lookup", "query": "Can you list all my web apps and virtual machines?"}
+{"key": "platforms/azure-resource-lookup|2", "skill_id": "platforms/azure-resource-lookup", "query": "Show me all my web apps in my subscription?"}
+{"key": "platforms/assuredworkloads-environment-assessor|1", "skill_id": "platforms/assuredworkloads-environment-assessor", "query": "How do I check if my existing cloud workloads meet EU data rules?"}
+{"key": "platforms/assuredworkloads-environment-assessor|2", "skill_id": "platforms/assuredworkloads-environment-assessor", "query": "How can I check if my cloud workloads meet EU data rules?"}
+{"key": "planning/think|1", "skill_id": "planning/think", "query": "Help me plan this project before I start building it?"}
+{"key": "planning/think|2", "skill_id": "planning/think", "query": "Help me plan this feature before I start building it."}
+{"key": "platforms/azure-messaging|1", "skill_id": "platforms/azure-messaging", "query": "Why can’t my app connect or process messages from the cloud service?"}
+{"key": "platforms/azure-messaging|2", "skill_id": "platforms/azure-messaging", "query": "Why does my app fail to connect or process event stream messages?"}
+{"key": "platforms/azure-static-web-apps|1", "skill_id": "platforms/azure-static-web-apps", "query": "How do I put my website online and set up its backend?"}
+{"key": "platforms/azure-static-web-apps|2", "skill_id": "platforms/azure-static-web-apps", "query": "How do I deploy my website to the cloud and add an API?"}
+{"key": "platforms/bigquery-basics|1", "skill_id": "platforms/bigquery-basics", "query": "Can you run a query and show the results in a table?"}
+{"key": "platforms/bigquery-basics|2", "skill_id": "platforms/bigquery-basics", "query": "Can you run a query on my data and show the results?"}
+{"key": "platforms/azure-resource-visualizer|1", "skill_id": "platforms/azure-resource-visualizer", "query": "Can you map out how all my cloud components connect together?"}
+{"key": "platforms/azure-resource-visualizer|2", "skill_id": "platforms/azure-resource-visualizer", "query": "Can you draw a diagram showing how my cloud services connect?"}
+{"key": "platforms/bigquery-optimization|1", "skill_id": "platforms/bigquery-optimization", "query": "How can I reduce my cloud data warehouse costs and speed up queries?"}
+{"key": "platforms/bigquery-optimization|2", "skill_id": "platforms/bigquery-optimization", "query": "How can I reduce my data storage and query costs?"}
+{"key": "platforms/cloud-databases-onboarding|1", "skill_id": "platforms/cloud-databases-onboarding", "query": "Which storage option should I pick for my new app?"}
+{"key": "platforms/cloud-databases-onboarding|2", "skill_id": "platforms/cloud-databases-onboarding", "query": "Which storage option should I use for my new app?"}
+{"key": "platforms/agent-platform-eval-flywheel|1", "skill_id": "platforms/agent-platform-eval-flywheel", "query": "How can I test whether my AI model gives good answers?"}
+{"key": "platforms/agent-platform-eval-flywheel|2", "skill_id": "platforms/agent-platform-eval-flywheel", "query": "How can I tell if my AI assistant is giving good answers?"}
+{"key": "platforms/cloud-monitoring-list-time-series-request|1", "skill_id": "platforms/cloud-monitoring-list-time-series-request", "query": "How do I generate a query to pull metric data over a time range?"}
+{"key": "platforms/cloud-monitoring-list-time-series-request|2", "skill_id": "platforms/cloud-monitoring-list-time-series-request", "query": "Can you build the query settings from these metric details and resource parameters?"}
+{"key": "platforms/azure-upgrade|1", "skill_id": "platforms/azure-upgrade", "query": "How can I move my old system to a newer version?"}
+{"key": "platforms/azure-upgrade|2", "skill_id": "platforms/azure-upgrade", "query": "How can I switch my app to a different service tier?"}
+{"key": "platforms/cloud-logging-cross-project-configuration|1", "skill_id": "platforms/cloud-logging-cross-project-configuration", "query": "How do I send logs from several projects to one central place?"}
+{"key": "platforms/cloud-logging-cross-project-configuration|2", "skill_id": "platforms/cloud-logging-cross-project-configuration", "query": "How do I collect and search activity records from several accounts in one place?"}
+{"key": "platforms/cloud-run-basics|1", "skill_id": "platforms/cloud-run-basics", "query": "How do I deploy a web app that handles requests?"}
+{"key": "platforms/cloud-run-basics|2", "skill_id": "platforms/cloud-run-basics", "query": "How do I deploy an app that responds to web requests?"}
+{"key": "platforms/bigquery-observability|1", "skill_id": "platforms/bigquery-observability", "query": "How do I monitor query performance and retrieve telemetry data efficiently?"}
+{"key": "platforms/bigquery-observability|2", "skill_id": "platforms/bigquery-observability", "query": "How can I track slow queries and job failures in my data warehouse?"}
+{"key": "platforms/cloudflare|1", "skill_id": "platforms/cloudflare", "query": "What services do I need to build and secure a web app?"}
+{"key": "platforms/cloudflare|2", "skill_id": "platforms/cloudflare", "query": "How do I choose the right services for my app, APIs, and security?"}
+{"key": "platforms/cloud-trace-querying|1", "skill_id": "platforms/cloud-trace-querying", "query": "Why are some requests slow, and how can I find where the delay happens?"}
+{"key": "platforms/cloud-trace-querying|2", "skill_id": "platforms/cloud-trace-querying", "query": "Why are some requests slow and how can I find the bottleneck?"}
+{"key": "platforms/cloud-build-basics|1", "skill_id": "platforms/cloud-build-basics", "query": "How do I automate building and deploying my code changes?"}
+{"key": "platforms/cloud-build-basics|2", "skill_id": "platforms/cloud-build-basics", "query": "How do I automate building and deploying code changes?"}
+{"key": "platforms/cloud-monitoring-metric-selection|1", "skill_id": "platforms/cloud-monitoring-metric-selection", "query": "How can I find the right usage measurements for my service?"}
+{"key": "platforms/cloud-monitoring-metric-selection|2", "skill_id": "platforms/cloud-monitoring-metric-selection", "query": "How do I know which performance numbers I should track?"}
+{"key": "platforms/data-manager-api-setup|1", "skill_id": "platforms/data-manager-api-setup", "query": "How do I install the client library and sign in on my computer?"}
+{"key": "platforms/data-manager-api-setup|2", "skill_id": "platforms/data-manager-api-setup", "query": "How do I install the client library and sign in for the first time?"}
+{"key": "platforms/connect-required-verification-information|1", "skill_id": "platforms/connect-required-verification-information", "query": "What details do I need to confirm my account?"}
+{"key": "platforms/connect-required-verification-information|2", "skill_id": "platforms/connect-required-verification-information", "query": "What details does a seller need to submit when signing up?"}
+{"key": "platforms/developing-genkit-js|1", "skill_id": "platforms/developing-genkit-js", "query": "How do I add an AI assistant to my web app?"}
+{"key": "platforms/developing-genkit-js|2", "skill_id": "platforms/developing-genkit-js", "query": "How do I build an AI agent that can call my own functions?"}
+{"key": "platforms/entra-app-registration|1", "skill_id": "platforms/entra-app-registration", "query": "How do I set up sign-in for my app using OAuth?"}
+{"key": "platforms/entra-app-registration|2", "skill_id": "platforms/entra-app-registration", "query": "How do I set up sign-in and API permissions for my app?"}
+{"key": "platforms/developer-device-platform-basics|1", "skill_id": "platforms/developer-device-platform-basics", "query": "How do I connect to a remote phone and check my session?"}
+{"key": "platforms/developer-device-platform-basics|2", "skill_id": "platforms/developer-device-platform-basics", "query": "How do I start making a simple mobile app?"}
+{"key": "platforms/bigquery-bigframes|1", "skill_id": "platforms/bigquery-bigframes", "query": "Can you help me analyze my large dataset and build a simple prediction model?"}
+{"key": "platforms/bigquery-bigframes|2", "skill_id": "platforms/bigquery-bigframes", "query": "How can I analyze huge datasets without downloading all the data?"}
+{"key": "platforms/gemini-live-api|1", "skill_id": "platforms/gemini-live-api", "query": "Can you create a client class that connects to a websocket service?"}
+{"key": "platforms/gemini-live-api|2", "skill_id": "platforms/gemini-live-api", "query": "Can you help me create a client that connects to a live websocket service?"}
+{"key": "platforms/gke-app-onboarding|1", "skill_id": "platforms/gke-app-onboarding", "query": "How do I put my app in containers and deploy it to a cluster?"}
+{"key": "platforms/gke-app-onboarding|2", "skill_id": "platforms/gke-app-onboarding", "query": "How do I move my app into containers and deploy it to a cluster?"}
+{"key": "platforms/data-manager-api-event-ingestion|1", "skill_id": "platforms/data-manager-api-event-ingestion", "query": "How do I send activity data to an API safely?"}
+{"key": "platforms/data-manager-api-event-ingestion|2", "skill_id": "platforms/data-manager-api-event-ingestion", "query": "How do I send usage data to an API endpoint?"}
+{"key": "platforms/gke-ai-troubleshooting-tpu-reservation-stockout|1", "skill_id": "platforms/gke-ai-troubleshooting-tpu-reservation-stockout", "query": "Why do my AI cluster machines fail to start due to capacity?"}
+{"key": "platforms/gke-ai-troubleshooting-tpu-reservation-stockout|2", "skill_id": "platforms/gke-ai-troubleshooting-tpu-reservation-stockout", "query": "Why do new nodes fail to start while old ones stay unhealthy?"}
+{"key": "platforms/gke-backup-dr|1", "skill_id": "platforms/gke-backup-dr", "query": "How do I set up encrypted backups and restore for my container cluster?"}
+{"key": "platforms/gke-backup-dr|2", "skill_id": "platforms/gke-backup-dr", "query": "How do I set up automatic recovery copies for my cluster and restore them?"}
+{"key": "platforms/gke-basics|1", "skill_id": "platforms/gke-basics", "query": "How do I set up a managed container cluster and connect to it?"}
+{"key": "platforms/gke-basics|2", "skill_id": "platforms/gke-basics", "query": "How do I set up a managed cluster and get its access credentials?"}
+{"key": "platforms/durable-objects|1", "skill_id": "platforms/durable-objects", "query": "How do I keep shared state consistent across multiple servers?"}
+{"key": "platforms/durable-objects|2", "skill_id": "platforms/durable-objects", "query": "Can you help me debug code that keeps shared state in sync?"}
+{"key": "platforms/gke-batch-hpc|1", "skill_id": "platforms/gke-batch-hpc", "query": "How do I set up parallel job queues for large computing workloads?"}
+{"key": "platforms/gke-batch-hpc|2", "skill_id": "platforms/gke-batch-hpc", "query": "How do I run many parallel computing jobs on a cluster?"}
+{"key": "platforms/gke-multitenancy|1", "skill_id": "platforms/gke-multitenancy", "query": "How do I keep teams' workloads separated and control resource use on a shared cluster?"}
+{"key": "platforms/gke-multitenancy|2", "skill_id": "platforms/gke-multitenancy", "query": "How do I keep teams separated and control costs in one cluster?"}
+{"key": "platforms/gke-custom-golden-image-discovery|1", "skill_id": "platforms/gke-custom-golden-image-discovery", "query": "What base operating system should I start from for new cluster machines?"}
+{"key": "platforms/gke-custom-golden-image-discovery|2", "skill_id": "platforms/gke-custom-golden-image-discovery", "query": "What base operating system should I start from for cluster nodes?"}
+{"key": "platforms/gke-networking|1", "skill_id": "platforms/gke-networking", "query": "How should I plan private cluster addresses and internet access?"}
+{"key": "platforms/gke-networking|2", "skill_id": "platforms/gke-networking", "query": "How should I plan private cluster addresses and outbound access?"}
+{"key": "platforms/gateway-workers|1", "skill_id": "platforms/gateway-workers", "query": "How do I write and debug a script that inspects and continues web requests?"}
+{"key": "platforms/gateway-workers|2", "skill_id": "platforms/gateway-workers", "query": "How do I keep many small background jobs running smoothly?"}
+{"key": "platforms/developing-genkit-dart|1", "skill_id": "platforms/developing-genkit-dart", "query": "How do I build an AI agent into my mobile app?"}
+{"key": "platforms/gke-ai-troubleshooting-tpu-vbar-oom|1", "skill_id": "platforms/gke-ai-troubleshooting-tpu-vbar-oom", "query": "Why do my AI chips crash with memory errors during startup?"}
+{"key": "platforms/gke-ai-troubleshooting-tpu-vbar-oom|2", "skill_id": "platforms/gke-ai-troubleshooting-tpu-vbar-oom", "query": "Why do my AI chips keep crashing and running out of memory?"}
+{"key": "platforms/gke-workload-scaling|1", "skill_id": "platforms/gke-workload-scaling", "query": "How do I make my app automatically adjust resources when traffic changes?"}
+{"key": "platforms/gke-workload-scaling|2", "skill_id": "platforms/gke-workload-scaling", "query": "How can I automatically adjust the number and size of my app instances?"}
+{"key": "platforms/gke-cost-analysis|1", "skill_id": "platforms/gke-cost-analysis", "query": "Why did my container cluster costs spike last week?"}
+{"key": "platforms/gke-cost-analysis|2", "skill_id": "platforms/gke-cost-analysis", "query": "How can I figure out which workloads are costing me the most each month?"}
+{"key": "platforms/google-analytics-data-api-basics|1", "skill_id": "platforms/google-analytics-data-api-basics", "query": "How do I turn on reporting access and build a data report?"}
+{"key": "platforms/google-analytics-data-api-basics|2", "skill_id": "platforms/google-analytics-data-api-basics", "query": "How do I turn on the reporting service and generate a summary report?"}
+{"key": "platforms/gke-reliability|1", "skill_id": "platforms/gke-reliability", "query": "How do I keep my apps running during updates and failures?"}
+{"key": "platforms/gke-reliability|2", "skill_id": "platforms/gke-reliability", "query": "How can I keep my app available during updates and outages?"}
+{"key": "platforms/gke-service-networking|1", "skill_id": "platforms/gke-service-networking", "query": "How do I route outside traffic to my apps securely and privately?"}
+{"key": "platforms/gke-service-networking|2", "skill_id": "platforms/gke-service-networking", "query": "How do I route traffic to my app and protect it from attacks?"}
+{"key": "platforms/google-cloud-filestore-nfs-browser|1", "skill_id": "platforms/google-cloud-filestore-nfs-browser", "query": "How can I search and read files on a network drive without installing anything?"}
+{"key": "platforms/google-cloud-filestore-nfs-browser|2", "skill_id": "platforms/google-cloud-filestore-nfs-browser", "query": "How can I search and read files on a network share without installing anything?"}
+{"key": "platforms/google-cloud-filestore-log-troubleshooting|1", "skill_id": "platforms/google-cloud-filestore-log-troubleshooting", "query": "Why does my shared drive keep hanging and saying permission denied?"}
+{"key": "platforms/google-cloud-filestore-log-troubleshooting|2", "skill_id": "platforms/google-cloud-filestore-log-troubleshooting", "query": "Why does my shared drive keep timing out or denying access?"}
+{"key": "platforms/google-cloud-networking-observability|1", "skill_id": "platforms/google-cloud-networking-observability", "query": "Why are data packets being dropped on my connection?"}
+{"key": "platforms/google-cloud-networking-observability|2", "skill_id": "platforms/google-cloud-networking-observability", "query": "Why is my internet traffic getting dropped between my services?"}
+{"key": "platforms/google-cloud-recipe-auth|1", "skill_id": "platforms/google-cloud-recipe-auth", "query": "How can I make sure only the right people can use my app?"}
+{"key": "platforms/google-cloud-recipe-auth|2", "skill_id": "platforms/google-cloud-recipe-auth", "query": "How do I let an app sign in to another service securely?"}
+{"key": "platforms/google-cloud-recipe-onboarding|1", "skill_id": "platforms/google-cloud-recipe-onboarding", "query": "How do I set up my first developer account and deploy something?"}
+{"key": "platforms/google-cloud-recipe-onboarding|2", "skill_id": "platforms/google-cloud-recipe-onboarding", "query": "How do I set up my first online project and launch something simple?"}
+{"key": "platforms/google-cloud-filestore-auditing|1", "skill_id": "platforms/google-cloud-filestore-auditing", "query": "How can I check if my backups are stale and access is too open?"}
+{"key": "platforms/google-cloud-filestore-auditing|2", "skill_id": "platforms/google-cloud-filestore-auditing", "query": "How can I track who changes files on a shared network drive?"}
+{"key": "platforms/gemini-agents-api|1", "skill_id": "platforms/gemini-agents-api", "query": "How can I set up"}
+{"key": "platforms/google-cloud-global-frontend-configuration|1", "skill_id": "platforms/google-cloud-global-frontend-configuration", "query": "How do I set up a fast website with security and caching?"}
+{"key": "platforms/google-cloud-global-frontend-configuration|2", "skill_id": "platforms/google-cloud-global-frontend-configuration", "query": "How can I make my website load faster for visitors everywhere?"}
+{"key": "platforms/google-cloud-slo-alert-configuration|1", "skill_id": "platforms/google-cloud-slo-alert-configuration", "query": "How can I set up service level monitoring for my app?"}
+{"key": "platforms/google-cloud-slo-alert-configuration|2", "skill_id": "platforms/google-cloud-slo-alert-configuration", "query": "How do I get notified when my service misses its reliability targets?"}
+{"key": "platforms/google-cloud-solution-guided-gke-ai-migration|1", "skill_id": "platforms/google-cloud-solution-guided-gke-ai-migration", "query": "How do I move my AI model hosting to my own servers?"}
+{"key": "platforms/google-cloud-solution-guided-gke-ai-migration|2", "skill_id": "platforms/google-cloud-solution-guided-gke-ai-migration", "query": "How do I move my AI workloads to my own servers?"}
+{"key": "platforms/gke-workload-scaling-troubleshooting|1", "skill_id": "platforms/gke-workload-scaling-troubleshooting", "query": "Why does my service slow down when more people use it?"}
+{"key": "platforms/gke-workload-scaling-troubleshooting|2", "skill_id": "platforms/gke-workload-scaling-troubleshooting", "query": "Why does my app keep running out of capacity during busy hours?"}
+{"key": "platforms/google-cloud-recipe-foundation-builder|1", "skill_id": "platforms/google-cloud-recipe-foundation-builder", "query": "How do I set up a simple project step by step?"}
+{"key": "platforms/google-cloud-recipe-foundation-builder|2", "skill_id": "platforms/google-cloud-recipe-foundation-builder", "query": "How do I set up secure folders and projects for a new organization with centralized logging?"}
+{"key": "platforms/google-cloud-solution-n-tier-serverless-web-app|1", "skill_id": "platforms/google-cloud-solution-n-tier-serverless-web-app", "query": "How do I design a secure multi-tier web app and deploy it with code?"}
+{"key": "platforms/google-cloud-solution-n-tier-serverless-web-app|2", "skill_id": "platforms/google-cloud-solution-n-tier-serverless-web-app", "query": "How do I design a secure multi-tier web app and deploy it safely?"}
+{"key": "platforms/gke-workload-security|1", "skill_id": "platforms/gke-workload-security", "query": "How do I keep my containerized apps safe from attacks?"}
+{"key": "platforms/gke-workload-security|2", "skill_id": "platforms/gke-workload-security", "query": "How do I keep my container apps safe from attacks?"}
+{"key": "platforms/google-cloud-solution-rag-enterprise-search-gke-sqldb|1", "skill_id": "platforms/google-cloud-solution-rag-enterprise-search-gke-sqldb", "query": "Help me plan a system that answers questions using my documents."}
+{"key": "platforms/google-cloud-solution-rag-enterprise-search-gke-sqldb|2", "skill_id": "platforms/google-cloud-solution-rag-enterprise-search-gke-sqldb", "query": "How do I build a system that answers questions from my own documents?"}
+{"key": "platforms/google-cloud-waf-performance-optimization|1", "skill_id": "platforms/google-cloud-waf-performance-optimization", "query": "How can I make my website load faster?"}
+{"key": "platforms/google-cloud-waf-performance-optimization|2", "skill_id": "platforms/google-cloud-waf-performance-optimization", "query": "How can I make my workloads run faster and use resources wisely?"}
+{"key": "platforms/google-cloud-waf-sustainability|1", "skill_id": "platforms/google-cloud-waf-sustainability", "query": "How can I reduce my carbon footprint and save energy at work?"}
+{"key": "platforms/google-cloud-waf-sustainability|2", "skill_id": "platforms/google-cloud-waf-sustainability", "query": "How can I reduce my home's energy use and carbon footprint?"}
+{"key": "platforms/google-cloud-solution-hybrid-search-alloydb|1", "skill_id": "platforms/google-cloud-solution-hybrid-search-alloydb", "query": "How do I combine keyword matching with meaning-based lookup in my database?"}
+{"key": "platforms/google-cloud-solution-hybrid-search-alloydb|2", "skill_id": "platforms/google-cloud-solution-hybrid-search-alloydb", "query": "How do I combine meaning-based and keyword matching in one system?"}
+{"key": "platforms/google-mobile-ads-validate|1", "skill_id": "platforms/google-mobile-ads-validate", "query": "How do I check my app's ad setup before launch?"}
+{"key": "platforms/google-mobile-ads-validate|2", "skill_id": "platforms/google-mobile-ads-validate", "query": "How do I check if my app's ads are set up correctly before launch?"}
+{"key": "platforms/google-mobile-ads-get-started|1", "skill_id": "platforms/google-mobile-ads-get-started", "query": "How do I show ads in my phone app and earn money?"}
+{"key": "platforms/google-mobile-ads-get-started|2", "skill_id": "platforms/google-mobile-ads-get-started", "query": "How do I add ads into my app and configure them?"}
+{"key": "platforms/ima-dai-sdk|1", "skill_id": "platforms/ima-dai-sdk", "query": "How do I add ads to videos in my app?"}
+{"key": "platforms/ima-dai-sdk|2", "skill_id": "platforms/ima-dai-sdk", "query": "How do I add dynamic ads to video streams in my app?"}
+{"key": "platforms/managed-airflow-migrations|1", "skill_id": "platforms/managed-airflow-migrations", "query": "How do I move my scheduled workflows to a newer version?"}
+{"key": "platforms/managed-airflow-migrations|2", "skill_id": "platforms/managed-airflow-migrations", "query": "How do I update my scheduled workflows to a newer version?"}
+{"key": "platforms/managed-airflow-dag-authoring|1", "skill_id": "platforms/managed-airflow-dag-authoring", "query": "How do I write reliable scheduled data pipelines without common mistakes?"}
+{"key": "platforms/managed-airflow-dag-authoring|2", "skill_id": "platforms/managed-airflow-dag-authoring", "query": "How do I write workflow scripts for a cloud data pipeline?"}
+{"key": "platforms/google-cloud-waf-reliability|1", "skill_id": "platforms/google-cloud-waf-reliability", "query": "How do I keep my system running during outages and disasters?"}
+{"key": "platforms/google-cloud-waf-reliability|2", "skill_id": "platforms/google-cloud-waf-reliability", "query": "How can I make my system recover quickly from outages?"}
+{"key": "platforms/neon-auth|1", "skill_id": "platforms/neon-auth", "query": "How do I add sign-up and login to my new app?"}
+{"key": "platforms/neon-auth|2", "skill_id": "platforms/neon-auth", "query": "How do I add login and sign-up to my new app?"}
+{"key": "platforms/google-cloud-solution-agentic-analytics-spark-knowledge-catalog|1", "skill_id": "platforms/google-cloud-solution-agentic-analytics-spark-knowledge-catalog", "query": "How can I find and organize all my datasets in one place?"}
+{"key": "platforms/google-cloud-solution-agentic-analytics-spark-knowledge-catalog|2", "skill_id": "platforms/google-cloud-solution-agentic-analytics-spark-knowledge-catalog", "query": "How do I design a governed data science workflow from start to finish?"}
+{"key": "platforms/neon|1", "skill_id": "platforms/neon", "query": "What backend services do I need for login, files, APIs, and AI?"}
+{"key": "platforms/neon|2", "skill_id": "platforms/neon", "query": "What do I need to add login, file storage, and AI features to my app?"}
+{"key": "platforms/google-mobile-ads-android-migrate-to-next-gen|1", "skill_id": "platforms/google-mobile-ads-android-migrate-to-next-gen", "query": "How do I update my app's ad code to the latest version?"}
+{"key": "platforms/google-mobile-ads-android-migrate-to-next-gen|2", "skill_id": "platforms/google-mobile-ads-android-migrate-to-next-gen", "query": "How do I update my app’s ad setup to the newer version?"}
+{"key": "platforms/iam-helper-for-policy-management|1", "skill_id": "platforms/iam-helper-for-policy-management", "query": "How can I set up user access rules for my team?"}
+{"key": "platforms/iam-helper-for-policy-management|2", "skill_id": "platforms/iam-helper-for-policy-management", "query": "How do I create and manage access policies for my cloud resources?"}
+{"key": "platforms/neon-realtime|1", "skill_id": "platforms/neon-realtime", "query": "How can my app update automatically when database rows change?"}
+{"key": "platforms/neon-realtime|2", "skill_id": "platforms/neon-realtime", "query": "How do I make my app update automatically when database rows change?"}
+{"key": "platforms/paypal-integration|1", "skill_id": "platforms/paypal-integration", "query": "How do I add online checkout, recurring billing, and refunds to my store?"}
+{"key": "platforms/paypal-integration|2", "skill_id": "platforms/paypal-integration", "query": "How do I add online checkout with recurring billing and refunds?"}
+{"key": "platforms/neon-postgres-branches|1", "skill_id": "platforms/neon-postgres-branches", "query": "How do I set up an isolated copy of my database for testing migrations safely?"}
+{"key": "platforms/neon-postgres-branches|2", "skill_id": "platforms/neon-postgres-branches", "query": "How do I create a safe copy of my database for testing changes?"}
+{"key": "platforms/prisma-compute|1", "skill_id": "platforms/prisma-compute", "query": "How do I deploy my app to the cloud and keep it running?"}
+{"key": "platforms/prisma-compute|2", "skill_id": "platforms/prisma-compute", "query": "How do I deploy my app to the cloud using a command line?"}
+{"key": "platforms/phoenix-evals|1", "skill_id": "platforms/phoenix-evals", "query": "How do I build and run tests to check my AI app's answers?"}
+{"key": "platforms/phoenix-evals|2", "skill_id": "platforms/phoenix-evals", "query": "How can I measure whether my AI application gives reliable answers?"}
+{"key": "platforms/prisma-postgres-setup|1", "skill_id": "platforms/prisma-postgres-setup", "query": "I need a database for my app; can you add one?"}
+{"key": "platforms/prisma-postgres-setup|2", "skill_id": "platforms/prisma-postgres-setup", "query": "I need a database for my app; can you help me connect it?"}
+{"key": "platforms/qdrant-clients-sdk|1", "skill_id": "platforms/qdrant-clients-sdk", "query": "How do I connect my app to a vector database from different programming languages?"}
+{"key": "platforms/qdrant-clients-sdk|2", "skill_id": "platforms/qdrant-clients-sdk", "query": "How do I connect my app to a vector database?"}
+{"key": "platforms/qdrant-minimize-latency|1", "skill_id": "platforms/qdrant-minimize-latency", "query": "Why is my search sometimes really slow and how can I fix it?"}
+{"key": "platforms/qdrant-minimize-latency|2", "skill_id": "platforms/qdrant-minimize-latency", "query": "Why is my search so slow and how can I make it faster?"}
+{"key": "platforms/qdrant-horizontal-scaling|1", "skill_id": "platforms/qdrant-horizontal-scaling", "query": "My data no longer fits; should I add more machines or bigger ones?"}
+{"key": "platforms/qdrant-horizontal-scaling|2", "skill_id": "platforms/qdrant-horizontal-scaling", "query": "Should I add more servers or make each one bigger?"}
+{"key": "platforms/qdrant-memory-usage-optimization|1", "skill_id": "platforms/qdrant-memory-usage-optimization", "query": "How can I stop my computer from slowing down and crashing?"}
+{"key": "platforms/qdrant-memory-usage-optimization|2", "skill_id": "platforms/qdrant-memory-usage-optimization", "query": "Why does my app keep crashing when it gets busy?"}
+{"key": "platforms/qdrant-version-upgrade|1", "skill_id": "platforms/qdrant-version-upgrade", "query": "How do I safely update a database without downtime and keep data intact?"}
+{"key": "platforms/qdrant-version-upgrade|2", "skill_id": "platforms/qdrant-version-upgrade", "query": "How do I update my database without downtime and keep data safe?"}
+{"key": "platforms/qdrant-vertical-scaling|1", "skill_id": "platforms/qdrant-vertical-scaling", "query": "How do I make my server bigger when it runs out of memory?"}
+{"key": "platforms/qdrant-vertical-scaling|2", "skill_id": "platforms/qdrant-vertical-scaling", "query": "My database needs more memory and CPU; should I upgrade or add servers?"}
+{"key": "platforms/python-appservice-deploy|1", "skill_id": "platforms/python-appservice-deploy", "query": "How do I put my web project online for others to use?"}
+{"key": "platforms/python-appservice-deploy|2", "skill_id": "platforms/python-appservice-deploy", "query": "How do I put my web application online using Linux?"}
+{"key": "platforms/qdrant-scaling-data-volume|1", "skill_id": "platforms/qdrant-scaling-data-volume", "query": "My data no longer fits on one server, what should I do?"}
+{"key": "platforms/qdrant-scaling-data-volume|2", "skill_id": "platforms/qdrant-scaling-data-volume", "query": "My data no longer fits on one server; should I add storage or more machines?"}
+{"key": "platforms/sandbox-migrate-to-next|1", "skill_id": "platforms/sandbox-migrate-to-next", "query": "How do I update my app to the newer preview version?"}
+{"key": "platforms/sandbox-migrate-to-next|2", "skill_id": "platforms/sandbox-migrate-to-next", "query": "How do I move my app to the newer preview version?"}
+{"key": "platforms/shopify-expert|1", "skill_id": "platforms/shopify-expert", "query": "How do I connect my online store to a custom app?"}
+{"key": "platforms/shopify-expert|2", "skill_id": "platforms/shopify-expert", "query": "How do I connect my online store to a custom mobile app?"}
+{"key": "platforms/sign-in-with-google-web|1", "skill_id": "platforms/sign-in-with-google-web", "query": "How do I add and secure third-party sign-in on my website?"}
+{"key": "platforms/sign-in-with-google-web|2", "skill_id": "platforms/sign-in-with-google-web", "query": "How do I add secure third-party sign-in to my website?"}
+{"key": "platforms/spanner-basics|1", "skill_id": "platforms/spanner-basics", "query": "How should I choose a primary key for a large database?"}
+{"key": "platforms/spanner-basics|2", "skill_id": "platforms/spanner-basics", "query": "How should I pick keys so queries stay fast?"}
+{"key": "platforms/sandbox-stable|1", "skill_id": "platforms/sandbox-stable", "query": "How do I move my preview app to the regular version?"}
+{"key": "platforms/sandbox-stable|2", "skill_id": "platforms/sandbox-stable", "query": "How do I move my app from preview to production?"}
+{"key": "platforms/neon-object-storage|1", "skill_id": "platforms/neon-object-storage", "query": "How do I keep files in sync when I branch my database?"}
+{"key": "platforms/neon-object-storage|2", "skill_id": "platforms/neon-object-storage", "query": "How can I keep files and database rows in sync across branches?"}
+{"key": "platforms/turnstile-spin|1", "skill_id": "platforms/turnstile-spin", "query": "How do I add bot verification to my site and check it on the server?"}
+{"key": "platforms/turnstile-spin|2", "skill_id": "platforms/turnstile-spin", "query": "How do I add bot verification to my website and check it on the server?"}
+{"key": "platforms/workload-manager-basics|1", "skill_id": "platforms/workload-manager-basics", "query": "How do I check whether my cloud resources follow best practices?"}
+{"key": "platforms/workload-manager-basics|2", "skill_id": "platforms/workload-manager-basics", "query": "How can I check my cloud resources against best-practice rules?"}
+{"key": "platforms/google-cloud-waf-operational-excellence|1", "skill_id": "platforms/google-cloud-waf-operational-excellence", "query": "How do I keep my website firewall running smoothly?"}
+{"key": "platforms/google-cloud-waf-operational-excellence|2", "skill_id": "platforms/google-cloud-waf-operational-excellence", "query": "How can I set up monitoring and incident alerts for my app deployments?"}
+{"key": "product/before-you-build|1", "skill_id": "product/before-you-build", "query": "What risks should I check for my new app idea?"}
+{"key": "product/before-you-build|2", "skill_id": "product/before-you-build", "query": "What risks should I check in my new app idea?"}
+{"key": "product/brainstorm-experiments-new|1", "skill_id": "product/brainstorm-experiments-new", "query": "How can I quickly test demand for a new product idea?"}
+{"key": "product/brainstorm-experiments-new|2", "skill_id": "product/brainstorm-experiments-new", "query": "How can I test demand for a new product without building it?"}
+{"key": "product/brainstorm-experiments-existing|1", "skill_id": "product/brainstorm-experiments-existing", "query": "How can I test a new feature idea cheaply before building it?"}
+{"key": "product/brainstorm-experiments-existing|2", "skill_id": "product/brainstorm-experiments-existing", "query": "How can I cheaply test if my product idea will work?"}
+{"key": "platforms/wrangler|1", "skill_id": "platforms/wrangler", "query": "How do I run and troubleshoot my project's local development and deployment commands?"}
+{"key": "platforms/wrangler|2", "skill_id": "platforms/wrangler", "query": "How do I fix errors when running my project's command-line deployment?"}
+{"key": "platforms/stripe-best-practices|1", "skill_id": "platforms/stripe-best-practices", "query": "What should I know before accepting payments online?"}
+{"key": "platforms/stripe-best-practices|2", "skill_id": "platforms/stripe-best-practices", "query": "How should I plan separate test and live environments for payments?"}
+{"key": "product/competitive-landscape|1", "skill_id": "product/competitive-landscape", "query": "How can I stand out from rivals and attract more customers?"}
+{"key": "product/competitive-landscape|2", "skill_id": "product/competitive-landscape", "query": "How do I find a unique edge over rivals in my market?"}
+{"key": "product/analyze-feature-requests|1", "skill_id": "product/analyze-feature-requests", "query": "Can you help me rank these ideas by value, effort, and risk?"}
+{"key": "product/analyze-feature-requests|2", "skill_id": "product/analyze-feature-requests", "query": "How do I decide which new ideas are worth building first?"}
+{"key": "product/gtm-0-to-1-launch|1", "skill_id": "product/gtm-0-to-1-launch", "query": "How do I find my first customers for a new product?"}
+{"key": "product/gtm-0-to-1-launch|2", "skill_id": "product/gtm-0-to-1-launch", "query": "How do I get the first customers for a new product?"}
+{"key": "product/gtm-enterprise-account-planning|1", "skill_id": "product/gtm-enterprise-account-planning", "query": "How do I keep a big sales deal on track with many decision-makers?"}
+{"key": "product/gtm-enterprise-account-planning|2", "skill_id": "product/gtm-enterprise-account-planning", "query": "How do I keep a big sales deal on track with many decision makers?"}
+{"key": "platforms/namecheap|1", "skill_id": "platforms/namecheap", "query": "How do I change my website's DNS records without breaking email?"}
+{"key": "platforms/namecheap|2", "skill_id": "platforms/namecheap", "query": "How do I update my domain's DNS records to point to a new server?"}
+{"key": "product/ideal-customer-profile|1", "skill_id": "product/ideal-customer-profile", "query": "Who are my best buyers based on demographics, behaviors, and needs?"}
+{"key": "product/ideal-customer-profile|2", "skill_id": "product/ideal-customer-profile", "query": "Who are my best buyers based on survey data?"}
+{"key": "product/gtm-technical-product-pricing|1", "skill_id": "product/gtm-technical-product-pricing", "query": "How should I decide what to charge for my new service?"}
+{"key": "product/gtm-technical-product-pricing|2", "skill_id": "product/gtm-technical-product-pricing", "query": "How do I know when to raise my subscription fees?"}
+{"key": "product/business-model|1", "skill_id": "product/business-model", "query": "Can you map out all nine key parts of how a company creates value?"}
+{"key": "product/business-model|2", "skill_id": "product/business-model", "query": "How can a small shop make money and keep costs low?"}
+{"key": "product/metrics-dashboard|1", "skill_id": "product/metrics-dashboard", "query": "How do I choose the most important numbers to track for my product?"}
+{"key": "product/metrics-dashboard|2", "skill_id": "product/metrics-dashboard", "query": "How do I track the most important numbers for my app and set alerts?"}
+{"key": "product/market-sizing|1", "skill_id": "product/market-sizing", "query": "How big is the opportunity for this new business idea?"}
+{"key": "product/market-sizing|2", "skill_id": "product/market-sizing", "query": "How big is the opportunity and what portion can we realistically win?"}
+{"key": "product/gtm-partnership-architecture|1", "skill_id": "product/gtm-partnership-architecture", "query": "How do I build a partner program that drives revenue?"}
+{"key": "product/gtm-partnership-architecture|2", "skill_id": "product/gtm-partnership-architecture", "query": "How do I build a partner program that actually drives revenue?"}
+{"key": "product/pricing-strategy|1", "skill_id": "product/pricing-strategy", "query": "Help me figure out what to charge customers and how demand changes."}
+{"key": "product/pricing-strategy|2", "skill_id": "product/pricing-strategy", "query": "How should I decide what to charge for my new service?"}
+{"key": "product/monetization-strategy|1", "skill_id": "product/monetization-strategy", "query": "What are some ways to make money from my audience?"}
+{"key": "product/monetization-strategy|2", "skill_id": "product/monetization-strategy", "query": "How can I make money from my app without annoying users?"}
+{"key": "product/identify-assumptions-existing|1", "skill_id": "product/identify-assumptions-existing", "query": "What hidden beliefs might be shaping this plan?"}
+{"key": "product/identify-assumptions-existing|2", "skill_id": "product/identify-assumptions-existing", "query": "What could go wrong with this new feature idea?"}
+{"key": "product/outcome-roadmap|1", "skill_id": "product/outcome-roadmap", "query": "How do I rewrite our project list to show real user and business impact?"}
+{"key": "product/outcome-roadmap|2", "skill_id": "product/outcome-roadmap", "query": "How do I rewrite our plan as results that show user and business impact?"}
+{"key": "product/prioritization-frameworks|1", "skill_id": "product/prioritization-frameworks", "query": "How do I decide which method to use for ranking tasks and projects?"}
+{"key": "product/prioritization-frameworks|2", "skill_id": "product/prioritization-frameworks", "query": "How do I decide which task to work on first?"}
+{"key": "product/prioritize-features|1", "skill_id": "product/prioritize-features", "query": "Which ideas should we do first based on impact, effort, risk, and strategy?"}
+{"key": "product/prioritize-features|2", "skill_id": "product/prioritize-features", "query": "Help me rank these product ideas by impact, effort, risk, and strategy."}
+{"key": "product/interview-me|1", "skill_id": "product/interview-me", "query": "Ask me questions one at a time to find what I really want."}
+{"key": "product/interview-me|2", "skill_id": "product/interview-me", "query": "Help me prepare answers for a job conversation next week."}
+{"key": "product/opportunity-solution-tree|1", "skill_id": "product/opportunity-solution-tree", "query": "Can you help me map an outcome to opportunities, solutions, and experiments?"}
+{"key": "product/opportunity-solution-tree|2", "skill_id": "product/opportunity-solution-tree", "query": "How do I map customer needs to ideas and tests?"}
+{"key": "product/sprint-plan|1", "skill_id": "product/sprint-plan", "query": "Help me estimate team capacity and choose work for the next cycle."}
+{"key": "product/sprint-plan|2", "skill_id": "product/sprint-plan", "query": "Help me plan the next work cycle and estimate what we can finish."}
+{"key": "platforms/qdrant-search-strategies|1", "skill_id": "platforms/qdrant-search-strategies", "query": "Why don’t I get the results I need from my data?"}
+{"key": "platforms/qdrant-search-strategies|2", "skill_id": "platforms/qdrant-search-strategies", "query": "How can I find the most similar items in a large collection?"}
+{"key": "refactoring/code-simplifier|1", "skill_id": "refactoring/code-simplifier", "query": "Can you clean up this code and make it easier to read?"}
+{"key": "refactoring/code-simplifier|2", "skill_id": "refactoring/code-simplifier", "query": "Can you clean up this code to make it easier to read?"}
+{"key": "product/swot-analysis|1", "skill_id": "product/swot-analysis", "query": "Can you help me assess the strengths and weaknesses of my business idea?"}
+{"key": "product/swot-analysis|2", "skill_id": "product/swot-analysis", "query": "Do a SWOT assessment for my small business idea?"}
+{"key": "refactoring/deprecation-and-migration|1", "skill_id": "refactoring/deprecation-and-migration", "query": "How do I safely remove an old feature without breaking current users?"}
+{"key": "refactoring/deprecation-and-migration|2", "skill_id": "refactoring/deprecation-and-migration", "query": "How do I safely rename a database column without breaking the app?"}
+{"key": "product/strategy-red-team|1", "skill_id": "product/strategy-red-team", "query": "Help me find weak assumptions in my business plan?"}
+{"key": "product/strategy-red-team|2", "skill_id": "product/strategy-red-team", "query": "Can you poke holes in my plan before I share it?"}
+{"key": "refactoring/doc-and-modernize|1", "skill_id": "refactoring/doc-and-modernize", "query": "Can you create an architecture document from the code in my local folder?"}
+{"key": "refactoring/doc-and-modernize|2", "skill_id": "refactoring/doc-and-modernize", "query": "Can you document how this codebase works and suggest modernizations?"}
+{"key": "refactoring/java-refactoring-extract-method|1", "skill_id": "refactoring/java-refactoring-extract-method", "query": "How can I make a long Java function easier to read and reuse?"}
+{"key": "refactoring/java-refactoring-extract-method|2", "skill_id": "refactoring/java-refactoring-extract-method", "query": "How can I make my long Java code easier to read and reuse?"}
+{"key": "refactoring/refactor-plan|1", "skill_id": "refactoring/refactor-plan", "query": "Can you plan how to safely update my code across several files?"}
+{"key": "refactoring/refactor-plan|2", "skill_id": "refactoring/refactor-plan", "query": "Can you make a step-by-step plan for changing several files safely?"}
+{"key": "refactoring/refactor-method-complexity-reduce|1", "skill_id": "refactoring/refactor-method-complexity-reduce", "query": "Can you split this code into smaller helper functions?"}
+{"key": "refactoring/refactor-method-complexity-reduce|2", "skill_id": "refactoring/refactor-method-complexity-reduce", "query": "Can you split this long function into smaller helper functions?"}
+{"key": "refactoring/legacy-modernizer|1", "skill_id": "refactoring/legacy-modernizer", "query": "How can I slowly break apart an old system into services?"}
+{"key": "refactoring/legacy-modernizer|2", "skill_id": "refactoring/legacy-modernizer", "query": "Can you map dependencies and plan a gradual migration for our old system?"}
+{"key": "product/startup-canvas|1", "skill_id": "product/startup-canvas", "query": "Help me map out a new business idea on one page."}
+{"key": "product/startup-canvas|2", "skill_id": "product/startup-canvas", "query": "Help me outline a simple one-page plan for a new business idea."}
+{"key": "refactoring/ruff-recursive-fix|1", "skill_id": "refactoring/ruff-recursive-fix", "query": "Can you check my code for style issues and fix them safely?"}
+{"key": "refactoring/ruff-recursive-fix|2", "skill_id": "refactoring/ruff-recursive-fix", "query": "Can you check my code for style issues and fix what's safe?"}
+{"key": "refactoring/safe-refactor|1", "skill_id": "refactoring/safe-refactor", "query": "Can you clean up this code without changing what it does?"}
+{"key": "refactoring/safe-refactor|2", "skill_id": "refactoring/safe-refactor", "query": "Can you reorganize this code without changing what it does?"}
+{"key": "reliability/aws-cloudwatch-investigation|1", "skill_id": "reliability/aws-cloudwatch-investigation", "query": "How do I find what caused a sudden spike in errors?"}
+{"key": "reliability/aws-cloudwatch-investigation|2", "skill_id": "reliability/aws-cloudwatch-investigation", "query": "How can I link alarm alerts to recent software deployments?"}
+{"key": "reliability/grafana-dashboards|1", "skill_id": "reliability/grafana-dashboards", "query": "How can I build a live view of my system's health and performance?"}
+{"key": "reliability/grafana-dashboards|2", "skill_id": "reliability/grafana-dashboards", "query": "How can I display live system and app metrics visually?"}
+{"key": "reliability/aws-resource-health-diagnose|1", "skill_id": "reliability/aws-resource-health-diagnose", "query": "Why is my app slow and what should I do to fix it?"}
+{"key": "reliability/aws-resource-health-diagnose|2", "skill_id": "reliability/aws-resource-health-diagnose", "query": "Can you check why my cloud server is unhealthy and help me fix it?"}
+{"key": "reliability/chaos-engineer|1", "skill_id": "reliability/chaos-engineer", "query": "How can I test what happens when parts of my system fail?"}
+{"key": "reliability/chaos-engineer|2", "skill_id": "reliability/chaos-engineer", "query": "How can I test whether my system recovers from failures?"}
+{"key": "reliability/azure-resource-health-diagnose|1", "skill_id": "reliability/azure-resource-health-diagnose", "query": "Can you check my logs and tell me how to fix the problems?"}
+{"key": "reliability/azure-resource-health-diagnose|2", "skill_id": "reliability/azure-resource-health-diagnose", "query": "Can you look at my system logs and tell me what’s wrong?"}
+{"key": "reliability/observability-and-instrumentation|1", "skill_id": "reliability/observability-and-instrumentation", "query": "How can I tell if my new feature is working in production?"}
+{"key": "reliability/observability-and-instrumentation|2", "skill_id": "reliability/observability-and-instrumentation", "query": "How can I make my app's production behavior easier to see and diagnose?"}
+{"key": "refactoring/javax-to-jakarta-migration|1", "skill_id": "refactoring/javax-to-jakarta-migration", "query": "How do I update my old Java imports to the new namespace?"}
+{"key": "refactoring/javax-to-jakarta-migration|2", "skill_id": "refactoring/javax-to-jakarta-migration", "query": "How do I update these old Java imports to the new names?"}
+{"key": "reliability/python-observability|1", "skill_id": "reliability/python-observability", "query": "How do I track errors and performance in my app?"}
+{"key": "reliability/python-observability|2", "skill_id": "reliability/python-observability", "query": "How can I log errors and measure performance in my application?"}
+{"key": "reliability/postmortem-writing|1", "skill_id": "reliability/postmortem-writing", "query": "How do I review an incident and find what caused it?"}
+{"key": "reliability/postmortem-writing|2", "skill_id": "reliability/postmortem-writing", "query": "How do I review a system outage without blaming people?"}
+{"key": "reliability/prometheus-configuration|1", "skill_id": "reliability/prometheus-configuration", "query": "How do I set up a system to collect and monitor metrics from my servers?"}
+{"key": "reliability/prometheus-configuration|2", "skill_id": "reliability/prometheus-configuration", "query": "How do I set up monitoring to collect and store system metrics?"}
+{"key": "reliability/on-call-handoff-patterns|1", "skill_id": "reliability/on-call-handoff-patterns", "query": "How do I pass on-call duties to the next engineer with clear notes and escalation steps?"}
+{"key": "reliability/on-call-handoff-patterns|2", "skill_id": "reliability/on-call-handoff-patterns", "query": "How do I hand off on-call duties without losing important context?"}
+{"key": "reliability/sre-engineer|1", "skill_id": "reliability/sre-engineer", "query": "Can you help me set reliability targets and plan incident responses?"}
+{"key": "reliability/sre-engineer|2", "skill_id": "reliability/sre-engineer", "query": "How do I set reliability targets and alerting for my service?"}
+{"key": "security/agent-owasp-compliance|1", "skill_id": "security/agent-owasp-compliance", "query": "Check my AI codebase for the top ten security risks."}
+{"key": "security/agent-owasp-compliance|2", "skill_id": "security/agent-owasp-compliance", "query": "Can you review my codebase for the top security risks before we launch?"}
+{"key": "security/attack-tree-construction|1", "skill_id": "security/attack-tree-construction", "query": "How can I map out possible ways someone might break into my system?"}
+{"key": "security/attack-tree-construction|2", "skill_id": "security/attack-tree-construction", "query": "How can I map out possible ways a system could be compromised?"}
+{"key": "security/gha-security-review|1", "skill_id": "security/gha-security-review", "query": "How can I check my automated build workflows for unsafe settings?"}
+{"key": "security/gha-security-review|2", "skill_id": "security/gha-security-review", "query": "Can you check my automation workflows for unsafe settings?"}
+{"key": "security/pci-compliance|1", "skill_id": "security/pci-compliance", "query": "How do I securely handle payment card data in my systems?"}
+{"key": "security/pci-compliance|2", "skill_id": "security/pci-compliance", "query": "How do I keep payment card data safe and secure?"}
+{"key": "security/gdpr-data-handling|1", "skill_id": "security/gdpr-data-handling", "query": "How should I handle user data to comply with GDPR privacy rules?"}
+{"key": "security/gdpr-data-handling|2", "skill_id": "security/gdpr-data-handling", "query": "How do I make my app follow EU privacy rules?"}
+{"key": "product/retro|1", "skill_id": "product/retro", "query": "Can you help me plan a team retrospective with clear action items and owners?"}
+{"key": "product/retro|2", "skill_id": "product/retro", "query": "Help our team review the sprint and plan fixes with owners and dates?"}
+{"key": "security/protocol-reverse-engineering|1", "skill_id": "security/protocol-reverse-engineering", "query": "How can I figure out what two programs are saying to each other over the network?"}
+{"key": "security/protocol-reverse-engineering|2", "skill_id": "security/protocol-reverse-engineering", "query": "How can I figure out what this network traffic means?"}
+{"key": "product/prototype|1", "skill_id": "product/prototype", "query": "Can you mock up a quick screen to see if this flow feels right?"}
+{"key": "product/prototype|2", "skill_id": "product/prototype", "query": "How can I make a quick early version to test my idea?"}
+{"key": "security/sast-configuration|1", "skill_id": "security/sast-configuration", "query": "How do I set up automatic security scanning for my application code?"}
+{"key": "security/sast-configuration|2", "skill_id": "security/sast-configuration", "query": "How do I automatically scan my code for security weaknesses?"}
+{"key": "security/security-and-hardening|1", "skill_id": "security/security-and-hardening", "query": "Please review my login flow for unsafe input handling and data leaks?"}
+{"key": "security/security-and-hardening|2", "skill_id": "security/security-and-hardening", "query": "Can you check if my login form is safe from attacks?"}
+{"key": "security/security-review|1", "skill_id": "security/security-review", "query": "Can you find hidden vulnerabilities in my code and explain them?"}
+{"key": "security/security-review|2", "skill_id": "security/security-review", "query": "Can you find hidden weaknesses in my code and explain how data moves through it?"}
+{"key": "security/solidity-security|1", "skill_id": "security/solidity-security", "query": "How do I keep a smart contract safe from common bugs?"}
+{"key": "security/solidity-security|2", "skill_id": "security/solidity-security", "query": "How do I write safe smart contracts and avoid common coding mistakes?"}
+{"key": "reliability/service-mesh-observability|1", "skill_id": "reliability/service-mesh-observability", "query": "How can I monitor traffic and latency between my app"}
+{"key": "reliability/service-mesh-observability|2", "skill_id": "reliability/service-mesh-observability", "query": "How can I track requests across my app and see where delays happen?"}
+{"key": "security/security-best-practices|1", "skill_id": "security/security-best-practices", "query": "Can you check my code for common safety mistakes and suggest fixes?"}
+{"key": "security/security-best-practices|2", "skill_id": "security/security-best-practices", "query": "Can you review my code for common coding weaknesses?"}
+{"key": "security/stride-analysis-patterns|1", "skill_id": "security/stride-analysis-patterns", "query": "How can I find security threats in my system design?"}
+{"key": "security/stride-analysis-patterns|2", "skill_id": "security/stride-analysis-patterns", "query": "How do I find security threats in my system?"}
+{"key": "security/k8s-security-policies|1", "skill_id": "security/k8s-security-policies", "query": "How do I lock down my cluster and control who can access it?"}
+{"key": "security/k8s-security-policies|2", "skill_id": "security/k8s-security-policies", "query": "How do I lock down network traffic and access in my container cluster?"}
+{"key": "security/threat-mitigation-mapping|1", "skill_id": "security/threat-mitigation-mapping", "query": "How do I decide which security fixes to prioritize first?"}
+{"key": "security/threat-mitigation-mapping|2", "skill_id": "security/threat-mitigation-mapping", "query": "How should I decide which security fixes to do first?"}
+{"key": "testing/java-junit|1", "skill_id": "testing/java-junit", "query": "What are best practices for writing unit tests with data-driven cases?"}
+{"key": "testing/java-junit|2", "skill_id": "testing/java-junit", "query": "What are best practices for data-driven unit testing?"}
+{"key": "security/secret-scanning|1", "skill_id": "security/secret-scanning", "query": "How do I stop passwords and keys from being accidentally committed to my code?"}
+{"key": "security/secret-scanning|2", "skill_id": "security/secret-scanning", "query": "How can I prevent passwords and keys from being committed to my code?"}
+{"key": "testing/migrate-to-shoehorn|1", "skill_id": "testing/migrate-to-shoehorn", "query": "How can I replace type casts in my tests with safer partial data?"}
+{"key": "testing/migrate-to-shoehorn|2", "skill_id": "testing/migrate-to-shoehorn", "query": "How do I replace type assertions in my tests with partial test data?"}
+{"key": "testing/csharp-nunit|1", "skill_id": "testing/csharp-nunit", "query": "What are best practices for unit testing with data-driven test cases?"}
+{"key": "testing/csharp-nunit|2", "skill_id": "testing/csharp-nunit", "query": "What are best practices for unit testing with data-driven tests?"}
+{"key": "testing/cypress-flake-fixer|1", "skill_id": "testing/cypress-flake-fixer", "query": "Can you find and fix unreliable test patterns and outdated APIs?"}
+{"key": "testing/cypress-flake-fixer|2", "skill_id": "testing/cypress-flake-fixer", "query": "Can you check my test suite for unreliable patterns and outdated commands?"}
+{"key": "testing/browser-testing-with-devtools|1", "skill_id": "testing/browser-testing-with-devtools", "query": "Can you check why my webpage shows an error when I click the button?"}
+{"key": "testing/browser-testing-with-devtools|2", "skill_id": "testing/browser-testing-with-devtools", "query": "Can you check why my webpage shows errors and loads slowly?"}
+{"key": "testing/vitest|1", "skill_id": "testing/vitest", "query": "How do I set up fast unit tests with mocking and coverage?"}
+{"key": "testing/vitest|2", "skill_id": "testing/vitest", "query": "How can I mock an API call in my tests?"}
+{"key": "verification/constraint-driven-development|1", "skill_id": "verification/constraint-driven-development", "query": "How do I set a written quality standard and keep it from being quietly lowered?"}
+{"key": "verification/constraint-driven-development|2", "skill_id": "verification/constraint-driven-development", "query": "Help me set clear quality standards for my project and keep them fixed?"}
+{"key": "verification/doubt-driven-development|1", "skill_id": "verification/doubt-driven-development", "query": "Can you stress-test my plan for hidden problems before I go ahead?"}
+{"key": "verification/doubt-driven-development|2", "skill_id": "verification/doubt-driven-development", "query": "Can you challenge every assumption in my plan before I go ahead?"}
+{"key": "testing/react19-test-patterns|1", "skill_id": "testing/react19-test-patterns", "query": "Why are my component tests failing after upgrading to the latest version?"}
+{"key": "testing/react19-test-patterns|2", "skill_id": "testing/react19-test-patterns", "query": "How do I update my old test files to work with the newest version?"}
+{"key": "video-media/faceless-explainer|1", "skill_id": "video-media/faceless-explainer", "query": "How can I turn my article into a video with custom visuals?"}
+{"key": "video-media/faceless-explainer|2", "skill_id": "video-media/faceless-explainer", "query": "Can you turn my notes into a short video with visuals?"}
+{"key": "verification/intended-vs-implemented|1", "skill_id": "verification/intended-vs-implemented", "query": "How can I find bugs where code doesn't match what it's supposed to do?"}
+{"key": "verification/intended-vs-implemented|2", "skill_id": "verification/intended-vs-implemented", "query": "How can I find bugs where code doesn’t match what it’s supposed to do?"}
+{"key": "video-media/hyperframes|1", "skill_id": "video-media/hyperframes", "query": "Can you make a short animated explainer video for my project?"}
+{"key": "video-media/hyperframes|2", "skill_id": "video-media/hyperframes", "query": "Can you make a short animated explainer video for my idea?"}
+{"key": "verification/verify-agent-action|1", "skill_id": "verification/verify-agent-action", "query": "Can you check this plan before I approve it?"}
+{"key": "verification/verify-agent-action|2", "skill_id": "verification/verify-agent-action", "query": "Can you double-check that this step was done correctly?"}
+{"key": "verification/build-evidence-map|1", "skill_id": "verification/build-evidence-map", "query": "Help me map what supports and contradicts this technical choice?"}
+{"key": "verification/build-evidence-map|2", "skill_id": "verification/build-evidence-map", "query": "How do I map out research findings on a topic?"}
+{"key": "video-media/hyperframes-cli|1", "skill_id": "video-media/hyperframes-cli", "query": "How can I turn my slides into a video and check the result?"}
+{"key": "video-media/hyperframes-cli|2", "skill_id": "video-media/hyperframes-cli", "query": "How do I turn my code into a video and check it before publishing?"}
+{"key": "video-media/music-to-video|1", "skill_id": "video-media/music-to-video", "query": "Make a beat-synced slideshow from this audio file with lyrics?"}
+{"key": "video-media/music-to-video|2", "skill_id": "video-media/music-to-video", "query": "Can you make a beat-synced slideshow from my audio file?"}
+{"key": "testing/quarkus-dev-services-and-testing|1", "skill_id": "testing/quarkus-dev-services-and-testing", "query": "How can I automatically start dependencies while developing and check my app works?"}
+{"key": "testing/quarkus-dev-services-and-testing|2", "skill_id": "testing/quarkus-dev-services-and-testing", "query": "How can I run tests with automatic temporary databases and mocks?"}
+{"key": "video-media/transcribe|1", "skill_id": "video-media/transcribe", "query": "Can you turn this interview recording into text and label who is speaking?"}
+{"key": "video-media/transcribe|2", "skill_id": "video-media/transcribe", "query": "Can you turn this recording into text and label who is speaking?"}
+{"key": "video-media/slideshow|1", "skill_id": "video-media/slideshow", "query": "Help me turn my notes into a simple presentation for a team meeting."}
+{"key": "video-media/slideshow|2", "skill_id": "video-media/slideshow", "query": "Can you help me build an interactive presentation with speaker notes and branching?"}
+{"key": "video-media/hyperframes-studio|1", "skill_id": "video-media/hyperframes-studio", "query": "How do I make a simple animated title sequence for a video?"}
+{"key": "video-media/hyperframes-studio|2", "skill_id": "video-media/hyperframes-studio", "query": "Can you suggest how to improve this project without changing anything?"}
+{"key": "verification/audit-integrity|1", "skill_id": "verification/audit-integrity", "query": "Can you double-check the security findings and evidence before finalizing?"}
+{"key": "verification/audit-integrity|2", "skill_id": "verification/audit-integrity", "query": "Can you check my code for security problems and confirm the findings?"}
+{"key": "video-media/remotion-to-hyperframes|1", "skill_id": "video-media/remotion-to-hyperframes", "query": "Can you turn this animation code into a simple web page?"}
+{"key": "video-media/remotion-to-hyperframes|2", "skill_id": "video-media/remotion-to-hyperframes", "query": "How do I turn a code-made video into a web animation?"}
+{"key": "video-media/general-video|1", "skill_id": "video-media/general-video", "query": "How can I make my home movies look more professional?"}
+{"key": "video-media/general-video|2", "skill_id": "video-media/general-video", "query": "Can you make a multi-scene montage with titles and a looping intro?"}
+{"key": "video-media/figma|1", "skill_id": "video-media/figma", "query": "How do I turn my design file into an animated scene?"}
+{"key": "video-media/figma|2", "skill_id": "video-media/figma", "query": "How do I turn my design files into animated scenes?"}

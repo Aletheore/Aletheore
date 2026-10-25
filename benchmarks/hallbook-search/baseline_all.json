@@ -1,0 +1,16 @@
+{
+  "split": "all",
+  "queries": 994,
+  "top1": 0.4225,
+  "top3": 0.6227,
+  "top5": 0.662,
+  "confidence": {
+    "high": 182,
+    "low": 812
+  },
+  "high_precision": 0.7802,
+  "wrong_high": 40,
+  "non_task_prompts": 10,
+  "non_task_quiet": 10,
+  "non_task_none": 0
+}

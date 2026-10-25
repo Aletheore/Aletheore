@@ -10,7 +10,7 @@ import toon
 from mcp.server.mcpserver.exceptions import ToolError
 
 from aletheore import skill_hub
-from aletheore.mcp_server import build_server
+from aletheore.mcp_server import _compact_tool_schemas, build_server
 from aletheore.search_index import IndexNotFoundError
 from aletheore.schema_map import skipped_schema
 from tests.air_fixtures import minimal_air_evidence
@@ -296,6 +296,92 @@ def test_build_server_surfaces_instructions_in_the_handshake(tmp_path):
     assert server.instructions
     assert "aletheore_overview" in server.instructions
     assert "vocabulary" in server.instructions.lower()
+
+
+# Every tool definition is sent to the agent on every turn, so their size is a recurring token cost. Measured on the
+# full profile: 51,242 characters of compact JSON before the schema boilerplate was stripped, 36,769 after. The
+# ceiling leaves room for a few new tools; raise it deliberately, not by accident.
+FULL_PROFILE_DEFINITION_CHAR_CEILING = 40_000
+
+
+@pytest.mark.asyncio
+async def test_tool_definitions_carry_no_generator_boilerplate_and_stay_small(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    tools = await build_server(repo).list_tools()
+    for tool in tools:
+        schema = tool.input_schema
+        assert "title" not in schema, tool.name
+        for name, prop in (schema.get("properties") or {}).items():
+            assert "title" not in prop, (tool.name, name)
+            assert prop.get("default", 0) is not None, (tool.name, name)  # no `default: null`
+            assert not any(o.get("type") == "null" for o in prop.get("anyOf", [])), (tool.name, name)
+    size = sum(len(json.dumps(t.model_dump(by_alias=True, exclude_none=True), separators=(",", ":"))) for t in tools)
+    assert size <= FULL_PROFILE_DEFINITION_CHAR_CEILING, size
+
+
+@pytest.mark.asyncio
+async def test_compaction_keeps_what_a_client_needs_to_call_the_tools(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    by_name = {t.name: t for t in await build_server(repo).list_tools()}
+    imports = by_name["aletheore_imports"]
+    assert imports.input_schema["required"] == ["target"]
+    props = imports.input_schema["properties"]
+    # optional arguments stay typed (not a union with null) and keep their descriptions
+    assert props["section"]["type"] == "string" and props["section"]["description"]
+    assert props["offset"]["type"] == "integer" and props["limit"]["type"] == "integer"
+    # read-only tools keep the hints a client uses to skip a permission prompt
+    assert imports.annotations.read_only_hint is True and imports.annotations.open_world_hint is False
+    assert imports.annotations.destructive_hint is None and imports.annotations.idempotent_hint is None
+
+
+def test_compaction_preserves_non_simple_any_of_schemas():
+    tool = MagicMock()
+    tool.annotations = None
+    tool.parameters = {
+        "properties": {
+            "reference": {"anyOf": [{"$ref": "#/definitions/Reference"}, {"type": "null"}]},
+            "nested": {"anyOf": [{"anyOf": [{"type": "string"}, {"type": "integer"}]}, {"type": "null"}]},
+        }
+    }
+    server = MagicMock()
+    server._tool_manager.list_tools.return_value = [tool]
+
+    _compact_tool_schemas(server)
+
+    assert "$ref" in tool.parameters["properties"]["reference"]["anyOf"][0]
+    assert "anyOf" in tool.parameters["properties"]["nested"]
+
+
+LEAN_TOOL_NAMES = {
+    "aletheore_ask", "aletheore_imports", "aletheore_imported_by", "aletheore_symbols", "aletheore_get_blast_radius",
+    "aletheore_list", "aletheore_overview", "aletheore_locate", "aletheore_symbol_source",
+}
+
+
+@pytest.mark.asyncio
+async def test_lean_profile_exposes_exactly_the_direct_tools_agents_use_and_is_far_smaller(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    lean = await build_server(repo, profile="lean").list_tools()
+    full = await build_server(repo).list_tools()
+    assert {t.name for t in lean} == LEAN_TOOL_NAMES
+    assert LEAN_TOOL_NAMES < {t.name for t in full}  # nothing is lean-only: it is a subset of the full profile
+
+    def size(tools):
+        return sum(len(json.dumps(t.model_dump(by_alias=True, exclude_none=True), separators=(",", ":"))) for t in tools)
+
+    assert size(lean) * 3 < size(full)
+    assert size(lean) <= 11_000, size(lean)
+
+
+@pytest.mark.asyncio
+async def test_lean_profile_tools_answer_and_the_profile_is_selectable(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo, profile="lean")
+    # the router tool in the lean profile does not point at tools the profile lacks
+    result = await server.call_tool("aletheore_ask", {"question": "what is this repo"})
+    assert "overview" in str(result).lower() or "repository" in str(result).lower()
+    with pytest.raises(ValueError, match="lean"):
+        build_server(repo, profile="nonsense")
 
 
 @pytest.mark.asyncio
