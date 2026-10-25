@@ -1804,7 +1804,11 @@ def build_index(
     try:
         table.create_index("text", config=FTS(), replace=True)
     except Exception:  # noqa: BLE001 - any backend failure degrades, never fails the build
-        pass
+        logger.debug(
+            "Could not create the full-text index for %s; vector search remains available",
+            index_path,
+            exc_info=True,
+        )
     # The real table is now complete, so the keyword-only stand-in has done
     # its job. Best-effort: a leftover _fts table is harmless (search prefers
     # the full table whenever it opens successfully) and never worth failing
@@ -1818,7 +1822,11 @@ def build_index(
         # error handling instead of being mislabeled as "embeddings building".
         raise
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug(
+            "Could not remove the temporary keyword index at %s after the full build",
+            index_path,
+            exc_info=True,
+        )
     return len(rows)
 
 
