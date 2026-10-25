@@ -160,7 +160,7 @@ INTENTS: tuple[Intent, ...] = (
             r"\b(?:depended on|imported|used|referenced) by the most\b",
             r"\b(?:imported|depended on|used|referenced)\b[^?.]{0,20}\bthe most\b",
             r"\bmost (?:important|central|core|critical) (?:modules?|files?)\b",
-            r"\b(?:import|dependency) hubs?\b", r"\bfan-?in\b", r"\bhighest (?:in-?degree|number of importers)\b",
+            r"\b(?:import|dependency) hubs?\b", r"\b(?:top|most) \d{1,2} hubs?\b", r"\bfan-?in\b", r"\bhighest (?:in-?degree|number of importers)\b",
         ),
         weight=1.5,
     ),
@@ -168,7 +168,7 @@ INTENTS: tuple[Intent, ...] = (
         "cycles",
         "import_cycles",
         (
-            r"\bcircular (?:imports?|dependencies?|references?|calls?|modules?|graph)\b",
+            r"\bcircular (?:imports?|dependenc(?:y|ies)|references?|calls?|modules?|graph)\b",
             r"\b(?:import|dependency) cycles?\b", r"\b(?:import|dependency) loops?\b",
             r"\bimport (?:each other|one another)\b", r"\bmutual(?:ly)? import",
         ),
@@ -703,7 +703,7 @@ def _dead_code(q, evidence, repo_path, target, question):
 
 def _wanted_count(question: str, default: int = 10) -> int:
     """Return a limit only when the number is explicitly part of a ranking cue."""
-    match = re.search(r"\btop\s+(\d{1,2})\b", question, re.I) or re.search(
+    match = re.search(r"\b(?:top|which|show|list)\s+(\d{1,2})\b", question, re.I) or re.search(
         r"\b(\d{1,2})\s+most\b", question, re.I
     )
     return int(match.group(1)) if match else default
