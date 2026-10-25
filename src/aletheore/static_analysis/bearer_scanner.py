@@ -106,12 +106,37 @@ def check_bearer(repo_path: Path, timeout: int | None = None) -> dict:
             "findings": [],
         }
 
+    # Bearer prints "{}" for a clean scan, so empty stdout (not "{}") is a run that died before reporting.
+    if not result.stdout.strip():
+        return {
+            "checked": False,
+            "reason": f"bearer exited {result.returncode} without any output: {(result.stderr or '')[-500:]}",
+            "findings": [],
+        }
+
     try:
-        payload = json.loads(result.stdout or "{}")
+        payload = json.loads(result.stdout)
     except json.JSONDecodeError:
         return {
             "checked": False,
             "reason": f"bearer produced unparseable output: {(result.stderr or '')[:300]}",
+            "findings": [],
+        }
+
+    if not isinstance(payload, dict):
+        return {
+            "checked": False,
+            "reason": f"bearer produced a non-object report: {type(payload).__name__}",
+            "findings": [],
+        }
+
+    # Bearer exits 1 when it reports findings, and 1 with an empty report is an error instead (checked live:
+    # a directory with no supported source prints "{}" on stdout, "Error: report error: 0 rules found ..." on
+    # stderr, and exits 1), which would otherwise pass as a clean scan.
+    if result.returncode == 1 and not any(isinstance(v, list) and v for v in payload.values()):
+        return {
+            "checked": False,
+            "reason": f"bearer exited 1 with no findings in its report: {(result.stderr or '')[-500:]}",
             "findings": [],
         }
 

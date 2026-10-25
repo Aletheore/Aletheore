@@ -13,6 +13,14 @@ workers and 30 s with 8. Local Ollama stays at one request at a time, because it
 at a time crashed its runner. Separately, a chunk longer than 8,000 characters made the hosted service answer 413, and
 the whole index then fell back to local Ollama; hosted requests now cut each chunk at that limit.
 
+- **License changed from PolyForm Noncommercial 1.0.0 to AGPL-3.0, with a separate
+  commercial license.** Aletheore is now open source: companies can use it internally
+  without a paid license. Modified versions that are distributed or offered over a
+  network must be published under the AGPL, and anyone who cannot accept that can buy a
+  commercial license (see [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md)). Copies obtained
+  under Apache 2.0 or PolyForm keep those terms. `src/LICENSE`, which still carried the
+  Apache 2.0 text, now matches the root file.
+
 **Fixed: a read-only `.aletheore/` folder no longer ends a command with a traceback**
 
 `scan` checks that `.aletheore/` can be written before it starts scanning, so a read-only folder fails in a second
