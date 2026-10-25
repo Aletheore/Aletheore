@@ -13,7 +13,7 @@
 <p align="center">
   <a href="https://pypi.org/project/aletheore/"><img src="https://img.shields.io/pypi/v/aletheore?color=blue" alt="PyPI version"></a>
   <a href="https://pypi.org/project/aletheore/"><img src="https://img.shields.io/pypi/pyversions/aletheore" alt="Python versions"></a>
-  <a href="https://github.com/Aletheore/Aletheore/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-PolyForm--Noncommercial--1.0.0-blue" alt="License"></a>
+  <a href="https://github.com/Aletheore/Aletheore/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License"></a>
   <a href="https://github.com/Aletheore/Aletheore/actions/workflows/tests.yml"><img src="https://github.com/Aletheore/Aletheore/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
   <a href="https://codecov.io/gh/Aletheore/Aletheore"><img src="https://codecov.io/gh/Aletheore/Aletheore/graph/badge.svg" alt="Coverage"></a>
   <a href="https://github.com/Aletheore/Aletheore/actions/workflows/container-security.yml"><img src="https://github.com/Aletheore/Aletheore/actions/workflows/container-security.yml/badge.svg" alt="Container Security"></a>
@@ -137,13 +137,24 @@ the public PR-review benchmark harness and published results.
 
 ## Licensing
 
-Aletheore is licensed under the
-[PolyForm Noncommercial License 1.0.0](LICENSE), not an OSI-approved open-source license.
-It's free for individuals: personal use, research, hobby projects, and evaluation. Any use
-for or within a company or other organization — including internal tooling at a company you
-work for — is a commercial use and requires a separate commercial license. Reach out at
-[arihantkaul@outlook.com](mailto:arihantkaul@outlook.com) for commercial licensing, or see
-[Aletheore AIR](https://aletheore.com) for the hosted, paid tier.
+Aletheore is open source under the [GNU Affero General Public License v3.0](LICENSE)
+(AGPL-3.0). You can use, study, modify, and redistribute it, including at a company and
+for internal tooling, as long as you follow the AGPL. The part that matters most:
+
+- If you modify Aletheore and distribute it, or let other people use your modified
+  version over a network (a hosted service, an internal platform other teams log in to),
+  you must make the complete source of your version available under the AGPL too.
+- If you build Aletheore into a product, that product's source falls under the same terms.
+- Running the unmodified CLI or Action on your own code does not put your code under the AGPL.
+
+If those terms don't fit, for example you want to embed Aletheore in a closed-source product
+or run a modified version as a service without publishing it, a commercial license is
+available. See [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md), or email
+[arihantkaul@outlook.com](mailto:arihantkaul@outlook.com). The hosted, paid tier is
+[Aletheore AIR](https://aletheore.com).
+
+Releases through 0.8.12 were Apache 2.0, and 0.8.13 through the version before this change were PolyForm
+Noncommercial 1.0.0. Copies you already received keep the license they came with.
 
 If it's useful to you personally, consider
 [sponsoring development](https://github.com/sponsors/ArihantK15) — no accounts, no usage tracking,

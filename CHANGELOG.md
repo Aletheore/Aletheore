@@ -3,6 +3,16 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## Unreleased
+
+- **License changed from PolyForm Noncommercial 1.0.0 to AGPL-3.0, with a separate
+  commercial license.** Aletheore is now open source: companies can use it internally
+  without a paid license. Modified versions that are distributed or offered over a
+  network must be published under the AGPL, and anyone who cannot accept that can buy a
+  commercial license (see [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md)). Copies obtained
+  under Apache 2.0 or PolyForm keep those terms. `src/LICENSE`, which still carried the
+  Apache 2.0 text, now matches the root file.
+
 ## 0.9.26 - 2026-10-09
 
 **Fixed: semgrep never ran from a pip install (#1007)**

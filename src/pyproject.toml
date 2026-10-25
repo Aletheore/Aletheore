@@ -3,7 +3,7 @@ name = "aletheore"
 version = "0.9.26"
 description = "Evidence-grounded repository audit CLI: deterministic scanner, MCP server, live dashboard, and a GitHub Action that posts PR diffs."
 readme = "README.md"
-license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
+license = "AGPL-3.0-only"
 license-files = ["LICENSE"]
 authors = [{ name = "Arihant Kaul", email = "arihantkaul@outlook.com" }]
 # Upper bound is the next Python after the newest one CI runs (3.14). It used to be
