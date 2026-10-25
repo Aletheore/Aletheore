@@ -58,6 +58,7 @@ Scanning /path/to/your/repo...
 No LLM call or account. Inspect potential network traffic before scanning with
 `aletheore scan . --explain-network`: registry lookups, installed Semgrep's registry access
 and metrics, configured SonarQube analysis submission, and conditional crash reporting.
+For a fully offline scan, run `ALETHEORE_CRASH_REPORTING=0 aletheore scan . --no-check-vulnerabilities --no-check-licenses --no-check-static-analysis`.
 That one scan command gets you a real dependency
 graph, secrets scan, git-history secret sweep, dependency-vulnerability/license check, and
 static API endpoint map — for **Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, Java, Kotlin,

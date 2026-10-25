@@ -2671,7 +2671,10 @@ def demo() -> None:
     try:
         repo, evidence = create_demo()
     except (OSError, subprocess.SubprocessError, GitAnalysisError) as exc:
+        detail = (exc.stderr or exc.stdout) if isinstance(exc, subprocess.CalledProcessError) else None
         console.print(f"Demo failed: {exc}", markup=False)
+        if detail:
+            console.print(detail.strip(), markup=False)
         raise typer.Exit(code=1)
     console.print("\n[bold]Dependency graph[/bold] (importer → dependency)")
     for source, target in evidence["repository"]["dependency_graph"]["edges"]:

@@ -1,5 +1,8 @@
 import json
 import socket
+import subprocess
+
+import pytest
 from typer.testing import CliRunner
 
 from aletheore.cli import app
@@ -84,3 +87,45 @@ def test_demo_scans_real_sample_and_supports_follow_up_queries(tmp_path, monkeyp
     query = runner.invoke(app, ["query", "hotspots", "--path", str(repo)])
     assert query.exit_code == 0, query.output
     assert "pricing.py" in query.output
+
+
+@pytest.mark.parametrize("failure", [
+    FileNotFoundError("git missing"),
+    subprocess.TimeoutExpired("git", 30),
+    subprocess.CalledProcessError(128, "git", stderr="fatal: demo commit failed"),
+])
+def test_demo_cleans_up_failed_setup_and_reports_git_error(tmp_path, monkeypatch, failure):
+    import aletheore.demo as demo
+
+    repo = tmp_path / "failed-demo"
+    repo.mkdir()
+    monkeypatch.setattr(demo.tempfile, "mkdtemp", lambda **kwargs: str(repo))
+
+    def fail(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(demo.subprocess, "run", fail)
+    result = runner.invoke(app, ["demo"])
+    assert result.exit_code == 1, result.output
+    assert "Demo failed:" in result.output
+    assert not repo.exists()
+    if isinstance(failure, subprocess.CalledProcessError):
+        assert "fatal: demo commit failed" in result.output
+
+
+def test_demo_cleans_up_if_scan_fails(tmp_path, monkeypatch):
+    import aletheore.demo as demo
+
+    repo = tmp_path / "failed-scan"
+    repo.mkdir()
+    monkeypatch.setattr(demo.tempfile, "mkdtemp", lambda **kwargs: str(repo))
+    monkeypatch.setattr(demo.subprocess, "run", lambda *args, **kwargs: None)
+
+    def fail(*args, **kwargs):
+        raise OSError("cannot scan demo")
+
+    monkeypatch.setattr(demo, "scan_repository", fail)
+    result = runner.invoke(app, ["demo"])
+    assert result.exit_code == 1, result.output
+    assert "cannot scan demo" in result.output
+    assert not repo.exists()
