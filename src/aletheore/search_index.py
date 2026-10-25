@@ -1558,7 +1558,17 @@ def _embed_in_batches(
             on_progress(len(vectors), total)
 
     # Remaining batches: run in parallel with the settled provider.
-    remaining_spans = spans[1:]
+    if use_hosted:
+        remaining_spans = spans[1:]
+    else:
+        # A hosted batch can be smaller than batch_size because of its token
+        # cap. If that first batch falls back to the local provider, rebuild
+        # the remaining spans using the local count-based contract instead of
+        # sending hosted-shaped oversized batches to the local endpoint.
+        remaining_spans = [
+            (start, min(start + batch_size, total))
+            for start in range(first_end, total, batch_size)
+        ]
     if not remaining_spans:
         return vectors, embedder
 

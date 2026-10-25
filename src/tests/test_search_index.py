@@ -1326,6 +1326,31 @@ def test_embed_in_batches_hosted_failure_first_batch_falls_back_local(monkeypatc
     assert len(flat_local) == len(texts)
 
 
+def test_hosted_first_batch_fallback_reslices_token_limited_remaining_batches(monkeypatch):
+    monkeypatch.setattr(search_index_module, "_hosted_embedding_confirmed", None)
+    texts = [f"t{i}" for i in range(10)]
+    local_calls: list[list[str]] = []
+
+    def fake_local_embed(batch):
+        local_calls.append(list(batch))
+        return [[0.0] * 768] * len(batch)
+
+    # Simulate the hosted tokenizer producing a short first span followed by
+    # a large token-bounded span. The local provider only has the count-based
+    # batch contract and must receive batches of at most batch_size.
+    with patch("aletheore.search_index.get_api_key", return_value="tok"), patch(
+        "aletheore.search_index.embed_texts_hosted",
+        side_effect=HostedEmbeddingUnavailableError("hosted unavailable"),
+    ), patch(
+        "aletheore.search_index._hosted_batches", return_value=[(0, 1), (1, 10)]
+    ), patch("aletheore.search_index.embed_texts", side_effect=fake_local_embed):
+        vectors, _ = _embed_in_batches(texts, batch_size=3, already_consented=True)
+
+    assert len(vectors) == len(texts)
+    assert all(len(batch) <= 3 for batch in local_calls)
+    assert [item for batch in local_calls for item in batch] == texts
+
+
 def test_embed_in_batches_hosted_failure_mid_run_raises(monkeypatch):
     monkeypatch.setattr(search_index_module, "_hosted_embedding_confirmed", None)
     """If hosted fails after at least one batch succeeded, raise the error
