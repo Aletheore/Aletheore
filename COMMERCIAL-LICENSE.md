@@ -115,7 +115,7 @@ addressed by the conflict. Any change to these terms must be signed by both part
 ## Order Form template
 
 | | |
-|---|---|
+| --- | --- |
 | Licensee (legal name, address) | |
 | Effective date | |
 | Software version(s) | |
