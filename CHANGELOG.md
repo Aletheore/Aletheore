@@ -5,6 +5,10 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Added a tested Java command-injection audit rule for variable commands/executables
+  passed to Runtime.exec and ProcessBuilder, including direct array parameters.
+  Findings are review candidates; see `docs/JAVA-COMMAND-INJECTION-RULE.md` for limits.
+
 ## 0.11.0 - 2026-10-25
 
 **Changed: a long, specific skill name no longer beats the general skill**

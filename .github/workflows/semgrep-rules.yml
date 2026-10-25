@@ -1,0 +1,39 @@
+name: Bundled Semgrep rules
+
+on:
+  pull_request:
+    paths:
+      - "src/aletheore/static_analysis/semgrep_rules/**"
+      - "src/tests/fixtures/semgrep/**"
+      - "src/tests/semgrep_rules/**"
+      - "github-app/requirements-semgrep.lock.txt"
+      - ".github/workflows/semgrep-rules.yml"
+  push:
+    branches: [master]
+    paths:
+      - "src/aletheore/static_analysis/semgrep_rules/**"
+      - "src/tests/fixtures/semgrep/**"
+      - "src/tests/semgrep_rules/**"
+      - "github-app/requirements-semgrep.lock.txt"
+      - ".github/workflows/semgrep-rules.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  java-command-injection:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.14"
+      # Separate from Aletheore's environment: Semgrep has its own SDK pins.
+      - name: Install pinned scanner
+        run: python -m pip install --require-hashes -r github-app/requirements-semgrep.lock.txt
+      - name: Exercise the bundled rule with the real engine
+        run: python src/tests/semgrep_rules/test_java_command_injection.py
