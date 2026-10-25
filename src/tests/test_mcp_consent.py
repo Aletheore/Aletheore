@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -123,12 +124,109 @@ async def test_withheld_tools_are_absent_not_merely_refusing(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_answer_tool_needs_external_when_the_adapter_requires_consent(tmp_path):
+    # Real gap found by an independent Strix pentest pass (2026-10-15):
+    # aletheore_answer's own TOOL_REQUIRED_EFFECTS entry lists only
+    # `network`, since a requires_consent=False local CLI adapter never
+    # leaves the machine - but build_server used to never add `external`
+    # for a requires_consent=True direct-API adapter either, so selecting
+    # one via `--agent` was enough to send retrieved repository code to a
+    # third-party API with only `network` granted, the one path the
+    # equivalent CLI `query answer` flow explicitly warns and confirms
+    # before doing.
+    adapter = MagicMock(requires_consent=True)
+    repo = make_repo(tmp_path)
+
+    names = await tool_names(repo, answer_adapter=adapter, allow=frozenset({EFFECT_NETWORK}))
+    assert "aletheore_answer" not in names
+
+    names = await tool_names(
+        repo, answer_adapter=adapter, allow=frozenset({EFFECT_NETWORK, EFFECT_EXTERNAL})
+    )
+    assert "aletheore_answer" in names
+
+
+@pytest.mark.asyncio
+async def test_answer_tool_only_needs_network_when_the_adapter_does_not_require_consent(tmp_path):
+    # The other half of the same gate: an intentionally local CLI adapter
+    # (requires_consent=False) must keep working on `network` alone -
+    # nothing it does ever reaches a third party, so requiring `external`
+    # for it too would be a real regression, not extra safety.
+    adapter = MagicMock(requires_consent=False)
+
+    names = await tool_names(make_repo(tmp_path), answer_adapter=adapter, allow=frozenset({EFFECT_NETWORK}))
+
+    assert "aletheore_answer" in names
+
+
+@pytest.mark.asyncio
 async def test_network_only_posture_withholds_writers_but_keeps_query_embedding(tmp_path):
     names = await tool_names(make_repo(tmp_path), allow=frozenset({EFFECT_NETWORK}))
 
     assert "aletheore_search_codebase" in names  # needs network only
     assert "aletheore_scan" not in names  # also needs write
     assert "aletheore_index" not in names
+
+
+# --- aletheore_scan's conditional `external` requirement ------------------
+#
+# Real gap found via audit: aletheore_scan always runs static analysis,
+# which uploads this repo's full source to a configured SonarQube server
+# (check_sonarqube's own -Dsonar.sources=.) - exactly what EFFECT_EXTERNAL
+# exists to gate. The requirement is conditional (not simply added to
+# aletheore_scan's base set) because check_sonarqube itself is a silent
+# no-op unless BOTH SONARQUBE_HOST_URL is set AND the sonar-scanner CLI is
+# installed - an operator with neither must not be asked for a permission
+# aletheore_scan could never actually use.
+
+
+@pytest.mark.asyncio
+async def test_scan_does_not_require_external_when_sonarqube_is_not_configured(tmp_path, monkeypatch):
+    monkeypatch.delenv("SONARQUBE_HOST_URL", raising=False)
+
+    names = await tool_names(make_repo(tmp_path), allow=frozenset({EFFECT_WRITE, EFFECT_NETWORK}))
+
+    assert "aletheore_scan" in names
+
+
+@pytest.mark.asyncio
+async def test_scan_requires_external_once_sonarqube_host_and_cli_are_both_present(tmp_path, monkeypatch):
+    monkeypatch.setenv("SONARQUBE_HOST_URL", "https://sonar.example.com")
+    monkeypatch.setattr(
+        "aletheore.mcp_server.shutil.which", lambda name: "/usr/local/bin/sonar-scanner" if name == "sonar-scanner" else None
+    )
+    repo = make_repo(tmp_path)
+
+    write_network_only = await tool_names(repo, allow=frozenset({EFFECT_WRITE, EFFECT_NETWORK}))
+    assert "aletheore_scan" not in write_network_only
+
+    with_external = await tool_names(repo, allow=frozenset({EFFECT_WRITE, EFFECT_NETWORK, EFFECT_EXTERNAL}))
+    assert "aletheore_scan" in with_external
+
+
+@pytest.mark.asyncio
+async def test_scan_does_not_require_external_when_the_cli_is_missing_even_with_host_set(tmp_path, monkeypatch):
+    # Matches check_sonarqube's own gating: a host URL alone, with no
+    # sonar-scanner binary on PATH, is already a silent no-op - nothing
+    # external can be transmitted, so nothing extra should be required.
+    monkeypatch.setenv("SONARQUBE_HOST_URL", "https://sonar.example.com")
+    monkeypatch.setattr("aletheore.mcp_server.shutil.which", lambda name: None)
+
+    names = await tool_names(make_repo(tmp_path), allow=frozenset({EFFECT_WRITE, EFFECT_NETWORK}))
+
+    assert "aletheore_scan" in names
+
+
+@pytest.mark.asyncio
+async def test_withholding_notice_names_external_when_sonarqube_is_the_reason(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SONARQUBE_HOST_URL", "https://sonar.example.com")
+    monkeypatch.setattr("aletheore.mcp_server.shutil.which", lambda name: "/usr/local/bin/sonar-scanner")
+
+    build_server(make_repo(tmp_path), allow=frozenset({EFFECT_WRITE, EFFECT_NETWORK}))
+    notice = capsys.readouterr().err
+
+    assert "external" in notice
+    assert "aletheore_scan" in notice
 
 
 @pytest.mark.asyncio
@@ -176,7 +274,7 @@ def test_embedding_fallback_cannot_send_code_to_openai_without_a_terminal(monkey
 
     from aletheore.search_index import EmbeddingProviderUnavailableError, embed_texts
 
-    with patch("aletheore.search_index.OpenAI") as mock_openai, patch(
+    with patch("openai.OpenAI") as mock_openai, patch(
         "aletheore.search_index.has_api_key", return_value=True
     ):
         mock_openai.return_value.embeddings.create.side_effect = RuntimeError("ollama down")
@@ -248,3 +346,60 @@ async def test_every_tool_is_either_gated_or_provably_inert(tmp_path):
         assert tool.annotations.open_world_hint is False, (
             f"{tool.name} is not gated but declares open-world access"
         )
+
+
+# --- aletheore_add_custom_skill: write AND network -------------------------
+#
+# Real gap (final Skill Hub review): skill_hub.add_custom_skill also pushes
+# the skill to the user's Skill Hub account whenever a personal token is
+# saved, so the tool reaches the network, not just the local filesystem. An
+# operator permitting writes but not network must not get that call.
+
+
+def test_add_custom_skill_declares_both_write_and_network():
+    assert TOOL_REQUIRED_EFFECTS["aletheore_add_custom_skill"] == frozenset({EFFECT_WRITE, EFFECT_NETWORK})
+
+
+@pytest.mark.asyncio
+async def test_write_only_posture_withholds_add_custom_skill(tmp_path):
+    names = await tool_names(make_repo(tmp_path), allow=frozenset({EFFECT_WRITE}))
+
+    assert "aletheore_add_custom_skill" not in names
+
+
+@pytest.mark.asyncio
+async def test_default_posture_still_registers_add_custom_skill(tmp_path, monkeypatch):
+    monkeypatch.delenv("ALETHEORE_MCP_ALLOW", raising=False)
+
+    names = await tool_names(make_repo(tmp_path))
+
+    assert "aletheore_add_custom_skill" in names
+
+
+# --- aletheore_remove_custom_skill: write AND network -----------------------
+#
+# Same gating as aletheore_add_custom_skill: it writes locally and also makes
+# a best-effort network call (skill_hub_sync.delete_custom_skill_best_effort),
+# so an operator permitting writes but not network must not get it either.
+
+
+def test_remove_custom_skill_declares_both_write_and_network():
+    assert TOOL_REQUIRED_EFFECTS["aletheore_remove_custom_skill"] == frozenset(
+        {EFFECT_WRITE, EFFECT_NETWORK}
+    )
+
+
+@pytest.mark.asyncio
+async def test_write_only_posture_withholds_remove_custom_skill(tmp_path):
+    names = await tool_names(make_repo(tmp_path), allow=frozenset({EFFECT_WRITE}))
+
+    assert "aletheore_remove_custom_skill" not in names
+
+
+@pytest.mark.asyncio
+async def test_default_posture_still_registers_remove_custom_skill(tmp_path, monkeypatch):
+    monkeypatch.delenv("ALETHEORE_MCP_ALLOW", raising=False)
+
+    names = await tool_names(make_repo(tmp_path))
+
+    assert "aletheore_remove_custom_skill" in names

@@ -1,0 +1,9 @@
+Trace ID: ee901a88b502c31049ddc784f1a233b2
+Root Span: /v1/payment/charge
+Total Latency: 1500ms
+
+[1500ms] /v1/payment/charge  [=========================================]
+  [ 100ms]   |-- /gateway/auth  [===                                      ] (OK)
+  [ 400ms]   |-- /gateway/post  [   ==========                            ] (ERROR - timeout)
+  [ 950ms]   |-- /gateway/retry [             ============================] (OK - fallback)
+  [  50ms]   |-- /db.Write      [                                         ] (OK)

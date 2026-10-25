@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import math
 from datetime import datetime
@@ -49,6 +50,8 @@ def _line_items(data: dict) -> list[dict]:
     if not isinstance(items, list):
         return []
     return [item for item in items if isinstance(item, dict)]
+
+
 logger = logging.getLogger(__name__)
 
 # Real gap found and fixed 2026-09-02, before this had ever been exercised
@@ -127,6 +130,53 @@ class PaddleTopupClawbackError(RuntimeError):
     taken back from the balance: either the buyer had already spent part of
     it, or the top-up predates the ledger recording amounts. A human has to
     decide what to do about the difference."""
+
+
+class PaddleWebhookPaidSetupReleaseError(RuntimeError):
+    """release_paid_setup itself failed while compensating for an earlier
+    failure in the gated block (affiliate attribution / Live Wiki+Docs
+    enqueue). The original failure still propagates either way - this is
+    the heads-up that the compensating release may not have landed, so the
+    claim could be stuck non-NULL, silently skipping the one-time build/
+    attribution on every future retry with nothing else observing it."""
+
+
+# Paddle's documented webhook delivery retry window is "up to three days"
+# (see the delivery-retry comment elsewhere in this file). rq's own
+# DEFAULT_RESULT_TTL is 500 seconds: that's how long a finished job's
+# Redis hash key survives, and unique=True's dedup (save_unique_job) is a
+# plain EXISTS check against that same key - once it expires, a retry's
+# re-enqueue under the identical job_id is no longer deduped at all and
+# silently creates a second real job. Real bug this closes: without an
+# explicit, longer result_ttl, the dedup below only actually holds for
+# ~8 minutes, not the multi-day window a Paddle retry can legitimately
+# land within - a retry that lands later than that reproduces the exact
+# duplicate-LLM-spend failure the dedup exists to prevent. 4 days gives
+# margin over the documented 3-day window.
+_PAID_SETUP_JOB_RESULT_TTL_SECONDS = 4 * 24 * 60 * 60
+
+
+def _enqueue_paid_setup_job(queue, job_name: str, job_id: str, *, installation_id: int) -> None:
+    """Enqueues one of the two one-time paid-setup jobs (Live Wiki or Docs
+    full build), tolerating a retry that re-enqueues the same,
+    already-succeeded job under the same job_id - see
+    _PAID_SETUP_JOB_RESULT_TTL_SECONDS for why result_ttl is set
+    explicitly. Shared by both call sites so the dedup settings can't
+    drift between them the way the plain fixed/count batch size once did
+    elsewhere in this codebase."""
+    from rq.exceptions import DuplicateJobError
+
+    try:
+        queue.enqueue(
+            job_name,
+            job_timeout=60,
+            result_ttl=_PAID_SETUP_JOB_RESULT_TTL_SECONDS,
+            installation_id=installation_id,
+            job_id=job_id,
+            unique=True,
+        )
+    except DuplicateJobError:
+        pass
 
 
 # Adjustment actions that return a customer's money. Others ("credit",
@@ -439,9 +489,8 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
     paid_setup_claimed_at = (
         await claim_paid_setup(pool, installation_id) if plan != "free" else None
     )
-    should_run_paid_setup = paid_setup_claimed_at is not None
 
-    if should_run_paid_setup:
+    if paid_setup_claimed_at is not None:
         try:
             # Attribution: first time this installation goes free -> paid, on
             # the AIR plan only (affiliates are AIR-only: Flash's margin cannot
@@ -491,43 +540,48 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
 
                     queue = Queue("scans", connection=Redis.from_url(redis_url))
 
-                # Deterministic, installation-scoped job_id + unique=True:
-                # real bug this closes - the two enqueues below aren't
-                # atomic, so if the wiki enqueue succeeds and the docs
-                # enqueue then fails (a Redis blip), the except block below
-                # releases the claim and re-raises so Paddle retries. That
-                # retry used to call BOTH enqueues again from scratch,
-                # including the wiki build that had already succeeded -
-                # a duplicate full AIRview build with real LLM spend. With a
+                # Deterministic, installation-scoped job_id + unique=True +
+                # an explicit result_ttl (see _PAID_SETUP_JOB_RESULT_TTL_
+                # SECONDS): real bug this closes - the two enqueues below
+                # aren't atomic, so if the wiki enqueue succeeds and the
+                # docs enqueue then fails (a Redis blip), the except block
+                # below releases the claim and re-raises so Paddle retries.
+                # That retry used to call BOTH enqueues again from scratch,
+                # including the wiki build that had already succeeded - a
+                # duplicate full AIRview build with real LLM spend. With a
                 # stable job_id and unique=True, rq's atomic check-and-push
                 # (save_unique_job) raises DuplicateJobError instead of
-                # re-queueing a second job under the same id, so the retry's
-                # re-enqueue of the already-succeeded wiki build is a safe
-                # no-op and only the docs build (which never actually
-                # queued) runs for real.
-                from rq.exceptions import DuplicateJobError
-
-                try:
-                    queue.enqueue(
-                        "scan_worker.jobs.run_live_wiki_full_build_for_installation_job",
-                        job_timeout=60,
-                        installation_id=installation_id,
-                        job_id=f"paid-setup-wiki-{installation_id}",
-                        unique=True,
-                    )
-                except DuplicateJobError:
-                    pass
-                try:
-                    queue.enqueue(
-                        "scan_worker.jobs.run_live_docs_full_build_for_installation_job",
-                        job_timeout=60,
-                        installation_id=installation_id,
-                        job_id=f"paid-setup-docs-{installation_id}",
-                        unique=True,
-                    )
-                except DuplicateJobError:
-                    pass
-        except Exception:
+                # re-queueing a second job under the same id, so the
+                # retry's re-enqueue of the already-succeeded wiki build is
+                # a safe no-op and only the docs build (which never
+                # actually queued) runs for real - as long as the retry
+                # lands before result_ttl expires, which is why that's set
+                # explicitly here rather than left at rq's 500-second
+                # default.
+                _enqueue_paid_setup_job(
+                    queue,
+                    "scan_worker.jobs.run_live_wiki_full_build_for_installation_job",
+                    f"paid-setup-wiki-{installation_id}",
+                    installation_id=installation_id,
+                )
+                _enqueue_paid_setup_job(
+                    queue,
+                    "scan_worker.jobs.run_live_docs_full_build_for_installation_job",
+                    f"paid-setup-docs-{installation_id}",
+                    installation_id=installation_id,
+                )
+        except BaseException:
+            # BaseException, not Exception: a request cancellation
+            # (asyncio.CancelledError, a BaseException subclass since
+            # Python 3.8 - e.g. a worker restart or client disconnect
+            # mid-call) must still release the claim below, or it never
+            # does and paid_setup_claimed_at stays stuck non-NULL forever -
+            # every later retry's claim_paid_setup then returns None and
+            # the one-time build/attribution is silently skipped for good,
+            # with nothing observing it. Always re-raised at the end
+            # regardless (including CancelledError), so cancellation still
+            # propagates normally.
+            #
             # The claim above is already committed. If the work it gates
             # fails (Redis/DB blip), a Paddle retry would find the claim
             # consumed and "succeed" without ever running the one-time
@@ -536,7 +590,28 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
             # claim set, so a newer claim that raced past this failure
             # isn't the one that gets released (see release_paid_setup's
             # docstring).
-            await release_paid_setup(pool, installation_id, paid_setup_claimed_at)
+            try:
+                # Shielded: this is itself an await inside an except block, so a second cancellation
+                # (the same task's cancellation re-delivered, or a shutdown after a first one) would
+                # raise CancelledError right here and abandon the release half-done - the claim
+                # stuck non-NULL, the exact failure this handler exists to prevent. Shielded, the
+                # release runs to completion even if this task is cancelled again.
+                await asyncio.shield(release_paid_setup(pool, installation_id, paid_setup_claimed_at))
+            except Exception as release_exc:
+                # Most plausible exactly when the original failure above
+                # was itself a DB outage - the same outage that broke the
+                # gated work can break this compensating release too. Don't
+                # let that mask the original failure (still re-raised
+                # below) or fail silently; this is the one signal ops gets
+                # that the claim might be stuck.
+                send_error_alert(
+                    "paddle_webhook",
+                    PaddleWebhookPaidSetupReleaseError(
+                        f"installation {installation_id}: failed to release paid-setup claim "
+                        f"after an earlier failure ({type(release_exc).__name__}: {release_exc})"
+                    ),
+                    f"installation_id={installation_id}",
+                )
             raise
 
     # payment_failed and subscription_canceled emails, gated on an actual
@@ -603,10 +678,12 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
     # like [{a real topup item}, None] (2 raw items, 1 malformed) collapses to
     # len(items) == 1, passes the guard, and gets auto-credited for the full
     # transaction total even though a second, unparseable line item could have
-    # carried real cost. Falls back to len(items) when `items` itself isn't a
-    # list, matching _line_items' own "non-list -> []" handling.
+    # carried real cost. Falls back to 0 when `items` itself isn't a list -
+    # not len(items), which would always be 0 anyway here: items comes from
+    # _line_items(data) reading this same data.get("items"), and returns []
+    # on exactly the same non-list condition this falls back on.
     raw_items = data.get("items")
-    raw_item_count = len(raw_items) if isinstance(raw_items, list) else len(items)
+    raw_item_count = len(raw_items) if isinstance(raw_items, list) else 0
     topup_item = next(
         (item for item in items if (item.get("price") or {}).get("id") in ACCEPTED_CREDIT_TOPUP_PRICE_IDS),
         None,
@@ -774,35 +851,61 @@ async def _handle_adjustment_created(data: dict, pool, event_type: str = "adjust
     money_returning = action is None or action in _MONEY_RETURNING_ADJUSTMENT_ACTIONS
     is_topup = money_returning and await is_credited_topup_transaction(pool, transaction_id)
 
-    # The first sighting of an adjustment (and a transaction.updated status
-    # change) does the commission reversal and the heads-up alert. A later
-    # adjustment.updated for the same refund only carries the approval, so it
-    # must not repeat either.
-    if event_type != "adjustment.updated":
-        from app_server.affiliates import reverse_commission_partial
+    # Whether to actually attempt a commission reversal for this event, and
+    # with what dedup key/amount - set by exactly one of the two branches
+    # below, then applied once at the end so both share one warning/alert
+    # path instead of duplicating it.
+    attempt_reversal = False
+    commission_adjustment_id: str | None = None
+    refunded_total_minor: Decimal | None = None
 
-        if action is not None:
-            # A real adjustment.created event: data["id"] is the adjustment's
-            # own id (same field _claw_back_refunded_topup keys on below) and
-            # data.totals.total is the amount *this* adjustment returned, in
-            # the transaction's original currency - enough to prorate. Either
-            # can be missing on an unexpectedly-shaped payload; left as None
-            # rather than guessed at here, so reverse_commission_partial can
-            # tell "no commission on this transaction at all" (the common
-            # case, not worth alerting on) apart from "a commission exists
-            # but this payload can't apply to it" (below).
+    if action is not None:
+        # A real adjustment.created or adjustment.updated event: data["id"]
+        # is the adjustment's own id (same field _claw_back_refunded_topup
+        # keys on below) and data.totals.total is the amount *this*
+        # adjustment returned, in the transaction's original currency -
+        # enough to prorate. Either can be missing on an unexpectedly-shaped
+        # payload; left as None rather than guessed at here, so
+        # reverse_commission_partial can tell "no commission on this
+        # transaction at all" (the common case, not worth alerting on) apart
+        # from "a commission exists but this payload can't apply to it"
+        # (below).
+        #
+        # Gated on status == "approved" (real bug fixed 2026-10-12, Strix
+        # security review): an adjustment.created event can arrive while the
+        # refund is still "pending_approval" - reversing commission
+        # immediately, before knowing whether Paddle will actually approve
+        # it, could permanently cost an affiliate their commission on a sale
+        # that, in the end, was never refunded, since nothing restored it on
+        # a later rejection. This now waits for the same "approved" signal
+        # _claw_back_refunded_topup already waits for on the credit side
+        # ("a rejected one must leave the buyer's credit alone") - whichever
+        # event (created, or a later updated confirming approval) first
+        # carries status == "approved" triggers the reversal.
+        # reverse_commission_partial's own adjustment_id dedup (the
+        # "duplicate" status) keeps this safe even if both events happen to
+        # carry "approved".
+        if data.get("status") == "approved":
             commission_adjustment_id = data.get("id")
             refunded_total_minor = _finite_decimal((data.get("totals") or {}).get("total"))
-        else:
-            # transaction.updated: carries only the transaction's own
-            # id/current status, no adjustment id and no incremental
-            # refunded amount to prorate against - expected for this path,
-            # not an anomaly. Reverses the whole remaining commission in one
-            # shot, same as the old all-or-nothing behavior - keyed on the
-            # transaction id itself so a repeated status-change delivery
-            # doesn't reverse it twice.
-            commission_adjustment_id = f"txn-status:{transaction_id}"
-            refunded_total_minor = Decimal("Infinity")
+            attempt_reversal = True
+    elif event_type != "adjustment.updated":
+        # transaction.updated: carries only the transaction's own
+        # id/current status, no adjustment id and no incremental refunded
+        # amount to prorate against - expected for this path, not an
+        # anomaly. This event only reaches this handler for an already-final
+        # refunded/partially_refunded/charged_back status (see
+        # handle_paddle_webhook_event's own dispatch gate), so there is no
+        # separate approval step to wait for here. Reverses the whole
+        # remaining commission in one shot, same as the old all-or-nothing
+        # behavior - keyed on the transaction id itself so a repeated
+        # status-change delivery doesn't reverse it twice.
+        commission_adjustment_id = f"txn-status:{transaction_id}"
+        refunded_total_minor = Decimal("Infinity")
+        attempt_reversal = True
+
+    if attempt_reversal:
+        from app_server.affiliates import reverse_commission_partial
 
         commission_result = await reverse_commission_partial(
             pool, commission_adjustment_id, transaction_id, refunded_total_minor
@@ -827,20 +930,28 @@ async def _handle_adjustment_created(data: dict, pool, event_type: str = "adjust
                 PaddleWebhookAmountError(f"commission reversal skipped: {commission_result['status']}"),
                 f"transaction_id={transaction_id} action={action}",
             )
+
+    # This heads-up alert is deliberately independent of attempt_reversal
+    # above (and of approval status) - it's an early "this is happening"
+    # notice for ops, not the actual clawback, so it should still fire on
+    # first sighting of a pending refund/chargeback, not wait for approval
+    # the way the real clawback below does. Kept on its original gate (not
+    # a later adjustment.updated, so it still only fires once per
+    # transaction) rather than tied to the commission-reversal timing fix.
+    if is_topup and event_type != "adjustment.updated":
         # transaction.updated payloads carry no adjustment action; they only
         # reach this handler for a refunded/charged-back status, so a missing
         # action means money was returned.
-        if is_topup:
-            logger.warning(
-                "credit top-up %s has a refund or chargeback (status=%s); credit is taken back once it is approved",
-                transaction_id, data.get("status"),
-            )
-            send_error_alert(
-                "paddle_webhook",
-                PaddleTopupRefundedError("credit top-up refund or chargeback raised"),
-                f"transaction_id={transaction_id} action={action or 'transaction.updated'} "
-                f"status={data.get('status')}",
-            )
+        logger.warning(
+            "credit top-up %s has a refund or chargeback (status=%s); credit is taken back once it is approved",
+            transaction_id, data.get("status"),
+        )
+        send_error_alert(
+            "paddle_webhook",
+            PaddleTopupRefundedError("credit top-up refund or chargeback raised"),
+            f"transaction_id={transaction_id} action={action or 'transaction.updated'} "
+            f"status={data.get('status')}",
+        )
 
     if is_topup and data.get("id") and data.get("status") == "approved" and action is not None:
         await _claw_back_refunded_topup(data, transaction_id, pool)

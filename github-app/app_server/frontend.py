@@ -1431,7 +1431,7 @@ async function loadOverview() {{
     let rows = '';
     securePreview.forEach(function (f) {{
       rows += '<div class="finding-row"><div class="sev-dot critical"></div><div><div class="msg">Possible ' + escapeHtml(f.pattern) + ' secret</div>' +
-        '<div class="cite">' + escapeHtml(f.path) + ':' + f.line + '</div></div>' +
+        '<div class="cite">' + escapeHtml(f.path) + ':' + escapeHtml(f.line) + '</div></div>' +
         '<div class="tool">trivy</div></div>';
     }});
     vulnPreview.forEach(function (f) {{
@@ -1443,7 +1443,7 @@ async function loadOverview() {{
       const sev = staticAnalysisSevChip(f.severity);
       const dotClass = sev.stripe === 'neutral' ? 'minor' : sev.stripe;
       rows += '<div class="finding-row"><div class="sev-dot ' + dotClass + '"></div><div><div class="msg">' + escapeHtml(f.message) + '</div>' +
-        '<div class="cite">' + escapeHtml(f.path) + ':' + f.line + '</div></div>' +
+        '<div class="cite">' + escapeHtml(f.path) + ':' + escapeHtml(f.line) + '</div></div>' +
         '<div class="tool">' + escapeHtml(f.tool || 'static analysis') + '</div></div>';
     }});
     recentBody.innerHTML = '<div class="finding-list">' + rows + '</div>';
@@ -1502,7 +1502,7 @@ function findingActionButtonHtml(findingType, f, label, handler) {{
   }}
   if (findingType === 'static_analysis') {{
     return '<button class="btn" data-type="static_analysis" data-path="' + escapeHtml(f.path) +
-      '" data-line="' + f.line + '" data-tool="' + escapeHtml(f.tool) + '" data-rule-id="' + escapeHtml(f.rule_id) +
+      '" data-line="' + escapeHtml(f.line) + '" data-tool="' + escapeHtml(f.tool) + '" data-rule-id="' + escapeHtml(f.rule_id) +
       '" data-content-fingerprint="' + escapeHtml(f.content_fingerprint || '') +
       '" onclick="' + handler + '(this)">' + label + '</button>';
   }}
@@ -1552,7 +1552,7 @@ function toggleDismissedFindings(event, dismissedSecretFindings, dismissedVulnFi
   let rows = '';
   dismissedSecretFindings.forEach(function (f) {{
     rows += '<tr><td><span class="finding-title">Possible ' + escapeHtml(f.pattern) + ' secret</span></td>' +
-      '<td class="finding-cite">' + escapeHtml(f.path) + ':' + f.line + '</td>' +
+      '<td class="finding-cite">' + escapeHtml(f.path) + ':' + escapeHtml(f.line) + '</td>' +
       '<td>' + findingActionButtonHtml('secret', f, 'Undismiss', 'undismissFinding') + '</td></tr>';
   }});
   dismissedVulnFindings.forEach(function (f) {{
@@ -1562,7 +1562,7 @@ function toggleDismissedFindings(event, dismissedSecretFindings, dismissedVulnFi
   }});
   (dismissedStaticAnalysisFindings || []).forEach(function (f) {{
     rows += '<tr><td><span class="finding-title">' + escapeHtml(f.message) + '</span></td>' +
-      '<td class="finding-cite">' + escapeHtml(f.path) + ':' + f.line + '</td>' +
+      '<td class="finding-cite">' + escapeHtml(f.path) + ':' + escapeHtml(f.line) + '</td>' +
       '<td>' + findingActionButtonHtml('static_analysis', f, 'Undismiss', 'undismissFinding') + '</td></tr>';
   }});
   el.innerHTML = '<table class="findings" style="opacity:0.7"><thead><tr><th>Finding</th><th>Evidence</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
@@ -1607,7 +1607,7 @@ async function loadSecurity() {{
   let rows = '';
   secretFindings.forEach(function (f) {{
     rows += '<tr><td><span class="sev-stripe critical"></span><span class="finding-title">Possible ' + escapeHtml(f.pattern) + ' secret</span></td>' +
-      '<td class="finding-cite">' + escapeHtml(f.path) + ':' + f.line + '</td>' +
+      '<td class="finding-cite">' + escapeHtml(f.path) + ':' + escapeHtml(f.line) + '</td>' +
       '<td><span class="chip critical">Critical</span></td>' +
       '<td>' + findingActionButtonHtml('secret', f, 'Dismiss', 'dismissFinding') + '</td></tr>';
   }});
@@ -1623,7 +1623,7 @@ async function loadSecurity() {{
   staticAnalysisFindings.forEach(function (f) {{
     const sev = staticAnalysisSevChip(f.severity);
     rows += '<tr><td><span class="sev-stripe ' + sev.stripe + '"></span><span class="finding-title">' + escapeHtml(f.message) + '</span></td>' +
-      '<td class="finding-cite">' + escapeHtml(f.path) + ':' + f.line + '</td>' +
+      '<td class="finding-cite">' + escapeHtml(f.path) + ':' + escapeHtml(f.line) + '</td>' +
       '<td><span class="chip ' + sev.chip + '">' + sev.label + '</span></td>' +
       '<td>' + findingActionButtonHtml('static_analysis', f, 'Dismiss', 'dismissFinding') + '</td></tr>';
   }});
@@ -2325,7 +2325,7 @@ async function showSubsystem(subsystemId) {{
   (s.files || []).forEach(function (f) {{
     let symbolsHtml = '';
     (f.key_symbols || []).forEach(function (sym) {{
-      symbolsHtml += '<div class="subsystem-detail-symbol"><span class="line">' + sym.line + '</span> ' + escapeHtml(sym.name) + ' &mdash; ' + escapeHtml(sym.explanation || '') + '</div>';
+      symbolsHtml += '<div class="subsystem-detail-symbol"><span class="line">' + escapeHtml(sym.line) + '</span> ' + escapeHtml(sym.name) + ' &mdash; ' + escapeHtml(sym.explanation || '') + '</div>';
     }});
     // The reference page is 500-800 words per file, so it starts collapsed -
     // expanded by default it would bury the file list this view exists to show.
@@ -3907,8 +3907,8 @@ async function buyCredit(btn) {
   // charging a different amount than what is on screen.
   const rawAmount = Number(document.getElementById('topup-amount').value);
   const amount = Number.isInteger(rawAmount) ? rawAmount : NaN;
-  if (!amount || amount < 5 || amount > 1000) {
-    setStatus('Enter an amount between $5 and $1000.');
+  if (!amount || amount < 6 || amount > 1000) {
+    setStatus('Enter an amount between $6 and $1000.');
     return;
   }
   btn.disabled = true;
@@ -4017,13 +4017,13 @@ def _credits_body_html() -> str:
           <span class="qty-prefix">$</span>
           <div class="stepper">
             <button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepDown()" aria-label="Decrease amount">&minus;</button>
-            <input type="number" id="topup-amount" min="5" max="1000" step="5" value="10">
+            <input type="number" id="topup-amount" min="6" max="1000" step="1" value="10">
             <button type="button" onclick="document.getElementById(&#39;topup-amount&#39;).stepUp()" aria-label="Increase amount">+</button>
           </div>
           <button class="btn btn-accent" id="topup-button">Buy credit</button>
         </div>
         <div id="topup-status" class="settings-block-hint"></div>
-        <div class="settings-block-hint">$5 minimum &middot; $1.15 per $1.00 of credit (includes a service charge), plus tax where it applies</div>
+        <div class="settings-block-hint">$6 minimum &middot; $1.15 per $1.00 of credit (includes a service charge), plus tax where it applies</div>
         <button class="btn btn-small" id="billing-portal-btn">Manage billing</button>
         <div id="billing-portal-status" class="settings-block-hint"></div>
       </div>

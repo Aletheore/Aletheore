@@ -1,4 +1,5 @@
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 from aletheore.static_analysis.trivy_scanner import check_trivy
@@ -17,6 +18,23 @@ def test_check_trivy_reports_not_installed(tmp_path):
         result = check_trivy(tmp_path)
 
     assert result == {"checked": False, "reason": "trivy not installed", "findings": []}
+
+
+def test_check_trivy_resolves_which_to_an_absolute_path(tmp_path):
+    # Real gap found by an independent Strix pentest pass (2026-10-15):
+    # shutil.which() can return a path relative to a relative PATH entry,
+    # and the subprocess below switches cwd to repo_path - a scanned
+    # (untrusted) repo could shadow a bare relative name with its own
+    # same-named executable and have it run with this process's privileges.
+    mock_result = _mock_run(0, stdout=json.dumps({"Results": []}))
+
+    with patch("aletheore.static_analysis.trivy_scanner.shutil.which", return_value="relative/trivy"), \
+         patch("aletheore.static_analysis.trivy_scanner.subprocess.run", return_value=mock_result) as mock_run:
+        check_trivy(tmp_path)
+
+    called_cmd = mock_run.call_args[0][0]
+    assert os.path.isabs(called_cmd[0])
+    assert called_cmd[0] != "relative/trivy"
 
 
 def test_check_trivy_always_passes_offline_scan(tmp_path):

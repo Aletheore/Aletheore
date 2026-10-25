@@ -1,7 +1,9 @@
+import { HALLBOOK_LAUNCHED } from "./launch";
+
 export type SiteLink = { label: string; href: string; external?: boolean };
 
 export const internalPaths = [
-  "/", "/pricing", "/developers", "/benchmarks", "/dogfooding", "/status", "/privacy", "/terms", "/refund", "/security",
+  "/", "/pricing", "/developers", "/hallbook", "/benchmarks", "/dogfooding", "/status", "/changelog", "/privacy", "/terms", "/refund", "/security",
 ] as const;
 
 /** Pages that exist in this app. Links to the rest are not prefetched (they would 404) until they ship. */
@@ -15,9 +17,11 @@ export const installGitHubAppHref = "https://github.com/apps/aletheore/installat
 export const navLinks: SiteLink[] = [
   { label: "Pricing", href: "/pricing" },
   { label: "Developers", href: "/developers" },
+  // Only linked once Hallbook has shipped (see data/launch.ts); the page itself stays reachable by URL, noindex.
+  ...(HALLBOOK_LAUNCHED ? [{ label: "Hallbook", href: "/hallbook" }] : []),
   { label: "Benchmarks", href: "/benchmarks" },
   { label: "Proof", href: "/dogfooding" },
-  { label: "Status", href: "/status" },
+  { label: "Changelog", href: "/changelog" },
   { label: "GitHub", href: "https://github.com/Aletheore/Aletheore", external: true },
 ];
 
@@ -35,6 +39,8 @@ export const footerColumns: { title: string; links: SiteLink[] }[] = [
       { label: "Pricing", href: "/pricing" },
       { label: "Developers", href: "/developers" },
       { label: "Benchmarks", href: "/benchmarks" },
+      { label: "Changelog", href: "/changelog" },
+      { label: "Status", href: "/status" },
       { label: "GitHub", href: "https://github.com/Aletheore/Aletheore", external: true },
     ],
   },

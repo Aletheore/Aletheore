@@ -1,0 +1,30 @@
+# GKE ComputeClass + CapacityQuota CUD Exhaustion Spillover
+# Demonstrates capping a primary machine family (e.g. N4 with a 100-core CUD)
+# at 100 CPU via CapacityQuota while automatically spilling over excess
+# workload demand to uncapped fallback families (N4D, C4) without Pending pods.
+---
+apiVersion: cloud.google.com/v1
+kind: ComputeClass
+metadata:
+  name: gen4-spillover
+spec:
+  priorities:
+  - machineFamily: n4
+  - machineFamily: n4d
+  - machineFamily: c4
+  nodePoolAutoCreation:
+    enabled: true
+---
+apiVersion: autoscaling.x-k8s.io/v1beta1
+kind: CapacityQuota
+metadata:
+  name: gen4-n4-quota
+spec:
+  selector:
+    matchLabels:
+      cloud.google.com/compute-class: gen4-spillover
+      cloud.google.com/machine-family: n4
+  limits:
+    resources:
+      cpu: 100
+

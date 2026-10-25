@@ -26,6 +26,7 @@ from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from aletheore.git_exec import git_executable
 from aletheore.git_intel.graph_store import (
     CommitTouch,
     FileChurnTotal,
@@ -89,8 +90,8 @@ def _scan_root_prefix(repo_path: Path) -> str:
     # component), files must be re-relativized to it, and anything outside
     # it excluded, matching how the rest of the scanner treats repo_path as
     # the analysis root.
-    result = subprocess.run(
-        ["git", "rev-parse", "--show-prefix"], cwd=repo_path, capture_output=True, text=True, errors="ignore"
+    result = subprocess.run(  # nosec B603 - argv[0] is git_executable()'s absolute path, args are fixed
+        [git_executable(), "rev-parse", "--show-prefix"], cwd=repo_path, capture_output=True, text=True, errors="ignore"
     )
     return result.stdout.strip() if result.returncode == 0 else ""
 
@@ -163,8 +164,8 @@ def stream_commit_touches(
     # block git and deadlock this process against it.
     stderr_file = tempfile.TemporaryFile(mode="w+", errors="ignore")
     try:
-        proc = subprocess.Popen(
-            ["git", *args],
+        proc = subprocess.Popen(  # nosec B603 - argv[0] is git_executable()'s absolute path, args are fixed
+            [git_executable(), *args],
             cwd=repo_path,
             stdout=subprocess.PIPE,
             stderr=stderr_file,
@@ -261,8 +262,8 @@ def _root_commit_key(repo_path: Path) -> str:
     facts = history_facts(repo_path)
     if facts is not None:
         return facts.root_shas[0] if facts.root_shas else "no-commits"
-    roots_result = subprocess.run(
-        ["git", "rev-list", "--max-parents=0", "HEAD"],
+    roots_result = subprocess.run(  # nosec B603 - argv[0] is git_executable()'s absolute path, args are fixed
+        [git_executable(), "rev-list", "--max-parents=0", "HEAD"],
         cwd=repo_path,
         capture_output=True,
         text=True,
@@ -283,8 +284,8 @@ def compute_repo_key(repo_path: Path) -> str:
     """
     root_key = _root_commit_key(repo_path)
 
-    remote_result = subprocess.run(
-        ["git", "remote", "get-url", "origin"],
+    remote_result = subprocess.run(  # nosec B603 - argv[0] is git_executable()'s absolute path, args are fixed
+        [git_executable(), "remote", "get-url", "origin"],
         cwd=repo_path,
         capture_output=True,
         text=True,

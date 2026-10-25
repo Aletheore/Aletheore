@@ -406,6 +406,27 @@ on some operating systems or Python versions can be found. It is on by default.
   `aletheore config crash-reporting` with no argument, like `aletheore status`, shows the current state.
 - You see a one-time notice on first run and a line after any crash that was reported, both on stderr.
 
+### `aletheore tokens audit` / `aletheore tokens profile <name>`
+
+A coding agent re-reads its fixed context (system prompt and tool definitions) on every turn. These commands
+show that cost and let you trim the part you do not use. Everything is local; nothing is sent to Aletheore.
+
+- `aletheore tokens audit [--project DIR] [--compare core]` sends one tiny request through your own `claude`
+  CLI and prints the tools your agent loads, your `ENABLE_TOOL_SEARCH` setting and the fixed per-turn
+  input-token count. `--compare core` sends a second request with the `core` profile's deny list on the
+  command line (no file is changed) and prints the count after. Each request costs a fraction of a cent, and
+  the command asks before it sends anything (`--yes` skips the question).
+- `aletheore tokens profile core|core+web [--project DIR]` shows the exact entries it would add to
+  `permissions.deny` in the project's `.claude/settings.json` and applies them only after you type `yes`
+  (`--yes` skips the question). `core` keeps Bash, Read, Edit, Write, Grep, Glob, Task and ToolSearch, plus
+  every MCP tool, and denies the other built-in tools (scheduling, artifacts, worktrees, notifications, web).
+  `core+web` also keeps WebFetch and WebSearch.
+- `aletheore tokens profile off` removes exactly the entries it added and nothing else. It never touches your
+  user-level settings, and a settings file it cannot parse is left unchanged.
+
+The profile is off until you apply it. A tool the profile denies is unavailable to the agent in that project, so
+switch to `core+web` or `off` if your work needs it.
+
 ### `aletheore query <kind> [target]`
 
 Answers one targeted question from an existing `air.json`, without re-scanning or an LLM
@@ -437,9 +458,54 @@ aletheore query search-codebase "how does auth work?" --path .
 aletheore query answer "how does auth work?" --path . --agent ollama
 ```
 
+`dead-code` and `error-handling` print a whole repo, which is often far more than a question about one folder needs.
+They accept `--under <dir>`, `--exclude <name>` and `--no-tests` (same meaning as on `dependents`) and then list only
+the matching paths, plus a `scope` block saying how many entries were left out. Counts that are not per path
+(`by_error_type`, `unused_dependencies`) stay repo-wide, and `error-handling` still carries the caps applied when the
+scan was written (`truncated`). Other kinds reject these flags.
+
 `search-codebase` returns TOON-encoded semantic retrieval results from the local index.
 `answer` retrieves code chunks from that same index, gates low-confidence matches, and then
 uses the selected provider's simple completion path to answer with citations.
+
+### `aletheore dependents <file> [path]`
+
+Lists every file that imports `<file>`, directly or through a chain of other imports, as one complete,
+deduplicated, sorted list. Use it for "what depends on this file?" questions instead of looping over
+`query imported-by` by hand.
+
+```bash
+aletheore dependents src/click/_compat.py --under src --exclude tests
+```
+
+- The target can also be a directory: all files directly in it are treated as one package, which is the natural unit for
+  Go (`aletheore dependents internal/js --packages`). `--packages` lists one line per importing directory instead of one
+  per file.
+- `--no-tests` leaves out test files (`tests/` style directories and test-shaped names such as `test_x.py`,
+  `x_test.go`, `x.test.ts`, `x.spec.js`, `XTest.java`).
+- `--under <dir>` keeps only files below a directory (repeatable).
+- `--exclude <name>` drops files under a directory with that exact name, or with that exact file name (repeatable).
+  It matches whole path parts, so `--exclude locale` does not drop `middleware/locale.py`.
+- The last paragraph of the output states what the list covers: static imports of the file's language, how many
+  modules were indexed, how many files could not be parsed, and whether any listed file changed after the scan.
+  Imports built at run time (`importlib`, `__import__`) are not tracked.
+
+### `aletheore cycles [path]`
+
+Lists every circular import dependency in the repo, with an example chain for each group of files that
+import each other in a circle.
+
+```bash
+aletheore cycles                                 # every group, repo-wide
+aletheore cycles --under src/billing --exclude tests
+```
+
+- `--under <dir>` and `--exclude <name>` (both repeatable) scope the answer. Cycles are still found over the
+  whole graph, so a cycle that runs through files outside `<dir>` is not missed, but only files inside the scope
+  are listed, as one flat list followed by a one-line summary per group.
+- `--exclude` matches whole path parts, so `--exclude locale` does not drop `middleware/locale.py`.
+- The closing paragraph states the coverage: static imports only, modules considered, and whether any listed file
+  changed after the scan. Imports built at run time (`importlib`, `__import__`) are not tracked.
 
 ### `aletheore diff <old.json> <new.json>`
 
@@ -492,11 +558,11 @@ aletheore healthcheck . --base-url http://127.0.0.1:5000
 ### `aletheore mcp [path]`
 
 Starts a stdio MCP server scoped to one repository, so a coding agent can query its structure
-directly instead of shelling out via Bash or re-reading files on every lookup. Every tool
+directly instead of shelling out via Bash for every lookup. Every tool
 result is [TOON](https://toonformat.dev)-encoded rather than plain JSON — the calling agent's
 own token budget is what actually pays for reading these results, and evidence's shape (almost
-entirely uniform arrays of same-shaped objects) is exactly TOON's best case. Exposes 30 tools in
-a read-only posture, 34 by default, and 35 with every effect permitted — see
+entirely uniform arrays of same-shaped objects) is exactly TOON's best case. Exposes 32 tools in
+a read-only posture, 36 by default, and 37 with every effect permitted — see
 [Tool permissions](#tool-permissions) for what gates the rest — plus one optional answer tool
 when started with `--agent`:
 
@@ -522,8 +588,13 @@ when started with `--agent`:
 - `aletheore_ast_pattern(language, query)` — structural search by shape, not words: a raw
   tree-sitter S-expression query against every file of one language, re-parsed from disk (not
   air.json) since a structural match needs the real parse tree.
-- `aletheore_symbol_source(module, symbol)` — exact source text for one named function/class,
-  with resolved line bounds.
+- `aletheore_symbol_source(module, symbol, max_lines=120)` — source text for one named function/class,
+  with resolved line bounds, returned as a one-line header plus the raw code. A symbol longer than
+  `max_lines` is cut (a long class is shown as its head plus a list of its methods with line ranges);
+  `max_lines=0` returns all of it.
+- `aletheore_locate(query)` — find where the names in `query` are defined and see the code in one call:
+  the functions whose bodies contain those names, each as a `path::Name Lstart-end` header plus its
+  source. Says so when a file changed after the last scan and its line ranges may be off.
 - `aletheore_verify_citations(report_text)` — checks every `file:line` citation in a report
   against this repo's real evidence and real file line counts, same check as `aletheore verify`.
 - `aletheore_find_evidence_for_endpoint(method, path)`, `aletheore_find_evidence_for_symbol(symbol)`,
@@ -639,6 +710,12 @@ machine. With `external` withheld (the default posture), `aletheore_index` never
 hosted endpoint either — it falls through to the local Ollama/OpenAI-fallback path above, for the
 same reason `aletheore_managed_audit` doesn't upload evidence without being asked. Set
 `ALETHEORE_MCP_ALLOW=write,network,external` to opt in.
+
+`aletheore mcp --profile nav` starts a smaller server with only `aletheore_locate`,
+`aletheore_symbol_source` and `aletheore_search`: about a tenth of the tool-definition text of the
+full server, so a client can load it up front instead of behind a tool-search step. Whether it
+saves tokens depends on the task: where the target is already named in the request, a plain grep
+is just as cheap, and the tools mainly help when you do not yet know where to look.
 
 ### `aletheore mcp-install [path]`
 

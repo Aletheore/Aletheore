@@ -1,6 +1,8 @@
+import errno
 import hashlib
 import json
 import os
+import tempfile
 import threading
 import time
 import warnings
@@ -23,7 +25,9 @@ from aletheore.git_intel.analyzer import (
 )
 from aletheore.licenses import check_dependency_licenses
 from aletheore.model_associations import rails_model_association_edges
-from aletheore.repo_config import load_repo_config
+from aletheore.manifests import clear_manifest_cache
+from aletheore.repo_config import load_repo_config, load_repo_config_warnings
+from aletheore.safe_io import collect_unreadable, reset_unreadable
 from aletheore.schema_map import extract_schema, skipped_schema
 from aletheore.scanner.detect import (
     _nested_git_roots,
@@ -36,6 +40,7 @@ from aletheore.scanner.detect import (
     detect_languages,
     detect_monorepo,
     detect_policy_docs,
+    git_visible_paths,
 )
 from aletheore.scanner.graph import _parallel_parse_disabled, build_module_graph
 from aletheore.secrets import (
@@ -48,7 +53,16 @@ from aletheore.static_analysis import check_static_analysis as run_static_analys
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.vulnerabilities import check_vulnerabilities as check_dependency_vulnerabilities
 
-EVIDENCE_VERSION = "0.8.1"
+EVIDENCE_VERSION = "0.9.0"
+
+# Earlier (major, minor) versions this build still reads, keyed by its own (major, minor).
+# A minor goes here only when the bump added optional keys and nothing else: 0.9.0 declared
+# cli_version, config_warnings, repository.unreadable_files, the extra monorepo and
+# dependency-check fields and git.reason, all optional, and every reader treats a missing
+# one as "not recorded". Anything that removes or retypes a key must not be listed.
+_READABLE_EARLIER_MINORS: dict[tuple[int, int], frozenset[tuple[int, int]]] = {
+    (0, 9): frozenset({(0, 8)}),
+}
 
 
 def _version_compatibility_key(version: str) -> tuple[int, int] | None:
@@ -85,7 +99,9 @@ def is_evidence_version_compatible(version: object) -> bool:
         return False
     current = _version_compatibility_key(EVIDENCE_VERSION)
     given = _version_compatibility_key(version)
-    return current is not None and current == given
+    if current is None or given is None:
+        return False
+    return current == given or given in _READABLE_EARLIER_MINORS.get(current, frozenset())
 
 
 class IncompatibleEvidenceVersionError(Exception):
@@ -94,6 +110,49 @@ class IncompatibleEvidenceVersionError(Exception):
 
 class MalformedEvidenceError(Exception):
     pass
+
+
+class EvidenceWriteError(OSError):
+    """Evidence could not be written to <repo>/.aletheore (read-only folder,
+    permission denied, disk full). An OSError subclass, so a caller that
+    already catches OSError keeps working; str() is a complete message."""
+
+    def __init__(self, message: str, errno: int | None = None):
+        super().__init__(errno, message)
+        self.message = message
+
+    def __str__(self) -> str:
+        return self.message
+
+
+def _evidence_write_error(aletheore_dir: Path, exc: OSError) -> EvidenceWriteError:
+    reason = (exc.strerror or exc.__class__.__name__).lower()
+    return EvidenceWriteError(
+        f"cannot write evidence to {aletheore_dir}: {reason}"
+        + (" - make the folder writable, or scan a copy of it" if isinstance(exc, PermissionError) else ""),
+        exc.errno,
+    )
+
+
+def check_evidence_writable(repo_path: Path) -> None:
+    """Raises EvidenceWriteError when <repo>/.aletheore cannot be created or written
+    to. Called before a scan starts so a read-only folder fails in a second, not
+    after the whole scan has run; the message is the one write_evidence gives.
+
+    Creates `.aletheore/` if it is missing (a scan needs it anyway), so a run that
+    stops early can leave that empty folder behind. An existing air.json that this
+    user cannot overwrite is reported too."""
+    aletheore_dir = Path(repo_path) / ".aletheore"
+    try:
+        aletheore_dir.mkdir(parents=True, exist_ok=True)
+        existing = aletheore_dir / "air.json"
+        if existing.exists() and not os.access(existing, os.W_OK):
+            raise PermissionError(errno.EACCES, "Permission denied", str(existing))
+        handle, probe_name = tempfile.mkstemp(prefix=".write-check-", dir=aletheore_dir)
+        os.close(handle)
+        os.unlink(probe_name)
+    except OSError as exc:
+        raise _evidence_write_error(aletheore_dir, exc) from exc
 
 
 def load_evidence_file(evidence_path: Path) -> dict:
@@ -115,7 +174,7 @@ def load_evidence_file(evidence_path: Path) -> dict:
     written_version = evidence.get("aletheore_version") if isinstance(evidence, dict) else None
     if not is_evidence_version_compatible(written_version):
         raise IncompatibleEvidenceVersionError(
-            f"{evidence_path} was written by aletheore_version={written_version!r}, which "
+            f"{evidence_path} was written with evidence schema {written_version!r}, which "
             f"isn't compatible with this build's evidence schema ({EVIDENCE_VERSION}) - "
             "re-run 'aletheore scan' to refresh it"
         )
@@ -125,7 +184,7 @@ def load_evidence_file(evidence_path: Path) -> dict:
         if len(problems) > 5:
             detail += f" (and {len(problems) - 5} more)"
         raise MalformedEvidenceError(
-            f"{evidence_path} claims a compatible aletheore_version but does not match the "
+            f"{evidence_path} claims a compatible evidence schema version but does not match the "
             f"AIR schema: {detail} - re-run 'aletheore scan' to regenerate it"
         )
     return evidence
@@ -284,6 +343,7 @@ def _hash_file(path: Path) -> str | None:
 
 def _load_local_scan_cache(
     repo_path: Path,
+    signatures_out: dict[str, str] | None = None,
 ) -> tuple[dict[str, dict] | None, dict[str, list[dict]] | None]:
     cache_path = _local_scan_cache_path(repo_path)
     if not cache_path.exists():
@@ -304,6 +364,11 @@ def _load_local_scan_cache(
     if cache.get("aletheore_version") != __version__:
         return None, None
 
+    if signatures_out is not None:
+        # Fingerprints of the cross-file facts the cached import lists were resolved against; an older cache
+        # has none, which makes build_module_graph re-extract once instead of trusting stale edges.
+        signatures_out.update(cache.get("resolution_sigs") or {})
+
     cached_hashes = cache.get("hashes", {})
     cached_modules = cache.get("modules", {})
     cached_endpoints = cache.get("endpoints", {})
@@ -322,7 +387,10 @@ def _load_local_scan_cache(
 
 
 def _write_local_scan_cache(
-    repo_path: Path, modules: list[dict], api_endpoints: list[dict]
+    repo_path: Path,
+    modules: list[dict],
+    api_endpoints: list[dict],
+    resolution_sigs: dict[str, str] | None = None,
 ) -> None:
     hashes: dict[str, str] = {}
     modules_by_path: dict[str, dict] = {}
@@ -351,6 +419,7 @@ def _write_local_scan_cache(
             json.dumps(
                 {
                     "aletheore_version": __version__,
+                    "resolution_sigs": resolution_sigs or {},
                     "hashes": hashes,
                     "modules": modules_by_path,
                     "endpoints": endpoints_by_path,
@@ -499,6 +568,14 @@ def scan_repository(
     report = progress or _noop_progress
     repo_path = repo_path.resolve()
     ignored_paths = load_repo_config(repo_path)["ignored_paths"]
+    # A typo in .aletheore.json must not pass silently: each problem is
+    # warned on stderr and recorded in the evidence (`config_warnings`); the
+    # scan itself carries on with the defaults for whatever was invalid.
+    config_warnings = load_repo_config_warnings(repo_path)
+    for problem in config_warnings:
+        warnings.warn(problem, UserWarning, stacklevel=2)
+    reset_unreadable()
+    clear_manifest_cache()
 
     # _nested_git_roots is @lru_cache'd for the life of the process, not one
     # scan - a long-lived scan_worker reuses the same on-disk checkout_dir
@@ -507,6 +584,7 @@ def scan_repository(
     # keeps the within-scan caching win (it's still called up to 6 times per
     # scan) without carrying a stale answer into the next scan of this path.
     _nested_git_roots.cache_clear()
+    git_visible_paths.cache_clear()
 
     # Must run before any file-counting walk below (detect_languages is the
     # first one), not after the scan in write_evidence as before - creating
@@ -545,8 +623,12 @@ def scan_repository(
     using_hosted_cache = bool(os.environ.get(_UNCHANGED_SCAN_CACHE_ENV))
     local_cache_disabled = bool(os.environ.get(_DISABLE_LOCAL_SCAN_CACHE_ENV))
     unchanged_modules, unchanged_endpoints = _load_unchanged_scan_cache()
+    # Saved with the local cache: None (the hosted cache cannot supply them) keeps reuse-always.
+    prior_signatures: dict[str, str] | None = None
+    current_signatures: dict[str, str] = {}
     if not using_hosted_cache and not local_cache_disabled:
-        unchanged_modules, unchanged_endpoints = _load_local_scan_cache(repo_path)
+        prior_signatures = {}
+        unchanged_modules, unchanged_endpoints = _load_local_scan_cache(repo_path, prior_signatures)
         # Surfaced here, not left implicit: a CLI user who only ever sees
         # "Scanning..." has no way to know a scan is cached at all, so a
         # fast repeat scan reads as suspicious (did it actually check
@@ -591,7 +673,11 @@ def scan_repository(
 
     report("Building module dependency graph (parsing source with tree-sitter)")
     modules, dependency_graph, unparseable_files = build_module_graph(
-        repo_path, unchanged_modules=unchanged_modules, ignored_paths=ignored_paths
+        repo_path,
+        unchanged_modules=unchanged_modules,
+        ignored_paths=ignored_paths,
+        prior_signatures=prior_signatures,
+        signatures_out=current_signatures,
     )
 
     # CPU-heavy (Trivy alone uses several cores), so it starts after the parse
@@ -782,13 +868,18 @@ def scan_repository(
         # normal scan would wrongly treat every file as having zero
         # endpoints instead of re-checking them.
         _write_local_scan_cache(
-            repo_path, modules, api_endpoints_data["endpoints"] if map_endpoints else []
+            repo_path, modules, api_endpoints_data["endpoints"] if map_endpoints else [], current_signatures
         )
 
     report("Done")
 
     return {
         "aletheore_version": EVIDENCE_VERSION,
+        # The CLI/library version that wrote this file. aletheore_version above
+        # is the evidence SCHEMA version (kept under that name for
+        # compatibility), which is not the same thing.
+        "cli_version": __version__,
+        "config_warnings": config_warnings,
         "scanned_at": datetime.now(timezone.utc).isoformat(),
         "repo_path": str(repo_path),
         "repository": {
@@ -804,6 +895,10 @@ def scan_repository(
             "modules": modules,
             "dependency_graph": dependency_graph,
             "unparseable_files": unparseable_files,
+            # Files some stage could not read (permission denied, removed
+            # mid-scan) and so skipped; the module graph's own entries are
+            # also in unparseable_files above.
+            "unreadable_files": collect_unreadable(repo_path),
             "api_endpoints": api_endpoints_data,
             "error_handling": error_handling_data,
             "dead_code": dead_code_data,
@@ -962,7 +1057,10 @@ def write_evidence(evidence: dict, repo_path: Path) -> Path:
     # scan_repository.
     _ensure_aletheore_dir_gitignored(repo_path)
     aletheore_dir = repo_path / ".aletheore"
-    aletheore_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        aletheore_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise _evidence_write_error(aletheore_dir, exc) from exc
     output_path = aletheore_dir / "air.json"
     # Explicit encoding, not Path.write_text()'s locale-dependent default:
     # Windows' default text encoding is still the legacy ANSI codepage (e.g.
@@ -978,7 +1076,10 @@ def write_evidence(evidence: dict, repo_path: Path) -> Path:
     # Compact, not indent=2: on the Linux kernel the indented form was 1.3GB
     # and 42s to encode, compact is 720MB and 6s. Every reader parses it.
     evidence_text = json.dumps(evidence, separators=(",", ":"))
-    _atomic_write_text(output_path, evidence_text)
+    try:
+        _atomic_write_text(output_path, evidence_text)
+    except OSError as exc:
+        raise _evidence_write_error(aletheore_dir, exc) from exc
 
     # A second, TOON-encoded copy exists specifically for the audit command's
     # coding-agent adapter to read instead of the JSON one - the agent's own

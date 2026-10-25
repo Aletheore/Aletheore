@@ -243,8 +243,8 @@ def _compute_curated_diff(old: dict, new: dict, renamed_paths: dict[str, str] | 
     result: dict = {}
     caveats = []
 
-    old_vuln_checked = old["security"]["dependency_vulnerabilities"]["checked"]
-    new_vuln_checked = new["security"]["dependency_vulnerabilities"]["checked"]
+    old_vuln_checked = old["security"]["dependency_vulnerabilities"].get("checked", True)
+    new_vuln_checked = new["security"]["dependency_vulnerabilities"].get("checked", True)
     if old_vuln_checked != new_vuln_checked:
         caveats.append(
             "dependency-vulnerability checking state changed between scans "

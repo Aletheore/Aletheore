@@ -29,6 +29,7 @@ surface says which level it reached.
 
 import json
 import logging
+import posixpath
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -41,7 +42,52 @@ logger = logging.getLogger("aletheore.citation_verifier")
 # or "`app.py:12`". Deliberately narrow (word chars, dots, slashes, hyphens in the
 # path) rather than a permissive catch-all - a citation format the audit manual
 # doesn't actually produce is not something this can silently guess at.
-_CITATION_PATTERN = re.compile(r"`?([\w./-]+\.[A-Za-z0-9]+):(\d+)`?")
+_CITATION_PATTERN = re.compile(r"`?([\w./-]+\.[A-Za-z0-9]+):(\d+)(?:-(\d+))?`?")
+
+# Citations whose path is absolute or climbs out of the repository, extension
+# or not (`/etc/passwd:2`, `../../etc/passwd:1`). They can never be valid, and
+# silently dropping them hid the attempt, so they are extracted to be reported.
+_ESCAPING_PATTERN = re.compile(
+    r"`?(?<![\w./-])((?:\.\./)+[\w./-]+|\.\.|/(?:[\w.-]+/)*[A-Za-z_.][\w.-]*):(\d+)(?:-(\d+))?`?"
+)
+
+# Windows-style citations (`app\util.py:5`, `C:\repo\a.py:3`, `..\..\x:1`): the path part,
+# which must contain a backslash, is rewritten with forward slashes before the
+# patterns above run, so the existing inside-the-repo and outside-the-repo rules
+# apply to it unchanged. A drive letter or UNC prefix becomes an absolute path.
+_BACKSLASH_PATH_PATTERN = re.compile(r"(?<![\w.\\/-])((?:\\\\\?\\)?(?:[A-Za-z]:)?(?:\\\\)?[\w.\-]*(?:\\[\w.\-]+)+):(?=\d)")
+
+# URLs are not citations: `http://x.com/a.py:5` must not become `//x.com/a.py:5`.
+_URL_PATTERN = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://[^\s`)>\]]+")
+
+OUTSIDE_REPO_REASON = "path outside the repository"
+
+
+def normalize_citation_path(path: str) -> str:
+    """`./app/util.py` and `app//util.py` name the same file as `app/util.py`."""
+    if not path:
+        return path
+    absolute = path.startswith("/")
+    normalized = posixpath.normpath(path)
+    return "/" + normalized.lstrip("/") if absolute else normalized
+
+
+def is_outside_repo(path: str) -> bool:
+    return path.startswith("/") or path == ".." or path.startswith("../")
+
+
+def citation_location(citation: dict) -> str:
+    """`file:line` or `file:start-end`, nothing else."""
+    end = citation.get("end_line")
+    span = f"{citation['line']}-{end}" if end is not None else str(citation["line"])
+    return f"{citation['file']}:{span}"
+
+
+def format_citation(citation: dict, *, markdown: bool = False) -> str:
+    """The location plus its reason, if any. markdown=True puts only the location in a code span."""
+    location = citation_location(citation)
+    reason = citation.get("reason")
+    return (f"`{location}`" if markdown else location) + (f" ({reason})" if reason else "")
 
 
 # Dotted hostnames and IPs ("api.example.com:443", "10.0.0.1:5432") satisfy
@@ -110,9 +156,11 @@ def extract_citations(report_text: str, known_paths: set[str] | None = None) -> 
     file inventory to catch those too.
     """
     citations = []
-    seen: set[tuple[str, int]] = set()
+    seen: set[tuple[str, int, int | None]] = set()
+    report_text = _URL_PATTERN.sub(lambda m: " " * len(m.group(0)), report_text)
+    report_text = _BACKSLASH_PATH_PATTERN.sub(lambda m: m.group(1).replace("\\", "/") + ":", report_text)
 
-    patterns = [_CITATION_PATTERN]
+    patterns = [_CITATION_PATTERN, _ESCAPING_PATTERN]
     if known_paths:
         extensionless = _extensionless_citation_pattern(known_paths)
         if extensionless is not None:
@@ -120,14 +168,22 @@ def extract_citations(report_text: str, known_paths: set[str] | None = None) -> 
 
     for pattern in patterns:
         for match in pattern.finditer(report_text):
-            file_path, line_str = match.groups()
-            if pattern is _CITATION_PATTERN and _looks_like_host(file_path, known_paths):
+            raw_path, line_str, *rest = match.groups()
+            end_str = rest[0] if rest else None
+            if pattern is _CITATION_PATTERN and _looks_like_host(raw_path, known_paths):
                 continue
-            key = (file_path, int(line_str))
+            file_path = normalize_citation_path(raw_path)
+            end_line = int(end_str) if end_str is not None else None
+            key = (file_path, int(line_str), end_line)
             if key in seen:
                 continue
             seen.add(key)
-            citations.append({"file": file_path, "line": int(line_str)})
+            citation: dict = {"file": file_path, "line": int(line_str)}
+            if end_line is not None:
+                citation["end_line"] = end_line
+            if is_outside_repo(file_path):
+                citation["reason"] = OUTSIDE_REPO_REASON
+            citations.append(citation)
     return citations
 
 
@@ -164,6 +220,10 @@ def verify_citations(
     unverified = []
     line_bounds_checked = 0
     for citation in citations:
+        if citation.get("reason") == OUTSIDE_REPO_REASON:
+            # Never looked up or read: it points outside the repository.
+            unverified.append(citation)
+            continue
         if citation["file"] not in known_paths:
             unverified.append(citation)
             continue
@@ -171,6 +231,11 @@ def verify_citations(
             # Only the upper bound was guarded before, so `app.py:0` passed
             # as verified. No file has a line 0; a citation naming one is
             # pointing at nothing whether or not the file is real.
+            unverified.append(citation)
+            continue
+        end_line = citation.get("end_line")
+        if end_line is not None and end_line < citation["line"]:
+            citation["reason"] = "reversed line range"
             unverified.append(citation)
             continue
         if fetch_line_count is not None:
@@ -181,7 +246,8 @@ def verify_citations(
                 # caller that assumed it did would overstate how much of
                 # its report was actually bounds-checked.
                 line_bounds_checked += 1
-                if citation["line"] > line_count:
+                if max(citation["line"], end_line or 0) > line_count:
+                    citation["reason"] = f"file has {line_count} lines"
                     unverified.append(citation)
                     continue
         verified.append(citation)
@@ -315,6 +381,6 @@ def citation_verification_section(report_text: str, repo_path: Path) -> str:
             f"\n**{len(unverified)} citation(s) could not be verified** — treat the "
             "claims attached to these as unconfirmed:\n"
         )
-        lines.extend(f"- `{c['file']}:{c['line']}`" for c in unverified)
+        lines.extend(f"- {format_citation(c, markdown=True)}" for c in unverified)
         lines.append("")
     return "\n".join(lines)

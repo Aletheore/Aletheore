@@ -1,0 +1,8 @@
+apiVersion: aiplatform.googleapis.com/v1beta1
+kind: SemanticGovernancePolicy
+metadata:
+  name: sgp-policy
+spec:
+  sgpEnforcementMode: ENFORCE
+  naturalLanguageConstraints:
+    - "Block all outbound transactions exceeding $1000, and sanitize all personally identifiable information (PII) found in tool results."

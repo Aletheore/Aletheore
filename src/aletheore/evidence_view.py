@@ -19,6 +19,11 @@ from aletheore.toon_encoding import to_toon
 
 # About 9,000 tokens of TOON. A section at or under this is returned whole.
 MAX_SECTION_CHARS = 30_000
+# A separate, independently-calibrated ratio from live_wiki.py's
+# _SUBSYSTEM_BATCH_CHARS_PER_TOKEN - not a duplicate to reconcile. That one
+# measures JSON-encoded subsystem payloads; this one measures TOON-encoded
+# evidence text. Different content shapes genuinely tokenize at different
+# densities, so one ratio updating is not a signal the other is stale.
 _APPROX_CHARS_PER_TOKEN = 3.3
 _SLICE_RE = re.compile(r"^(?P<base>.*)\[(?P<start>\d*):(?P<end>\d*)\]$")
 # Room for the page header, so a full page plus its header still fits the budget.

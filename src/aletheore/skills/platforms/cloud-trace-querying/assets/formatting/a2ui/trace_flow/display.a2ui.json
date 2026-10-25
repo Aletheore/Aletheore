@@ -1,0 +1,27 @@
+[
+  {
+    "createSurface": {
+      "id": "trace-flow-surface",
+      "title": "Trace Flow: /v2/items/batch_get",
+      "components": [
+        {
+          "id": "trace-flow-graph",
+          "component": "Graph",
+          "nodes": [
+            {"id": "n1", "label": "/v2/items/batch_get (800ms)"},
+            {"id": "n2", "label": "/cache/read (350ms)"},
+            {"id": "n3", "label": "/service/fetch (400ms)"},
+            {"id": "n4", "label": "/db.Query (300ms)"},
+            {"id": "n5", "label": "/render/json (50ms)"}
+          ],
+          "edges": [
+            {"from": "n1", "to": "n2"},
+            {"from": "n1", "to": "n3"},
+            {"from": "n3", "to": "n4"},
+            {"from": "n1", "to": "n5"}
+          ]
+        }
+      ]
+    }
+  }
+]

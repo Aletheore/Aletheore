@@ -10,9 +10,12 @@ from aletheore.device_auth import (
     infer_org_from_cwd_git_remote,
     infer_repo_full_name_from_cwd_git_remote,
     mint_cli_token,
+    mint_personal_token,
     poll_for_access_token,
     request_device_code,
     resolve_installation,
+    revoke_managed_audit_token,
+    revoke_personal_token,
 )
 
 
@@ -118,6 +121,24 @@ def test_mint_cli_token_returns_raw_token():
     client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://app.aletheore.com")
     token = mint_cli_token("gho_real", 100, "x", http_client=client)
     assert token == "aletheore-tok"
+
+
+def test_mint_personal_token_posts_and_returns_token():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["auth"] = request.headers["Authorization"]
+        seen["body"] = request.read()
+        return httpx.Response(200, json={"token": "aletheore-personal-tok", "id": 1, "label": "my-laptop"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://app.aletheore.com")
+    token = mint_personal_token("gho_real", "my-laptop", http_client=client)
+    assert token == "aletheore-personal-tok"
+    assert seen["path"] == "/v1/personal-tokens"
+    assert seen["auth"] == "Bearer gho_real"
+    assert b'"label"' in seen["body"] and b"my-laptop" in seen["body"]
+    assert b"installation_id" not in seen["body"]
 
 
 def test_infer_org_from_cwd_git_remote_ssh_style():
@@ -247,3 +268,86 @@ def test_resolve_installation_raises_when_no_installations():
 
     with pytest.raises(DeviceFlowError, match="no paid Aletheore installations"):
         resolve_installation("gho_real", http_client=client, run_fn=fake_run)
+
+
+def test_revoke_personal_token_calls_delete_personal_tokens():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["auth"] = request.headers.get("Authorization")
+        return httpx.Response(204)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://app.aletheore.com")
+    revoke_personal_token("my-token", http_client=client)
+    assert seen == {"method": "DELETE", "path": "/v1/personal-tokens", "auth": "Bearer my-token"}
+
+
+def test_revoke_personal_token_all_devices_hits_the_all_path():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        return httpx.Response(204)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://app.aletheore.com")
+    revoke_personal_token("my-token", all_devices=True, http_client=client)
+    assert seen["path"] == "/v1/personal-tokens/all"
+
+
+def test_revoke_personal_token_raises_on_server_error():
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda r: httpx.Response(500)),
+        base_url="https://app.aletheore.com",
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        revoke_personal_token("my-token", http_client=client)
+
+
+def test_revoke_managed_audit_token_calls_delete_cli_tokens_self():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["auth"] = request.headers.get("Authorization")
+        return httpx.Response(204)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://app.aletheore.com")
+    revoke_managed_audit_token("managed-token", http_client=client)
+    assert seen == {"method": "DELETE", "path": "/v1/cli-tokens/self", "auth": "Bearer managed-token"}
+
+
+def test_revoke_managed_audit_token_raises_on_401_and_server_error():
+    for status in (401, 500):
+        client = httpx.Client(
+            transport=httpx.MockTransport(lambda r, status=status: httpx.Response(status)),
+            base_url="https://app.aletheore.com",
+        )
+        with pytest.raises(httpx.HTTPStatusError):
+            revoke_managed_audit_token("managed-token", http_client=client)
+
+
+def test_revoke_managed_audit_token_uses_the_api_url_override(monkeypatch):
+    monkeypatch.setenv("ALETHEORE_API_URL", "http://localhost:9999")
+    seen = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            seen["closed"] = True
+
+        def delete(self, path, headers):
+            return httpx.Response(204, request=httpx.Request("DELETE", "http://localhost:9999" + path))
+
+    monkeypatch.setattr("aletheore.device_auth.httpx.Client", FakeClient)
+    revoke_managed_audit_token("managed-token")
+    assert seen["base_url"].startswith("http://localhost:9999")
+    assert seen["timeout"] <= 10
+    assert seen["closed"] is True  # the client is closed, not left to garbage collection

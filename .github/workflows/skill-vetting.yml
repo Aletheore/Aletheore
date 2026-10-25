@@ -1,0 +1,71 @@
+name: Skill Vetting
+
+# Runs on every PR that touches skills or the vetting rules themselves, and on
+# every push to master, so a skill that reaches master by any path is vetted.
+# The vetting module, its tests and the exemptions file are protected paths:
+# CODEOWNERS requires an owner review for them, so a PR cannot quietly widen
+# its own exemptions. The step below lists any such change in the job summary.
+on:
+  pull_request:
+    paths:
+      - "src/aletheore/skills/**"
+      - "src/aletheore/skill_vetting.py"
+      - "src/aletheore/skill_hub.py"
+      - "src/tests/test_skill_vetting*.py"
+      - ".github/workflows/skill-vetting.yml"
+  push:
+    branches: [master]
+    paths:
+      - "src/aletheore/skills/**"
+      - "src/aletheore/skill_vetting.py"
+      - "src/aletheore/skill_hub.py"
+      - "src/tests/test_skill_vetting*.py"
+      - ".github/workflows/skill-vetting.yml"
+
+permissions:
+  contents: read
+
+# CI must never send crash reports to the production Sentry project.
+env:
+  ALETHEORE_CRASH_REPORTING: "0"
+
+jobs:
+  vet-skills:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Flag changes to the vetting rules
+        if: github.event_name == 'pull_request'
+        run: |
+          changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- \
+            src/aletheore/skill_vetting.py \
+            src/aletheore/skills/_vetting_exemptions.json \
+            'src/tests/test_skill_vetting*.py' \
+            .github/workflows/skill-vetting.yml || true)
+          if [ -n "$changed" ]; then
+            {
+              echo "### Vetting rules changed in this PR"
+              echo "These files decide what the vetting gate accepts. A code owner must review them:"
+              echo '```'
+              echo "$changed"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning title=Vetting rules changed::$(echo "$changed" | tr '\n' ' ')"
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        working-directory: src
+        run: pip install -e ".[dev]"
+
+      - name: Run vetting
+        working-directory: src
+        run: pytest tests/test_skill_vetting_catalog.py -v

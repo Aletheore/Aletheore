@@ -39,12 +39,33 @@ def run(repo: Path, *args: str):
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
 
 
-def test_evidence_version_is_0_8_0():
-    # Bumped 0.7.0 -> 0.8.0 alongside AIR_JSON_SCHEMA's new repository.error_handling
-    # section - see docs/AIR-SCHEMA.md's migration rules (any schema change requires a
-    # MINOR bump). This test asserts the exact pin deliberately, so it must move in
-    # lockstep with the next schema change too.
-    assert EVIDENCE_VERSION == "0.8.1"
+def test_evidence_version_is_0_9_0():
+    # Bumped 0.8.1 -> 0.9.0 alongside AIR_JSON_SCHEMA declaring the optional fields added in
+    # the scanner work (cli_version, config_warnings, unreadable_files, ...) - see
+    # docs/AIR-SCHEMA.md's migration rules (any schema change requires a MINOR bump). This
+    # test asserts the exact pin deliberately, so it must move in lockstep with the next
+    # schema change too.
+    assert EVIDENCE_VERSION == "0.9.0"
+
+
+def test_evidence_from_the_previous_additive_minor_is_still_readable():
+    # 0.9.0 only declared optional keys, so evidence written by 0.8.x loads without a rescan.
+    assert is_evidence_version_compatible("0.8.0") is True
+    assert is_evidence_version_compatible("0.8.1") is True
+    # Anything older, or from a later minor, is still refused.
+    assert is_evidence_version_compatible("0.7.0") is False
+    assert is_evidence_version_compatible("0.10.0") is False
+
+
+def test_a_0_8_evidence_file_loads_under_the_current_schema(tmp_path):
+    from aletheore.evidence import load_evidence_file
+    from tests.air_fixtures import minimal_air_evidence
+
+    evidence = minimal_air_evidence()
+    evidence["aletheore_version"] = "0.8.1"
+    path = tmp_path / "air.json"
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+    assert load_evidence_file(path)["aletheore_version"] == "0.8.1"
 
 
 def make_repo(tmp_path: Path) -> Path:
@@ -250,7 +271,7 @@ def test_scan_repository_handles_no_git_history(tmp_path):
     repo.mkdir()
     (repo / "main.py").write_text("x = 1\n")
     evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
-    assert evidence["git"] == {"available": False}
+    assert evidence["git"] == {"available": False, "reason": "not a git repository"}
     assert "dead_code" in evidence["repository"]
     assert "hotspots" not in evidence["git"]
 

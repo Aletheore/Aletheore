@@ -1,0 +1,17 @@
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: canary-route # Replace with your HTTPRoute name
+  namespace: default # Replace with your namespace
+spec:
+  parentRefs:
+    - name: my-gateway # Replace with Gateway name
+  rules:
+    - backendRefs:
+        - name: app-v1 # Primary service
+          port: 80
+          weight: 90
+        - name: app-v2 # Canary service
+          port: 80
+          weight: 10

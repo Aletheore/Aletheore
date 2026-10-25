@@ -2,6 +2,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from aletheore.git_exec import git_executable
 from aletheore.git_intel.graph_store import FileChurnTotal, GraphSnapshot, RepoGraphStore
 from aletheore.git_intel.history_meta import cached_ahead_behind, history_facts
 from aletheore.git_intel.incremental import (
@@ -43,8 +44,8 @@ def _run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess:
     # decoding crashed with UnicodeDecodeError on a non-UTF-8 byte in an old
     # commit's author name). A handful of unparseable bytes in one field
     # shouldn't take down the whole git analysis.
-    return subprocess.run(
-        ["git", *args],
+    return subprocess.run(  # nosec B603 - argv[0] is git_executable()'s absolute path, args are fixed
+        [git_executable(), *args],
         cwd=repo_path,
         capture_output=True,
         text=True,
@@ -75,6 +76,13 @@ def _has_commits(repo_path: Path) -> bool:
         return False
     result = _run_git(repo_path, "rev-list", "-1", "HEAD")
     return result.returncode == 0 and result.stdout.strip() != ""
+
+
+def _unavailable(repo_path: Path) -> dict:
+    """{"available": False, "reason": ...} saying why there is no git data."""
+    if _run_git(repo_path, "rev-parse", "--git-dir").returncode != 0:
+        return {"available": False, "reason": "not a git repository"}
+    return {"available": False, "reason": "no commits yet"}
 
 
 def _remote_names(repo_path: Path) -> set[str]:
@@ -498,7 +506,7 @@ def prepare_git_analysis(
         now = datetime.now(timezone.utc)
 
     if not _has_commits(repo_path):
-        return {"available": False}
+        return _unavailable(repo_path)
 
     facts = history_facts(repo_path)
     if facts is not None:
@@ -554,7 +562,8 @@ def prepare_git_analysis(
 
 def finish_git_analysis(prepared: dict, modules: list[dict] | None) -> dict:
     if not prepared.get("available"):
-        return {"available": False}
+        reason = prepared.get("reason")
+        return {"available": False, **({"reason": reason} if reason else {})}
     return {
         "available": True,
         "branches": prepared["branches"],

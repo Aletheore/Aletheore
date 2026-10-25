@@ -2,13 +2,18 @@ import json
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from pydantic import BaseModel, field_validator
+from starlette.requests import Request
 
 from app_server.ingest_limits import (
+    GITHUB_WEBHOOK_MAX_BODY_BYTES,
     MANAGED_AUDIT_MAX_BODY_BYTES,
+    PADDLE_WEBHOOK_MAX_BODY_BYTES,
     RUNTIME_EVENT_MAX_BODY_BYTES,
     BodyTooLargeError,
     MissingContentLengthError,
     check_declared_body_size,
+    parse_validated_body_after_auth,
 )
 from app_server.main import app
 
@@ -61,6 +66,62 @@ def test_managed_audit_has_a_pre_routing_body_cap():
 
 def test_get_requests_are_untouched():
     check_declared_body_size("/v1/runtime-events", "GET", None)
+
+
+def _request_with_json_body(payload: dict) -> Request:
+    body = json.dumps(payload).encode()
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    scope = {"type": "http", "method": "POST", "path": "/test", "headers": []}
+    return Request(scope, receive)
+
+
+class _ModelWithACustomValidator(BaseModel):
+    x: str
+
+    @field_validator("x")
+    @classmethod
+    def _reject(cls, v: str) -> str:
+        # Pydantic v2 puts the raised ValueError itself (not just its
+        # message) into this error's `ctx` - not JSON-serializable on its
+        # own, which is exactly the shape Flash Review caught.
+        raise ValueError("custom validator failure")
+
+
+@pytest.mark.asyncio
+async def test_parse_validated_body_after_auth_sanitizes_an_unserializable_validation_error():
+    # Flash Review catch: raising exc.errors() directly (as this helper
+    # used to) can carry a non-JSON-serializable object in `ctx` for a
+    # model with a custom validator - a client's 422-worthy bad body would
+    # then fail to serialize and surface as an unhandled 500 instead.
+    from fastapi import HTTPException
+
+    request = _request_with_json_body({"x": "bad"})
+
+    with pytest.raises(HTTPException) as excinfo:
+        await parse_validated_body_after_auth(request, _ModelWithACustomValidator)
+
+    assert excinfo.value.status_code == 422
+    # Must not raise: every entry is plain, JSON-serializable data.
+    json.dumps(excinfo.value.detail)
+
+
+def test_github_webhook_has_a_pre_routing_body_cap():
+    # Real gap found via audit: /webhook's HMAC check (signature.py) only
+    # runs inside the handler, after request.body() has already fully
+    # buffered an unauthenticated POST - this path had no entry in
+    # MAX_BODY_BYTES_BY_PATH at all until this fix.
+    check_declared_body_size("/webhook", "POST", str(GITHUB_WEBHOOK_MAX_BODY_BYTES))
+    with pytest.raises(BodyTooLargeError):
+        check_declared_body_size("/webhook", "POST", str(GITHUB_WEBHOOK_MAX_BODY_BYTES + 1))
+
+
+def test_paddle_webhook_has_a_pre_routing_body_cap():
+    check_declared_body_size("/webhooks/paddle", "POST", str(PADDLE_WEBHOOK_MAX_BODY_BYTES))
+    with pytest.raises(BodyTooLargeError):
+        check_declared_body_size("/webhooks/paddle", "POST", str(PADDLE_WEBHOOK_MAX_BODY_BYTES + 1))
 
 
 # --- Runtime events: the queue is the resource being protected ---------------
@@ -270,3 +331,22 @@ async def test_the_oversized_and_length_less_paths_return_distinct_codes(pool):
         )
 
     assert (length_less.status_code, oversized.status_code) == (411, 413)
+
+
+def test_a_path_parameter_route_is_capped_by_prefix_and_covers_put():
+    from app_server.ingest_limits import CUSTOM_SKILL_MAX_BODY_BYTES
+
+    check_declared_body_size("/v1/custom-skills/mine", "PUT", str(CUSTOM_SKILL_MAX_BODY_BYTES))
+    with pytest.raises(BodyTooLargeError):
+        check_declared_body_size("/v1/custom-skills/mine", "PUT", str(CUSTOM_SKILL_MAX_BODY_BYTES + 1))
+    with pytest.raises(MissingContentLengthError):
+        check_declared_body_size("/v1/custom-skills/mine", "PUT", None)
+    # A bodyless method on the same prefix is untouched.
+    check_declared_body_size("/v1/custom-skills/mine", "GET", None)
+
+
+def test_personal_token_mint_has_a_small_body_cap():
+    from app_server.ingest_limits import PERSONAL_TOKEN_MAX_BODY_BYTES
+
+    with pytest.raises(BodyTooLargeError):
+        check_declared_body_size("/v1/personal-tokens", "POST", str(PERSONAL_TOKEN_MAX_BODY_BYTES + 1))

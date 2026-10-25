@@ -1,12 +1,14 @@
 import json
 import os
 import stat
+import sys
 import tomllib
 from functools import lru_cache
 from pathlib import Path
 
 import yaml
 
+from aletheore.safe_io import read_text_lenient
 from aletheore.repo_config import is_ignored
 
 # libyaml's C loader when PyYAML was built with it (same safe constructors,
@@ -38,6 +40,17 @@ IGNORED_DIRS = {
     # handlers, API routers) were misreported as dead code. Always
     # gitignored by convention, never project source.
     ".claude",
+    # The project's own top-level worktree container (`git worktree add
+    # .worktrees/<name>`) - every entry under it is a separate working tree,
+    # never this repo's own source. _nested_git_roots below only catches a
+    # worktree by finding its `.git` file, which misses one whose git link
+    # was removed but whose checked-out files were left behind (confirmed on
+    # this project's own repo: .worktrees/review-740 has no .git entry at
+    # all - a real scan picked up its orphaned copy of every module and
+    # duplicated jobs.py's own imported_by list from 12 real entries to 255).
+    # Name-based exclusion, same as .claude above, closes that gap outright
+    # instead of trying to detect "an orphaned worktree remnant" generically.
+    ".worktrees",
 }
 
 FRAMEWORK_MARKERS_PY = {
@@ -196,7 +209,7 @@ def _iter_pip_package_lines(repo_path: Path) -> list[tuple[str, str, str]]:
 
     requirements = repo_path / "requirements.txt"
     if requirements.exists():
-        for line in requirements.read_text(encoding="utf-8", errors="ignore").splitlines():
+        for line in read_text_lenient(requirements).splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
@@ -206,7 +219,7 @@ def _iter_pip_package_lines(repo_path: Path) -> list[tuple[str, str, str]]:
     pyproject = repo_path / "pyproject.toml"
     if pyproject.exists():
         try:
-            data = tomllib.loads(pyproject.read_text(encoding="utf-8", errors="ignore"))
+            data = tomllib.loads(read_text_lenient(pyproject))
         except tomllib.TOMLDecodeError:
             data = {}
 
@@ -232,7 +245,7 @@ def _npm_dependencies(repo_path: Path) -> dict[str, str]:
     if not package_json.exists():
         return {}
     try:
-        data = json.loads(package_json.read_text(encoding="utf-8", errors="ignore"))
+        data = json.loads(read_text_lenient(package_json))
     except json.JSONDecodeError:
         return {}
     return {**data.get("dependencies", {}), **data.get("devDependencies", {})}
@@ -265,6 +278,75 @@ def _nested_git_roots(repo_path: Path) -> set[Path]:
             roots.add(current_dir)
             dirnames[:] = []
     return roots
+
+
+# Windows and (by default) macOS file systems compare names case-insensitively
+# while git records the case a file was added with, so lookups against the
+# visible sets fold case on those platforms. Use visible_key() for every lookup.
+_CASE_INSENSITIVE_FS = sys.platform in ("win32", "darwin")
+
+
+def visible_key(rel_path: str) -> str:
+    return rel_path.casefold() if _CASE_INSENSITIVE_FS else rel_path
+
+
+@lru_cache(maxsize=32)
+def git_visible_paths(repo_path: Path) -> tuple[frozenset[str], frozenset[str]] | None:
+    """Files git itself considers part of the working tree, as (files, dirs).
+
+    `git ls-files --cached --others --exclude-standard`: every tracked file
+    (a tracked file is always included, even if a .gitignore pattern also
+    matches it) plus every untracked file that no .gitignore (root, nested,
+    $GIT_DIR/info/exclude or the user's global excludes file) ignores. Both
+    sets are repo-relative POSIX paths; `dirs` holds every ancestor directory
+    of a visible file so a walk can prune an ignored directory outright.
+
+    None when git does not apply (not a git working tree, git missing or
+    failing, or an answer that is empty for a non-empty folder): the caller
+    keeps its pre-existing behaviour, only the hard-coded and
+    `ignored_paths` skips. The folder is deliberately NOT parsed for
+    .gitignore by hand outside git: the format has negation, anchoring and
+    directory-only rules that are easy to get subtly wrong, and git is the
+    one authority on them.
+
+    Cached for the life of the process like _nested_git_roots; scan_repository
+    clears both at the start of every scan.
+    """
+    import subprocess  # nosec B404 - runs git with a fixed argv
+
+    from aletheore.git_exec import git_executable
+
+    try:
+        proc = subprocess.run(  # nosec B603 - absolute git path, fixed argv
+            [
+                git_executable(), "-c", "core.quotepath=off", "ls-files", "-z",
+                "--cached", "--others", "--exclude-standard",
+            ],
+            cwd=repo_path,
+            capture_output=True,
+            timeout=120,
+            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    files: set[str] = set()
+    dirs: set[str] = set()
+    for raw in proc.stdout.split(b"\0"):
+        if not raw:
+            continue
+        rel = visible_key(raw.decode("utf-8", errors="surrogateescape"))
+        files.add(rel)
+        parent = rel.rpartition("/")[0]
+        while parent and parent not in dirs:
+            dirs.add(parent)
+            parent = parent.rpartition("/")[0]
+    if not files:
+        # An empty answer is either a genuinely empty tree or git not seeing
+        # this folder as its own; either way filtering would hide everything.
+        return None
+    return frozenset(files), frozenset(dirs)
 
 
 def _iter_pruned_tree(repo_path: Path):
@@ -300,6 +382,7 @@ def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
     patterns = ignored_paths or []
     root_str = str(repo_path)
     sep = os.sep
+    visible = git_visible_paths(repo_path)
     for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
         rel_dir = _rel_dir(repo_path, root_str, dirpath)
         dirnames[:] = [
@@ -307,6 +390,7 @@ def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
             for d in dirnames
             if d not in IGNORED_DIRS
             and not is_ignored(f"{rel_dir}/{d}" if rel_dir != "." else d, patterns)
+            and (visible is None or visible_key(f"{rel_dir}/{d}" if rel_dir != "." else d) in visible[1])
         ]
         if any(dirpath == root or dirpath.startswith(root + sep) for root in nested_git_roots):
             dirnames[:] = []
@@ -321,6 +405,8 @@ def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
             rel_path = f"{rel_dir}/{filename}" if rel_dir != "." else filename
             if is_ignored(rel_path, patterns):
                 continue
+            if visible is not None and visible_key(rel_path) not in visible[0]:
+                continue  # ignored by a .gitignore (and not tracked)
             yield Path(full)
 
 
@@ -488,22 +574,108 @@ def detect_policy_docs(repo_path: Path) -> list[dict]:
     return docs
 
 
+def _package_name(directory: Path, file_names: list[str]) -> str | None:
+    """Best-effort package/module name of the project rooted at `directory`."""
+    if "package.json" in file_names:
+        try:
+            name = json.loads(read_text_lenient(directory / "package.json")).get("name")
+        except (json.JSONDecodeError, AttributeError):
+            name = None
+        if isinstance(name, str) and name:
+            return name
+    if "go.mod" in file_names:
+        for line in read_text_lenient(directory / "go.mod").splitlines():
+            line = line.strip()
+            if line.startswith("module "):
+                return line.split(None, 1)[1].strip().strip('"')
+    if "pyproject.toml" in file_names:
+        try:
+            data = tomllib.loads(read_text_lenient(directory / "pyproject.toml"))
+        except tomllib.TOMLDecodeError:
+            data = {}
+        name = data.get("project", {}).get("name") or data.get("tool", {}).get("poetry", {}).get("name")
+        if isinstance(name, str) and name:
+            return name
+    return None
+
+
+# Directories whose manifests belong to documentation, samples or test support rather
+# than to a package of the project, so a docs/requirements.txt next to the root
+# manifest does not make a plain repository a monorepo. Matched on any path
+# segment, case-insensitively. Declared workspaces are unaffected (they are a
+# monorepo by declaration).
+NON_PROJECT_DIR_NAMES = frozenset(
+    {
+        "docs", "doc", "documentation", "examples", "example", "samples", "sample",
+        "demo", "demos", "tests", "test", "__tests__", "spec", "specs", "fixtures",
+        "__fixtures__", "testdata", "benchmarks", "benchmark",
+    }
+)
+
+
+def _is_non_project_dir(rel_dir: str) -> bool:
+    return any(part.lower() in NON_PROJECT_DIR_NAMES for part in rel_dir.split("/"))
+
+
 def detect_monorepo(repo_path: Path) -> dict:
+    """{"detected", "workspaces", ...} plus additive fields:
+
+    `packages`: one entry per directory holding a manifest ({"path", "manifests",
+    "ecosystems", "name"?}, "." for the root), `reason`, and `manifests_truncated`
+    when the manifest discovery cap was hit. A repository is a monorepo when it
+    declares workspaces (package.json "workspaces", pnpm/lerna/nx/Cargo/go.work)
+    or holds project manifests in two or more different directories (manifests under
+    docs/, examples/, tests/ and similar folders are listed in `packages` but do not
+    count towards that).
+    """
+    from aletheore.manifests import discover_manifests, is_project_manifest, manifest_ecosystems
+
+    workspaces: list = []
+    declared = False
     package_json = repo_path / "package.json"
     if package_json.exists():
         try:
-            data = json.loads(package_json.read_text(encoding="utf-8", errors="ignore"))
+            data = json.loads(read_text_lenient(package_json))
         except json.JSONDecodeError:
             data = {}
-        workspaces = data.get("workspaces")
-        if workspaces:
-            return {"detected": True, "workspaces": list(workspaces)}
-
-    for marker in ("pnpm-workspace.yaml", "lerna.json", "nx.json"):
+        raw = data.get("workspaces") if isinstance(data, dict) else None
+        if isinstance(raw, dict):  # yarn classic: {"packages": [...]}
+            raw = raw.get("packages")
+        if raw:
+            workspaces = list(raw)
+            declared = True
+    for marker in ("pnpm-workspace.yaml", "lerna.json", "nx.json", "go.work"):
         if (repo_path / marker).exists():
-            return {"detected": True, "workspaces": []}
+            declared = True
 
-    return {"detected": False, "workspaces": []}
+    discovery = discover_manifests(repo_path)
+    packages = []
+    project_dirs = 0
+    for rel_dir in discovery["dirs"]:
+        names = discovery["files"][rel_dir]
+        directory = repo_path if rel_dir == "." else repo_path / rel_dir
+        entry = {
+            "path": rel_dir,
+            "manifests": names,
+            "ecosystems": manifest_ecosystems(names),
+        }
+        package_name = _package_name(directory, names)
+        if package_name:
+            entry["name"] = package_name
+        packages.append(entry)
+        if any(is_project_manifest(n) for n in names) and not _is_non_project_dir(rel_dir):
+            project_dirs += 1
+
+    multiple = project_dirs >= 2
+    result = {
+        "detected": declared or multiple,
+        "workspaces": workspaces,
+        "packages": packages,
+        "reason": "workspaces" if declared else ("multiple manifests" if multiple else None),
+    }
+    if discovery["truncated"]:
+        result["manifests_truncated"] = True
+    return result
 
 
 def _looks_like_alembic_versions_file(path: Path) -> bool:
@@ -590,7 +762,7 @@ def _detect_docker_compose_services(repo_path: Path, pruned_tree=None) -> list[d
         if path.name not in COMPOSE_FILE_NAMES:
             continue
         try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8", errors="ignore"))
+            data = yaml.safe_load(read_text_lenient(path))
         except yaml.YAMLError:
             continue
         if not isinstance(data, dict):
@@ -614,7 +786,7 @@ def _detect_kubernetes_manifests(repo_path: Path, pruned_tree=None) -> list[str]
             continue
         if path.suffix not in YAML_EXTENSIONS:
             continue
-        text = path.read_text(encoding="utf-8", errors="ignore")
+        text = read_text_lenient(path)
         # A manifest needs both keys, so skip parsing any YAML that can't be
         # one: on the Linux kernel this skipped thousands of devicetree
         # bindings that were each fully parsed for nothing.
@@ -677,7 +849,7 @@ def _detect_declared_env_vars(repo_path: Path, pruned_tree=None) -> list[dict]:
         if path.name not in ENV_FILE_MARKERS:
             continue
         source = path.relative_to(repo_path).as_posix()
-        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        for line in read_text_lenient(path).splitlines():
             stripped = line.strip()
             if not stripped or stripped.startswith("#"):
                 continue

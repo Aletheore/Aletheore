@@ -1,0 +1,1332 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Safe Rust Migration Report &amp; Infographic</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2064%2064%22%20role%3D%22img%22%20aria-label%3D%22Migrate%20to%20Rust%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2214%22%20fill%3D%22%23b7410e%22/%3E%3Crect%20x%3D%2230.5%22%20y%3D%228%22%20width%3D%223%22%20height%3D%2235%22%20rx%3D%221.5%22%20fill%3D%22%23fff%22/%3E%3Cpath%20d%3D%22M35%2012c9%204%2014%2013%2014%2025H35z%22%20fill%3D%22%23fff%22/%3E%3Cpath%20d%3D%22M29%2016c-7%204-11%2011-11%2021h11z%22%20fill%3D%22%23fed7aa%22/%3E%3Cpath%20d%3D%22M2%2037l6%205h48l-6%2011H14L5%2043z%22%20fill%3D%22%23fff%22/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root,
+    html[data-theme="light"] {
+      --bg-page: #f8fafc;
+      --bg-surface: #ffffff;
+      --bg-subtle: #f1f5f9;
+      --bg-hover: #e2e8f0;
+      --bg-code: #0f172a;
+      --text-code: #f8fafc;
+      --text-primary: #0f172a;
+      --text-secondary: #475569;
+      --text-muted: #64748b;
+      --border-color: #e2e8f0;
+      --border-strong: #cbd5e1;
+      --accent-primary: #2563eb;
+      --accent-primary-hover: #1d4ed8;
+      --accent-primary-soft: #eff6ff;
+      --accent-primary-text: #1e40af;
+      --accent-success: #059669;
+      --accent-success-soft: #ecfdf5;
+      --accent-success-text: #065f46;
+      --accent-warning: #d97706;
+      --accent-warning-soft: #fffbeb;
+      --accent-warning-text: #92400e;
+      --accent-danger: #dc2626;
+      --accent-danger-soft: #fef2f2;
+      --accent-danger-text: #991b1b;
+      --shadow-sm: 0 1px 2px 0 rgba(15, 23, 42, 0.05);
+      --shadow-md: 0 4px 12px -2px rgba(15, 23, 42, 0.08);
+    }
+
+    html[data-theme="dark"] {
+      --bg-page: #0b0f19;
+      --bg-surface: #111827;
+      --bg-subtle: #1e293b;
+      --bg-hover: #334155;
+      --bg-code: #090d16;
+      --text-code: #e2e8f0;
+      --text-primary: #f8fafc;
+      --text-secondary: #cbd5e1;
+      --text-muted: #94a3b8;
+      --border-color: #1e293b;
+      --border-strong: #334155;
+      --accent-primary: #3b82f6;
+      --accent-primary-hover: #60a5fa;
+      --accent-primary-soft: rgba(59, 130, 246, 0.14);
+      --accent-primary-text: #93c5fd;
+      --accent-success: #10b981;
+      --accent-success-soft: rgba(16, 185, 129, 0.14);
+      --accent-success-text: #6ee7b7;
+      --accent-warning: #f59e0b;
+      --accent-warning-soft: rgba(245, 158, 11, 0.14);
+      --accent-warning-text: #fcd34d;
+      --accent-danger: #ef4444;
+      --accent-danger-soft: rgba(239, 68, 68, 0.14);
+      --accent-danger-text: #fca5a5;
+      --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+      --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.45);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background-color: var(--bg-page);
+      color: var(--text-primary);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      transition: background-color 0.2s ease, color 0.2s ease;
+    }
+
+    code, pre, .mono {
+      font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 0;
+    }
+
+    a {
+      color: var(--accent-primary);
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .container {
+      max-width: 1140px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* Sticky Top Bar */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-color);
+      box-shadow: var(--shadow-sm);
+    }
+    .topbar-inner {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 12px 0;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-logo {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      box-shadow: var(--shadow-sm);
+    }
+    .brand-title {
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin: 0;
+      color: var(--text-primary);
+    }
+
+    .nav-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+    .tab-group {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background: var(--bg-subtle);
+      padding: 4px;
+      border-radius: 10px;
+      border: 1px solid var(--border-color);
+    }
+    .tab-btn {
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      font-family: inherit;
+      font-size: 12.5px;
+      font-weight: 600;
+      padding: 6px 12px;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .tab-btn:hover {
+      color: var(--text-primary);
+    }
+    .tab-btn.active {
+      background: var(--bg-surface);
+      color: var(--accent-primary);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .theme-toggle {
+      border: 1px solid var(--border-color);
+      background: var(--bg-surface);
+      color: var(--text-secondary);
+      font-family: inherit;
+      font-size: 12.5px;
+      font-weight: 600;
+      padding: 6px 11px;
+      border-radius: 9px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+    .theme-toggle:hover {
+      background: var(--bg-subtle);
+      color: var(--text-primary);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      font-size: 11.5px;
+      font-weight: 600;
+      padding: 3px 9px;
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+    .badge-primary {
+      background: var(--accent-primary-soft);
+      color: var(--accent-primary-text);
+    }
+    .badge-success {
+      background: var(--accent-success-soft);
+      color: var(--accent-success-text);
+    }
+    .badge-warning {
+      background: var(--accent-warning-soft);
+      color: var(--accent-warning-text);
+    }
+    .badge-danger {
+      background: var(--accent-danger-soft);
+      color: var(--accent-danger-text);
+    }
+
+    .section-stack {
+      padding: 24px 0 60px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    /* 4 Glanceable Hero KPI Pillars */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+      margin-top: 18px;
+    }
+    @media (min-width: 880px) {
+      .kpi-grid {
+        grid-template-columns: repeat(4, 1fr);
+      }
+    }
+    .kpi-card {
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-color);
+      border-radius: 14px;
+      padding: 16px 18px;
+    }
+    .kpi-card.kpi-featured {
+      border-color: var(--accent-primary);
+      background: linear-gradient(180deg, var(--accent-primary-soft) 0%, var(--bg-surface) 75%);
+    }
+    .kpi-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .kpi-label {
+      font-size: 11.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+    }
+    .kpi-val {
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-top: 6px;
+      color: var(--text-primary);
+    }
+    .kpi-sub {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+
+    /* Collapsible Cards for Progressive Disclosure */
+    details.collapsible-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      box-shadow: var(--shadow-sm);
+      overflow: hidden;
+    }
+    details.collapsible-card > summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 16px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      user-select: none;
+      transition: background-color 0.15s ease;
+    }
+    details.collapsible-card > summary::-webkit-details-marker {
+      display: none;
+    }
+    details.collapsible-card > summary:hover {
+      background: var(--bg-subtle);
+    }
+    .summary-left {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .summary-title {
+      font-size: 15.5px;
+      font-weight: 700;
+      color: var(--text-primary);
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+    .summary-sub {
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+    .summary-toggle-pill {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent-primary-text);
+      background: var(--accent-primary-soft);
+      padding: 5px 11px;
+      border-radius: 8px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    details.collapsible-card[open] > summary {
+      border-bottom: 1px solid var(--border-color);
+      background: var(--bg-subtle);
+    }
+    details.collapsible-card[open] .summary-toggle-pill::after {
+      content: " ▲";
+    }
+    details.collapsible-card:not([open]) .summary-toggle-pill::after {
+      content: " ▼";
+    }
+    .collapsible-body {
+      padding: 20px 22px;
+    }
+
+    /* Progress Bars */
+    .bar-track {
+      width: 100%;
+      height: 8px;
+      background: var(--bg-subtle);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 999px;
+      transition: width 0.5s ease;
+    }
+
+    /* Scorecard Grid */
+    .scorecard-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+    @media (min-width: 640px) {
+      .scorecard-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+    @media (min-width: 960px) {
+      .scorecard-grid {
+        grid-template-columns: repeat(4, 1fr);
+      }
+    }
+    .score-item {
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    /* Code Comparison Boxes */
+    .code-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+    }
+    @media (min-width: 880px) {
+      .code-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+    .code-box {
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--bg-code);
+      color: var(--text-code);
+      display: flex;
+      flex-direction: column;
+    }
+    .code-box-header {
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      border-bottom: 1px solid #1e293b;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navigation & Mode Toggle -->
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <div class="brand">
+        <div class="brand-logo" title="Safe Rust Migration Report">
+          <svg width="36" height="36" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Migrate to Rust">
+            <rect width="64" height="64" rx="14" fill="#b7410e"/>
+            <rect x="30.5" y="8" width="3" height="35" rx="1.5" fill="#fff"/>
+            <path d="M35 12c9 4 14 13 14 25H35z" fill="#fff"/>
+            <path d="M29 16c-7 4-11 11-11 21h11z" fill="#fed7aa"/>
+            <path d="M2 37l6 5h48l-6 11H14L5 43z" fill="#fff"/>
+          </svg>
+        </div>
+        <div>
+          <div style="display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-bottom:2px;">
+            <span class="badge badge-primary">migrate-to-rust</span>
+            <span id="nav-lang-badge" class="badge badge-primary">Language: Unmeasured</span>
+            <span id="nav-model-badge" class="badge badge-primary hidden"></span>
+          </div>
+          <h1 id="nav-project-title" class="brand-title">Rust Migration Telemetry Report</h1>
+        </div>
+      </div>
+
+      <div class="nav-actions">
+        <div class="tab-group" role="tablist" aria-label="Report View Mode">
+          <button onclick="setViewMode('all')" id="btn-mode-all" class="tab-btn active">Overview &amp; Story</button>
+          <button onclick="setViewMode('executive')" id="btn-mode-executive" class="tab-btn">Executive Summary</button>
+          <button onclick="setViewMode('technical')" id="btn-mode-technical" class="tab-btn">Code &amp; Benchmarks</button>
+        </div>
+
+        <button onclick="toggleTheme()" id="theme-toggle-btn" class="theme-toggle" title="Switch between Light and Dark theme">
+          <span id="theme-toggle-icon">🌙</span>
+          <span id="theme-toggle-label">Dark Mode</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container section-stack">
+
+    <!-- 1. HERO SUMMARY CARD: GLANCEABLE OUTCOMES -->
+    <section class="card">
+      <div style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px;">
+        <span class="badge badge-primary">🤖 First-Person Migration Report</span>
+        <span id="hero-timestamp" style="font-size:12.5px; color:var(--text-muted);">Not measured</span>
+      </div>
+
+      <h2 id="hero-headline" style="margin:0 0 10px; font-size:24px; font-weight:800; letter-spacing:-0.02em; line-height:1.3;">
+        Unrendered Migration Report Template
+      </h2>
+
+      <p id="hero-narrative" style="margin:0; font-size:14.5px; color:var(--text-secondary); max-width:960px; line-height:1.6;">
+        Run scripts/telemetry.py render-infographic to inject measured migration telemetry into this template.
+      </p>
+
+      <!-- 4 Glanceable Impact Pillars -->
+      <div class="kpi-grid">
+        <!-- Pillar 1: Measured Agent Execution Time -->
+        <div class="kpi-card kpi-featured">
+          <div class="kpi-top">
+            <span class="kpi-label">⏱️ Agent Execution Time</span>
+            <span id="hero-roi-badge" class="badge badge-primary">Unmeasured</span>
+          </div>
+          <div id="hero-total-time" class="kpi-val" style="color:var(--accent-primary);">Not measured</div>
+          <div id="hero-roi-sub" class="kpi-sub">
+            No stage timers recorded
+          </div>
+        </div>
+
+        <!-- Pillar 2: Speedup -->
+        <div class="kpi-card">
+          <div class="kpi-top">
+            <span class="kpi-label">⚡ Final PGO Speedup</span>
+            <span id="hero-speed-grade" class="badge badge-success">N/A</span>
+          </div>
+          <div id="hero-speedup" class="kpi-val" style="color:var(--accent-success);">Not measured</div>
+          <div id="hero-speed-sub" class="kpi-sub">
+            Log benchmarks via log-benchmark
+          </div>
+        </div>
+
+        <!-- Pillar 3: Memory Safety -->
+        <div class="kpi-card">
+          <div class="kpi-top">
+            <span class="kpi-label">🛡️ Memory Safety</span>
+            <span id="hero-safety-badge" class="badge badge-warning">Unmeasured</span>
+          </div>
+          <div id="hero-unsafe" class="kpi-val">Not measured</div>
+          <div id="hero-safety-sub" class="kpi-sub">
+            Scan codebase via scan-codebase
+          </div>
+        </div>
+
+        <!-- Pillar 4: Output Parity -->
+        <div class="kpi-card">
+          <div class="kpi-top">
+            <span class="kpi-label">🎯 Output Replication</span>
+            <span id="hero-parity-seeds" class="badge badge-primary">Unmeasured</span>
+          </div>
+          <div id="hero-parity" class="kpi-val">Not measured</div>
+          <div id="hero-parity-sub" class="kpi-sub">
+            No parity runs logged
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. BENCHMARK & TIME SUMMARY (ALWAYS GLANCEABLE) -->
+    <section id="sec-benchmarks-time" class="card">
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:24px;">
+        <!-- Left: 4-Stage PGO Speedup Staircase -->
+        <div>
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px;">
+            <h3 style="margin:0; font-size:17px; font-weight:800;">⚡ 4-Stage Performance Staircase</h3>
+            <span id="ch5-pgo-badge" class="badge badge-primary">No Benchmarks Logged</span>
+          </div>
+          <p id="ch5-narrative" style="margin:0 0 14px; font-size:13px; color:var(--text-secondary);">
+            Progressive optimization from original baseline to Safe Rust, Struct-of-Arrays (SoA) layout, and Profile-Guided Optimization (PGO).
+          </p>
+          <div id="benchmark-staircase" style="display:flex; flex-direction:column; gap:10px;"></div>
+        </div>
+
+        <!-- Right: Measured Agent Execution Time Breakdown -->
+        <div>
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px;">
+            <h3 style="margin:0; font-size:17px; font-weight:800;">⏱️ Agent Execution Time Breakdown</h3>
+            <span id="ch6-total-badge" class="badge badge-primary">Not measured</span>
+          </div>
+          <p style="margin:0 0 14px; font-size:13px; color:var(--text-secondary);">
+            Measured wall-clock time across the 6 migration stages.
+          </p>
+          <div id="time-stacked-bar" style="width:100%; height:14px; border-radius:999px; overflow:hidden; display:flex; border:1px solid var(--border-color); margin-bottom:12px;"></div>
+          <div id="time-buckets-grid" style="display:grid; grid-template-columns:repeat(2, 1fr); gap:8px;"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. COLLAPSIBLE EXECUTIVE SCORECARD (8 DIMENSIONS BEFORE VS AFTER) -->
+    <details id="sec-scorecard" class="collapsible-card" open>
+      <summary>
+        <div class="summary-left">
+          <div class="summary-title">
+            <span>🏅 Executive Transformation Scorecard (Before vs. After)</span>
+            <span id="overall-before-score" class="badge badge-danger">Legacy: Not measured</span>
+            <span>→</span>
+            <span id="overall-after-score" class="badge badge-success">Safe Rust: Not measured</span>
+          </div>
+          <div class="summary-sub">
+            8 engineering dimensions scored 0–100 strictly from measured repository census, compiler checks, test coverage, and benchmarks.
+          </div>
+        </div>
+        <span class="summary-toggle-pill">Scorecard</span>
+      </summary>
+      <div class="collapsible-body">
+        <div id="scorecard-grid" class="scorecard-grid"></div>
+      </div>
+    </details>
+
+    <!-- 4. COLLAPSIBLE AI MIGRATION STORY CHAPTERS (PROGRESSIVE DISCLOSURE) -->
+    <div id="sec-story" style="display:flex; flex-direction:column; gap:14px;">
+
+      <!-- Chapter 1: Discovery & Hidden Legacy Bugs -->
+      <details class="collapsible-card" open>
+        <summary>
+          <div class="summary-left">
+            <div class="summary-title">
+              <span>🔍 Chapter 1: Legacy Audit &amp; Hidden Bugs Discovered</span>
+              <span id="ch1-bugs-pill" class="badge badge-warning">Audit Not Measured</span>
+            </div>
+            <div id="ch1-narrative" class="summary-sub">
+              Not yet recorded.
+            </div>
+          </div>
+          <span class="summary-toggle-pill">See Details</span>
+        </summary>
+        <div class="collapsible-body">
+          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:10px; margin-bottom:16px;">
+            <div style="background:var(--bg-subtle); border:1px solid var(--border-color); border-radius:10px; padding:12px;">
+              <div style="font-size:11px; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Largest Legacy File</div>
+              <div id="ch1-max-loc" style="font-size:18px; font-weight:800; color:var(--accent-danger); margin-top:2px;">Not measured</div>
+            </div>
+            <div style="background:var(--bg-subtle); border:1px solid var(--border-color); border-radius:10px; padding:12px;">
+              <div style="font-size:11px; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Legacy Comment Ratio</div>
+              <div id="ch1-comment-pct" style="font-size:18px; font-weight:800; color:var(--accent-warning); margin-top:2px;">Not measured</div>
+            </div>
+            <div style="background:var(--bg-subtle); border:1px solid var(--border-color); border-radius:10px; padding:12px;">
+              <div style="font-size:11px; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Memory &amp; Pointer Hazards</div>
+              <div id="ch1-hazards" style="font-size:18px; font-weight:800; color:var(--accent-danger); margin-top:2px;">Not measured</div>
+            </div>
+            <div style="background:var(--bg-subtle); border:1px solid var(--border-color); border-radius:10px; padding:12px;">
+              <div style="font-size:11px; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Latent Bugs Uncovered</div>
+              <div id="ch1-latent-bugs" style="font-size:18px; font-weight:800; color:var(--accent-warning); margin-top:2px;">Not measured</div>
+            </div>
+          </div>
+
+          <div id="opportunities-list" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:10px;"></div>
+        </div>
+      </details>
+
+      <!-- Chapter 2: Modular Architecture & Hygiene -->
+      <details class="collapsible-card">
+        <summary>
+          <div class="summary-left">
+            <div class="summary-title">
+              <span>🗂️ Chapter 2: Modular Architecture, Hygiene &amp; Rustdoc</span>
+              <span id="ch2-doc-delta" class="badge badge-success">Not measured</span>
+              <span id="ch2-loc-delta" class="badge badge-primary">Not measured</span>
+            </div>
+            <div id="ch2-narrative" class="summary-sub">
+              Not yet recorded.
+            </div>
+          </div>
+          <span class="summary-toggle-pill">See Details</span>
+        </summary>
+        <div class="collapsible-body">
+          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(250px, 1fr)); gap:14px;">
+            <div style="background:var(--bg-subtle); border:1px solid var(--border-color); border-radius:12px; padding:14px;">
+              <div style="font-size:13px; font-weight:700; margin-bottom:8px;">📚 Comment &amp; Doc Density</div>
+              <div style="font-size:12px; color:var(--text-secondary); display:flex; justify-content:space-between; margin-bottom:4px;">
+                <span>Before (Legacy)</span>
+                <span id="ch2-doc-before">Not measured</span>
+              </div>
+              <div class="bar-track" style="margin-bottom:8px;">
+                <div id="ch2-doc-bar-before" class="bar-fill" style="width:0%; background:var(--accent-danger);"></div>
+              </div>
+              <div style="font-size:12px; font-weight:600; display:flex; justify-content:space-between; margin-bottom:4px;">
+                <span>After (Rust + Rustdoc)</span>
+                <span id="ch2-doc-after" style="color:var(--accent-success);">Not measured</span>
+              </div>
+              <div class="bar-track">
+                <div id="ch2-doc-bar-after" class="bar-fill" style="width:0%; background:var(--accent-success);"></div>
+              </div>
+            </div>
+
+            <div style="background:var(--bg-subtle); border:1px solid var(--border-color); border-radius:12px; padding:14px;">
+              <div style="font-size:13px; font-weight:700; margin-bottom:8px;">🗂️ Max File Size (≤400 LOC Rule)</div>
+              <div style="font-size:12px; color:var(--text-secondary); display:flex; justify-content:space-between; margin-bottom:4px;">
+                <span>Before (Monolith)</span>
+                <span id="ch2-loc-before">Not measured</span>
+              </div>
+              <div class="bar-track" style="margin-bottom:8px;">
+                <div id="ch2-loc-bar-before" class="bar-fill" style="width:0%; background:var(--accent-danger);"></div>
+              </div>
+              <div style="font-size:12px; font-weight:600; display:flex; justify-content:space-between; margin-bottom:4px;">
+                <span>After (Modular Rust)</span>
+                <span id="ch2-loc-after" style="color:var(--accent-success);">Not measured</span>
+              </div>
+              <div class="bar-track">
+                <div id="ch2-loc-bar-after" class="bar-fill" style="width:0%; background:var(--accent-success);"></div>
+              </div>
+            </div>
+
+            <div style="background:var(--bg-subtle); border:1px solid var(--border-color); border-radius:12px; padding:14px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <span style="font-size:13px; font-weight:700;">🧠 Cognitive Simplicity</span>
+                <span id="ch2-simplicity-delta" class="badge badge-success">Not measured</span>
+              </div>
+              <div style="font-size:12px; color:var(--text-secondary); display:flex; justify-content:space-between; margin-bottom:4px;">
+                <span>Before (Fn / Depth)</span>
+                <span id="ch2-simp-before">Not measured</span>
+              </div>
+              <div class="bar-track" style="margin-bottom:8px;">
+                <div id="ch2-simp-bar-before" class="bar-fill" style="width:0%; background:var(--accent-danger);"></div>
+              </div>
+              <div style="font-size:12px; font-weight:600; display:flex; justify-content:space-between; margin-bottom:4px;">
+                <span>After (Fn / Depth)</span>
+                <span id="ch2-simp-after" style="color:var(--accent-success);">Not measured</span>
+              </div>
+              <div class="bar-track">
+                <div id="ch2-simp-bar-after" class="bar-fill" style="width:0%; background:var(--accent-success);"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <!-- Chapter 3 & 4: Self-Healing Test Loop & A/B Parity Verification -->
+      <details class="collapsible-card">
+        <summary>
+          <div class="summary-left">
+            <div class="summary-title">
+              <span>🧪 Chapters 3 &amp; 4: Self-Healing Test Loop &amp; Side-by-Side Parity Proof</span>
+              <span id="ch3-initial-fail-badge" class="badge badge-warning">No Test Runs Logged</span>
+              <span id="ch4-parity-badge" class="badge badge-success">Parity Not Measured</span>
+            </div>
+            <div id="ch3-narrative" class="summary-sub">
+              Not yet recorded.
+            </div>
+          </div>
+          <span class="summary-toggle-pill">See Details</span>
+        </summary>
+        <div class="collapsible-body" style="display:flex; flex-direction:column; gap:18px;">
+          <div>
+            <h4 style="margin:0 0 8px; font-size:14px; font-weight:700;">Unit, Doc &amp; Property Test Iterations (Self-Repair Audit Trail)</h4>
+            <div id="test-iterations-list" style="display:flex; flex-direction:column; gap:10px;"></div>
+          </div>
+          <div style="padding-top:14px; border-top:1px solid var(--border-color);">
+            <h4 style="margin:0 0 4px; font-size:14px; font-weight:700;">A/B Differential Output Parity (Legacy vs. Rust Binary)</h4>
+            <p id="ch4-narrative" style="margin:0 0 10px; font-size:12.5px; color:var(--text-secondary);"></p>
+            <div id="parity-iterations-list" style="display:flex; flex-direction:column; gap:10px;"></div>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <!-- 5. TECHNICAL PROOF: BEFORE VS AFTER CODE SPOTLIGHT -->
+    <details id="sec-technical" class="collapsible-card" open>
+      <summary>
+        <div class="summary-left">
+          <div class="summary-title">
+            <span>🔬 Code Spotlight: Legacy Implementation vs. Target Rust</span>
+          </div>
+          <div id="spotlight-explanation" class="summary-sub">
+            Not yet recorded.
+          </div>
+        </div>
+        <span class="summary-toggle-pill">Code Diff</span>
+      </summary>
+      <div class="collapsible-body">
+        <div class="code-grid">
+          <div class="code-box">
+            <div class="code-box-header" style="background:rgba(220, 38, 38, 0.18); color:#fca5a5;">
+              <span>❌ BEFORE: Legacy Implementation</span>
+              <code id="spotlight-legacy-file" style="font-size:11px; color:#cbd5e1;">Not measured</code>
+            </div>
+            <pre id="spotlight-legacy-code" style="padding:14px; font-size:12px; line-height:1.55; overflow-x:auto;"></pre>
+          </div>
+
+          <div class="code-box">
+            <div class="code-box-header" style="background:rgba(16, 185, 129, 0.18); color:#6ee7b7;">
+              <span>✅ AFTER: Target Rust Implementation</span>
+              <code id="spotlight-rust-file" style="font-size:11px; color:#cbd5e1;">Not measured</code>
+            </div>
+            <pre id="spotlight-rust-code" style="padding:14px; font-size:12px; line-height:1.55; overflow-x:auto;"></pre>
+          </div>
+        </div>
+      </div>
+    </details>
+
+  </main>
+
+  <script>
+    const RAW_INJECTED = "__TELEMETRY_JSON_PLACEHOLDER__";
+    const DATA = (typeof RAW_INJECTED === "object" && RAW_INJECTED !== null)
+      ? RAW_INJECTED
+      : null;
+
+    // Theme management
+    function applyTheme(theme) {
+      const resolved = theme === 'dark' ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', resolved);
+      const iconEl = document.getElementById('theme-toggle-icon');
+      const labelEl = document.getElementById('theme-toggle-label');
+      if (iconEl && labelEl) {
+        if (resolved === 'dark') {
+          iconEl.textContent = '☀️';
+          labelEl.textContent = 'Light Mode';
+        } else {
+          iconEl.textContent = '🌙';
+          labelEl.textContent = 'Dark Mode';
+        }
+      }
+      try {
+        localStorage.setItem('migrate_to_rust_theme', resolved);
+      } catch (e) {}
+    }
+
+    function toggleTheme() {
+      const current = document.documentElement.getAttribute('data-theme') || 'light';
+      applyTheme(current === 'dark' ? 'light' : 'dark');
+    }
+
+    (function initTheme() {
+      let saved = 'light';
+      try {
+        const stored = localStorage.getItem('migrate_to_rust_theme');
+        if (stored === 'dark' || stored === 'light') saved = stored;
+      } catch (e) {}
+      applyTheme(saved);
+    })();
+
+    // Format AI minutes strictly in compact H:MM format
+    function formatAiDuration(totalMins) {
+      const m = Math.max(0, Math.round(Number(totalMins) || 0));
+      const hrs = Math.floor(m / 60);
+      const mins = m % 60;
+      return `${hrs}:${String(mins).padStart(2, '0')}`;
+    }
+
+    let currentViewMode = 'all';
+
+    function setViewMode(mode, skipUrlUpdate) {
+      if (!['all', 'executive', 'technical'].includes(mode)) mode = 'all';
+      currentViewMode = mode;
+      const secBench = document.getElementById('sec-benchmarks-time');
+      const secScorecard = document.getElementById('sec-scorecard');
+      const secStory = document.getElementById('sec-story');
+      const secTech = document.getElementById('sec-technical');
+
+      ['all', 'executive', 'technical'].forEach(m => {
+        const btn = document.getElementById('btn-mode-' + m);
+        if (!btn) return;
+        if (m === mode) {
+          btn.classList.add('active');
+        } else {
+          btn.classList.remove('active');
+        }
+      });
+
+      if (mode === 'all') {
+        secBench.classList.remove('hidden');
+        secScorecard.classList.remove('hidden');
+        secStory.classList.remove('hidden');
+        secTech.classList.remove('hidden');
+      } else if (mode === 'executive') {
+        secBench.classList.remove('hidden');
+        secScorecard.classList.remove('hidden');
+        secStory.classList.remove('hidden');
+        secTech.classList.add('hidden');
+      } else if (mode === 'technical') {
+        secBench.classList.remove('hidden');
+        secScorecard.classList.add('hidden');
+        secStory.classList.add('hidden');
+        secTech.classList.remove('hidden');
+        secTech.open = true;
+      }
+
+      if (!skipUrlUpdate && typeof window !== 'undefined' && window.history && window.history.replaceState && window.location) {
+        const base = String(window.location.href || '').split('?')[0];
+        const nextUrl = mode === 'all' ? base : `${base}?mode=${encodeURIComponent(mode)}`;
+        window.history.replaceState({ mode }, '', nextUrl);
+      }
+    }
+
+    function gradeFromScore(s) {
+      if (s === null || s === undefined) return 'N/A';
+      if (s >= 95) return 'A+';
+      if (s >= 90) return 'A';
+      if (s >= 80) return 'B';
+      if (s >= 70) return 'C';
+      if (s >= 55) return 'D';
+      return 'F';
+    }
+
+    function renderAll() {
+      if (!DATA) {
+        const mainEl = document.querySelector('main');
+        if (mainEl) {
+          mainEl.innerHTML = `
+            <section class="card" style="border:2px dashed var(--accent-warning); text-align:center; padding:48px 24px;">
+              <span class="badge badge-warning" style="margin-bottom:12px;">Unrendered Template (Fail-Closed)</span>
+              <h2 style="margin:0 0 10px; font-size:22px; font-weight:800;">No Telemetry Data Injected</h2>
+              <p style="margin:0 auto; max-width:640px; font-size:14px; color:var(--text-secondary); line-height:1.6;">
+                This HTML file is an unrendered template. Run <code>python3 scripts/telemetry.py render-infographic --telemetry migration_telemetry.json --out migration_infographic.html</code> to inject measured migration telemetry.
+              </p>
+            </section>
+          `;
+        }
+        return;
+      }
+      const beforeCensus = (DATA.census && DATA.census.before) || {};
+      const afterCensus = (DATA.census && DATA.census.after) || {};
+      const hasAfterUnsafe = afterCensus.unsafe_blocks !== null && afterCensus.unsafe_blocks !== undefined;
+      const hasBeforeHazards = beforeCensus.hazards_count !== null && beforeCensus.hazards_count !== undefined;
+
+      document.getElementById('nav-project-title').textContent = DATA.project_name || 'Rust Migration Telemetry Report';
+      const navLangBadgeEl = document.getElementById('nav-lang-badge');
+      if (hasAfterUnsafe && Number(afterCensus.unsafe_blocks) === 0) {
+        navLangBadgeEl.textContent = `${DATA.legacy_language || 'Legacy'} → Safe Rust`;
+        navLangBadgeEl.className = 'badge badge-success';
+      } else if (afterCensus.scanned) {
+        navLangBadgeEl.textContent = `${DATA.legacy_language || 'Legacy'} → Rust`;
+        navLangBadgeEl.className = 'badge badge-primary';
+      } else {
+        navLangBadgeEl.textContent = DATA.legacy_language ? `${DATA.legacy_language} (Target: Rust)` : 'Language: Unmeasured';
+        navLangBadgeEl.className = 'badge badge-primary';
+      }
+      const modelBadgeEl = document.getElementById('nav-model-badge');
+      if (DATA.model && String(DATA.model).trim() && String(DATA.model).toLowerCase() !== 'unspecified') {
+        modelBadgeEl.textContent = `Model: ${DATA.model}`;
+        modelBadgeEl.classList.remove('hidden');
+      } else {
+        modelBadgeEl.classList.add('hidden');
+      }
+      document.getElementById('hero-timestamp').textContent = (DATA.completed_at && afterCensus.scanned)
+        ? `Completed ${DATA.completed_at}`
+        : (DATA.completed_at ? `Snapshot ${DATA.completed_at} (Incomplete)` : 'Incomplete / In Progress');
+
+      const story = DATA.story || {};
+      document.getElementById('hero-headline').textContent = story.headline
+        || `${DATA.project_name || 'Repository'} Migration Telemetry`;
+      document.getElementById('hero-narrative').textContent = story.intro
+        || 'Narrative summary not yet recorded via set-story.';
+      document.getElementById('ch1-narrative').textContent = story.ch1_narrative || 'Not yet recorded.';
+      document.getElementById('ch2-narrative').textContent = story.ch2_narrative || 'Not yet recorded.';
+      document.getElementById('ch3-narrative').textContent = story.ch3_narrative || 'Not yet recorded.';
+      document.getElementById('ch4-narrative').textContent = story.ch4_narrative || '';
+      document.getElementById('ch5-narrative').textContent = story.ch5_narrative
+        || 'Progressive benchmark stages from legacy baseline to Rust.';
+
+      const benches = DATA.benchmarks || [];
+      if (benches.length >= 2) {
+        const baseBench = benches[0];
+        const finalBench = benches[benches.length - 1];
+        const speedup = Number(finalBench.speedup || (baseBench.wall_time_ms / Math.max(finalBench.wall_time_ms, 0.001)));
+        const runtimeSavedPct = ((1 - 1 / Math.max(speedup, 1)) * 100).toFixed(1);
+        document.getElementById('hero-speedup').textContent = `${speedup.toFixed(2)}x`;
+        document.getElementById('hero-speed-sub').textContent = `${runtimeSavedPct}% faster (${baseBench.wall_time_ms} → ${finalBench.wall_time_ms} ms)`;
+      } else {
+        document.getElementById('hero-speedup').textContent = 'Not measured';
+        document.getElementById('hero-speed-sub').textContent = 'Log benchmarks via log-benchmark';
+        document.getElementById('hero-speed-grade').textContent = 'N/A';
+      }
+
+      const safetyBadgeEl = document.getElementById('hero-safety-badge');
+
+      if (hasAfterUnsafe) {
+        document.getElementById('hero-unsafe').textContent = `${afterCensus.unsafe_blocks} Unsafe`;
+        if (Number(afterCensus.unsafe_blocks) === 0) {
+          safetyBadgeEl.textContent = '#![forbid(unsafe)]';
+          safetyBadgeEl.className = 'badge badge-success';
+        } else {
+          safetyBadgeEl.textContent = `${afterCensus.unsafe_blocks} unsafe`;
+          safetyBadgeEl.className = 'badge badge-warning';
+        }
+      } else {
+        document.getElementById('hero-unsafe').textContent = 'Not measured';
+        safetyBadgeEl.textContent = 'Unmeasured';
+        safetyBadgeEl.className = 'badge badge-warning';
+      }
+      if (hasBeforeHazards && hasAfterUnsafe) {
+        if (Number(afterCensus.unsafe_blocks) === 0) {
+          document.getElementById('hero-safety-sub').textContent = `Eliminated ${beforeCensus.hazards_count} legacy pointer/memory hazards`;
+        } else {
+          document.getElementById('hero-safety-sub').textContent = `${beforeCensus.hazards_count} legacy hazards → ${afterCensus.unsafe_blocks} Rust unsafe blocks`;
+        }
+      } else if (hasBeforeHazards) {
+        document.getElementById('hero-safety-sub').textContent = `${beforeCensus.hazards_count} legacy hazards scanned (after-scan pending)`;
+      } else {
+        document.getElementById('hero-safety-sub').textContent = 'Scan legacy codebase via scan-codebase --phase before';
+      }
+
+      const parityRuns = DATA.parity_iterations || [];
+      const covText = (afterCensus.branch_coverage_pct !== null && afterCensus.branch_coverage_pct !== undefined)
+        ? `${afterCensus.branch_coverage_pct}% coverage`
+        : 'Coverage not measured';
+      if (parityRuns.length > 0) {
+        const lastParity = parityRuns[parityRuns.length - 1];
+        const parityPct = lastParity.seeds_tested > 0 ? ((lastParity.seeds_passed / lastParity.seeds_tested) * 100).toFixed(1) : '0.0';
+        document.getElementById('hero-parity-seeds').textContent = `${lastParity.seeds_tested} Seeds`;
+        document.getElementById('hero-parity').textContent = `${parityPct}%`;
+        document.getElementById('hero-parity-sub').textContent = `Verified within tolerance • ${covText}`;
+      } else {
+        document.getElementById('hero-parity-seeds').textContent = 'Unmeasured';
+        document.getElementById('hero-parity').textContent = 'Not measured';
+        document.getElementById('hero-parity-sub').textContent = `No parity runs logged • ${covText}`;
+      }
+
+      // Measured Agent Time Pillar
+      const buckets = DATA.time_buckets || [];
+      const totalMins = buckets.reduce((acc, b) => acc + (b.minutes || 0), 0);
+      const activeStages = buckets.filter(b => (b.minutes || 0) > 0).length;
+      const formattedAiTime = formatAiDuration(totalMins);
+
+      if (activeStages > 0) {
+        document.getElementById('hero-total-time').textContent = formattedAiTime;
+        document.getElementById('hero-roi-badge').textContent = `${activeStages}/${buckets.length || 6} Stages Timed`;
+        document.getElementById('hero-roi-sub').textContent = `${totalMins} min measured across task buckets`;
+      } else {
+        document.getElementById('hero-total-time').textContent = 'Not measured';
+        document.getElementById('hero-roi-badge').textContent = 'Unmeasured';
+        document.getElementById('hero-roi-sub').textContent = 'No stage timers recorded';
+      }
+
+      // Render Scorecard Grid
+      const scorecard = DATA.scorecard || [];
+      if (scorecard[0] && scorecard[0].after_grade && scorecard[0].after_score !== null && scorecard[0].after_score !== undefined) {
+        document.getElementById('hero-speed-grade').textContent = scorecard[0].after_grade;
+      } else {
+        document.getElementById('hero-speed-grade').textContent = 'N/A';
+      }
+      const gridEl = document.getElementById('scorecard-grid');
+      gridEl.innerHTML = '';
+      let sumBefore = 0, countBefore = 0, sumAfter = 0, countAfter = 0;
+
+      scorecard.forEach(item => {
+        const hasBefore = item.before_score !== null && item.before_score !== undefined;
+        const hasAfter = item.after_score !== null && item.after_score !== undefined;
+        if (hasBefore) { sumBefore += item.before_score; countBefore++; }
+        if (hasAfter) { sumAfter += item.after_score; countAfter++; }
+        const beforeScoreText = hasBefore ? `${item.before_score}/100 (${item.before_grade})` : 'Not measured';
+        const afterScoreText = hasAfter ? `${item.after_score}/100 (${item.after_grade})` : 'Not measured';
+        const barWidth = hasAfter ? item.after_score : 0;
+
+        const card = document.createElement('div');
+        card.className = "score-item";
+        card.innerHTML = `
+          <div>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:6px; margin-bottom:8px;">
+              <span style="font-size:12.5px; font-weight:700;">${item.icon || '📊'} ${item.title}</span>
+              <span class="badge ${hasAfter ? 'badge-success' : 'badge-warning'}">${item.delta_badge}</span>
+            </div>
+            <div style="display:flex; align-items:center; justify-content:space-between; background:var(--bg-surface); border:1px solid var(--border-color); border-radius:9px; padding:8px 10px; margin-bottom:8px;">
+              <div>
+                <div style="font-size:10px; text-transform:uppercase; color:var(--text-muted);">Before</div>
+                <div style="font-size:13px; font-weight:700; color:var(--accent-danger);">${beforeScoreText}</div>
+                <div style="font-size:11px; color:var(--text-secondary);">${item.before_label}</div>
+              </div>
+              <div style="font-weight:700; color:var(--text-muted);">→</div>
+              <div style="text-align:right;">
+                <div style="font-size:10px; text-transform:uppercase; color:var(--text-muted);">After (Rust)</div>
+                <div style="font-size:13px; font-weight:800; color:var(--accent-success);">${afterScoreText}</div>
+                <div style="font-size:11px; color:var(--accent-success); font-weight:600;">${item.after_label}</div>
+              </div>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill" style="width:${barWidth}%; background:var(--accent-success);"></div>
+            </div>
+          </div>
+          <div style="font-size:11.5px; color:var(--text-secondary); line-height:1.45;">
+            ${item.explanation}
+          </div>
+        `;
+        gridEl.appendChild(card);
+      });
+
+      const avgBefore = countBefore > 0 ? Math.round(sumBefore / countBefore) : null;
+      const avgAfter = countAfter > 0 ? Math.round(sumAfter / countAfter) : null;
+      document.getElementById('overall-before-score').textContent = avgBefore !== null
+        ? `Legacy: ${avgBefore}/100 (${gradeFromScore(avgBefore)})`
+        : 'Legacy: Not measured';
+      document.getElementById('overall-after-score').textContent = avgAfter !== null
+        ? `Safe Rust: ${avgAfter}/100 (${gradeFromScore(avgAfter)})`
+        : 'Safe Rust: Not measured';
+
+      // Chapter 1 Metrics & Opportunities
+      const latentBugsRaw = beforeCensus.latent_bugs_found;
+      const hasLatentBugsCount = (
+        latentBugsRaw !== null &&
+        latentBugsRaw !== undefined &&
+        (Boolean(beforeCensus.scanned) || (Array.isArray(DATA.opportunities) && DATA.opportunities.length > 0))
+      );
+      if (hasLatentBugsCount) {
+        const bugsCount = Number(latentBugsRaw);
+        document.getElementById('ch1-bugs-pill').textContent = `${bugsCount} Hidden Bug${bugsCount === 1 ? '' : 's'} Found`;
+        document.getElementById('ch1-latent-bugs').textContent = `${bugsCount} Bug${bugsCount === 1 ? '' : 's'}`;
+      } else {
+        document.getElementById('ch1-bugs-pill').textContent = 'Audit Not Measured';
+        document.getElementById('ch1-latent-bugs').textContent = 'Not measured';
+      }
+      document.getElementById('ch1-max-loc').textContent = beforeCensus.max_file_loc ? `${beforeCensus.max_file_loc.toLocaleString()} LOC` : 'Not measured';
+      document.getElementById('ch1-comment-pct').textContent = (beforeCensus.comment_pct !== null && beforeCensus.comment_pct !== undefined) ? `${beforeCensus.comment_pct}%` : 'Not measured';
+      document.getElementById('ch1-hazards').textContent = (beforeCensus.hazards_count !== null && beforeCensus.hazards_count !== undefined) ? `${beforeCensus.hazards_count} Hazards` : 'Not measured';
+
+      const oppEl = document.getElementById('opportunities-list');
+      oppEl.innerHTML = '';
+      (DATA.opportunities || []).forEach(opp => {
+        const cat = String(opp.category || 'architecture');
+        const isBug = cat === 'latent_bug';
+        const badgeClass = isBug ? 'badge-danger' : 'badge-primary';
+        const badgeLabel = isBug ? '🐞 Latent Legacy Bug' : `💡 ${cat.toUpperCase()}`;
+        const item = document.createElement('div');
+        item.style.cssText = "background:var(--bg-subtle); border:1px solid var(--border-color); border-radius:12px; padding:14px;";
+        item.innerHTML = `
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px;">
+            <span class="badge ${badgeClass}">${badgeLabel}</span>
+            <code style="font-size:11px; color:var(--text-muted);">${opp.file || ''}</code>
+          </div>
+          <div style="font-size:13px; font-weight:700; margin-bottom:4px;">${opp.title || ''}</div>
+          <div style="font-size:12.5px; color:var(--text-secondary); line-height:1.5;">${opp.description || ''}</div>
+        `;
+        oppEl.appendChild(item);
+      });
+
+      // Chapter 2 Hygiene & Simplicity Bars
+      const docBeforePct = beforeCensus.comment_pct;
+      const docAfterPct = afterCensus.comment_pct;
+      if (docBeforePct !== null && docBeforePct !== undefined && docAfterPct !== null && docAfterPct !== undefined) {
+        const docIncreasePct = docBeforePct > 0 ? Math.round(((docAfterPct - docBeforePct) / docBeforePct) * 100) : 0;
+        const docTestsVal = (afterCensus.doc_tests !== null && afterCensus.doc_tests !== undefined) ? afterCensus.doc_tests : null;
+        document.getElementById('ch2-doc-delta').textContent = docIncreasePct >= 0
+          ? `+${docIncreasePct}% More Docs`
+          : (docTestsVal !== null ? `${docTestsVal} Doc-Tests` : `${docAfterPct}% Docs`);
+        const beforeLinesPart = (beforeCensus.comment_loc !== null && beforeCensus.comment_loc !== undefined) ? ` (${beforeCensus.comment_loc} lines)` : '';
+        const afterLinesPart = (afterCensus.comment_loc !== null && afterCensus.comment_loc !== undefined)
+          ? ` (${afterCensus.comment_loc} lines${docTestsVal !== null ? ` • ${docTestsVal} doc-tests` : ''})`
+          : (docTestsVal !== null ? ` (${docTestsVal} doc-tests)` : '');
+        document.getElementById('ch2-doc-before').textContent = `${docBeforePct}%${beforeLinesPart}`;
+        document.getElementById('ch2-doc-after').textContent = `${docAfterPct}%${afterLinesPart}`;
+        document.getElementById('ch2-doc-bar-before').style.width = `${Math.min(100, Math.max(5, Math.round(docBeforePct * 2)))}%`;
+        document.getElementById('ch2-doc-bar-after').style.width = `${Math.min(100, Math.max(5, Math.round(docAfterPct * 2.5)))}%`;
+      } else {
+        document.getElementById('ch2-doc-delta').textContent = 'Not measured';
+        document.getElementById('ch2-doc-before').textContent = docBeforePct !== null && docBeforePct !== undefined ? `${docBeforePct}%` : 'Not measured';
+        document.getElementById('ch2-doc-after').textContent = docAfterPct !== null && docAfterPct !== undefined ? `${docAfterPct}%` : 'Not measured';
+        document.getElementById('ch2-doc-bar-before').style.width = '0%';
+        document.getElementById('ch2-doc-bar-after').style.width = '0%';
+      }
+
+      const maxLocBefore = beforeCensus.max_file_loc || 0;
+      const maxLocAfter = afterCensus.max_file_loc || 0;
+      if (maxLocBefore > 0 && maxLocAfter > 0) {
+        const locDropPct = Math.round(((maxLocBefore - maxLocAfter) / maxLocBefore) * 100);
+        document.getElementById('ch2-loc-delta').textContent = `${locDropPct >= 0 ? '-' : '+'}${Math.abs(locDropPct)}% Max File LOC`;
+        document.getElementById('ch2-loc-before').textContent = `${maxLocBefore.toLocaleString()} LOC max`;
+        document.getElementById('ch2-loc-after').textContent = `${maxLocAfter.toLocaleString()} LOC max`;
+        document.getElementById('ch2-loc-bar-before').style.width = '95%';
+        document.getElementById('ch2-loc-bar-after').style.width = `${Math.min(95, Math.max(10, Math.round((maxLocAfter / Math.max(maxLocBefore, 400)) * 95)))}%`;
+      } else {
+        document.getElementById('ch2-loc-delta').textContent = 'Not measured';
+        document.getElementById('ch2-loc-before').textContent = maxLocBefore > 0 ? `${maxLocBefore} LOC` : 'Not measured';
+        document.getElementById('ch2-loc-after').textContent = maxLocAfter > 0 ? `${maxLocAfter} LOC` : 'Not measured';
+        document.getElementById('ch2-loc-bar-before').style.width = '0%';
+        document.getElementById('ch2-loc-bar-after').style.width = '0%';
+      }
+
+      const fnBefore = beforeCensus.avg_fn_loc;
+      const fnAfter = afterCensus.avg_fn_loc;
+      const depthBefore = beforeCensus.max_nesting_depth;
+      const depthAfter = afterCensus.max_nesting_depth;
+      if (fnBefore !== null && fnBefore !== undefined && fnAfter !== null && fnAfter !== undefined) {
+        const fnDropPct = fnBefore > 0 ? Math.round(((fnBefore - fnAfter) / fnBefore) * 100) : 0;
+        const hasDepth = depthBefore !== null && depthBefore !== undefined && depthAfter !== null && depthAfter !== undefined;
+        document.getElementById('ch2-simplicity-delta').textContent = fnDropPct >= 0
+          ? `-${fnDropPct}% Fn Complexity`
+          : (hasDepth ? `Depth ${depthBefore} → ${depthAfter}` : `${fnAfter} LOC/fn`);
+        document.getElementById('ch2-simp-before').textContent = `${fnBefore} LOC/fn${depthBefore !== null && depthBefore !== undefined ? ` • depth ${depthBefore}` : ''}`;
+        document.getElementById('ch2-simp-after').textContent = `${fnAfter} LOC/fn${depthAfter !== null && depthAfter !== undefined ? ` • depth ${depthAfter}` : ''}`;
+        const maxFn = Math.max(fnBefore, fnAfter, 1);
+        document.getElementById('ch2-simp-bar-before').style.width = `${Math.min(95, Math.max(10, Math.round((fnBefore / maxFn) * 90)))}%`;
+        document.getElementById('ch2-simp-bar-after').style.width = `${Math.min(95, Math.max(10, Math.round((fnAfter / maxFn) * 90)))}%`;
+      } else {
+        document.getElementById('ch2-simplicity-delta').textContent = 'Not measured';
+        document.getElementById('ch2-simp-before').textContent = (fnBefore !== null && fnBefore !== undefined) ? `${fnBefore} LOC/fn` : 'Not measured';
+        document.getElementById('ch2-simp-after').textContent = (fnAfter !== null && fnAfter !== undefined) ? `${fnAfter} LOC/fn` : 'Not measured';
+        document.getElementById('ch2-simp-bar-before').style.width = '0%';
+        document.getElementById('ch2-simp-bar-after').style.width = '0%';
+      }
+
+      // Chapter 3 Test Self-Healing List
+      const testListEl = document.getElementById('test-iterations-list');
+      testListEl.innerHTML = '';
+      const testRuns = DATA.test_iterations || [];
+      if (testRuns.length > 0) {
+        const firstRun = testRuns[0];
+        const lastRun = testRuns[testRuns.length - 1];
+        const firstFailPct = firstRun.total > 0 ? ((firstRun.failed / firstRun.total) * 100).toFixed(1) : "0.0";
+        const lastPassPct = lastRun.total > 0 ? ((lastRun.passed / lastRun.total) * 100).toFixed(1) : "0.0";
+        document.getElementById('ch3-initial-fail-badge').textContent =
+          `Initial Run: ${firstFailPct}% Failed → Final: ${lastPassPct}% Pass`;
+      } else {
+        document.getElementById('ch3-initial-fail-badge').textContent = 'No Test Runs Logged';
+      }
+      testRuns.forEach(tr => {
+        const passPct = tr.total > 0 ? ((tr.passed / tr.total) * 100).toFixed(1) : "0.0";
+        const isClean = tr.failed === 0;
+        const covDisplay = (tr.coverage_pct !== null && tr.coverage_pct !== undefined) ? `${tr.coverage_pct}%` : 'Not measured';
+        const clippyDisplay = (tr.clippy_warnings !== null && tr.clippy_warnings !== undefined) ? String(tr.clippy_warnings) : 'Not measured';
+        const row = document.createElement('div');
+        row.style.cssText = "background:var(--bg-subtle); border:1px solid var(--border-color); border-radius:12px; padding:14px; font-size:12.5px;";
+        row.innerHTML = `
+          <div style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px;">
+            <div>
+              <span class="badge ${isClean ? 'badge-success' : 'badge-warning'}">Test Run #${tr.iteration}</span>
+              <strong style="margin-left:6px;">${tr.passed}/${tr.total} Passed (${passPct}%) • ${tr.failed} Failed</strong>
+            </div>
+            <span style="color:var(--text-secondary);">Coverage: <strong>${covDisplay}</strong> • Clippy Warnings: <strong>${clippyDisplay}</strong></span>
+          </div>
+          <div style="color:var(--text-secondary); margin-top:4px;"><strong>Diagnostic:</strong> ${tr.failures_summary}</div>
+          <div style="color:var(--accent-success-text); margin-top:3px;"><strong>Self-Healing Action:</strong> ${tr.fix_applied}</div>
+        `;
+        testListEl.appendChild(row);
+      });
+
+      // Chapter 4 Parity Iterations
+      const parityEl = document.getElementById('parity-iterations-list');
+      parityEl.innerHTML = '';
+      if (parityRuns.length > 0) {
+        const lp = parityRuns[parityRuns.length - 1];
+        const pct = lp.seeds_tested > 0 ? ((lp.seeds_passed / lp.seeds_tested) * 100).toFixed(1) : '0.0';
+        document.getElementById('ch4-parity-badge').textContent = `${pct}% Output Parity`;
+      } else {
+        document.getElementById('ch4-parity-badge').textContent = 'Parity Not Measured';
+      }
+      parityRuns.forEach(pr => {
+        const isClean = pr.seeds_passed === pr.seeds_tested;
+        const row = document.createElement('div');
+        row.style.cssText = "background:var(--bg-subtle); border:1px solid var(--border-color); border-radius:12px; padding:14px; font-size:12.5px;";
+        row.innerHTML = `
+          <div style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px;">
+            <span class="badge ${isClean ? 'badge-success' : 'badge-warning'}">A/B Parity Run #${pr.iteration}: ${pr.seeds_passed}/${pr.seeds_tested} Seeds Matched</span>
+            <span style="color:var(--text-secondary);">Max Error: <strong>${pr.max_abs_error}</strong></span>
+          </div>
+          <div style="color:var(--text-secondary);"><strong>Finding:</strong> ${pr.divergence_cause}</div>
+          <div style="color:var(--accent-success-text); margin-top:3px;"><strong>Resolution:</strong> ${pr.fix_applied}</div>
+        `;
+        parityEl.appendChild(row);
+      });
+
+      // Chapter 5 PGO Benchmark Staircase
+      const stairEl = document.getElementById('benchmark-staircase');
+      stairEl.innerHTML = '';
+      if (benches.length >= 2) {
+        const prePgo = benches[benches.length - 2];
+        const postPgo = benches[benches.length - 1];
+        if (prePgo && postPgo && postPgo.wall_time_ms > 0) {
+          const pgoGain = Math.round(((prePgo.wall_time_ms - postPgo.wall_time_ms) / prePgo.wall_time_ms) * 100);
+          if (pgoGain > 0) {
+            document.getElementById('ch5-pgo-badge').textContent = `+${pgoGain}% Extra Boost from PGO`;
+          } else {
+            document.getElementById('ch5-pgo-badge').textContent = `${benches.length} Stages Logged`;
+          }
+        }
+      } else if (benches.length === 1) {
+        document.getElementById('ch5-pgo-badge').textContent = '1 Stage Logged';
+      } else {
+        document.getElementById('ch5-pgo-badge').textContent = 'No Benchmarks Logged';
+      }
+      const firstBenchMs = benches.length > 0 ? Math.max(0.001, benches[0].wall_time_ms) : 1.0;
+      benches.forEach((b, idx) => {
+        const timeRatioPct = Math.min(100, Math.max(10, Math.round((b.wall_time_ms / firstBenchMs) * 100)));
+        const isFinal = idx === benches.length - 1;
+        const barCol = idx === 0 ? 'var(--text-muted)' : (isFinal ? 'var(--accent-success)' : 'var(--accent-primary)');
+        const row = document.createElement('div');
+        row.style.cssText = "background:var(--bg-subtle); border:1px solid var(--border-color); border-radius:10px; padding:11px 13px;";
+        row.innerHTML = `
+          <div style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px; font-size:12.5px; margin-bottom:5px;">
+            <strong>${b.label}</strong>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span class="mono" style="font-size:11.5px; color:var(--text-secondary);">${b.wall_time_ms} ms • ${b.peak_rss_mb} MB</span>
+              <span class="badge ${isFinal ? 'badge-success' : 'badge-primary'}">${b.speedup.toFixed(2)}x</span>
+            </div>
+          </div>
+          <div class="bar-track">
+            <div class="bar-fill" style="width:${timeRatioPct}%; background:${barCol};"></div>
+          </div>
+          <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">${b.notes || ''}</div>
+        `;
+        stairEl.appendChild(row);
+      });
+
+      // Chapter 6 Time Buckets
+      document.getElementById('ch6-total-badge').textContent = activeStages > 0 ? `Total: ${formattedAiTime}` : 'Not measured';
+      const stackedBar = document.getElementById('time-stacked-bar');
+      const bucketsGrid = document.getElementById('time-buckets-grid');
+      stackedBar.innerHTML = '';
+      bucketsGrid.innerHTML = '';
+
+      const palette = ['#3b82f6', '#6366f1', '#10b981', '#f59e0b', '#06b6d4', '#8b5cf6'];
+      buckets.forEach((b, idx) => {
+        const pct = totalMins > 0 ? ((b.minutes / totalMins) * 100).toFixed(1) : '0.0';
+        const col = palette[idx % palette.length];
+        if (b.minutes > 0) {
+          const seg = document.createElement('div');
+          seg.style.cssText = `width:${pct}%; height:100%; background:${col};`;
+          seg.title = `${b.label}: ${formatAiDuration(b.minutes)} (${pct}%)`;
+          stackedBar.appendChild(seg);
+        }
+
+        const card = document.createElement('div');
+        card.style.cssText = "background:var(--bg-subtle); border:1px solid var(--border-color); border-radius:10px; padding:9px 11px; display:flex; align-items:center; justify-content:space-between; gap:8px;";
+        card.innerHTML = `
+          <div style="display:flex; align-items:center; gap:7px;">
+            <span style="width:9px; height:9px; border-radius:999px; background:${col}; flex-shrink:0;"></span>
+            <div>
+              <div style="font-size:12px; font-weight:700;">${b.label}</div>
+              <div style="font-size:10.5px; color:var(--text-muted);">${b.minutes > 0 ? `${pct}% of agent time` : 'Not timed'}</div>
+            </div>
+          </div>
+          <strong class="mono" style="font-size:12.5px;">${b.minutes > 0 ? formatAiDuration(b.minutes) : 'Not measured'}</strong>
+        `;
+        bucketsGrid.appendChild(card);
+      });
+
+      // Spotlight
+      const spot = DATA.spotlight || {};
+      document.getElementById('spotlight-explanation').textContent = spot.explanation || 'Not yet recorded.';
+      document.getElementById('spotlight-legacy-file').textContent = spot.legacy_file || 'Not measured';
+      document.getElementById('spotlight-legacy-code').textContent = spot.legacy_code || '';
+      document.getElementById('spotlight-rust-file').textContent = spot.rust_file || 'Not measured';
+      document.getElementById('spotlight-rust-code').textContent = spot.rust_code || '';
+    }
+
+    renderAll();
+    if (typeof window !== 'undefined' && window.location && window.location.search) {
+      const m = String(window.location.search).match(/[?&]mode=([^&]+)/);
+      const modeParam = m ? decodeURIComponent(m[1]) : null;
+      if (modeParam && ['all', 'executive', 'technical'].includes(modeParam)) {
+        setViewMode(modeParam, true);
+      }
+    }
+  </script>
+</body>
+</html>

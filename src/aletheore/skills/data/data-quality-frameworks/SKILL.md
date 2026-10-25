@@ -1,0 +1,107 @@
+---
+name: data-quality-frameworks
+description: Implement data quality validation with Great Expectations, dbt tests, and data contracts. Use when building data quality pipelines, implementing validation rules, or establishing data contracts.
+skill_id: data/data-quality-frameworks
+title: Data Quality Frameworks
+source_url: https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/data-engineering/skills/data-quality-frameworks
+license: MIT
+shelf: build
+aletheore: {"id": "data/data-quality-frameworks", "shelf": "build", "category": "data", "origin": "https://github.com/wshobson/agents/tree/0874a27b17a22e2b7c2e2bcd725768e0803cad06/plugins/data-engineering/skills/data-quality-frameworks", "license": "MIT", "license_source": "LICENSE", "upstream_commit": "0874a27b17a22e2b7c2e2bcd725768e0803cad06", "quality": 4, "curation_note": "data quality frameworks", "needs_tool": null, "vet": {"injection_pattern_hits": [], "portability_flags": [], "companion_files": 1, "has_scripts": false}, "curated_on": "2026-10-18", "requires": [], "adapted": {"SKILL.md": "the tail of a code sample (from its Summary report line to the closing fence) was left in the skill body when it was trimmed to a pointer; it was removed and restored to references/details.md", "references/details.md": "the end of the DataQualityPipeline sample, cut off mid-string by the same trim, was restored and its code fence closed"}, "status": "ready", "mentions_agents": []}
+---
+
+# Data Quality Frameworks
+
+Production patterns for implementing data quality with Great Expectations, dbt tests, and data contracts to ensure reliable data pipelines.
+
+## When to Use This Skill
+
+- Implementing data quality checks in pipelines
+- Setting up Great Expectations validation
+- Building comprehensive dbt test suites
+- Establishing data contracts between teams
+- Monitoring data quality metrics
+- Automating data validation in CI/CD
+
+## Core Concepts
+
+### 1. Data Quality Dimensions
+
+| Dimension        | Description              | Example Check                                      |
+| ---------------- | ------------------------ | -------------------------------------------------- |
+| **Completeness** | No missing values        | `expect_column_values_to_not_be_null`              |
+| **Uniqueness**   | No duplicates            | `expect_column_values_to_be_unique`                |
+| **Validity**     | Values in expected range | `expect_column_values_to_be_in_set`                |
+| **Accuracy**     | Data matches reality     | Cross-reference validation                         |
+| **Consistency**  | No contradictions        | `expect_column_pair_values_A_to_be_greater_than_B` |
+| **Timeliness**   | Data is recent           | `expect_column_max_to_be_between`                  |
+
+### 2. Testing Pyramid for Data
+
+```
+          /\
+         /  \     Integration Tests (cross-table)
+        /────\
+       /      \   Unit Tests (single column)
+      /────────\
+     /          \ Schema Tests (structure)
+    /────────────\
+```
+
+## Quick Start
+
+### Great Expectations Setup
+
+```bash
+# Install
+pip install great_expectations
+
+# Initialize project
+great_expectations init
+
+# Create datasource
+great_expectations datasource new
+```
+
+```python
+# great_expectations/checkpoints/daily_validation.yml
+import great_expectations as gx
+
+# Create context
+context = gx.get_context()
+
+# Create expectation suite
+suite = context.add_expectation_suite("orders_suite")
+
+# Add expectations
+suite.add_expectation(
+    gx.expectations.ExpectColumnValuesToNotBeNull(column="order_id")
+)
+suite.add_expectation(
+    gx.expectations.ExpectColumnValuesToBeUnique(column="order_id")
+)
+
+# Validate
+results = context.run_checkpoint(checkpoint_name="daily_orders")
+```
+
+## Detailed patterns and worked examples
+
+Detailed pattern documentation lives in `references/details.md`. Read that file when the navigation tier above is insufficient.
+
+## Best Practices
+
+### Do's
+
+- **Test early** - Validate source data before transformations
+- **Test incrementally** - Add tests as you find issues
+- **Document expectations** - Clear descriptions for each test
+- **Alert on failures** - Integrate with monitoring
+- **Version contracts** - Track schema changes
+
+### Don'ts
+
+- **Don't test everything** - Focus on critical columns
+- **Don't ignore warnings** - They often precede failures
+- **Don't skip freshness** - Stale data is bad data
+- **Don't hardcode thresholds** - Use dynamic baselines
+- **Don't test in isolation** - Test relationships too

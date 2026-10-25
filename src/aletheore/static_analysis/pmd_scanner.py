@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -76,11 +77,17 @@ def check_pmd(repo_path: Path, timeout: int | None = None) -> dict:
     # count_real_files used to be two separate full-tree walks here.
     has_java, file_count = file_census(repo_path, "*.java")
     if not has_java:
-        return {"checked": True, "reason": None, "findings": []}
+        return {"checked": True, "reason": None, "findings": [], "not_applicable": "no Java source files"}
 
     binary = shutil.which("pmd")
     if binary is None:
         return {"checked": False, "reason": "pmd not installed", "findings": []}
+    # Resolve to an absolute path before the subprocess below switches its
+    # cwd to repo_path - shutil.which() can return a path relative to a
+    # relative PATH entry, which a scanned (untrusted) repo could otherwise
+    # shadow with its own same-named executable (Strix security review,
+    # 2026-10-15).
+    binary = os.path.abspath(binary)
 
     resolved_timeout = timeout if timeout is not None else _scaled_timeout(file_count)
     cmd = [

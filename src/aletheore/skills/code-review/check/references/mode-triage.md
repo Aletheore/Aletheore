@@ -1,0 +1,26 @@
+# Triage Mode (issue / PR queues)
+
+Loaded from `check` Mode Picker when the request is issue/PR triage. Shared review surface (Scope, Hard Rules, Hard Stops, Autofix, Specialist Review, Verification, Sign-off) still applies from `SKILL.md`.
+
+Activate when the user mentions: issue, PR, "review all", triage, "batch", or "批量处理". Skip the diff flow and run this instead.
+
+**Action-first rule:** Items with a clear disposition (already fixed, duplicate, already released) get acted on immediately without analysis paragraphs. When analyzing screenshots or images, state what you see and the suggested action in one message. Only ask the user when the disposition is genuinely ambiguous.
+
+**Bundled request classification:** When one issue, PR, or support thread contains several asks, split them before acting: core bug, existing affordance, cosmetic preference, and out-of-scope request. Answer existing affordances with the current path and assess each remaining ask against the maintainer's accepted scope. Classification does not cancel an explicitly requested cosmetic fix or authorize removing an accepted feature; record a separate disposition for every ask.
+
+**Status answer order:** For "都解决了吗", "is this fixed", "is this ready", or similar status checks, answer in this order: code or commit state, branch or CI state, release artifact or registry state, then public issue or PR state. Do not collapse fixed-on-main, available in pre-release, next stable release, and already shipped.
+
+**Flow:** Identify the project's issue/PR host from public context and use that platform's CLI/API; if none exists, stop and report the missing integration instead of pretending GitHub commands apply. Freeze the initial queue as exact IDs plus counts before acting. For each open item, check current state against the project's release boundary: latest public release, main branch, preview/nightly/beta channel, registry/appcast, and target issue/PR status. Already in a public release or documented pre-release channel: close with that exact upgrade path. Fixed on `main` but unreleased: reply "已修复，等下一个版本 release" and close only when project convention or the current user request allows fixed-on-main closure, otherwise leave it open with the next-release note. No fix yet: analyze and act. Fix now if possible (`fix: closes #N` commit); for valid-but-unreleased items acknowledge and leave open; for invalid items give a one-two sentence reason and close.
+
+Before final conclusions in a live queue, refresh the issue/PR list once more and re-read any item that changed during the run. Reconcile every initial ID as done, deferred, or blocked, then report the final IDs and counts; list newly arrived items separately. If evidence is incomplete, hold the item instead of closing it on a guess. Missing logs, inability to reproduce, or inability to fix now do not establish invalidity or a not-planned decision. State the missing evidence and the smallest next diagnostic step; send that request only within the user's authorization.
+
+**PR handling:** Read the check state as a count, not a color: zero check runs with a non-green mergeability status means nothing was verified, not that something failed, and a contributor's "CI is green" may refer to a different base than their patch. Reproduce the verification locally before merging, and say which layer the green came from.
+
+Keep PRs with unresolved evidence in a pending state. Once the evidence supports a final decision, name one of three dispositions in the analysis output: merge as written, push fixes onto the contributor's branch then merge, or close as not planned. "Not mergeable as written" without naming the fix-on-their-branch option is an incomplete triage, and it is the most common one to skip because the patch's flaws are the most visible thing about it. If the PR direction is accepted but the patch needs changes, prefer pushing the maintainer's fixes to the contributor's PR branch and then merging the PR. Check `maintainerCanModify` first, then confirm the push remote, target branch, and current HEAD immediately before pushing so you do not overwrite contributor work or push maintainer fixes to the wrong repository. If branch edits are not allowed, ask the contributor to enable maintainer edits or push the needed revision; only fall back to a separate maintainer commit when timing or release safety requires it, and say so in the PR. Close without merging only when the direction is rejected, unsafe, no longer needed, or explicitly not part of the project's scope. Do not silently absorb an accepted PR into `main` and close it.
+
+**Public replies:** load `references/public-reply.md` for login resolution, edit-or-new-comment, read-back, and closure criteria; the reply body follows `write` Public Reply Mode.
+
+**Sign-off line (append to standard sign-off):**
+```
+triage:           N reviewed, N closed, N deferred
+```

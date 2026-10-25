@@ -1,0 +1,205 @@
+[
+  {
+    "type": "tool_confusion",
+    "severity": "medium",
+    "description": "Agent attempted to fetch non-existent or unreachable URLs without adjusting approach",
+    "suggestion": "When a URL fetch fails, search for alternative URLs or verify the URL structure. Consider using search to find the correct documentation pages.",
+    "iteration": 1
+  },
+  {
+    "type": "missing_validation",
+    "severity": "medium",
+    "description": "Agent didn't validate the completeness of gathered information or verify key claims",
+    "suggestion": "Before writing the final report, explicitly validate that all required topics are covered. Create a checklist of requirements and verify each one is addressed.",
+    "iteration": 1
+  },
+  {
+    "type": "tool_misuse",
+    "severity": "low",
+    "description": "Agent made redundant searches and didn't optimize tool calls",
+    "suggestion": "Track previously found URLs to avoid redundant searches. When a useful URL is found in one search, use it directly rather than searching again for the same topic.",
+    "iteration": 1
+  },
+  {
+    "type": "incomplete_reasoning",
+    "severity": "low",
+    "description": "Thinking blocks are sparse and don't show deep analysis of alternatives or trade-offs",
+    "suggestion": "In thinking blocks, explicitly list what information has been gathered, what gaps remain, and what decisions are being made. Use structured checklists.",
+    "iteration": 1
+  },
+  {
+    "type": "missing_validation",
+    "severity": "high",
+    "description": "Agent failed to properly handle or acknowledge tool errors, particularly the failed URL fetch for Anthropic context windows documentation",
+    "suggestion": "Add explicit error handling for failed tool calls - when a read_url fails, the agent should acknowledge it and either retry, try an alternative source, or explicitly note that information is missing rather than proceeding as if it succeeded",
+    "iteration": 2
+  },
+  {
+    "type": "tool_misuse",
+    "severity": "medium",
+    "description": "Agent did not verify or validate the relevance of search results before committing to reading sources",
+    "suggestion": "After receiving search results, explicitly evaluate and rank sources by relevance to the research question before deciding which URLs to read. This saves token costs and ensures better source quality.",
+    "iteration": 2
+  },
+  {
+    "type": "premature_conclusion",
+    "severity": "low",
+    "description": "Agent prematurely declared having 'enough information' despite not yet completing all research phases",
+    "suggestion": "Before declaring research complete, create a checklist of what information is still needed and verify each item is adequately covered. Set explicit criteria for 'enough information' at task start.",
+    "iteration": 2
+  },
+  {
+    "type": "missing_validation",
+    "severity": "medium",
+    "description": "Agent accepted information without verifying it and failed to handle errors gracefully",
+    "suggestion": "Implement explicit error checking after each tool call. If a read_url fails, acknowledge the failure and try an alternative source. Cross-reference key claims across multiple sources before including them in the final report.",
+    "iteration": 3
+  },
+  {
+    "type": "incomplete_reasoning",
+    "severity": "medium",
+    "description": "Agent gathered information but didn't deeply analyze or synthesize insights",
+    "suggestion": "After reading sources, explicitly document what was learned, what contradictions exist, and what gaps remain. Create a synthesis section that combines insights from multiple sources rather than just reporting them separately.",
+    "iteration": 3
+  },
+  {
+    "type": "tool_misuse",
+    "severity": "low",
+    "description": "Agent used tools but didn't fully leverage results or handle failures properly",
+    "suggestion": "Immediately act on directory listing results. If a directory is empty, plan when to create notes rather than waiting. Implement proper error handling for tool failures and check response status codes before proceeding.",
+    "iteration": 3
+  },
+  {
+    "type": "tool_misuse",
+    "severity": "medium",
+    "description": "Agent uses list_directory to verify file creation instead of the more reliable read_file method",
+    "suggestion": "Use read_file to verify file write success since it confirms both file existence and content; list_directory may not immediately reflect recent filesystem changes",
+    "iteration": 4
+  },
+  {
+    "type": "missing_validation",
+    "severity": "medium",
+    "description": "Agent reads a URL that returns an error but doesn't acknowledge or log this failure, potentially missing important context",
+    "suggestion": "Implement explicit error handling for failed URL reads - log which sources failed and consider searching for alternative sources or documentation",
+    "iteration": 4
+  },
+  {
+    "type": "incomplete_reasoning",
+    "severity": "low",
+    "description": "Agent doesn't explain why it chose certain sources or how it evaluated source quality; research appears thorough but reasoning process is opaque",
+    "suggestion": "Add explicit reasoning about source selection criteria (e.g., prioritizing official documentation, recent publications, peer-reviewed papers) and evaluation of source credibility",
+    "iteration": 4
+  },
+  {
+    "type": "missing_validation",
+    "severity": "medium",
+    "description": "Agent accepts incomplete results without acknowledging failures or seeking alternatives",
+    "suggestion": "When tool calls fail, explicitly note the failure in thinking blocks, consider alternative sources, and document what information gaps exist. Add a validation step to confirm all critical sources were successfully retrieved.",
+    "iteration": 5
+  },
+  {
+    "type": "incomplete_reasoning",
+    "severity": "low",
+    "description": "Agent doesn't demonstrate analytical depth when processing source material",
+    "suggestion": "After reading sources, explicitly state: (a) key findings from each source, (b) how they relate to the research goal, (c) any contradictions or complementary findings, (d) what additional information is needed",
+    "iteration": 5
+  },
+  {
+    "type": "tool_misuse",
+    "severity": "low",
+    "description": "Inefficient tool usage pattern - multiple web searches without reading all results first",
+    "suggestion": "Before making additional searches, review the URLs from previous search results. A better pattern would be: search -> read all relevant sources -> identify gaps -> targeted additional searches only if needed",
+    "iteration": 5
+  },
+  {
+    "type": "context_degradation",
+    "severity": "low",
+    "description": "Vague thinking blocks that don't show active reasoning process",
+    "suggestion": "Make thinking blocks more explicit: show intermediate conclusions, decision points, how each source contributed, and how conclusions evolved. The thinking trace should be readable as a standalone explanation of the research process.",
+    "iteration": 5
+  },
+  {
+    "type": "missing_validation",
+    "severity": "medium",
+    "description": "Agent does not validate information across sources or verify accuracy of gathered content",
+    "suggestion": "Add explicit validation steps: compare information across multiple sources, verify claims against original papers, include confidence assessments for key findings",
+    "iteration": 7
+  },
+  {
+    "type": "tool_misuse",
+    "severity": "low",
+    "description": "Inefficient tool usage - read_url calls lack systematic prioritization and some results may not have been fully utilized",
+    "suggestion": "Implement a source prioritization matrix before reading URLs; explicitly note how each source will contribute to the research before fetching",
+    "iteration": 7
+  },
+  {
+    "type": "hallucination",
+    "severity": "low",
+    "description": "Potential source misattribution in final report - cites Google Research Chain of Thought paper but source wasn't fetched in thinking trace",
+    "suggestion": "Only cite sources that were actually retrieved and read; if a source is referenced from memory, clearly indicate it as secondary/indirect reference",
+    "iteration": 7
+  },
+  {
+    "type": "missing_validation",
+    "severity": "medium",
+    "description": "Agent accepts search results without validating source relevance or quality before proceeding to read URLs",
+    "suggestion": "Add explicit validation steps: list the top 3-5 sources with brief rationale for selection, note any potential gaps in coverage, and prioritize primary authoritative sources before secondary ones",
+    "iteration": 8
+  },
+  {
+    "type": "incomplete_reasoning",
+    "severity": "medium",
+    "description": "Thinking blocks are extremely sparse and lack intermediate analysis - agent doesn't explain HOW it's interpreting information or making decisions",
+    "suggestion": "Implement structured reflection after each major information-gathering step: What did I learn? How does this connect to what I already know? What gaps remain? What should I prioritize next?",
+    "iteration": 8
+  },
+  {
+    "type": "missing_validation",
+    "severity": "low",
+    "description": "Agent encounters a failed tool call (404 error on Anthropic context-windows URL) but doesn't acknowledge or recover in thinking",
+    "suggestion": "Add explicit error acknowledgment: 'Attempted X but failed with Y error. Will try alternative Z or note this as a gap.' This improves debugging and transparency",
+    "iteration": 8
+  },
+  {
+    "type": "incomplete_reasoning",
+    "severity": "low",
+    "description": "The agent reaches conclusions about having 'comprehensive information' after limited tool interactions, without explicitly documenting what was learned or what gaps remain",
+    "suggestion": "Add more detailed reasoning about what specific information was gained from each source and what questions remain unanswered before claiming comprehensive understanding",
+    "iteration": 9
+  },
+  {
+    "type": "missing_validation",
+    "severity": "low",
+    "description": "The agent doesn't explicitly validate assumptions or cross-reference information between sources. The 'Lost in the Middle' paper is mentioned multiple times but not critically compared against other sources",
+    "suggestion": "After reading multiple sources, explicitly compare findings, note contradictions, and validate key claims against multiple sources before proceeding",
+    "iteration": 9
+  },
+  {
+    "type": "tool_misuse",
+    "severity": "medium",
+    "description": "The agent attempted to read a URL that returned an error (https://docs.anthropic.com/en/docs/build-with-claude/context-windows) but proceeded without acknowledging or handling this failure",
+    "suggestion": "Add explicit error handling for failed tool calls - acknowledge failures, try alternative URLs, or note the gap in research",
+    "iteration": 9
+  },
+  {
+    "type": "incomplete_reasoning",
+    "severity": "medium",
+    "description": "The agent reaches conclusions and writes comprehensive reports without explicitly validating key details in the thinking trace. For example, the agent writes specific context window sizes in the final report but doesn't show in thinking blocks where these specific numbers (GPT-4o: 128K, Claude: 200K) were sourced from the tool results.",
+    "suggestion": "Add explicit source tracking in thinking blocks - when gathering specific facts like model specifications, explicitly note 'I found X from source Y' to ensure traceability and validation.",
+    "iteration": 10
+  },
+  {
+    "type": "missing_validation",
+    "severity": "medium",
+    "description": "When a tool call fails (context-windows URL returns error), the agent doesn't attempt recovery or note this as an information gap. Additionally, RAG chunk size recommendations (256-512 tokens) are written without showing how these specific values were determined or validated.",
+    "suggestion": "Implement explicit error recovery: when a tool fails, note what information is missing and either try alternative sources or flag for follow-up. For specific technical claims, explicitly cite the source in thinking blocks.",
+    "iteration": 10
+  },
+  {
+    "type": "tool_misuse",
+    "severity": "low",
+    "description": "The agent makes several overlapping web searches that could have been more efficient. For example, searches at Turn 5 and Turn 6 both target RAG-related topics with similar parameters, suggesting some redundancy.",
+    "suggestion": "Before starting new searches, review what information has already been gathered and explicitly note gaps. Use more specific queries rather than broad overlapping ones.",
+    "iteration": 10
+  }
+]

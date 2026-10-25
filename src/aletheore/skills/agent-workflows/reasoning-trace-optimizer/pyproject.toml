@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reasoning-trace-optimizer"
+version = "0.1.0"
+description = "Debug and optimize AI agents by analyzing reasoning traces using MiniMax M2.1's interleaved thinking. Built in partnership with MiniMax AI."
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Muratcan Koylan", email = "muratcan.koylan@outlook.com"}
+]
+keywords = [
+    "ai-agents",
+    "reasoning-traces",
+    "prompt-optimization",
+    "minimax-m2",
+    "interleaved-thinking",
+    "agent-debugging",
+    "context-engineering"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=0.40.0",
+    "pydantic>=2.0.0",
+    "rich>=13.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+rto = "reasoning_trace_optimizer.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/muratcankoylan/Agent-Skills-for-Context-Engineering"
+Repository = "https://github.com/muratcankoylan/Agent-Skills-for-Context-Engineering"
+Documentation = "https://github.com/muratcankoylan/Agent-Skills-for-Context-Engineering/tree/main/examples/interleaved-thinking"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["reasoning_trace_optimizer*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

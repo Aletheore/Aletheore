@@ -1,0 +1,752 @@
+[
+ {
+  "question": "run the test suite and tell me if it passes",
+  "target": null,
+  "intent": "none"
+ },
+ {
+  "question": "best practices for postgres indexing",
+  "target": null,
+  "intent": "skill"
+ },
+ {
+  "question": "react useEffect cleanup patterns",
+  "target": null,
+  "intent": "skill"
+ },
+ {
+  "question": "need the dependents of this module before I touch it",
+  "target": null,
+  "intent": "impact"
+ },
+ {
+  "question": "k8s manifests in the repo?",
+  "target": null,
+  "intent": "infrastructure"
+ },
+ {
+  "question": "show the Dockerfile setup",
+  "target": null,
+  "intent": "infrastructure"
+ },
+ {
+  "question": "what's declared in this file",
+  "target": null,
+  "intent": "symbols"
+ },
+ {
+  "question": "credentials in source?",
+  "target": null,
+  "intent": "secrets"
+ },
+ {
+  "question": "eslint issues across the repo",
+  "target": null,
+  "intent": "static_analysis"
+ },
+ {
+  "question": "tl;dr of repo",
+  "target": null,
+  "intent": "overview"
+ },
+ {
+  "question": "give me the lay of the land",
+  "target": null,
+  "intent": "overview"
+ },
+ {
+  "question": "can we ship this commercially, dependency-wise",
+  "target": null,
+  "intent": "licenses"
+ },
+ {
+  "question": "where do bugs keep coming back, going by commit frequency",
+  "target": null,
+  "intent": "hotspot"
+ },
+ {
+  "question": "what's the weather in Pune",
+  "target": null,
+  "intent": "none"
+ },
+ {
+  "question": "I just joined, where do I start",
+  "target": null,
+  "intent": "overview"
+ },
+ {
+  "question": "show me every POST handler",
+  "target": null,
+  "intent": "endpoints"
+ },
+ {
+  "question": "columns on users",
+  "target": null,
+  "intent": "database"
+ },
+ {
+  "question": "terraform resources",
+  "target": null,
+  "intent": "infrastructure"
+ },
+ {
+  "question": "deploy this to staging",
+  "target": null,
+  "intent": "none"
+ },
+ {
+  "question": "did someone push a token to the repo",
+  "target": null,
+  "intent": "secrets"
+ },
+ {
+  "question": "commit these changes with a good message",
+  "target": null,
+  "intent": "none"
+ },
+ {
+  "question": "who should review my change to infra/vpc.tf",
+  "target": null,
+  "intent": "owner"
+ },
+ {
+  "question": "churn leaderboard",
+  "target": null,
+  "intent": "hotspot"
+ },
+ {
+  "question": "list the functions in router.go",
+  "target": null,
+  "intent": "symbols"
+ },
+ {
+  "question": "license compliance check",
+  "target": null,
+  "intent": "licenses"
+ },
+ {
+  "question": "which paths are public, graphql included",
+  "target": null,
+  "intent": "endpoints"
+ },
+ {
+  "question": "any api keys committed by accident?",
+  "target": null,
+  "intent": "secrets"
+ },
+ {
+  "question": "how to write a good Dockerfile for node",
+  "target": null,
+  "intent": "skill"
+ },
+ {
+  "question": "refactor the auth module to use async",
+  "target": null,
+  "intent": "none"
+ },
+ {
+  "question": "layer breaks",
+  "target": null,
+  "intent": "layers"
+ },
+ {
+  "question": "what's the most fragile part of the codebase",
+  "target": null,
+  "intent": "hotspot"
+ },
+ {
+  "question": "which specs exercise app/models/user.rb",
+  "target": null,
+  "intent": "tests"
+ },
+ {
+  "question": "guidance on rust error handling with thiserror",
+  "target": null,
+  "intent": "skill"
+ },
+ {
+  "question": "error handling patterns used",
+  "target": null,
+  "intent": "errors"
+ },
+ {
+  "question": "boundary crossings between domain and infra",
+  "target": null,
+  "intent": "layers"
+ },
+ {
+  "question": "locate CartTotal",
+  "target": null,
+  "intent": "locate"
+ },
+ {
+  "question": "what did semgrep find",
+  "target": null,
+  "intent": "static_analysis"
+ },
+ {
+  "question": "how is this thing shipped to prod, config-wise",
+  "target": null,
+  "intent": "infrastructure"
+ },
+ {
+  "question": "can I delete legacy/auth_helpers.php without hurting anything?",
+  "target": null,
+  "intent": "impact"
+ },
+ {
+  "question": "cluster around auth.py",
+  "target": null,
+  "intent": "neighborhood"
+ },
+ {
+  "question": "I'm about to merge a PR that touches the session middleware and I'm nervous, what else could break?",
+  "target": "src/middleware/session.ts",
+  "intent": "impact"
+ },
+ {
+  "question": "code that handles webhook signature check",
+  "target": null,
+  "intent": "locate"
+ },
+ {
+  "question": "unreferenced functions in helpers.py",
+  "target": "utils/helpers.py",
+  "intent": "dead_code"
+ },
+ {
+  "question": "list process.env usages",
+  "target": null,
+  "intent": "env"
+ },
+ {
+  "question": "I saw something starting with AKIA in a config, check the whole repo for leaked stuff",
+  "target": null,
+  "intent": "secrets"
+ },
+ {
+  "question": "show direct deps of this file",
+  "target": null,
+  "intent": "neighborhood"
+ },
+ {
+  "question": "what does the deploy pipeline do",
+  "target": null,
+  "intent": "infrastructure"
+ },
+ {
+  "question": "which files get touched all the time",
+  "target": null,
+  "intent": "hotspot"
+ },
+ {
+  "question": "is log4j an issue here",
+  "target": null,
+  "intent": "vulnerabilities"
+ },
+ {
+  "question": "SAST results please",
+  "target": null,
+  "intent": "static_analysis"
+ },
+ {
+  "question": "files that always change together with schema.sql",
+  "target": null,
+  "intent": "hotspot"
+ },
+ {
+  "question": "architecture rule violations",
+  "target": null,
+  "intent": "layers"
+ },
+ {
+  "question": "injection-type findings from the analyzers",
+  "target": null,
+  "intent": "static_analysis"
+ },
+ {
+  "question": "any dependency I should bump urgently",
+  "target": null,
+  "intent": "vulnerabilities"
+ },
+ {
+  "question": "what licenses do third party packages use",
+  "target": null,
+  "intent": "licenses"
+ },
+ {
+  "question": "who calls billing/invoice_builder.py",
+  "target": null,
+  "intent": "impact"
+ },
+ {
+  "question": "what should I run after editing parser.rs",
+  "target": null,
+  "intent": "tests"
+ },
+ {
+  "question": "copyleft risk",
+  "target": null,
+  "intent": "licenses"
+ },
+ {
+  "question": "show me the riskiest files by edit history",
+  "target": null,
+  "intent": "hotspot"
+ },
+ {
+  "question": "method names in UserService.java",
+  "target": null,
+  "intent": "symbols"
+ },
+ {
+  "question": "is DATABASE_URL used anywhere",
+  "target": null,
+  "intent": "env"
+ },
+ {
+  "question": "need a CODEOWNERS-style answer for api/v2/",
+  "target": null,
+  "intent": "owner"
+ },
+ {
+  "question": "safe to nuke this file?",
+  "target": null,
+  "intent": "impact"
+ },
+ {
+  "question": "who do I ping about Sources/Networking/Client.swift",
+  "target": null,
+  "intent": "owner"
+ },
+ {
+  "question": "where do we swallow exceptions",
+  "target": null,
+  "intent": "errors"
+ },
+ {
+  "question": "what env vars does the app need to boot",
+  "target": null,
+  "intent": "env"
+ },
+ {
+  "question": "summarize the project structure",
+  "target": null,
+  "intent": "overview"
+ },
+ {
+  "question": "is there any coverage on the retry logic in worker/retry.py",
+  "target": null,
+  "intent": "tests"
+ },
+ {
+  "question": "which models map to the orders table",
+  "target": null,
+  "intent": "database"
+ },
+ {
+  "question": "controllers reaching into repositories?",
+  "target": null,
+  "intent": "layers"
+ },
+ {
+  "question": "tests for this file?",
+  "target": "pkg/cache/lru.go",
+  "intent": "tests"
+ },
+ {
+  "question": "whose code is this",
+  "target": "app/Http/Kernel.php",
+  "intent": "owner"
+ },
+ {
+  "question": "outdated deps with security problems",
+  "target": null,
+  "intent": "vulnerabilities"
+ },
+ {
+  "question": "where do we send emails",
+  "target": null,
+  "intent": "locate"
+ },
+ {
+  "question": "list migrations",
+  "target": null,
+  "intent": "database"
+ },
+ {
+  "question": "what's the capital of Australia",
+  "target": null,
+  "intent": "none"
+ },
+ {
+  "question": "am i covered if I tweak this?",
+  "target": "Sources/Core/Formatter.swift",
+  "intent": "tests"
+ },
+ {
+  "question": "config keys read from the environment",
+  "target": null,
+  "intent": "env"
+ },
+ {
+  "question": "where is rate limiting implemented",
+  "target": null,
+  "intent": "locate"
+ },
+ {
+  "question": "is there a /healthz?",
+  "target": null,
+  "intent": "endpoints"
+ },
+ {
+  "question": "vuln report",
+  "target": null,
+  "intent": "vulnerabilities"
+ },
+ {
+  "question": "main maintainer of this folder?",
+  "target": null,
+  "intent": "owner"
+ },
+ {
+  "question": "how do I set up pytest fixtures properly",
+  "target": null,
+  "intent": "skill"
+ },
+ {
+  "question": "which packages have known CVEs",
+  "target": null,
+  "intent": "vulnerabilities"
+ },
+ {
+  "question": "where's the retry decorator defined",
+  "target": null,
+  "intent": "locate"
+ },
+ {
+  "question": "bandit warnings",
+  "target": null,
+  "intent": "static_analysis"
+ },
+ {
+  "question": "grep for hardcoded passwords pls",
+  "target": null,
+  "intent": "secrets"
+ },
+ {
+  "question": "empty catch blocks",
+  "target": null,
+  "intent": "errors"
+ },
+ {
+  "question": "unreachable branches",
+  "target": null,
+  "intent": "dead_code"
+ },
+ {
+  "question": "os.getenv calls",
+  "target": null,
+  "intent": "env"
+ },
+ {
+  "question": "need the list of routes in the flask app",
+  "target": null,
+  "intent": "endpoints"
+ },
+ {
+  "question": "show lint findings in the security category",
+  "target": null,
+  "intent": "static_analysis"
+ },
+ {
+  "question": "outline of src/App.tsx",
+  "target": null,
+  "intent": "symbols"
+ },
+ {
+  "question": "main components and tech stack?",
+  "target": null,
+  "intent": "overview"
+ },
+ {
+  "question": "what URLs does the server expose",
+  "target": null,
+  "intent": "endpoints"
+ },
+ {
+  "question": "cleanup candidates",
+  "target": null,
+  "intent": "dead_code"
+ },
+ {
+  "question": "why is my build slow on CI, fix it",
+  "target": null,
+  "intent": "none"
+ },
+ {
+  "question": "sqlalchemy models overview",
+  "target": null,
+  "intent": "database"
+ },
+ {
+  "question": "is anything in this repo just rotting?",
+  "target": null,
+  "intent": "dead_code"
+ },
+ {
+  "question": "github actions workflows",
+  "target": null,
+  "intent": "infrastructure"
+ },
+ {
+  "question": "translate this README to Hindi",
+  "target": null,
+  "intent": "none"
+ },
+ {
+  "question": "co-change partners for main.cpp",
+  "target": "src/main.cpp",
+  "intent": "hotspot"
+ },
+ {
+  "question": "list the REST routes",
+  "target": null,
+  "intent": "endpoints"
+ },
+ {
+  "question": "classes defined in models.py",
+  "target": "app/models.py",
+  "intent": "symbols"
+ },
+ {
+  "question": "if i rename PaymentGateway in lib/payments.rb what falls over",
+  "target": "lib/payments.rb",
+  "intent": "impact"
+ },
+ {
+  "question": "need the test files linked to src/cart/Cart.vue",
+  "target": null,
+  "intent": "tests"
+ },
+ {
+  "question": "any code smells flagged by the scanners in src/api/",
+  "target": null,
+  "intent": "static_analysis"
+ },
+ {
+  "question": "who wrote the scheduler",
+  "target": null,
+  "intent": "owner"
+ },
+ {
+  "question": "does the UI import from the db layer directly",
+  "target": null,
+  "intent": "layers"
+ },
+ {
+  "question": "which settings do I have to export before running",
+  "target": null,
+  "intent": "env"
+ },
+ {
+  "question": "modules close to this one",
+  "target": "internal/store/store.go",
+  "intent": "neighborhood"
+ },
+ {
+  "question": "how are failures handled across the codebase",
+  "target": null,
+  "intent": "errors"
+ },
+ {
+  "question": "orphan files",
+  "target": null,
+  "intent": "dead_code"
+ },
+ {
+  "question": "functions never called anywhere",
+  "target": null,
+  "intent": "dead_code"
+ },
+ {
+  "question": "what does server.js import",
+  "target": "server.js",
+  "intent": "neighborhood"
+ },
+ {
+  "question": "bare except clauses",
+  "target": null,
+  "intent": "errors"
+ },
+ {
+  "question": "bump the version and publish to npm",
+  "target": null,
+  "intent": "none"
+ },
+ {
+  "question": "what is this repo",
+  "target": null,
+  "intent": "overview"
+ },
+ {
+  "question": "explain how this codebase is organised",
+  "target": null,
+  "intent": "overview"
+ },
+ {
+  "question": "places that ignore errors returned from functions",
+  "target": null,
+  "intent": "errors"
+ },
+ {
+  "question": "what tables exist",
+  "target": null,
+  "intent": "database"
+ },
+ {
+  "question": "generate a migration to add an email column",
+  "target": null,
+  "intent": "none"
+ },
+ {
+  "question": "are there plaintext db passwords in config/",
+  "target": null,
+  "intent": "secrets"
+ },
+ {
+  "question": "exports of index.ts",
+  "target": "src/index.ts",
+  "intent": "symbols"
+ },
+ {
+  "question": "importers of utils.h",
+  "target": null,
+  "intent": "neighborhood"
+ },
+ {
+  "question": "tips for FastAPI dependency injection",
+  "target": null,
+  "intent": "skill"
+ },
+ {
+  "question": "write a unit test for the parser",
+  "target": null,
+  "intent": "none"
+ },
+ {
+  "question": "show the schema",
+  "target": null,
+  "intent": "database"
+ },
+ {
+  "question": "ci is painfully slow, I only want to rerun the relevant suites for my change to checkout.ts",
+  "target": null,
+  "intent": "tests"
+ },
+ {
+  "question": "advisories affecting our lockfile",
+  "target": null,
+  "intent": "vulnerabilities"
+ },
+ {
+  "question": "rename the variable foo to bar across the project",
+  "target": null,
+  "intent": "none"
+ },
+ {
+  "question": "tell me a joke about programmers",
+  "target": null,
+  "intent": "none"
+ },
+ {
+  "question": "list deps with their license",
+  "target": null,
+  "intent": "licenses"
+ },
+ {
+  "question": "hi there",
+  "target": null,
+  "intent": "none"
+ },
+ {
+  "question": "who won the 2018 world cup",
+  "target": null,
+  "intent": "none"
+ },
+ {
+  "question": "npm audit equivalent for this repo",
+  "target": null,
+  "intent": "vulnerabilities"
+ },
+ {
+  "question": "what imports lib/logger.ts",
+  "target": null,
+  "intent": "neighborhood"
+ },
+ {
+  "question": "install lodash",
+  "target": null,
+  "intent": "none"
+ },
+ {
+  "question": "fix the null pointer bug in line 42",
+  "target": null,
+  "intent": "none"
+ },
+ {
+  "question": "what can I delete, nobody uses it",
+  "target": null,
+  "intent": "dead_code"
+ },
+ {
+  "question": "any forbidden imports between tiers?",
+  "target": null,
+  "intent": "layers"
+ },
+ {
+  "question": "api surface",
+  "target": null,
+  "intent": "endpoints"
+ },
+ {
+  "question": "find the definition of parseConfig",
+  "target": null,
+  "intent": "locate"
+ },
+ {
+  "question": "blast radius of changing utils/dates.go",
+  "target": null,
+  "intent": "impact"
+ },
+ {
+  "question": "git blame summary for the payments dir, who knows it best",
+  "target": null,
+  "intent": "owner"
+ },
+ {
+  "question": "which file has the login logic",
+  "target": null,
+  "intent": "locate"
+ },
+ {
+  "question": "any GPL in our deps",
+  "target": null,
+  "intent": "licenses"
+ },
+ {
+  "question": "private keys checked in?",
+  "target": null,
+  "intent": "secrets"
+ },
+ {
+  "question": "thanks, that's all",
+  "target": null,
+  "intent": "none"
+ },
+ {
+  "question": "check the hexagonal rules",
+  "target": null,
+  "intent": "layers"
+ }
+]

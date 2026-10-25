@@ -128,7 +128,9 @@ def test_verify_citations_with_fetch_line_count_catches_a_fabricated_line():
     result = verify_citations(text, make_evidence(), fetch_line_count=lambda path: 200)
 
     assert result["all_verified"] is False
-    assert result["unverified"] == [{"file": "server/routes/billing.ts", "line": 99999}]
+    assert result["unverified"] == [
+        {"file": "server/routes/billing.ts", "line": 99999, "reason": "file has 200 lines"}
+    ]
 
 
 def test_verify_citations_with_fetch_line_count_keeps_a_real_line():

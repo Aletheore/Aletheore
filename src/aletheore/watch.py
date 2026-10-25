@@ -391,7 +391,7 @@ def _carry_forward_skipped_analysis(evidence: dict, repo_path: Path) -> None:
         current_secrets["history_scanned_commits"] = previous_history_scanned_commits
 
 
-def rebuild(repo_path: Path, report: Callable[[str], None]) -> None:
+def rebuild(repo_path: Path, report: Callable[[str], None], allow_hosted: bool = True) -> None:
     """One scan-and-reindex cycle.
 
     Vulnerability, license, git-history, architecture-analysis, hotspot, and
@@ -419,6 +419,14 @@ def rebuild(repo_path: Path, report: Callable[[str], None]) -> None:
     The index is only refreshed if one already exists. Building a first
     index means embedding every chunk, which needs a provider and real time;
     starting that unasked because someone edited a file would be a surprise.
+
+    allow_hosted defaults to True to preserve the CLI `aletheore watch`
+    command's existing behavior, but an MCP-server-started watcher always
+    passes the operator's actual `external` effect grant through here - see
+    build_server's watching setup (Strix security review, 2026-10-15: this
+    used to always default True regardless of the MCP effect policy, so an
+    operator who denied `external` still had edited files silently
+    hosted-embedded on every watcher-triggered reindex).
     """
     from aletheore.evidence import scan_repository, write_evidence
 
@@ -440,7 +448,7 @@ def rebuild(repo_path: Path, report: Callable[[str], None]) -> None:
     from aletheore.search_index import build_index
 
     try:
-        count = build_index(repo_path, evidence)
+        count = build_index(repo_path, evidence, allow_hosted=allow_hosted)
     except Exception as exc:  # noqa: BLE001
         # An unreachable embedding provider must not end the watch. Evidence
         # is already current, which is most of the value, and the next edit
@@ -458,6 +466,7 @@ def watch(
     poll_seconds: float = 0.25,
     announce: str | None = None,
     initial_mtimes: dict[Path, float] | None = None,
+    allow_hosted: bool = True,
 ) -> None:
     """Rebuild evidence whenever watched source files settle after changing.
 
@@ -469,6 +478,8 @@ def watch(
     walked (see _DebouncedHandler).
     """
     from watchdog.observers import Observer
+
+    from aletheore.evidence import EvidenceWriteError
 
     stop = stop or threading.Event()
     # Printed before building the mtime baseline (_DebouncedHandler.__init__
@@ -502,7 +513,11 @@ def watch(
                 report(f"{len(names)} file(s) changed ({shown})")
                 try:
                     with EVIDENCE_WRITE_LOCK:
-                        rebuild(repo_path, report)
+                        rebuild(repo_path, report, allow_hosted=allow_hosted)
+                except EvidenceWriteError as exc:
+                    # Read-only .aletheore/: say so once per edit, in the message
+                    # the scan command gives, not as a class name and a traceback.
+                    report(f"rebuild failed: {exc}")
                 except Exception as exc:  # noqa: BLE001
                     # A scan that fails on one bad edit - a half-written
                     # file, a syntax error mid-keystroke - should not end a
@@ -599,11 +614,13 @@ class BackgroundWatcher:
         debounce_seconds: float,
         max_files: int,
         lock_handle,
+        allow_hosted: bool = True,
     ) -> None:
         self.repo_path = repo_path
         self._report = report
         self._debounce_seconds = debounce_seconds
         self._max_files = max_files
+        self._allow_hosted = allow_hosted
         self._stop = threading.Event()
         self._lock_handle = lock_handle
         self._thread: threading.Thread | None = None
@@ -642,6 +659,7 @@ class BackgroundWatcher:
                     f"{self._debounce_seconds:g}s after edits settle. Turn off with --no-watch or {WATCH_ENV_VAR}=0"
                 ),
                 initial_mtimes=mtimes,
+                allow_hosted=self._allow_hosted,
             )
         except Exception as exc:  # noqa: BLE001
             # The likely causes are environmental (an exhausted inotify watch
@@ -678,6 +696,7 @@ def start_background_watch(
     *,
     debounce_seconds: float = MCP_DEBOUNCE_SECONDS,
     max_files: int = MCP_MAX_WATCHED_FILES,
+    allow_hosted: bool = True,
 ) -> BackgroundWatcher | None:
     """Start keeping this repository's evidence current in the background.
 
@@ -704,7 +723,9 @@ def start_background_watch(
         return None
     # _LOCK_UNSUPPORTED falls through with no handle: watch without exclusion.
 
-    watcher = BackgroundWatcher(repo_path, report, debounce_seconds, max_files, lock_handle)
+    watcher = BackgroundWatcher(
+        repo_path, report, debounce_seconds, max_files, lock_handle, allow_hosted=allow_hosted
+    )
     watcher._thread = threading.Thread(target=watcher._run, name="aletheore-mcp-watch", daemon=True)
     watcher._thread.start()
     return watcher

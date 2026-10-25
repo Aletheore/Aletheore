@@ -39,6 +39,21 @@ async def test_report_runtime_event_requires_bearer_token(pool):
 
 
 @pytest.mark.asyncio
+async def test_report_runtime_event_rejects_an_unauthenticated_malformed_body_with_401_not_422(pool):
+    # Real gap found via audit: `body: RuntimeEventRequest` as a route
+    # parameter gets parsed and Pydantic-validated before the handler's
+    # first line (_authenticate_token) ever runs - so an unauthenticated
+    # caller could already force that work. A malformed body that would
+    # fail validation must still come back 401 (auth), not 422
+    # (validation), proving auth genuinely runs first now.
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/v1/runtime-events", json={"unexpected": "field"})
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_report_runtime_event_rejects_free_plan(pool):
     await upsert_installation(pool, 200, "octocat")
     token_hash = hashlib.sha256(b"real-token").hexdigest()

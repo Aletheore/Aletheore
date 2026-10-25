@@ -1,0 +1,14 @@
+# ResourceQuota template — caps total resource consumption per namespace to
+# prevent runaway costs in multi-tenant clusters.
+# Replace {namespace} and the hard limits with tenant-appropriate values.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: compute-quota
+  namespace: {namespace}
+spec:
+  hard:
+    requests.cpu: "4"
+    requests.memory: 16Gi
+    limits.cpu: "8"
+    limits.memory: 32Gi

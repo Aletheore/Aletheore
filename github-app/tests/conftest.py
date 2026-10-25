@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -19,7 +20,7 @@ os.environ.setdefault("GITHUB_WEBHOOK_SECRET", "test-webhook-secret")
 os.environ.setdefault("GITHUB_APP_SLUG", "aletheore")
 os.environ.setdefault("GITHUB_CLIENT_ID", "test-client-id")
 os.environ.setdefault("GITHUB_CLIENT_SECRET", "test-client-secret")
-os.environ.setdefault("SESSION_SECRET", "test-session-secret")
+os.environ.setdefault("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
 os.environ.setdefault("AUDIT_SIGNING_PRIVATE_KEY", "11" * 32)
 os.environ.setdefault("PADDLE_WEBHOOK_SECRET", "pdl_ntfset_test_secret")
 os.environ.setdefault("PADDLE_CLIENT_TOKEN", "test_conftest_client_token")
@@ -42,10 +43,19 @@ MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 # test_credit_topup_purchase_is_idempotent_on_replayed_transaction relies on
 # a clean slate to tell a genuine first credit from a stale row left by a
 # previous run.
+# personal_identities is listed for the same "no FK to installations" reason
+# - it's keyed on github_user_id, entirely independent of the installation
+# tree - truncating just this one row covers personal_api_tokens and
+# custom_skills too, since both have an ON DELETE CASCADE FK to
+# personal_identities (see 074_skill_hub_personal_identity.sql). Without it,
+# a fixed test github_user_id (e.g. 12345 for "octocat") upserts onto the
+# same identity row test after test within one pytest session, so
+# custom_skills rows written by an earlier test keep showing up in a later,
+# unrelated test's list/get assertions.
 _TRUNCATE_SQL = (
     "TRUNCATE installations, sessions, cli_telemetry_events, "
     "github_user_emails, sent_emails, data_deletion_log, webhook_deliveries, affiliates, "
-    "processed_paddle_transactions CASCADE"
+    "processed_paddle_transactions, personal_identities CASCADE"
 )
 
 
@@ -144,15 +154,32 @@ def _reset_git_path_cache(monkeypatch):
     # Most existing git-subprocess tests here mock subprocess.run and
     # assert on the literal "git" argv they themselves pass in, not
     # whatever absolute path this machine happens to resolve it to, so
-    # this also defaults shutil.which("git") to return "git" itself -
-    # unchanged behavior for those tests. A test that wants to verify
-    # real path resolution (see test_run_git_resolves_the_bare_git_name_
-    # to_its_shutil_which_path) mocks shutil.which itself within the test
-    # body, which overrides this default the normal monkeypatch way.
+    # this pins the cache to that literal "git" string directly rather
+    # than through _git_path()'s own resolution - unchanged behavior for
+    # those tests. _git_path() now always os.path.abspath()'s whatever
+    # shutil.which() returns (Strix security review, 2026-10-15: a cached,
+    # possibly-relative result was reused across many later repos' cwds
+    # for the rest of the worker process's life), so mocking
+    # shutil.which("git") to return the bare "git" string and letting
+    # _git_path() resolve it here would turn it into an absolute
+    # cwd-joined path too, breaking those literal-argv assertions. Setting
+    # _GIT_PATH directly (not None) skips _git_path()'s own resolution
+    # entirely. A test that wants to verify real path resolution (see
+    # test_run_git_resolves_the_bare_git_name_to_its_shutil_which_path and
+    # test_git_path_resolves_a_relative_which_result_to_an_absolute_path)
+    # resets _GIT_PATH to None and mocks shutil.which itself within the
+    # test body, which overrides this default the normal monkeypatch way.
     from scan_worker import jobs
 
-    monkeypatch.setattr(jobs.shutil, "which", lambda name: "git" if name == "git" else None)
-    jobs._GIT_PATH = None
+    # `jobs.shutil` is the process-wide shutil module, so this patch is also seen by
+    # aletheore.git_exec.git_executable() (used by git_intel and friends), which abspath()s the
+    # result: a bare "git" there becomes "<cwd>/git", which does not exist. Only the "git" answer
+    # for the real executable is therefore passed through; anything else stays faked as before.
+    real_which = shutil.which
+    monkeypatch.setattr(
+        jobs.shutil, "which", lambda name, *a, **kw: real_which(name, *a, **kw) if name == "git" else None
+    )
+    jobs._GIT_PATH = "git"
     yield
     jobs._GIT_PATH = None
 
@@ -187,6 +214,10 @@ def _no_real_auth_rate_limiting(monkeypatch):
     # that specifically exercise the 429 path patch is_rate_limited back
     # to something real (or fake it directly) within their own test body.
     monkeypatch.setattr("app_server.auth.is_rate_limited", lambda *a, **k: False)
+    # Same reasoning for POST /v1/personal-tokens' per-GitHub-account limit:
+    # many tests mint tokens for the same fixed test user id. The 429 tests
+    # in test_skill_hub_api.py patch the real limiter back in.
+    monkeypatch.setattr("app_server.skill_hub_api.is_rate_limited", lambda *a, **k: False)
 
 
 @pytest.fixture(scope="session")

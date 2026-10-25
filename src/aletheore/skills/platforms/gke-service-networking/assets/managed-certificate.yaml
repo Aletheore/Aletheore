@@ -1,0 +1,9 @@
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: my-certificate # Replace with your certificate name
+  namespace: default # Replace with your namespace
+spec:
+  domains:
+    - example.com # Replace with your domain (A/AAAA record must point at the LB IP)

@@ -61,3 +61,40 @@ CVE-2026-84445
 # file's own comment would otherwise trip Aletheore's own secrets check
 # the same way REPORT.md's prose quoting them did.)
 github-app-token
+
+# CVE-2026-78667, CVE-2026-78669 and CVE-2026-97031 (Go stdlib net/http and
+# crypto/tls, golang.org/x/net http2; all HIGH, "fixed" upstream in Go
+# 1.26.9/1.27.2 and x/net 0.60.0), scan-worker image only. Published after the
+# last green image scan on master (2026-10-09 18:01 UTC) and flagged since on
+# every PR, including ones that touch no Dockerfile.
+#
+# They sit entirely inside a third-party Go command-line binary the image
+# installs from a pinned, checksum-verified release archive, usr/local/bin/gosec,
+# not in anything this repo builds:
+#   * gosec v2.29.0 is its latest release (2026-08-26): go.mod pins x/net 0.58.0
+#     and go 1.25.0, so there is no fixed release to upgrade to.
+#   * trivy is no longer affected: v0.76.0 (2026-10-14) is built with Go 1.27.2
+#     and x/net 0.60.0, and the image pins it.
+#
+# Accepted because the advisories are denial-of-service in HTTP/TLS request
+# handling (crafted Range headers, an HTTP/2 SETTINGS flood, repeated ECH
+# extension references) and gosec does not run as a server in this image: it is
+# invoked as a one-shot local process that scans files and exits, and nothing
+# in the scan-worker listens for requests on its behalf.
+#
+# Revisit when gosec ships a release built on Go >= 1.26.9/1.27.2 with
+# x/net >= 0.60.0: bump the pin in Dockerfile.scan-worker (with its checksum)
+# and delete these three lines.
+CVE-2026-78667
+CVE-2026-78669
+CVE-2026-97031
+
+# gosec 2.29.0 (the newest release as of 2026-10-21) is built with a Go standard
+# library that Trivy flags for CVE-2026-111943 (crypto/x509 mitigation, fixed in
+# Go 1.26.10 and 1.27.3). Accepted for the same reason as above: gosec is a
+# one-shot local process that scans files and exits, and it makes no TLS
+# connections on behalf of anything untrusted.
+#
+# Revisit when gosec ships a release built on Go >= 1.27.3: bump the pin in
+# Dockerfile.scan-worker (with its checksum) and delete this line.
+CVE-2026-111943

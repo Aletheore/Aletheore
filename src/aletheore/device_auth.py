@@ -1,10 +1,14 @@
+from __future__ import annotations
+
 import re
 import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-import httpx
+from aletheore._lazy import lazy_module
+httpx = lazy_module("httpx")
+
 
 GITHUB_CLIENT_ID = "Iv23liGMhaWSkY927jgI"
 
@@ -83,12 +87,19 @@ def poll_for_access_token(
     raise DeviceFlowError("timed out waiting for authorization")
 
 
+def _resolved_api_base_url() -> str:
+    # Local import: skill_hub_sync imports modules that import this one.
+    from aletheore.skill_hub_sync import _api_base_url
+
+    return _api_base_url()
+
+
 def fetch_my_installations(
     github_token: str,
-    api_base_url: str = "https://app.aletheore.com",
+    api_base_url: str | None = None,
     http_client: httpx.Client | None = None,
 ) -> list[dict]:
-    client = http_client or httpx.Client(base_url=api_base_url)
+    client = http_client or httpx.Client(base_url=api_base_url or _resolved_api_base_url())
     response = client.get(
         "/v1/my-installations",
         headers={"Authorization": f"Bearer {github_token}"},
@@ -101,10 +112,10 @@ def mint_cli_token(
     github_token: str,
     installation_id: int,
     label: str,
-    api_base_url: str = "https://app.aletheore.com",
+    api_base_url: str | None = None,
     http_client: httpx.Client | None = None,
 ) -> str:
-    client = http_client or httpx.Client(base_url=api_base_url)
+    client = http_client or httpx.Client(base_url=api_base_url or _resolved_api_base_url())
     response = client.post(
         "/v1/cli-tokens",
         headers={"Authorization": f"Bearer {github_token}"},
@@ -112,6 +123,86 @@ def mint_cli_token(
     )
     response.raise_for_status()
     return response.json()["token"]
+
+
+def mint_personal_token(
+    github_token: str,
+    label: str,
+    api_base_url: str | None = None,
+    http_client: httpx.Client | None = None,
+) -> str:
+    client = http_client or httpx.Client(base_url=api_base_url or _resolved_api_base_url())
+    response = client.post(
+        "/v1/personal-tokens",
+        headers={"Authorization": f"Bearer {github_token}"},
+        json={"label": label},
+    )
+    response.raise_for_status()
+    return response.json()["token"]
+
+
+def revoke_personal_token(
+    personal_token: str,
+    all_devices: bool = False,
+    api_base_url: str | None = None,
+    http_client: httpx.Client | None = None,
+) -> None:
+    client = http_client or httpx.Client(base_url=api_base_url or _resolved_api_base_url())
+    path = "/v1/personal-tokens/all" if all_devices else "/v1/personal-tokens"
+    response = client.delete(path, headers={"Authorization": f"Bearer {personal_token}"})
+    response.raise_for_status()
+
+
+_REVOKE_TIMEOUT_SECONDS = 5.0
+
+DASHBOARD_URL = "https://aletheore.com"
+
+
+def revoke_managed_audit_token(
+    api_token: str,
+    api_base_url: str | None = None,
+    http_client: httpx.Client | None = None,
+) -> None:
+    """Revokes the CLI's own installation token (DELETE /v1/cli-tokens/self).
+
+    The server revokes only the token that authenticates the call. Raises
+    httpx.HTTPStatusError on any non-2xx (401 means it was already revoked,
+    which the caller treats as done) and httpx.HTTPError on network failure.
+    """
+    headers = {"Authorization": f"Bearer {api_token}"}
+    if http_client is not None:
+        http_client.delete("/v1/cli-tokens/self", headers=headers).raise_for_status()
+        return
+    with httpx.Client(base_url=api_base_url or _resolved_api_base_url(), timeout=_REVOKE_TIMEOUT_SECONDS) as client:
+        client.delete("/v1/cli-tokens/self", headers=headers).raise_for_status()
+
+
+def server_error_detail(exc: httpx.HTTPStatusError) -> str | None:
+    """The server's `detail` string from a JSON error body, or None."""
+    try:
+        body = exc.response.json()
+    except Exception:  # noqa: BLE001 - any non-JSON body just means no detail
+        return None
+    detail = body.get("detail") if isinstance(body, dict) else None
+    return detail if isinstance(detail, str) and detail.strip() else None
+
+
+def describe_login_http_error(exc: httpx.HTTPStatusError) -> str:
+    """Actionable text for a failed login whose server answered with an error status."""
+    status = exc.response.status_code
+    detail = server_error_detail(exc)
+    if status == 409:
+        reason = detail or "token limit reached"
+        return (
+            f"You have reached the limit of active CLI tokens for this installation ({reason}). "
+            f"Revoke old ones in the dashboard at {DASHBOARD_URL}, or log in from a machine where you "
+            "are already logged in, then run `aletheore login` again."
+        )
+    if status == 402:
+        return f"{detail or 'this feature requires the AIR plan'} (login needs a plan that includes managed audits)."
+    if detail:
+        return f"login failed (HTTP {status}): {detail}"
+    return f"login failed (HTTP {status})"
 
 
 _GITHUB_REMOTE_PREFIXES = (
@@ -172,7 +263,7 @@ def infer_repo_full_name_from_cwd_git_remote(
 
 def resolve_installation(
     github_token: str,
-    api_base_url: str = "https://app.aletheore.com",
+    api_base_url: str | None = None,
     http_client: httpx.Client | None = None,
     run_fn: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> dict | list[dict]:

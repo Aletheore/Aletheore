@@ -4,12 +4,226 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-10-09
-**Snapshot Freshness:** CURRENT as of 2026-10-09 - the scan workers, `health-worker` and `scheduler` run
-`master` at commit `9cf6f24e` (tag `github-app-deploy-2026-10-09-5`); `app-server` and `jina-embed` still run
-`e3182a9f` from the 2026-10-08 deploy below, because nothing under `github-app/app_server/` or
-`github-app/jina_embed/` changed after it, so a rebuild would have produced the same code. Re-verified live
-via SSH after each step. No migration, no Dockerfile or compose change, no lockfile change in any of these.
+**Last Updated:** 2026-10-22
+**Snapshot Freshness:** CURRENT as of 2026-10-22 - `app-server`, both scan workers, `health-worker` and `scheduler`
+run `master` at commit `9fa87511` (tag `github-app-deploy-2026-10-22`); `jina-embed`, `postgres` and `redis` were not
+touched. No migration (the start log says `no pending migrations`). One deploy, after a database backup
+(`backups/aletheore_app_2026-10-22T06-24-04Z.dump`). All five changed images were built first and import-tested
+(`app-server` through `docker compose run` so it had its environment), then replaced with `--no-deps`: `app-server`,
+then `health-worker` and `scheduler`, then the scan workers one at a time once both RQ `scans` workers reported idle.
+
+2026-10-22 deploy (`9fa87511`, tag `github-app-deploy-2026-10-22`):
+
+- Seven audit fixes (#1090 to #1096): the CLI login routes reconcile the seat against the numeric GitHub id before
+  checking membership and record the real member on the CLI token they mint (so removing a member revokes it); the skill
+  hub PUT and token-mint routes authenticate before parsing the body, with size caps by method and path prefix; a failed
+  worker git command logs its credential-scrubbed stderr at WARNING; `git_executable()` resolves git to an absolute
+  path for commands that run inside a scanned repository; the read guard no longer records a partly shown file as read
+  in full; `usages.py` and the code locator decode git output as UTF-8; and the personal-token mint has a per-IP
+  limit (30 per hour, last `X-Forwarded-For` hop, fails open on a Redis error) that runs before the call to GitHub.
+- #1097: a 401, 403 or 5xx from GitHub's check-a-token call is logged at ERROR so it reaches Sentry; a 404 stays a
+  warning.
+- The scan workers, `health-worker` and `scheduler` now run everything merged since the 2026-10-15 build, which
+  includes the 2026-10-18 batch and the `certifi` 2026.10.19 lock file.
+- CLI tokens minted before #1090 are recorded under the account name. A production count showed 2 unrevoked tokens,
+  both the owner's own device-flow login, never used, so no customer has one.
+
+Verified live: `https://app.aletheore.com/healthz` returns 200 with database and Redis ok; `POST /v1/personal-tokens`
+without a token returns 401; all ten containers `Up`, the nine that define a health check `healthy`; no error or
+traceback lines in the first two minutes of any recreated container; and the new code is in the running containers
+(`aletheore.git_exec` resolves `/usr/bin/git` in all four worker-side containers; `app-server` has the ERROR-level
+branch, the per-IP limit and the reconcile call). Not verified: a real `aletheore login` against production.
+
+**Correction to the 2026-10-21 record below:** it says every other container was untouched. That was wrong.
+`postgres`, `redis` and `jina-embed` showed 13 hours of uptime the next morning, which matches the time of the
+`docker compose up -d --build app-server` run, so compose most likely recreated them as dependencies. The database
+reported healthy right after (`schema_migrations` held all 72 rows) and no data loss was seen, but the cause was not
+confirmed. The 2026-10-22 deploy used `--no-deps` so these containers were not touched.
+
+Previous: CURRENT as of 2026-10-21 - `app-server` runs `master` at commit `8ffc8602` (tag
+`github-app-deploy-2026-10-21`). The scan workers, `health-worker` and `scheduler` were deliberately not rebuilt and
+still run `4adddf55` from the 2026-10-15 deploy, and `jina-embed` still runs `e3182a9f`: the change is the Hallbook
+account backend, which lives entirely in `app_server`. Migrations 073 and 074 were applied by `app-server`'s start
+command (`scripts/migrate.py`), after a database backup (`backups/aletheore_app_2026-10-21T17-40-39Z.dump`, 54 MB).
+
+2026-10-21 deploy (`8ffc8602`, tag `github-app-deploy-2026-10-21`), `app-server` only:
+
+- Hallbook account backend (#1070): personal API tokens (`/v1/personal-tokens`, issued only to tokens that GitHub says
+  belong to the Aletheore GitHub App) and per-account custom skills (`/v1/custom-skills`), with migration
+  `074_skill_hub_personal_identity.sql` (tables `personal_identities`, `personal_api_tokens`, `custom_skills`).
+  Migration `073_installation_members_github_user_id.sql` had not been applied in production before and ran in the
+  same start. `app-server` logged `applied 073...`, `applied 074...`, `applied 2 migration(s)`.
+- `certifi` 2026.7.22 to 2026.10.19 in the lock files (#1084, GHSA-6q48-6c7w-9gw2), the trivy bump in the scan-worker
+  image, and a `.trivyignore` entry for CVE-2026-111943 in `gosec` (the newest release is still built on a Go standard
+  library with that CVE; the entry is removed when a fixed `gosec` ships). The worker images were not rebuilt, so the
+  `certifi` fix reaches them at their next rebuild.
+- Everything else merged since 2026-10-15 that lives in the `aletheore` package (the CLI changes, the new menu, the
+  Hallbook catalogue) is in `app-server`'s image but is not released to PyPI and not announced: the Hallbook launch is
+  held, and the `/hallbook` page stays out of the site navigation until `NEXT_PUBLIC_HALLBOOK_LAUNCHED` is set.
+
+Verified live: `https://app.aletheore.com/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`;
+`POST /v1/personal-tokens` and `GET /v1/custom-skills` without a token return 401 (not 404); the three new tables
+exist; the `app-server` container is `healthy` and its log since the restart has no error or traceback lines; every
+other container was untouched and still `healthy` (`redis` and `caddy` define no health check). Not verified: a real
+`aletheore login` against production (the same flow passed against a local server with real GitHub; the production run
+is left to the pre-launch review).
+
+Previous: CURRENT as of 2026-10-15 - `app-server`, both scan workers, `health-worker` and `scheduler` run
+`master` at commit `4adddf55` (tag `github-app-deploy-2026-10-15`); `jina-embed` still runs `e3182a9f` and was not
+rebuilt (it is idle: 38 hours of its logs held health checks and one embed request, and it stays as the rollback for the
+DeepInfra embedder). No migration, no Dockerfile or compose change. One deploy, preceded by a database backup
+(`backups/aletheore_app_2026-10-15T15-48-01Z.dump`); the new images were import-tested before anything was replaced,
+`app-server` was rolled first, and the workers were rolled only once all three RQ workers were idle.
+
+2026-10-15 deploy (`4adddf55`, tag `github-app-deploy-2026-10-15`):
+
+- #1043: fastapi 0.141.1 to 0.143.2, with `requirements.lock.txt`, `requirements-dev.lock.txt` and
+  `requirements-jina-embed.lock.txt` regenerated together under Python 3.12 (the images' Python). This is the change that
+  Dependabot's #1032 could not make: fastapi 0.143 also needs `opentelemetry-api`, which was not pinned, so
+  `pip install --require-hashes` failed the image build. Only fastapi was asked to upgrade; starlette stays at 1.6.0.
+  The dev lock was also stale (it lacked `bandit` and its dependencies) and now includes them. fastapi 0.143.0 makes
+  automatic OpenTelemetry exporter setup opt-in; nothing here configures OTel exporters, and only the API package is
+  added, so there is no behavior change.
+- CI on the pull request: the full suite on Python 3.11 to 3.14 (plus Windows and macOS), and the image build and
+  scan for all three images including `jina-embed`, all green. A local run on a developer Mac showed test-isolation
+  failures that fail identically on the old lock files and not in CI.
+- `requirements-jina-embed.lock.txt` now pins fastapi 0.143.2 but the running `jina-embed` container keeps its old
+  image until it is next rebuilt.
+
+Verified live: in a throwaway container from each new image, fastapi 0.143.2, starlette 1.6.0 and `opentelemetry-api`
+1.45.1, and `app_server.main` and `scan_worker.jobs` import; all five recreated services `healthy`, exactly one
+`github-app-scan-worker-1` and one `github-app-scan-worker-2-1`; `/healthz` returns
+`200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}` locally and at the public hostname, and a GET on
+`/v1/embeddings` still returns 405; three RQ workers registered; zero lines matching `error|traceback|exception` in each
+recreated container's logs three minutes after the roll; and a real embedding call from the new scan-worker image
+returned a 1024-dimension vector labelled `deepinfra:Qwen/Qwen3-Embedding-8B@1024`.
+
+**Previous:** CURRENT as of 2026-10-14 - `app-server`, both scan workers, `health-worker` and `scheduler` run
+`master` at commit `f2e1bcf4` (tag `github-app-deploy-2026-10-14-2`); `jina-embed` still runs `e3182a9f` (nothing it
+runs changed, and it is deliberately not rebuilt while it is the rollback for the DeepInfra embedder). No migration, no
+Dockerfile or compose change. Two deploys that day, each preceded by a database backup and rolled with the workers one
+at a time while idle (0 busy at every step), then re-verified live via SSH.
+
+2026-10-14 deploy 1 (`46b6739d`, tag `github-app-deploy-2026-10-14`, backup `backups/aletheore_app_2026-10-14T11-05-57Z.dump`):
+
+- #1038: Flash Review is no longer queued for pull requests opened by `dependabot[bot]`, `renovate[bot]`,
+  `pre-commit-ci[bot]` or `snyk-bot`, for draft pull requests, for a title containing `[skip review]`, `[no review]` or
+  `[skip aletheore]`, or for the labels `skip-review` and `no-review`. The deterministic scan still runs on all of them.
+  Marking a draft ready (`ready_for_review`) queues one review, which covers everything since the last reviewed commit.
+  The label `aletheore-review` forces a review. Before this, a review (charged to the customer's credit, or to the
+  Community allowance) ran on every Dependabot version bump.
+- #1037: three unused rate-table rows removed, and the unknown-model fallback price now ignores embedding-only rows
+  (it had dropped from about $0.23 in / $1.20 out to $0.20 / $0.68 per million when the DeepInfra rows were added; it is
+  now $0.2137 / $0.9409, the median of the chat models).
+
+2026-10-14 deploy 2 (`f2e1bcf4`, tag `github-app-deploy-2026-10-14-2`, backup `backups/aletheore_app_2026-10-14T11-20-27Z.dump`):
+
+- #1029 uvloop 0.22.1 to 0.23.0 and #1030 asyncpg 0.31.0 to 0.32.0, the event loop and database driver of the app
+  server. Tested before merging, not just by CI (which does not run uvloop): the real image with both bumps, and the
+  image production ran, were each started in an isolated scratch stack (own Postgres, Redis and network, torn down
+  afterwards) and given the same load: 3,000 requests each of `/healthz`, a bad-token and a flash-token
+  `/v1/embeddings` (asyncpg token lookups), signed `/webhook` pull-request events, and 3,000 mixed at concurrency 150.
+  Both returned only the expected statuses, the bumped build with zero exceptions and zero error log lines, memory
+  about 162 MiB in both, latency level; and the queue counts proved #1038 end to end (300 Dependabot PRs queued 300
+  scan jobs and no reviews, 100 drafts 100, 100 human PRs 200). `uvicorn` selects `uvloop.Loop` in both images.
+- The images also resolve `tree-sitter-php` 0.25.1 now that #1028 allows it. A scan of two real PHP repositories
+  (132 and 125 files) gave identical symbols, imports, security and architecture under 0.24.1 and 0.25.1.
+- #1034, #1035, #1036 (prettier and two GitHub Actions patch bumps) are CI-only; #1031 (markupsafe 3.0.4) is in the
+  `jina-embed` lock file only and takes effect when that image is next rebuilt.
+- Not taken: #1032 (fastapi 0.143.0, which left the hash-pinned `requirements-jina-embed.lock.txt` incomplete so the
+  image build failed) and #1033 (jsonschema 4.26.0, which conflicts with semgrep's pins). Both were closed with the
+  reason; the fastapi bump needs the three lock files regenerated together.
+
+Verified live after each deploy: all five recreated services `healthy`; zero lines matching `error|traceback|exception`
+in each recreated container's logs since its restart; `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`;
+three RQ workers registered; and the new code is in the running containers (seven markers in each of the five after
+deploy 1; after deploy 2, uvloop 0.23.0, asyncpg 0.32.0, `tree-sitter-php` 0.25.1, the skip rules and the DeepInfra
+setting in each of the five). The database showed 6 connections of 100 allowed, 5 of them idle: asyncpg 0.32 keeps the
+pool's `min_size=5` open as a floor. The DeepInfra embedder stayed on throughout, with no embedding warnings in the
+logs since it was switched on, and 14 Flash Review plus 4 AIRview embeddings metered at about $0.0002 in total.
+
+**Previous:** CURRENT as of 2026-10-13 - `app-server`, both scan workers, `health-worker` and `scheduler` ran
+`master` at commit `c9b63d98` (tag `github-app-deploy-2026-10-13`); `jina-embed` still runs `e3182a9f`, because nothing
+under `github-app/jina_embed/` changed. Re-verified live via SSH after each step. No migration, no Dockerfile or compose
+change, no lockfile change.
+
+2026-10-13 deploy: a database backup first (`backups/aletheore_app_2026-10-13T03-46-42Z.dump`), the five images built
+and import-tested before anything running was touched, then `app-server`, then each worker in turn only when no RQ
+worker was busy (0 busy at every step), so no running job was killed. What it brought live, since `56c44a8c`:
+
+- #1017: an optional DeepInfra embedder behind `EMBED_PROVIDER` (Qwen3-Embedding-8B at 1024 dimensions). It shipped
+  **off** and was **switched on the same day** (see "Switched on" below). It is metered against the customer's
+  credit, has no per-request fallback to Jina, and a circuit breaker skips the provider for five minutes after three
+  failed lookups in a row.
+- #1019: the credit top-up minimum is $6 on the dashboard form, matching Paddle's price (`quantity.minimum` was raised
+  from 5 to 6 on 2026-10-11, so checkout already enforced it).
+- #1021: Flash Review cache replays drop a finding whose quoted code is no longer near the diff, which usually means it
+  was fixed, instead of posting it again.
+- #1022: the shared-state check sees `threading.Thread`, `run_in_executor` and `to_thread`.
+- #1020: follow-ups from the #1015 review: one shared annual-plan helper, a non-list Paddle IP response is rejected,
+  the webhook timestamp check is a single try block, and the stale-price warning no longer repeats or crashes on an
+  incomplete rate entry.
+- #1023 and #1024 are CLI-side (comment cleanup, and the notice that hosted embeddings upload source chunks); the
+  site changes (#1018 changelog and security page, #1025 privacy wording) deploy from Vercel, not from this server.
+
+Verified live: all five recreated services `healthy`; zero lines matching `error|traceback|exception` in each
+recreated container's logs since its restart; `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`;
+three RQ workers registered; and the new code is in the running containers, not just the checkout (eight markers in
+each of the five, including `hosted_embedder`, the circuit breaker in `embedding_client`, `strict_quotes` in the
+citation check, `is_annual_subscription` and a top-up minimum of 6). The rendered credits form shows the $6 minimum.
+A one-string call to DeepInfra from a scan worker, with the flag overridden for that single process, returned a
+1024-dimension unit vector tagged `deepinfra:Qwen/Qwen3-Embedding-8B@1024`.
+
+**Switched on (2026-10-13, after the deploy above):** `EMBED_PROVIDER=deepinfra` was added to `.env` and all five
+services were force-recreated, workers one at a time while idle (0 busy at every step). Verified in each of the five
+containers: provider `deepinfra`, cache tag `deepinfra:Qwen/Qwen3-Embedding-8B@1024`, hosted response label
+`Qwen/Qwen3-Embedding-8B@1024`; all `healthy`, zero error lines, `/healthz` ok, three RQ workers, and `/v1/embeddings`
+answers 401 without a token. Consequences to expect: the Flash diff cache and the AIRview packet cache start cold
+(rows tagged with the Jina embedder no longer match), and every AIR user's local search index rebuilds once because
+the vector size changed from 768 to 1024. The privacy policy names DeepInfra as the embedding provider (#1026, merged
+after the switch). To switch back: delete the `EMBED_PROVIDER` line from `.env` and recreate the same five services;
+`jina-embed` is still running and untouched.
+
+**Previous:** CURRENT as of 2026-10-10 - `app-server`, both scan workers, `health-worker` and `scheduler` ran
+`master` at commit `56c44a8c` (tag `github-app-deploy-2026-10-10`); `jina-embed` still runs `e3182a9f` from the 2026-10-08
+deploy below, because nothing under `github-app/jina_embed/` changed after it. Re-verified live via SSH after each
+step. No migration, no Dockerfile or compose change, no lockfile change.
+
+2026-10-10 deploy: a database backup first (`backups/aletheore_app_2026-10-10T17-02-01Z.dump`), then `app-server`,
+then each worker in turn only when no RQ worker was busy (0 busy at every step), so no running job was killed.
+What it brought live, since `9cf6f24e` (the 2026-10-09 worker deploy below):
+
+- #1011: Flash Review's grounding gate moves a finding whose quoted text sits on a different line to that line
+  instead of dropping it. The old check dropped 39 of 220 proposed findings in a measured run, 32 of them accurate;
+  recall on the 13-PR Experiment 8 corpus went from about 50% to 59%. A quote that is not in the file at all is kept.
+- #1013: the Python exception-mismatch rule no longer reads prose like "can raise an error" as an exception name,
+  understands dotted and tuple handlers, and treats `Exception` as covering everything (4 of the rule's 8 findings
+  in that run were false positives, none after).
+- #1012: the paid-setup job deduplication holds for Paddle's three-day retry window (explicit `result_ttl`), the claim is
+  released on request cancellation, and that release is shielded against a second cancellation.
+- #1015: Paddle webhook hardening (an oversized `ts` is rejected instead of crashing before verification, the HMAC
+  hashes the header's own `ts` string, the IP allowlist no longer caches an empty list or trusts a stale one past
+  seven days, handles IPv4-mapped addresses and a trailing-comma `X-Forwarded-For`); `cost_for_usage` prices a model
+  missing from the rate table at the table's median and logs an error instead of raising (the first draft priced it at
+  the highest rate, about 200 times the production generator, against customers' real credit); annual AIR
+  subscribers see their annual credit figure on the dashboard and admin page.
+- #1010: AIRview subsystem-write batches are capped by an estimated token budget, not only by count.
+- #1008: `aletheore.__version__` is 0.9.26 in the running containers. #1014 records three new HIGH Go CVEs inside
+  the bundled gosec and trivy binaries in `.trivyignore` (no runtime change).
+
+Verified live: all five recreated services `healthy`; zero lines matching `error|traceback|exception` in each
+recreated container's logs since its restart; `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`;
+three RQ workers registered; and the new code is in the running containers, not just the checkout
+(`asyncio.shield` in the app-server's `webhooks/paddle.py`, `_unwrap_ipv4_mapped` in its IP allowlist, `_median_rates`
+in `llm_cost.py` in every container, the citation re-anchoring helper, `_python_raised_types` and
+`_pack_subsystem_batches` in the workers, `scheduler` and `health-worker` included). A direct call inside the
+app-server container rejected an oversized `ts` without a crash, verified a correctly signed webhook, and priced an
+unmapped model at $1.43 per million tokens each way where the old fallback gave $90. The cross-file check
+(`FLASH_REVIEW_CROSS_FILE_CHECK`) is unset in every container and in `.env`, so it remains off.
+
+**Previous:** CURRENT as of 2026-10-09 - the scan workers, `health-worker` and `scheduler` ran
+`master` at commit `9cf6f24e` (tag `github-app-deploy-2026-10-09-5`); `app-server` and `jina-embed` still ran
+`e3182a9f`.
 
 Five worker-only deploys on 2026-10-09, each built from `master` and rolled one container at a time, waiting
 for that worker to be idle first so no running job was killed:

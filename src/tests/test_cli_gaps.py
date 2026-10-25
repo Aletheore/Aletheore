@@ -27,7 +27,7 @@ def test_file_path_is_rejected(tmp_path):
 
 
 def test_diff_directory_is_clean_error(tmp_path):
-    assert cli._diff(str(tmp_path), str(tmp_path), False, False) == 1
+    assert cli._diff(str(tmp_path), str(tmp_path), False, False) == 2
 
 
 def test_malformed_evidence_file_is_a_clean_error_not_a_traceback(tmp_path, capsys):
@@ -40,8 +40,8 @@ def test_malformed_evidence_file_is_a_clean_error_not_a_traceback(tmp_path, caps
     bad.write_text(json.dumps({"aletheore_version": "0.7.0"}))
     good = tmp_path / "other.json"
     good.write_text(json.dumps({"aletheore_version": "0.7.0"}))
-    assert cli._diff(str(bad), str(good), False, False) == 1
-    assert "Traceback" not in capsys.readouterr().out
+    assert cli._diff(str(bad), str(good), False, False) == 2
+    assert "Traceback" not in capsys.readouterr().err
 
 
 def test_malformed_repo_evidence_is_a_clean_error(tmp_path):
@@ -66,13 +66,25 @@ def test_k_and_debounce_validated(tmp_path):
     assert runner.invoke(cli.app, ["watch", str(tmp_path), "--debounce", "-1"]).exit_code == 2
 
 
-def test_jsonc_and_bom_configs_are_merged(tmp_path):
+def test_bom_configs_are_merged(tmp_path):
     cfg = tmp_path / "mcp.json"
-    cfg.write_bytes(b'\xef\xbb\xbf{\n // c\n "servers": {"x": {"a": 1,},},\n /* b */\n}')
-    msg = cli._write_json_mcp_client_config(cfg, "servers", {"command": "c"})
+    cfg.write_bytes(b'\xef\xbb\xbf{"servers": {"x": {"a": 1}}}')
+    msg, security_skip = cli._write_json_mcp_client_config(cfg, "servers", {"command": "c"})
     assert msg.startswith("wrote")
-    data = json.loads(cfg.read_text(encoding="utf-8"))
+    assert security_skip is False
+    assert cfg.read_bytes().startswith(b"\xef\xbb\xbf")  # the BOM is kept
+    data = json.loads(cfg.read_text(encoding="utf-8-sig"))
     assert data["servers"]["x"] == {"a": 1} and data["servers"]["aletheore"] == {"command": "c"}
+
+
+def test_jsonc_configs_are_left_untouched_rather_than_losing_their_comments(tmp_path):
+    cfg = tmp_path / "mcp.json"
+    original = '{\n // c\n "servers": {"x": {"a": 1,},},\n /* b */\n}'
+    cfg.write_text(original)
+    msg, security_skip = cli._write_json_mcp_client_config(cfg, "servers", {"command": "c"})
+    assert msg.startswith("skipped") and "comments or trailing commas" in msg
+    assert security_skip is False
+    assert cfg.read_text() == original
 
 
 def test_jsonc_keeps_slashes_inside_strings():

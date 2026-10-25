@@ -45,6 +45,20 @@ five external deterministic scanners - see the changelog entry below.
 Version `0.7.0` adds `git.recently_updated`, a recency-ranked file list -
 see the changelog entry below.
 
+Version `0.9.0` declares the optional fields the scanner gained after `0.8.1`
+(`cli_version`, `config_warnings`, `repository.unreadable_files`, the extra
+`repository.monorepo` and dependency-check fields, `git.reason`) - see the
+changelog entry below.
+
+### Reading older evidence
+
+A reader normally refuses evidence from a different `(major, minor)`. The one
+exception is a minor whose bump added optional keys and nothing else: such a
+minor is listed in `_READABLE_EARLIER_MINORS` in `src/aletheore/evidence.py`
+under the build that can still read it, and evidence from it loads without a
+re-scan. Today that is `0.9` reading `0.8`. A minor that removes, renames or
+retypes a key must never be listed there.
+
 ## Migration rules
 
 1. **Any change to `AIR_JSON_SCHEMA` requires an `EVIDENCE_VERSION` MINOR bump.**
@@ -108,6 +122,7 @@ architecture config, which is the common case.
 
 | Version | Change |
 | --- | --- |
+| `0.9.0` | Declared fields the scanner already emitted, all optional: top-level `cli_version` (the CLI that wrote the file, as opposed to `aletheore_version`, the schema version) and `config_warnings`; `repository.unreadable_files` (`{path, reason}`); `repository.monorepo.packages`, `reason` and `manifests_truncated`; `manifest_dirs`, `unreadable_manifest_dirs`, `note` and `reason` on `security.dependency_vulnerabilities` and `security.dependency_licenses`; and `git.reason` when `git.available` is false. Nothing was removed or retyped, so evidence from `0.8.x` is still readable (`_READABLE_EARLIER_MINORS`); every reader already used `.get()` for these keys. |
 | `0.8.1` | Symbol entries (`repository.modules[].symbols.functions`/`classes`/`constants`) leave out fields that would be empty: `params`, `docstring` and `return_type` when null, and `is_pure_declaration` when false. A missing key means exactly what the null or false did. Every in-repo reader already used `.get()` with that default (one hosted reader, `live_docs.py`, was changed to match). On the Linux kernel's 2.9 million `#define` constants these fields were always empty and were about 45% of each entry, most of `air.json`. Not a schema change (symbol entries are not in `AIR_JSON_SCHEMA`, per rule 5), so a patch bump: readers of 0.8.0 and 0.8.1 stay compatible. External tools that index these keys directly (`symbol["docstring"]`) should switch to `.get()`. |
 | `0.8.0` | Added `repository.error_handling`: error types (classes deriving from exception/error bases), raise or throw sites and catch handlers, each with `file`/`line`, plus a per-type summary (`by_error_type`: raised and caught counts). Python, C/C++, JavaScript/TypeScript, Java, C#, PHP, Kotlin, Ruby and Swift (exceptions), plus Go and Rust (errors as values). Lists are capped and `truncated` says when one was cut; the summary counts every site. Optional in the schema (only `checked` is required) so air.json written before 0.8.0 stays valid until its next scan. |
 | `0.7.0` | Added `git.recently_updated`: the most recently touched files repo-wide (`{path, last_commit_at}`), ranked by recency rather than churn - a low-churn file edited five minutes ago and a high-churn hotspot are different questions, and `git.hotspots`' churn-ranked, capped list can exclude the former outright. Computed from `FileChurnTotal.recent_commits` (already gathered while streaming git log for `hotspots`), so this is a second summarization of data already in hand, not a second git walk. `git.hotspots` entries also now carry `last_commit_at` per file; since `hotspots` has no declared item schema (`_ANY_LIST`), that addition alone needed no version bump - `recently_updated` is what requires this one. |

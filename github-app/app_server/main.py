@@ -28,6 +28,7 @@ from app_server.managed_audit_api import managed_audit_router
 from app_server.metrics import metrics_router
 from app_server.runtime_events import runtime_events_router
 from app_server.sentry_config import init_sentry
+from app_server.skill_hub_api import skill_hub_router
 from app_server.signature import verify_signature
 from app_server.webhooks.installation import handle_installation_event
 from app_server.webhooks.paddle import paddle_webhook_router
@@ -62,6 +63,7 @@ app.add_middleware(
 app.include_router(dashboard_router)
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.include_router(skill_hub_router)
 app.include_router(managed_audit_router)
 app.include_router(embeddings_router)
 app.include_router(metrics_router)

@@ -3,7 +3,7 @@ import json
 import logging
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from functools import lru_cache
 
 import psycopg
@@ -30,8 +30,8 @@ logger = logging.getLogger(__name__)
 # lock made a concurrent seat-admission call block for its full
 # lock_timeout and then fail), fixed by moving SEAT_LOCK_NAMESPACE to 6.
 # 7 is claimed below for the wiki-write lock, 8 for the check-run creation
-# lock - keep this registry comment in sync with any new namespace either
-# file adds.
+# lock, and app_server.db claims 9 (PERSONAL_TOKEN_LOCK_NAMESPACE) - keep
+# this registry comment in sync with any new namespace either file adds.
 SCAN_SLOT_LOCK_NAMESPACE = 1
 SPEND_LOCK_NAMESPACE = 2
 # Real gap found via audit: insert_repo_history's retention trim (below)
@@ -271,6 +271,24 @@ def get_llm_spend_this_month(dsn: str, installation_id: int) -> float:
             return float(row[0]) if row else 0.0
 
 
+def get_llm_review_spend_this_month(dsn: str, installation_id: int) -> float:
+    """This month's spend on PR reviews alone (feature "flash_review" and its
+    embedding sibling), from the llm_spend_events ledger. get_llm_spend_this_month
+    is the all-feature total, so the two together let a message say how much
+    of the total actually went to reviews."""
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(cost_usd), 0) FROM llm_spend_events
+                WHERE installation_id = %s AND feature LIKE 'flash_review%%'
+                  AND created_at >= date_trunc('month', now())
+                """,
+                (installation_id,),
+            )
+            return float(cur.fetchone()[0])
+
+
 def get_llm_spend_breakdown(dsn: str, installation_id: int, since: datetime) -> dict[str, float]:
     """Per-feature cost breakdown for one installation since `since` - the
     query llm_spend's own blended monthly total can never answer, and the
@@ -388,7 +406,9 @@ def get_flash_review_count_this_month(dsn: str, installation_id: int) -> int:
             return int(row[0]) if row else 0
 
 
-def reserve_flash_review_count(dsn: str, installation_id: int, limit: int | None) -> bool:
+def reserve_flash_review_count(
+    dsn: str, installation_id: int, limit: int | None, month: date | None = None
+) -> bool:
     """Atomically checks the review-count cap and reserves a slot in one
     statement, the same INSERT...ON CONFLICT...WHERE...RETURNING shape as
     check_and_reserve_flash_review_attempt below. installation_spend_lock's
@@ -403,9 +423,16 @@ def reserve_flash_review_count(dsn: str, installation_id: int, limit: int | None
 
     Returns True (and increments) if a slot was available, False (no
     increment - nothing to undo) if the cap was already reached. Call
-    release_flash_review_count_reservation if the reserved review then
-    never actually runs (e.g. every free-tier provider failed, or an
-    unrelated exception aborted the job before it produced a result).
+    release_flash_review_count_reservation, passing this SAME `month` value,
+    if the reserved review then never actually runs (e.g. every free-tier
+    provider failed, or an unrelated exception aborted the job before it
+    could produce a result) - see that function's docstring for why passing
+    it through matters.
+
+    `month` defaults to the database's own current month (first-of-month
+    date) if not given - the caller-supplied value exists so a long-running
+    job that straddles a month boundary reserves and releases against the
+    same row, not whichever month happens to be current at each moment.
 
     `limit=None` means no cap: the review is still counted (the admin
     month-to-date figure reads this table) but never refused. Paid plans use
@@ -416,43 +443,56 @@ def reserve_flash_review_count(dsn: str, installation_id: int, limit: int | None
                 cur.execute(
                     """
                     INSERT INTO flash_review_monthly_count (installation_id, month, review_count)
-                    VALUES (%s, date_trunc('month', now())::date, 1)
+                    VALUES (%s, COALESCE(%s, date_trunc('month', now())::date), 1)
                     ON CONFLICT (installation_id, month) DO UPDATE
                     SET review_count = flash_review_monthly_count.review_count + 1
                     RETURNING review_count
                     """,
-                    (installation_id,),
+                    (installation_id, month),
                 )
             else:
                 cur.execute(
                     """
                     INSERT INTO flash_review_monthly_count (installation_id, month, review_count)
-                    VALUES (%s, date_trunc('month', now())::date, 1)
+                    VALUES (%s, COALESCE(%s, date_trunc('month', now())::date), 1)
                     ON CONFLICT (installation_id, month) DO UPDATE
                     SET review_count = flash_review_monthly_count.review_count + 1
                     WHERE flash_review_monthly_count.review_count < %s
                     RETURNING review_count
                     """,
-                    (installation_id, limit),
+                    (installation_id, month, limit),
                 )
             row = cur.fetchone()
         conn.commit()
     return row is not None
 
 
-def release_flash_review_count_reservation(dsn: str, installation_id: int) -> None:
+def release_flash_review_count_reservation(
+    dsn: str, installation_id: int, month: date | None = None
+) -> None:
     """Undoes one reserve_flash_review_count reservation for a review that
     was counted against the cap but never actually ran. GREATEST(...,0)
-    guards against a double-release ever taking the count negative."""
+    guards against a double-release ever taking the count negative.
+
+    `month` must be the SAME value passed to the matching
+    reserve_flash_review_count call (or the same default, both None) so this
+    decrements the exact row that reservation incremented. Without this, a
+    job whose reservation and release straddle a month boundary - no
+    concurrency required, just one job reserving in month N and releasing
+    after month N+1 begins - would decrement month N+1's row instead of
+    month N's, erroneously erasing a legitimate new-month reservation and
+    letting the free-tier cap be exceeded (confirmed real, see the
+    2026-10-12 Strix review: github-app/tests/test_scan_worker_db.py
+    test_release_flash_review_count_reservation_respects_reservation_month)."""
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE flash_review_monthly_count
                 SET review_count = GREATEST(review_count - 1, 0)
-                WHERE installation_id = %s AND month = date_trunc('month', now())::date
+                WHERE installation_id = %s AND month = COALESCE(%s, date_trunc('month', now())::date)
                 """,
-                (installation_id,),
+                (installation_id, month),
             )
         conn.commit()
 
@@ -627,32 +667,55 @@ def sweep_stale_llm_spend_reservations(dsn: str, max_age_seconds: int) -> int:
     reservation whose owning process was killed before it could call
     on_call_failed has no other path back to the balance.
 
-    Each row is released and deleted one at a time rather than in bulk so
-    a failure partway through still leaves every row already processed
-    correctly resolved, instead of re-attempting (and double-releasing)
-    them on the next sweep tick."""
+    Each row is claimed with its own atomic DELETE ... RETURNING before its
+    balance is released - not released-then-deleted in two separate round
+    trips, as this used to work (confirmed real bug, 2026-10-12 Strix
+    security review): that order left a real double-refund window open,
+    either from a crash between the release commit and the delete commit,
+    or from two sweep ticks both selecting the same stale row before
+    either had deleted it - either way, the same reservation's balance
+    could be released twice, crediting an installation more than it was
+    ever owed. Claiming by delete first makes double-processing
+    structurally impossible: a concurrent second DELETE for the same id
+    returns no row, so only whichever caller actually removed the row
+    proceeds to release it. The only residual risk is the opposite, far
+    safer direction - a crash strictly between this delete committing and
+    the matching release committing would leave that one reservation's
+    balance unreleased, which is recoverable by a human and not
+    exploitable by an attacker, unlike a duplicate refund."""
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
             cur.execute(
                 """
-                SELECT id, installation_id, reserve_usd, topup_usd
-                FROM llm_spend_reservations
+                SELECT id FROM llm_spend_reservations
                 WHERE updated_at < now() - make_interval(secs => %s)
                 """,
                 (max_age_seconds,),
             )
-            stale = cur.fetchall()
+            stale_ids = [row["id"] for row in cur.fetchall()]
 
-    for row in stale:
-        release_llm_spend_reservation(
-            dsn, row["installation_id"], float(row["reserve_usd"]), float(row["topup_usd"])
-        )
+    released = 0
+    for stale_id in stale_ids:
         with get_db_pool(dsn).connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("DELETE FROM llm_spend_reservations WHERE id = %s", (row["id"],))
+            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+                cur.execute(
+                    """
+                    DELETE FROM llm_spend_reservations WHERE id = %s
+                    RETURNING installation_id, reserve_usd, topup_usd
+                    """,
+                    (stale_id,),
+                )
+                claimed = cur.fetchone()
             conn.commit()
+        if claimed is None:
+            # Already claimed and released by a concurrent sweep tick.
+            continue
+        release_llm_spend_reservation(
+            dsn, claimed["installation_id"], float(claimed["reserve_usd"]), float(claimed["topup_usd"])
+        )
+        released += 1
 
-    return len(stale)
+    return released
 
 
 def insert_audit_report(

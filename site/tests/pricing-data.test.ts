@@ -19,9 +19,9 @@ describe("pricing data", () => {
   it("carries no em or en dashes", () => {
     expect(flat).not.toMatch(/[–—]/);
   });
-  it("keeps the benchmark numbers on the Flash card in line with Experiment 8", () => {
-    expect(flat).toContain("about 53% of human-identified bugs");
-    expect(flat).toContain("about 93%");
+  it("keeps the benchmark numbers on the Flash card in line with Experiment 9", () => {
+    expect(flat).toContain("about 55% of human-identified bugs");
+    expect(flat).toContain("about 89%");
   });
   it("keeps the footnote marks the cards refer to", () => {
     expect(footnotes.map((f) => f.mark)).toEqual(["*", "**"]);

@@ -1,4 +1,5 @@
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 from aletheore.static_analysis.bandit_scanner import (
@@ -53,7 +54,7 @@ def test_check_bandit_is_checked_true_with_no_findings_when_no_python_source(tmp
         result = check_bandit(tmp_path)
 
     mock_which.assert_not_called()
-    assert result == {"checked": True, "reason": None, "findings": []}
+    assert result == {"checked": True, "reason": None, "findings": [], "not_applicable": "no Python source files"}
 
 
 def test_check_bandit_reports_not_installed(tmp_path):
@@ -63,6 +64,24 @@ def test_check_bandit_reports_not_installed(tmp_path):
         result = check_bandit(tmp_path)
 
     assert result == {"checked": False, "reason": "bandit not installed", "findings": []}
+
+
+def test_check_bandit_resolves_which_to_an_absolute_path(tmp_path):
+    # Real gap found by an independent Strix pentest pass (2026-10-15):
+    # shutil.which() can return a path relative to a relative PATH entry,
+    # and the subprocess below switches cwd to repo_path - a scanned
+    # (untrusted) repo could shadow a bare relative name with its own
+    # same-named executable and have it run with this process's privileges.
+    (tmp_path / "app.py").write_text("import os\n")
+    mock_result = _mock_run(0, stdout=json.dumps({"results": []}))
+
+    with patch("aletheore.static_analysis.bandit_scanner.shutil.which", return_value="relative/bandit"), \
+         patch("aletheore.static_analysis.bandit_scanner.subprocess.run", return_value=mock_result) as mock_run:
+        check_bandit(tmp_path)
+
+    called_cmd = mock_run.call_args[0][0]
+    assert os.path.isabs(called_cmd[0])
+    assert called_cmd[0] != "relative/bandit"
 
 
 def test_check_bandit_normalizes_a_real_finding_shape(tmp_path):

@@ -1,0 +1,10 @@
+apiVersion: networksecurity.cnrm.cloud.google.com/v1beta1
+kind: AuthzPolicy
+metadata:
+  name: agw-authz-policy
+spec:
+  action: ALLOW
+  target:
+    resources:
+      - "projects/{project_number}/locations/{region}/agentGateways/agw-client-c2a"
+      - "projects/{project_number}/locations/{region}/agentGateways/agw-tools-a2a"

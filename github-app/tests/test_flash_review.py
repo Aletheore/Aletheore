@@ -25,6 +25,7 @@ from scan_worker.flash_review import (
     _rank_findings_with_severity,
     _ranking_user_prompt,
     _validate_findings,
+    _verify_or_reanchor_citation,
     build_change_impact_context,
     build_code_evidence_context,
     build_dependency_impact_context,
@@ -508,11 +509,13 @@ def test_validate_findings_logs_every_dropped_finding_with_its_reason(caplog):
     with caplog.at_level(logging.INFO, logger="scan_worker.flash_review"):
         kept = _validate_findings(findings, diff_text, {"a.py": "\n".join(lines)})
 
-    assert kept == [findings[0]]
+    # The out-of-diff finding is dropped; the one whose quoted text is really on line 2 is
+    # moved there instead of dropped (see _verify_or_reanchor_citation).
+    assert kept == [findings[0], {**findings[2], "line": 2}]
     message = caplog.text
-    assert "kept 1/3" in message
+    assert "kept 2/3" in message
     assert "a.py:999" in message
-    assert "a.py:18" in message
+    assert "a.py:18->2" in message
 
 
 def test_validate_findings_stays_quiet_when_nothing_is_dropped(caplog):
@@ -562,7 +565,7 @@ def test_line_citation_content_matches_ignores_suggestion_quoted_text():
     assert _line_citation_content_matches(finding, file_contents) is True
 
 
-def test_validate_findings_drops_finding_whose_quoted_content_is_at_the_wrong_line():
+def test_validate_findings_moves_a_finding_to_the_line_its_quoted_content_is_really_on():
     diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
     diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"
     findings = [
@@ -573,9 +576,131 @@ def test_validate_findings_drops_finding_whose_quoted_content_is_at_the_wrong_li
     file_lines[1] = "a specific buggy string here"  # real location: line 2
     file_contents = {"a.py": "\n".join(file_lines)}
 
-    assert _validate_findings(findings, diff_text, file_contents=file_contents) == [
-        {"file": "a.py", "line": 2, "issue": "right line: 'a specific buggy string here'"}
+    kept = _validate_findings(findings, diff_text, file_contents=file_contents)
+
+    assert [(f["line"], f["issue"]) for f in kept] == [
+        (2, "wrong line: 'a specific buggy string here'"),
+        (2, "right line: 'a specific buggy string here'"),
     ]
+    assert findings[0]["line"] == 15, "the caller's finding must not be mutated"
+
+
+def test_validate_findings_keeps_a_finding_whose_quoted_text_is_nowhere_in_the_file():
+    # The model uses quote marks for paraphrases, UI strings and messages defined in other code.
+    # That is a quote that cannot be checked, not a wrong line: kept exactly as it came.
+    diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
+    diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"
+    finding = {"file": "a.py", "line": 7, "issue": 'The handler "never throws" so errors are hidden'}
+    file_contents = {"a.py": "\n".join(["filler"] * 20)}
+
+    assert _validate_findings([finding], diff_text, file_contents=file_contents) == [finding]
+
+
+def test_validate_findings_moves_to_the_nearest_occurrence_of_the_quoted_text():
+    diff_lines = "\n".join(f" line{i}" for i in range(1, 41))
+    diff_text = f"--- a.py ---\n@@ -1,40 +1,40 @@\n{diff_lines}"
+    file_lines = ["filler"] * 40
+    file_lines[2] = "the buggy literal text"
+    file_lines[29] = "the buggy literal text"
+    # Cited line 20 is 17 lines from the occurrence on line 3 and 10 from the one on line 30,
+    # both outside the 8-line window, so it moves to the nearer one.
+    finding = {"file": "a.py", "line": 20, "issue": "wrong place: 'the buggy literal text'"}
+
+    kept = _validate_findings([finding], diff_text, file_contents={"a.py": "\n".join(file_lines)})
+
+    assert [f["line"] for f in kept] == [30]
+
+
+def test_validate_findings_still_grounds_the_identifiers_of_a_finding_it_moved():
+    # A finding moved to its quoted line is a copy; it must still go through the identifier check.
+    diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
+    diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"
+    file_lines = ["filler"] * 20
+    file_lines[1] = "a specific buggy string here"
+    file_contents = {"a.py": "\n".join(file_lines)}
+    real_symbol = {"file": "a.py", "line": 15, "issue": "moved: 'a specific buggy string here' in `filler`"}
+    invented_symbol = {"file": "a.py", "line": 15, "issue": "moved: 'a specific buggy string here' in `no_such_symbol`"}
+
+    kept = _validate_findings([real_symbol, invented_symbol], diff_text, file_contents=file_contents)
+
+    assert [f["issue"] for f in kept] == [real_symbol["issue"]]
+    assert kept[0]["line"] == 2
+
+
+def test_validate_findings_keeps_the_cited_line_when_the_quoted_text_only_exists_outside_the_diff():
+    # A corrected line has to be somewhere an inline comment can be posted.
+    diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
+    diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"
+    file_lines = ["filler"] * 100
+    file_lines[79] = "the buggy literal text"  # line 80, far from the 20-line hunk
+    finding = {"file": "a.py", "line": 15, "issue": "wrong place: 'the buggy literal text'"}
+
+    assert _validate_findings([finding], diff_text, file_contents={"a.py": "\n".join(file_lines)}) == [finding]
+
+
+def test_validate_findings_still_drops_a_line_past_the_end_of_the_file_with_nothing_to_anchor_it():
+    diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
+    diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"
+    # Cited line 22 is within the diff tolerance but past the real file's 20 lines.
+    nothing_quoted = {"file": "a.py", "line": 22, "issue": "no quote here"}
+    quote_not_in_file = {"file": "a.py", "line": 22, "issue": "absent: 'text that is not in the file'"}
+    file_contents = {"a.py": "\n".join(["filler"] * 20)}
+
+    assert _validate_findings([nothing_quoted, quote_not_in_file], diff_text, file_contents=file_contents) == []
+
+
+def test_validate_findings_drops_a_cache_replayed_finding_whose_quoted_code_is_gone():
+    # Audit finding 10/12: #1011 keeps a fresh finding whose quote is nowhere in the file (usually a
+    # paraphrase), but the same rule on a cache replay reposted findings for code that had since been
+    # fixed - the cache matches on a similar diff, and the quoted code vanishing is the sign it is stale.
+    diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
+    diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"
+    file_contents = {"a.py": "\n".join(["filler"] * 20)}
+    finding = {"file": "a.py", "line": 5, "issue": "unsafe: 'eval(user_input)' runs untrusted input", "source": "llm"}
+
+    assert _validate_findings([finding], diff_text, file_contents=file_contents) == [finding]
+    assert _validate_findings([finding], diff_text, file_contents=file_contents, replayed_from_cache=True) == []
+
+
+def test_validate_findings_cache_replay_drops_a_quote_found_only_away_from_the_diff():
+    diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
+    diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"
+    file_lines = ["filler"] * 100
+    file_lines[79] = "the buggy literal text"
+    finding = {"file": "a.py", "line": 15, "issue": "wrong place: 'the buggy literal text'", "source": "llm"}
+
+    kept = _validate_findings(
+        [finding], diff_text, file_contents={"a.py": "\n".join(file_lines)}, replayed_from_cache=True
+    )
+
+    assert kept == []
+
+
+def test_validate_findings_cache_replay_keeps_a_quote_still_near_the_diff_and_semantic_findings():
+    diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
+    diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"
+    file_lines = ["filler"] * 20
+    file_lines[4] = "eval(user_input)"
+    file_contents = {"a.py": "\n".join(file_lines)}
+    still_there = {"file": "a.py", "line": 5, "issue": "unsafe: 'eval(user_input)'", "source": "llm"}
+    # Semantic findings are recomputed against this diff, not replayed, so they keep the lenient rule.
+    semantic = {"file": "a.py", "line": 5, "issue": "lost: 'something not in the file'", "source": "semantic"}
+
+    kept = _validate_findings([still_there, semantic], diff_text, file_contents=file_contents, replayed_from_cache=True)
+
+    assert kept == [still_there, semantic]
+
+
+def test_verify_or_reanchor_citation_recovers_the_original_hallucinated_line_incident():
+    # case 001-flask-cli-key-quote: the model cited line 561 for text that is at line 798.
+    lines = ["filler"] * 1000
+    lines[797] = 'raise ValueError("when using --cert as SSLContext, --key is not used.")'
+    finding = {"file": "cli.py", "line": 561,
+               "issue": "message is malformed: 'when using --cert as SSLContext'"}
+
+    fixed = _verify_or_reanchor_citation(finding, {"cli.py": "\n".join(lines)})
+
+    assert fixed == {**finding, "line": 798}
 
 
 def test_is_non_substantive_diff_true_for_lockfile_only():
@@ -871,6 +996,21 @@ def test_review_diff_revalidates_cache_hit_against_current_diff():
 
     mock_adapter_class.assert_not_called()
     assert findings == [{"file": "app.py", "line": 42, "issue": "still valid", "source": "llm"}]
+
+
+def test_review_diff_cache_hit_drops_a_finding_whose_quoted_code_was_fixed():
+    diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')"
+    file_contents = {"app.py": "\n".join(["pass"] * 41 + ["f = open('x')"])}
+    cached_findings = [
+        {"file": "app.py", "line": 42, "issue": "leaks a handle: \"open('x')\""},
+        {"file": "app.py", "line": 42, "issue": "unsafe: \"eval(user_input)\""},
+    ]
+
+    with patch("scan_worker.flash_review.flash_review_generation_adapter") as mock_adapter_class:
+        findings = review_diff(diff_text, file_contents=file_contents, cache_lookup=lambda diff: cached_findings)
+
+    mock_adapter_class.assert_not_called()
+    assert [f["issue"] for f in findings] == [cached_findings[0]["issue"]]
 
 
 @patch("scan_worker.flash_review.flash_review_generation_adapter")
@@ -1445,6 +1585,90 @@ def test_semantic_checker_finds_wrong_exception_type():
 
     assert len(findings) == 1
     assert "catches ErrorB instead" in findings[0]["issue"]
+
+
+_PY_DEP_HEADER = "--- referenced definition (not part of this diff): callee.py:op ---\n"
+
+
+def _exception_findings(added: str, dependency: str, caller_source: str | None = None, removed: str = ""):
+    removed_lines = "".join(f"-{line}\n" for line in removed.splitlines())
+    added_lines = "".join(f"+{line}\n" for line in added.splitlines())
+    diff = f"--- caller.py ---\n@@ -1,2 +1,3 @@\n{removed_lines}{added_lines}"
+    findings = find_semantic_regressions(
+        diff, {"caller.py": caller_source or added}, _PY_DEP_HEADER + dependency
+    )
+    return [f for f in findings if "raises" in f["issue"]]
+
+
+def test_exception_rule_ignores_the_word_raise_in_prose():
+    # Experiment 8 produced "submit raises an, but the changed handler catches queue instead":
+    # the dependency's docstring said it "can raise an error", and `raise an` was read as a class.
+    dependency = 'def op(x):\n    """Queue the item; can raise an error if the pool is closed."""\n    return pool.put(x)'
+    added = "try:\n    value = op(key)\nexcept Exception:\n    return None"
+
+    assert _exception_findings(added, dependency) == []
+
+
+def test_exception_rule_ignores_a_comment_that_mentions_raise():
+    dependency = "def op(x):\n    # we never raise here, the caller decides\n    return 1"
+    added = "try:\n    value = op(key)\nexcept ErrorB:\n    return None"
+
+    assert _exception_findings(added, dependency) == []
+
+
+def test_exception_rule_compares_dotted_exception_names_by_their_last_component():
+    # `except queue.Empty:` was read as `except queue`, a different type from Empty.
+    dependency = "raise Empty()"
+    added = "try:\n    value = op(key)\nexcept queue.Empty:\n    return None"
+    assert _exception_findings(added, dependency) == []
+
+    dependency = "raise queue.Empty()"
+    added = "try:\n    value = op(key)\nexcept Empty:\n    return None"
+    assert _exception_findings(added, dependency) == []
+
+
+def test_exception_rule_does_not_flag_a_tuple_that_still_includes_the_raised_type():
+    added = "try:\n    value = op(key)\nexcept (ErrorA, ErrorB) as exc:\n    return None"
+
+    assert _exception_findings(added, "raise ErrorA()") == []
+
+
+def test_exception_rule_does_not_flag_a_broad_exception_handler():
+    added = "try:\n    value = op(key)\nexcept Exception:\n    return None"
+    assert _exception_findings(added, "raise ErrorA()") == []
+    added = "try:\n    value = op(key)\nexcept BaseException:\n    return None"
+    assert _exception_findings(added, "raise ErrorA()") == []
+
+
+def test_exception_rule_still_flags_a_dotted_handler_of_the_wrong_type():
+    added = "try:\n    value = op(key)\nexcept queue.Full:\n    return None"
+
+    findings = _exception_findings(added, "raise ErrorA()")
+
+    assert len(findings) == 1
+    assert "catches Full instead" in findings[0]["issue"]
+
+
+def test_exception_rule_still_recognises_a_one_line_conditional_raise():
+    dependency = "def op(x):\n    if bad(x): raise ErrorA('bad input')\n    return 1"
+    caller = "def handler():\n    value = op(key)"
+
+    findings = _exception_findings("    value = op(key)", dependency, caller_source=caller, removed="except ErrorA as exc:")
+
+    assert len(findings) == 1
+    assert "removed its exception handler" in findings[0]["issue"]
+
+
+def test_exception_rule_ignores_a_reraise_of_a_variable_of_unknown_type():
+    caller = "def handler():\n    value = op(key)"
+
+    assert _exception_findings("    value = op(key)", "raise exc", caller_source=caller, removed="except ErrorA:") == []
+
+
+def test_exception_rule_treats_a_surviving_broad_handler_as_still_handling_the_error():
+    caller = "def handler():\n    try:\n        value = op(key)\n    except Exception:\n        return None"
+
+    assert _exception_findings("    value = op(key)", "raise ErrorA()", caller_source=caller, removed="except ErrorA:") == []
 
 
 def test_semantic_checker_finds_retry_mutation():
@@ -4420,6 +4644,38 @@ def test_semantic_checker_finds_shared_state_run_on_threads():
 
     assert len(findings) == 1
     assert "shared mutable instance state" in findings[0]["issue"]
+
+
+@pytest.mark.parametrize(
+    "added_line",
+    [
+        "t = threading.Thread(target=self.worker)",
+        "loop.run_in_executor(None, self.worker)",
+        "await asyncio.to_thread(self.worker)",
+    ],
+)
+def test_semantic_checker_finds_shared_state_on_module_qualified_and_asyncio_threads(added_line):
+    # Audit finding 10/12: the Thread trigger's lookbehind excluded the "." in
+    # threading.Thread(...), the usual spelling, so only a bare Thread(...) ever
+    # matched. run_in_executor and to_thread also hand the callable to threads.
+    findings = find_semantic_regressions(
+        f"--- caller.py ---\n@@ -1,1 +1,2 @@\n+{added_line}\n",
+        {"caller.py": "worker(value)"},
+        "--- referenced definition (not part of this diff): worker.py:worker ---\nself.count += 1",
+    )
+
+    assert len(findings) == 1
+    assert "shared mutable instance state" in findings[0]["issue"]
+
+
+def test_semantic_checker_ignores_thread_attribute_on_an_unrelated_object():
+    findings = find_semantic_regressions(
+        "--- caller.py ---\n@@ -1,1 +1,2 @@\n+handle = obj.Thread(target=worker)\n",
+        {"caller.py": "worker(value)"},
+        "--- referenced definition (not part of this diff): worker.py:worker ---\nself.cache = {}",
+    )
+
+    assert findings == []
 
 
 def test_semantic_checker_finds_shared_state_called_concurrently_across_wrapped_lines():

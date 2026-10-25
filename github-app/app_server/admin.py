@@ -42,6 +42,7 @@ from app_server.db import (
     add_installation_member_within_seat_limit,
     consume_deletion_otp_code,
     count_installation_members,
+    create_api_token_replacing_label,
     create_api_token_within_limit,
     create_deletion_otp_code,
     delete_session,
@@ -65,9 +66,11 @@ from app_server.db import (
     record_admin_action,
     record_installation_access,
     remove_health_check_target,
+    reconcile_installation_member_identity,
     remove_installation_member,
     replace_endpoint_health_selection,
     revoke_api_token,
+    revoke_api_tokens_created_by,
     set_docs_repo_commit_enabled,
     set_llm_suggestions_enabled,
     set_public_status_enabled,
@@ -84,7 +87,7 @@ from app_server.paddle_client import create_discount as create_paddle_discount
 from app_server.paddle_client import create_portal_session
 from app_server.paddle_client import get_subscription as get_paddle_subscription
 from app_server.paddle_client import update_subscription_items as update_paddle_subscription_items
-from app_server.paddle_pricing import CREDIT_TOPUP_PRICE_ID, EXTRA_SEAT_PRICE_ID
+from app_server.paddle_pricing import CREDIT_TOPUP_PRICE_ID, EXTRA_SEAT_PRICE_ID, is_annual_subscription
 from app_server.rate_limit import is_rate_limited
 from app_server.redis_client import get_redis_client
 from app_server.url_validation import UnsafeURLError, validate_external_https_url
@@ -282,12 +285,11 @@ def _fetch_administered_installation_ids(github_token: str) -> set[int]:
     return {item["id"] for item in installations}
 
 
-def _fetch_github_login(github_token: str) -> str:
-    """The caller's own GitHub login, for the bearer-token routes
-    (`/v1/my-installations`, `/v1/cli-tokens`) that never go through
-    `get_current_session` and so never get `session["github_login"]` for
-    free - needed to call `_is_real_installation_member_or_admin` the same
-    way every session-cookie route already does.
+def _fetch_github_user(github_token: str) -> dict:
+    """The caller's own GitHub user id and login, for the bearer-token
+    routes (`/v1/my-installations`, `/v1/cli-tokens`, `/v1/personal-tokens`)
+    that never go through `get_current_session` and so never get
+    `session["github_login"]` for free.
     """
     response = _github_http_client().get(
         "/user",
@@ -297,7 +299,34 @@ def _fetch_github_login(github_token: str) -> str:
         },
     )
     response.raise_for_status()
-    return response.json()["login"]
+    body = response.json()
+    return {"id": body["id"], "login": body["login"]}
+
+
+def _fetch_github_login(github_token: str) -> str:
+    """The caller's own GitHub login - see `_fetch_github_user` for the
+    full response this is drawn from, needed to call
+    `_is_real_installation_member_or_admin` the same way every
+    session-cookie route already does.
+    """
+    return _fetch_github_user(github_token)["login"]
+
+
+async def _reconciled_github_login(pool, github_token: str) -> str:
+    """The caller's GitHub login, after reconciling installation_members
+    against their numeric id (see db.reconcile_installation_member_identity).
+
+    The bearer-token routes authorize by login via `is_installation_member`
+    and never pass through the OAuth callback, which is the only other place
+    reconciliation runs. Without this, a login that was abandoned and
+    re-claimed by a different GitHub account would still match the old
+    holder's seat here. Unlike the callback this is NOT best-effort: it
+    gates a credential, so a failure fails the request instead of falling
+    back to an unreconciled login.
+    """
+    user = await asyncio.to_thread(_fetch_github_user, github_token)
+    await reconcile_installation_member_identity(pool, user["login"], user["id"])
+    return user["login"]
 
 
 _ADMINISTERED_INSTALLATIONS_CACHE_TTL_SECONDS = 30
@@ -725,6 +754,7 @@ async def admin_page(org: str, repo: str, request: Request):
     settings = get_settings()
     checkout_installation_token = sign_checkout_installation_id(installation_id, settings.session_secret)
     subscription_renews_at = None
+    is_annual = False
     subscription_id = installation.get("paddle_subscription_id")
     if subscription_id:
         # Best-effort, matching _uninitialized_repos_for_installation's
@@ -733,8 +763,17 @@ async def admin_page(org: str, repo: str, request: Request):
         try:
             subscription = await asyncio.to_thread(get_paddle_subscription, settings.paddle_api_key, subscription_id)
             subscription_renews_at = subscription.get("next_billed_at")
+            # Code-review finding: base_credit_allotment_usd below used to
+            # always call base_credit_for_plan with is_annual defaulted to
+            # False - this page didn't even fetch the billing interval to
+            # notice the mismatch, unlike dashboard.py (same underlying
+            # bug there, which did have the data and just never passed it
+            # through). An annual AIR subscriber's progress-bar
+            # denominator here was $3+seat-bonus too high.
+            is_annual = is_annual_subscription(subscription)
         except Exception:
             subscription_renews_at = None
+            is_annual = False
     return {
         "installation": installation,
         "tokens": tokens,
@@ -755,7 +794,7 @@ async def admin_page(org: str, repo: str, request: Request):
         "flash_reviews_month_to_date": flash_reviews_month_to_date,
         "base_credit_remaining_usd": float(installation["base_credit_remaining_usd"]),
         "topup_credit_balance_usd": float(installation["topup_credit_balance_usd"]),
-        "base_credit_allotment_usd": base_credit_for_plan(installation["plan"], extra_seats),
+        "base_credit_allotment_usd": base_credit_for_plan(installation["plan"], extra_seats, is_annual=is_annual),
         "checkout_installation_token": checkout_installation_token,
         "credit_topup_price_id": CREDIT_TOPUP_PRICE_ID,
         "subscription_renews_at": subscription_renews_at,
@@ -1080,10 +1119,19 @@ async def remove_member(org: str, repo: str, github_login: str, request: Request
     installation = await _require_admin_installation(request, org, repo)
     pool = request.app.state.db_pool
     await remove_installation_member(pool, installation["installation_id"], github_login)
+    # Real gap closed here (2026-10-12, Strix security review): an API
+    # token authenticates purely by its hash, with no check that its
+    # creator is still a member - so a removed member's own tokens used to
+    # stay fully usable forever unless someone separately noticed and
+    # revoked them one at a time. Revoking them as part of removal closes
+    # that without relying on anyone remembering the separate step.
+    revoked_token_count = await revoke_api_tokens_created_by(
+        pool, installation["installation_id"], github_login
+    )
     session = await get_current_session(request)
     await record_admin_action(
         pool, installation["installation_id"], session["github_login"], "member_removed",
-        {"github_login": github_login},
+        {"github_login": github_login, "revoked_token_count": revoked_token_count},
     )
     return {"ok": True}
 
@@ -1570,6 +1618,13 @@ DELETION_OTP_ATTEMPT_LIMIT = 10
 DELETION_OTP_ATTEMPT_WINDOW_SECONDS = 3600
 DELETION_OTP_VALIDITY_MINUTES = 10
 
+# Explicit allowlist rather than an equality check against "production":
+# an unset, misspelled, or differently-cased SENTRY_ENVIRONMENT must still
+# fail closed (treated as production) instead of silently falling through
+# to logging the raw deletion OTP - see the brittleness Flash Review
+# flagged on PR #1044 against the equality-check version of this guard.
+_NON_PRODUCTION_ENVIRONMENTS = {"test", "development", "dev", "local", "staging"}
+
 
 @admin_router.post("/admin/{org}/{repo}/delete-all-data/request-otp")
 async def request_deletion_otp(org: str, repo: str, request: Request):
@@ -1625,6 +1680,32 @@ async def request_deletion_otp(org: str, repo: str, request: Request):
             detail="no verified email on file for your GitHub account - contact support@aletheore.com",
         )
 
+    if (
+        not settings.resend_api_key
+        and settings.sentry_environment.strip().lower() not in _NON_PRODUCTION_ENVIRONMENTS
+    ):
+        # Real gap closed here (2026-10-12, Strix security review): this
+        # used to create the code row and log the raw OTP unconditionally
+        # whenever RESEND_API_KEY was missing, with no check for which
+        # environment was running - so a real production misconfiguration
+        # (the secret rotated out, an env var typo) would have leaked a
+        # code that exists specifically to gate a destructive
+        # data-deletion action into application logs, which get shipped to
+        # Sentry/log aggregators. Checked before any side effect (the code
+        # row insert below, not just the log line) so a request that can't
+        # be delivered doesn't leave an orphaned, undeliverable-but-valid
+        # code sitting in the database either. A missing email provider in
+        # production is a real incident, not a safe local-dev fallback:
+        # fail the request instead.
+        logger.error(
+            "RESEND_API_KEY not configured in production (environment=%s); deletion OTP could not be sent",
+            settings.sentry_environment,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="unable to send a confirmation code right now - contact support@aletheore.com",
+        )
+
     code = f"{secrets.randbelow(1_000_000):06d}"
     code_hash = hashlib.sha256(code.encode()).hexdigest()
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=DELETION_OTP_VALIDITY_MINUTES)
@@ -1643,8 +1724,9 @@ async def request_deletion_otp(org: str, repo: str, request: Request):
             message["text"],
         )
     else:
-        # No email provider configured (local dev) - log it instead of
-        # silently succeeding with a code nobody can ever receive.
+        # No email provider configured, but we've already established
+        # above that we're not in production - local dev. Log it instead
+        # of silently succeeding with a code nobody can ever receive.
         logger.warning("RESEND_API_KEY not configured, deletion OTP not sent: %s", code)
 
     masked = to_email[0] + "***" + to_email[to_email.index("@"):] if "@" in to_email else "***"
@@ -1802,7 +1884,7 @@ async def my_installations(request: Request):
     # verification issue as /app/repos and /subscribe, just on the CLI's
     # own login path - filtered to installations this login is actually
     # seated on, or has real GitHub admin permission on.
-    github_login = await asyncio.to_thread(_fetch_github_login, github_token)
+    github_login = await _reconciled_github_login(pool, github_token)
     verified_ids = await _verify_installation_ids(pool, administered_ids, github_login)
     rows = await pool.fetch(
         """
@@ -1832,7 +1914,7 @@ async def create_cli_token(request: Request, body: CreateCliTokenRequest):
     # token against someone else's installation - not just view their data,
     # act as them. Same real-membership-or-admin bar as every other route
     # fixed alongside this one.
-    github_login = await asyncio.to_thread(_fetch_github_login, github_token)
+    github_login = await _reconciled_github_login(pool, github_token)
     if not await _is_real_installation_member_or_admin(pool, installation_id, github_login):
         raise HTTPException(status_code=403, detail="you do not administer this installation")
 
@@ -1847,8 +1929,12 @@ async def create_cli_token(request: Request, body: CreateCliTokenRequest):
     max_tokens = await get_max_tokens(pool, installation_id)
     raw_token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-    token_id = await create_api_token_within_limit(
-        pool, installation_id, token_hash, body.label, installation["account_login"], max_tokens
+    # Replace-on-relogin: a same-label token (the same machine logging in
+    # again) is revoked first, so repeated logins from one laptop never
+    # accumulate toward the cap. The dashboard's token creation keeps
+    # create_api_token_within_limit.
+    token_id = await create_api_token_replacing_label(
+        pool, installation_id, token_hash, body.label, github_login, max_tokens
     )
     if token_id is None:
         raise HTTPException(status_code=409, detail=f"token limit reached ({max_tokens})")

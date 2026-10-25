@@ -9,6 +9,7 @@ The free tier is genuinely free: `scan`, `query`, `diff`, the MCP server, and th
 - Repository: https://github.com/Aletheore/Aletheore
 - Benchmarks (separate repo, reproducible): https://github.com/Aletheore/aletheore-benchmarks
 - Install: `pip install aletheore`
+- Hallbook (1,129 vetted agent skills bundled with Aletheore, searchable offline through the MCP server): https://www.aletheore.com/hallbook
 - License: AGPL-3.0, with a separate commercial license available (COMMERCIAL-LICENSE.md)
 
 ## The deterministic scanner
@@ -48,11 +49,11 @@ This matters if you build on Aletheore: a key rename is a breaking change and is
 
 `aletheore diff` compares two evidence snapshots. `aletheore verify` checks a report's `file:line` citations against a repository's actual evidence, including reports Aletheore did not write.
 
-## MCP server: free, local, 34 tools
+## MCP server: free, local, 43 tools
 
 `aletheore mcp` runs a stdio MCP server. `aletheore mcp-install` writes client config for Claude Code, Cursor, VS Code, Kiro, Opencode, and Codex CLI.
 
-**34 tools by default (30 with every effect class disabled), and 36 at most** with the two opt-in tools: `aletheore_answer` (started with `--agent`) and `aletheore_managed_audit` (needs explicit consent to send evidence externally). No account required. Counts are for aletheore 0.9.21.
+**43 tools by default (37 with every effect class disabled), and 45 at most** with the two opt-in tools: `aletheore_answer` (started with `--agent`) and `aletheore_managed_audit` (needs explicit consent to send evidence externally). No account required. Counts are for aletheore 0.10.2.
 
 Tools are grouped by effect class (`write`, `network`, `external`), and a tool whose effects are not permitted is **never registered**, so it cannot be called at all. Evidence upload to the hosted service is off by default. Set `ALETHEORE_MCP_ALLOW` to change it.
 
@@ -109,7 +110,7 @@ LLM spend is capped monthly per installation and recorded per call. Deterministi
 
 `aletheore-benchmarks` (github.com/Aletheore/aletheore-benchmarks) is a separate public repository measuring Aletheore against RepoWise: locating code (5 wins, 0 losses, 2 ties on top-1 across 7 shared corpora), generated-docs quality, and PR review. Retrieval numbers recompute from raw results with no API key and no network. Losses are published alongside wins: RepoWise's generated wiki overtakes Aletheore on one retrieval regime (jekyll with vocabulary phrasing), and on "how does X work?" questions AIRview is roughly at parity (2.00 against 1.77 on a blind 0 to 3 judge, most per-corpus gaps inside the judge's own noise). A separate result set validated that Flash review's default prompt (evidence only, no raw file dump) matches or beats including full file content on independently-verified accept rate, using a fraction of the tokens, that is why it shipped as the default rather than staying an experiment.
 
-On 13 real pull requests with 44 human-identified bugs, judged by one blinded judge for every tool, Flash catches about 53% of the bugs at about 93% precision: the same range as GitHub Copilot and GitLab Duo on bugs caught, not ahead, with more accurate findings per run (about 87 against 24 to 60, mostly not among the 44 bugs). On SWE-PRBench, an independent PR-review benchmark, Aletheore's review path scores at or above the Claude Sonnet 4.6 and Haiku 4.5 cluster. Confidence intervals and limitations are published with both.
+On 13 real pull requests with 44 human-identified bugs, judged by one blinded judge for every tool, Flash, measured in its production configuration, catches about 55% of the bugs at about 89% precision: the same range as GitHub Copilot and GitLab Duo on bugs caught, not ahead, with more accurate findings per run (about 87 against 24 to 60, mostly not among the 44 bugs). On SWE-PRBench, an independent PR-review benchmark, Aletheore's review path scores at or above the Claude Sonnet 4.6 and Haiku 4.5 cluster. Confidence intervals and limitations are published with both.
 
 ## Security posture
 

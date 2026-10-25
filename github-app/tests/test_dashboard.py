@@ -166,13 +166,13 @@ async def _async_none(*args, **kwargs):
 
 
 async def _logged_in_client(pool, monkeypatch, administered_ids):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     await create_session(
         pool,
         "sess-1",
         42,
         "octocat",
-        encrypt_access_token("gho_faketoken", "test-session-secret"),
+        encrypt_access_token("gho_faketoken", "test-session-secret-at-least-32-characters-long"),
         datetime.now(timezone.utc) + timedelta(hours=1),
     )
 
@@ -196,7 +196,7 @@ async def _logged_in_client(pool, monkeypatch, administered_ids):
     monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
 
     app.state.db_pool = pool
-    signed = sign_session_id("sess-1", "test-session-secret")
+    signed = sign_session_id("sess-1", "test-session-secret-at-least-32-characters-long")
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed})
 
@@ -424,6 +424,40 @@ async def test_credits_keeps_the_real_subscription_id_when_the_paddle_lookup_fai
 
 
 @pytest.mark.asyncio
+async def test_credits_uses_the_annual_credit_figure_for_an_annual_subscriber(pool, monkeypatch):
+    # Code-review finding: billing_interval was already fetched and
+    # returned in this same response, but never threaded into
+    # base_credit_for_plan's is_annual (default False) - an annual AIR
+    # subscriber saw the monthly figure (18.00 + seat bonus) here sitting
+    # directly next to "billing_interval": "year" in the same payload,
+    # instead of the real, lower annual figure (15.00 + seat bonus) their
+    # stored balance actually resets to.
+    from app_server.llm_cost import base_credit_for_plan
+
+    await upsert_installation(pool, 738, "annual-org")
+    await set_installation_plan(pool, 738, "air")
+    await insert_repo_history(
+        pool, 738, "annual-org/app", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
+    )
+    await add_paddle_ids_to_installation(pool, 738, "sub_test_annual", "ctm_test_annual")
+
+    def _annual_subscription(api_key, subscription_id):
+        return {"next_billed_at": "2027-10-10T00:00:00Z", "billing_cycle": {"interval": "year"}}
+
+    monkeypatch.setattr("app_server.dashboard.get_paddle_subscription", _annual_subscription)
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[738])
+    async with client:
+        response = await client.get("/app/installations/738/credits")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["billing_interval"] == "year"
+    assert body["base_credit_allotment_usd"] == base_credit_for_plan("air", 0, is_annual=True)
+    assert body["base_credit_allotment_usd"] != base_credit_for_plan("air", 0, is_annual=False)
+
+
+@pytest.mark.asyncio
 async def test_credits_reports_this_installations_own_real_repo_count(pool, monkeypatch):
     # Plan is set per installation, not per repo, so the mockup's own
     # "1 repo on Flash, 1 on the free tier" line (repo-level plan
@@ -538,7 +572,7 @@ async def test_credits_does_not_silently_swallow_an_unexpected_sibling_lookup_er
     # raise_app_exceptions=False: an unhandled exception must come back as
     # this route's own 500, not propagate through the test transport - see
     # test_main.py's identical setup for the same reasoning.
-    signed = sign_session_id("sess-1", "test-session-secret")
+    signed = sign_session_id("sess-1", "test-session-secret-at-least-32-characters-long")
     transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed}) as client:
         response = await client.get("/app/installations/737/credits")
@@ -776,10 +810,10 @@ async def test_list_my_repos_includes_uninitialized_repos_with_no_scan_yet(pool,
             })
         raise AssertionError(f"unexpected request: {request.url.path}")
 
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     await create_session(
         pool, "sess-1", 42, "octocat",
-        encrypt_access_token("gho_faketoken", "test-session-secret"),
+        encrypt_access_token("gho_faketoken", "test-session-secret-at-least-32-characters-long"),
         datetime.now(timezone.utc) + timedelta(hours=1),
     )
     monkeypatch.setattr(
@@ -807,7 +841,7 @@ async def test_list_my_repos_includes_uninitialized_repos_with_no_scan_yet(pool,
     monkeypatch.setattr("app_server.admin.get_installation_token", fake_get_installation_token)
 
     app.state.db_pool = pool
-    signed = sign_session_id("sess-1", "test-session-secret")
+    signed = sign_session_id("sess-1", "test-session-secret-at-least-32-characters-long")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed}) as client:
         response = await client.get("/app/repos")
@@ -853,10 +887,10 @@ async def test_list_my_repos_flags_uninitialized_repos_when_monthly_scan_cap_rea
             })
         raise AssertionError(f"unexpected request: {request.url.path}")
 
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     await create_session(
         pool, "sess-2", 42, "octocat",
-        encrypt_access_token("gho_faketoken", "test-session-secret"),
+        encrypt_access_token("gho_faketoken", "test-session-secret-at-least-32-characters-long"),
         datetime.now(timezone.utc) + timedelta(hours=1),
     )
     monkeypatch.setattr(
@@ -875,7 +909,7 @@ async def test_list_my_repos_flags_uninitialized_repos_when_monthly_scan_cap_rea
     monkeypatch.setattr("app_server.admin.get_installation_token", fake_get_installation_token)
 
     app.state.db_pool = pool
-    signed = sign_session_id("sess-2", "test-session-secret")
+    signed = sign_session_id("sess-2", "test-session-secret-at-least-32-characters-long")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed}) as client:
         response = await client.get("/app/repos")
@@ -919,10 +953,10 @@ async def test_list_my_repos_does_not_duplicate_already_scanned_repos(pool, monk
             })
         raise AssertionError(f"unexpected request: {request.url.path}")
 
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     await create_session(
         pool, "sess-1", 42, "octocat",
-        encrypt_access_token("gho_faketoken", "test-session-secret"),
+        encrypt_access_token("gho_faketoken", "test-session-secret-at-least-32-characters-long"),
         datetime.now(timezone.utc) + timedelta(hours=1),
     )
     monkeypatch.setattr(
@@ -936,7 +970,7 @@ async def test_list_my_repos_does_not_duplicate_already_scanned_repos(pool, monk
     monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
 
     app.state.db_pool = pool
-    signed = sign_session_id("sess-1", "test-session-secret")
+    signed = sign_session_id("sess-1", "test-session-secret-at-least-32-characters-long")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed}) as client:
         response = await client.get("/app/repos")
@@ -993,13 +1027,13 @@ async def test_app_repos_response_is_not_cacheable(pool, monkeypatch):
 
 
 async def _logged_in_client_with_github_failure(pool, monkeypatch, status_code: int):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     await create_session(
         pool,
         "sess-1",
         42,
         "octocat",
-        encrypt_access_token("gho_faketoken", "test-session-secret"),
+        encrypt_access_token("gho_faketoken", "test-session-secret-at-least-32-characters-long"),
         datetime.now(timezone.utc) + timedelta(hours=1),
     )
 
@@ -1012,7 +1046,7 @@ async def _logged_in_client_with_github_failure(pool, monkeypatch, status_code: 
     )
 
     app.state.db_pool = pool
-    signed = sign_session_id("sess-1", "test-session-secret")
+    signed = sign_session_id("sess-1", "test-session-secret-at-least-32-characters-long")
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed})
 

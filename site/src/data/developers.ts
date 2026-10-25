@@ -7,7 +7,7 @@ export const developersHead = {
 };
 
 export const flow = [
-  { id: "scan", k: "$ aletheore scan", title: "Build the evidence", body: "Tree-sitter and git history produce air.json and air.toon. No LLM in the scan path, no account, no network access." },
+  { id: "scan", k: "$ aletheore scan", title: "Build the evidence", body: "Tree-sitter and git history produce air.json and air.toon. No LLM in the scan path and no account. A scan makes dependency advisory and license lookups and checks for a newer release, each of which can be turned off, and sends a crash report only if the CLI itself crashes." },
   { id: "app", k: "on: pull_request", title: "The GitHub App keeps watch", body: "Automatic PR comments, branch-protection checks, and Flash reviews on every push: same evidence, hosted." },
   { id: "mcp", k: "$ aletheore mcp .", title: "Agents query it directly", body: "Read-only tools over stdio, TOON-encoded: a coding agent gets exact answers instead of re-reading files on every lookup." },
 ] as const;
@@ -35,7 +35,7 @@ export const quickstart = {
   commands: [
     { title: "Install and scan", code: "pip install Aletheore\naletheore scan .", body: "Builds .aletheore/air.json, .aletheore/air.toon, and history snapshots." },
     { title: "Audit locally or managed", code: "aletheore audit .\naletheore audit . --managed", body: "Use your own provider locally, or run a managed audit with an Aletheore API token." },
-    { title: "Search and dashboard", code: "aletheore index .\naletheore query search-codebase \"auth flow\"\naletheore dashboard .", body: "Build a local semantic index, ask targeted questions, and inspect evidence visually." },
+    { title: "Search and dashboard", code: "aletheore index .\naletheore query search-codebase \"auth flow\"\naletheore dashboard .", body: "Build a semantic index (on your machine by default), ask targeted questions, and inspect evidence visually." },
   ],
 };
 
@@ -124,7 +124,7 @@ export const toolInfo: ToolInfo[] = (tools.tools as { name: string; group: strin
   ...x,
   optional: (tools.optional as string[]).includes(x.name),
 }));
-const GROUP_ORDER = ["Navigate", "Structure", "Security", "Runtime", "History", "Evidence", "Search", "Run", "AI-assisted"];
+const GROUP_ORDER = ["Navigate", "Structure", "Security", "Runtime", "History", "Evidence", "Search", "Hallbook", "Run", "AI-assisted"];
 export const toolGroups: string[] = [...new Set(toolInfo.map((x) => x.group))].sort(
   (a, b) => (GROUP_ORDER.indexOf(a) + 100) % 100 - (GROUP_ORDER.indexOf(b) + 100) % 100,
 );

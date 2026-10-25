@@ -15,27 +15,36 @@ from app_server.db import (
     count_health_check_targets,
     count_installation_members,
     create_api_token,
+    create_api_token_replacing_label,
     create_api_token_within_limit,
+    create_personal_token_within_limit,
     create_session,
     delete_installation,
     delete_session,
     get_extra_seats,
     get_installation_by_token_hash,
     get_installation,
+    revoke_api_token_by_hash,
     get_latest_evidence,
     get_llm_spend_this_month,
+    get_or_create_personal_identity,
+    get_personal_identity_by_token_hash,
     get_recent_history,
     get_max_tokens,
     get_session,
     insert_repo_history,
     is_installation_member,
+    reconcile_installation_member_identity,
     list_api_tokens,
     list_health_check_targets,
     list_installation_member_emails,
     list_installation_members,
     remove_health_check_target,
     remove_installation_member,
+    revoke_all_personal_tokens,
     revoke_api_token,
+    revoke_api_tokens_created_by,
+    revoke_personal_token,
     record_llm_spend,
     set_installation_plan,
     set_webhook_url,
@@ -185,6 +194,33 @@ async def test_webhook_url_and_token_lifecycle(pool):
     assert await get_installation_by_token_hash(pool, "hash1") is None
 
 
+@pytest.mark.asyncio
+async def test_revoke_api_tokens_created_by_only_revokes_that_creators_tokens(pool):
+    # Regression test for a real bug (2026-10-12 Strix security review):
+    # a token authenticates purely by hash + revoked_at IS NULL, with
+    # nothing tying its continued validity to its creator still being an
+    # installation member - removing someone used to leave every token
+    # they'd personally created fully usable indefinitely. This is the DB
+    # primitive remove_member now calls to close that.
+    await upsert_installation(pool, 101, "octocat")
+    await create_api_token(pool, 101, "alice-hash-1", "alice-laptop", "alice")
+    await create_api_token(pool, 101, "alice-hash-2", "alice-ci", "alice")
+    await create_api_token(pool, 101, "bob-hash-1", "bob-laptop", "bob")
+
+    revoked_count = await revoke_api_tokens_created_by(pool, 101, "alice")
+
+    assert revoked_count == 2
+    assert await get_installation_by_token_hash(pool, "alice-hash-1") is None
+    assert await get_installation_by_token_hash(pool, "alice-hash-2") is None
+    # Bob was not removed - his own token must keep working.
+    assert (await get_installation_by_token_hash(pool, "bob-hash-1"))["installation_id"] == 101
+
+
+@pytest.mark.asyncio
+async def test_revoke_api_tokens_created_by_is_a_noop_for_a_login_with_no_tokens(pool):
+    await upsert_installation(pool, 102, "octocat")
+    revoked_count = await revoke_api_tokens_created_by(pool, 102, "nobody")
+    assert revoked_count == 0
 
 
 @pytest.mark.asyncio
@@ -306,6 +342,73 @@ async def test_installation_member_lifecycle(pool):
 
 
 @pytest.mark.asyncio
+async def test_reconcile_installation_member_identity_binds_an_unbound_row(pool):
+    # A row granted before this reconciliation existed (or before this
+    # login's holder ever logged in) has no github_user_id yet - the first
+    # login under that login string is trusted to bind it, since a login
+    # string is the only identity admin.py's add_member had to begin with.
+    await upsert_installation(pool, 700, "octocat")
+    await add_installation_member(pool, 700, "octocat", "octocat")
+
+    await reconcile_installation_member_identity(pool, "octocat", 99001)
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT github_user_id FROM installation_members WHERE installation_id = $1 AND github_login = $2",
+            700,
+            "octocat",
+        )
+    assert row["github_user_id"] == 99001
+    # Still a member - binding must not evict the legitimate first holder.
+    assert await is_installation_member(pool, 700, "octocat") is True
+
+
+@pytest.mark.asyncio
+async def test_reconcile_installation_member_identity_evicts_a_reassigned_login(pool):
+    # Real gap this closes: "octocat" was already bound to user 99001 (the
+    # original member). The login is later abandoned and claimed by a
+    # different real GitHub account (99002) - that new account logging in
+    # must not inherit the original member's seat just by sharing the login
+    # string.
+    await upsert_installation(pool, 701, "octocat")
+    await add_installation_member(pool, 701, "octocat", "octocat")
+    await reconcile_installation_member_identity(pool, "octocat", 99001)
+    assert await is_installation_member(pool, 701, "octocat") is True
+
+    await reconcile_installation_member_identity(pool, "octocat", 99002)
+
+    assert await is_installation_member(pool, 701, "octocat") is False
+
+
+@pytest.mark.asyncio
+async def test_reconcile_installation_member_identity_is_a_noop_for_the_same_user(pool):
+    await upsert_installation(pool, 702, "octocat")
+    await add_installation_member(pool, 702, "octocat", "octocat")
+    await reconcile_installation_member_identity(pool, "octocat", 99001)
+
+    # The original member logging in again, repeatedly, must not evict
+    # their own seat.
+    await reconcile_installation_member_identity(pool, "octocat", 99001)
+    await reconcile_installation_member_identity(pool, "octocat", 99001)
+
+    assert await is_installation_member(pool, 702, "octocat") is True
+
+
+@pytest.mark.asyncio
+async def test_reconcile_installation_member_identity_only_touches_the_matching_login(pool):
+    await upsert_installation(pool, 703, "octocat")
+    await add_installation_member(pool, 703, "octocat", "octocat")
+    await add_installation_member(pool, 703, "otheruser", "octocat")
+    await reconcile_installation_member_identity(pool, "octocat", 99001)
+    await reconcile_installation_member_identity(pool, "otheruser", 99003)
+
+    await reconcile_installation_member_identity(pool, "octocat", 99002)
+
+    assert await is_installation_member(pool, 703, "octocat") is False
+    assert await is_installation_member(pool, 703, "otheruser") is True
+
+
+@pytest.mark.asyncio
 async def test_add_installation_member_is_idempotent(pool):
     await upsert_installation(pool, 600, "octocat")
     await add_installation_member(pool, 600, "octocat", "octocat")
@@ -372,6 +475,135 @@ async def test_create_api_token_within_limit_is_concurrency_safe(pool):
     rows = await pool.fetch("SELECT id FROM api_tokens WHERE installation_id = $1", 612)
     assert len(rows) == 2
     assert {row["id"] for row in rows} == {token_id for token_id in results if token_id is not None}
+
+
+@pytest.mark.asyncio
+async def test_create_personal_token_within_limit_evicts_oldest_on_overflow(pool):
+    # 2026-10-18 fix: `aletheore login` mints a brand new personal token on
+    # every login and nothing ever revokes one (no revoke endpoint exists),
+    # so the old cap-and-reject-at-10 design permanently locked out any
+    # identity that had logged in 10+ times. Minting past the cap must now
+    # succeed by rotating out the single OLDEST non-revoked token, not by
+    # rejecting or revoking everything (multi-machine sync needs every other
+    # token to stay valid).
+    identity = await get_or_create_personal_identity(pool, 70001, "octocat")
+
+    token_ids = [
+        await create_personal_token_within_limit(pool, identity["id"], f"hash-{index}", f"machine-{index}", limit=10)
+        for index in range(10)
+    ]
+
+    # Backdate the first-inserted token so it is unambiguously the oldest by
+    # created_at, independent of how close together these awaited inserts
+    # actually land in wall-clock time.
+    oldest_id = token_ids[0]
+    await pool.execute(
+        "UPDATE personal_api_tokens SET created_at = now() - interval '1 hour' WHERE id = $1",
+        oldest_id,
+    )
+
+    new_id = await create_personal_token_within_limit(pool, identity["id"], "hash-overflow", "machine-overflow", limit=10)
+
+    assert new_id is not None
+    rows = await pool.fetch(
+        "SELECT id, revoked_at FROM personal_api_tokens WHERE personal_identity_id = $1",
+        identity["id"],
+    )
+    assert len(rows) == 11
+    revoked_ids = {row["id"] for row in rows if row["revoked_at"] is not None}
+    non_revoked_count = sum(1 for row in rows if row["revoked_at"] is None)
+    assert revoked_ids == {oldest_id}
+    assert non_revoked_count == 10
+
+
+@pytest.mark.asyncio
+async def test_create_personal_token_within_limit_evicted_token_no_longer_authenticates(pool):
+    identity = await get_or_create_personal_identity(pool, 70002, "octocat")
+
+    for index in range(10):
+        await create_personal_token_within_limit(pool, identity["id"], f"hash-{index}", f"m-{index}", limit=10)
+
+    oldest = await pool.fetchrow(
+        "SELECT id, token_hash FROM personal_api_tokens WHERE personal_identity_id = $1 "
+        "ORDER BY created_at ASC, id ASC LIMIT 1",
+        identity["id"],
+    )
+    # Sanity check: still valid before the overflow mint.
+    assert await get_personal_identity_by_token_hash(pool, oldest["token_hash"]) is not None
+
+    await create_personal_token_within_limit(pool, identity["id"], "hash-overflow", "m-overflow", limit=10)
+
+    assert await get_personal_identity_by_token_hash(pool, oldest["token_hash"]) is None
+
+
+@pytest.mark.asyncio
+async def test_create_personal_token_within_limit_is_concurrency_safe(pool):
+    # Same regression class as test_create_api_token_within_limit_is_concurrency_safe,
+    # but for the rotate-oldest personal-token cap: once an identity is
+    # already at the limit, several near-simultaneous logins must never let
+    # the non-revoked count exceed the limit and must never double-evict the
+    # same row (the advisory xact lock this mirrors from
+    # create_api_token_within_limit serializes the count-check, evict, and
+    # insert into one atomic unit per caller).
+    identity = await get_or_create_personal_identity(pool, 70003, "octocat")
+    for index in range(10):
+        await create_personal_token_within_limit(pool, identity["id"], f"hash-{index}", f"m-{index}", limit=10)
+
+    results = await asyncio.gather(
+        *(
+            create_personal_token_within_limit(pool, identity["id"], f"hash-new-{index}", f"m-new-{index}", limit=10)
+            for index in range(5)
+        )
+    )
+
+    assert all(token_id is not None for token_id in results)
+    assert len(set(results)) == 5
+
+    rows = await pool.fetch(
+        "SELECT id, revoked_at FROM personal_api_tokens WHERE personal_identity_id = $1",
+        identity["id"],
+    )
+    non_revoked = [row for row in rows if row["revoked_at"] is None]
+    revoked = [row for row in rows if row["revoked_at"] is not None]
+    assert len(rows) == 15
+    assert len(non_revoked) == 10
+    assert len(revoked) == 5
+
+
+@pytest.mark.asyncio
+async def test_revoke_personal_token_is_idempotent_at_db_layer(pool):
+    # Covers the DB layer directly, with no HTTP/auth gate in between. The
+    # HTTP-layer idempotency test (two DELETE /v1/personal-tokens calls with
+    # the same token) can't exercise this path: the second HTTP call 401s
+    # on auth before revoke_personal_token is ever reached, since the first
+    # call already revoked the only credential that could authorize it. A
+    # future refactor that calls revoke_personal_token directly (e.g. a
+    # retry path, or reordering auth vs. revoke) needs this guarded here.
+    identity = await get_or_create_personal_identity(pool, 70004, "octocat")
+    await create_personal_token_within_limit(pool, identity["id"], "hash-revoke-once", "machine-revoke-once", limit=10)
+
+    first = await revoke_personal_token(pool, "hash-revoke-once")
+    second = await revoke_personal_token(pool, "hash-revoke-once")
+
+    assert first is True
+    assert second is False
+
+
+@pytest.mark.asyncio
+async def test_revoke_all_personal_tokens_is_idempotent_at_db_layer(pool):
+    # Same DB-layer idempotency gap as the test above, for the revoke-all
+    # path: calling revoke_all_personal_tokens twice in a row, with no HTTP
+    # auth gate between the two calls, must return the real revoked count
+    # the first time and 0 the second time, with no exception either time.
+    identity = await get_or_create_personal_identity(pool, 70005, "octocat")
+    await create_personal_token_within_limit(pool, identity["id"], "hash-revoke-all-1", "machine-a", limit=10)
+    await create_personal_token_within_limit(pool, identity["id"], "hash-revoke-all-2", "machine-b", limit=10)
+
+    first = await revoke_all_personal_tokens(pool, identity["id"])
+    second = await revoke_all_personal_tokens(pool, identity["id"])
+
+    assert first == 2
+    assert second == 0
 
 
 @pytest.mark.asyncio
@@ -515,3 +747,72 @@ async def test_list_installation_member_emails_only_includes_members_who_have_lo
     emails = await list_installation_member_emails(pool, 700)
 
     assert emails == ["alice@example.com"]
+
+
+@pytest.mark.asyncio
+async def test_relogin_from_the_same_machine_replaces_its_own_token_only(pool):
+    # Repeated logins on one laptop must not pile up and push the cap, which
+    # would silently revoke a different machine's token.
+    identity = await get_or_create_personal_identity(pool, 70002, "octocat2")
+    other = await create_personal_token_within_limit(pool, identity["id"], "hash-other", "desktop (device flow)", limit=3)
+    first = await create_personal_token_within_limit(pool, identity["id"], "hash-l1", "laptop (device flow)", limit=3)
+    second = await create_personal_token_within_limit(pool, identity["id"], "hash-l2", "laptop (device flow)", limit=3)
+    third = await create_personal_token_within_limit(pool, identity["id"], "hash-l3", "laptop (device flow)", limit=3)
+
+    rows = {r["id"]: r["revoked_at"] for r in await pool.fetch(
+        "SELECT id, revoked_at FROM personal_api_tokens WHERE personal_identity_id = $1", identity["id"]
+    )}
+    assert rows[other] is None  # the other machine is untouched
+    assert rows[first] is not None and rows[second] is not None
+    assert rows[third] is None
+
+
+@pytest.mark.asyncio
+async def test_create_api_token_replacing_label_revokes_same_label_and_keeps_count(pool):
+    await upsert_installation(pool, 620, "octocat")
+    first = await create_api_token_replacing_label(pool, 620, "h1", "laptop-ab12 (device flow)", "octocat", limit=3)
+    second = await create_api_token_replacing_label(pool, 620, "h2", "laptop-ab12 (device flow)", "octocat", limit=3)
+
+    assert first is not None and second is not None and first != second
+    assert await count_active_tokens(pool, 620) == 1
+    assert await get_installation_by_token_hash(pool, "h1") is None
+    assert await get_installation_by_token_hash(pool, "h2") is not None
+
+
+@pytest.mark.asyncio
+async def test_create_api_token_replacing_label_different_label_hits_cap_and_keeps_old_tokens(pool):
+    await upsert_installation(pool, 621, "octocat")
+    for index in range(3):
+        assert await create_api_token_replacing_label(pool, 621, f"h{index}", f"machine-{index}", "octocat", limit=3)
+
+    assert await create_api_token_replacing_label(pool, 621, "h-new", "machine-new", "octocat", limit=3) is None
+    assert await count_active_tokens(pool, 621) == 3
+
+    # A same-label relogin at the cap still succeeds (it frees its own slot).
+    assert await create_api_token_replacing_label(pool, 621, "h-again", "machine-1", "octocat", limit=3)
+    assert await count_active_tokens(pool, 621) == 3
+    assert await get_installation_by_token_hash(pool, "h1") is None
+
+
+@pytest.mark.asyncio
+async def test_create_api_token_replacing_label_rejected_login_does_not_revoke_same_label(pool):
+    # limit 0: nothing can ever be inserted, so the same-label revocation
+    # must be rolled back rather than costing the user a working token.
+    await upsert_installation(pool, 622, "octocat")
+    await create_api_token(pool, 622, "keep", "machine-a", "octocat")
+
+    assert await create_api_token_replacing_label(pool, 622, "new", "machine-a", "octocat", limit=0) is None
+    assert await get_installation_by_token_hash(pool, "keep") is not None
+
+
+@pytest.mark.asyncio
+async def test_revoke_api_token_by_hash_revokes_only_that_token(pool):
+    await upsert_installation(pool, 623, "octocat")
+    await create_api_token(pool, 623, "mine", "a", "octocat")
+    await create_api_token(pool, 623, "other", "b", "octocat")
+
+    assert await revoke_api_token_by_hash(pool, "mine") is True
+    assert await revoke_api_token_by_hash(pool, "mine") is False
+    assert await revoke_api_token_by_hash(pool, "nope") is False
+    assert await get_installation_by_token_hash(pool, "mine") is None
+    assert await get_installation_by_token_hash(pool, "other") is not None

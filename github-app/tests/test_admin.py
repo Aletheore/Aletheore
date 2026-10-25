@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import socket
 import threading
 import time
@@ -31,7 +32,9 @@ from app_server.github_pagination import GITHUB_LIST_PER_PAGE
 from app_server.db import (
     add_installation_member,
     add_paddle_ids_to_installation,
+    create_api_token,
     create_session,
+    get_installation_by_token_hash,
     get_max_tokens,
     get_session,
     insert_repo_history,
@@ -47,7 +50,7 @@ from app_server.paddle_pricing import EXTRA_SEAT_PRICE_ID
 
 
 async def _logged_in_client(pool, monkeypatch, installation_id=100, plan="air"):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     await upsert_installation(pool, installation_id, "octocat")
     await set_installation_plan(pool, installation_id, plan)
     await insert_repo_history(
@@ -62,7 +65,7 @@ async def _logged_in_client(pool, monkeypatch, installation_id=100, plan="air"):
         "sess-1",
         42,
         "octocat",
-        encrypt_access_token("gho_faketoken", "test-session-secret"),
+        encrypt_access_token("gho_faketoken", "test-session-secret-at-least-32-characters-long"),
         datetime.now(timezone.utc) + timedelta(hours=1),
     )
 
@@ -91,7 +94,7 @@ async def _logged_in_client(pool, monkeypatch, installation_id=100, plan="air"):
     monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
 
     app.state.db_pool = pool
-    signed = sign_session_id("sess-1", "test-session-secret")
+    signed = sign_session_id("sess-1", "test-session-secret-at-least-32-characters-long")
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed})
 
@@ -104,10 +107,12 @@ async def _async_false(*args, **kwargs) -> bool:
     return False
 
 
-async def _mock_github_installations(monkeypatch, installation_ids: list[int], github_login: str = "octocat"):
+async def _mock_github_installations(
+    monkeypatch, installation_ids: list[int], github_login: str = "octocat", github_user_id: int = 12345
+):
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/user":
-            return httpx.Response(200, json={"login": github_login})
+            return httpx.Response(200, json={"id": github_user_id, "login": github_login})
         return httpx.Response(
             200,
             json={
@@ -132,15 +137,15 @@ async def _mock_github_installations(monkeypatch, installation_ids: list[int], g
 async def _create_session_with_tokens(
     pool, monkeypatch, session_id, access_token, refresh_token=None
 ):
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-at-least-32-characters-long")
     await create_session(
         pool,
         session_id,
         42,
         "octocat",
-        encrypt_access_token(access_token, "test-session-secret"),
+        encrypt_access_token(access_token, "test-session-secret-at-least-32-characters-long"),
         datetime.now(timezone.utc) + timedelta(hours=1),
-        refresh_token=encrypt_access_token(refresh_token, "test-session-secret") if refresh_token else None,
+        refresh_token=encrypt_access_token(refresh_token, "test-session-secret-at-least-32-characters-long") if refresh_token else None,
     )
     return {
         "id": session_id,
@@ -194,7 +199,7 @@ async def test_administered_ids_for_session_succeeds_without_refresh_when_token_
     assert ids == {1, 2}
     # Untouched - no refresh was needed.
     row = await get_session(pool, "sess-valid")
-    assert decrypt_access_token(row["github_access_token"], "test-session-secret") == "gho_valid"
+    assert decrypt_access_token(row["github_access_token"], "test-session-secret-at-least-32-characters-long") == "gho_valid"
 
 
 @pytest.mark.asyncio
@@ -225,8 +230,8 @@ async def test_administered_ids_for_session_refreshes_and_retries_on_401(pool, m
     assert ids == {7}
 
     row = await get_session(pool, "sess-refresh")
-    assert decrypt_access_token(row["github_access_token"], "test-session-secret") == "gho_fresh"
-    assert decrypt_access_token(row["github_refresh_token"], "test-session-secret") == "ghr_rotated"
+    assert decrypt_access_token(row["github_access_token"], "test-session-secret-at-least-32-characters-long") == "gho_fresh"
+    assert decrypt_access_token(row["github_refresh_token"], "test-session-secret-at-least-32-characters-long") == "ghr_rotated"
 
 
 @pytest.mark.asyncio
@@ -254,7 +259,7 @@ async def test_administered_ids_for_session_keeps_old_refresh_token_if_github_om
     await _administered_installation_ids_for_session_or_401(pool, session)
 
     row = await get_session(pool, "sess-norotate")
-    assert decrypt_access_token(row["github_refresh_token"], "test-session-secret") == "ghr_stillgood"
+    assert decrypt_access_token(row["github_refresh_token"], "test-session-secret-at-least-32-characters-long") == "ghr_stillgood"
 
 
 @pytest.mark.asyncio
@@ -428,6 +433,32 @@ async def test_admin_page_surfaces_base_credit_allotment(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_admin_page_uses_the_annual_credit_figure_for_an_annual_subscriber(pool, monkeypatch):
+    # Code-review finding: this page never even fetched billing_interval
+    # (unlike dashboard.py's get_credits, which fetched it but didn't pass
+    # it through either) - base_credit_allotment_usd always used the
+    # monthly figure, overstating an annual AIR subscriber's real
+    # progress-bar denominator by $3 (plus any seat bonus).
+    from app_server.llm_cost import base_credit_for_plan
+
+    client = await _logged_in_client(pool, monkeypatch, plan="air")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test_annual", "ctm_test_annual")
+
+    def _annual_subscription(api_key, subscription_id):
+        return {"next_billed_at": "2027-10-10T00:00:00Z", "billing_cycle": {"interval": "year"}}
+
+    monkeypatch.setattr("app_server.admin.get_paddle_subscription", _annual_subscription)
+
+    async with client:
+        response = await client.get("/admin/octocat/hello-world")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["base_credit_allotment_usd"] == base_credit_for_plan("air", 0, is_annual=True)
+    assert body["base_credit_allotment_usd"] != pytest.approx(PLAN_BASE_CREDIT_USD["air"])
+
+
+@pytest.mark.asyncio
 async def test_admin_page_surfaces_subscription_renewal_date(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch, plan="air")
     await add_paddle_ids_to_installation(pool, 100, "sub_test_renewal", "ctm_test_renewal")
@@ -481,6 +512,25 @@ async def test_generate_token_returns_raw_value_once(pool, monkeypatch):
     async with client:
         response = await client.post("/admin/octocat/hello-world/tokens", json={"label": "laptop"})
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_remove_member_revokes_api_tokens_that_member_created(pool, monkeypatch):
+    # Regression test for a real bug (2026-10-12 Strix security review):
+    # removing a member used to leave any API token they'd personally
+    # created fully usable indefinitely, since a token authenticates
+    # purely by hash with no check that its creator is still a member.
+    client = await _logged_in_client(pool, monkeypatch)
+    await create_api_token(pool, 100, "departing-hash", "departing-laptop", "departing-member")
+    await create_api_token(pool, 100, "octocat-hash", "octocat-laptop", "octocat")
+
+    async with client:
+        response = await client.delete("/admin/octocat/hello-world/members/departing-member")
+
+    assert response.status_code == 200
+    assert await get_installation_by_token_hash(pool, "departing-hash") is None
+    # The acting admin's own token, from a different login, must survive.
+    assert (await get_installation_by_token_hash(pool, "octocat-hash"))["installation_id"] == 100
 
 
 @pytest.mark.asyncio
@@ -1367,6 +1417,79 @@ async def test_create_cli_token_mints_token_for_administered_paid_installation(p
     assert len(response.json()["token"]) > 20
 
 
+async def _seed_air_installation_with_member(pool, member_login, bound_user_id):
+    await upsert_installation(pool, 100, "acme")
+    await set_installation_plan(pool, 100, "air")
+    await insert_repo_history(
+        pool, 100, "acme/some-repo", datetime.now(timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "scanned_at": "x"},
+    )
+    await add_installation_member(pool, 100, member_login, "owner")
+    if bound_user_id is not None:
+        await pool.execute(
+            "UPDATE installation_members SET github_user_id = $1 WHERE github_login = $2",
+            bound_user_id,
+            member_login,
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_cli_token_does_not_honor_a_seat_bound_to_a_previous_holder_of_the_login(pool, monkeypatch):
+    # The seat was granted to GitHub user 1; the login "octocat" now belongs to user 999.
+    await _seed_air_installation_with_member(pool, "octocat", bound_user_id=1)
+    await _mock_github_installations(monkeypatch, [100], github_login="octocat", github_user_id=999)
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_false)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/cli-tokens",
+            json={"installation_id": 100, "label": "x"},
+            headers={"Authorization": "Bearer gho_faketoken"},
+        )
+
+    assert response.status_code == 403
+    assert not await is_installation_member(pool, 100, "octocat")
+
+
+@pytest.mark.asyncio
+async def test_my_installations_does_not_list_a_seat_bound_to_a_previous_holder_of_the_login(pool, monkeypatch):
+    await _seed_air_installation_with_member(pool, "octocat", bound_user_id=1)
+    await _mock_github_installations(monkeypatch, [100], github_login="octocat", github_user_id=999)
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_false)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/my-installations", headers={"Authorization": "Bearer gho_faketoken"})
+
+    assert response.status_code == 200
+    assert response.json()["installations"] == []
+
+
+@pytest.mark.asyncio
+async def test_create_cli_token_binds_an_unbound_seat_and_records_the_real_creator(pool, monkeypatch):
+    await _seed_air_installation_with_member(pool, "octocat", bound_user_id=None)
+    await _mock_github_installations(monkeypatch, [100], github_login="octocat", github_user_id=12345)
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_false)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/cli-tokens",
+            json={"installation_id": 100, "label": "laptop"},
+            headers={"Authorization": "Bearer gho_faketoken"},
+        )
+
+    assert response.status_code == 200
+    assert await pool.fetchval("SELECT github_user_id FROM installation_members WHERE github_login = 'octocat'") == 12345
+    # Recorded as the member who minted it (not the installation's account login), so removing
+    # that member revokes it.
+    assert await pool.fetchval("SELECT created_by_github_login FROM api_tokens WHERE id = $1", response.json()["id"]) == "octocat"
+
+
 @pytest.mark.asyncio
 async def test_create_cli_token_rejects_unadministered_installation(pool, monkeypatch):
     await upsert_installation(pool, 100, "acme")
@@ -1491,10 +1614,10 @@ async def _second_session_client(monkeypatch, github_user_id: int, login: str, s
         session_id,
         github_user_id,
         login,
-        encrypt_access_token("gho_faketoken2", "test-session-secret"),
+        encrypt_access_token("gho_faketoken2", "test-session-secret-at-least-32-characters-long"),
         datetime.now(timezone.utc) + timedelta(hours=1),
     )
-    signed = sign_session_id(session_id, "test-session-secret")
+    signed = sign_session_id(session_id, "test-session-secret-at-least-32-characters-long")
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed})
 
@@ -1525,7 +1648,7 @@ async def test_admin_page_rejects_an_unadministered_installation_with_the_same_4
     await _logged_in_client(pool, monkeypatch)  # sets up installation 100 + real repo_history
     await _mock_github_installations(monkeypatch, [999])  # this session administers 999, not 100
 
-    signed = sign_session_id("sess-1", "test-session-secret")
+    signed = sign_session_id("sess-1", "test-session-secret-at-least-32-characters-long")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed}) as client:
         response = await client.get("/admin/octocat/hello-world")
@@ -2448,3 +2571,123 @@ async def test_repo_installation_id_returns_none_when_truly_unresolvable(pool):
     # caller doesn't administer are indistinguishable (see
     # test_admin_page_rejects_an_unadministered_installation_with_the_same_404_as_a_nonexistent_repo).
     assert await _repo_installation_id(pool, "no-such-account", "no-such-repo") is None
+
+
+def test_fetch_github_user_returns_id_and_login(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": 12345, "login": "octocat"})
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    assert admin._fetch_github_user("fake-token") == {"id": 12345, "login": "octocat"}
+
+
+def test_fetch_github_login_still_returns_just_login(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": 12345, "login": "octocat"})
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    assert admin._fetch_github_login("fake-token") == "octocat"
+
+
+async def _mint_cli_token(client, label, installation_id=100):
+    return await client.post(
+        "/v1/cli-tokens",
+        json={"installation_id": installation_id, "label": label},
+        headers={"Authorization": "Bearer gho_faketoken"},
+    )
+
+
+async def _seed_air_for_cli_tokens(pool, monkeypatch):
+    await upsert_installation(pool, 100, "acme")
+    await set_installation_plan(pool, 100, "air")
+    await insert_repo_history(
+        pool, 100, "acme/some-repo", datetime.now(timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "scanned_at": "x"},
+    )
+    await _mock_github_installations(monkeypatch, [100])
+
+
+def _hash(raw_token):
+    return hashlib.sha256(raw_token.encode()).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_create_cli_token_same_label_relogin_replaces_old_token(pool, monkeypatch):
+    await _seed_air_for_cli_tokens(pool, monkeypatch)
+    app.state.db_pool = pool
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first = await _mint_cli_token(client, "laptop-ab12 (device flow)")
+        second = await _mint_cli_token(client, "laptop-ab12 (device flow)")
+
+    assert first.status_code == 200 and second.status_code == 200
+    assert await get_installation_by_token_hash(pool, _hash(first.json()["token"])) is None
+    assert await get_installation_by_token_hash(pool, _hash(second.json()["token"])) is not None
+    assert await pool.fetchval(
+        "SELECT count(*) FROM api_tokens WHERE installation_id = 100 AND revoked_at IS NULL"
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_cli_token_different_labels_still_hit_the_cap(pool, monkeypatch):
+    await _seed_air_for_cli_tokens(pool, monkeypatch)
+    app.state.db_pool = pool
+    max_tokens = await get_max_tokens(pool, 100)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        for i in range(max_tokens):
+            assert (await _mint_cli_token(client, f"machine-{i} (device flow)")).status_code == 200
+        over = await _mint_cli_token(client, "another-machine (device flow)")
+        same = await _mint_cli_token(client, "machine-0 (device flow)")
+
+    assert over.status_code == 409
+    assert str(max_tokens) in over.json()["detail"]
+    assert same.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_cli_token_self_revoke_returns_204_and_token_is_unusable(pool, monkeypatch):
+    await _seed_air_for_cli_tokens(pool, monkeypatch)
+    app.state.db_pool = pool
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        raw = (await _mint_cli_token(client, "laptop (device flow)")).json()["token"]
+        revoked = await client.delete("/v1/cli-tokens/self", headers={"Authorization": f"Bearer {raw}"})
+        again = await client.delete("/v1/cli-tokens/self", headers={"Authorization": f"Bearer {raw}"})
+
+    assert revoked.status_code == 204
+    assert await get_installation_by_token_hash(pool, _hash(raw)) is None
+    assert again.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_cli_token_self_revoke_with_bad_token_returns_401_and_revokes_nothing(pool, monkeypatch):
+    await _seed_air_for_cli_tokens(pool, monkeypatch)
+    app.state.db_pool = pool
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        raw = (await _mint_cli_token(client, "laptop (device flow)")).json()["token"]
+        bad = await client.delete("/v1/cli-tokens/self", headers={"Authorization": "Bearer not-a-real-token"})
+        missing = await client.delete("/v1/cli-tokens/self")
+
+    assert bad.status_code == 401
+    assert missing.status_code == 401
+    assert await get_installation_by_token_hash(pool, _hash(raw)) is not None
+
+
+@pytest.mark.asyncio
+async def test_cli_token_self_revoke_cannot_revoke_another_token(pool, monkeypatch):
+    await _seed_air_for_cli_tokens(pool, monkeypatch)
+    app.state.db_pool = pool
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        mine = (await _mint_cli_token(client, "machine-a (device flow)")).json()["token"]
+        other = (await _mint_cli_token(client, "machine-b (device flow)")).json()["token"]
+        response = await client.delete("/v1/cli-tokens/self", headers={"Authorization": f"Bearer {mine}"})
+
+    assert response.status_code == 204
+    assert await get_installation_by_token_hash(pool, _hash(mine)) is None
+    assert await get_installation_by_token_hash(pool, _hash(other)) is not None

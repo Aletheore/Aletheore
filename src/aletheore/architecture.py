@@ -1,9 +1,7 @@
 import json
 from pathlib import Path
 
-import networkx as nx
-from networkx.algorithms.community import greedy_modularity_communities
-
+from aletheore.safe_io import read_text_lenient
 from aletheore.repo_config import load_repo_config
 from aletheore.wiki_diagrams import _ambiguous_edges
 
@@ -19,7 +17,7 @@ def load_architecture_config(repo_path: Path) -> dict | None:
     if not config_file.exists():
         return None
     try:
-        data = json.loads(config_file.read_text(encoding="utf-8", errors="ignore"))
+        data = json.loads(read_text_lenient(config_file))
     except json.JSONDecodeError:
         return None
     if not isinstance(data, dict):
@@ -93,6 +91,9 @@ def build_clusters(
     edges = [
         (a, b) for a, b in dependency_graph["edges"] if a in kept and b in kept
     ]
+
+    import networkx as nx
+    from networkx.algorithms.community import greedy_modularity_communities
 
     graph = nx.Graph()
     graph.add_nodes_from(nodes)

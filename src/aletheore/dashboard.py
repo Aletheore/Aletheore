@@ -4,6 +4,8 @@ from pathlib import Path
 
 from sse_starlette.sse import EventSourceResponse
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.routing import Route
 
@@ -20,6 +22,7 @@ _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 def build_evidence_summary(evidence: dict) -> dict:
+    git = evidence.get("git") or {}
     findings = evidence["security"]["secrets"]["findings"]
     real_findings = [
         f for f in findings if not f.get("likely_placeholder", False) and not f.get("accepted", False)
@@ -32,11 +35,14 @@ def build_evidence_summary(evidence: dict) -> dict:
             "module_count": len(evidence["repository"]["modules"]),
             "monorepo": evidence["repository"]["monorepo"],
         },
+        # A folder that is not a git repository, or a repository with no commits yet, scans to
+        # {"git": {"available": False}} with none of the history fields.
         "git_activity": {
-            "total_commits": evidence["git"]["total_commits"],
-            "commit_cadence": evidence["git"]["commit_cadence"],
-            "ownership": evidence["git"]["ownership"],
-            "branches": evidence["git"]["branches"],
+            "available": bool(git.get("available", "total_commits" in git)),
+            "total_commits": git.get("total_commits", 0),
+            "commit_cadence": git.get("commit_cadence") or {"trend": "n/a"},
+            "ownership": git.get("ownership", []),
+            "branches": git.get("branches", []),
         },
         "security": {
             "secrets": {
@@ -127,8 +133,12 @@ def build_history_summary(repo_path: Path) -> list[dict]:
                 "scanned_at": evidence["scanned_at"],
                 "module_count": len(evidence["repository"]["modules"]),
                 "secrets_findings": len(evidence["security"]["secrets"]["findings"]),
-                "vulnerability_findings": len(
-                    evidence["security"]["dependency_vulnerabilities"]["findings"]
+                # None, not 0, when the scan skipped the check: 0 would read as
+                # "all vulnerabilities fixed" in the trend chart.
+                "vulnerability_findings": (
+                    len(evidence["security"]["dependency_vulnerabilities"]["findings"])
+                    if evidence["security"]["dependency_vulnerabilities"].get("checked", True)
+                    else None
                 ),
             }
         except (KeyError, TypeError):
@@ -217,15 +227,28 @@ def build_app(repo_path: Path) -> Starlette:
     async def index(request):
         return HTMLResponse(DASHBOARD_HTML)
 
+    def no_scan_response():
+        # The scan file can be missing or removed while the dashboard is up; say so instead of answering 500.
+        return JSONResponse(
+            {"error": "No scan found for this folder. Run 'aletheore scan' here, then reload this page."},
+            status_code=404,
+        )
+
     async def api_evidence(request):
-        evidence = read_evidence(repo_path)
+        try:
+            evidence = read_evidence(repo_path)
+        except FileNotFoundError:
+            return no_scan_response()
         return JSONResponse(build_evidence_summary(evidence))
 
     async def api_history(request):
         return JSONResponse(build_history_summary(repo_path))
 
     async def api_graph(request):
-        evidence = read_evidence(repo_path)
+        try:
+            evidence = read_evidence(repo_path)
+        except FileNotFoundError:
+            return no_scan_response()
         return JSONResponse(build_graph_summary(evidence))
 
     async def api_mcp_tools(request):
@@ -260,7 +283,19 @@ def build_app(repo_path: Path) -> Starlette:
             Route("/favicon.ico", favicon),
             Route("/apple-touch-icon.png", favicon),
             Route("/apple-touch-icon-precomposed.png", favicon),
-        ]
+        ],
+        # Real gap found via audit: this server binds only to 127.0.0.1
+        # (cli.py's _dashboard), but with no Host check, a DNS-rebinding
+        # page (first served from an attacker-controlled domain, then
+        # re-resolved to 127.0.0.1 after the browser has already loaded
+        # it) could still reach every route here with a forged Host/Origin
+        # - confirmed directly: a request with Host/Origin set to an
+        # attacker domain got a normal 200 with the full evidence JSON.
+        # Only a real browser pointed at this exact loopback address sends
+        # a Host header of "127.0.0.1"/"localhost" - rejecting anything
+        # else is the same mitigation webpack-dev-server, Django's
+        # runserver, and most local dev servers use for this exact class.
+        middleware=[Middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])],
     )
     app.state.shutdown_event = shutdown_event
     return app
@@ -431,7 +466,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <script>
 async function fetchJSON(path) {
   const response = await fetch(path);
-  return response.json();
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || ('Request failed: HTTP ' + response.status));
+  return body;
 }
 
 function renderRepoOverview(data) {
@@ -445,6 +482,10 @@ function renderRepoOverview(data) {
 
 function renderGitActivity(data) {
   const el = document.getElementById('git-activity');
+  if (!data.available) {
+    el.innerHTML = '<div class="stat-row"><span>No git history to read (not a git repository, or no commits yet)</span></div>';
+    return;
+  }
   const staleBranches = data.branches.filter(b => b.ahead_of_main > 0).length;
   el.innerHTML =
     '<div class="stat">' + data.total_commits + ' commits</div>' +
@@ -473,7 +514,9 @@ function renderBarChart(svgId, values, valueLabelId, noteId) {
   const svg = document.getElementById(svgId);
   const label = valueLabelId ? document.getElementById(valueLabelId) : null;
   const note = noteId ? document.getElementById(noteId) : null;
-  if (label) label.textContent = values.length > 0 ? String(values[values.length - 1]) : '-';
+  // null marks a scan that did not measure this (e.g. the vulnerability check was skipped): drawn as a gap.
+  const fmt = v => (v === null || v === undefined) ? '-' : String(v);
+  if (label) label.textContent = values.length > 0 ? fmt(values[values.length - 1]) : '-';
   if (note) note.textContent = '';
   if (values.length === 0) { svg.innerHTML = ''; return; }
 
@@ -492,7 +535,7 @@ function renderBarChart(svgId, values, valueLabelId, noteId) {
     note.textContent = 'Unchanged across the last ' + values.length + ' scans.';
   }
 
-  const max = Math.max(...displayValues, 1);
+  const max = Math.max(...displayValues.filter(v => v !== null && v !== undefined), 1);
   const barWidth = Math.max(2, (width / displayValues.length) - barGap);
 
   let content = '<line x1="0" y1="' + baseline + '" x2="' + width + '" y2="' + baseline +
@@ -501,6 +544,11 @@ function renderBarChart(svgId, values, valueLabelId, noteId) {
 
   displayValues.forEach((v, i) => {
     const x = i * (barWidth + barGap);
+    if (v === null || v === undefined) {
+      content += '<text x="' + x + '" y="' + (baseline - 2) + '" fill="#5a5a5a" font-size="9" font-family="monospace">' +
+        '-<title>not checked in this scan</title></text>';
+      return;
+    }
     const barHeight = Math.max(minBarHeight, (v / max) * (baseline - topPad));
     const y = baseline - barHeight;
     const isLast = i === displayValues.length - 1;
@@ -1506,7 +1554,14 @@ function toggleTimezone() {
 }
 
 async function loadAll() {
-  const evidence = await fetchJSON('/api/evidence');
+  let evidence;
+  try {
+    evidence = await fetchJSON('/api/evidence');
+  } catch (err) {
+    // No scan yet (or it was removed): the page refreshes by itself when a scan appears.
+    document.getElementById('repo-overview').innerHTML = '<div class="stat-row"><span>' + err.message + '</span></div>';
+    return;
+  }
   lastScannedAtIso = evidence.scanned_at;
   renderScannedAt();
   renderRepoOverview(evidence.repo_overview);

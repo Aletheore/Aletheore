@@ -1,0 +1,15 @@
+============================================================
+REASONING TRACE ANALYSIS REPORT
+============================================================
+
+Overall Score: 0.0/100
+
+Scores:
+  - Reasoning Clarity: 0.0/100
+  - Goal Adherence: 0.0/100
+  - Tool Usage Quality: 0.0/100
+  - Error Recovery: 0.0/100
+
+
+Recommendations:
+  1. Analysis parsing failed: Invalid control character at: line 48 column 17 (char 3631). Raw response available in analyzer_thinking.

@@ -1,0 +1,47 @@
+============================================================
+REASONING TRACE ANALYSIS REPORT
+============================================================
+
+Overall Score: 70/100
+
+Scores:
+  - Reasoning Clarity: 80/100
+  - Goal Adherence: 85/100
+  - Tool Usage Quality: 70/100
+  - Error Recovery: 45/100
+
+Detected Patterns:
+
+  [MEDIUM] incomplete_reasoning
+    The agent reaches conclusions and writes comprehensive reports without explicitly validating key details in the thinking trace. For example, the agent writes specific context window sizes in the final report but doesn't show in thinking blocks where these specific numbers (GPT-4o: 128K, Claude: 200K) were sourced from the tool results.
+    Suggestion: Add explicit source tracking in thinking blocks - when gathering specific facts like model specifications, explicitly note 'I found X from source Y' to ensure traceability and validation.
+
+  [MEDIUM] missing_validation
+    When a tool call fails (context-windows URL returns error), the agent doesn't attempt recovery or note this as an information gap. Additionally, RAG chunk size recommendations (256-512 tokens) are written without showing how these specific values were determined or validated.
+    Suggestion: Implement explicit error recovery: when a tool fails, note what information is missing and either try alternative sources or flag for follow-up. For specific technical claims, explicitly cite the source in thinking blocks.
+
+  [LOW] tool_misuse
+    The agent makes several overlapping web searches that could have been more efficient. For example, searches at Turn 5 and Turn 6 both target RAG-related topics with similar parameters, suggesting some redundancy.
+    Suggestion: Before starting new searches, review what information has already been gathered and explicitly note gaps. Use more specific queries rather than broad overlapping ones.
+
+Strengths:
+  + Maintained clear tracking of the research goal throughout all 9 turns
+  + Good parallel execution of independent tasks (search + directory check in Turn 1)
+  + Effective source diversification - consulted academic papers, vendor documentation, and community resources
+  + Appropriate progressive deepening of research (starting broad, then narrowing to specific topics)
+  + Saved intermediate research notes before writing final summary, showing good workflow organization
+  + Final report is comprehensive with proper citation structure and covers all required elements
+
+Weaknesses:
+  - Failed to recover when one URL read failed (context-windows docs) - no fallback strategy or gap acknowledgment
+  - Thinking trace doesn't explicitly link facts to sources for key claims in the final report
+  - Some redundant search queries suggesting incomplete tracking of already-gathered information
+  - No explicit validation or cross-checking of information from different sources
+  - RAG best practices written with specific numbers but thinking trace doesn't show where these came from
+
+Recommendations:
+  1. Add a 'source citation' field to thinking blocks when gathering facts - explicitly note 'Fact X from source URL Y' to ensure traceability
+  2. Implement explicit error recovery protocols: when a tool fails, the thinking should immediately include 'Fallback strategy:' or 'Gap identified:' with next steps
+  3. Before writing the final report, add a validation step in thinking that reviews: 'Did I cite sources for all specific claims? Are there any unsupported assertions?'
+  4. Track gathered information in a structured way during research to avoid redundant searches and identify gaps more clearly
+  5. When writing technical recommendations with specific values (like RAG chunk sizes), explicitly reference the source in the thinking block, not just the final report

@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from aletheore.git_exec import git_executable
 from aletheore.dead_code import _package_import_names
 
 CONFIDENCE_ORDER = {"unavailable": 0, "weak": 1, "inferred": 2, "exact": 3}
@@ -324,8 +325,8 @@ def resolve_recent_commit(repo_path: Path, file_path: str, line: int | None = No
     sha_from_blame: str | None = None
     if line is not None:
         try:
-            blame_proc = subprocess.run(
-                ["git", "blame", "-L", f"{line},{line}", "--porcelain", "HEAD", "--", file_path],
+            blame_proc = subprocess.run(  # nosec B603 - argv[0] is git_executable()'s absolute path, args are fixed
+                [git_executable(), "blame", "-L", f"{line},{line}", "--porcelain", "HEAD", "--", file_path],
                 cwd=repo_path,
                 check=False,
                 capture_output=True,
@@ -347,7 +348,7 @@ def resolve_recent_commit(repo_path: Path, file_path: str, line: int | None = No
             if candidate and set(candidate) != {"0"}:
                 sha_from_blame = candidate
 
-    log_args = ["git", "log", "-1", "--format=%H%x1f%an%x1f%aI%x1f%s"]
+    log_args = [git_executable(), "log", "-1", "--format=%H%x1f%an%x1f%aI%x1f%s"]
     if sha_from_blame is not None:
         log_args.append(sha_from_blame)
     else:
@@ -396,7 +397,7 @@ def attach_dependency_evidence(evidence: dict, resolution: dict) -> dict:
     )
 
 
-def _risk(category: str, severity: str, summary: str, evidence_path: str) -> dict:
+def _risk(category: str, severity: Any, summary: str, evidence_path: str) -> dict:
     return {
         "category": category,
         "severity": severity,
@@ -465,7 +466,7 @@ def attach_risk_evidence(evidence: dict, resolution: dict, max_risks: int = 5) -
             risks.append(
                 _risk(
                     "vulnerability",
-                    str(finding.get("severity", "unknown")).lower(),
+                    finding.get("severity", "unknown"),
                     f"{package} {finding.get('advisory_id', 'vulnerability')}",
                     f"security.dependency_vulnerabilities.findings[{index}]",
                 )
@@ -479,7 +480,7 @@ def attach_risk_evidence(evidence: dict, resolution: dict, max_risks: int = 5) -
             risks.append(
                 _risk(
                     "license",
-                    str(finding.get("severity", "unknown")).lower(),
+                    finding.get("severity", "unknown"),
                     f"{package} license {finding.get('license', 'unknown')}",
                     f"security.dependency_licenses.findings[{index}]",
                 )
