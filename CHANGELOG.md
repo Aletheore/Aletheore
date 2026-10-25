@@ -50,6 +50,14 @@ the catalog. A transposed, missing or doubled letter, as in "kubernetes deployme
 skills as the correct spelling. The match is down-weighted and only used when the word has no exact match, so
 queries with no typos rank exactly as before.
 
+**Faster hosted indexing, and long functions no longer push an index onto local Ollama**
+
+`aletheore index` with a hosted token now sends several embedding requests at once instead of one at a time: 4 by
+default, set with `ALETHEORE_EMBED_WORKERS`. On 3,000 chunks of a real repository this took 97 s down to 49 s with 4
+workers and 30 s with 8. Local Ollama stays at one request at a time, because it serves a single request at once and two
+at a time crashed its runner. Separately, a chunk longer than 8,000 characters made the hosted service answer 413, and
+the whole index then fell back to local Ollama; hosted requests now cut each chunk at that limit.
+
 **Added: `aletheore_ask` answers "which files are imported the most" and "is there a circular import"**
 
 Two questions the router could not answer, and that a grep can only approximate, now come straight from the scan's
