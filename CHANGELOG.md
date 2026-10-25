@@ -5,6 +5,23 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+**Changed: the MCP tool definitions are 28% smaller, and there is a new `lean` profile**
+
+An agent receives every tool definition on every turn: with the full profile that was about 19,000 tokens before it
+had done anything (a first-turn context of 25.8k tokens against 6.6k with no MCP server). The definitions no longer
+carry the schema generator's boilerplate (a `title` on every argument, `anyOf: [X, null]` for optional arguments,
+`default: null`, and the `destructiveHint` and `idempotentHint` hints on read-only tools, which the MCP spec defines
+only for tools that are not read-only), and the paging arguments repeated on 18 tools have shorter descriptions. The
+full profile's definitions went from 51,242 to 36,769 characters. Arguments, types, required lists and behaviour are
+unchanged. On 51 repository questions across 12 repositories, the full profile used 20,000 fewer input tokens per run
+(96,700 to 76,800, 95% interval 14,400 to 26,100) with the same accuracy (0.90 and 0.91).
+
+`aletheore mcp --profile lean` is a new profile: the router tool plus eight direct tools (`aletheore_imports`,
+`aletheore_imported_by`, `aletheore_symbols`, `aletheore_get_blast_radius`, `aletheore_list`, `aletheore_overview`,
+`aletheore_locate`, `aletheore_symbol_source`), 8,869 characters of definitions against 36,769 for full. Of the 44
+tools in the full profile, 8 accounted for every Aletheore call in a sample of benchmark runs. Nothing is removed from
+the full profile, which stays the default. Like `router` and `nav`, `lean` does not watch for file changes.
+
 **Faster hosted indexing, and long functions no longer push an index onto local Ollama**
 
 `aletheore index` with a hosted token now sends several embedding requests at once instead of one at a time: 4 by

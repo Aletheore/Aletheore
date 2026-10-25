@@ -13,17 +13,16 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
-_FILE_PATH = "Repo-relative file path exactly as listed in the evidence, e.g. src/app.py (aletheore_list kind=modules lists them)."
+_FILE_PATH = "Repo-relative file path as in the evidence, e.g. src/app.py (aletheore_list kind=modules lists them)."
 
 # The paging arguments the evidence-query tools share.
 _PAGING = {
-    "section": (
-        "Dotted path of one list in the result to page through ('$' for a root list). Leave empty for the "
-        "summary; when the result is too large the summary names the sections you can pass here."
-    ),
-    "offset": "Items to skip in the selected section (default 0). Only used together with section.",
-    "limit": "Maximum items to return from the selected section. Only used together with section.",
-    "filter": "Case-insensitive text; only items containing it are kept. Only used together with section.",
+    # Short on purpose: these four are repeated on every evidence-query tool, so each word is paid for 18 times per turn.
+    # A truncated result names the sections it cut, which is where an agent learns what to pass for `section`.
+    "section": "List to page through: dotted path from the result ('$' for the root). Empty returns the summary.",
+    "offset": "Items to skip in `section` (default 0).",
+    "limit": "Max items to return from `section`.",
+    "filter": "With `section`: keep only items containing this text (case-insensitive).",
 }
 
 _TARGET_FILE = {"target": _FILE_PATH}
