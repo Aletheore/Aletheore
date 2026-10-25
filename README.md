@@ -153,6 +153,8 @@ available. See [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md), or email
 [arihantkaul@outlook.com](mailto:arihantkaul@outlook.com). The hosted, paid tier is
 [Aletheore AIR](https://aletheore.com).
 
+Copyright (C) 2026 Arihant Kaul. See [NOTICE](NOTICE).
+
 Releases through 0.8.12 were Apache 2.0, and 0.8.13 through the version before this change were PolyForm
 Noncommercial 1.0.0. Copies you already received keep the license they came with.
 

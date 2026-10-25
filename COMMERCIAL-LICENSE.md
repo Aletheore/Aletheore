@@ -118,3 +118,5 @@ Signed for the Licensee: ____________________  Date: ________
 
 *This is a baseline form, not legal advice. Have a lawyer review it before you rely on it for a
 paid deal.*
+
+Copyright (C) 2026 Arihant Kaul. This document is not covered by the AGPL-3.0. Reproduce it only to evaluate or negotiate a license with the Licensor.
