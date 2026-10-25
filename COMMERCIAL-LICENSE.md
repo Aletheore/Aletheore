@@ -33,7 +33,9 @@ roughly how many people or customers it touches.
 
 These terms apply between Arihant Kaul ("**Licensor**") and the party named in the Order Form
 ("**Licensee**"). "**Software**" means the Aletheore source code and documentation in this
-repository, in the version(s) named in the Order Form.
+repository, in the version(s) named in the Order Form, excluding third-party materials,
+dependencies, generated assets, trademarks, and other content identified as separately licensed.
+Those excluded materials remain governed by their own notices and licenses.
 
 ### 1. Grant
 
@@ -43,17 +45,25 @@ reproduce, modify, and create derivative works of the Software, and to distribut
 those derivative works as part of the Licensee's products and services within the scope stated in
 the Order Form (for example internal use, a named product, or a named hosted service).
 
-This license is granted in place of the AGPL-3.0 for the Software it covers. The AGPL's
-source-disclosure and network-use requirements do not apply to the Licensee's use within that
-scope. Code the Licensee did not receive from the Licensor is not affected.
+Licensee may grant customers and end users the rights needed to use the Software only as embedded
+in the permitted product or service, provided Licensee preserves all notices and does not grant
+standalone rights beyond this Order Form.
+
+This commercial license applies only to the Licensor-controlled Software covered by the Order Form
+and replaces the AGPL-3.0 permissions for that scope. The AGPL's source-disclosure and network-use
+requirements do not apply to that scope. It does not change the license of excluded third-party
+materials or code the Licensee did not receive from the Licensor.
 
 ### 2. Restrictions
 
-Unless the Order Form says otherwise, the Licensee may not (a) sublicense the Software or let a
-third party use it stand-alone; (b) remove copyright, license, or attribution notices; (c) offer
-the Software, on its own or a lightly modified version of it, as a competing product or
-service; or (d) use the Licensor's name or marks except to state accurately that the Licensee
-uses Aletheore.
+Unless the Order Form says otherwise, the Licensee may not (a) sublicense or distribute the
+Software as a standalone product, except for the embedded distribution expressly permitted in
+Section 1; (b) remove copyright, license, or attribution notices; (c) offer the Software itself, or
+a substantially unmodified redistribution of it, as a standalone repository-audit,
+repository-intelligence, or code-review product that competes directly with the Licensor's
+Aletheore offering. This restriction does not prohibit use of the Software inside Licensee's
+materially broader product or service; or (d) use the Licensor's name or marks except to state
+accurately that the Licensee uses Aletheore.
 
 ### 3. Fees and taxes
 
@@ -63,9 +73,11 @@ taxes, which the Licensee pays except for taxes on the Licensor's income.
 ### 4. Term and termination
 
 The license lasts for the term in the Order Form. Either party may terminate for the other's
-material breach not cured within 30 days of written notice. On expiry or termination the
-Licensee stops new distribution of the Software. Copies already distributed to end customers in
-accordance with these terms may continue to be used by those customers.
+material breach not cured within 30 days of written notice. On expiry or termination, the Licensee
+must stop new distribution and new hosted access under this license. Rights already granted to end
+customers for embedded copies are not revoked solely by termination, but the Licensee may not grant
+new rights. The Licensee may retain archival copies required by law or routine backup, which may
+not be used for production or distribution.
 
 ### 5. Ownership
 
@@ -95,6 +107,9 @@ in writing signed by both parties. The governing law and courts are stated in th
 Neither party may assign the license without the other's consent, except to a successor to all or
 substantially all of its business.
 
+If the Order Form conflicts with these baseline terms, it controls only for the specific subject
+addressed by the conflict. Any change to these terms must be signed by both parties.
+
 ---
 
 ## Order Form template
@@ -102,6 +117,7 @@ substantially all of its business.
 | | |
 |---|---|
 | Licensee (legal name, address) | |
+| Effective date | |
 | Software version(s) | |
 | Permitted scope (internal use / named product / named hosted service) | |
 | Term (start date and length) | |
@@ -119,4 +135,6 @@ Signed for the Licensee: ____________________  Date: ________
 *This is a baseline form, not legal advice. Have a lawyer review it before you rely on it for a
 paid deal.*
 
-Copyright (C) 2026 Arihant Kaul. This document is not covered by the AGPL-3.0. Reproduce it only to evaluate or negotiate a license with the Licensor.
+Copyright (C) 2026 Arihant Kaul. This document is not covered by the AGPL-3.0. No license to copy,
+modify, distribute, or use it commercially is granted, except to evaluate or negotiate a license
+with the Licensor.

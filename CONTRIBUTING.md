@@ -18,9 +18,16 @@ being triaged right now.
 
 Aletheore is licensed under the [GNU Affero General Public License v3.0](LICENSE), and a
 separate commercial license is available (see [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md)).
-Because the project is also offered under commercial terms, any code contribution needs the
-author's written agreement that it may be distributed under both the AGPL and the commercial
-license. Open an issue before sending code so that can be set up.
+Because the project is also offered under commercial terms, code cannot be accepted until the
+contributor or relevant rights holder provides written confirmation using this statement, or
+equivalent wording:
+
+> I authorize Aletheore, Arihant Kaul, and successors to distribute my contribution under
+> AGPL-3.0 and to include it in commercial licenses for Aletheore.
+
+The maintainer records the contributor or rights-holder identity, contribution scope or commit,
+date, and consent location before merging. This permission does not transfer copyright unless a
+separate assignment is signed. Open an issue before sending code so that the record can be set up.
 
 This policy may change as the project matures — if you're interested in
 contributing code, opening an issue to ask is a reasonable way to check
