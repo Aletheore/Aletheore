@@ -4084,6 +4084,24 @@ def test_dashboard_with_a_scan_does_not_ask(tmp_path):
     mock_offer.assert_not_called()
 
 
+def test_dashboard_can_skip_opening_browser_for_headless_runs(tmp_path, monkeypatch):
+    from aletheore.cli import _dashboard
+
+    (tmp_path / ".aletheore").mkdir()
+    (tmp_path / ".aletheore" / "air.json").write_text("{}")
+    monkeypatch.setenv("ALETHEORE_NO_BROWSER", "1")
+    server = MagicMock()
+
+    with patch("aletheore.cli._port_is_available", return_value=True), patch(
+        "aletheore.cli._offer_scan_before_dashboard"
+    ), patch("aletheore.dashboard.build_app"), patch(
+        "aletheore.cli.threading.Timer"
+    ) as timer, patch("aletheore.cli.uvicorn.Server", return_value=server):
+        assert _dashboard(str(tmp_path), 8420) == 0
+
+    timer.assert_not_called()
+
+
 def test_offer_scan_in_a_terminal_scans_when_the_answer_is_yes(tmp_path):
     from aletheore import cli
 
