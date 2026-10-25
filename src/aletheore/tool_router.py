@@ -140,14 +140,39 @@ INTENTS: tuple[Intent, ...] = (
         "dead_code",
         "aletheore_dead_code",
         (
-            r"\bnobody (?:imports|uses|calls|references)\b", r"\bno other (?:[\w#+.]+ ){0,3}(?:modules?|files?)\b[^.?]*\bimports?\b",
+            r"\bnobody (?:imports|uses|calls|references)\b", r"\bno other (?:[\w#+.]+ ){0,3}(?:modules?|files?)\b[^.?]*\b(?:imports?|depends? on|uses?|references?|requires?)\b",
             r"\b(?:un-?imported|no importers?|zero importers?|not imported by (?:any|anything))\b", r"\bsafely delete\b",
             r"\bnot imported (?:by|anywhere)\b", r"\b(?:isn'?t|aren'?t|is not|are not|never|not) (?:being )?imported\b",
             r"\bnothing (?:imports|depends on|uses|references)\b", r"\bno one (?:imports|uses|references)\b",
+            # "depends on" alone also reads as an impact question; a negated subject makes it unambiguous
+            r"\b(?:no|none of the) (?:other )?(?:[\w#+.]+ ){0,3}(?:modules?|files?)\b[^.?]*\bdepends? on\b",
             r"\b(?:no|zero) (?:other )?(?:modules?|files?) (?:import|use|reference)s?\b",
             r"\b(?:with|has|have|without) (?:no|zero|any) (?:importers?|dependents?)\b",
             r"\bno one importing\b", r"\bimported (?:by )?(?:no ?one|nothing|nobody)\b", r"\bcut the fat\b", r"\bdead (?:files?|modules?|functions?)\b", r"\borphan\w*\b",r"\bdead code\b", r"\bunused (?:code|files?|modules?|functions?)\b", r"\bunreachable\b", r"\bnever (?:used|called|imported)\b", r"\bsafe to delete\b"),
         weight=1.2,
+    ),
+    Intent(
+        # Fan-in: the files many others import. The opposite end of the import graph from dead_code.
+        "hubs",
+        "most_imported",
+        (
+            r"\bmost[- ](?:depended[- ]on|imported|used|referenced|connected|central|widely[- ]used)\b",
+            r"\b(?:depended on|imported|used|referenced) by the most\b",
+            r"\b(?:imported|depended on|used|referenced)\b[^?.]{0,20}\bthe most\b",
+            r"\bmost (?:important|central|core|critical) (?:modules?|files?)\b",
+            r"\b(?:import|dependency) hubs?\b", r"\b(?:top|most) \d{1,2} hubs?\b", r"\bfan-?in\b", r"\bhighest (?:in-?degree|number of importers)\b",
+        ),
+        weight=1.5,
+    ),
+    Intent(
+        "cycles",
+        "import_cycles",
+        (
+            r"\bcircular (?:imports?|dependenc(?:y|ies)|references?|calls?|modules?|graph)\b",
+            r"\b(?:import|dependency) cycles?\b", r"\b(?:import|dependency) loops?\b",
+            r"\bimport (?:each other|one another)\b", r"\bmutual(?:ly)? import",
+        ),
+        weight=1.5,
     ),
     Intent(
         "layers",
@@ -266,7 +291,9 @@ _INTENTS_BY_NAME = {intent.name: intent for intent in INTENTS}
 _COMPILED = {intent.name: tuple(re.compile(p, re.IGNORECASE) for p in intent.patterns) for intent in INTENTS}
 
 # A path-looking token: contains a slash or ends in a known source extension.
-_PATH_TOKEN = re.compile(r"[\w@./+-]+\.(?:py|pyi|js|jsx|ts|tsx|mjs|cjs|go|rs|rb|php|java|kt|swift|cs|cpp|cc|c|h|hpp|scala|sql|sh|vue|svelte)\b|[\w@.+-]+(?:/[\w@.+-]+)+")
+# A path segment is a plain name, or a framework route segment: `(group)`, `[id]`, `[[...slug]]` (Next.js, SvelteKit).
+_SEG = r"(?:\([\w.-]+\)|\[{1,2}\.{0,3}[\w.-]+\]{1,2}|[\w@.+-]+)"
+_PATH_TOKEN = re.compile(r"[\w@./+-]+\.(?:py|pyi|js|jsx|ts|tsx|mjs|cjs|go|rs|rb|php|java|kt|swift|cs|cpp|cc|c|h|hpp|scala|sql|sh|vue|svelte)\b|" + _SEG + rf"(?:/{_SEG})+")
 # Ways a question marks a one-word directory as a place, kept narrow because the result narrows the answer: a
 # quoted word counts only right after a place cue (so `retry` in "how does `retry` work" is an identifier, not a
 # scope), "under/inside/within/below X" is a place on its own, and a plain "in X" needs a directory word beside it.
@@ -416,7 +443,7 @@ def strip_test_qualifiers(question: str) -> str:
 
 # A multi-segment path names where to look, not what to look for. Its words (a `setup/` directory, a `deploy_config`
 # file) used to score as intents of their own.
-_SLASH_PATH = re.compile(r"[\w@.+-]+(?:/[\w@.+-]+)+/?")
+_SLASH_PATH = re.compile(rf"{_SEG}(?:/{_SEG})+/?")
 
 
 def intent_text_of(question: str) -> str:
@@ -551,13 +578,13 @@ def route(question: str, explicit_target: str | None, paths: list[str]) -> Route
     # An intent that needs a file cannot run when the question names none, so it is not a real rival: a question
     # about a directory that matches both "nothing imports it" and "what imports this file" is the first one.
     rivals = [i for s, i in scored[1:] if top_score - s < 0.5 and not (i.needs_file and target is None)]
-    if rivals and top.name not in ("impact", "tests", "owner", "dependencies"):
+    if rivals and top.name not in ("impact", "tests", "owner", "dependencies", "hubs", "cycles"):
         # A near tie between unrelated intents is not worth a confident wrong answer.
         return Route(
             "low", top.name, top.tool, target, reason="the question fits more than one query",
             candidates=[i.tool for _, i in scored[:3]],
         )
-    scope = (resolve_scope(question, explicit_target, paths) or target) if top.name == "dead_code" else None
+    scope = (resolve_scope(question, explicit_target, paths) or target) if top.name in ("dead_code", "hubs", "cycles") else None
     return Route("high", top.name, top.tool, target, reason=f"matched {top.name}", scope=scope)
 
 
@@ -674,6 +701,30 @@ def _dead_code(q, evidence, repo_path, target, question):
     )
 
 
+def _wanted_count(question: str, default: int = 10) -> int:
+    """Return a limit only when the number is explicitly part of a ranking cue."""
+    match = re.search(r"\btop\s+(\d{1,2})\b", question, re.I) or re.search(
+        r"\b(\d{1,2})\s+most\b", question, re.I
+    ) or re.search(
+        r"\bwhich\s+(\d{1,2})\s+(?:non[- ]?test\s+)?(?:files?|modules?)\s+"
+        r"(?:are|is)\s+(?:imported|depended on|used|referenced)\s+by\s+the\s+most\b",
+        question,
+        re.I,
+    )
+    return int(match.group(1)) if match else default
+
+
+def _hubs(q, evidence, repo_path, target, question):
+    # `target` is the directory the question is limited to, or None for the whole repo.
+    return q.find_most_imported_modules(
+        evidence, target, _wanted_count(question), ignore_test_importers=bool(_NON_TEST_QUALIFIER.search(question))
+    )
+
+
+def _cycles(q, evidence, repo_path, target, question):
+    return q.find_import_cycles(evidence, target, ignore_test_files=bool(_NON_TEST_QUALIFIER.search(question)))
+
+
 def _secrets(q, evidence, repo_path, target, question):
     return q.find_secrets_for_file(evidence, target) if target else q.find_secrets_for_file(evidence, None)
 
@@ -688,6 +739,8 @@ _RUNNERS: dict[str, Callable] = {
     "vulnerabilities": lambda q, e, r, t, qu: q.find_vulnerabilities(e, None),
     "static_analysis": lambda q, e, r, t, qu: q.find_static_analysis(e, None),
     "dead_code": _dead_code,
+    "hubs": _hubs,
+    "cycles": _cycles,
     "layers": lambda q, e, r, t, qu: q.find_layer_violations(e, None),
     "endpoints": lambda q, e, r, t, qu: q.find_endpoints(e, None),
     "env": lambda q, e, r, t, qu: q.find_environment_variables(e, None),
