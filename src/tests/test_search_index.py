@@ -995,6 +995,22 @@ def test_search_index_raises_when_neither_table_exists(tmp_path):
         search_index(tmp_path, "anything")
 
 
+def test_search_index_does_not_hide_dimension_mismatch_behind_keyword_fallback(tmp_path):
+    from aletheore.search_index import IndexDimensionMismatchError
+
+    table = MagicMock()
+    table.schema.field.return_value.type.list_size = 1536
+    with patch("aletheore.search_index.open_index", return_value=table), patch(
+        "aletheore.search_index._open_fts_table"
+    ) as open_fts, patch(
+        "aletheore.search_index._embed_in_batches",
+        return_value=([[0.0] * 768], "local:test"),
+    ):
+        with pytest.raises(IndexDimensionMismatchError):
+            search_index(tmp_path, "anything")
+        open_fts.assert_not_called()
+
+
 def test_keyword_only_results_carry_the_marker(tmp_path):
     """Callers (the CLI especially) need to know the answer came from the
     stand-in table while embeddings were still building."""

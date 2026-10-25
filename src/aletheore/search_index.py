@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import logging
 import os
 import re
 import shutil
@@ -25,6 +26,7 @@ from aletheore.credentials import (
 )
 
 httpx = lazy_module("httpx")
+logger = logging.getLogger(__name__)
 
 FALLBACK_CHUNK_MAX_LINES = 200
 DEFAULT_EMBEDDING_BASE_URL = "http://localhost:11434/v1"
@@ -1655,8 +1657,8 @@ def _write_keyword_index(index_path: Path, chunks: list[dict]) -> None:
     # this table still exists, it just cannot answer a keyword query.
     try:
         table.create_index("text", config=FTS(), replace=True)
-    except Exception:  # noqa: BLE001 - any backend failure degrades, never fails the build
-        pass
+    except Exception as exc:  # noqa: BLE001 - any backend failure degrades, never fails the build
+        logger.warning("keyword index FTS creation failed; keyword search remains available: %s", exc)
 
 
 def build_index(
@@ -1809,6 +1811,12 @@ def build_index(
     # a finished build over.
     try:
         db.drop_table(FTS_TABLE_NAME)
+    except IndexDimensionMismatchError:
+        # A keyword table is a valid fallback only when the vector table is
+        # absent or temporarily unreadable. A dimension mismatch is a real
+        # index/provider incompatibility and must reach the CLI's dedicated
+        # error handling instead of being mislabeled as "embeddings building".
+        raise
     except Exception:  # noqa: BLE001
         pass
     return len(rows)
