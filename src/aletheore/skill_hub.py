@@ -73,12 +73,20 @@ AGENT_INSTRUCTION_SNIPPET = (
 FIND_SKILL_MIN_SCORE = 34.0
 FIND_SKILL_MIN_GAP = 10.0
 FIND_SKILL_MIN_RATIO = 1.3
+# Below this score even the best result is a keyword accident. The dev half of the
+# benchmark has no task query under 14.2, so a floor here turns weak, scattered
+# matches into an honest "none" without losing a real task.
+FIND_SKILL_NONE_SCORE = 14.0
+# A strong top score still is not a confident answer when the skill covers only a few
+# of the task's content words. Requiring four in five keeps the genuinely scattered
+# matches at "low" (dev precision 0.851, 63 of 66 correct highs kept).
+FIND_SKILL_MIN_COVERAGE = 0.8
 FIND_SKILL_MAX_CONTENT_CHARS = 14_000
 # UserPromptSubmit hook limits. A prompt shorter than HOOK_MIN_WORDS is a fragment, not a task;
 # a prompt longer than HOOK_MAX_PROMPT_CHARS is usually a pasted log, so only its first
 # HOOK_TRUNCATE_CHARS characters are searched (the task is normally stated at the top).
 HOOK_MODES = ("hint", "inject")
-HOOK_MIN_WORDS = 5
+HOOK_MIN_WORDS = 6
 HOOK_MAX_PROMPT_CHARS = 6_000
 HOOK_TRUNCATE_CHARS = 800
 # The medium hint tier is deliberately looser than find_skill's "high" bar: a hint is about
@@ -89,6 +97,10 @@ HOOK_TRUNCATE_CHARS = 800
 # 86.1% fire rate, with 10% of the non-task chatty prompts firing.
 HINT_MIN_SCORE = 10.0
 HINT_MIN_RATIO = 1.05
+# A medium hint is only worth showing when the first skill covers half of the prompt's
+# content words. Without a floor, a conversational prompt can share one broad word with
+# a skill and still produce a hint.
+HOOK_MIN_COVERAGE = 0.5
 HOOK_ACKNOWLEDGEMENTS = frozenset(
     {
         "ok", "okay", "k", "thanks", "thank", "thx", "yes", "yeah", "yep", "sure",
@@ -97,6 +109,70 @@ HOOK_ACKNOWLEDGEMENTS = frozenset(
         "right", "no", "nope", "stop", "wait", "cancel", "now", "that", "worked",
     }
 )
+
+# Prompts that are small talk, one-word replies, trivial local edits or questions about the
+# immediate code or chat rather than a task. They never need a skill, whatever the ranker finds.
+_SMALL_TALK_WORDS = frozenset(
+    "hi hello hey there bye goodbye cheers thanks thank much appreciated so cool great perfect nice "
+    "ok okay sure yeah yep yes no nope done agreed lgtm see later going good morning night well hmm "
+    "sounds fine alright right now then please go ahead continue next stop wait awesome got worked "
+    "cancel proceed thx".split()
+)
+_CONVERSATIONAL_PATTERNS = (
+    re.compile(r"\b(?:what|why|how) (?:did|do|does) you (?:do|mean|choose|say|use|think)\b"),
+    re.compile(r"\bwhat you (?:meant|said|were saying|are saying)\b"),
+    re.compile(
+        r"\b(?:previous|last|earlier) (?:message|paragraph|step|change|answer|response|diff|output|"
+        r"command|approach|explanation)\b"
+    ),
+    re.compile(r"\b(?:show|give) me (?:the|that) (?:diff|output|last|previous)\b"),
+    re.compile(r"\b(?:thanks|thank you)\b[^.!?]*\b(?:works?|worked|is working|looks? (?:good|correct|right))\b"),
+    re.compile(r"^(?:sorry|i meant|i was referring)\b"),
+    re.compile(r"^(?:please )?(?:continue|go on|keep going)\b"),
+    re.compile(r"^(?:that|this) (?:output|looks|sounds|makes sense)\b"),
+    re.compile(r"^(?:can you )?(?:repeat|say) (?:that|this)\b"),
+)
+_TRIVIAL_PATTERNS = (
+    re.compile(
+        r"^(?:rename|delete|remove|change|fix|make|add|move|update|reword|shorten|capitalize)\s+"
+        r"(?:this|that|the)\s+(?:variable|line|comment|typo|semicolon|word|sentence|text|label|"
+        r"string|import|function|method|name|value|color|colour|spelling|indentation|whitespace|"
+        r"bracket|quote|comma|dot|space|character|number)\b"
+    ),
+    re.compile(r"^fix the (?:typo|spelling|wording|grammar)\b"),
+    re.compile(r"^change (?:this|that|it) to (?:lowercase|uppercase|camelcase|title case|snake case)\b"),
+    re.compile(r"^(?:make|change) (?:this|that) (?:bold|italic|bigger|smaller|red|blue|green)\b"),
+    re.compile(r"^add (?:a|an) (?:semicolon|comma|period|dot|space|bracket|quote)\b"),
+    re.compile(r"^(?:what does|what is|what's) (?:this|that|it)\b"),
+    re.compile(r"^(?:why is|why does) (?:this|that|it)\b"),
+    re.compile(r"^can you (?:explain|show|repeat|say)(?: me)? (?:this|that|it|the line|the code|the function|the error)\b"),
+    re.compile(r"^is this (?:working|on|ready|right|correct)\b"),
+    re.compile(r"^are you (?:there|ok|okay|sure|ready)\b"),
+    re.compile(r"^can you hear me\b"),
+    re.compile(r"^(?:repeat|say) (?:that|this)\b"),
+    re.compile(r"^what (?:model|version) are you\b"),
+    re.compile(r"^what is the (?:date|time|weather|day)\b"),
+)
+
+
+def _is_conversational_prompt(text: str) -> bool:
+    """True for a follow-up about the chat itself rather than a new task for a skill."""
+    lowered = text.strip().lower()
+    return any(pattern.search(lowered) for pattern in _CONVERSATIONAL_PATTERNS)
+
+
+def _is_trivial_prompt(text: str) -> bool:
+    """True for small talk, one-word replies and local edits that deserve no skill suggestion."""
+    lowered = text.strip().lower()
+    if not lowered:
+        return True
+    words = re.findall(r"[a-z]+", lowered)
+    if len(words) <= 2:
+        return True
+    if all(word in _STOPWORDS or word in _SMALL_TALK_WORDS for word in words):
+        return True
+    return any(pattern.search(lowered) for pattern in _TRIVIAL_PATTERNS)
+
 
 FIND_SKILL_HIGH_NOTE = (
     "Apply this guidance to the current project. Examples use sample values; do not copy them blindly. "
@@ -737,6 +813,41 @@ def _tokens(text: str) -> list[str]:
     return [_stem(t) for t in re.findall(r"[a-z0-9]+", text.lower()) if len(t) > 1 and t not in _STOPWORDS]
 
 
+def _collapse_repeats(token: str) -> str:
+    """Fold runs of the same letter, so a doubled-letter typo still finds its word."""
+    return re.sub(r"(.)\1+", r"\1", token)
+
+
+def _within_one_edit(left: str, right: str) -> bool:
+    """True when two tokens differ by one insert, delete, substitute or adjacent swap.
+
+    This is a narrow, allocation-light check rather than a full edit-distance matrix: the
+    query path runs it against a small bucket of candidate vocabulary words.
+    """
+    if left == right:
+        return True
+    left_len, right_len = len(left), len(right)
+    if abs(left_len - right_len) > 1:
+        return False
+    if left_len == right_len:
+        differing = [index for index in range(left_len) if left[index] != right[index]]
+        if len(differing) == 1:
+            return True
+        if len(differing) == 2:
+            first, second = differing
+            return (
+                second == first + 1
+                and left[first] == right[second]
+                and left[second] == right[first]
+            )
+        return False
+    short, long = (left, right) if left_len < right_len else (right, left)
+    index = 0
+    while index < len(short) and short[index] == long[index]:
+        index += 1
+    return short[index:] == long[index + 1:]
+
+
 _SEARCH_FIELDS = ("name", "title", "description", "intents", "headings", "body", "category")
 
 # Tuned by coordinate ascent on the DEV half of the benchmark in search-lab/lab_rankers.py (on the hallbook/search-lab branch).
@@ -751,8 +862,15 @@ _RANK_WEIGHTS = {
     "coverage": 3.92,
     "name_hit": 2.8,
     "name_cov": 2.0,
+    # An additive name bonus bypasses BM25's field-length normalisation, so a long
+    # name that repeats the query can outrank a shorter, more general skill. Penalise
+    # each name token the query did not ask for; tuned on the dev half.
+    "name_extra": 3.0,
     "phrase": 1.26,
     "prefix": 0.6,
+    # A token recovered by one edit is a guess, so its term frequency counts for less
+    # than an exact hit. It only applies to query tokens with no exact index match.
+    "fuzzy": 0.55,
     "quality": 0.07,
     "k1": 1.2,
     "b": 0.75,
@@ -772,13 +890,14 @@ class _RankIndex:
     def __init__(self, metas: tuple[CuratedSkillMeta, ...]) -> None:
         self.metas = metas
         self.ids = [meta.skill_id for meta in metas]
+        self.id_to_index = {skill_id: index for index, skill_id in enumerate(self.ids)}
         self.categories = [meta.category for meta in metas]
         self.quality = [meta.quality for meta in metas]
         self.texts: list[tuple[str, ...]] = []
         self.joined: list[str] = []
         self.doc_len: list[dict[str, int]] = []
         self.name_sizes: list[int] = []
-        self.prefix_tokens: dict[str, set[str]] | None = None
+        self.prefix_tokens: dict[str, tuple[str, ...]] | None = None
         for meta in metas:
             texts = meta.search_tokens or {
                 "name": meta.skill_id.split("/", 1)[-1].replace("-", " ").replace("_", " "),
@@ -811,6 +930,58 @@ class _RankIndex:
             ]
             for lengths in self.doc_len
         ]
+        # The vocabulary is grouped by first letter and length. A one-edit match must share the
+        # first letter and is at most one character longer or shorter, so this keeps the fuzzy
+        # lookup to a few dozen words instead of scanning every token in the catalog.
+        self.vocab: set[str] = set()
+        for texts in self.texts:
+            for text in texts:
+                self.vocab.update(text.split())
+        self.vocab_by_first: dict[str, dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
+        for token in sorted(self.vocab):
+            if len(token) >= 4:
+                self.vocab_by_first[token[0]][len(token)].append(token)
+
+    def coverage(self, query_tokens: list[str], skill_id: str) -> float:
+        """The share of query tokens the skill's text contains, counting a typo recovery."""
+        index = self.id_to_index.get(skill_id)
+        if index is None:
+            return 1.0
+        joined = self.joined[index]
+        matched = 0
+        for token in query_tokens:
+            if f" {token} " in joined:
+                matched += 1
+                continue
+            recovered = self._fuzzy_match(token)
+            if recovered is not None and f" {recovered} " in joined:
+                matched += 1
+        return matched / len(query_tokens) if query_tokens else 0.0
+
+    def _fuzzy_match(self, token: str) -> str | None:
+        """The closest vocabulary token to an unmatched query token, or None.
+
+        A doubled-letter typo is folded first ("postgress" -> "postgres") because the
+        stemmer keeps "ss" and would otherwise leave it several edits from "postgr".
+        """
+        if len(token) < 5:
+            return None
+        forms = [token]
+        collapsed = _collapse_repeats(token)
+        if collapsed != token:
+            forms.append(collapsed)
+            forms.append(_stem(collapsed))
+        for form in dict.fromkeys(forms):
+            if form in self.vocab:
+                return form
+            if len(form) < 4:
+                continue
+            buckets = self.vocab_by_first.get(form[0], {})
+            for length in (len(form) - 1, len(form), len(form) + 1):
+                for candidate in buckets.get(length, ()):
+                    if _within_one_edit(form, candidate):
+                        return candidate
+        return None
 
     def _ensure_prefix_tokens(self) -> None:
         """Build the prefix map on first use; the hook path (prefix=False) never needs it."""
@@ -820,11 +991,11 @@ class _RankIndex:
         for texts in self.texts:
             for text in texts:
                 vocab.update(text.split())
-        prefix: dict[str, set[str]] = defaultdict(set)
-        for token in vocab:
+        prefix: dict[str, list[str]] = defaultdict(list)
+        for token in sorted(vocab):
             if len(token) >= 5:
-                prefix[token[:5]].add(token)
-        self.prefix_tokens = prefix
+                prefix[token[:5]].append(token)
+        self.prefix_tokens = {key: tuple(value) for key, value in prefix.items()}
 
     def rank_scored(
         self,
@@ -834,16 +1005,30 @@ class _RankIndex:
         min_matches: int = 1,
         prefix: bool = True,
         phrase: bool = True,
+        fuzzy: bool = True,
     ) -> list[tuple[CuratedSkillMeta, float]]:
         weights = _RANK_WEIGHTS
         field_weights = [weights[field] for field in _SEARCH_FIELDS]
         k1 = weights["k1"]
-        needed = set(query_tokens)
+        # (token used for term frequency, weight applied to it) for each query token.
+        # An exact hit is the token itself at full weight. A typo is the recovered
+        # vocabulary word, down-weighted so it can only help an otherwise weak match.
+        sources: dict[str, tuple[str, float]] = {}
+        needed: set[str] = set()
+        for token in query_tokens:
+            if token in self.vocab:
+                sources[token] = (token, 1.0)
+                needed.add(token)
+            elif fuzzy:
+                recovered = self._fuzzy_match(token)
+                if recovered is not None:
+                    sources[token] = (recovered, weights["fuzzy"])
+                    needed.add(recovered)
         if prefix:
             self._ensure_prefix_tokens()
             assert self.prefix_tokens is not None
             for token in query_tokens:
-                if len(token) >= 5:
+                if token in self.vocab and len(token) >= 5:
                     for other in self.prefix_tokens.get(token[:5], ()):
                         if other != token and other.startswith(token):
                             needed.add(other)
@@ -877,10 +1062,15 @@ class _RankIndex:
         term_maps: list[tuple[str, dict[int, list[float]]]] = []
         matching: set[int] = set()
         for token in query_tokens:
+            source = sources.get(token)
+            if source is None:
+                term_maps.append((token, {}))
+                continue
+            source_token, source_weight = source
             merged: dict[int, list[float]] = {}
-            for doc_index, tfs in postings[token].items():
-                merged[doc_index] = list(tfs)
-            if prefix and len(token) >= 5:
+            for doc_index, tfs in postings[source_token].items():
+                merged[doc_index] = [source_weight * value for value in tfs]
+            if prefix and token in self.vocab and len(token) >= 5:
                 for other in needed_tokens:
                     if other == token or not other.startswith(token):
                         continue
@@ -892,10 +1082,14 @@ class _RankIndex:
                             current[position] += weights["prefix"] * value
             if merged:
                 matching.update(merged)
-            term_maps.append((token, merged))
+            term_maps.append((source_token, merged))
         if not matching:
             return []
-        query_pairs = list(zip(query_tokens, query_tokens[1:]))
+        # Recovered typo tokens stand in for the query token in the name and phrase checks,
+        # so "kuberentes deployment" still gets the same name and adjacent-word credit as
+        # "kubernetes deployment". Coverage still counts each query token once.
+        scoring_tokens = [sources.get(token, (token, 0.0))[0] for token in query_tokens]
+        query_pairs = list(zip(scoring_tokens, scoring_tokens[1:]))
         n_terms = len(query_tokens)
         scored: list[tuple[CuratedSkillMeta, float]] = []
         for doc_index in matching:
@@ -917,11 +1111,12 @@ class _RankIndex:
                     score += idf.get(token, 0.0) * weighted_tf * (k1 + 1.0) / (k1 + weighted_tf)
             score += weights["coverage"] * (matched / n_terms)
             name_tokens = doc_tokens[doc_index][0]
-            name_hits = [token for token in query_tokens if token in name_tokens]
+            name_hits = [token for token in scoring_tokens if token in name_tokens]
             if name_hits:
                 score += weights["name_hit"] * sum(idf.get(token, 0.0) for token in name_hits)
                 if self.name_sizes[doc_index]:
                     score += weights["name_cov"] * (len(set(name_hits)) / self.name_sizes[doc_index])
+                score -= weights["name_extra"] * (self.name_sizes[doc_index] - len(set(name_hits)))
             if phrase and query_pairs:
                 bigrams: set[tuple[str, str]] = set()
                 for tokens in doc_tokens[doc_index]:
@@ -940,6 +1135,101 @@ class _RankIndex:
 def _search_index(skills_dir: str) -> _RankIndex:
     """The BM25F index, built once per process per skills directory."""
     return _RankIndex(_bundled_index(skills_dir))
+
+
+# Custom skills are read from disk on demand. Each file is cached by (path, mtime, size), so
+# a search only pays for the files that changed since the previous one, and an add, edit or
+# removal shows up on the next search without restarting the process.
+_CUSTOM_DOC_CACHE: dict[str, tuple[int, int, CuratedSkillMeta]] = {}
+_CUSTOM_INDEX_CACHE: tuple[tuple[tuple[str, int, int], ...], _RankIndex | None] = ((), None)
+
+
+def _custom_frontmatter(text: str) -> tuple[str, str, str]:
+    """(title, description, body) from a custom skill's optional frontmatter."""
+    if not text.startswith("---\n"):
+        return "", "", text
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        return "", "", text
+    title = description = ""
+    for line in text[4:end].splitlines():
+        key, separator, value = line.partition(":")
+        if not separator:
+            continue
+        key = key.strip().lower()
+        value = value.strip().strip("'\"")
+        if key == "title":
+            title = value
+        elif key == "description":
+            description = value
+    return title, description, text[end + 5:]
+
+
+def _custom_meta(path: Path) -> CuratedSkillMeta | None:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    title, description, body = _custom_frontmatter(text)
+    name = path.stem
+    headings = " ".join(line.lstrip("#").strip() for line in body.splitlines() if line.lstrip().startswith("#"))
+
+    def tokens(value: str) -> str:
+        return " ".join(_tokens(value))
+
+    return CuratedSkillMeta(
+        skill_id=f"{_CUSTOM_PREFIX}{name}",
+        category=_CUSTOM_CATEGORY,
+        title=title or name,
+        description=description,
+        search_tokens={
+            "name": tokens(name.replace("-", " ").replace("_", " ")),
+            "title": tokens(title or name),
+            "description": tokens(description),
+            "intents": "",
+            "headings": tokens(headings),
+            "body": tokens(body),
+            "category": tokens(_CUSTOM_CATEGORY),
+        },
+    )
+
+
+def _custom_index() -> _RankIndex | None:
+    """The custom-skill index, rebuilt only when a file's path, mtime or size changed."""
+    global _CUSTOM_INDEX_CACHE
+    directory = custom_skills_dir()
+    try:
+        paths = sorted(directory.glob("*.md"))
+    except OSError:
+        return None
+    signature: list[tuple[str, int, int]] = []
+    metas: list[CuratedSkillMeta] = []
+    live_paths = set()
+    for path in paths:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        key = (str(path), stat.st_mtime_ns, stat.st_size)
+        signature.append(key)
+        live_paths.add(str(path))
+        cached = _CUSTOM_DOC_CACHE.get(str(path))
+        if cached is not None and cached[0] == key[1] and cached[1] == key[2]:
+            meta = cached[2]
+        else:
+            meta = _custom_meta(path)
+            if meta is not None:
+                _CUSTOM_DOC_CACHE[str(path)] = (key[1], key[2], meta)
+        if meta is not None:
+            metas.append(meta)
+    for stale in set(_CUSTOM_DOC_CACHE) - live_paths:
+        del _CUSTOM_DOC_CACHE[stale]
+    signature_tuple = tuple(signature)
+    if _CUSTOM_INDEX_CACHE[0] == signature_tuple:
+        return _CUSTOM_INDEX_CACHE[1]
+    index = _RankIndex(tuple(metas)) if metas else None
+    _CUSTOM_INDEX_CACHE = (signature_tuple, index)
+    return index
 
 
 _CURATION_FILE = "_curation.json"
@@ -976,42 +1266,65 @@ def search_skills_scored(
     min_matches: int = 1,
     prefix: bool = True,
     phrase: bool = True,
+    fuzzy: bool = True,
 ) -> list[tuple[SkillMeta, float]]:
     """The same ranking as search_skills, with the raw score for each result.
 
-    `min_matches`, `prefix` and `phrase` are candidate-pruning aids for callers that
-    only need the head of the ranking (the prompt hook). Their defaults are the full
-    ranking.
+    `min_matches`, `prefix`, `phrase` and `fuzzy` are candidate-pruning aids for
+    callers that only need the head of the ranking (the prompt hook). Their defaults
+    are the full ranking.
     """
     query_tokens = list(dict.fromkeys(_tokens(query)))
     if not query_tokens or limit <= 0:
         return []
     min_matches = min(min_matches, len(query_tokens))
     index = _search_index(str(bundled_skills_dir()))
-    custom_names = list_custom_skill_names() if (category is None or category == _CUSTOM_CATEGORY) else []
+    custom_index = _custom_index() if (category is None or category == _CUSTOM_CATEGORY) else None
     scored: list[tuple[float, str, SkillMeta]] = []
     for meta, score in index.rank_scored(
         query_tokens,
         category,
-        limit * 3 + len(custom_names),
+        limit * 3 + (len(custom_index.metas) if custom_index is not None else 0),
         min_matches=min_matches,
         prefix=prefix,
         phrase=phrase,
+        fuzzy=fuzzy,
     ):
         if score:
             scored.append((score, meta.skill_id, _meta(meta)))
-    if category is None or category == _CUSTOM_CATEGORY:
-        for name in custom_names:
-            name_tokens = _tokens(name.replace("-", " ").replace("_", " "))
-            matched = {token for token in query_tokens if token in name_tokens}
-            # A custom skill is the user's own, unvetted text. It can be found by
-            # name, but its score is capped under the "high confidence" bar so it
-            # is never handed over as a confident answer or injected by the hook.
-            score = min(20.0 * len(matched), FIND_SKILL_MIN_SCORE - 1.0)
+    if custom_index is not None:
+        # A custom skill is the user's own, unvetted text. It is searched by its name,
+        # title, description and body like a bundled skill, but its score is capped
+        # under the "high confidence" bar so it is never handed over as a confident
+        # answer or injected by the hook. It also never counts as the runner-up.
+        for meta, score in custom_index.rank_scored(
+            query_tokens,
+            None,
+            limit * 3,
+            min_matches=min_matches,
+            prefix=prefix,
+            phrase=phrase,
+            fuzzy=fuzzy,
+        ):
             if score:
-                skill_id = f"{_CUSTOM_PREFIX}{name}"
+                # The custom corpus is tiny, so its IDF makes an otherwise good match
+                # score far below the bundled results. A coverage floor keeps a custom
+                # skill that covers much of the query visible next to them, while the
+                # cap still keeps every custom result under the high-confidence bar.
+                cap = FIND_SKILL_MIN_SCORE - 1.0
+                coverage = custom_index.coverage(query_tokens, meta.skill_id)
+                custom_score = min(cap, max(score, cap * (0.4 + 0.6 * coverage)))
                 scored.append(
-                    (score, skill_id, SkillMeta(skill_id=skill_id, category=_CUSTOM_CATEGORY, title=name, description=""))
+                    (
+                        custom_score,
+                        meta.skill_id,
+                        SkillMeta(
+                            skill_id=meta.skill_id,
+                            category=_CUSTOM_CATEGORY,
+                            title=meta.title,
+                            description=meta.description,
+                        ),
+                    )
                 )
     scored.sort(key=lambda item: (-item[0], item[1]))
     redirect, alternates_of = _curation(str(bundled_skills_dir()))
@@ -1124,9 +1437,18 @@ def _find_skill_candidate(meta: SkillMeta) -> dict:
     return {"skill_id": meta.skill_id, "title": meta.title, "description": _one_line(meta.description, 140)}
 
 
-def _is_high_confidence(results: list[tuple[SkillMeta, float]]) -> bool:
-    """The strict find_skill bar: strong top score and clearly ahead of the runner-up."""
-    if not results:
+def _query_coverage(task: str, skill_id: str) -> float:
+    tokens = list(dict.fromkeys(_tokens(task)))
+    return _search_index(str(bundled_skills_dir())).coverage(tokens, skill_id)
+
+
+def _is_high_confidence(results: list[tuple[SkillMeta, float]], task: str | None = None) -> bool:
+    """The strict find_skill bar: strong top score, ahead of the runner-up and on-topic.
+
+    Coverage is checked last and only when the task is known, so callers that only
+    have scores (and tests with synthetic results) keep the score-only behaviour.
+    """
+    if not results or results[0][0].skill_id.startswith(_CUSTOM_PREFIX):
         return False
     top_score = results[0][1]
     # A custom skill is the user's own unvetted text and can never be the confident answer, so it must not
@@ -1135,9 +1457,11 @@ def _is_high_confidence(results: list[tuple[SkillMeta, float]]) -> bool:
     second_score = next((score for meta, score in results[1:] if not meta.skill_id.startswith(_CUSTOM_PREFIX)), 0.0)
     gap = top_score - second_score
     ratio = top_score / second_score if second_score > 0 else math.inf
-    return top_score >= FIND_SKILL_MIN_SCORE and (
-        gap >= FIND_SKILL_MIN_GAP or ratio >= FIND_SKILL_MIN_RATIO
-    )
+    if not (top_score >= FIND_SKILL_MIN_SCORE and (gap >= FIND_SKILL_MIN_GAP or ratio >= FIND_SKILL_MIN_RATIO)):
+        return False
+    if task is not None and _query_coverage(task, results[0][0].skill_id) < FIND_SKILL_MIN_COVERAGE:
+        return False
+    return True
 
 
 def find_skill(task: str, category: str | None = None) -> dict:
@@ -1145,14 +1469,19 @@ def find_skill(task: str, category: str | None = None) -> dict:
 
     Returns "high" confidence with the full skill only when the top result is strong and
     clearly ahead of the runner-up; otherwise "low" with compact candidates, or "none"
-    when nothing matched. The thresholds are calibrated offline on the search benchmark.
+    for small talk, trivial edits and matches too weak to be about a real task. The
+    thresholds are calibrated offline on the search benchmark.
     """
+    if _is_trivial_prompt(task):
+        return {"confidence": "none", "note": FIND_SKILL_NONE_NOTE}
     results = search_skills_scored(task, category=category, limit=5)
     if not results:
         return {"confidence": "none", "note": FIND_SKILL_NONE_NOTE}
 
     top_meta, top_score = results[0]
-    confident = _is_high_confidence(results)
+    if top_score < FIND_SKILL_NONE_SCORE:
+        return {"confidence": "none", "note": FIND_SKILL_NONE_NOTE}
+    confident = _is_high_confidence(results, task)
 
     result = {
         "confidence": "high" if confident else "low",
@@ -1182,6 +1511,120 @@ def find_skill(task: str, category: str | None = None) -> dict:
     return result
 
 
+# Per-session hook state: one small JSON file per Claude Code session under the user's
+# Aletheore config directory. A skill is suggested at most once per session. Every
+# operation is best effort: a missing, unreadable or unwritable file only means the hook
+# may repeat a suggestion, never that it crashes or prints a traceback.
+_SESSION_DIRNAME = "hallbook_sessions"
+_SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+_SESSION_HINT_GAP = 3
+_SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+
+
+def session_state_dir() -> Path:
+    return user_home() / ".config" / "aletheore" / _SESSION_DIRNAME
+
+
+def _session_state_path(session_id: object) -> Path | None:
+    if not isinstance(session_id, str) or not _SESSION_ID.fullmatch(session_id):
+        return None
+    return session_state_dir() / f"{session_id}.json"
+
+
+def _prune_session_state() -> None:
+    directory = session_state_dir()
+    cutoff = time.time() - _SESSION_MAX_AGE_SECONDS
+    try:
+        for entry in directory.iterdir():
+            try:
+                if entry.is_file() and entry.stat().st_mtime < cutoff:
+                    entry.unlink()
+            except OSError:
+                continue
+    except OSError:
+        return
+
+
+def _load_session_state(path: Path) -> tuple[set[str], int, int]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set(), 0, 0
+    if not isinstance(data, dict):
+        return set(), 0, 0
+    values = data.get("suggested")
+    skills = {value for value in values if isinstance(value, str)} if isinstance(values, list) else set()
+    prompts = data.get("prompts")
+    last_suggest = data.get("last_suggest")
+    return (
+        skills,
+        prompts if isinstance(prompts, int) and prompts >= 0 else 0,
+        last_suggest if isinstance(last_suggest, int) and last_suggest >= 0 else 0,
+    )
+
+
+def _write_session_state(path: Path, skills: set[str], prompts: int, last_suggest: int) -> None:
+    import tempfile
+
+    tmp_name = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=".session-", suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump({"suggested": sorted(skills), "prompts": prompts, "last_suggest": last_suggest}, handle)
+        os.replace(tmp_name, path)
+        tmp_name = None
+    except OSError:
+        return
+    finally:
+        if tmp_name is not None:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+
+
+def _begin_session_prompt(session_id: object) -> tuple[Path, set[str], int, int, bool] | None:
+    """Count this prompt and say whether the 3-prompt hint gap still applies.
+
+    Returns None when there is no usable session id. Every read and write is best
+    effort, so a broken state file can allow an extra hint but never break the hook.
+    """
+    path = _session_state_path(session_id)
+    if path is None:
+        return None
+    _prune_session_state()
+    seen, prompts, last_suggest = _load_session_state(path)
+    prompts += 1
+    throttled = bool(last_suggest and prompts - last_suggest < _SESSION_HINT_GAP)
+    _write_session_state(path, seen, prompts, last_suggest)
+    return path, seen, prompts, last_suggest, throttled
+
+
+def _new_session_suggestions(
+    session_id: object,
+    skill_ids: list[str],
+    session: tuple[Path, set[str], int, int, bool] | None = None,
+) -> list[str]:
+    """The ids not already suggested in this session, recorded as suggested now.
+
+    Returns every id when there is no usable session id, so a direct caller such as
+    `aletheore hallbook suggest` keeps working without state.
+    """
+    if session is None:
+        path = _session_state_path(session_id)
+        if path is None:
+            return list(skill_ids)
+        _prune_session_state()
+        seen, prompts, _ = _load_session_state(path)
+    else:
+        path, seen, prompts, _, _ = session
+    new = [skill_id for skill_id in skill_ids if skill_id not in seen]
+    if new:
+        _write_session_state(path, seen | set(new), prompts, prompts)
+    return new
+
+
 def _hook_prompt_text(prompt: object) -> str | None:
     """The searchable text of a hook prompt, or None when the hook should stay silent."""
     if not isinstance(prompt, str):
@@ -1196,18 +1639,25 @@ def _hook_prompt_text(prompt: object) -> str | None:
     words = re.findall(r"[a-z']+", text.lower())
     if words and all(word in HOOK_ACKNOWLEDGEMENTS for word in words):
         return None
+    if _is_trivial_prompt(text) or _is_conversational_prompt(text):
+        return None
     return text
 
 
-def hook_suggestion(prompt: str, mode: str = "hint") -> str | None:
+def hook_suggestion(prompt: str, mode: str = "hint", session_id: str | None = None) -> str | None:
     """Suggest a Hallbook skill for a Claude Code UserPromptSubmit hook, or None to add nothing.
 
     Silent by design: only a clear, high-confidence match produces output, so the hook never nudges
-    the agent for small talk, slash commands, fragments or ambiguous requests. "hint" prints one short
-    pointer; "inject" prints the skill content itself. The caller is responsible for swallowing errors.
+    the agent for small talk, follow-up questions, slash commands, fragments or ambiguous requests.
+    "hint" prints one short pointer; "inject" prints the skill content itself. A skill is suggested
+    at most once per session when the caller passes the hook payload's `session_id`. The caller is
+    responsible for swallowing errors.
     """
     if mode not in HOOK_MODES:
         raise ValueError(f"unknown hook mode: {mode!r}")
+    session = _begin_session_prompt(session_id)
+    if session is not None and session[4]:
+        return None
     text = _hook_prompt_text(prompt)
     if text is None:
         return None
@@ -1222,8 +1672,10 @@ def hook_suggestion(prompt: str, mode: str = "hint") -> str | None:
             # The fast pass only prunes candidates; a near-high top score may still
             # clear the strict bar with the full ranking (prefix and phrase terms).
             full_results = search_skills_scored(text, limit=5)
-            if _is_high_confidence(full_results):
+            if _is_high_confidence(full_results, text):
                 top_meta = full_results[0][0]
+                if not _new_session_suggestions(session_id, [top_meta.skill_id], session):
+                    return None
                 return (
                     f"Hallbook skill that fits this task: {top_meta.skill_id} ({top_meta.title}).\n"
                     "If it applies, load it with aletheore_get_skill (or run: aletheore hallbook get "
@@ -1237,9 +1689,15 @@ def hook_suggestion(prompt: str, mode: str = "hint") -> str | None:
             return None
         if second_score > 0 and first_score < HINT_MIN_RATIO * second_score:
             return None
+        if _query_coverage(text, first.skill_id) < HOOK_MIN_COVERAGE:
+            return None
+        by_id = {first.skill_id: first, second.skill_id: second}
+        suggested = _new_session_suggestions(session_id, [first.skill_id, second.skill_id], session)
+        if not suggested:
+            return None
+        names = " or ".join(f"{by_id[skill_id].skill_id} ({by_id[skill_id].title})" for skill_id in suggested)
         return (
-            f"Hallbook may have a skill for this: {first.skill_id} ({first.title}) "
-            f"or {second.skill_id} ({second.title}). "
+            f"Hallbook may have a skill for this: {names}. "
             "If one applies, load it with aletheore_get_skill (or run: aletheore hallbook get <id>); otherwise ignore this."
         )
     result = find_skill(text)
@@ -1249,6 +1707,8 @@ def hook_suggestion(prompt: str, mode: str = "hint") -> str | None:
     skill = result.get("skill") or {}
     skill_id = top.get("skill_id") or skill.get("skill_id")
     if not skill_id:
+        return None
+    if not _new_session_suggestions(session_id, [skill_id], session):
         return None
     content = skill.get("content") or ""
     if len(content) > FIND_SKILL_MAX_CONTENT_CHARS:

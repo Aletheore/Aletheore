@@ -211,7 +211,7 @@ for bad in ("0", "70000", "-1"):
     out = run(["dashboard", str(repo), "--port", bad])[1]
     check(f"dashboard --port {bad} rejected cleanly", "Traceback" not in out and "port" in out.lower(), out)
 port = free_port()
-d = spawn(["dashboard", str(repo), "--port", str(port)])
+d = spawn(["dashboard", str(repo), "--port", str(port)], ALETHEORE_NO_BROWSER="1")
 
 
 def _bindable(port):

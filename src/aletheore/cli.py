@@ -2142,7 +2142,8 @@ def _dashboard(repo_path: str, port: int) -> int:
     console.print(f"[green]Dashboard running at[/green] {url}")
     # Opened shortly after the server starts listening, not before - the tab
     # would otherwise race uvicorn's bind and hit connection-refused.
-    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    if os.environ.get("ALETHEORE_NO_BROWSER") != "1":
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
 
     # A plain uvicorn.run() hung on Ctrl-C for as long as a browser tab was
     # open: the dashboard's /events SSE stream never ends on its own, so

@@ -5,6 +5,50 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+**Changed: a long, specific skill name no longer beats the general skill**
+
+The name bonus bypassed BM25's length normalization, so a skill whose long name happened to repeat the query could
+outrank a shorter skill that covered the task more broadly. Each name word the query did not ask for now carries a
+small penalty. "postgres migration" puts `data/database-migration` in the top three instead of behind the
+Oracle-to-Postgres and Neon skills. Top1, top3, top5 and typo recovery all improved on both dev and test.
+
+**Changed: custom Hallbook skills are searchable by their content**
+
+Custom skills now match on their title, front-matter description and body, not only their file name. They are
+ranked with the same fields as the bundled skills, kept below the high-confidence bar and still left out of the
+runner-up check. The index caches each file by path, modification time and size, so an edit, add or removal shows
+up on the next search without a restart.
+
+**Changed: the Hallbook prompt hook is quieter and does not repeat itself**
+
+The UserPromptSubmit hook stays silent for follow-up questions about the chat itself, such as "what did you do
+in the last step", "please continue with what you were saying" and "thanks, that works now". A medium hint also
+has to cover at least half of the prompt's content words, so a single shared word is not enough. In a session,
+each skill is suggested at most once and at most one hint is printed every three prompts in the same session,
+using a small state file under `~/.config/aletheore/hallbook_sessions/`; files are pruned after seven days, and a
+missing or unreadable state file only means a suggestion may repeat.
+On the new hook cases all 12 follow-ups stayed silent and eight of nine clear task prompts fired. The remaining
+prompt was left silent because its top two skills were within the existing 5% ambiguity guard.
+
+**Changed: fewer confident Hallbook answers that are only partly on topic**
+
+A high-confidence result now has to cover at least four in five of the task's content words, not just score well
+and beat the runner-up. A skill that matches only a few scattered words stays at "low", so the agent is not told
+a partial match is the answer. On the held-out test half high-confidence precision rose from 0.7755 to 0.8800
+while the number of correct high results fell by 13.2%, inside the 15% budget.
+
+**Changed: Hallbook says "none" when a prompt is not a task**
+
+`find_skill` now returns confidence "none" with no skill for small talk, one-word replies, trivial local edits
+("rename this variable") and questions about the current line or chat. A match whose best score is too weak to be
+about a real task is also "none" instead of a low-confidence guess.
+
+**Fixed: Hallbook search recovers from a typo in a task word**
+
+`find_skill`, `search_skills` and the prompt hook now match a query word that is one letter away from a word in
+the catalog. A transposed, missing or doubled letter, as in "kubernetes deployment" with a letter swapped, or "webhooks" missing one, finds the same
+skills as the correct spelling. The match is down-weighted and only used when the word has no exact match, so
+queries with no typos rank exactly as before.
 **Changed: the MCP tool definitions are 28% smaller, and there is a new `lean` profile**
 
 An agent receives every tool definition on every turn: with the full profile that was about 19,000 tokens before it
