@@ -717,6 +717,18 @@ full server, so a client can load it up front instead of behind a tool-search st
 saves tokens depends on the task: where the target is already named in the request, a plain grep
 is just as cheap, and the tools mainly help when you do not yet know where to look.
 
+Choosing a profile. Every tool definition is sent to the agent on every turn, so the tool set is a
+recurring cost:
+
+| `--profile` | Tools | Definitions | Use it for |
+|---|---|---|---|
+| `full` (default) | every tool, with background watching | about 36,800 characters | the whole surface: scan and index, skills, AST patterns, ownership, the lot |
+| `lean` | the router plus nine direct code tools | about 8,900 characters | day-to-day questions about the code (imports, blast radius, where something is defined) |
+| `router` | one tool, `aletheore_ask`, which picks the query | about 1,400 characters | the smallest context; plain questions, answered by the matching exact query |
+| `nav` | `aletheore_locate`, `aletheore_symbol_source`, `aletheore_search` | about 2,400 characters | finding code when you do not yet know where it is |
+
+`lean`, `router` and `nav` do not watch for file changes; re-run the scan yourself after edits.
+
 ### `aletheore mcp-install [path]`
 
 Writes the MCP server registration into your coding tool's own config, so it launches
