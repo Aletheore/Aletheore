@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+## 0.11.0 - 2026-10-25
+
 **Changed: a long, specific skill name no longer beats the general skill**
 
 The name bonus bypassed BM25's length normalization, so a skill whose long name happened to repeat the query could
