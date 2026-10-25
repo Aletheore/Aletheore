@@ -140,6 +140,16 @@ NAV_INSTRUCTIONS = (
     "aletheore_symbol_source returns one function or class; aletheore_search is a literal or regex search."
 )
 
+ROUTER_INSTRUCTIONS = (
+    "Exact code evidence from a scan of the whole repo, through one tool. Prefer aletheore_ask to grep for the "
+    "shape of the code, where grep only samples: who imports a file and how many modules a change reaches, "
+    "modules in a directory that nothing imports, tests for a file, owners, churn, secrets, vulnerabilities, dead "
+    "code, layer violations, endpoints, definitions, repo overview. Give a plain question and a file or "
+    "directory as target. Its counts and lists are exact; report them as returned, not filtered by what you know "
+    "of the framework. On 'no clear match', carry on "
+    "without it instead of rephrasing."
+)
+
 SERVER_INSTRUCTIONS = """Aletheore is a deterministic, evidence-grounded code intelligence tool for \
 this repository - every result cites a real file:line, nothing is invented.
 
@@ -190,6 +200,12 @@ aletheore_licenses, aletheore_dead_code, aletheore_hotspots, \
 aletheore_layer_violations). Reach for aletheore_search_codebase/ \
 aletheore_answer only for open-ended "how does this work" questions the \
 exact tools can't answer directly.
+
+For questions about whole-repo shape, ask aletheore_ask once instead of \
+walking files one at a time with aletheore_imports/aletheore_imported_by: \
+how many modules a change reaches, how many modules a file depends on \
+transitively, which modules in a directory nothing imports, who has the most \
+commits on a file. It returns exact totals in one call.
 
 Hallbook (skills): Aletheore also carries Hallbook, a library of over a \
 thousand vetted agent skills - specialist instructions for debugging, code \
@@ -1003,6 +1019,34 @@ def _skill_summary(meta: skill_hub.SkillMeta) -> dict:
     return summary
 
 
+def _register_ask_tool(mcp_instance: MCPServer, repo_path: Path, *, only_tool: bool = False) -> None:
+    @mcp_instance.tool(name="aletheore_ask", annotations=READ_ONLY_ANNOTATIONS)
+    @_guard_evidence_read_errors
+    def aletheore_ask(question: str, target: str | None = None) -> str:
+        """One entry point for code evidence. Ask a plain question and it runs the right query.
+
+        Handles: what breaks if a file changes, which tests cover a file, who owns it, what changes most or
+        together, where something is defined, secrets, vulnerabilities, dead code, layer violations, endpoints,
+        environment variables, database, infrastructure, licenses, and a repo overview. Pass `target` (a file
+        path as it appears in the scan) when the question is about one file. The reply says which query it ran
+        (routed_to) and how sure it is (confidence). If confidence is low it names what is missing instead of
+        guessing; if it says 'no clear match', carry on without it and do not rephrase the same question."""
+        from aletheore import tool_router
+
+        evidence = read_evidence(repo_path)
+        result = tool_router.answer(question, target, evidence, repo_path)
+        text = _toon_result(result)
+        if len(text) > tool_router.ANSWER_MAX_CHARS:
+            cut = text[: tool_router.ANSWER_MAX_CHARS]
+            if only_tool:
+                # The tool named in routed_to is not registered in this profile, so it cannot be called.
+                text = cut + "\n... truncated; ask again with a narrower question or a more specific target"
+            else:
+                routed = result.get("routed_to") or "the specific tool"
+                text = cut + f"\n... truncated; call {routed} directly for the full result"
+        return text
+
+
 def _register_skill_hub_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
     # Skills (curated + local custom) aren't repo-scoped - unlike every other
     # tool group in this file, neither of these two ever touches repo_path or
@@ -1710,8 +1754,8 @@ def build_server(
     also needs the `write` effect, the same permission aletheore_scan needs to
     rewrite .aletheore/, so an operator who withheld write gets no watcher.
     """
-    if profile not in ("full", "nav"):
-        raise ValueError(f"unknown MCP profile {profile!r}; choose full or nav")
+    if profile not in ("full", "nav", "router"):
+        raise ValueError(f"unknown MCP profile {profile!r}; choose full, nav or router")
     effects = allowed_effects(os.environ.get(_ALLOW_ENV_VAR)) if allow is None else allow
     # A per-server copy, not the module-level TOOL_REQUIRED_EFFECTS directly:
     # aletheore_answer only needs `external` added when the selected adapter
@@ -1744,7 +1788,7 @@ def build_server(
 
     mcp_instance = MCPServer(
         "aletheore",
-        instructions=NAV_INSTRUCTIONS if profile == "nav" else SERVER_INSTRUCTIONS,
+        instructions={"nav": NAV_INSTRUCTIONS, "router": ROUTER_INSTRUCTIONS}.get(profile, SERVER_INSTRUCTIONS),
         version=_package_version(),
     )
     # A tool that returns a string would otherwise also send a JSON-wrapped structured copy, and the model is shown
@@ -1770,6 +1814,11 @@ def build_server(
         return register
 
     mcp_instance.tool = tool_without_structured_copy
+    if profile == "router":
+        # One tool: the point is a single definition in the agent's context. aletheore_ask routes to the same
+        # queries the full profile exposes one by one.
+        _register_ask_tool(mcp_instance, repo_path, only_tool=True)
+        return mcp_instance
     if profile == "nav":
         # Three tools, small enough to load up front instead of behind a search step: find code, read one symbol,
         # or search literally. Everything else needs the full profile.
@@ -1777,6 +1826,7 @@ def build_server(
         _register_symbol_source_tool(mcp_instance, repo_path)
         _register_search_tool(mcp_instance, repo_path)
         return mcp_instance
+    _register_ask_tool(mcp_instance, repo_path)
     _register_locate_tool(mcp_instance, repo_path)
     _register_query_wrapper_tools(mcp_instance, repo_path)
     _register_changes_tool(mcp_instance, repo_path)

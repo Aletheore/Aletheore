@@ -50,6 +50,14 @@ the catalog. A transposed, missing or doubled letter, as in "kubernetes deployme
 skills as the correct spelling. The match is down-weighted and only used when the word has no exact match, so
 queries with no typos rank exactly as before.
 
+- **License changed from PolyForm Noncommercial 1.0.0 to AGPL-3.0, with a separate
+  commercial license.** Aletheore is now open source: companies can use it internally
+  without a paid license. Modified versions that are distributed or offered over a
+  network must be published under the AGPL, and anyone who cannot accept that can buy a
+  commercial license (see [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md)). Copies obtained
+  under Apache 2.0 or PolyForm keep those terms. `src/LICENSE`, which still carried the
+  Apache 2.0 text, now matches the root file.
+
 **Fixed: a read-only `.aletheore/` folder no longer ends a command with a traceback**
 
 `scan` checks that `.aletheore/` can be written before it starts scanning, so a read-only folder fails in a second

@@ -313,6 +313,108 @@ async def test_build_unchanged_scan_cache_excludes_changed_files_includes_unchan
     assert cache_data["modules"]["b.py"]["symbols"]["functions"][0]["name"] == "stable"
 
 
+class _FakeGraphStore:
+    """Stands in for CodeGraphStore so the cache rule can be tested against a real git diff without Postgres."""
+
+    modules: dict = {}
+
+    def __init__(self, *args):
+        pass
+
+    def load_all_modules(self, branch):
+        return {path: dict(module) for path, module in self.modules.items()}
+
+    def load_all_endpoints(self, branch):
+        return {}
+
+
+def _module(path, language):
+    return {"path": path, "language": language, "imports": [], "symbols": {"functions": [], "classes": []}}
+
+
+def test_build_unchanged_scan_cache_drops_cached_modules_of_a_language_the_diff_could_have_changed(
+    tmp_path, monkeypatch
+):
+    # A cached C# module's imports were resolved against other files' types. Editing ANOTHER C# file can make
+    # them wrong while the cached file itself is untouched, so the whole language is re-parsed. A Python file in
+    # the same repo is unaffected by an edit to a C# file and stays cached.
+    from types import SimpleNamespace
+
+    from scan_worker import jobs
+
+    checkout_dir = tmp_path / "checkout"
+    sha1 = _make_local_repo(
+        checkout_dir,
+        {"Models.cs": "class Order {}\n", "Service.cs": "class Service { Order o; }\n", "tool.py": "x = 1\n"},
+    )
+    (checkout_dir / "Models.cs").write_text("class Purchase {}\n")
+    subprocess.run(["git", "add", "-A"], cwd=checkout_dir, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "rename the type"], cwd=checkout_dir, check=True)
+    sha2 = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=checkout_dir, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    _FakeGraphStore.modules = {
+        "Models.cs": _module("Models.cs", "csharp"),
+        "Service.cs": _module("Service.cs", "csharp"),
+        "tool.py": _module("tool.py", "python"),
+    }
+    monkeypatch.setattr(jobs, "CodeGraphStore", _FakeGraphStore)
+    monkeypatch.setattr(jobs, "get_settings", lambda: SimpleNamespace(database_url="unused"))
+
+    cache_path = jobs._build_unchanged_scan_cache(1, "org/repo", checkout_dir, sha1, sha2, tmp_path / "cache.json")
+
+    cached = json.loads(cache_path.read_text())["modules"]
+    assert set(cached) == {"tool.py"}
+
+
+def test_build_unchanged_scan_cache_keeps_everything_when_only_a_python_body_changed(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scan_worker import jobs
+
+    checkout_dir = tmp_path / "checkout"
+    sha1 = _make_local_repo(checkout_dir, {"a.py": "x = 1\n", "b.py": "import a\n", "Foo.java": "class Foo {}\n"})
+    (checkout_dir / "a.py").write_text("x = 2\n")
+    subprocess.run(["git", "add", "-A"], cwd=checkout_dir, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "edit a body"], cwd=checkout_dir, check=True)
+    sha2 = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=checkout_dir, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    _FakeGraphStore.modules = {
+        "a.py": _module("a.py", "python"), "b.py": _module("b.py", "python"), "Foo.java": _module("Foo.java", "java"),
+    }
+    monkeypatch.setattr(jobs, "CodeGraphStore", _FakeGraphStore)
+    monkeypatch.setattr(jobs, "get_settings", lambda: SimpleNamespace(database_url="unused"))
+
+    cache_path = jobs._build_unchanged_scan_cache(1, "org/repo", checkout_dir, sha1, sha2, tmp_path / "cache.json")
+
+    # a.py itself changed; b.py (Python, import resolution unchanged by a body edit) and Foo.java stay cached
+    assert set(json.loads(cache_path.read_text())["modules"]) == {"b.py", "Foo.java"}
+
+
+def test_build_unchanged_scan_cache_drops_a_language_when_a_file_is_deleted(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scan_worker import jobs
+
+    checkout_dir = tmp_path / "checkout"
+    sha1 = _make_local_repo(checkout_dir, {"a.py": "x = 1\n", "b.py": "import a\n", "doc.md": "hi\n"})
+    subprocess.run(["git", "rm", "-q", "a.py"], cwd=checkout_dir, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "delete a"], cwd=checkout_dir, check=True)
+    sha2 = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=checkout_dir, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    _FakeGraphStore.modules = {"a.py": _module("a.py", "python"), "b.py": _module("b.py", "python")}
+    monkeypatch.setattr(jobs, "CodeGraphStore", _FakeGraphStore)
+    monkeypatch.setattr(jobs, "get_settings", lambda: SimpleNamespace(database_url="unused"))
+
+    # b.py imported a.py, which no longer exists: its cached import list is stale, so nothing is reused
+    assert jobs._build_unchanged_scan_cache(1, "org/repo", checkout_dir, sha1, sha2, tmp_path / "cache.json") is None
+
+
 def test_build_unchanged_scan_cache_returns_none_without_a_previous_sync(tmp_path):
     from scan_worker.jobs import _build_unchanged_scan_cache
 

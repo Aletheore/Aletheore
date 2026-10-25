@@ -1,8 +1,9 @@
 import difflib
 import posixpath
 import re
+from collections import deque
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from aletheore.evidence_resolution import resolve_code_evidence
@@ -94,6 +95,47 @@ def find_imports(evidence: dict, target: str | None) -> list[str]:
 
 def find_imported_by(evidence: dict, target: str | None) -> list[str]:
     return _unique(_find_module(evidence, target)["imported_by"])
+
+
+_TRANSITIVE_IMPORTS_SHOWN = 80
+
+
+def find_transitive_imports(evidence: dict, target: str | None) -> dict:
+    """Everything `target` depends on through imports: the modules it imports, the modules those import, and so on.
+
+    The forward counterpart of find_blast_radius. The walk covers the whole closure so the totals are exact;
+    only the lists handed back are capped. `transitive_non_test_total` leaves out test files, which is what
+    "how many modules does this depend on" usually means.
+    """
+    module = _find_module(evidence, target)
+    by_path = {m["path"]: m for m in evidence["repository"]["modules"] if m.get("path")}
+    direct = [p for p in _unique(module.get("imports") or []) if p != target]
+    seen = {target, *direct}
+    reached: list[str] = []
+    queue = deque(direct)
+    while queue:
+        current = queue.popleft()
+        for dependency in by_path.get(current, {}).get("imports") or []:
+            if dependency in seen:
+                continue
+            seen.add(dependency)
+            reached.append(dependency)
+            queue.append(dependency)
+    everything = [*direct, *reached]
+    tests = [p for p in everything if _BLAST_TEST_PATH.search(p)]
+    return {
+        "target": target,
+        "depends_on_total": len(everything),
+        "depends_on_non_test_total": len(everything) - len(tests),
+        "depends_on_test_files": len(tests),
+        "direct_total": len(direct),
+        "transitive_total": len(reached),
+        "direct_imports": direct[:_TRANSITIVE_IMPORTS_SHOWN],
+        "direct_imports_truncated": len(direct) > _TRANSITIVE_IMPORTS_SHOWN,
+        "transitive_imports": reached[:_TRANSITIVE_IMPORTS_SHOWN],
+        "transitive_imports_truncated": len(reached) > _TRANSITIVE_IMPORTS_SHOWN,
+        "definition": "modules reachable by following imports from the target, not counting the target itself",
+    }
 
 
 def find_symbols(evidence: dict, target: str | None) -> dict:
@@ -292,6 +334,12 @@ _BLAST_RADIUS_MAX_TRANSITIVE = 50
 # already hardened twice this session for aletheore_search and
 # aletheore_ast_pattern.
 _BLAST_RADIUS_MAX_DIRECT = 50
+# Same shape as tests_for._TEST_PATH, local so the count of test files in a blast radius needs no extra import.
+_BLAST_TEST_PATH = re.compile(
+    r"(^|/)(tests?|testing|__tests__|spec)/|_test\.|\.test\.|\.spec\.|(^|/)test_[^/]*$|/testdata/|conftest"
+    # PascalCase test files and test projects: FooTests.cs, FooTest.java, UnitTests/, Foo.Tests/
+    r"|[A-Za-z0-9]Tests?\.(?:cs|java|kt|kts|php|scala|swift)$|(^|/)[\w.\-]*Tests?/"
+)
 
 
 def find_blast_radius(
@@ -336,27 +384,34 @@ def find_blast_radius(
     this scanner doesn't have.
     """
     module = _find_module(evidence, target)
-    direct_dependents = list(module.get("imported_by") or [])
+    # imported_by lists a file once per import statement; counting it raw inflated every total.
+    direct_dependents = _unique(module.get("imported_by") or [])
     by_path = {m["path"]: m for m in evidence["repository"]["modules"] if m.get("path")}
 
     visited = {target, *direct_dependents}
-    transitive_dependents: list[str] = []
-    truncated = False
-    queue = list(direct_dependents)
+    # The walk covers the whole closure (it is bounded by the number of modules) so the totals are exact;
+    # only the list handed back is capped. Stopping the walk at the cap, as this once did, left a hub's real
+    # reach unknown and made "how many modules does this affect" unanswerable.
+    all_transitive: list[str] = []
+    queue = deque(direct_dependents)
     while queue:
-        current = queue.pop(0)
+        current = queue.popleft()
         for dependent in by_path.get(current, {}).get("imported_by") or []:
             if dependent in visited:
                 continue
             visited.add(dependent)
-            if len(transitive_dependents) >= _BLAST_RADIUS_MAX_TRANSITIVE:
-                truncated = True
-                continue
-            transitive_dependents.append(dependent)
+            all_transitive.append(dependent)
             queue.append(dependent)
+    transitive_dependents = all_transitive[:_BLAST_RADIUS_MAX_TRANSITIVE]
+    truncated = len(all_transitive) > _BLAST_RADIUS_MAX_TRANSITIVE
+    affected = [*direct_dependents, *all_transitive]
 
     result: dict[str, Any] = {
         "target": target,
+        "affected_total": len(affected),
+        "affected_test_files": sum(1 for path in affected if _BLAST_TEST_PATH.search(path)),
+        "direct_total": len(direct_dependents),
+        "transitive_total": len(all_transitive),
         # Truncated for DISPLAY only - the BFS above, confirmed_callers
         # below, and blast_radius_modules further down all still use the
         # full, untruncated direct_dependents list, so a large hub's real
@@ -402,7 +457,7 @@ def find_blast_radius(
         result["confirmed_callers"] = confirmed_callers
         result["same_file_caller"] = same_file_caller
 
-    blast_radius_modules = {target, *direct_dependents, *transitive_dependents}
+    blast_radius_modules = {target, *direct_dependents, *all_transitive}
     violations = evidence.get("architecture", {}).get("layer_violations", {}).get("violations") or []
     result["layer_violations"] = [
         v for v in violations
@@ -557,6 +612,86 @@ def find_symbol_path(
 
 def find_dead_code_evidence(evidence: dict, target: str | None) -> dict:
     return evidence["repository"]["dead_code"]
+
+
+# Display caps for find_unimported_modules. Every total is counted over the whole scope first; only the lists
+# are cut, and a *_truncated flag says so (the find_blast_radius lesson).
+_UNIMPORTED_MAX_LISTED = 200
+_UNIMPORTED_MAX_TEST_ONLY = 20
+
+_UNIMPORTED_DEFINITION = (
+    "unimported = no other module in the scan's import graph imports the file; test files and __init__.py are "
+    "never listed. This is not dead_code.unreachable_modules, which also drops entry points, main-guard scripts "
+    "and files named by a dotted string (settings, URLconfs), so it lists fewer files."
+)
+# What to do with the list. Agents asked "which modules does nothing import" took the framework conventions they
+# knew (middleware, cache and email backends named in settings) and removed those files from the tool's list, which
+# answered "is it used" instead of the question. Both questions are legitimate, so say which one this list answers.
+_UNIMPORTED_ANSWERING_NOTE = (
+    "Report `unimported` as returned when asked which modules nothing imports. A file a framework loads by name "
+    "(a middleware, backend or plugin named in settings) is still unimported: it just has no importer. That is a "
+    "separate question from whether it is used; mention such files beside the list rather than removing them."
+)
+
+
+def find_unimported_modules(
+    evidence: dict,
+    scope: str | None = None,
+    languages: list[str] | None = None,
+    ignore_test_importers: bool = False,
+) -> dict:
+    """Modules that no other module imports, optionally limited to a directory (or one file) and languages.
+
+    The scan's own dead_code.unreachable_modules answers a different question ("is this reachable at all"):
+    it drops entry points, main-guard scripts and dotted-string references, and it is repo-wide. This reads
+    the raw imported_by edges instead, so "which files under X does nothing import" is exact. Test files are
+    not candidates; a file imported only by tests is reported separately, since whether that counts as
+    imported depends on the question. With `ignore_test_importers` (a "non-test" question) such a file counts
+    as unimported and the separate list is empty.
+    """
+    prefix = (scope or "").strip("/")
+    wanted = {lang.lower() for lang in languages or []}
+    unimported: list[str] = []
+    tests_only: list[str] = []
+    for module in evidence["repository"]["modules"]:
+        path = module.get("path") or ""
+        if prefix and path != prefix and not path.startswith(prefix + "/"):
+            continue
+        if wanted and str(module.get("language") or "").lower() not in wanted:
+            continue
+        if _BLAST_TEST_PATH.search(path) or PurePosixPath(path).name.startswith("__init__."):
+            continue
+        importers = module.get("imported_by") or []
+        if not importers:
+            unimported.append(path)
+        elif all(_BLAST_TEST_PATH.search(p) for p in importers):
+            (unimported if ignore_test_importers else tests_only).append(path)
+    unimported.sort()
+    tests_only.sort()
+    # The scan's own list gets the same scope and language filter, so the two totals are comparable.
+    language_of = {m.get("path"): str(m.get("language") or "").lower() for m in evidence["repository"]["modules"]}
+    scan_unreachable = []
+    for entry in evidence["repository"].get("dead_code", {}).get("unreachable_modules", []):
+        entry_path = entry.get("path") or ""
+        if not entry_path or (prefix and entry_path != prefix and not entry_path.startswith(prefix + "/")):
+            continue
+        if wanted and language_of.get(entry_path, "") not in wanted:
+            continue
+        scan_unreachable.append(entry_path)
+    return {
+        "scope": prefix or "(whole repo)",
+        "languages": sorted(wanted) or "any",
+        "definition": _UNIMPORTED_DEFINITION,
+        "answering_note": _UNIMPORTED_ANSWERING_NOTE,
+        "importers_counted": "non-test only" if ignore_test_importers else "all",
+        "unimported_total": len(unimported),
+        "imported_only_by_tests_total": len(tests_only),
+        "scan_unreachable_total": len(scan_unreachable),
+        "unimported": unimported[:_UNIMPORTED_MAX_LISTED],
+        "unimported_truncated": len(unimported) > _UNIMPORTED_MAX_LISTED,
+        "imported_only_by_tests": tests_only[:_UNIMPORTED_MAX_TEST_ONLY],
+        "imported_only_by_tests_truncated": len(tests_only) > _UNIMPORTED_MAX_TEST_ONLY,
+    }
 
 
 def find_database(evidence: dict, target: str | None) -> dict:

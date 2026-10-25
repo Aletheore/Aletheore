@@ -3033,13 +3033,14 @@ def mcp(
         "full",
         "--profile",
         help=(
-            "tool set to expose: full (every tool, with background watching) or nav (three "
-            "code-navigation tools, small enough to load up front, with background watching off)"
+            "tool set to expose: full (every tool, with background watching), nav (three "
+            "code-navigation tools, small enough to load up front, with background watching off) or "
+            "router (one tool, aletheore_ask, that picks the right query; watching off)"
         ),
     ),
 ) -> None:
-    if profile not in ("full", "nav"):
-        _stderr_console.print(f"[bold red]error:[/bold red] unknown profile {profile!r}; choose full or nav")
+    if profile not in ("full", "nav", "router"):
+        _stderr_console.print(f"[bold red]error:[/bold red] unknown profile {profile!r}; choose full, nav or router")
         raise typer.Exit(code=2)
     path = _resolve_path(path, path_option)
     _checked_dir(path)
@@ -3164,6 +3165,54 @@ def hook_post_read() -> None:
     from aletheore.read_guard import main_post as hook_main
 
     hook_main()
+
+
+@hook_app.command(
+    "evidence",
+    help="PreToolUse/PostToolUse hook: tells the agent what the scan knows about a file it is about to edit "
+    "or has just read (importers, reach, tests, owner, churn). Once per file per session; silent when the "
+    "scan has nothing to say, and never fails. Prefer the settings from `evidence-snippet`, which call the "
+    "fast module entry point instead of this command.",
+)
+def hook_evidence(
+    mode: str = typer.Option("inject", "--mode", help="inject (short block) or pointer (one line)"),
+) -> None:
+    from aletheore.evidence_hook import main as hook_main
+
+    hook_main(["--mode", mode])
+
+
+@hook_app.command(
+    "evidence-snippet",
+    help="print the Claude Code settings.json hooks block that turns the evidence hook on",
+)
+def hook_evidence_snippet(
+    mode: str = typer.Option("inject", "--mode", help="inject (short block) or pointer (one line)"),
+) -> None:
+    import json as _json
+    import shlex as _shlex
+    import sys as _sys
+
+    if mode not in ("inject", "pointer"):
+        console.print(f"[bold red]error:[/bold red] unknown mode {mode!r}; choose inject or pointer")
+        raise typer.Exit(code=2)
+    # The interpreter path can hold spaces (a pipx venv lives under "Application Support" on macOS), so the
+    # command is built from an argv list and quoted for the shell that will run it.
+    argv = [_sys.executable, "-m", "aletheore.evidence_hook", "--mode", mode]
+    if _sys.platform == "win32":
+        # cmd.exe style: quote an argument that is empty or holds a space, tab, quote or cmd metacharacter
+        command = " ".join(
+            '"' + arg.replace('"', '\\"') + '"' if not arg or any(c in arg for c in ' \t"&^|<>()') else arg
+            for arg in argv
+        )
+    else:
+        command = _shlex.join(argv)
+    entry = lambda matcher: [{"matcher": matcher, "hooks": [{"type": "command", "command": command}]}]  # noqa: E731
+    typer.echo(
+        _json.dumps(
+            {"hooks": {"PreToolUse": entry("Edit|MultiEdit|Write"), "PostToolUse": entry("Read")}}, indent=2
+        )
+    )
 
 from aletheore.tokens_cli import tokens_app  # noqa: E402
 
