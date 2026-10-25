@@ -4,15 +4,17 @@ rules:
     severity: WARNING
     metadata:
       category: security
-      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+      cwe:
+        "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command
+        Injection')"
       confidence: MEDIUM
       references:
         - https://owasp.org/www-community/attacks/Command_Injection
     message: >
-      Review the variable command or executable '$COMMAND'. If untrusted input
-      controls it, Runtime.exec/ProcessBuilder can execute an attacker-chosen
-      program. Prefer a fixed executable with separately validated arguments.
-      This structural check does not prove input provenance or allowlist safety.
+      Review the variable command or executable '$COMMAND'. If untrusted input controls it,
+      Runtime.exec/ProcessBuilder can execute an attacker-chosen program. Prefer a fixed executable
+      with separately validated arguments. This structural check does not prove input provenance or
+      allowlist safety.
     pattern-either:
       # Scalar overloads: only the command/executable position matters. A fixed
       # executable followed by a variable ordinary argument is not a finding.
@@ -33,7 +35,8 @@ rules:
               - pattern: (ProcessBuilder $BUILDER).command((String $COMMAND), ...)
               - pattern: (ProcessBuilder $BUILDER).command((java.lang.String $COMMAND), ...)
               - pattern: (java.lang.ProcessBuilder $BUILDER).command((String $COMMAND), ...)
-              - pattern: (java.lang.ProcessBuilder $BUILDER).command((java.lang.String $COMMAND), ...)
+              - pattern:
+                  (java.lang.ProcessBuilder $BUILDER).command((java.lang.String $COMMAND), ...)
           - metavariable-pattern:
               metavariable: $COMMAND
               patterns:
@@ -56,6 +59,8 @@ rules:
               metavariable: $COMMAND
               patterns:
                 - pattern: $LEFT + $RIGHT
+                # Inline arrays are handled below, using only their executable.
+                - pattern-not-inside: new $TYPE[] { ... }
                 - pattern-not: '"..."'
       # Inline arrays expose the executable directly. Do not flag an ordinary
       # variable argument elsewhere in an array whose first element is fixed.
@@ -64,11 +69,13 @@ rules:
               - pattern: Runtime.getRuntime().exec(new String[] { $COMMAND, ... }, ...)
               - pattern: Runtime.getRuntime().exec(new java.lang.String[] { $COMMAND, ... }, ...)
               - pattern: java.lang.Runtime.getRuntime().exec(new String[] { $COMMAND, ... }, ...)
-              - pattern: java.lang.Runtime.getRuntime().exec(new java.lang.String[] { $COMMAND, ... }, ...)
+              - pattern:
+                  java.lang.Runtime.getRuntime().exec(new java.lang.String[] { $COMMAND, ... }, ...)
               - pattern: (Runtime $RUNTIME).exec(new String[] { $COMMAND, ... }, ...)
               - pattern: (Runtime $RUNTIME).exec(new java.lang.String[] { $COMMAND, ... }, ...)
               - pattern: (java.lang.Runtime $RUNTIME).exec(new String[] { $COMMAND, ... }, ...)
-              - pattern: (java.lang.Runtime $RUNTIME).exec(new java.lang.String[] { $COMMAND, ... }, ...)
+              - pattern:
+                  (java.lang.Runtime $RUNTIME).exec(new java.lang.String[] { $COMMAND, ... }, ...)
               - pattern: new ProcessBuilder(new String[] { $COMMAND, ... })
               - pattern: new ProcessBuilder(new java.lang.String[] { $COMMAND, ... })
               - pattern: new java.lang.ProcessBuilder(new String[] { $COMMAND, ... })
@@ -76,12 +83,17 @@ rules:
               - pattern: (ProcessBuilder $BUILDER).command(new String[] { $COMMAND, ... })
               - pattern: (ProcessBuilder $BUILDER).command(new java.lang.String[] { $COMMAND, ... })
               - pattern: (java.lang.ProcessBuilder $BUILDER).command(new String[] { $COMMAND, ... })
-              - pattern: (java.lang.ProcessBuilder $BUILDER).command(new java.lang.String[] { $COMMAND, ... })
+              - pattern:
+                  (java.lang.ProcessBuilder $BUILDER).command(new java.lang.String[] { $COMMAND, ...
+                  })
           - metavariable-pattern:
               metavariable: $COMMAND
               patterns:
                 - pattern: $VALUE
                 - pattern-not: '"..."'
+                # Array elements do not always receive constant folding.
+                # Exclude complete chains of string literals, including escapes.
+                - pattern-not-regex: '\A\s*"(?:\\.|[^"\\])*"(?:\s*\+\s*"(?:\\.|[^"\\])*")+\s*\z'
       # A whole command array supplied as a method parameter has an unknown
       # executable. Local array/list aliases and interprocedural flows are
       # outside this rule's scope; they need dataflow analysis.

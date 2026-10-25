@@ -73,6 +73,38 @@ class CommandExamples {
         Runtime.getRuntime().exec("echo" + " safe");
     }
 
+    void concatenations(String host) throws Exception {
+        // ruleid: java-runtime-exec-command-injection
+        Runtime.getRuntime().exec("ping" + " " + host);
+        // ruleid: java-runtime-exec-command-injection
+        new ProcessBuilder("/usr/bin/" + host);
+        ProcessBuilder builder = new ProcessBuilder("echo");
+        // ruleid: java-runtime-exec-command-injection
+        builder.command("/usr/bin/" + host);
+        // ok: java-runtime-exec-command-injection
+        Runtime.getRuntime().exec("echo" + " " + "safe");
+        // ok: java-runtime-exec-command-injection
+        new ProcessBuilder("/usr/" + "bin/" + "echo");
+        // ok: java-runtime-exec-command-injection
+        builder.command("/usr/" + "bin/" + "echo");
+        // ok: java-runtime-exec-command-injection
+        Runtime.getRuntime().exec(new String[] {"/usr/" + "bin/" + "echo", host});
+        // ok: java-runtime-exec-command-injection
+        new ProcessBuilder(new String[] {"/usr/bin/" + "echo", host});
+        // ok: java-runtime-exec-command-injection
+        builder.command(new String[] {"/usr/" + "bin/" + "echo", host});
+        // ok: java-runtime-exec-command-injection
+        Runtime.getRuntime().exec(new String[] {"echo" + " \"safe\"", host});
+        // ok: java-runtime-exec-command-injection
+        Runtime.getRuntime().exec(new String[] {"echo", host + " suffix"});
+        // ruleid: java-runtime-exec-command-injection
+        Runtime.getRuntime().exec(new String[] {"/usr/" + "bin/" + host, "--version"});
+        // ruleid: java-runtime-exec-command-injection
+        new ProcessBuilder(new String[] {"/usr/bin/" + host, "--version"});
+        // ruleid: java-runtime-exec-command-injection
+        builder.command(new String[] {"/usr/bin/" + host, "--version"});
+    }
+
     void qualified(java.lang.String command, java.lang.String[] commands, java.lang.String argument) throws Exception {
         // ruleid: java-runtime-exec-command-injection
         java.lang.Runtime.getRuntime().exec(command);
