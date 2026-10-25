@@ -1,6 +1,6 @@
 [project]
 name = "aletheore"
-version = "0.10.2"
+version = "0.11.0"
 description = "Evidence-grounded repository audit CLI: deterministic scanner, MCP server, live dashboard, and a GitHub Action that posts PR diffs."
 readme = "README.md"
 license = "AGPL-3.0-only"

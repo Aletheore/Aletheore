@@ -1,8 +1,9 @@
 {
   "source": "aletheore package build_server() and cli.QUERY_KIND_GROUPS",
-  "version": "0.10.2",
+  "version": "0.11.0",
   "default": [
     "aletheore_add_custom_skill",
+    "aletheore_ask",
     "aletheore_ast_pattern",
     "aletheore_branch",
     "aletheore_changes",
@@ -103,6 +104,11 @@
       "description": "Answer a natural-language question about this repository from the semantic index."
     },
     {
+      "name": "aletheore_ask",
+      "group": "Other",
+      "description": "One entry point for code evidence."
+    },
+    {
       "name": "aletheore_ast_pattern",
       "group": "Search",
       "description": "Structural search: find code by shape rather than by words, via a raw tree-sitter S-expression query: e.g. functions that catch a specific exception type, or classes implementing a given interface, regardless of naming."
@@ -175,7 +181,7 @@
     {
       "name": "aletheore_get_skill",
       "group": "Hallbook",
-      "description": "Fetches one skill by its skill_id (from aletheore_search_skills or aletheore_list_skills): its title, description, license, source_url, what it requires of the agent (e.g. subagents, an MCP server, a browser), and the full instructions in content."
+      "description": "Fetches one skill by its skill_id (from aletheore_search_skills or aletheore_list_skills): its title, description, license, copyright holder, source_url (the pinned upstream), what it requires of the agent (e.g. subagents, an MCP server, a browser), and the full instructions in content."
     },
     {
       "name": "aletheore_get_skill_file",
