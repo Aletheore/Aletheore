@@ -10,7 +10,7 @@ import toon
 from mcp.server.mcpserver.exceptions import ToolError
 
 from aletheore import skill_hub
-from aletheore.mcp_server import build_server
+from aletheore.mcp_server import _compact_tool_schemas, build_server
 from aletheore.search_index import IndexNotFoundError
 from aletheore.schema_map import skipped_schema
 from tests.air_fixtures import minimal_air_evidence
@@ -332,6 +332,24 @@ async def test_compaction_keeps_what_a_client_needs_to_call_the_tools(tmp_path):
     # read-only tools keep the hints a client uses to skip a permission prompt
     assert imports.annotations.read_only_hint is True and imports.annotations.open_world_hint is False
     assert imports.annotations.destructive_hint is None and imports.annotations.idempotent_hint is None
+
+
+def test_compaction_preserves_non_simple_any_of_schemas():
+    tool = MagicMock()
+    tool.annotations = None
+    tool.parameters = {
+        "properties": {
+            "reference": {"anyOf": [{"$ref": "#/definitions/Reference"}, {"type": "null"}]},
+            "nested": {"anyOf": [{"anyOf": [{"type": "string"}, {"type": "integer"}]}, {"type": "null"}]},
+        }
+    }
+    server = MagicMock()
+    server._tool_manager.list_tools.return_value = [tool]
+
+    _compact_tool_schemas(server)
+
+    assert "$ref" in tool.parameters["properties"]["reference"]["anyOf"][0]
+    assert "anyOf" in tool.parameters["properties"]["nested"]
 
 
 LEAN_TOOL_NAMES = {

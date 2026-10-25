@@ -723,7 +723,7 @@ recurring cost:
 | `--profile` | Tools | Definitions | Use it for |
 |---|---|---|---|
 | `full` (default) | every tool, with background watching | about 36,800 characters | the whole surface: scan and index, skills, AST patterns, ownership, the lot |
-| `lean` | the router plus nine direct code tools | about 8,900 characters | day-to-day questions about the code (imports, blast radius, where something is defined) |
+| `lean` | the router plus eight direct code tools | about 8,900 characters | day-to-day questions about the code (imports, blast radius, where something is defined) |
 | `router` | one tool, `aletheore_ask`, which picks the query | about 1,400 characters | the smallest context; plain questions, answered by the matching exact query |
 | `nav` | `aletheore_locate`, `aletheore_symbol_source`, `aletheore_search` | about 2,400 characters | finding code when you do not yet know where it is |
 

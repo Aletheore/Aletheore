@@ -16,7 +16,7 @@ full profile's definitions went from 51,242 to 36,769 characters. Arguments, typ
 unchanged. On 51 repository questions across 12 repositories, the full profile used 20,000 fewer input tokens per run
 (96,700 to 76,800, 95% interval 14,400 to 26,100) with the same accuracy (0.90 and 0.91).
 
-`aletheore mcp --profile lean` is a new profile: the router tool plus nine direct tools (`aletheore_imports`,
+`aletheore mcp --profile lean` is a new profile: the router tool plus eight direct tools (`aletheore_imports`,
 `aletheore_imported_by`, `aletheore_symbols`, `aletheore_get_blast_radius`, `aletheore_list`, `aletheore_overview`,
 `aletheore_locate`, `aletheore_symbol_source`), 8,869 characters of definitions against 36,769 for full. Of the 44
 tools in the full profile, 8 accounted for every Aletheore call in a sample of benchmark runs. Nothing is removed from

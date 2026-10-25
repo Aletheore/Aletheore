@@ -1767,7 +1767,7 @@ def _compact_tool_schemas(mcp_instance: MCPServer) -> None:
             options = prop.get("anyOf")
             if options:
                 kept = [o for o in options if o.get("type") != "null"]
-                if len(kept) == 1 and len(kept) < len(options):
+                if len(kept) == 1 and len(kept) < len(options) and isinstance(kept[0], dict) and "type" in kept[0]:
                     del prop["anyOf"]
                     prop.update(kept[0])
             if "default" in prop and prop["default"] is None:
