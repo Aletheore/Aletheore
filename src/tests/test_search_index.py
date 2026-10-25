@@ -1244,17 +1244,22 @@ def test_embed_in_batches_on_progress_defaults_to_silent():
 
 def test_embed_in_batches_preserves_order_with_parallel_completion(monkeypatch):
     """Vectors must be returned in input order even when workers complete
-    out of order. Mock embed fn with varying sleeps to force this."""
+    out of order. Synchronize the first two parallel workers so this does not
+    depend on scheduler timing."""
+    import threading
     import time as time_mod
 
     monkeypatch.setenv("ALETHEORE_EMBED_WORKERS", "2")
     order: list[int] = []
+    first_two_started = threading.Barrier(2)
 
     def fake_embed(texts):
         # texts contain strings like "t0", "t1", etc. - extract the index.
         idx = int(texts[0][1:])
-        # Sleep inversely proportional to index so later batches finish first.
-        time_mod.sleep(0.01 * (10 - idx))
+        if idx in (1, 2):
+            first_two_started.wait(timeout=5)
+            if idx == 1:
+                time_mod.sleep(0.02)
         order.append(idx)
         return [[float(idx)]] * len(texts)
 
