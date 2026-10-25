@@ -431,6 +431,15 @@ Titles are written out of the skill name, and acronyms and product names came ou
 
 Seven of the eight Oracle-to-PostgreSQL migration skills now sit under `data/creating-oracle-to-postgres-master-migration-plan`, five Qdrant data-volume skills that duplicate sections of `platforms/qdrant-scaling` sit under it, and `marketing/marketing-ideas-phuryn` sits under `marketing/marketing-ideas`. They are listed as alternates of the main skill and can still be loaded by id.
 
+**New: keyword search works while `aletheore index` is still embedding**
+
+`aletheore index` now writes a keyword-only copy of the chunks before it starts embedding, so `search-codebase` answers
+from exact-text matches within seconds instead of failing until the whole index is built. On a 13,000-chunk repository
+the first result came back 1.6 s after the build started. Those results are marked `keyword_only`, the CLI prints
+`keyword-only: embeddings still building`, and no embedding service, token or consent prompt is needed for them. When the
+build finishes the temporary copy is removed and search is hybrid again. If a build fails partway, keyword search keeps
+working.
+
 ## 0.10.2 - 2026-10-22
 
 Fixes for signing in and out, found by logging in again after logging out. Replacing a machine's earlier token on a

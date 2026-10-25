@@ -77,7 +77,7 @@ def spawn(args, cwd=None, **envx):
 
 def stop(p):
     try:
-        p.send_signal(signal.CTRL_BREAK_EVENT if WIN else signal.SIGINT)
+        p.send_signal(signal.CTRL_C_EVENT if WIN else signal.SIGINT)
         p.wait(10)
     except Exception:
         p.kill()

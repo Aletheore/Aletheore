@@ -1116,6 +1116,8 @@ def _query(
         except IndexDimensionMismatchError as exc:
             console.print(f"[bold red]error:[/bold red] {exc}")
             return 1
+        if any(item.get("keyword_only") for item in result):
+            console.print("[dim]keyword-only: embeddings still building[/dim]")
         _print_query_result(result)
         return 0
 
