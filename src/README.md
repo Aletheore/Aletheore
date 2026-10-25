@@ -20,14 +20,21 @@ GitHub App (see `../github-app/`). Full project overview: [`../README.md`](../RE
 
 ```bash
 pipx install aletheore
+aletheore demo           # optional: real scan of a small synthetic sample
 aletheore scan .
 cat .aletheore/air.json   # the evidence everything else reads from
 ```
 
-That's the whole deterministic path: no LLM call, no account, no network access beyond the
-dependency-vulnerability/license registry lookups and Semgrep's `--config=auto` rule-registry
-pull (skip those with `--no-check-vulnerabilities --no-check-licenses --no-check-static-analysis`
-for a fully offline run). Everything below - the per-language import
+That's the whole deterministic path: no LLM call or account. Run
+`aletheore scan . --explain-network` to inspect potential traffic without scanning:
+dependency registries, Semgrep rule downloads and metrics, configured SonarQube analysis
+submission, and conditional crash reporting. For a scan with those network paths disabled:
+
+```bash
+ALETHEORE_CRASH_REPORTING=0 aletheore scan . --no-check-vulnerabilities --no-check-licenses --no-check-static-analysis
+```
+
+Everything below - the per-language import
 resolution details, `audit`'s LLM-written report, the MCP server, the dashboard - builds on
 top of that one `air.json` file.
 
@@ -168,6 +175,14 @@ that scan.
 
 ## Commands
 
+### `aletheore demo`
+
+Creates a fresh synthetic Python checkout example with three local commits, scans it
+with the real engine, and displays dependency edges and a hotspot table. Requires Git;
+does not clone, index embeddings, query registries, or invoke external scanners. Prints
+the retained temporary directory and follow-up query/dashboard commands. Delete the
+directory when finished. Normal CLI crash-reporting preferences still apply.
+
 ### `aletheore init [path]`
 
 Scaffolds a `.aletheore.json` at the repository root with all four Configuration keys above
@@ -179,6 +194,14 @@ aletheore init .
 ```
 
 ### `aletheore scan [path]`
+
+Add `--explain-network` to print the potential network paths and exit without scanning
+or prompting for optional scanners. It honors `.aletheore.json`, explicit CLI check
+overrides, installed Semgrep/SonarScanner binaries, scanner environment toggles, and
+crash-reporting preferences. Enabled paths are conditional on actual inputs and caches;
+request counts are not predicted. This is a disclosure, not network enforcement or a
+packet trace. External scanner configuration may introduce additional behavior. The
+explanation describes `scan`, not `audit`, `index`, or `healthcheck`.
 
 Runs only the deterministic scan phase. Writes `.aletheore/air.json` and a rolling history
 snapshot under `.aletheore/history/`. No LLM call — safe to run repeatedly, in CI, or from a

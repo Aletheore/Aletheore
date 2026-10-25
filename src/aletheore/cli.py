@@ -2614,9 +2614,37 @@ def scan(
         "analysis - opt-in, off by default with no prompt: requires Joern installed "
         "separately, and a CPG build is real per-scan JVM/parsing cost",
     ),
+    explain_network: bool = typer.Option(
+        False, "--explain-network",
+        help="show potential network traffic for the resolved scan settings, then exit without scanning",
+    ),
 ) -> None:
     path = _resolve_path(path, path_option)
     _checked_dir(path)
+    if explain_network:
+        from aletheore.network_plan import scan_network_plan
+
+        toggles = _resolve_check_toggles(
+            Path(path).resolve(), check_vulnerabilities, scan_git_history,
+            check_licenses, map_endpoints, map_schema, check_static_analysis,
+        )
+        plan = scan_network_plan(
+            vulnerabilities=toggles[0], licenses=toggles[2], static_analysis=toggles[5],
+        )
+        console.print("[bold]Potential scan network traffic[/bold] (explanation only; no scan runs)")
+        for entry in plan:
+            state = "CONDITIONAL" if entry["enabled"] else "DISABLED / UNAVAILABLE"
+            console.print(f"\n{state}: {entry['service']}", markup=False)
+            console.print(entry["sends"], markup=False)
+            console.print(f"Disable: {entry['disable']}", markup=False)
+        console.print(
+            "\nEnabled paths may make requests; exact counts depend on inputs and caches. "
+            "Aletheore's deterministic core does not upload source or air.json. "
+            "External scanner behavior depends on its installation and configuration; "
+            "this is not a firewall or a packet trace. Audit, index, and healthcheck "
+            "have separate network behavior.", markup=False,
+        )
+        return
     _workspace_guard(path, yes)
     exit_code, _evidence, _evidence_path = _scan(
         path, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints, map_schema,
@@ -2625,6 +2653,41 @@ def scan(
     if exit_code == 0:
         _stderr_console.print(_free_pr_review_nudge())
     raise typer.Exit(code=exit_code)
+
+
+@app.command(help="explore a small synthetic repository with the real local scanner")
+def demo() -> None:
+    import shlex
+    import subprocess
+
+    from aletheore.demo import create_demo
+    from aletheore.query import find_hotspots
+
+    console.print(
+        "[bold]Aletheore demo[/bold] — synthetic Python checkout example. "
+        "Creating local sample history and scanning it; no clone, hosted model, "
+        "registry checks, or external scanners."
+    )
+    try:
+        repo, evidence = create_demo()
+    except (OSError, subprocess.SubprocessError, GitAnalysisError) as exc:
+        console.print(f"Demo failed: {exc}", markup=False)
+        raise typer.Exit(code=1)
+    console.print("\n[bold]Dependency graph[/bold] (importer → dependency)")
+    for source, target in evidence["repository"]["dependency_graph"]["edges"]:
+        console.print(f"  {source} → {target}", markup=False)
+    table = Table(title="Hotspots — computed from the sample's synthetic commit history")
+    table.add_column("File")
+    table.add_column("Commits", justify="right")
+    table.add_column("Dependents", justify="right")
+    for hotspot in find_hotspots(evidence, None):
+        table.add_row(hotspot["path"], str(hotspot["churn_count"]), str(hotspot["dependents_count"]))
+    console.print(table)
+    console.print(f"\nSample and evidence kept at: {repo}", markup=False)
+    quote_command = subprocess.list2cmdline if os.name == "nt" else shlex.join
+    console.print(quote_command(["aletheore", "query", "hotspots", "--path", str(repo)]), markup=False)
+    console.print(quote_command(["aletheore", "dashboard", "--path", str(repo)]), markup=False)
+    console.print("Delete this temporary directory when finished. Crash-reporting preferences still apply.")
 
 
 @app.command(
