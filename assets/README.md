@@ -8,3 +8,5 @@
 - `readme-airview.png`: cropped public AIRview demo from the local marketing site at fd45b3d3 (2026-10-26), corresponding to https://www.aletheore.com/#live-title. It is not an authenticated hosted dashboard.
 
 Badge images are served live by their named providers; navigation badges are labels rather than status claims. Language logos are served by Shields. See the CLI reference for language-specific analysis limits.
+
+Walkthrough narration: Kokoro 1.0 ONNX, `bf_emma` (British English), selected by the project owner. Generated locally with no cloned voice or paid service. Official voice catalog: https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md . Captions follow the synthesized narration; music and sound effects retain the sources credited in the transcript.

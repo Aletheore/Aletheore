@@ -1,5 +1,5 @@
 Aletheore — follow the evidence
-About 95 seconds; on-screen explanation over music; no narration.
+About 95 seconds; narration by Emma (Kokoro bf_emma), with music and sound effects.
 Actual captured outputs are replayed with motion annotations. The earlier graph and MCP views are evidence diagrams. The GitHub PR section uses a user-provided graph screenshot and actual public review captures.
 
 00:00:00.000 — One file. Five non-test dependents.
@@ -110,3 +110,27 @@ https://github.com/Aletheore/Aletheore/pull/1128
 Recall regression: The cycles intent previously matched the bare words cycles? and cyclic, so questions like "are there any cycles in the dependency graph?" or "find cyclic modules" routed to import_cycles. The new patterns only match when the word circular/import/dependency is adjacent (e.g., "circular imports", "import cycles"), so plain "cycles" or "cyclic" questions no longer trigger this intent at all. If the goal was to reduce false positives, a narrower but still inclusive pattern (e.g., keeping \bcycles?\b with lower weight, or adding \b(?:dependency|module) cycles?\b) would preserve recall. Same concern applies to the hubs pattern: "which files are hubs?" no longer matches now that \bhubs?\b requires an import|dependency prefix.
 
 Reply /dismiss (optionally with a reason) if this isn't helpful - Aletheore won't raise it again on this repo.
+
+
+Narration — Emma (Kokoro bf_emma, British English)
+Generated locally with Kokoro 1.0 ONNX. Voice selected by the project owner.
+
+00:00:00.350 — Before changing a file, trace its impact. Here, five other files depend on it.
+
+00:00:07.900 — Start with a local scan. The deterministic scanner builds reusable evidence from your source, without calling a language model.
+
+00:00:19.100 — Locate a function to see its file, line range, and actual source. Then inspect who has contributed to it.
+
+00:00:28.500 — Follow the import graph beyond immediate neighbours. These paths show how a change can reach the command line and the dashboard.
+
+00:00:39.700 — Find related tests before you change the code. These eight candidates guide investigation; they do not prove test coverage.
+
+00:00:49.100 — Connect your coding agent through M C P. Targeted tool calls return repository evidence, including source code and its location.
+
+00:01:00.300 — In GitHub, a generated graph helps you trace the changed file to its dependents.
+
+00:01:07.300 — Read the findings alongside the code. Here, a review flags changed count parsing.
+
+00:01:16.450 — Hosted features extend the evidence into architecture pages, symbol documentation, and endpoint monitoring linked to source. Availability depends on your plan.
+
+00:01:27.700 — Start with your own repository. Install the free local scanner, and follow the evidence from scan to review.

@@ -42,9 +42,9 @@
 
 [Watch the 95-second developer walkthrough →](https://www.aletheore.com/#walkthrough)
 
-https://github.com/user-attachments/assets/3004e18e-c2da-426c-beb2-aa4cb1c85694
+https://github.com/user-attachments/assets/658e99ef-e66a-478f-b7bc-0b62fea5c495
 
-Follow a scan of Aletheore's own CLI source, inspect dependencies and related tests,
+Narrated by Emma (British English). Follow a scan of Aletheore's own CLI source, inspect dependencies and related tests,
 then see how the evidence connects to MCP and PR review. The walkthrough separates
 captured local output from explanations of hosted features.
 

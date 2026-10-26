@@ -1,64 +1,45 @@
 WEBVTT
 
-00:00:00.200 --> 00:00:03.600
-Before changing query.py, trace what depends on it.
+00:00:00.350 --> 00:00:04.915
+Before changing a file, trace its impact. Here, five other files
+depend on it.
 
-00:00:03.600 --> 00:00:07.100
-Direct and transitive relationships, resolved from the scan.
+00:00:07.900 --> 00:00:14.919
+Start with a local scan. The deterministic scanner builds reusable
+evidence from your source, without calling a language model.
 
-00:00:07.500 --> 00:00:13.100
-No LLM in the deterministic scan.
+00:00:19.100 --> 00:00:25.244
+Locate a function to see its file, line range, and actual source. Then
+inspect who has contributed to it.
 
-00:00:13.100 --> 00:00:17.900
-The output becomes reusable evidence for the next steps.
+00:00:28.500 --> 00:00:35.220
+Follow the import graph beyond immediate neighbours. These paths show
+how a change can reach the command line and the dashboard.
 
-00:00:18.733 --> 00:00:24.433
-A file, a symbol, a line range, and the actual source.
+00:00:39.700 --> 00:00:46.804
+Find related tests before you change the code. These eight candidates
+guide investigation; they do not prove test coverage.
 
-00:00:24.433 --> 00:00:28.133
-A target selects this file’s ownership.
+00:00:49.100 --> 00:00:57.207
+Connect your coding agent through M C P. Targeted tool calls return
+repository evidence, including source code and its location.
 
-00:00:28.133 --> 00:00:34.133
-A changed file can affect more than its immediate importers.
+00:01:00.300 --> 00:01:04.823
+In GitHub, a generated graph helps you trace the changed file to its
+dependents.
 
-00:00:34.133 --> 00:00:37.133
-_launcher.py → cli.py → query.py
-
-00:00:37.133 --> 00:00:39.367
-dashboard.py → mcp_server.py → query.py
-
-00:00:39.367 --> 00:00:44.867
-Eight candidates from direct imports or naming matches.
-
-00:00:44.867 --> 00:00:48.733
-Candidates guide investigation. They do not prove test coverage.
-
-00:00:48.733 --> 00:00:53.733
-Configure the client. Request targeted repository evidence.
-
-00:00:53.733 --> 00:00:59.983
-The tool returns source with its file and line range.
-
-00:01:00.000 --> 00:01:02.500
-A dependency graph appears in the PR.
-
-00:01:02.500 --> 00:01:07.000
-Trace the changed file to its dependents.
-
-00:01:07.000 --> 00:01:12.500
-A real review flagged a count-parsing regression.
+00:01:07.300 --> 00:01:12.057
+Read the findings alongside the code. Here, a review flags changed
+count parsing.
 
 00:01:12.500 --> 00:01:16.100
-Real screenshots from public Aletheore reviews.
+[Music and transition sounds]
 
-00:01:16.100 --> 00:01:21.500
-Hosted features add architecture pages and AI-marked symbol documentation.
+00:01:16.450 --> 00:01:26.221
+Hosted features extend the evidence into architecture pages, symbol
+documentation, and endpoint monitoring linked to source. Availability
+depends on your plan.
 
-00:01:21.500 --> 00:01:27.200
-Monitoring can connect an endpoint back to its source handler.
-
-00:01:27.333 --> 00:01:31.833
-Scan → source → dependents → candidate tests → agent → PR review.
-
-00:01:31.833 --> 00:01:34.833
-Free local scanner · Python 3.11–3.14 · pipx required
+00:01:27.700 --> 00:01:33.673
+Start with your own repository. Install the free local scanner, and
+follow the evidence from scan to review.
