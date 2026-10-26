@@ -11,6 +11,9 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 - Local scan caches now invalidate when parser/endpoint code or installed tree-sitter
   grammars change, even without a package-version bump. Older unstamped caches rebuild
   once instead of serving stale modules or API endpoints.
+- Updated MCP agent guidance across full, lean, router and navigation profiles: explain
+  snapshot/analysis limits and incomplete output, match setup advice to permitted tools,
+  and require authorization and redaction before external diagnostics or issue reporting.
 - Added `aletheore demo`: a real local scan of a clearly labelled synthetic repository,
   showing dependency edges and git hotspots with retained evidence for follow-up queries.
 - Added `aletheore scan --explain-network`: reports conditional registry, external scanner,

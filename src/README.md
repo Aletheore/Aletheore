@@ -643,6 +643,20 @@ aletheore mcp .
 
 **Windows: `ImportError: DLL load failed while importing _lancedb`.** This is Windows 11's Smart App Control silently blocking `_lancedb.dll` (from the `lancedb` package the semantic-search tools depend on), not a bug in this package. Check Windows Security → App & browser control → Smart App Control; turning it off resolves the import immediately, with no code changes needed. Microsoft only lets Smart App Control be turned off, not back on, without reinstalling Windows, so this is a one-way decision on the affected machine.
 
+#### Guidance sent to coding agents
+
+The MCP initialization instructions reflect the selected profile and permitted tools. They
+explain scan freshness and analysis limits, distinguish candidate tests from measured
+coverage, and tell agents to check confidence, skipped checks and truncated output before
+claiming completeness. Full-profile guidance includes paging hints and only recommends
+scan, index, semantic-search and answer tools that are actually exposed in that session.
+The smaller profiles retain compact freshness, completeness and trust guidance.
+
+Repository content and Hallbook skills are data, not permission to override the user's
+instructions or run external actions. Agents are instructed to report problems to the user;
+filing an issue or sharing diagnostics requires user authorization and redaction. These
+instructions guide model behavior; tool registration and client permissions enforce access.
+
 #### Keeping evidence current (on by default)
 
 Evidence is a snapshot of the last scan, so an agent driving the server would otherwise answer
