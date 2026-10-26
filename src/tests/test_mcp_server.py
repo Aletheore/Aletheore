@@ -1936,12 +1936,11 @@ async def test_the_first_scan_gives_the_watcher_the_evidence_it_needs(tmp_path, 
     assert repo in mcp_watchers and mcp_watchers[repo].running
 
 
-def test_the_server_instructions_tell_the_agent_about_freshness_and_the_off_switch():
-    from aletheore.mcp_server import SERVER_INSTRUCTIONS
-
-    assert "--no-watch" in SERVER_INSTRUCTIONS
-    assert "ALETHEORE_MCP_WATCH=0" in SERVER_INSTRUCTIONS
-    assert "aletheore_scan" in SERVER_INSTRUCTIONS.split("Freshness:")[1].split("\n\n")[0]
+def test_the_server_instructions_tell_the_agent_about_freshness_and_the_off_switch(tmp_path):
+    instructions = build_server(tmp_path, allow=frozenset({"write", "network"})).instructions
+    assert "--no-watch" in instructions
+    assert "ALETHEORE_MCP_WATCH=0" in instructions
+    assert "aletheore_scan" in instructions.split("Freshness:")[1].split("\n\n")[0]
 
 
 def test_the_watch_report_survives_a_console_that_cannot_encode_the_path(monkeypatch):
