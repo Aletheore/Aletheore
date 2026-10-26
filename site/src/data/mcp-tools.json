@@ -1,6 +1,6 @@
 {
   "source": "aletheore package build_server() and cli.QUERY_KIND_GROUPS",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "default": [
     "aletheore_add_custom_skill",
     "aletheore_ask",
@@ -136,7 +136,7 @@
     {
       "name": "aletheore_dead_code",
       "group": "Structure",
-      "description": "Unreferenced functions/classes and unused dependencies."
+      "description": "Candidates for unreferenced functions/classes and unused dependencies; verify runtime usage."
     },
     {
       "name": "aletheore_endpoints",
@@ -176,7 +176,7 @@
     {
       "name": "aletheore_get_blast_radius",
       "group": "Navigate",
-      "description": "Everything that would be affected by changing target (a file path): one call instead of manually chasing aletheore_imported_by recursively."
+      "description": "Resolved import dependents of target (a file path), not a guarantee of every runtime impact: one call instead of manually chasing aletheore_imported_by recursively."
     },
     {
       "name": "aletheore_get_skill",
