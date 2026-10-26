@@ -1,0 +1,45 @@
+WEBVTT
+
+00:00:00.350 --> 00:00:04.915
+Before changing a file, trace its impact. Here, five other files
+depend on it.
+
+00:00:07.900 --> 00:00:14.919
+Start with a local scan. The deterministic scanner builds reusable
+evidence from your source, without calling a language model.
+
+00:00:19.100 --> 00:00:25.244
+Locate a function to see its file, line range, and actual source. Then
+inspect who has contributed to it.
+
+00:00:28.500 --> 00:00:35.220
+Follow the import graph beyond immediate neighbours. These paths show
+how a change can reach the command line and the dashboard.
+
+00:00:39.700 --> 00:00:46.804
+Find related tests before you change the code. These eight candidates
+guide investigation; they do not prove test coverage.
+
+00:00:49.100 --> 00:00:57.207
+Connect your coding agent through M C P. Targeted tool calls return
+repository evidence, including source code and its location.
+
+00:01:00.300 --> 00:01:04.823
+In GitHub, a generated graph helps you trace the changed file to its
+dependents.
+
+00:01:07.300 --> 00:01:12.057
+Read the findings alongside the code. Here, a review flags changed
+count parsing.
+
+00:01:12.500 --> 00:01:16.100
+[Music and transition sounds]
+
+00:01:16.450 --> 00:01:26.221
+Hosted features extend the evidence into architecture pages, symbol
+documentation, and endpoint monitoring linked to source. Availability
+depends on your plan.
+
+00:01:27.700 --> 00:01:33.673
+Start with your own repository. Install the free local scanner, and
+follow the evidence from scan to review.

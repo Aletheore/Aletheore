@@ -22,6 +22,9 @@ export function Hero() {
           <Button asChild size="lg" variant="secondary"><a href={installGitHubAppHref} rel="noopener">Install the GitHub App</a></Button>
           <Button asChild size="lg" variant="ghost"><a href="https://github.com/Aletheore/Aletheore" rel="noopener">View on GitHub</a></Button>
         </div>
+        <a href="#walkthrough" className="mt-4 inline-block font-display text-[12px] text-ink underline underline-offset-4">
+          Watch the developer walkthrough →
+        </a>
         <p className="mt-5 flex flex-wrap gap-x-5 font-display text-[11.5px] text-faint">
           <span>Source-available</span><span>Local-first CLI</span><span>Hosted GitHub App</span>
         </p>
