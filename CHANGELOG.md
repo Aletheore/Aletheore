@@ -8,6 +8,12 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 - Added a tested Java command-injection audit rule for variable commands/executables
   passed to Runtime.exec and ProcessBuilder, including direct array parameters.
   Findings are review candidates; see `docs/JAVA-COMMAND-INJECTION-RULE.md` for limits.
+- Added `aletheore demo`: a real local scan of a clearly labelled synthetic repository,
+  showing dependency edges and git hotspots with retained evidence for follow-up queries.
+- Added `aletheore scan --explain-network`: reports conditional registry, external scanner,
+  and crash-reporting traffic for resolved settings, then exits without scanning.
+- Corrected quickstart network disclosures to include Semgrep metrics and configured
+  SonarQube analysis submission.
 
 ## 0.11.0 - 2026-10-25
 
