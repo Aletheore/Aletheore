@@ -2664,7 +2664,10 @@ def demo(
     if not plain and ui.is_interactive():
         from aletheore.demo_walkthrough import DemoWalkthrough
 
-        raise typer.Exit(code=DemoWalkthrough(console, run_command=_run_cli, ask=_ask).run())
+        # Keep monochrome styling (bold/reverse) in the tour. The plain command
+        # console disables ANSI styling entirely, which flattens the hierarchy.
+        tour_console = Console(file=console.file, color_system="standard", no_color=True, highlight=False)
+        raise typer.Exit(code=DemoWalkthrough(tour_console, run_command=_run_cli, ask=_ask).run())
     import shlex
     import subprocess  # nosec B404 - exception types only; demo owns fixed Git calls
 

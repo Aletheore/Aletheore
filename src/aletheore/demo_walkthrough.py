@@ -17,10 +17,8 @@ from aletheore.query import (
     ModuleNotFoundInEvidenceError,
     SymbolNotFoundInEvidenceError,
     find_blast_radius,
-    find_hotspots,
     find_symbol_source,
 )
-from aletheore.tests_for import TestsForError, tests_for_report
 
 STEPS = ("Scan", "Source", "Impact", "Tests", "Next")
 
@@ -35,13 +33,11 @@ class DemoWalkthrough:
         self.evidence = {}
         self.source = {}
         self.impact = {}
-        self.candidates = ""
-        self.hotspots = []
 
     def _line(self, text: Text, value: str = "", style: str = "") -> None:
         if not value and self.console.height < 24:
             return
-        width = max(20, min(self.console.width - 2, 94))
+        width = max(20, min(self.console.width - 2, 88))
         for line in value.split("\n"):
             text.append(textwrap.fill(line, width=width, replace_whitespace=False) + "\n", style=style)
 
@@ -61,61 +57,70 @@ class DemoWalkthrough:
             self._line(page, "No account, model, clone or external checks. Git required.", "dim")
             return page
 
-        self._line(page, "ALETHEORE  /  GUIDED DEMO", "bold")
-        if self.console.width < 60 or self.console.height < 24:
-            self._line(page, f"{step} / 5   {STEPS[step - 1]}", "bold reverse")
-        else:
-            for index, label in enumerate(STEPS, 1):
-                page.append(f" {index} {label} ", style="bold reverse" if index == step else "dim")
-            page.append("\n\n")
+        titles = ("SCAN THE SAMPLE", "READ THE SOURCE", "TRACE THE IMPACT", "FIND A CANDIDATE TEST", "CHOOSE YOUR NEXT STEP")
+        self._line(page, "ALETHEORE / GUIDED DEMO", "dim")
+        self._line(page, f"STEP {step} OF 5  |  {titles[step - 1]}", "bold")
+        self._line(page, "=" * min(self.console.width - 2, 88), "dim")
         if step == 1:
-            self._line(page, "A small repository. A real scan.", "bold")
-            self._line(page)
+            self._line(page, "First, Aletheore scans a small checkout application.")
             modules = len(self.evidence["repository"]["modules"])
             edges = self.evidence["repository"]["dependency_graph"]["edges"]
             commits = self.evidence["git"]["total_commits"]
-            self._line(page, f"{modules} files   /   {len(edges)} import links   /   {commits} synthetic commits", "bold")
-            self._line(page)
-            for name, purpose in (("app.py", "entry point"), ("service.py", "checkout flow"),
-                                  ("pricing.py", "the function you will change"), ("test_service.py", "a test to investigate")):
-                self._line(page, f"  {name:<19} {purpose}", "bold" if name == "pricing.py" else "")
-            self._line(page)
-            self._line(page, "The scanner built reusable evidence locally. No LLM was called.", "dim")
+            self._box(page, "SAMPLE FILES", [
+                "app.py           entry point", "service.py       checkout flow",
+                "pricing.py       the file you will change", "test_service.py  a test to investigate",
+            ])
+            meaning = f"{modules} files, {len(edges)} import links, {commits} synthetic commits. Real local evidence; no LLM call."
         elif step == 2:
-            self._line(page, "Start at the exact source.", "bold")
-            self._line(page)
-            self._line(page, f"{self.source['module']}:{self.source['start_line']}-{self.source['end_line']}", "dim")
-            for number, line in enumerate(self.source["source"].splitlines(), self.source["start_line"]):
-                self._line(page, f"  {number:>2}  {line}", "bold")
-            self._line(page)
-            hotspot = next(h for h in self.hotspots if h["path"] == "pricing.py")
-            self._line(page, f"pricing.py changed in {hotspot['churn_count']} sample commits.")
-            self._line(page, "Before editing total(), trace who depends on this file.", "dim")
+            self._line(page, "Your task: change how checkout prices are calculated.")
+            location = f"{self.source['module']}:{self.source['start_line']}-{self.source['end_line']}"
+            code = [f"{number:>2}  {line}" for number, line in
+                    enumerate(self.source["source"].splitlines(), self.source["start_line"])]
+            self._box(page, "SOURCE  " + location, code)
+            meaning = "This function adds the item prices. Before editing it, find which files depend on it."
         elif step == 3:
-            self._line(page, "One edit reaches beyond one file.", "bold")
-            self._line(page)
-            self._line(page, f"{self.impact['affected_total']} dependent files  /  {self.impact['direct_total']} direct  /  {self.impact['transitive_total']} transitive", "bold")
-            self._line(page)
-            self._line(page, "  pricing.py  <--- change here", "bold reverse")
-            for name in self.impact["direct_dependents"]:
-                self._line(page, f"    {name:<21} direct importer", "bold")
-            for name in self.impact["transitive_dependents"]:
-                self._line(page, f"      {name:<19} through another file")
-            self._line(page)
-            self._line(page, "Caller of total(): " + ", ".join(self.impact["confirmed_callers"]), "bold")
-            self._line(page, "Resolved static imports; runtime and dynamic paths may differ.", "dim")
+            self._line(page, "A pricing.py change can reach these importers.")
+            rows = ["pricing.py  <-- the file you are changing"]
+            rows += [f"  {name}  (direct importer)" for name in self.impact["direct_dependents"]]
+            rows += [f"    {name}  (transitive importer)" for name in self.impact["transitive_dependents"]]
+            self._box(page, f"{self.impact['affected_total']} DEPENDENT FILES", rows)
+            meaning = "service.py calls total(). These are static import links; runtime paths may differ."
         elif step == 4:
-            self._line(page, "A test to investigate before you edit.", "bold")
-            self._line(page)
-            self._line(page, self.candidates)
-            self._line(page)
-            self._line(page, "Candidate, not proven coverage. The demo has not run this test.", "bold")
+            self._line(page, "Inspect a related test before changing the pricing function.")
+            # This bundled sample has one transitive test candidate. Derive its
+            # path from the scan's impact result instead of parsing report prose.
+            rows = [path for path in [*self.impact["direct_dependents"], *self.impact["transitive_dependents"]]
+                    if Path(path).name.startswith("test_")]
+            self._box(page, "CANDIDATE TESTS", rows or ["No import-linked test candidates found."])
+            meaning = ("test_service.py reaches pricing.py through service.py. Candidate, not proven coverage; the demo has not run it."
+                       if rows else "No import-linked candidates were found. This does not prove the file is untested.")
         else:
-            self._line(page, "You have a reasoned starting point.", "bold")
+            self._line(page, "You now know where to begin investigating this change.")
+            self._box(page, "WHAT YOU HAVE LEARNED", [
+                "Source   pricing.py::total", f"Impact   {self.impact['affected_total']} dependent files",
+                f"Tests    {self.impact['affected_test_files']} import-linked candidate",
+            ])
+            meaning = "Explore the sample graph, revisit a step, or choose your own repository."
+        if self.console.height >= 28:
             self._line(page)
-            self._line(page, "Source located. Callers traced. Candidate test identified.")
-            self._line(page, "Open the same evidence as a graph, revisit a step, or try your repository.", "dim")
+        self._line(page, "WHAT THIS MEANS", "bold")
+        self._line(page, meaning)
+        if self.console.height >= 28:
+            self._line(page)
+        self._line(page, "ACTIONS", "bold")
+        self._line(page, "-" * min(self.console.width - 2, 88), "dim")
         return page
+
+    def _box(self, page: Text, title: str, rows: list[str]) -> None:
+        width = max(24, min(self.console.width - 2, 88))
+        inner = width - 4
+        self._line(page)
+        label = ui.truncate(title, width - 6, unicode_ok=False)
+        page.append("+- " + label + " " + "-" * (width - len(label) - 5) + "+\n", style="bold")
+        for row in rows:
+            for line in textwrap.wrap(row, width=inner, replace_whitespace=False) or [""]:
+                page.append("| " + line.ljust(inner) + " |\n")
+        page.append("+" + "-" * (width - 2) + "+\n", style="dim")
 
     def _choose(self, step: int, items):
         self.console.clear()
@@ -127,8 +132,6 @@ class DemoWalkthrough:
             self.repo, self.evidence = create_demo()
             self.source = find_symbol_source(self.evidence, self.repo, "pricing.py", "total")
             self.impact = find_blast_radius(self.evidence, self.repo, "pricing.py", "total")
-            self.candidates = tests_for_report(self.evidence, self.repo, "pricing.py", summary_only=True)
-            self.hotspots = find_hotspots(self.evidence, None)
 
     def _own_repository(self) -> int | None:
         self.console.clear()
@@ -167,7 +170,7 @@ class DemoWalkthrough:
         try:
             self._prepare()
         except (OSError, subprocess.SubprocessError, GitAnalysisError, ModuleNotFoundInEvidenceError,
-                SymbolNotFoundInEvidenceError, TestsForError) as exc:
+                SymbolNotFoundInEvidenceError) as exc:
             self.console.print(Text(f"Demo could not prepare its sample: {exc}"))
             if self.repo:
                 self.console.print(Text(f"Sample kept at: {self.repo}"), soft_wrap=True)
@@ -175,7 +178,7 @@ class DemoWalkthrough:
         step = 1
         while True:
             if step < 5:
-                items = [ui.MenuItem("next", "Continue", f"{step + 1} / 5  {STEPS[step]}"),
+                items = [ui.MenuItem("next", "Continue", f"Next: {STEPS[step]}"),
                          ui.MenuItem("back", "Previous step" if step > 1 else "Back to welcome"),
                          ui.MenuItem("quit", "Exit")]
             else:

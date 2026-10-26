@@ -47,9 +47,9 @@ def test_tour_moves_one_page_at_a_time_without_running_commands(monkeypatch, sam
     assert "A change. Its impact. The evidence." in pages[0]
     assert "4 files" in pages[1]
     assert "return sum(items)" in pages[2]
-    assert "3 dependent files" in pages[3]
-    assert "Candidate, not proven coverage" in pages[4]
-    assert "reasoned starting point" in pages[5]
+    assert "3 dependent files" in pages[3].lower()
+    assert "Candidate, not proven coverage" in " ".join(pages[4].split())
+    assert "CHOOSE YOUR NEXT STEP" in pages[5]
     assert "return sum(items)" not in pages[1]
     assert commands == []
 
@@ -58,6 +58,15 @@ def test_previous_step_reuses_the_existing_sample(monkeypatch, sample):
     walkthrough, pages, _, _ = tour(monkeypatch, sample, [ENTER, ENTER, DOWN, ENTER, "q"])
     assert walkthrough.run() == 0
     assert pages[1] == pages[3]
+
+
+def test_source_page_has_a_visible_hierarchy_without_ansi_styles(monkeypatch, sample):
+    walkthrough, _, _, _ = tour(monkeypatch, sample, [])
+    walkthrough._prepare()
+    page = walkthrough.screen(2).plain
+    assert page.index("STEP 2 OF 5  |  READ THE SOURCE") < page.index("+- SOURCE pricing.py:1-2")
+    assert page.index("return sum(items)") < page.index("WHAT THIS MEANS") < page.index("ACTIONS")
+    assert "=====" in page and "| " in page and "+-----" in page
 
 
 def test_dashboard_action_is_scoped_to_the_sample(monkeypatch, sample):
