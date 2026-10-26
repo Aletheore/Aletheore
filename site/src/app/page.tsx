@@ -1,3 +1,4 @@
+import { Walkthrough } from "@/components/sections/walkthrough";
 import { Hero } from "@/components/scenes/hero";
 import { LiveGraph } from "@/components/scenes/live-graph";
 import { SubscribedNotice } from "@/components/site/subscribed-notice";
@@ -25,6 +26,7 @@ export default function Home() {
           {home.evidenceStrip.items.map((i) => (<span key={i} className="text-ink">{i}</span>))}
         </p>
       </div>
+      <Walkthrough />
       <ResolutionScene />
       <Surfaces />
       <LiveGraph />

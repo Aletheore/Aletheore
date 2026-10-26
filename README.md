@@ -1,147 +1,227 @@
 <p align="center">
-  <img src="assets/logo.png" alt="Aletheore" width="360">
+  <img src="assets/logo.png" alt="Aletheore" width="320">
 </p>
 
-<h3 align="center">Evidence-grounded repository intelligence</h3>
+<h3 align="center">Understand your code. Trace the impact of a change.</h3>
 
 <p align="center">
-  Code intelligence that has to show its work. A deterministic scanner reads your repo and
-  writes structured evidence — every downstream feature (AI audit, PR bot, MCP server,
-  dashboard) has to cite that evidence, or it doesn't get to make the claim.
+  Scan a repository into structured evidence, inspect its dependencies and ownership,
+  and give coding agents and PR reviews concrete source context.
 </p>
 
 <p align="center">
   <a href="https://pypi.org/project/aletheore/"><img src="https://img.shields.io/pypi/v/aletheore?color=blue" alt="PyPI version"></a>
-  <a href="https://pypi.org/project/aletheore/"><img src="https://img.shields.io/pypi/pyversions/aletheore" alt="Python versions"></a>
-  <a href="https://github.com/Aletheore/Aletheore/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License"></a>
+  <a href="https://pypi.org/project/aletheore/"><img src="https://img.shields.io/pypi/pyversions/aletheore" alt="Supported Python versions"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="AGPL-3.0 license"></a>
   <a href="https://github.com/Aletheore/Aletheore/actions/workflows/tests.yml"><img src="https://github.com/Aletheore/Aletheore/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
-  <a href="https://codecov.io/gh/Aletheore/Aletheore"><img src="https://codecov.io/gh/Aletheore/Aletheore/graph/badge.svg" alt="Coverage"></a>
-  <a href="https://github.com/Aletheore/Aletheore/actions/workflows/container-security.yml"><img src="https://github.com/Aletheore/Aletheore/actions/workflows/container-security.yml/badge.svg" alt="Container Security"></a>
-  <a href="https://securityscorecards.dev/viewer/?uri=github.com/Aletheore/Aletheore"><img src="https://api.securityscorecards.dev/projects/github.com/Aletheore/Aletheore/badge" alt="OpenSSF Scorecard"></a>
-  <a href="https://pepy.tech/projects/aletheore"><img src="https://static.pepy.tech/personalized-badge/aletheore?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads" alt="PyPI Downloads"></a>
-  <a href="https://mcpvault.io/servers/aletheore/health?utm_source=external_badge&utm_medium=referral&utm_campaign=mcp_health_report"><img src="https://mcpvault.io/badge/aletheore.svg" alt="MCPVault: claimed"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/apps/aletheore/installations/new"><strong>Install the Aletheore GitHub App</strong></a> — hosted PR review, dashboard, and AIRview docs on top of the same evidence engine.<br>
-  Prefer the free local CLI? Keep reading below.
+  <a href="#quickstart">Run locally</a> ·
+  <a href="https://github.com/apps/aletheore/installations/new">Install the GitHub App</a> ·
+  <a href="https://www.aletheore.com/#walkthrough">Watch the walkthrough</a> ·
+  <a href="src/README.md">CLI reference</a>
 </p>
 
-```bash
-$ pipx install aletheore
-$ aletheore scan .
+## See the workflow
 
-Scanning /path/to/your/repo...
-  → Detecting languages, frameworks, and build tools
-  → Building module dependency graph (parsing source with tree-sitter)
-  → Analyzing git history and ownership
-  → Scanning working tree for secrets
-  → Checking dependencies for known vulnerabilities (OSV.dev)
-  → Mapping API endpoints
-  → Done
-✓ Scan complete
-  Evidence written to /path/to/your/repo/.aletheore/air.json
+[Watch the 3-minute developer walkthrough →](https://www.aletheore.com/#walkthrough)
+
+[![Watch the Aletheore developer walkthrough: scan, inspect evidence, connect an agent, review changes](assets/walkthrough-poster.jpg)](https://www.aletheore.com/#walkthrough)
+
+Follow a scan of Aletheore's own CLI source, inspect dependencies and related tests,
+then see how the evidence connects to MCP and PR review. The walkthrough separates
+captured local output from explanations of hosted features.
+
+## Quickstart
+
+Requires **Python 3.11–3.14** and [pipx](https://pipx.pypa.io/stable/installation/).
+Run these commands from a repository you want to inspect:
+
+```bash
+pipx install aletheore
+aletheore scan .
+aletheore query hotspots
+aletheore dashboard .
 ```
 
-No LLM call, no account, no network access beyond the vulnerability/license registry lookups
-(turn those off too for a fully offline run). That one command gets you a real dependency
-graph, secrets scan, git-history secret sweep, dependency-vulnerability/license check, and
-static API endpoint map — for **Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, Java, Kotlin,
-Ruby, PHP, C, C++, C#, and Swift**.
+Open the dashboard at the local URL printed in your terminal. The scan writes
+`.aletheore/air.json`, a compact `.aletheore/air.toon`, and history snapshots.
+The deterministic scanner does not call an LLM. Local scanning and structural queries
+need no Aletheore account or model API key. Registry lookups and optional scanner integrations
+can use the network; see [Data and network behavior](#data-and-network-behavior).
 
-## Why
+Already installed? Update with `pipx upgrade aletheore`.
+For a virtual environment or source installation, see the [setup guide](src/README.md#setup).
 
-- **Grounded, not vibes.** Every AI-written claim (the `audit` report, PR review comments, the
-  architecture wiki) is checked against the file:line it cites. A finding that can't be
-  verified against real evidence gets dropped or flagged, not shipped silently.
-- **The free tier is actually free.** `scan`, `query`, `diff`, the MCP server, and the local
-  dashboard need no account and no API key. Nothing leaves your machine, apart from a crash report
-  if the CLI itself crashes (on by default, one command to turn off; see
-  [Crash reporting](src/README.md#crash-reporting)).
-- **Bring your own model, or don't use one at all.** `audit` works with six provider families
-  (Claude, OpenAI, Google, Mistral, xAI, or a local Ollama model) — your key, your cost, your
-  choice — or skip the LLM step entirely and just use the deterministic evidence.
-- **1,600+ tests**, real CI, and a GitHub Action that dogfoods itself on every PR to this repo.
-- **Benchmarked, not just claimed.** [aletheore-benchmarks](https://github.com/Aletheore/aletheore-benchmarks)
-  is the public harness we test review quality against — real open-source PRs, blind LLM
-  judging, and a published methodology, comparing Aletheore's evidence-grounded context
-  against raw-diff and full-file-context baselines.
+## Start with a question
 
-## What's actually shipped
+Run a scan first. Replace the example paths and symbol with names from your repository.
 
-- **`aletheore scan`** — the deterministic scanner above. Safe to run in CI, on every commit.
-- **`aletheore audit`** — scans, then has a coding-agent CLI or API provider write a full
-  grounded markdown report, citing exact evidence fields throughout. Meant to be run by hand
-  against your own repo — see [`src/README.md`](src/README.md) for why it isn't wired into CI.
-- **`aletheore query`** / **`aletheore diff`** — answer a targeted question or compare two
-  scans from existing evidence, no re-scan or LLM call needed.
-- **`aletheore mcp`** — a stdio MCP server exposing 36 tools by default (37 with
-  `ALETHEORE_MCP_ALLOW=external` enabled) (module/symbol/dependency lookups,
-  ownership, clusters, dead code, hotspots, full-text and semantic search, scan and index
-  triggers) so a coding agent can query your repo's structure directly instead of shelling out
-  for every lookup; it re-scans in the background as files change unless started
-  with `--no-watch`. `aletheore mcp-install` wires it into Claude Code,
-  Cursor, VS Code, Kiro, Opencode, or Codex CLI automatically.
-- **`aletheore tokens`** — measures how many tokens your coding agent re-reads on every turn and, if you
-  choose, trims the built-in tools a project does not use (reversible, project-scoped, off by default).
-  Every repo-wide, no-target tool (dependency usage, environment variables, error handling, ...) caps
-  its result to a size budget by default — a result that already fits is untouched; an over-budget one
-  keeps its shape, says what was left out, and the same tool takes `section`/`offset`/`limit`/`filter`
-  to page through the rest losslessly.
-- **`aletheore dashboard`** — a live local web UI: dependency graph, an Obsidian-style cluster
-  graph, trend charts across scan history, and the MCP tool list.
-- **A GitHub Action** (`action.yml`, on the Marketplace as "Aletheore") — scans a PR's base and
-  head refs and posts a diff: new/resolved secrets, dependency vulnerabilities, and
-  layer-convention violations, as a PR comment, inline annotations, and the run's Step Summary.
-  CI only ever runs `scan` + `diff` — fast and deterministic, never the full agent-driven
-  `audit`.
+| What you need to know | Command |
+| --- | --- |
+| Where is a function defined? | `aletheore locate find_ownership` |
+| Who imports this file, directly or indirectly? | `aletheore dependents src/example.py` |
+| Where is this symbol referenced? | `aletheore usages parse_config` |
+| Which tests are related to this file? | `aletheore tests-for src/example.py` |
+| Which files change frequently? | `aletheore query hotspots` |
+| Who has contributed to a file? | `aletheore query ownership src/example.py` |
+| Which endpoints are mapped? | `aletheore query endpoints` |
+| Which secret findings need review? | `aletheore query secrets` |
+| Are there circular imports? | `aletheore cycles` |
+
+`dependents` follows resolved import edges. `tests-for` identifies candidates from import
+relationships and naming conventions; it does not execute tests or establish coverage.
+Ownership reflects Git history, rather than an assignment of responsibility.
+Use `aletheore query` to list available query kinds and `aletheore COMMAND --help` for options.
+
+## Give your coding agent repository evidence
+
+```bash
+aletheore mcp-install . --target cursor
+```
+
+This writes client configuration so Cursor can launch the repository's MCP server.
+Restart or reload the client as needed. Other supported targets include Claude Code,
+VS Code, Kiro, Opencode, Antigravity, Codex CLI, and Claude Desktop; list the current
+options with `aletheore mcp-install --help`.
+
+An agent can inspect symbols, imports, dependents, owners, endpoints, and related evidence
+without starting each investigation from an unstructured repository dump.
+For example, ask your agent:
+
+> Before changing this function, use Aletheore to locate its definition, inspect its
+> references and import dependents, and identify candidate tests. Cite the evidence and
+> distinguish resolved relationships from uncertainty.
+
+For clients you configure manually, the server command is `aletheore mcp .`.
+Optional AI answering, semantic indexing, and external tools have their own setup and
+network requirements. See the [MCP guide](src/README.md#aletheore-mcp-path).
+
+## What you can use
+
+| Surface | Purpose | Start here |
+| --- | --- | --- |
+| Local CLI | Scan, locate code, inspect risks, and compare evidence | `aletheore scan .` |
+| Local dashboard | Explore dependency and cluster graphs and scan history | `aletheore dashboard .` |
+| MCP server | Let a coding agent query repository evidence | `aletheore mcp-install --help` |
+| AI audit | Generate a report using a configured coding-agent CLI or API provider | `aletheore audit --help` |
+| Hallbook | Search the bundled coding-agent skill catalog | `aletheore hallbook search "code review"` |
+| Agent context tools | Measure context overhead and inspect optional tool profiles | `aletheore tokens --help` |
+| GitHub Action | Report new and resolved findings between a PR's base and head | [Action setup](#run-in-github-actions) |
+| Hosted GitHub App | Run PR reviews and use managed repository features | [Install the app](https://github.com/apps/aletheore/installations/new) |
+
+Hallbook skills have individual instructions, dependencies, and licenses; review a skill
+before installing or executing it. Token auditing can invoke your configured agent;
+context profiles are optional and change which tools that agent can access.
+
+## Review changes in GitHub
+
+The hosted GitHub App adds PR reviews, managed audits, AIRview architecture pages,
+AI-marked symbol documentation, and endpoint monitoring with source context.
+Availability depends on the selected plan. Free AI reviews are globally rate-limited and
+subject to availability. See [current plans and limits](https://www.aletheore.com/pricing)
+rather than relying on a price copied into this README.
+
+[Install the Aletheore GitHub App](https://github.com/apps/aletheore/installations/new)
+and choose the repositories to connect.
+
+### Run in GitHub Actions
+
+For a deterministic PR diff in your own workflow:
 
 ```yaml
-- uses: Aletheore/Aletheore@v0.7.2
-  with:
-    fail-on-new-secrets: true
+name: Aletheore
+on: [pull_request]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: Aletheore/Aletheore@v0.10.2
+        with:
+          fail-on-new-secrets: true
 ```
 
-Full command reference, MCP tool list, per-language import-resolution details, and
-configuration options: **[`src/README.md`](src/README.md)**.
+The Action scans both refs and reports new/resolved secrets, dependency vulnerabilities,
+and layer-convention violations. It runs `scan` and `diff`, rather than an AI audit.
+The example pins an existing release; review and pin a commit SHA for your own deployment
+policy. Fork PRs can have read-only tokens: comment posting may be unavailable even when
+analysis succeeds. See [Action inputs](action.yml) and the [CLI reference](src/README.md).
 
-## Aletheore AIR (hosted GitHub App)
+## What the scanner understands
 
-Everything above is the free, local-first CLI (Aletheore Community). Installing the
-[Aletheore GitHub App](https://aletheore.com) adds a hosted layer on top of the same
-evidence — paid plans start at $29.99/mo for up to 3 team members (additional seats $6.99/mo each):
+Dependency graphs support **Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, Java, Kotlin,
+Ruby, PHP, C, C++, C#, and Swift**, with language-specific resolution limits.
+Secrets and Git analysis can still apply to other source files.
+Dependency checks depend on supported manifests, resolved versions, and registry coverage.
 
-- **Automated PR review** — Flash reviews and managed audits comment directly on pull
-  requests, scoped to the changed hunks, citing file:line evidence. Blast-radius checks
-  trace a changed symbol to its real callers across the repo (or say plainly when no
-  caller could be confirmed, instead of guessing).
-- **AIRview** — an AI-generated, always-current architecture map of the repo, rebuilt
-  from the same dependency-graph evidence `scan` produces.
-- **AI-generated Docs** — per-symbol descriptions written straight from real source,
-  drafted as PRs land and backfilled for a repo's existing public API, always marked
-  as AI-generated rather than presented as hand-written.
-- **Production monitoring** — live endpoint reachability/latency checks mapped back to
-  the source handler that owns the route, with Slack/Teams alerts on state changes.
-- **Branch-protection checks** and team seat management.
+The evidence can include imports, symbols, clusters, Git ownership and activity,
+secret findings, dependency vulnerabilities and licenses, static analysis, endpoints,
+database schema, infrastructure, and error handling. Some checks depend on installed
+external scanners or explicit configuration. Missing tools and unsupported analysis
+must be distinguished from a clean result.
 
-The GitHub App and dashboard code lives in `github-app/`; see its own
-[README](github-app/README.md) for deployment and operations details.
+Static evidence is a starting point for investigation. Dynamic dispatch, runtime configuration,
+external services, and unresolved imports can leave gaps. A source citation makes a claim
+inspectable; it does not by itself prove that a bug exists or that a change is safe.
+Read [resolution details and configuration](src/README.md) for the limits that apply to your language.
 
-## Repository layout
+## Data and network behavior
 
-- `src/` — the actual, working CLI code (see its README for everything above in detail).
-- `github-app/` — the hosted GitHub App: FastAPI server, RQ workers, migrations. See
-  [Aletheore AIR](#aletheore-air-hosted-github-app) above for what it does.
-- `site/` — the marketing site (Next.js).
-- `docs/superpowers/` — design specs and implementation plans written during development.
-- `docs/operations/` — current operational baselines: incident response, data handling, SLOs,
-  deployment verification, branch protection, support process.
-- `SECURITY.md` — vulnerability reporting and response targets.
+The local deterministic scan builds evidence on your machine. Its network behavior depends
+on enabled checks and integrations:
 
-Related, separate repo: [aletheore-benchmarks](https://github.com/Aletheore/aletheore-benchmarks) —
-the public PR-review benchmark harness and published results.
+- Dependency vulnerability and license checks contact OSV and package registries.
+- Semgrep can fetch rules and send its own metrics; optional integrations such as SonarQube
+  have separate submission behavior.
+- CLI startup can check PyPI for updates. Set `ALETHEORE_NO_UPDATE_CHECK=1` to disable that check.
+- Crash reporting is enabled by default and can be disabled with
+  `aletheore config crash-reporting off` or `ALETHEORE_CRASH_REPORTING=0`.
+- AI audits, hosted features, and configured semantic services send the context required
+  by the selected workflow to their configured services. Local evidence can contain
+  sensitive metadata or source excerpts; review it before sharing.
+
+To skip registry and static-scanner checks for a local scan:
+
+```bash
+aletheore scan . --no-check-vulnerabilities --no-check-licenses --no-check-static-analysis
+```
+
+These scan flags do not configure every other command or service. Review
+[CLI configuration and crash reporting](src/README.md#crash-reporting),
+[security information](SECURITY.md), and the hosted [privacy policy](https://www.aletheore.com/privacy)
+for the workflow you choose.
+
+## Evidence and benchmarks
+
+Explore [published scan examples](https://www.aletheore.com/dogfooding) and
+[benchmarks with methodology and limits](https://www.aletheore.com/benchmarks).
+The separate [benchmark repository](https://github.com/Aletheore/aletheore-benchmarks)
+contains the PR-review evaluation harness. Results depend on repository, task, model,
+and sample; they do not guarantee the same result on your code.
+
+## Contribute or get help
+
+- [Report a bug or request a feature](https://github.com/Aletheore/Aletheore/issues).
+- Read [CONTRIBUTING.md](CONTRIBUTING.md) to work on the project.
+- Use [SECURITY.md](SECURITY.md) for vulnerability reports.
+- [Sponsor development](https://github.com/sponsors/ArihantK15).
+
+| Directory | Contents |
+| --- | --- |
+| [`src/`](src/) | CLI implementation and command reference |
+| [`github-app/`](github-app/) | Hosted application, workers, and operations documentation |
+| [`site/`](site/) | Next.js marketing site |
+| [`docs/operations/`](docs/operations/) | Operational baselines and runbooks |
+| [`benchmarks/`](benchmarks/) | Repository benchmark material |
 
 ## Licensing
+
 
 Aletheore is open source under the [GNU Affero General Public License v3.0](LICENSE)
 (AGPL-3.0). You can use, study, modify, and redistribute it, including at a company and
@@ -164,7 +244,3 @@ Copyright (C) 2026 Arihant Kaul. See [NOTICE](NOTICE).
 
 Releases through 0.8.12 were Apache 2.0, and 0.8.13 through the version before this change were PolyForm
 Noncommercial 1.0.0. Copies you already received keep the license they came with.
-
-If it's useful to you personally, consider
-[sponsoring development](https://github.com/sponsors/ArihantK15) — no accounts, no usage tracking,
-and nothing leaves your machine when you run it except an optional crash report (see above).

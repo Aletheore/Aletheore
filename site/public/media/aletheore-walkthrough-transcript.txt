@@ -1,0 +1,135 @@
+Aletheore developer walkthrough
+180 seconds. Explanatory text over background music; no narration.
+Captured from Aletheore/Aletheore fd45b3d3 on 26 October 2026.
+Displayed local command output is excerpted. Full raw outputs and capture settings are in the editable project.
+
+00:00:00.000 — What depends on the file you’re changing?
+Before editing query.py, inspect the files that depend on it.
+Aletheore resolves five non-test import dependents in this scan.
+aletheore dependents aletheore/query.py --no-tests
+5 files import aletheore/query.py, directly or through other imports (25 more left out by --exclude/--under/--no-tests):
+aletheore/_launcher.py
+aletheore/cli.py
+aletheore/dashboard.py
+aletheore/mcp_server.py
+aletheore/tool_router.py
+Captured CLI output · Aletheore’s own source · excerpt
+
+00:00:12.000 — Install. Scan. Ask a question.
+Local scanning needs no Aletheore account or model API key.
+Enabled registry checks and scanner integrations can use the network.
+Quickstart · run inside your repository
+pipx install aletheore
+
+aletheore scan .
+aletheore query hotspots
+aletheore dashboard .
+Command recipe · Python 3.11–3.14 · pipx required
+
+00:00:27.000 — The scan creates a reusable evidence file.
+The deterministic scanner builds structure before an AI model reasons.
+air.json and air.toon hold the evidence used by downstream tools.
+aletheore scan src [checks disabled for this capture]
+  → Detecting languages, frameworks, and build tools
+  → No previous scan cache found for this repo - this first scan will take
+  → Building module dependency graph (parsing source with tree-sitter)
+  → Analyzing git history and ownership
+  → Scanning working tree for secrets
+  → Clustering modules and checking layer conventions
+  → Mapping API endpoints
+  → Mapping error handling
+  → Detecting dead code
+  → Computing git hotspots
+  → Mapping database schema from migrations
+  → Done
+✓ Scan complete
+Captured output · vulnerability, license, static and history-secret checks disabled
+
+00:00:45.000 — Find the definition and read its source.
+The result includes the file, symbol, line range, and source.
+This function uses file-scoped ownership when a target is supplied.
+aletheore locate find_ownership
+aletheore/query.py::find_ownership L199-202
+def find_ownership(evidence: dict, target: str | None) -> list[dict]:
+    if target:
+        return evidence["git"].get("file_ownership", {}).get(target, [])
+    return evidence["git"].get("ownership", [])
+Captured source result · aletheore/query.py · lines 199–202
+
+00:01:03.000 — Inspect the resolved import relationships.
+The CLI, dashboard, MCP server, and tool router depend on this file.
+Static imports are useful context; runtime loading can leave gaps.
+aletheore dependents aletheore/query.py --no-tests
+5 files import aletheore/query.py, directly or through other imports (25 more left out by --exclude/--under/--no-tests):
+aletheore/_launcher.py
+aletheore/cli.py
+aletheore/dashboard.py
+aletheore/mcp_server.py
+aletheore/tool_router.py
+Captured output · 25 test-related results excluded by this command
+
+00:01:21.000 — Find candidate tests before making a change.
+Related tests are separated by the strength of their relationship.
+These are candidates. The command does not execute tests or prove coverage.
+aletheore tests-for aletheore/query.py
+8 test file(s) likely exercise aletheore/query.py (direct import or naming match):
+tests/test_cli.py
+tests/test_cli_surface_gaps.py
+tests/test_dependents.py
+tests/test_mcp_server_budget.py
+tests/test_query.py
+tests/test_review_fixes_router_hook.py
+tests/test_router_hubs_cycles.py
+tests/test_scanner_correctness.py
+Captured output · direct-import and naming candidates · excerpt
+
+00:01:39.000 — Explore the same evidence visually.
+The local dashboard exposes the dependency graph and scan history.
+Use it to investigate structure alongside the targeted CLI answers.
+
+
+Real local dashboard · dependency graph from the captured scan
+
+00:01:54.000 — Give the agent a source-backed tool result.
+Run aletheore mcp-install . --target cursor to configure Cursor.
+MCP returns repository evidence; your agent remains responsible for reasoning.
+MCP tool call: aletheore_locate({"query":"find_ownership"})
+aletheore/query.py::find_ownership L199-202
+def find_ownership(evidence: dict, target: str | None) -> list[dict]:
+    if target:
+        return evidence["git"].get("file_ownership", {}).get(target, [])
+    return evidence["git"].get("ownership", [])
+Actual server tool invocation · no agent conversation simulated
+
+00:02:12.000 — Read a real review in GitHub.
+The GitHub App can post source-linked findings on pull requests.
+This historical finding was marked no longer detected after a later commit.
+
+
+Public PR #1129 · actual Aletheore bot comment · marked no longer detected
+
+00:02:30.000 — Keep documentation connected to the source.
+Hosted features include AI-marked symbol docs and AIRview architecture pages.
+Endpoint monitoring adds source context. Check current plan availability.
+
+
+Hosted feature overview · captured public website · availability varies by plan
+
+00:02:45.000 — Start with one question about your code.
+Start locally, inspect the evidence, then connect the workflow you need.
+Scan → source → dependents → candidate tests → agent → PR review.
+Your next step
+pipx install aletheore
+aletheore scan .
+aletheore query hotspots
+
+www.aletheore.com/developers
+github.com/Aletheore/Aletheore
+Full command reference in src/README.md · current plans on the website
+
+Scan capture command:
+aletheore scan src --no-check-vulnerabilities --no-check-licenses --no-check-static-analysis --no-scan-git-history
+
+Music: Minimal Techno 01 — Alejandro Magaña (A. M.), Mixkit.
+Source: https://mixkit.co/free-stock-music/tech-house/
+License: https://mixkit.co/license/#musicFree

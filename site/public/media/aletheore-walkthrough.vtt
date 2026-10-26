@@ -1,0 +1,67 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:06.000
+Before editing query.py, inspect the files that depend on it.
+
+00:00:06.000 --> 00:00:12.000
+Aletheore resolves five non-test import dependents in this scan.
+
+00:00:12.000 --> 00:00:19.500
+Local scanning needs no Aletheore account or model API key.
+
+00:00:19.500 --> 00:00:27.000
+Enabled registry checks and scanner integrations can use the network.
+
+00:00:27.000 --> 00:00:36.000
+The deterministic scanner builds structure before an AI model reasons.
+
+00:00:36.000 --> 00:00:45.000
+air.json and air.toon hold the evidence used by downstream tools.
+
+00:00:45.000 --> 00:00:54.000
+The result includes the file, symbol, line range, and source.
+
+00:00:54.000 --> 00:01:03.000
+This function uses file-scoped ownership when a target is supplied.
+
+00:01:03.000 --> 00:01:12.000
+The CLI, dashboard, MCP server, and tool router depend on this file.
+
+00:01:12.000 --> 00:01:21.000
+Static imports are useful context; runtime loading can leave gaps.
+
+00:01:21.000 --> 00:01:30.000
+Related tests are separated by the strength of their relationship.
+
+00:01:30.000 --> 00:01:39.000
+These are candidates. The command does not execute tests or prove coverage.
+
+00:01:39.000 --> 00:01:46.500
+The local dashboard exposes the dependency graph and scan history.
+
+00:01:46.500 --> 00:01:54.000
+Use it to investigate structure alongside the targeted CLI answers.
+
+00:01:54.000 --> 00:02:03.000
+Run aletheore mcp-install . --target cursor to configure Cursor.
+
+00:02:03.000 --> 00:02:12.000
+MCP returns repository evidence; your agent remains responsible for reasoning.
+
+00:02:12.000 --> 00:02:21.000
+The GitHub App can post source-linked findings on pull requests.
+
+00:02:21.000 --> 00:02:30.000
+This historical finding was marked no longer detected after a later commit.
+
+00:02:30.000 --> 00:02:37.500
+Hosted features include AI-marked symbol docs and AIRview architecture pages.
+
+00:02:37.500 --> 00:02:45.000
+Endpoint monitoring adds source context. Check current plan availability.
+
+00:02:45.000 --> 00:02:52.500
+Start locally, inspect the evidence, then connect the workflow you need.
+
+00:02:52.500 --> 00:03:00.000
+Scan → source → dependents → candidate tests → agent → PR review.
