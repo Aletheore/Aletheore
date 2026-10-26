@@ -684,6 +684,66 @@ def test_scan_repository_writes_the_current_version_into_the_local_scan_cache(tm
     assert cache["aletheore_version"] == __version__
 
 
+@pytest.mark.parametrize("stamp", [None, "older-parser-build"])
+def test_scan_cache_reparses_modules_and_endpoints_after_code_change(tmp_path, stamp):
+    # Source bytes and package version stay unchanged: a missing/old code stamp
+    # must still invalidate BOTH cached parse products, not just the module graph.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text(
+        "from flask import Flask\napp = Flask(__name__)\n"
+        "@app.get('/fresh')\ndef handler():\n    return 'ok'\n", encoding="utf-8",
+    )
+    options = dict(
+        check_vulnerabilities=False, check_licenses=False, check_static_analysis=False,
+        scan_git_history=False, map_schema=False, analyze_architecture=False, check_hotspots=False,
+    )
+    first = scan_repository(repo, **options)
+    cache_path = repo / ".aletheore" / "scan-cache.json"
+    cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert cache["code_version"]
+    assert first["repository"]["api_endpoints"]["endpoints"]
+    if stamp is None:
+        cache.pop("code_version")
+    else:
+        cache["code_version"] = stamp
+    cache["modules"]["app.py"]["symbols"]["functions"][0]["name"] = "stale_handler"
+    cache["endpoints"]["app.py"][0]["path"] = "/stale"
+    cache_path.write_text(json.dumps(cache), encoding="utf-8")
+
+    second = scan_repository(repo, **options)
+
+    assert second["repository"]["modules"] == first["repository"]["modules"]
+    assert second["repository"]["api_endpoints"] == first["repository"]["api_endpoints"]
+    assert json.loads(cache_path.read_text(encoding="utf-8"))["code_version"] not in (None, stamp)
+
+
+@pytest.mark.parametrize("changed", ["graph", "endpoints", "grammar"])
+def test_scan_cache_code_stamp_tracks_parser_and_grammar_changes(tmp_path, monkeypatch, changed):
+    from aletheore import endpoints, file_cache
+    from aletheore.evidence import _scan_cache_code_version
+    from aletheore.scanner import graph
+
+    graph_path, endpoints_path = tmp_path / "graph.py", tmp_path / "endpoints.py"
+    graph_path.write_text("parser build 1", encoding="utf-8")
+    endpoints_path.write_text("endpoint build 1", encoding="utf-8")
+    monkeypatch.setattr(graph, "__file__", str(graph_path))
+    monkeypatch.setattr(endpoints, "__file__", str(endpoints_path))
+    monkeypatch.setattr(file_cache, "_code_versions", {})
+    monkeypatch.setattr(file_cache, "_grammar_versions", lambda: "grammar build 1")
+    before = _scan_cache_code_version()
+
+    if changed == "grammar":
+        monkeypatch.setattr(file_cache, "_grammar_versions", lambda: "grammar build 2")
+    else:
+        path = graph_path if changed == "graph" else endpoints_path
+        path.write_text("updated parser logic", encoding="utf-8")
+    # The shared fingerprint memo is process-local; a new CLI invocation starts empty.
+    file_cache._code_versions.clear()
+
+    assert _scan_cache_code_version() != before
+
+
 def test_scan_repository_ignores_local_cache_when_disabled_via_env_var(tmp_path, monkeypatch):
     # A repo author fully controls both a committed file's content AND a
     # committed .aletheore/scan-cache.json - the cache is only keyed by a
