@@ -5,6 +5,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+## 0.12.0 - 2026-10-26
+
 - Added a tested Java command-injection audit rule for variable commands/executables
   passed to Runtime.exec and ProcessBuilder, including direct array parameters.
   Findings are review candidates; see `docs/JAVA-COMMAND-INJECTION-RULE.md` for limits.
