@@ -163,6 +163,7 @@ ROUTER_INSTRUCTIONS = (
 )
 
 SERVER_INSTRUCTIONS = """Aletheore provides repository evidence from deterministic scans, source lookups, and optional semantic/AI tools.
+Model answering is available only when the server was started with --agent and session permissions allow it.
 Use only tools listed in this session and stay within the user's authorized task. Do not bypass profile or permission
 restrictions through shell commands, other tools, or permission changes.
 

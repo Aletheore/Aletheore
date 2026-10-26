@@ -60,6 +60,7 @@ async def test_full_guidance_tracks_adapter_and_source_upload_gates(
     assert mentioned <= names, mentioned - names
     for capability in ("aletheore_scan", "aletheore_index", "aletheore_search_codebase", "aletheore_answer"):
         assert (capability in mentioned) == (capability in names)
+    assert "only when the server was started with --agent" in server.instructions
     if "aletheore_scan" not in names:
         assert "this session cannot run a scan" in server.instructions
         assert "do not bypass" in server.instructions
