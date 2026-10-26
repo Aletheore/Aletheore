@@ -9,7 +9,8 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
   no findings, including overview counts, secret-history coverage and limited scans.
 - The local demo now guides a pricing change through source, callers, import dependents,
   candidate tests and hotspots. Interactive terminals use a paced arrow-key tour with
-  dashboard and own-repository actions; `--plain` keeps the printable report and commands.
+  dashboard and own-repository actions, and executes a local read-only MCP tool call;
+  `--plain` keeps the printable report and commands.
 
 ## 0.12.0 - 2026-10-26
 

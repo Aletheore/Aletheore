@@ -44,12 +44,14 @@ def test_tour_moves_one_page_at_a_time_without_running_commands(monkeypatch, sam
     walkthrough, pages, commands, _ = tour(monkeypatch, sample, [ENTER] * 5 + ["q"])
     assert walkthrough.run() == 0
     assert len(pages) == 6
-    assert "A change. Its impact. The evidence." in pages[0]
+    assert "Scan once. Explore it. Give your agent evidence." in pages[0]
     assert "4 files" in pages[1]
     assert "return sum(items)" in pages[2]
     assert "3 dependent files" in pages[3].lower()
-    assert "Candidate, not proven coverage" in " ".join(pages[4].split())
-    assert "CHOOSE YOUR NEXT STEP" in pages[5]
+    assert "ACTUAL LOCAL TOOL CALL" in pages[4]
+    assert "affected_total: 3" in pages[4]
+    assert "affected_test_files: 1" in pages[4]
+    assert "ACCESS THE SAME EVIDENCE" in pages[5]
     assert "return sum(items)" not in pages[1]
     assert commands == []
 
@@ -64,7 +66,7 @@ def test_source_page_has_a_visible_hierarchy_without_ansi_styles(monkeypatch, sa
     walkthrough, _, _, _ = tour(monkeypatch, sample, [])
     walkthrough._prepare()
     page = walkthrough.screen(2).plain
-    assert page.index("STEP 2 OF 5  |  READ THE SOURCE") < page.index("+- SOURCE pricing.py:1-2")
+    assert page.index("STEP 2 OF 5  |  QUERY THE SOURCE") < page.index("+- SOURCE pricing.py:1-2")
     assert page.index("return sum(items)") < page.index("WHAT THIS MEANS") < page.index("ACTIONS")
     assert "=====" in page and "| " in page and "+-----" in page
 

@@ -178,8 +178,10 @@ that scan.
 ### `aletheore demo`
 
 Creates a fresh synthetic Python checkout example with three local commits, scans it
-with the real engine, and guides you through changing `pricing.py::total`: source,
-direct and transitive dependents, a confirmed caller, candidate tests, and hotspots.
+with the real engine, and shows what Aletheore produces and how to access it:
+saved JSON/TOON evidence, a source query, direct and transitive import mapping,
+and an actual local, read-only MCP impact-tool call. No coding-agent conversation
+or model response is simulated. The printable report also includes candidate tests and hotspots.
 Candidate tests are not executed. The dashboard highlights the sample target and labels
 checks that did not run. Requires Git;
 does not clone, index embeddings, query registries, or invoke external scanners.

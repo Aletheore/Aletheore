@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import subprocess  # nosec B404 - exception types only
 import textwrap
 from pathlib import Path
 
 import click
+import toon
+from mcp.server.mcpserver.exceptions import ToolError
 from rich.console import Console
 from rich.text import Text
 
@@ -20,7 +23,7 @@ from aletheore.query import (
     find_symbol_source,
 )
 
-STEPS = ("Scan", "Source", "Impact", "Tests", "Next")
+STEPS = ("Scan", "Query", "Map", "Agent", "Explore")
 
 
 class DemoWalkthrough:
@@ -33,6 +36,7 @@ class DemoWalkthrough:
         self.evidence = {}
         self.source = {}
         self.impact = {}
+        self.agent_result = {}
 
     def _line(self, text: Text, value: str = "", style: str = "") -> None:
         if not value and self.console.height < 24:
@@ -49,58 +53,60 @@ class DemoWalkthrough:
             for line in art:
                 self._line(page, line, "bold")
             self._line(page)
-            self._line(page, "A change. Its impact. The evidence.", "bold")
+            self._line(page, "Scan once. Explore it. Give your agent evidence.", "bold")
             self._line(page)
-            self._line(page, "You need to change a pricing function. Which files depend on it? Which test should you inspect?")
+            self._line(page, "See how Aletheore maps a repository, answers a query, and exposes that evidence through MCP.")
             self._line(page)
             self._line(page, "A five-step tour of a real scan on a small synthetic repository.", "dim")
             self._line(page, "No account, model, clone or external checks. Git required.", "dim")
             return page
 
-        titles = ("SCAN THE SAMPLE", "READ THE SOURCE", "TRACE THE IMPACT", "FIND A CANDIDATE TEST", "CHOOSE YOUR NEXT STEP")
+        titles = ("BUILD REUSABLE EVIDENCE", "QUERY THE SOURCE", "FOLLOW THE IMPORT MAP", "GIVE AN AGENT EVIDENCE", "ACCESS THE SAME EVIDENCE")
         self._line(page, "ALETHEORE / GUIDED DEMO", "dim")
         self._line(page, f"STEP {step} OF 5  |  {titles[step - 1]}", "bold")
         self._line(page, "=" * min(self.console.width - 2, 88), "dim")
         if step == 1:
-            self._line(page, "First, Aletheore scans a small checkout application.")
+            self._line(page, "Aletheore parses source and reads local Git history.")
             modules = len(self.evidence["repository"]["modules"])
             edges = self.evidence["repository"]["dependency_graph"]["edges"]
             commits = self.evidence["git"]["total_commits"]
-            self._box(page, "SAMPLE FILES", [
-                "app.py           entry point", "service.py       checkout flow",
-                "pricing.py       the file you will change", "test_service.py  a test to investigate",
+            self._box(page, "SCAN OUTPUT", [
+                f"{modules} files / {len(edges)} import links / {commits} sample commits",
+                ".aletheore/air.json   structured evidence",
+                ".aletheore/air.toon   compact evidence",
             ])
-            meaning = f"{modules} files, {len(edges)} import links, {commits} synthetic commits. Real local evidence; no LLM call."
+            meaning = "Scan once. CLI, dashboard and MCP reuse this evidence. No LLM is needed to build it."
         elif step == 2:
-            self._line(page, "Your task: change how checkout prices are calculated.")
+            self._line(page, "CLI > aletheore query symbol-source pricing.py total")
             location = f"{self.source['module']}:{self.source['start_line']}-{self.source['end_line']}"
             code = [f"{number:>2}  {line}" for number, line in
                     enumerate(self.source["source"].splitlines(), self.source["start_line"])]
             self._box(page, "SOURCE  " + location, code)
-            meaning = "This function adds the item prices. Before editing it, find which files depend on it."
+            meaning = "Aletheore resolves the symbol to its file, lines and source. You retrieve a precise result, not the whole repository."
         elif step == 3:
-            self._line(page, "A pricing.py change can reach these importers.")
+            self._line(page, "CLI > aletheore dependents pricing.py")
             rows = ["pricing.py  <-- the file you are changing"]
             rows += [f"  {name}  (direct importer)" for name in self.impact["direct_dependents"]]
             rows += [f"    {name}  (transitive importer)" for name in self.impact["transitive_dependents"]]
             self._box(page, f"{self.impact['affected_total']} DEPENDENT FILES", rows)
-            meaning = "service.py calls total(). These are static import links; runtime paths may differ."
+            meaning = "Aletheore resolves imports to files, then walks them backwards. This shows static dependents."
         elif step == 4:
-            self._line(page, "Inspect a related test before changing the pricing function.")
-            # This bundled sample has one transitive test candidate. Derive its
-            # path from the scan's impact result instead of parsing report prose.
-            rows = [path for path in [*self.impact["direct_dependents"], *self.impact["transitive_dependents"]]
-                    if Path(path).name.startswith("test_")]
-            self._box(page, "CANDIDATE TESTS", rows or ["No import-linked test candidates found."])
-            meaning = ("test_service.py reaches pricing.py through service.py. Candidate, not proven coverage; the demo has not run it."
-                       if rows else "No import-linked candidates were found. This does not prove the file is untested.")
-        else:
-            self._line(page, "You now know where to begin investigating this change.")
-            self._box(page, "WHAT YOU HAVE LEARNED", [
-                "Source   pricing.py::total", f"Impact   {self.impact['affected_total']} dependent files",
-                f"Tests    {self.impact['affected_test_files']} import-linked candidate",
+            self._line(page, "MCP > aletheore mcp <repo> --profile lean")
+            self._box(page, "ACTUAL LOCAL TOOL CALL / RESPONSE EXCERPT", [
+                "aletheore_get_blast_radius",
+                '  target="pricing.py", symbol="total"',
+                f"affected_total: {self.agent_result['affected_total']}",
+                f"affected_test_files: {self.agent_result['affected_test_files']} (candidates)",
             ])
-            meaning = "Explore the sample graph, revisit a step, or choose your own repository."
+            meaning = "The agent gets scoped impact evidence to plan its next reads. This demo calls the tool without a model."
+        else:
+            self._line(page, "Choose how you want to use the evidence next.")
+            self._box(page, "ONE SCAN / THREE WAYS TO ACCESS IT", [
+                "CLI        targeted source and dependency queries",
+                "Dashboard  browse the repository graph",
+                "MCP        agent connects to aletheore mcp",
+            ])
+            meaning = "Open the dashboard now, or scan your own repository. MCP access needs no model inside Aletheore."
         if self.console.height >= 28:
             self._line(page)
         self._line(page, "WHAT THIS MEANS", "bold")
@@ -132,6 +138,16 @@ class DemoWalkthrough:
             self.repo, self.evidence = create_demo()
             self.source = find_symbol_source(self.evidence, self.repo, "pricing.py", "total")
             self.impact = find_blast_radius(self.evidence, self.repo, "pricing.py", "total")
+            self.agent_result = asyncio.run(self._agent_call())
+
+    async def _agent_call(self) -> dict:
+        from aletheore.mcp_server import build_server
+
+        server = build_server(self.repo, allow=frozenset(), watch=False, profile="lean")
+        result = await server.call_tool("aletheore_get_blast_radius", {"target": "pricing.py", "symbol": "total"})
+        if result.is_error:
+            raise OSError("The demo MCP tool could not retrieve impact evidence.")
+        return toon.decode(result.content[0].text)["result"]
 
     def _own_repository(self) -> int | None:
         self.console.clear()
@@ -170,7 +186,7 @@ class DemoWalkthrough:
         try:
             self._prepare()
         except (OSError, subprocess.SubprocessError, GitAnalysisError, ModuleNotFoundInEvidenceError,
-                SymbolNotFoundInEvidenceError) as exc:
+                SymbolNotFoundInEvidenceError, ToolError) as exc:
             self.console.print(Text(f"Demo could not prepare its sample: {exc}"))
             if self.repo:
                 self.console.print(Text(f"Sample kept at: {self.repo}"), soft_wrap=True)

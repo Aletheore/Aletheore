@@ -78,8 +78,8 @@ aletheore demo
 ```
 
 The demo creates a small synthetic Python repository with local Git history and runs
-the real scanner to trace a pricing change through its source, callers, dependencies,
-candidate tests, and hotspots. In a terminal, arrow-key menus guide one screen at a time,
+the real scanner to build reusable evidence, retrieve source, trace imports, and execute
+a local MCP tool call. In a terminal, arrow-key menus guide one screen at a time,
 with actions to open the sample dashboard or try your own repository. Use `aletheore demo --plain`
 for a printable report; piped output also runs without prompts.
 Tests are suggested, not executed. Git must be installed; no account,
