@@ -50,7 +50,9 @@ class DemoWalkthrough:
         """One bounded page, with real scan results rather than a transcript of commands."""
         page = Text()
         if step == 0:
-            art = ui.wordmark_lines(self.console.width) if self.console.height >= 28 else ["ALETHEORE"]
+            art = (ui.wordmark_lines(self.console.width)
+                   if self.console.height >= 28 and ui.supports_unicode(self.console.file)
+                   else ["ALETHEORE"])
             for line in art:
                 self._line(page, line, "bold")
             self._line(page)

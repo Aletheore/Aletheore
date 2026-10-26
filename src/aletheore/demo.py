@@ -4,6 +4,7 @@
 
 import os
 import shutil
+import stat
 import subprocess  # nosec B404 - fixed Git argument lists, never a shell
 import tempfile
 from pathlib import Path
@@ -60,5 +61,15 @@ def create_demo() -> tuple[Path, dict]:
         (repo / ".aletheore" / "demo").write_text(DEMO_MARKER, encoding="utf-8")
         return repo, evidence
     except BaseException:
-        shutil.rmtree(repo, ignore_errors=True)
+        def remove_readonly(function, path, exc_info):
+            # Git object files have the read-only attribute on Windows.
+            if not isinstance(exc_info[1], PermissionError):
+                raise exc_info[1]
+            os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+            function(path)
+
+        try:
+            shutil.rmtree(repo, onerror=remove_readonly)
+        except OSError:
+            pass  # Preserve the original setup error if cleanup also fails.
         raise

@@ -199,3 +199,12 @@ def test_repository_action_errors_are_readable(tmp_path, stage):
                                   read_key=lambda: next(keys))
     assert walkthrough._own_repository() == (None if stage == "plan" else 1)
     assert "Could not complete this action: repository unavailable" in stream.getvalue()
+
+
+def test_welcome_falls_back_to_ascii_on_non_unicode_terminals(monkeypatch):
+    monkeypatch.setattr(ui, "supports_unicode", lambda stream: False)
+    console = Console(file=io.StringIO(), width=100, height=32)
+    walkthrough = DemoWalkthrough(console, run_command=lambda args: 0, ask=lambda _: "")
+    page = walkthrough.screen(0).plain
+    assert page.startswith("ALETHEORE\n")
+    assert page.isascii()

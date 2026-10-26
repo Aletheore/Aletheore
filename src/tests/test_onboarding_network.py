@@ -226,3 +226,24 @@ def test_demo_reports_sample_lookup_errors_without_a_traceback(tmp_path, monkeyp
     assert "Run aletheore demo again" in result.output
     assert str(repo) in result.output
     assert (repo / ".aletheore" / "air.json").exists()
+
+
+def test_failed_scan_removes_real_git_readonly_objects(tmp_path, monkeypatch):
+    import aletheore.demo as demo
+    import stat
+
+    repo = tmp_path / "failed real git demo"
+    repo.mkdir()
+    monkeypatch.setattr(demo.tempfile, "mkdtemp", lambda **kwargs: str(repo))
+
+    def fail(*args, **kwargs):
+        objects = [path for path in (repo / ".git" / "objects").rglob("*") if path.is_file()]
+        assert objects
+        for path in objects:
+            path.chmod(stat.S_IREAD)
+        raise OSError("scan failed after git setup")
+
+    monkeypatch.setattr(demo, "scan_repository", fail)
+    with pytest.raises(OSError, match="scan failed after git setup"):
+        demo.create_demo()
+    assert not repo.exists()
