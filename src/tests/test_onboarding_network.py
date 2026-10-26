@@ -129,3 +129,46 @@ def test_demo_cleans_up_if_scan_fails(tmp_path, monkeypatch):
     assert result.exit_code == 1, result.output
     assert "cannot scan demo" in result.output
     assert not repo.exists()
+
+
+def test_demo_git_uses_resolved_executable_and_shell_free_arguments(tmp_path, monkeypatch):
+    import aletheore.demo as demo
+
+    repo = tmp_path / "sample with spaces"
+    repo.mkdir()
+    executable = str(tmp_path / "trusted tools" / "git")
+    monkeypatch.setattr(demo.tempfile, "mkdtemp", lambda **kwargs: str(repo))
+    monkeypatch.setattr(demo, "git_executable", lambda: executable)
+    calls = []
+    monkeypatch.setattr(demo.subprocess, "run", lambda argv, **kwargs: calls.append((argv, kwargs)))
+    monkeypatch.setattr(demo, "scan_repository", lambda *args, **kwargs: {})
+    monkeypatch.setattr(demo, "write_evidence", lambda *args: None)
+
+    assert demo.create_demo() == (repo, {})
+    assert len(calls) == 7
+    for argv, kwargs in calls:
+        assert argv[0] == executable
+        assert kwargs["shell"] is False
+        assert kwargs["cwd"] == repo
+        assert kwargs["env"]["GIT_CONFIG_NOSYSTEM"] == "1"
+        assert "core.hooksPath=" + str(repo / ".demo-hooks") in argv
+        assert "commit.gpgsign=false" in argv
+    assert calls[0][0][-3:] == ["init", "--quiet", "--template="]
+    assert calls[1][0][-6:] == ["add", "--", *demo._FILES]
+
+
+def test_demo_cleans_up_when_git_cannot_be_resolved(tmp_path, monkeypatch):
+    import aletheore.demo as demo
+
+    repo = tmp_path / "missing-git-demo"
+    repo.mkdir()
+    monkeypatch.setattr(demo.tempfile, "mkdtemp", lambda **kwargs: str(repo))
+
+    def missing_git():
+        raise FileNotFoundError("git was not found on PATH")
+
+    monkeypatch.setattr(demo, "git_executable", missing_git)
+    result = runner.invoke(app, ["demo"])
+    assert result.exit_code == 1
+    assert "git was not found on PATH" in result.output
+    assert not repo.exists()

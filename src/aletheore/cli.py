@@ -2658,7 +2658,7 @@ def scan(
 @app.command(help="explore a small synthetic repository with the real local scanner")
 def demo() -> None:
     import shlex
-    import subprocess
+    import subprocess  # nosec B404 - exception types only; demo owns fixed Git calls
 
     from aletheore.demo import create_demo
     from aletheore.query import find_hotspots

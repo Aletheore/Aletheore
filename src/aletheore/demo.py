@@ -4,11 +4,12 @@
 
 import os
 import shutil
-import subprocess
+import subprocess  # nosec B404 - fixed Git argument lists, never a shell
 import tempfile
 from pathlib import Path
 
 from aletheore.evidence import scan_repository, write_evidence
+from aletheore.git_exec import git_executable
 
 
 _FILES = {
@@ -23,6 +24,7 @@ def create_demo() -> tuple[Path, dict]:
     """Keep the fresh temporary repo so follow-up queries and dashboard work."""
     repo = Path(tempfile.mkdtemp(prefix="aletheore-demo-"))
     try:
+        executable = git_executable()
         # Ignore user/system git configuration: a demo must not invoke signing,
         # hooks, credential helpers or filters installed by a user's git setup.
         env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
@@ -30,10 +32,10 @@ def create_demo() -> tuple[Path, dict]:
         hooks.mkdir()
 
         def git(*args: str) -> None:
-            subprocess.run(
-                ["git", "-c", f"core.hooksPath={hooks}", "-c", "commit.gpgsign=false",
+            subprocess.run(  # nosec B603 - absolute Git executable, fixed demo args, shell disabled
+                [executable, "-c", f"core.hooksPath={hooks}", "-c", "commit.gpgsign=false",
                  "-c", "user.name=Aletheore Demo", "-c", "user.email=demo@example.invalid", *args],
-                cwd=repo, env=env, check=True, capture_output=True, text=True, timeout=30,
+                cwd=repo, env=env, check=True, capture_output=True, text=True, timeout=30, shell=False,
             )
 
         git("init", "--quiet", "--template=")
