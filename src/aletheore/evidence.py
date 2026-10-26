@@ -341,6 +341,19 @@ def _hash_file(path: Path) -> str | None:
         return None
 
 
+def _scan_cache_code_version() -> str:
+    """__version__ plus a hash of the modules whose logic shapes a cached
+    module/endpoint entry (parsing, import resolution, route extraction) and
+    the installed tree-sitter grammars. __version__ alone doesn't move in an
+    editable install or between commits, so a resolver fix would otherwise
+    keep serving the old, wrong edges until .aletheore was deleted."""
+    from aletheore import endpoints as _endpoints
+    from aletheore.file_cache import code_version
+    from aletheore.scanner import graph as _graph
+
+    return code_version(_graph.__file__, _endpoints.__file__, parses=True)
+
+
 def _load_local_scan_cache(
     repo_path: Path,
     signatures_out: dict[str, str] | None = None,
@@ -362,6 +375,8 @@ def _load_local_scan_cache(
     # at all) the same as a missing cache file forces a full re-parse,
     # which then overwrites the cache with a correctly-stamped one.
     if cache.get("aletheore_version") != __version__:
+        return None, None
+    if cache.get("code_version") != _scan_cache_code_version():
         return None, None
 
     if signatures_out is not None:
@@ -419,6 +434,7 @@ def _write_local_scan_cache(
             json.dumps(
                 {
                     "aletheore_version": __version__,
+                    "code_version": _scan_cache_code_version(),
                     "resolution_sigs": resolution_sigs or {},
                     "hashes": hashes,
                     "modules": modules_by_path,

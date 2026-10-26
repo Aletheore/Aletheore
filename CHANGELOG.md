@@ -5,6 +5,9 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Local scan caches now invalidate when parser/endpoint code or installed tree-sitter
+  grammars change, even without a package-version bump. Older unstamped caches rebuild
+  once instead of serving stale modules or API endpoints.
 - Added `aletheore demo`: a real local scan of a clearly labelled synthetic repository,
   showing dependency edges and git hotspots with retained evidence for follow-up queries.
 - Added `aletheore scan --explain-network`: reports conditional registry, external scanner,
