@@ -27,6 +27,18 @@
   Prefer the free local CLI? Keep reading below.
 </p>
 
+Try a small example first:
+
+```bash
+pipx install aletheore
+aletheore demo
+```
+
+The demo creates a synthetic Python repository and local commit history, then uses the
+real scanner to show its dependency graph and hotspots. No account, model, or clone is
+needed. The sample and evidence stay in a temporary directory for follow-up queries or
+the local dashboard; delete that directory when finished. Git must be installed.
+
 ```bash
 $ pipx install aletheore
 $ aletheore scan .
@@ -43,8 +55,11 @@ Scanning /path/to/your/repo...
   Evidence written to /path/to/your/repo/.aletheore/air.json
 ```
 
-No LLM call, no account, no network access beyond the vulnerability/license registry lookups
-(turn those off too for a fully offline run). That one command gets you a real dependency
+No LLM call or account. Inspect potential network traffic before scanning with
+`aletheore scan . --explain-network`: registry lookups, installed Semgrep's registry access
+and metrics, configured SonarQube analysis submission, and conditional crash reporting.
+For a fully offline scan, run `ALETHEORE_CRASH_REPORTING=0 aletheore scan . --no-check-vulnerabilities --no-check-licenses --no-check-static-analysis`.
+That one scan command gets you a real dependency
 graph, secrets scan, git-history secret sweep, dependency-vulnerability/license check, and
 static API endpoint map — for **Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, Java, Kotlin,
 Ruby, PHP, C, C++, C#, and Swift**.
@@ -55,8 +70,9 @@ Ruby, PHP, C, C++, C#, and Swift**.
   architecture wiki) is checked against the file:line it cites. A finding that can't be
   verified against real evidence gets dropped or flagged, not shipped silently.
 - **The free tier is actually free.** `scan`, `query`, `diff`, the MCP server, and the local
-  dashboard need no account and no API key. Nothing leaves your machine, apart from a crash report
-  if the CLI itself crashes (on by default, one command to turn off; see
+  dashboard need no account and no API key. The deterministic core processes source locally;
+  registry checks and configured external scanners have network behavior disclosed by
+  `scan --explain-network`. Crash reporting is on by default (see
   [Crash reporting](src/README.md#crash-reporting)).
 - **Bring your own model, or don't use one at all.** `audit` works with six provider families
   (Claude, OpenAI, Google, Mistral, xAI, or a local Ollama model) — your key, your cost, your
