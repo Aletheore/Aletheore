@@ -42,7 +42,7 @@
 
 [Watch the 95-second developer walkthrough →](https://www.aletheore.com/#walkthrough)
 
-[![Watch the Aletheore developer walkthrough: scan, inspect evidence, connect an agent, review changes](assets/walkthrough-poster.jpg)](https://www.aletheore.com/#walkthrough)
+https://github.com/user-attachments/assets/3004e18e-c2da-426c-beb2-aa4cb1c85694
 
 Follow a scan of Aletheore's own CLI source, inspect dependencies and related tests,
 then see how the evidence connects to MCP and PR review. The walkthrough separates
