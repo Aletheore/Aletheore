@@ -71,6 +71,18 @@ can use the network; see [Data and network behavior](#data-and-network-behavior)
 Already installed? Update with `pipx upgrade aletheore`.
 For a virtual environment or source installation, see the [setup guide](src/README.md#setup).
 
+### Try the built-in demo
+
+```bash
+aletheore demo
+```
+
+The demo creates a small synthetic Python repository with local Git history and runs
+the real scanner to show dependencies and hotspots. Git must be installed; no account,
+model, or repository clone is needed. The sample and evidence remain in a temporary
+directory for follow-up queries and the dashboard. Delete that directory when finished.
+
+
 ## See the evidence
 
 ### Explore a repository's dependencies
@@ -260,6 +272,15 @@ on enabled checks and integrations:
 - AI audits, hosted features, and configured semantic services send the context required
   by the selected workflow to their configured services. Local evidence can contain
   sensitive metadata or source excerpts; review it before sharing.
+
+Before scanning, inspect potential traffic for the resolved configuration:
+
+```bash
+aletheore scan . --explain-network
+```
+
+This prints the conditional network paths and exits without scanning. It is an
+explanation of configured behavior, rather than a firewall or packet trace.
 
 To skip registry and static-scanner checks for a local scan:
 
