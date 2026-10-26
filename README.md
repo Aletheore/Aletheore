@@ -44,7 +44,7 @@
 
 <!-- GitHub requires a standalone attachment URL to render the video player. -->
 <!-- markdownlint-disable-next-line MD034 -->
-https://github.com/user-attachments/assets/658e99ef-e66a-478f-b7bc-0b62fea5c495
+https://github.com/user-attachments/assets/91b58344-d5b7-4be5-b71f-32f1da8499ed
 
 With background music and on-screen explanations. Follow a scan of Aletheore's own CLI source, inspect dependencies and related tests,
 then see how the evidence connects to MCP and PR review. The walkthrough separates
