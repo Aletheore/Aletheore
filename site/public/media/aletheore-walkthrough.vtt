@@ -39,20 +39,26 @@ Configure the client. Request targeted repository evidence.
 00:00:53.733 --> 00:00:59.983
 The tool returns source with its file and line range.
 
-00:01:00.000 --> 00:01:05.800
-Read a real finding on a public pull request.
+00:01:00.000 --> 00:01:02.500
+A dependency graph appears in the PR.
 
-00:01:05.800 --> 00:01:11.250
-This historical review was later marked “no longer detected”.
+00:01:02.500 --> 00:01:07.000
+Trace the changed file to its dependents.
 
-00:01:11.267 --> 00:01:16.667
+00:01:07.000 --> 00:01:12.500
+A real review flagged a count-parsing regression.
+
+00:01:12.500 --> 00:01:16.100
+Real screenshots from public Aletheore reviews.
+
+00:01:16.100 --> 00:01:21.500
 Hosted features add architecture pages and AI-marked symbol documentation.
 
-00:01:16.667 --> 00:01:22.367
+00:01:21.500 --> 00:01:27.200
 Monitoring can connect an endpoint back to its source handler.
 
-00:01:22.500 --> 00:01:27.000
+00:01:27.333 --> 00:01:31.833
 Scan → source → dependents → candidate tests → agent → PR review.
 
-00:01:27.000 --> 00:01:30.000
+00:01:31.833 --> 00:01:34.833
 Free local scanner · Python 3.11–3.14 · pipx required

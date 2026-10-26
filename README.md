@@ -25,7 +25,7 @@
 
 ## See the workflow
 
-[Watch the 90-second developer walkthrough →](https://www.aletheore.com/#walkthrough)
+[Watch the 95-second developer walkthrough →](https://www.aletheore.com/#walkthrough)
 
 [![Watch the Aletheore developer walkthrough: scan, inspect evidence, connect an agent, review changes](assets/walkthrough-poster.jpg)](https://www.aletheore.com/#walkthrough)
 
