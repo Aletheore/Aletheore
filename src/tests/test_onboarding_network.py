@@ -1,4 +1,5 @@
 import json
+import os
 import socket
 import subprocess
 
@@ -79,6 +80,12 @@ def test_demo_scans_real_sample_and_supports_follow_up_queries(tmp_path, monkeyp
     assert result.exit_code == 0, (result.output, result.exception)
     assert "synthetic" in result.output
     assert "pricing.py" in result.output
+    assert "Your task: change pricing.py::total" in result.output
+    assert "3 files depend on pricing.py: 1 directly, 2 transitively." in result.output
+    assert "Confirmed caller of total: service.py" in result.output
+    assert "The demo did not run these tests" in result.output
+    assert "Try your own repository next" in result.output
+    assert (repo / ".aletheore" / "demo").read_text() == demo.DEMO_MARKER
     evidence = load_evidence(repo)
     assert ["service.py", "pricing.py"] in evidence["repository"]["dependency_graph"]["edges"]
     hotspots = find_hotspots(evidence, None)
@@ -142,7 +149,7 @@ def test_demo_git_uses_resolved_executable_and_shell_free_arguments(tmp_path, mo
     calls = []
     monkeypatch.setattr(demo.subprocess, "run", lambda argv, **kwargs: calls.append((argv, kwargs)))
     monkeypatch.setattr(demo, "scan_repository", lambda *args, **kwargs: {})
-    monkeypatch.setattr(demo, "write_evidence", lambda *args: None)
+    monkeypatch.setattr(demo, "write_evidence", lambda *args: (repo / ".aletheore").mkdir())
 
     assert demo.create_demo() == (repo, {})
     assert len(calls) == 7
@@ -172,3 +179,21 @@ def test_demo_cleans_up_when_git_cannot_be_resolved(tmp_path, monkeypatch):
     assert result.exit_code == 1
     assert "git was not found on PATH" in result.output
     assert not repo.exists()
+
+
+def test_demo_commands_remain_copyable_in_a_narrow_terminal(tmp_path, monkeypatch):
+    import shlex
+
+    import aletheore.demo as demo
+    from rich.console import Console
+
+    repo = tmp_path / "a long sample path with spaces and [brackets]"
+    repo.mkdir()
+    monkeypatch.setattr(demo.tempfile, "mkdtemp", lambda **kwargs: str(repo))
+    monkeypatch.setattr("aletheore.cli.console", Console(width=40))
+    result = runner.invoke(app, ["demo"])
+    assert result.exit_code == 0, result.output
+    quote = subprocess.list2cmdline if os.name == "nt" else shlex.join
+    assert quote(["cd", str(repo)]) in result.output.splitlines()
+    for command in ("aletheore dependents pricing.py", "aletheore tests-for pricing.py", "aletheore scan --explain-network"):
+        assert command in result.output.splitlines()

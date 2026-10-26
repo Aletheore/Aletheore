@@ -178,10 +178,15 @@ that scan.
 ### `aletheore demo`
 
 Creates a fresh synthetic Python checkout example with three local commits, scans it
-with the real engine, and displays dependency edges and a hotspot table. Requires Git;
+with the real engine, and guides you through changing `pricing.py::total`: source,
+direct and transitive dependents, a confirmed caller, candidate tests, and hotspots.
+Candidate tests are not executed. The dashboard highlights the sample target and labels
+checks that did not run. Requires Git;
 does not clone, index embeddings, query registries, or invoke external scanners. Prints
 the retained temporary directory and follow-up query/dashboard commands. Delete the
-directory when finished. Normal CLI crash-reporting preferences still apply.
+directory when finished. The final commands show how to inspect the network plan and
+scan your own repository; normal scans may enable checks the demo skipped.
+Normal CLI crash-reporting preferences still apply.
 
 ### `aletheore init [path]`
 

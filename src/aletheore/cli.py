@@ -2661,7 +2661,8 @@ def demo() -> None:
     import subprocess  # nosec B404 - exception types only; demo owns fixed Git calls
 
     from aletheore.demo import create_demo
-    from aletheore.query import find_hotspots
+    from aletheore.query import find_blast_radius, find_hotspots, find_symbol_source
+    from aletheore.tests_for import tests_for_report
 
     console.print(
         "[bold]Aletheore demo[/bold] — synthetic Python checkout example. "
@@ -2676,20 +2677,61 @@ def demo() -> None:
         if detail:
             console.print(detail.strip(), markup=False)
         raise typer.Exit(code=1)
-    console.print("\n[bold]Dependency graph[/bold] (importer → dependency)")
+    console.print("\n[bold]1. Your task: change pricing.py::total[/bold]")
+    source = find_symbol_source(evidence, repo, "pricing.py", "total")
+    console.print(f"pricing.py:{source['start_line']}-{source['end_line']}", markup=False)
+    console.print(source["source"], markup=False, highlight=False)
+    console.print("Before changing this function, trace its callers and find tests to investigate.")
+    console.print("\n[bold]2. Follow the dependency graph[/bold] (importer → dependency)")
     for source, target in evidence["repository"]["dependency_graph"]["edges"]:
         console.print(f"  {source} → {target}", markup=False)
+    impact = find_blast_radius(evidence, repo, "pricing.py", "total")
+    console.print(
+        f"\n{impact['affected_total']} files depend on pricing.py: "
+        f"{impact['direct_total']} directly, {impact['transitive_total']} transitively.",
+        markup=False,
+    )
+    console.print("Direct: " + ", ".join(impact["direct_dependents"]), markup=False)
+    console.print("Transitive: " + ", ".join(impact["transitive_dependents"]), markup=False)
+    console.print("Confirmed caller of total: " + ", ".join(impact["confirmed_callers"]), markup=False)
+    console.print("These are resolved static imports, not a guarantee of every runtime impact.")
+    console.print("\n[bold]3. Find candidate tests[/bold]")
+    # Keep the first-run explanation short; tests-for retains the full coverage
+    # and freshness report for the follow-up command below.
+    candidates = tests_for_report(evidence, repo, "pricing.py").partition("\n\nCoverage:")[0].replace(" (see Coverage)", "")
+    console.print(candidates, markup=False, highlight=False)
+    console.print("Imports and filenames suggest candidates; they do not prove runtime coverage.")
+    console.print("The tests-for command below includes full coverage and freshness details.")
+    console.print("The demo did not run these tests. Inspect and run them before relying on a change.")
+    console.print("\n[bold]4. See why this file deserves attention[/bold]")
     table = Table(title="Hotspots — computed from the sample's synthetic commit history")
     table.add_column("File")
     table.add_column("Commits", justify="right")
-    table.add_column("Dependents", justify="right")
+    table.add_column("Direct dependents", justify="right")
     for hotspot in find_hotspots(evidence, None):
         table.add_row(hotspot["path"], str(hotspot["churn_count"]), str(hotspot["dependents_count"]))
     console.print(table)
-    console.print(f"\nSample and evidence kept at: {repo}", markup=False)
+    console.print(f"\nSample and evidence kept at: {repo}", markup=False, soft_wrap=True)
     quote_command = subprocess.list2cmdline if os.name == "nt" else shlex.join
-    console.print(quote_command(["aletheore", "query", "hotspots", "--path", str(repo)]), markup=False)
-    console.print(quote_command(["aletheore", "dashboard", "--path", str(repo)]), markup=False)
+    console.print("\n[bold]Keep exploring the sample[/bold] — run these commands:")
+    # Soft wrapping leaves each shell command intact when copied or redirected,
+    # including quoted temporary paths with spaces. Short relative commands then
+    # avoid repeating an often very long macOS temporary-directory prefix.
+    commands = [
+        ["cd", str(repo)],
+        ["aletheore", "locate", "total"],
+        ["aletheore", "dependents", "pricing.py"],
+        ["aletheore", "tests-for", "pricing.py"],
+        ["aletheore", "query", "hotspots"],
+        ["aletheore", "dashboard"],
+    ]
+    for command in commands:
+        console.print(quote_command(command), markup=False, highlight=False, soft_wrap=True)
+    console.print("\n[bold]Try your own repository next[/bold]")
+    console.print("Normal scans can enable network checks that this sample skipped. Inspect the plan first.")
+    own_repo = r"C:\path\to\your-repo" if os.name == "nt" else "/path/to/your-repo"
+    for command in (["cd", own_repo], ["aletheore", "scan", "--explain-network"], ["aletheore", "scan"]):
+        console.print(quote_command(command), markup=False, highlight=False, soft_wrap=True)
     console.print("Delete this temporary directory when finished. Crash-reporting preferences still apply.")
 
 

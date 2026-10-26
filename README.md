@@ -78,7 +78,8 @@ aletheore demo
 ```
 
 The demo creates a small synthetic Python repository with local Git history and runs
-the real scanner to show dependencies and hotspots. Git must be installed; no account,
+the real scanner to trace a pricing change through its source, callers, dependencies,
+candidate tests, and hotspots. Tests are suggested, not executed. Git must be installed; no account,
 model, or repository clone is needed. The sample and evidence remain in a temporary
 directory for follow-up queries and the dashboard. Delete that directory when finished.
 

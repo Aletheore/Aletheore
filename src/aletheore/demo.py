@@ -11,6 +11,7 @@ from pathlib import Path
 from aletheore.evidence import scan_repository, write_evidence
 from aletheore.git_exec import git_executable
 
+DEMO_MARKER = "synthetic-checkout-v1\n"
 
 _FILES = {
     "app.py": "from service import checkout\n\ndef main():\n    return checkout([12, 8])\n",
@@ -56,6 +57,7 @@ def create_demo() -> tuple[Path, dict]:
             map_endpoints=False, map_schema=False,
         )
         write_evidence(evidence, repo)
+        (repo / ".aletheore" / "demo").write_text(DEMO_MARKER, encoding="utf-8")
         return repo, evidence
     except BaseException:
         shutil.rmtree(repo, ignore_errors=True)

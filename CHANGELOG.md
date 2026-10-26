@@ -5,6 +5,11 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Dashboard panels now distinguish checks that did not run from completed checks with
+  no findings, including overview counts, secret-history coverage and limited scans.
+- The local demo now guides a pricing change through source, callers, import dependents,
+  candidate tests and hotspots, with copyable commands and a handoff to your own repository.
+
 ## 0.12.0 - 2026-10-26
 
 - Added a tested Java command-injection audit rule for variable commands/executables
