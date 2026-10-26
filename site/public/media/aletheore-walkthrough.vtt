@@ -1,67 +1,58 @@
 WEBVTT
 
-00:00:00.000 --> 00:00:06.000
-Before editing query.py, inspect the files that depend on it.
+00:00:00.200 --> 00:00:03.600
+Before changing query.py, trace what depends on it.
 
-00:00:06.000 --> 00:00:12.000
-Aletheore resolves five non-test import dependents in this scan.
+00:00:03.600 --> 00:00:07.100
+Direct and transitive relationships, resolved from the scan.
 
-00:00:12.000 --> 00:00:19.500
-Local scanning needs no Aletheore account or model API key.
+00:00:07.500 --> 00:00:13.100
+No LLM in the deterministic scan.
 
-00:00:19.500 --> 00:00:27.000
-Enabled registry checks and scanner integrations can use the network.
+00:00:13.100 --> 00:00:17.900
+The output becomes reusable evidence for the next steps.
 
-00:00:27.000 --> 00:00:36.000
-The deterministic scanner builds structure before an AI model reasons.
+00:00:18.733 --> 00:00:24.433
+A file, a symbol, a line range, and the actual source.
 
-00:00:36.000 --> 00:00:45.000
-air.json and air.toon hold the evidence used by downstream tools.
+00:00:24.433 --> 00:00:28.133
+A target selects this file’s ownership.
 
-00:00:45.000 --> 00:00:54.000
-The result includes the file, symbol, line range, and source.
+00:00:28.133 --> 00:00:34.133
+A changed file can affect more than its immediate importers.
 
-00:00:54.000 --> 00:01:03.000
-This function uses file-scoped ownership when a target is supplied.
+00:00:34.133 --> 00:00:37.133
+_launcher.py → cli.py → query.py
 
-00:01:03.000 --> 00:01:12.000
-The CLI, dashboard, MCP server, and tool router depend on this file.
+00:00:37.133 --> 00:00:39.367
+dashboard.py → mcp_server.py → query.py
 
-00:01:12.000 --> 00:01:21.000
-Static imports are useful context; runtime loading can leave gaps.
+00:00:39.367 --> 00:00:44.867
+Eight candidates from direct imports or naming matches.
 
-00:01:21.000 --> 00:01:30.000
-Related tests are separated by the strength of their relationship.
+00:00:44.867 --> 00:00:48.733
+Candidates guide investigation. They do not prove test coverage.
 
-00:01:30.000 --> 00:01:39.000
-These are candidates. The command does not execute tests or prove coverage.
+00:00:48.733 --> 00:00:53.733
+Configure the client. Request targeted repository evidence.
 
-00:01:39.000 --> 00:01:46.500
-The local dashboard exposes the dependency graph and scan history.
+00:00:53.733 --> 00:00:59.983
+The tool returns source with its file and line range.
 
-00:01:46.500 --> 00:01:54.000
-Use it to investigate structure alongside the targeted CLI answers.
+00:01:00.000 --> 00:01:05.800
+Read a real finding on a public pull request.
 
-00:01:54.000 --> 00:02:03.000
-Run aletheore mcp-install . --target cursor to configure Cursor.
+00:01:05.800 --> 00:01:11.250
+This historical review was later marked “no longer detected”.
 
-00:02:03.000 --> 00:02:12.000
-MCP returns repository evidence; your agent remains responsible for reasoning.
+00:01:11.267 --> 00:01:16.667
+Hosted features add architecture pages and AI-marked symbol documentation.
 
-00:02:12.000 --> 00:02:21.000
-The GitHub App can post source-linked findings on pull requests.
+00:01:16.667 --> 00:01:22.367
+Monitoring can connect an endpoint back to its source handler.
 
-00:02:21.000 --> 00:02:30.000
-This historical finding was marked no longer detected after a later commit.
-
-00:02:30.000 --> 00:02:37.500
-Hosted features include AI-marked symbol docs and AIRview architecture pages.
-
-00:02:37.500 --> 00:02:45.000
-Endpoint monitoring adds source context. Check current plan availability.
-
-00:02:45.000 --> 00:02:52.500
-Start locally, inspect the evidence, then connect the workflow you need.
-
-00:02:52.500 --> 00:03:00.000
+00:01:22.500 --> 00:01:27.000
 Scan → source → dependents → candidate tests → agent → PR review.
+
+00:01:27.000 --> 00:01:30.000
+Free local scanner · Python 3.11–3.14 · pipx required
