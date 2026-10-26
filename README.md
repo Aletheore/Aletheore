@@ -27,7 +27,7 @@
   <a href="https://github.com/apps/aletheore/installations/new"><img src="https://img.shields.io/badge/GitHub_App-Install-dd8034?style=flat-square&amp;logo=github&amp;logoColor=white" alt="Install the GitHub App"></a>
   <a href="https://github.com/marketplace/actions/aletheore"><img src="https://img.shields.io/badge/Marketplace-Action-2088ff?style=flat-square&amp;logo=githubactions&amp;logoColor=white" alt="GitHub Marketplace Action"></a>
   <a href="https://github.com/sponsors/ArihantK15"><img src="https://img.shields.io/badge/Sponsor-Support-ea4aaa?style=flat-square&amp;logo=githubsponsors&amp;logoColor=white" alt="Sponsor development"></a>
-  <a href="https://github.com/Aletheore/Aletheore/stargazers"><img src="https://img.shields.io/github/stars/Aletheore/Aletheore?style=flat-square&amp;label=Star&amp;color=e3b341" alt="GitHub stars"></a>
+  <a href="https://github.com/Aletheore/Aletheore"><img src="https://img.shields.io/github/stars/Aletheore/Aletheore?style=flat-square&amp;label=Star&amp;color=e3b341" alt="GitHub stars"></a>
 </p>
 
 <p align="center">
