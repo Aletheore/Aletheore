@@ -42,6 +42,8 @@
 
 [Watch the 95-second developer walkthrough →](https://www.aletheore.com/#walkthrough)
 
+<!-- GitHub requires a standalone attachment URL to render the video player. -->
+<!-- markdownlint-disable-next-line MD034 -->
 https://github.com/user-attachments/assets/658e99ef-e66a-478f-b7bc-0b62fea5c495
 
 Narrated by Emma (British English). Follow a scan of Aletheore's own CLI source, inspect dependencies and related tests,
@@ -50,7 +52,7 @@ captured local output from explanations of hosted features.
 
 ## Quickstart
 
-Requires **Python 3.11–3.14** and [pipx](https://pipx.pypa.io/stable/installation/).
+Requires **Python 3.11–3.14** and [pipx](https://pipx.pypa.io/latest/how-to/install-pipx.html).
 Run these commands from a repository you want to inspect:
 
 ```bash
