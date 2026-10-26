@@ -1,5 +1,8 @@
 import io
+import os
 import shutil
+import stat
+from types import SimpleNamespace
 
 import pytest
 from rich.console import Console
@@ -17,7 +20,14 @@ ENTER, DOWN = "\r", "\x1b[B"
 def sample():
     repo, evidence = create_demo()
     yield repo, evidence
-    shutil.rmtree(repo)
+    def remove_readonly(function, path, exc_info):
+        if not isinstance(exc_info[1], PermissionError):
+            raise exc_info[1]
+        os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+        function(path)
+
+    # Git objects carry the read-only attribute on Windows runners.
+    shutil.rmtree(repo, onerror=remove_readonly)
 
 
 def tour(monkeypatch, sample, keys, *, ask=""):
@@ -133,3 +143,59 @@ def test_plain_flag_bypasses_the_tour_even_in_a_terminal(monkeypatch):
     result = CliRunner().invoke(app, ["demo", "--plain"])
     assert result.exit_code == 0, result.output
     assert "3 files depend on pricing.py" in result.output
+
+
+@pytest.mark.parametrize("text", [
+    '{"result":{"affected_total":3,"affected_test_files":1}}',
+    'result:\n  affected_total: 3\n  affected_test_files: 1',
+])
+def test_mcp_demo_accepts_real_serializer_formats(monkeypatch, tmp_path, text):
+    import asyncio
+
+    async def call_tool(name, arguments):
+        assert name == "aletheore_get_blast_radius"
+        assert arguments == {"target": "pricing.py", "symbol": "total"}
+        return SimpleNamespace(is_error=False, content=[SimpleNamespace(text=text)])
+
+    def build_server(repo, **kwargs):
+        assert repo == tmp_path
+        assert kwargs == {"allow": frozenset(), "watch": False, "profile": "lean"}
+        return SimpleNamespace(call_tool=call_tool)
+
+    monkeypatch.setattr("aletheore.mcp_server.build_server", build_server)
+    walkthrough = DemoWalkthrough(Console(file=io.StringIO()), run_command=lambda _: 0, ask=lambda _: "")
+    walkthrough.repo = tmp_path
+    assert asyncio.run(walkthrough._agent_call()) == {"affected_total": 3, "affected_test_files": 1}
+
+
+@pytest.mark.parametrize("content", [
+    [], [SimpleNamespace(text='{}')], [SimpleNamespace(text='not: [valid')],
+    [SimpleNamespace(text='{"result":{"affected_total":3,"affected_test_files":[]}}')],
+    [SimpleNamespace(text='{"result":{"affected_total":true,"affected_test_files":1}}')],
+])
+def test_unexpected_mcp_payload_has_a_readable_failure(monkeypatch, tmp_path, content):
+    import asyncio
+
+    async def call_tool(*args):
+        return SimpleNamespace(is_error=False, content=content)
+
+    monkeypatch.setattr("aletheore.mcp_server.build_server", lambda *a, **k: SimpleNamespace(call_tool=call_tool))
+    walkthrough = DemoWalkthrough(Console(file=io.StringIO()), run_command=lambda _: 0, ask=lambda _: "")
+    walkthrough.repo = tmp_path
+    with pytest.raises(OSError, match="unreadable impact response"):
+        asyncio.run(walkthrough._agent_call())
+
+
+@pytest.mark.parametrize("stage", ["plan", "scan"])
+def test_repository_action_errors_are_readable(tmp_path, stage):
+    def run_command(args):
+        if stage == "plan" or "--explain-network" not in args:
+            raise OSError("repository unavailable")
+        return 0
+
+    keys = iter([" ", ENTER])
+    stream = io.StringIO()
+    walkthrough = DemoWalkthrough(Console(file=stream), run_command=run_command, ask=lambda _: str(tmp_path),
+                                  read_key=lambda: next(keys))
+    assert walkthrough._own_repository() == (None if stage == "plan" else 1)
+    assert "Could not complete this action: repository unavailable" in stream.getvalue()

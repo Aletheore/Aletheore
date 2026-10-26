@@ -423,6 +423,7 @@ def _print_query_result(result: object) -> None:
 
 _COMMAND_SUMMARIES = [
     ("scan", "run the scanner, write evidence, no LLM call"),
+    ("demo", "take a guided tour of scans, queries and coding-agent evidence"),
     ("audit", "scan, then have a coding agent write a grounded report"),
     ("index", "build the semantic search index used by 'query search-codebase' and 'query answer'"),
     ("query", "answer a targeted question from existing evidence"),
@@ -458,7 +459,7 @@ _COMMAND_DESCRIPTIONS = dict(_COMMAND_SUMMARIES + _PICKER_ONLY_SUMMARIES)
 _COMMAND_GROUPS = [
     (
         "Scan and explore",
-        ["scan", "index", "query", "locate", "usages", "dependents", "tests-for", "cycles", "diff", "verify", "healthcheck"],
+        ["scan", "demo", "index", "query", "locate", "usages", "dependents", "tests-for", "cycles", "diff", "verify", "healthcheck"],
     ),
     ("Agents and skills", ["mcp", "mcp-install", "audit", "hallbook", "hook", "tokens"]),
     ("Dashboard and watch", ["dashboard", "watch", "init"]),
@@ -2273,12 +2274,14 @@ _MAIN_MENU = [
     ("dashboard", "Open the dashboard", "a live local view"),
     ("account", "Account", "sign in, sign out, status"),
     ("commands", "All commands", "every command, grouped by task"),
+    ("demo", "Take the guided demo", "scan, query and coding-agent evidence"),
     ("quit", "Quit", ""),
 ]
 
 # What Enter does on a command in the "All commands" picker. Commands that need nothing run as they are; the three
 # in _COMMAND_PROMPTS ask for their one required argument first; the rest print their own --help.
 _COMMAND_RUNS = {
+    "demo": ["demo"],
     "scan": ["scan", "."], "audit": ["audit", "."], "query": ["query"], "dashboard": ["dashboard", "."],
     "init": ["init", "."], "cycles": ["cycles"], "login": ["login"], "logout": ["logout"], "status": ["status"],
 }
@@ -2429,6 +2432,9 @@ def _run_menu(read_key=None, pause=None) -> None:
                 continue
         elif picked.key == "commands":
             _commands_flow(kwargs, pause)
+            continue
+        elif picked.key == "demo":
+            _run_cli(["demo"])
             continue
         pause()
 

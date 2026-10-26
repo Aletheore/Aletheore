@@ -354,6 +354,18 @@ def test_the_menu_remembers_where_you_were(monkeypatch):
     assert ran == [["query"], ["query"]]
 
 
+def test_guided_demo_is_available_from_home_and_all_commands(monkeypatch):
+    ran = []
+    monkeypatch.setattr(cli, "_run_cli", lambda args: ran.append(args) or 0)
+    position = [row[0] for row in cli._MAIN_MENU].index("demo")
+    cli._run_menu(read_key=_keys(*([DOWN] * position), ENTER, "q"),
+                  pause=lambda: pytest.fail("The tour returns directly to the home menu"))
+    assert ran == [["demo"]]
+    assert "demo" in dict(cli._COMMAND_GROUPS)["Scan and explore"]
+    assert cli._run_command("demo", {}) is True
+    assert ran == [["demo"], ["demo"]]
+
+
 def test_connect_submenu_passes_the_chosen_agent_and_all_means_no_target(monkeypatch):
     ran = []
     monkeypatch.setattr(cli, "_run_cli", lambda args: ran.append(args) or 0)

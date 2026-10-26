@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess  # nosec B404 - exception types only
 import textwrap
 from pathlib import Path
@@ -147,7 +148,24 @@ class DemoWalkthrough:
         result = await server.call_tool("aletheore_get_blast_radius", {"target": "pricing.py", "symbol": "total"})
         if result.is_error:
             raise OSError("The demo MCP tool could not retrieve impact evidence.")
-        return toon.decode(result.content[0].text)["result"]
+        try:
+            text = result.content[0].text
+            # MCP's serializer can fall back to JSON if TOON encoding fails.
+            payload = json.loads(text) if text.lstrip().startswith("{") else toon.decode(text)
+            data = payload["result"]
+            for key in ("affected_total", "affected_test_files"):
+                if type(data[key]) is not int or data[key] < 0:
+                    raise ValueError(f"Invalid {key} count")
+            return data
+        except (IndexError, AttributeError, KeyError, TypeError, ValueError, toon.ToonDecodeError) as exc:
+            raise OSError("The demo MCP tool returned an unreadable impact response.") from exc
+
+    def _command(self, args: list[str]) -> int:
+        try:
+            return self.run_command(args)
+        except (OSError, GitAnalysisError, subprocess.SubprocessError) as exc:
+            self.console.print(Text(f"Could not complete this action: {exc}"))
+            return 1
 
     def _own_repository(self) -> int | None:
         self.console.clear()
@@ -161,7 +179,7 @@ class DemoWalkthrough:
             self.read_key()
             return None
         # Explain first. Scanning a real repo may enable checks the sample skipped.
-        if self.run_command(["scan", str(repo), "--explain-network"]) != 0:
+        if self._command(["scan", str(repo), "--explain-network"]) != 0:
             self.console.print(Text("Could not read the network plan. Press any key to go back."))
             self.read_key()
             return None
@@ -175,7 +193,7 @@ class DemoWalkthrough:
                            self.console, header=header, read_key=self.read_key, numbers=False)
         if choice and choice.key == "scan":
             self.console.clear()
-            return self.run_command(["scan", str(repo)])
+            return self._command(["scan", str(repo)])
         return None
 
     def run(self) -> int:
@@ -219,7 +237,9 @@ class DemoWalkthrough:
                     step -= 1
             elif choice.key == "dashboard":
                 self.console.clear()
-                self.run_command(["dashboard", "--path", str(self.repo)])
+                if self._command(["dashboard", "--path", str(self.repo)]) != 0:
+                    self.console.print(Text("Press any key to return to the demo."))
+                    self.read_key()
             elif choice.key == "own":
                 result = self._own_repository()
                 if result is not None:
