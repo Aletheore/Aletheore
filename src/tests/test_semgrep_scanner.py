@@ -21,6 +21,28 @@ def test_check_semgrep_reports_not_installed(tmp_path):
     assert result == {"checked": False, "reason": "semgrep not installed", "findings": []}
 
 
+def test_java_command_rule_is_loaded_and_normalized(tmp_path):
+    rule_id = "java-runtime-exec-command-injection"
+    payload = {"results": [{
+        "check_id": f"src.aletheore.static_analysis.semgrep_rules.{rule_id}",
+        "path": str(tmp_path / "Commands.java"),
+        "start": {"line": 7},
+        "extra": {"severity": "WARNING", "message": "Review variable command",
+                  "metadata": {"category": "security"}},
+    }]}
+    with patch("aletheore.static_analysis.semgrep_scanner.shutil.which", return_value="/usr/bin/semgrep"), \
+         patch("aletheore.static_analysis.semgrep_scanner.subprocess.run",
+               return_value=_mock_run(0, stdout=json.dumps(payload))) as run:
+        result = check_semgrep(tmp_path)
+
+    assert result["checked"] is True
+    assert result["findings"][0] == {
+        "tool": "semgrep", "rule_id": rule_id, "severity": "major", "type": "vulnerability",
+        "path": "Commands.java", "line": 7, "message": "Review variable command",
+    }
+    assert "--config" in run.call_args.args[0]
+
+
 def test_check_semgrep_resolves_which_to_an_absolute_path(tmp_path):
     # Real gap found by an independent Strix pentest pass (2026-10-15):
     # shutil.which() can return a path relative to a relative PATH entry,
