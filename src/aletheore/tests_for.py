@@ -88,7 +88,8 @@ def _files_changed_since_scan(repo_path: Path, paths: list[str], scanned_at: obj
     return changed
 
 
-def tests_for_report(evidence: dict, repo_path: Path, target: str) -> str:
+def tests_for_report(evidence: dict, repo_path: Path, target: str, *, summary_only: bool = False) -> str:
+    """Report candidate tests; summary_only omits the detailed coverage appendix."""
     modules = evidence["repository"]["modules"]
     by_path = {m["path"]: m for m in modules if m.get("path")}
     target = target.removeprefix("./")
@@ -126,6 +127,8 @@ def tests_for_report(evidence: dict, repo_path: Path, target: str) -> str:
         fresh = f"STALE: {who}{len(changed)} file(s) changed after the scan{extra}; re-scan before relying on this"
 
     if not both:
+        if summary_only:
+            return f"No test file imports {target} (directly or transitively) or matches its naming convention."
         return (
             f"No test file imports {target} (directly or transitively) or matches its naming convention.\n\n"
             f"Coverage: {fresh}. A test may still exercise this file through a fixture or integration path this "
@@ -143,9 +146,11 @@ def tests_for_report(evidence: dict, repo_path: Path, target: str) -> str:
             lines.append("")
         lines.append(
             f"{len(lower_confidence)} more test file(s) reach it only through other imports - lower confidence, "
-            "some may not actually run code from this file (see Coverage):"
+            "some may not actually run code from this file" + (":" if summary_only else " (see Coverage):")
         )
         lines.extend(lower_confidence)
+    if summary_only:
+        return "\n".join(lines)
     lines.append("")
     lines.append(
         f"Coverage: {len(via_imports_direct)} found via direct import, {len(via_naming)} via filename convention "

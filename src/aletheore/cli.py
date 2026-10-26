@@ -2661,8 +2661,11 @@ def demo() -> None:
     import subprocess  # nosec B404 - exception types only; demo owns fixed Git calls
 
     from aletheore.demo import create_demo
-    from aletheore.query import find_blast_radius, find_hotspots, find_symbol_source
-    from aletheore.tests_for import tests_for_report
+    from aletheore.query import (
+        ModuleNotFoundInEvidenceError, SymbolNotFoundInEvidenceError,
+        find_blast_radius, find_hotspots, find_symbol_source,
+    )
+    from aletheore.tests_for import TestsForError, tests_for_report
 
     console.print(
         "[bold]Aletheore demo[/bold] — synthetic Python checkout example. "
@@ -2677,15 +2680,22 @@ def demo() -> None:
         if detail:
             console.print(detail.strip(), markup=False)
         raise typer.Exit(code=1)
+    try:
+        source = find_symbol_source(evidence, repo, "pricing.py", "total")
+        impact = find_blast_radius(evidence, repo, "pricing.py", "total")
+        candidates = tests_for_report(evidence, repo, "pricing.py", summary_only=True)
+    except (OSError, ModuleNotFoundInEvidenceError, SymbolNotFoundInEvidenceError, TestsForError) as exc:
+        console.print(f"Demo could not read its sample evidence: {exc}", markup=False)
+        console.print(f"Sample and evidence kept at: {repo}", markup=False, soft_wrap=True)
+        console.print("Run aletheore demo again to create a fresh sample.")
+        raise typer.Exit(code=1)
     console.print("\n[bold]1. Your task: change pricing.py::total[/bold]")
-    source = find_symbol_source(evidence, repo, "pricing.py", "total")
     console.print(f"pricing.py:{source['start_line']}-{source['end_line']}", markup=False)
     console.print(source["source"], markup=False, highlight=False)
     console.print("Before changing this function, trace its callers and find tests to investigate.")
     console.print("\n[bold]2. Follow the dependency graph[/bold] (importer → dependency)")
     for source, target in evidence["repository"]["dependency_graph"]["edges"]:
         console.print(f"  {source} → {target}", markup=False)
-    impact = find_blast_radius(evidence, repo, "pricing.py", "total")
     console.print(
         f"\n{impact['affected_total']} files depend on pricing.py: "
         f"{impact['direct_total']} directly, {impact['transitive_total']} transitively.",
@@ -2696,9 +2706,6 @@ def demo() -> None:
     console.print("Confirmed caller of total: " + ", ".join(impact["confirmed_callers"]), markup=False)
     console.print("These are resolved static imports, not a guarantee of every runtime impact.")
     console.print("\n[bold]3. Find candidate tests[/bold]")
-    # Keep the first-run explanation short; tests-for retains the full coverage
-    # and freshness report for the follow-up command below.
-    candidates = tests_for_report(evidence, repo, "pricing.py").partition("\n\nCoverage:")[0].replace(" (see Coverage)", "")
     console.print(candidates, markup=False, highlight=False)
     console.print("Imports and filenames suggest candidates; they do not prove runtime coverage.")
     console.print("The tests-for command below includes full coverage and freshness details.")

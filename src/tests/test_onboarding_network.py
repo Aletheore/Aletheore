@@ -197,3 +197,32 @@ def test_demo_commands_remain_copyable_in_a_narrow_terminal(tmp_path, monkeypatc
     assert quote(["cd", str(repo)]) in result.output.splitlines()
     for command in ("aletheore dependents pricing.py", "aletheore tests-for pricing.py", "aletheore scan --explain-network"):
         assert command in result.output.splitlines()
+
+
+@pytest.mark.parametrize("lookup", ["source", "impact", "tests", "source-read"])
+def test_demo_reports_sample_lookup_errors_without_a_traceback(tmp_path, monkeypatch, lookup):
+    import aletheore.demo as demo
+    from aletheore.query import ModuleNotFoundInEvidenceError, SymbolNotFoundInEvidenceError
+    from aletheore.tests_for import TestsForError
+
+    repo = tmp_path / "retained sample"
+    repo.mkdir()
+    monkeypatch.setattr(demo.tempfile, "mkdtemp", lambda **kwargs: str(repo))
+    name, failure = {
+        "source": ("aletheore.query.find_symbol_source", SymbolNotFoundInEvidenceError("pricing.py", "total")),
+        "impact": ("aletheore.query.find_blast_radius", ModuleNotFoundInEvidenceError("pricing.py")),
+        "tests": ("aletheore.tests_for.tests_for_report", TestsForError("sample missing")),
+        "source-read": ("aletheore.query.find_symbol_source", OSError("sample unreadable")),
+    }[lookup]
+
+    def fail(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(name, fail)
+    result = runner.invoke(app, ["demo"])
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Demo could not read its sample evidence:" in result.output
+    assert "Run aletheore demo again" in result.output
+    assert str(repo) in result.output
+    assert (repo / ".aletheore" / "air.json").exists()

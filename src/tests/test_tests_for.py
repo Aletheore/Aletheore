@@ -31,6 +31,22 @@ def test_transitive_importer_through_another_module_is_found(tmp_path: Path):
     assert "lower confidence" in text
 
 
+@pytest.mark.parametrize("graph", [
+    {"a.py": ["test_a.py"], "test_a.py": []},
+    {"a.py": ["b.py"], "b.py": ["test_b.py"], "test_b.py": []},
+    {"a.py": []},
+])
+def test_short_report_omits_appendix_without_dangling_references(tmp_path, graph):
+    full = render_tests_for(_ev(graph), tmp_path, "a.py")
+    short = render_tests_for(_ev(graph), tmp_path, "a.py", summary_only=True)
+    assert "Coverage:" in full
+    assert "Coverage" not in short
+    for path in ("test_a.py", "test_b.py"):
+        assert (path in short) == (path in full)
+    if "lower confidence" in full:
+        assert "lower confidence" in short
+
+
 def test_non_test_importer_is_not_counted(tmp_path: Path):
     graph = {"a.py": ["b.py"], "b.py": []}
     text = render_tests_for(_ev(graph), tmp_path, "a.py")
