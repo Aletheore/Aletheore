@@ -10,20 +10,35 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Aletheore/Aletheore/releases/latest"><img src="https://img.shields.io/github/v/release/Aletheore/Aletheore?label=release&amp;color=dd8034" alt="Latest GitHub release"></a>
   <a href="https://pypi.org/project/aletheore/"><img src="https://img.shields.io/pypi/v/aletheore?color=blue" alt="PyPI version"></a>
   <a href="https://pypi.org/project/aletheore/"><img src="https://img.shields.io/pypi/pyversions/aletheore" alt="Supported Python versions"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="AGPL-3.0 license"></a>
   <a href="https://github.com/Aletheore/Aletheore/actions/workflows/tests.yml"><img src="https://github.com/Aletheore/Aletheore/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
+  <a href="https://codecov.io/gh/Aletheore/Aletheore"><img src="https://codecov.io/gh/Aletheore/Aletheore/graph/badge.svg" alt="Coverage"></a>
+  <a href="https://github.com/Aletheore/Aletheore/actions/workflows/container-security.yml"><img src="https://github.com/Aletheore/Aletheore/actions/workflows/container-security.yml/badge.svg" alt="Container security"></a>
+  <a href="https://securityscorecards.dev/viewer/?uri=github.com/Aletheore/Aletheore"><img src="https://api.securityscorecards.dev/projects/github.com/Aletheore/Aletheore/badge" alt="OpenSSF Scorecard"></a>
+  <a href="https://pepy.tech/projects/aletheore"><img src="https://static.pepy.tech/personalized-badge/aletheore?period=total&amp;units=INTERNATIONAL_SYSTEM&amp;left_color=BLACK&amp;right_color=GREEN&amp;left_text=downloads" alt="PyPI downloads"></a>
+  <a href="https://mcpvault.io/servers/aletheore/health?utm_source=external_badge&amp;utm_medium=referral&amp;utm_campaign=mcp_health_report"><img src="https://mcpvault.io/badge/aletheore.svg" alt="MCPVault status"></a>
+</p>
+
+<p align="center">
+  <a href="src/README.md"><img src="https://img.shields.io/badge/Docs-CLI_reference-3276b8?style=flat-square&amp;logo=readthedocs&amp;logoColor=white" alt="CLI documentation"></a>
+  <a href="https://github.com/apps/aletheore/installations/new"><img src="https://img.shields.io/badge/GitHub_App-Install-dd8034?style=flat-square&amp;logo=github&amp;logoColor=white" alt="Install the GitHub App"></a>
+  <a href="https://github.com/marketplace/actions/aletheore"><img src="https://img.shields.io/badge/Marketplace-Action-2088ff?style=flat-square&amp;logo=githubactions&amp;logoColor=white" alt="GitHub Marketplace Action"></a>
+  <a href="https://github.com/sponsors/ArihantK15"><img src="https://img.shields.io/badge/Sponsor-Support-ea4aaa?style=flat-square&amp;logo=githubsponsors&amp;logoColor=white" alt="Sponsor development"></a>
+  <a href="https://github.com/Aletheore/Aletheore/stargazers"><img src="https://img.shields.io/github/stars/Aletheore/Aletheore?style=flat-square&amp;label=Star&amp;color=e3b341" alt="GitHub stars"></a>
 </p>
 
 <p align="center">
   <a href="#quickstart">Run locally</a> ·
-  <a href="https://github.com/apps/aletheore/installations/new">Install the GitHub App</a> ·
   <a href="https://www.aletheore.com/#walkthrough">Watch the walkthrough</a> ·
-  <a href="src/README.md">CLI reference</a>
+  <a href="#see-the-evidence">Explore the evidence</a>
 </p>
 
 ## See the workflow
+
+![Scan → Evidence graph → Coding agent → PR review](assets/readme-workflow.svg)
 
 [Watch the 95-second developer walkthrough →](https://www.aletheore.com/#walkthrough)
 
@@ -53,6 +68,31 @@ can use the network; see [Data and network behavior](#data-and-network-behavior)
 
 Already installed? Update with `pipx upgrade aletheore`.
 For a virtual environment or source installation, see the [setup guide](src/README.md#setup).
+
+## See the evidence
+
+### Explore a repository's dependencies
+
+[![Local Aletheore dashboard showing the dependency graph of its CLI source](assets/readme-dependencies.png)](assets/readme-dependencies.png)
+
+A real local scan of Aletheore's CLI source. Hover modules in the dashboard to explore
+resolved imports. Security checks were disabled for this capture; graph nodes do not
+represent a clean security verdict.
+
+### Read a finding where you review code
+
+[![Aletheore bot finding on GitHub PR 1128, describing a count-parsing behavior regression](assets/readme-pr-finding.png)](https://github.com/Aletheore/Aletheore/pull/1128)
+
+An actual bot comment on [PR #1128](https://github.com/Aletheore/Aletheore/pull/1128).
+The screenshot shows the review surface; a finding remains something to investigate.
+
+### Explore AIRview
+
+[![AIRview public demo showing connected Aletheore modules and their import relationships](assets/readme-airview.png)](https://www.aletheore.com/#live-title)
+
+The public AIRview demo, captured from the website using Aletheore's own module graph.
+[Try the interactive version](https://www.aletheore.com/#live-title) to drag modules and
+trace imports. This is the public demo rather than an authenticated hosted workspace.
 
 ## Start with a question
 
@@ -128,6 +168,9 @@ and choose the repositories to connect.
 
 ### Run in GitHub Actions
 
+<details>
+<summary><strong>GitHub Actions workflow and execution notes</strong></summary>
+
 For a deterministic PR diff in your own workflow:
 
 ```yaml
@@ -153,7 +196,29 @@ The example pins an existing release; review and pin a commit SHA for your own d
 policy. Fork PRs can have read-only tokens: comment posting may be unavailable even when
 analysis succeeds. See [Action inputs](action.yml) and the [CLI reference](src/README.md).
 
+</details>
+
 ## What the scanner understands
+
+<p>Dependency graph support, with language-specific resolution limits:</p>
+<p>
+  <a href="src/README.md"><img src="https://img.shields.io/badge/Python-3776AB?style=flat-square&amp;logo=python&amp;logoColor=white" alt="Python dependency graph support"></a>
+  <a href="src/README.md"><img src="https://img.shields.io/badge/JavaScript-c4a800?style=flat-square&amp;logo=javascript&amp;logoColor=white" alt="JavaScript dependency graph support"></a>
+  <a href="src/README.md"><img src="https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&amp;logo=typescript&amp;logoColor=white" alt="TypeScript dependency graph support"></a>
+  <a href="src/README.md"><img src="https://img.shields.io/badge/Go-007D9C?style=flat-square&amp;logo=go&amp;logoColor=white" alt="Go dependency graph support"></a>
+  <a href="src/README.md"><img src="https://img.shields.io/badge/Rust-9b4f23?style=flat-square&amp;logo=rust&amp;logoColor=white" alt="Rust dependency graph support"></a>
+  <a href="src/README.md"><img src="https://img.shields.io/badge/Java-b85e00?style=flat-square&amp;logo=openjdk&amp;logoColor=white" alt="Java dependency graph support"></a>
+  <a href="src/README.md"><img src="https://img.shields.io/badge/Kotlin-7F52FF?style=flat-square&amp;logo=kotlin&amp;logoColor=white" alt="Kotlin dependency graph support"></a>
+  <a href="src/README.md"><img src="https://img.shields.io/badge/Ruby-CC342D?style=flat-square&amp;logo=ruby&amp;logoColor=white" alt="Ruby dependency graph support"></a>
+  <a href="src/README.md"><img src="https://img.shields.io/badge/PHP-777BB4?style=flat-square&amp;logo=php&amp;logoColor=white" alt="PHP dependency graph support"></a>
+  <a href="src/README.md"><img src="https://img.shields.io/badge/C-5969ab?style=flat-square&amp;logo=c&amp;logoColor=white" alt="C dependency graph support"></a>
+  <a href="src/README.md"><img src="https://img.shields.io/badge/C%2B%2B-00599C?style=flat-square&amp;logo=cplusplus&amp;logoColor=white" alt="C++ dependency graph support"></a>
+  <a href="src/README.md"><img src="https://img.shields.io/badge/C%23-512BD4?style=flat-square&amp;logo=dotnet&amp;logoColor=white" alt="C# dependency graph support"></a>
+  <a href="src/README.md"><img src="https://img.shields.io/badge/Swift-c74b27?style=flat-square&amp;logo=swift&amp;logoColor=white" alt="Swift dependency graph support"></a>
+</p>
+
+<details>
+<summary><strong>Language support, available evidence, and analysis limits</strong></summary>
 
 Dependency graphs support **Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, Java, Kotlin,
 Ruby, PHP, C, C++, C#, and Swift**, with language-specific resolution limits.
@@ -171,7 +236,15 @@ external services, and unresolved imports can leave gaps. A source citation make
 inspectable; it does not by itself prove that a bug exists or that a change is safe.
 Read [resolution details and configuration](src/README.md) for the limits that apply to your language.
 
+</details>
+
 ## Data and network behavior
+
+Local scans build evidence on your machine. Enabled registry checks, optional integrations,
+crash reporting, and AI features have their own network behavior.
+
+<details>
+<summary><strong>Network requests, crash reporting, and offline scan flags</strong></summary>
 
 The local deterministic scan builds evidence on your machine. Its network behavior depends
 on enabled checks and integrations:
@@ -197,6 +270,8 @@ These scan flags do not configure every other command or service. Review
 [security information](SECURITY.md), and the hosted [privacy policy](https://www.aletheore.com/privacy)
 for the workflow you choose.
 
+</details>
+
 ## Evidence and benchmarks
 
 Explore [published scan examples](https://www.aletheore.com/dogfooding) and
@@ -212,6 +287,9 @@ and sample; they do not guarantee the same result on your code.
 - Use [SECURITY.md](SECURITY.md) for vulnerability reports.
 - [Sponsor development](https://github.com/sponsors/ArihantK15).
 
+<details>
+<summary><strong>Repository map</strong></summary>
+
 | Directory | Contents |
 | --- | --- |
 | [`src/`](src/) | CLI implementation and command reference |
@@ -219,6 +297,8 @@ and sample; they do not guarantee the same result on your code.
 | [`site/`](site/) | Next.js marketing site |
 | [`docs/operations/`](docs/operations/) | Operational baselines and runbooks |
 | [`benchmarks/`](benchmarks/) | Repository benchmark material |
+
+</details>
 
 ## Licensing
 
