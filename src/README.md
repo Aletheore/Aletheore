@@ -182,10 +182,14 @@ with the real engine, and guides you through changing `pricing.py::total`: sourc
 direct and transitive dependents, a confirmed caller, candidate tests, and hotspots.
 Candidate tests are not executed. The dashboard highlights the sample target and labels
 checks that did not run. Requires Git;
-does not clone, index embeddings, query registries, or invoke external scanners. Prints
-the retained temporary directory and follow-up query/dashboard commands. Delete the
-directory when finished. The final commands show how to inspect the network plan and
-scan your own repository; normal scans may enable checks the demo skipped.
+does not clone, index embeddings, query registries, or invoke external scanners.
+In a real terminal, the tour uses the same wordmark and arrow-key menus as the home
+screen. Continue or go back one step at a time, open the sample dashboard directly,
+or select your own repository. Its network plan is shown before you choose to scan.
+Normal scans may enable checks the demo skipped.
+Use `aletheore demo --plain` for the printable report and commands. Piped output,
+CI, dumb terminals and `ALETHEORE_NO_MENU` also use the printable report.
+The sample directory is retained; delete it when finished.
 Normal CLI crash-reporting preferences still apply.
 
 ### `aletheore init [path]`

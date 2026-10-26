@@ -2656,7 +2656,15 @@ def scan(
 
 
 @app.command(help="explore a small synthetic repository with the real local scanner")
-def demo() -> None:
+def demo(
+    plain: bool = typer.Option(False, "--plain", help="print the full demo report instead of the interactive tour"),
+) -> None:
+    from aletheore import ui
+
+    if not plain and ui.is_interactive():
+        from aletheore.demo_walkthrough import DemoWalkthrough
+
+        raise typer.Exit(code=DemoWalkthrough(console, run_command=_run_cli, ask=_ask).run())
     import shlex
     import subprocess  # nosec B404 - exception types only; demo owns fixed Git calls
 
