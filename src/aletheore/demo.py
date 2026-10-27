@@ -33,9 +33,12 @@ def create_demo() -> tuple[Path, dict]:
         hooks = repo / ".demo-hooks"
         hooks.mkdir()
 
+        # A tiny retained sample needs no background maintenance or automatic GC.
+        # Keep Git from creating/removing maintenance files during follow-up reads.
         def git(*args: str) -> None:
             subprocess.run(  # nosec B603 - absolute Git executable, fixed demo args, shell disabled
                 [executable, "-c", f"core.hooksPath={hooks}", "-c", "commit.gpgsign=false",
+                 "-c", "maintenance.auto=false", "-c", "gc.auto=0",
                  "-c", "user.name=Aletheore Demo", "-c", "user.email=demo@example.invalid", *args],
                 cwd=repo, env=env, check=True, capture_output=True, text=True, timeout=30, shell=False,
             )

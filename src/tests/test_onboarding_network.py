@@ -160,6 +160,8 @@ def test_demo_git_uses_resolved_executable_and_shell_free_arguments(tmp_path, mo
         assert kwargs["env"]["GIT_CONFIG_NOSYSTEM"] == "1"
         assert "core.hooksPath=" + str(repo / ".demo-hooks") in argv
         assert "commit.gpgsign=false" in argv
+        assert "maintenance.auto=false" in argv
+        assert "gc.auto=0" in argv
     assert calls[0][0][-3:] == ["init", "--quiet", "--template="]
     assert calls[1][0][-6:] == ["add", "--", *demo._FILES]
 
@@ -237,10 +239,18 @@ def test_failed_scan_removes_real_git_readonly_objects(tmp_path, monkeypatch):
     monkeypatch.setattr(demo.tempfile, "mkdtemp", lambda **kwargs: str(repo))
 
     def fail(*args, **kwargs):
-        objects = [path for path in (repo / ".git" / "objects").rglob("*") if path.is_file()]
+        object_dir = repo / ".git" / "objects"
+        # Only loose objects: maintenance.lock is transient and can disappear
+        # between discovery and chmod on macOS's Git runners.
+        lock = object_dir / "maintenance.lock"
+        lock.write_text("test maintenance lock", encoding="utf-8")
+        lock_mode = lock.stat().st_mode
+        objects = [path for path in object_dir.glob("[0-9a-f][0-9a-f]/*") if path.is_file()]
         assert objects
         for path in objects:
             path.chmod(stat.S_IREAD)
+        assert lock.stat().st_mode == lock_mode
+        lock.unlink()
         raise OSError("scan failed after git setup")
 
     monkeypatch.setattr(demo, "scan_repository", fail)
