@@ -930,17 +930,18 @@ class _RankIndex:
             ]
             for lengths in self.doc_len
         ]
-        # The vocabulary is grouped by first letter and length. A one-edit match must share the
-        # first letter and is at most one character longer or shorter, so this keeps the fuzzy
-        # lookup to a few dozen words instead of scanning every token in the catalog.
+        # Group by first letter and length for the common case. A suffix index also catches
+        # one-edit typos at the first character without scanning the full vocabulary.
         self.vocab: set[str] = set()
         for texts in self.texts:
             for text in texts:
                 self.vocab.update(text.split())
         self.vocab_by_first: dict[str, dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
+        self.vocab_by_suffix: dict[str, list[str]] = defaultdict(list)
         for token in sorted(self.vocab):
             if len(token) >= 4:
                 self.vocab_by_first[token[0]][len(token)].append(token)
+                self.vocab_by_suffix[token[1:]].append(token)
 
     def coverage(self, query_tokens: list[str], skill_id: str) -> float:
         """The share of query tokens the skill's text contains, counting a typo recovery."""
@@ -981,6 +982,16 @@ class _RankIndex:
                 for candidate in buckets.get(length, ()):
                     if _within_one_edit(form, candidate):
                         return candidate
+            # The first-letter buckets exclude leading substitutions and insertions/deletions.
+            # Matching the remaining suffix finds those candidates in a small bucket.
+            if len(form) >= 5:
+                for suffix in (form[1:], form):
+                    for candidate in self.vocab_by_suffix.get(suffix, ()):
+                        if _within_one_edit(form, candidate):
+                            return candidate
+                leading_deletion = form[1:]
+                if leading_deletion in self.vocab and _within_one_edit(form, leading_deletion):
+                    return leading_deletion
         return None
 
     def _ensure_prefix_tokens(self) -> None:

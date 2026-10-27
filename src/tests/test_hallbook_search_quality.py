@@ -13,6 +13,7 @@ from aletheore import skill_hub
 def test_fuzzy_match_recovers_common_typos():
     index = skill_hub._search_index(str(skill_hub.bundled_skills_dir()))
     assert index._fuzzy_match("webhok") == "webhook"
+    assert index._fuzzy_match("bysql") == "mysql"
     assert index._fuzzy_match("kuberent") == "kubernet"
     assert index._fuzzy_match("postgress") == "postgr"
     assert index._fuzzy_match("zzzzq") is None
