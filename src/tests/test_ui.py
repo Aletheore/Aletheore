@@ -514,6 +514,7 @@ def test_the_picker_rows_carry_the_banner_descriptions(capsys):
 
 
 def test_the_screen_is_cleared_only_in_a_real_interactive_terminal(monkeypatch):
+    monkeypatch.setenv("TERM", "xterm-256color")
     live = Console(file=io.StringIO(), width=80, force_terminal=True, color_system=None)
     monkeypatch.setattr(cli, "console", live)
     monkeypatch.setattr(ui, "is_interactive", lambda: True)
