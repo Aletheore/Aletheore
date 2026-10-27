@@ -49,10 +49,14 @@ def build_evidence_summary(evidence: dict) -> dict:
                 "total_findings": len(findings),
                 "real_findings": len(real_findings),
                 "history_findings": len(evidence["security"]["secrets"]["history_findings"]),
+                "history_scanned_commits": evidence["security"]["secrets"].get("history_scanned_commits"),
+                "history_scan_timed_out": evidence["security"]["secrets"].get("history_scan_timed_out", False),
             },
             "vulnerabilities": {
                 "checked": evidence["security"]["dependency_vulnerabilities"]["checked"],
                 "reason": evidence["security"]["dependency_vulnerabilities"].get("reason"),
+                "note": evidence["security"]["dependency_vulnerabilities"].get("note"),
+                "unreadable_manifest_dirs": evidence["security"]["dependency_vulnerabilities"].get("unreadable_manifest_dirs", []),
                 "finding_count": len(
                     evidence["security"]["dependency_vulnerabilities"]["findings"]
                 ),
@@ -61,6 +65,8 @@ def build_evidence_summary(evidence: dict) -> dict:
             "licenses": {
                 "checked": evidence["security"]["dependency_licenses"]["checked"],
                 "reason": evidence["security"]["dependency_licenses"].get("reason"),
+                "note": evidence["security"]["dependency_licenses"].get("note"),
+                "unreadable_manifest_dirs": evidence["security"]["dependency_licenses"].get("unreadable_manifest_dirs", []),
                 "repo_license": evidence["security"]["dependency_licenses"]["repo_license"],
                 "finding_count": len(evidence["security"]["dependency_licenses"]["findings"]),
                 "findings": evidence["security"]["dependency_licenses"]["findings"],
@@ -73,6 +79,7 @@ def build_evidence_summary(evidence: dict) -> dict:
             # a "powered by" list) says which of them actually ran.
             "static_analysis": {
                 "checked": evidence["security"]["static_analysis"]["checked"],
+                "reason": evidence["security"]["static_analysis"].get("reason"),
                 "tools_run": evidence["security"]["static_analysis"]["tools_run"],
                 "tools_skipped": evidence["security"]["static_analysis"]["tools_skipped"],
                 "finding_count": len(evidence["security"]["static_analysis"]["findings"]),
@@ -239,7 +246,14 @@ def build_app(repo_path: Path) -> Starlette:
             evidence = read_evidence(repo_path)
         except FileNotFoundError:
             return no_scan_response()
-        return JSONResponse(build_evidence_summary(evidence))
+        summary = build_evidence_summary(evidence)
+        from aletheore.demo import DEMO_MARKER
+
+        try:
+            summary["demo"] = (repo_path / ".aletheore" / "demo").read_text(encoding="utf-8") == DEMO_MARKER
+        except (OSError, UnicodeError):
+            summary["demo"] = False
+        return JSONResponse(summary)
 
     async def api_history(request):
         return JSONResponse(build_history_summary(repo_path))
@@ -316,6 +330,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   #tz-toggle { background: #0d0d0d; color: #9a9a9a; border: 1px solid #2a2a2a; border-radius: 20px; padding: 4px 12px; font-size: 11px; cursor: pointer; transition: color 0.15s ease, border-color 0.15s ease; }
   #tz-toggle:hover { color: #fff; border-color: #4a4a4a; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  [hidden] { display: none !important; }
+  #demo-guide { margin-bottom: 16px; }
   .card { background: #0a0a0a; border: 1px solid #222; border-radius: 10px; padding: 16px; box-shadow: 0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 24px rgba(0,0,0,0.35); }
   .card h2 { font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; color: #8a8a8a; margin: 0 0 12px 0; }
   .stat { font-size: 24px; font-weight: 600; color: #fff; }
@@ -382,13 +398,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <button id="tz-toggle" onclick="toggleTimezone()">Show UTC</button>
     </div>
   </div>
+  <div id="demo-guide" class="card" hidden>
+    <h2>Synthetic checkout example</h2>
+    <p>Your task: change <strong>pricing.py::total</strong>. Follow service.py to app.py and test_service.py in the dependency graph. These are import relationships; the candidate test still needs to be inspected and run.</p>
+    <p>This sample uses synthetic local commits. Its initial scan skips registry checks, external scanners and endpoint mapping; the panels describe the current scan.</p>
+  </div>
   <div class="grid">
     <div class="card"><h2>Repo Overview</h2><div id="repo-overview"></div></div>
     <div class="card"><h2>Git Activity</h2><div id="git-activity"></div></div>
     <div class="card"><h2>Security</h2><div id="security"></div></div>
     <div class="card"><h2>Architecture</h2><div id="architecture"></div></div>
   </div>
-  <div class="grid">
+  <div class="grid" id="history-panels">
     <div class="card">
       <h2>Module Count Trend</h2>
       <svg id="sparkline-modules" class="barchart"></svg>
@@ -458,10 +479,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div id="static-analysis-coverage" class="stat-row"></div>
     <div id="static-analysis" class="tools-list"></div>
   </div>
-  <div class="card">
-    <h2>MCP Tools Available for This Repo</h2>
+  <details class="card">
+    <summary>MCP Tools Available for This Repo</summary>
     <div id="mcp-tools" class="tools-list"></div>
-  </div>
+  </details>
 </div>
 <script>
 async function fetchJSON(path) {
@@ -495,11 +516,16 @@ function renderGitActivity(data) {
 
 function renderSecurity(data) {
   const el = document.getElementById('security');
+  const commits = data.secrets.history_scanned_commits;
+  const history = commits == null ? 'Coverage unknown' : commits === 0 ? 'No commits scanned' :
+    data.secrets.history_findings + ' in ' + commits + ' scanned commits' + (data.secrets.history_scan_timed_out ? ' (limited coverage: timed out)' : '');
   el.innerHTML =
     '<div class="stat">' + data.secrets.real_findings + ' real secret findings</div>' +
     '<div class="stat-row"><span>Total (incl. placeholders)</span><span>' + data.secrets.total_findings + '</span></div>' +
-    '<div class="stat-row"><span>History findings</span><span>' + data.secrets.history_findings + '</span></div>' +
-    '<div class="stat-row"><span>Vulnerabilities</span><span>' + data.vulnerabilities.finding_count + '</span></div>';
+    '<div class="stat-row"><span>History findings</span><span>' + history + '</span></div>' +
+    '<div class="stat-row"><span>Vulnerabilities</span><span>' +
+    (checkStatus(data.vulnerabilities) === 'Not checked' ? 'Not checked' :
+      data.vulnerabilities.finding_count + (checkStatus(data.vulnerabilities) ? ' (limited coverage)' : '')) + '</span></div>';
 }
 
 function renderArchitecture(data) {
@@ -1414,23 +1440,47 @@ function severityLabel(severity) {
   return severity.map(s => s.type + ' ' + s.score).join(', ');
 }
 
-function skipCaption(data, fallback) {
-  if (data.checked) return '';
-  return ' (' + (data.reason || fallback) + ')';
+function checkStatus(data) {
+  // A completed static-analysis wrapper can still have run no individual checks.
+  if (data.checked !== true || (data.tools_run && data.tools_run.length === 0)) return 'Not checked';
+  if (data.note || (data.unreadable_manifest_dirs || []).length || (data.tools_skipped || []).length) return 'Limited coverage';
+  return '';
+}
+
+function checkSummary(data, measured) {
+  const status = checkStatus(data);
+  if (status === 'Not checked') return status;
+  return measured + (status ? ' — ' + status.toLowerCase() : '');
+}
+
+function checkDetail(data, fallback) {
+  const status = checkStatus(data);
+  if (status === 'Not checked') return data.reason || fallback;
+  const notes = [];
+  if (data.note) notes.push(data.note);
+  if ((data.unreadable_manifest_dirs || []).length) notes.push(data.unreadable_manifest_dirs.length + ' manifest directories could not be read.');
+  if ((data.tools_skipped || []).length) notes.push('Some checks did not run; results cover completed checks only.');
+  return notes.join(' ');
+}
+
+function checkNotice(data, fallback) {
+  const detail = checkDetail(data, fallback);
+  return detail ? '<div class="tool-row">' + escapeHtml(detail) + '</div>' : '';
 }
 
 function renderVulnerabilities(data) {
   const summary = document.getElementById('vulnerabilities-summary');
   const el = document.getElementById('vulnerabilities');
   const findings = data.findings;
-  summary.textContent = findings.length + ' vulnerabilit' + (findings.length === 1 ? 'y' : 'ies') + ' found' +
-    skipCaption(data, 'dependency scan not run');
+  summary.textContent = checkSummary(data, findings.length + ' vulnerabilit' + (findings.length === 1 ? 'y' : 'ies') + ' found');
+  const notice = checkNotice(data, 'Dependency vulnerability checks did not run.');
 
   if (findings.length === 0) {
-    el.innerHTML = '<div class="tool-row">No known vulnerabilities in pinned dependencies.</div>';
+    el.innerHTML = notice + (checkStatus(data) === 'Not checked' ? '' :
+      '<div class="tool-row">No known vulnerabilities found among the dependency versions checked.</div>');
     return;
   }
-  el.innerHTML = findings.map(f =>
+  el.innerHTML = notice + findings.map(f =>
     '<div class="tool-row"><span class="tool-name">' + escapeHtml(f.package) + '@' + escapeHtml(f.installed_version) +
     '</span> - ' + escapeHtml(f.advisory_id) + ' (' + escapeHtml(severityLabel(f.severity)) + ')' +
     '<div class="tool-detail">' + escapeHtml(f.summary || '') + '</div></div>'
@@ -1442,15 +1492,17 @@ function renderLicenses(data) {
   const repoEl = document.getElementById('licenses-repo');
   const el = document.getElementById('licenses');
   const findings = data.findings;
-  summary.textContent = findings.length + ' dependenc' + (findings.length === 1 ? 'y' : 'ies') +
-    ' with an unknown or non-permissive license' + skipCaption(data, 'license scan not run');
+  summary.textContent = checkSummary(data, findings.length + ' dependenc' + (findings.length === 1 ? 'y' : 'ies') +
+    ' with an unknown or non-permissive license');
+  const notice = checkNotice(data, 'Dependency license checks did not run.');
   repoEl.innerHTML = '<span>Repo license</span><span>' + escapeHtml(data.repo_license.category) + '</span>';
 
   if (findings.length === 0) {
-    el.innerHTML = '<div class="tool-row">Every checked dependency has a known, permissive license.</div>';
+    el.innerHTML = notice + (checkStatus(data) === 'Not checked' ? '' :
+      '<div class="tool-row">No unknown or non-permissive licenses found among the dependencies checked.</div>');
     return;
   }
-  el.innerHTML = findings.map(f =>
+  el.innerHTML = notice + findings.map(f =>
     '<div class="tool-row"><span class="tool-name">' + escapeHtml(f.package) + '</span> - ' +
     escapeHtml(f.ecosystem) + ', license: ' + escapeHtml(f.license || 'unknown') +
     ' (' + escapeHtml(f.category) + ')</div>'
@@ -1463,19 +1515,19 @@ function renderEndpoints(data) {
   const endpoints = data.endpoints;
   const resolvedCount = endpoints.filter(e => !e.unresolved).length;
   const mountCount = endpoints.length - resolvedCount;
-  summary.textContent = resolvedCount + ' API endpoint' + (resolvedCount === 1 ? '' : 's') + ' mapped from source' +
-    (mountCount > 0 ? ', ' + mountCount + ' router mount' + (mountCount === 1 ? '' : 's') + ' not individually resolved' : '') +
-    skipCaption(data, 'endpoint mapping not run');
+  summary.textContent = checkSummary(data, resolvedCount + ' API endpoint' + (resolvedCount === 1 ? '' : 's') + ' mapped from source' +
+    (mountCount > 0 ? ', ' + mountCount + ' router mount' + (mountCount === 1 ? '' : 's') + ' not individually resolved' : ''));
+  const notice = checkNotice(data, 'Endpoint mapping did not run.');
 
   if (endpoints.length === 0) {
-    el.innerHTML = '<div class="tool-row">No API endpoints detected.</div>';
+    el.innerHTML = notice + (checkStatus(data) === 'Not checked' ? '' : '<div class="tool-row">No API endpoints detected.</div>');
     return;
   }
   // A null method means the scanner found a router mount/include/middleware
   // delegation, not a concrete leaf route - labeled distinctly rather than
   // printed as the literal string "null", which would misrepresent evidence
   // the scanner itself flagged as unresolved.
-  el.innerHTML = endpoints.map(e => {
+  el.innerHTML = notice + endpoints.map(e => {
     const methodLabel = e.method || 'MOUNT';
     const noteRow = e.note ? '<div class="tool-detail">' + escapeHtml(e.note) + '</div>' : '';
     return '<div class="tool-row"><span class="tool-name">' + escapeHtml(methodLabel) + ' ' + escapeHtml(e.path) +
@@ -1494,21 +1546,21 @@ function renderStaticAnalysis(data) {
   const ranCount = data.tools_run.length;
   const totalCount = ranCount + data.tools_skipped.length;
 
-  summary.textContent = findings.length + ' finding' + (findings.length === 1 ? '' : 's') +
-    skipCaption(data, 'static analysis not run');
+  summary.textContent = checkSummary(data, findings.length + ' finding' + (findings.length === 1 ? '' : 's'));
+  const notice = checkNotice(data, 'Static analysis did not run.');
   // Deliberately no tool names here (or anywhere else on this card) -
   // every finding presents as Aletheore's own, same as PR review comments;
   // "N of M checks ran" is a coverage signal, not a "powered by" list.
   coverage.innerHTML = '<span>Coverage</span><span>' + ranCount + ' of ' + totalCount + ' checks ran</span>';
 
   if (findings.length === 0) {
-    el.innerHTML = '<div class="tool-row">No static analysis findings.</div>';
+    el.innerHTML = notice + (checkStatus(data) === 'Not checked' ? '' : '<div class="tool-row">No findings from the static analysis checks that ran.</div>');
     return;
   }
   const sorted = findings.slice().sort((a, b) =>
     (STATIC_ANALYSIS_SEVERITY_ORDER[a.severity] ?? 5) - (STATIC_ANALYSIS_SEVERITY_ORDER[b.severity] ?? 5)
   );
-  el.innerHTML = sorted.map(f => {
+  el.innerHTML = notice + sorted.map(f => {
     const highSeverity = f.severity === 'blocker' || f.severity === 'critical';
     return '<div class="tool-row' + (highSeverity ? ' sa-severity-high' : '') + '"><span class="tool-name">' +
       escapeHtml(f.path) + ':' + f.line + '</span> - ' + escapeHtml(f.message) +
@@ -1563,6 +1615,7 @@ async function loadAll() {
     return;
   }
   lastScannedAtIso = evidence.scanned_at;
+  document.getElementById('demo-guide').hidden = !evidence.demo;
   renderScannedAt();
   renderRepoOverview(evidence.repo_overview);
   renderGitActivity(evidence.git_activity);
@@ -1575,6 +1628,7 @@ async function loadAll() {
   renderStaticAnalysis(evidence.security.static_analysis);
 
   const history = await fetchJSON('/api/history');
+  document.getElementById('history-panels').hidden = Boolean(evidence.demo && history.length === 0);
   renderBarChart('sparkline-modules', history.map(h => h.module_count), 'sparkline-modules-value', 'sparkline-modules-note');
   renderBarChart('sparkline-secrets', history.map(h => h.secrets_findings), 'sparkline-secrets-value', 'sparkline-secrets-note');
   renderBarChart('sparkline-vulns', history.map(h => h.vulnerability_findings), 'sparkline-vulns-value', 'sparkline-vulns-note');
@@ -1585,6 +1639,14 @@ async function loadAll() {
   // than serializing two potentially multi-second layouts on large repos.
   renderClusters(graph);
   await Promise.all([renderGraph(graph), renderClusterGraph(graph)]);
+  if (evidence.demo) {
+    const target = document.querySelector('#graph circle[data-id="pricing.py"]');
+    if (target) {
+      target.setAttribute('stroke', '#f59e0b');
+      target.setAttribute('stroke-width', '3');
+      document.getElementById('graph-hover-info').textContent = 'Highlighted: pricing.py — start here and hover to trace its import relationships.';
+    }
+  }
 }
 
 async function loadMcpTools() {

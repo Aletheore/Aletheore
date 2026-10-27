@@ -423,6 +423,7 @@ def _print_query_result(result: object) -> None:
 
 _COMMAND_SUMMARIES = [
     ("scan", "run the scanner, write evidence, no LLM call"),
+    ("demo", "take a guided tour of scans, queries and coding-agent evidence"),
     ("audit", "scan, then have a coding agent write a grounded report"),
     ("index", "build the semantic search index used by 'query search-codebase' and 'query answer'"),
     ("query", "answer a targeted question from existing evidence"),
@@ -458,7 +459,7 @@ _COMMAND_DESCRIPTIONS = dict(_COMMAND_SUMMARIES + _PICKER_ONLY_SUMMARIES)
 _COMMAND_GROUPS = [
     (
         "Scan and explore",
-        ["scan", "index", "query", "locate", "usages", "dependents", "tests-for", "cycles", "diff", "verify", "healthcheck"],
+        ["scan", "demo", "index", "query", "locate", "usages", "dependents", "tests-for", "cycles", "diff", "verify", "healthcheck"],
     ),
     ("Agents and skills", ["mcp", "mcp-install", "audit", "hallbook", "hook", "tokens"]),
     ("Dashboard and watch", ["dashboard", "watch", "init"]),
@@ -2273,12 +2274,14 @@ _MAIN_MENU = [
     ("dashboard", "Open the dashboard", "a live local view"),
     ("account", "Account", "sign in, sign out, status"),
     ("commands", "All commands", "every command, grouped by task"),
+    ("demo", "Take the guided demo", "scan, query and coding-agent evidence"),
     ("quit", "Quit", ""),
 ]
 
 # What Enter does on a command in the "All commands" picker. Commands that need nothing run as they are; the three
 # in _COMMAND_PROMPTS ask for their one required argument first; the rest print their own --help.
 _COMMAND_RUNS = {
+    "demo": ["demo"],
     "scan": ["scan", "."], "audit": ["audit", "."], "query": ["query"], "dashboard": ["dashboard", "."],
     "init": ["init", "."], "cycles": ["cycles"], "login": ["login"], "logout": ["logout"], "status": ["status"],
 }
@@ -2429,6 +2432,9 @@ def _run_menu(read_key=None, pause=None) -> None:
                 continue
         elif picked.key == "commands":
             _commands_flow(kwargs, pause)
+            continue
+        elif picked.key == "demo":
+            _run_cli(["demo"])
             continue
         pause()
 
@@ -2656,12 +2662,27 @@ def scan(
 
 
 @app.command(help="explore a small synthetic repository with the real local scanner")
-def demo() -> None:
+def demo(
+    plain: bool = typer.Option(False, "--plain", help="print the full demo report instead of the interactive tour"),
+) -> None:
+    from aletheore import ui
+
+    if not plain and ui.is_interactive():
+        from aletheore.demo_walkthrough import DemoWalkthrough
+
+        # Keep monochrome styling (bold/reverse) in the tour. The plain command
+        # console disables ANSI styling entirely, which flattens the hierarchy.
+        tour_console = Console(file=console.file, color_system="standard", no_color=True, highlight=False)
+        raise typer.Exit(code=DemoWalkthrough(tour_console, run_command=_run_cli, ask=_ask).run())
     import shlex
     import subprocess  # nosec B404 - exception types only; demo owns fixed Git calls
 
     from aletheore.demo import create_demo
-    from aletheore.query import find_hotspots
+    from aletheore.query import (
+        ModuleNotFoundInEvidenceError, SymbolNotFoundInEvidenceError,
+        find_blast_radius, find_hotspots, find_symbol_source,
+    )
+    from aletheore.tests_for import TestsForError, tests_for_report
 
     console.print(
         "[bold]Aletheore demo[/bold] — synthetic Python checkout example. "
@@ -2676,20 +2697,65 @@ def demo() -> None:
         if detail:
             console.print(detail.strip(), markup=False)
         raise typer.Exit(code=1)
-    console.print("\n[bold]Dependency graph[/bold] (importer → dependency)")
+    try:
+        source = find_symbol_source(evidence, repo, "pricing.py", "total")
+        impact = find_blast_radius(evidence, repo, "pricing.py", "total")
+        candidates = tests_for_report(evidence, repo, "pricing.py", summary_only=True)
+    except (OSError, ModuleNotFoundInEvidenceError, SymbolNotFoundInEvidenceError, TestsForError) as exc:
+        console.print(f"Demo could not read its sample evidence: {exc}", markup=False)
+        console.print(f"Sample and evidence kept at: {repo}", markup=False, soft_wrap=True)
+        console.print("Run aletheore demo again to create a fresh sample.")
+        raise typer.Exit(code=1)
+    console.print("\n[bold]1. Your task: change pricing.py::total[/bold]")
+    console.print(f"pricing.py:{source['start_line']}-{source['end_line']}", markup=False)
+    console.print(source["source"], markup=False, highlight=False)
+    console.print("Before changing this function, trace its callers and find tests to investigate.")
+    console.print("\n[bold]2. Follow the dependency graph[/bold] (importer → dependency)")
     for source, target in evidence["repository"]["dependency_graph"]["edges"]:
         console.print(f"  {source} → {target}", markup=False)
+    console.print(
+        f"\n{impact['affected_total']} files depend on pricing.py: "
+        f"{impact['direct_total']} directly, {impact['transitive_total']} transitively.",
+        markup=False,
+    )
+    console.print("Direct: " + ", ".join(impact["direct_dependents"]), markup=False)
+    console.print("Transitive: " + ", ".join(impact["transitive_dependents"]), markup=False)
+    console.print("Confirmed caller of total: " + ", ".join(impact["confirmed_callers"]), markup=False)
+    console.print("These are resolved static imports, not a guarantee of every runtime impact.")
+    console.print("\n[bold]3. Find candidate tests[/bold]")
+    console.print(candidates, markup=False, highlight=False)
+    console.print("Imports and filenames suggest candidates; they do not prove runtime coverage.")
+    console.print("The tests-for command below includes full coverage and freshness details.")
+    console.print("The demo did not run these tests. Inspect and run them before relying on a change.")
+    console.print("\n[bold]4. See why this file deserves attention[/bold]")
     table = Table(title="Hotspots — computed from the sample's synthetic commit history")
     table.add_column("File")
     table.add_column("Commits", justify="right")
-    table.add_column("Dependents", justify="right")
+    table.add_column("Direct dependents", justify="right")
     for hotspot in find_hotspots(evidence, None):
         table.add_row(hotspot["path"], str(hotspot["churn_count"]), str(hotspot["dependents_count"]))
     console.print(table)
-    console.print(f"\nSample and evidence kept at: {repo}", markup=False)
+    console.print(f"\nSample and evidence kept at: {repo}", markup=False, soft_wrap=True)
     quote_command = subprocess.list2cmdline if os.name == "nt" else shlex.join
-    console.print(quote_command(["aletheore", "query", "hotspots", "--path", str(repo)]), markup=False)
-    console.print(quote_command(["aletheore", "dashboard", "--path", str(repo)]), markup=False)
+    console.print("\n[bold]Keep exploring the sample[/bold] — run these commands:")
+    # Soft wrapping leaves each shell command intact when copied or redirected,
+    # including quoted temporary paths with spaces. Short relative commands then
+    # avoid repeating an often very long macOS temporary-directory prefix.
+    commands = [
+        ["cd", str(repo)],
+        ["aletheore", "locate", "total"],
+        ["aletheore", "dependents", "pricing.py"],
+        ["aletheore", "tests-for", "pricing.py"],
+        ["aletheore", "query", "hotspots"],
+        ["aletheore", "dashboard"],
+    ]
+    for command in commands:
+        console.print(quote_command(command), markup=False, highlight=False, soft_wrap=True)
+    console.print("\n[bold]Try your own repository next[/bold]")
+    console.print("Normal scans can enable network checks that this sample skipped. Inspect the plan first.")
+    own_repo = r"C:\path\to\your-repo" if os.name == "nt" else "/path/to/your-repo"
+    for command in (["cd", own_repo], ["aletheore", "scan", "--explain-network"], ["aletheore", "scan"]):
+        console.print(quote_command(command), markup=False, highlight=False, soft_wrap=True)
     console.print("Delete this temporary directory when finished. Crash-reporting preferences still apply.")
 
 

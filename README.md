@@ -78,7 +78,12 @@ aletheore demo
 ```
 
 The demo creates a small synthetic Python repository with local Git history and runs
-the real scanner to show dependencies and hotspots. Git must be installed; no account,
+the real scanner to build reusable evidence, retrieve source, trace imports, and execute
+a local MCP tool call. In a terminal, arrow-key menus guide one screen at a time,
+with actions to open the sample dashboard or try your own repository. Use `aletheore demo --plain`
+for a printable report; piped output also runs without prompts.
+You can also select **Take the guided demo** from the `aletheore` home menu.
+Tests are suggested, not executed. Git must be installed; no account,
 model, or repository clone is needed. The sample and evidence remain in a temporary
 directory for follow-up queries and the dashboard. Delete that directory when finished.
 
