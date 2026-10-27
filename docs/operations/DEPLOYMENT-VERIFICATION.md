@@ -5,7 +5,31 @@
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
 **Last Updated:** 2026-10-27
-**Snapshot Freshness:** CURRENT as of 2026-10-27 - all six app services (`app-server`, both scan workers,
+**Snapshot Freshness:** CURRENT as of 2026-10-27 (second deploy of the day) - all six app services (`app-server`, both
+scan workers, `health-worker`, `scheduler` and `jina-embed`) run `master` at commit `31959d9e` (tag
+`github-app-deploy-2026-10-27-b`); `postgres`, `redis`, `caddy` and `autoheal` were not touched. One commit since the
+previous deploy (`be6c82b5`), a Python-only change to `src/aletheore/skill_hub.py` and two tests. No migration (newest
+applied row is still `074_skill_hub_personal_identity.sql`) and no change to `docker-compose.yml`, any Dockerfile or any
+lockfile. Done after a database backup (`backups/aletheore_app_2026-10-27T18-46-09Z.dump`): the server checkout was
+fetched (without `--tags`), reset and confirmed at `31959d9e` before anything was built, all six images were built
+detached with `nohup` and a status file (exit 0 for each, about ten minutes in total), then `app-server` was replaced
+first, then both scan workers, `health-worker`, `scheduler` and `jina-embed` one at a time with `--no-deps`, each
+waiting for `healthy` and for every RQ worker to be idle first.
+
+Verified live over SSH: `docker ps` shows all ten containers up and the app services `healthy`;
+`https://app.aletheore.com/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`; zero lines
+matching `error|traceback|exception` in the six services' logs since restart; `aletheore.__version__` is 0.12.0 in the
+running `app-server` container and `skill_hub.py` in the container has the same SHA-256 prefix as the server checkout;
+`https://aletheore.com/` returns 200. The marketing domain has no `/healthz` route (it returns the site's 404 page), so
+use the `app.` host for that check.
+
+2026-10-27 second deploy (`31959d9e`, tag `github-app-deploy-2026-10-27-b`; `git log be6c82b5..31959d9e` is the exact
+range):
+
+- **Hallbook search:** fuzzy matching now covers a typo in the first letters of a query, and a flaky terminal test was
+  stabilized (#1153).
+
+**Previous:** CURRENT as of 2026-10-27 - all six app services (`app-server`, both scan workers,
 `health-worker`, `scheduler` and `jina-embed`) run `master` at commit `be6c82b5` (tag `github-app-deploy-2026-10-27`);
 `postgres`, `redis`, `caddy` and `autoheal` were not touched. 11 commits since the previous deploy (`8496a546`). No
 migration (newest applied row is still `074_skill_hub_personal_identity.sql`) and no change to `docker-compose.yml` or
