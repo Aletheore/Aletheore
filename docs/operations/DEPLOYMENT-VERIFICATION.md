@@ -4,8 +4,35 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-10-25
-**Snapshot Freshness:** CURRENT as of 2026-10-25 - all six app services (`app-server`, both scan workers,
+**Last Updated:** 2026-10-26
+**Snapshot Freshness:** CURRENT as of 2026-10-26 - `app-server`, both scan workers, `health-worker` and `scheduler`
+run `master` at commit `8496a546` (tag `github-app-deploy-2026-10-26`); `jina-embed` was rebuilt but its image did not
+change, so it was left running; `postgres`, `redis`, `caddy` and `autoheal` were not touched. 33 commits since the
+previous deploy (`64d80b2f`). No migration (newest applied row is still `074_skill_hub_personal_identity.sql`), and no
+change to `docker-compose.yml`, any Dockerfile or any lockfile. Done after a database backup
+(`backups/aletheore_app_2026-10-26T13-35-43Z.dump`): the server checkout was fetched (without `--tags`), reset and
+confirmed at `8496a546` before anything was built, all six images were built (exit 0), then `app-server` was replaced
+first, then both scan workers, `health-worker` and `scheduler` one at a time with `--no-deps`, each waiting for
+`healthy` and for every RQ worker to be idle first.
+
+Verified live over SSH: `docker ps` shows all ten containers up and the app services `healthy`; `/healthz` returns
+`200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`; zero lines matching `error|traceback|exception` in the
+six services' logs since restart; `aletheore.__version__` is 0.11.0 in the running `app-server` and scan-worker
+containers; `https://aletheore.com/` returns 200.
+
+2026-10-26 deploy (`8496a546`, tag `github-app-deploy-2026-10-26`; `git log 64d80b2f..8496a546` is the exact range):
+
+- **Scanner:** a tested Java command-injection Semgrep rule for variable commands passed to `Runtime.exec` and
+  `ProcessBuilder`, and local scan caches now invalidate when parser or endpoint code, or the installed tree-sitter
+  grammars, change even without a version bump (older unstamped caches rebuild once).
+- **MCP:** agent guidance across the full, lean, router and navigation profiles now explains snapshot and analysis limits,
+  matches setup advice to permitted tools, and requires authorization and redaction before external diagnostics.
+- **CLI:** `aletheore demo` (a real local scan of a labelled synthetic repository) and `aletheore scan --explain-network`
+  (reports conditional network traffic for the resolved settings, then exits). These ship in the package, not in the
+  hosted services.
+- **Documentation and media only:** the README walkthrough video, screenshots and badges, and the site benchmark status.
+
+**Previous:** CURRENT as of 2026-10-25 - all six app services (`app-server`, both scan workers,
 `health-worker`, `scheduler` and `jina-embed`) run `master` at commit `64d80b2f` (tag `github-app-deploy-2026-10-25`);
 `postgres`, `redis`, `caddy` and `autoheal` were not touched. 87 commits since the previous deploy (`aa967773`, which
 is where the server's checkout stood; the last tagged deploy was `github-app-deploy-2026-10-22-2`). No migration
