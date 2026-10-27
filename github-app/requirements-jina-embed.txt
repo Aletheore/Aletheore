@@ -5,4 +5,4 @@ llama-cpp-python==0.3.35
 # Not a direct runtime need of anything above - pinned explicitly because
 # llama-cpp-python's own build-time chain otherwise pulls in a setuptools
 # vulnerable to CVE-2025-47273 (path traversal in PackageIndex).
-setuptools>=84.1.0
+setuptools>=84.2.1
