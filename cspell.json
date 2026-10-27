@@ -229,6 +229,9 @@
     "uvloop",
     "markupsafe",
     "opentelemetry",
-    "starlette"
+    "starlette",
+    "setuptools",
+    "nohup",
+    "numpy"
   ]
 }

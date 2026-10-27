@@ -4,8 +4,67 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-10-26
-**Snapshot Freshness:** CURRENT as of 2026-10-26 - `app-server`, both scan workers, `health-worker` and `scheduler`
+**Last Updated:** 2026-10-27
+**Snapshot Freshness:** CURRENT as of 2026-10-27 (second deploy of the day) - all six app services (`app-server`, both
+scan workers, `health-worker`, `scheduler` and `jina-embed`) run `master` at commit `31959d9e` (tag
+`github-app-deploy-2026-10-27-b`); `postgres`, `redis`, `caddy` and `autoheal` were not touched. One commit since the
+previous deploy (`be6c82b5`), a Python-only change to `src/aletheore/skill_hub.py` and two tests. No migration (newest
+applied row is still `074_skill_hub_personal_identity.sql`) and no change to `docker-compose.yml`, any Dockerfile or any
+lockfile. Done after a database backup (`backups/aletheore_app_2026-10-27T18-46-09Z.dump`): the server checkout was
+fetched (without `--tags`), reset and confirmed at `31959d9e` before anything was built, all six images were built
+detached with `nohup` and a status file (exit 0 for each, about ten minutes in total), then `app-server` was replaced
+first, then both scan workers, `health-worker`, `scheduler` and `jina-embed` one at a time with `--no-deps`, each
+waiting for `healthy` and for every RQ worker to be idle first.
+
+Verified live over SSH: `docker ps` shows all ten containers up and the app services `healthy`;
+`https://app.aletheore.com/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`; zero lines
+matching `error|traceback|exception` in the six services' logs since restart; `aletheore.__version__` is 0.12.0 in the
+running `app-server` container and `skill_hub.py` in the container has the same SHA-256 prefix as the server checkout;
+`https://aletheore.com/` returns 200. The marketing domain has no `/healthz` route (it returns the site's 404 page), so
+use the `app.` host for that check.
+
+2026-10-27 second deploy (`31959d9e`, tag `github-app-deploy-2026-10-27-b`; `git log be6c82b5..31959d9e` is the exact
+range):
+
+- **Hallbook search:** fuzzy matching now covers a typo in the first letters of a query, and a flaky terminal test was
+  stabilized (#1153).
+
+**Previous:** CURRENT as of 2026-10-27 - all six app services (`app-server`, both scan workers,
+`health-worker`, `scheduler` and `jina-embed`) run `master` at commit `be6c82b5` (tag `github-app-deploy-2026-10-27`);
+`postgres`, `redis`, `caddy` and `autoheal` were not touched. 11 commits since the previous deploy (`8496a546`). No
+migration (newest applied row is still `074_skill_hub_personal_identity.sql`) and no change to `docker-compose.yml` or
+any Dockerfile; `github-app/requirements-jina-embed.txt` and its lockfile changed (setuptools 84.2.1), so `jina-embed`
+was rebuilt and replaced as well. Done after a database backup (`backups/aletheore_app_2026-10-27T08-44-14Z.dump`): the
+server checkout was fetched (without `--tags`), reset and confirmed at `be6c82b5` before anything was built, all six
+images were built (exit 0), then `app-server` was replaced first, then both scan workers, `health-worker`, `scheduler`
+and `jina-embed` one at a time with `--no-deps`, each waiting for `healthy` and for every RQ worker to be idle first.
+
+Verified live over SSH: `docker ps` shows all ten containers up and the app services `healthy`; `/healthz` returns
+`200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`; zero lines matching `error|traceback|exception` in the
+six services' logs since restart; `aletheore.__version__` is 0.12.0 in the running `app-server` and scan-worker
+containers; `https://aletheore.com/` returns 200.
+
+The build needed several attempts. About four hours of builds failed because downloads from the server were timing out:
+first `pip install` from PyPI through Docker's bridge network, then the Trivy, gosec and PMD archives from GitHub
+releases, which transferred about 3 KB/s (115 KB in 40 seconds) while the GitHub status page showed no incident. The
+`scan-worker` image downloads those archives after it copies `src/`, so any code change invalidates that layer and forces
+the download again. Nothing was restarted during the failed attempts, and production kept running the previous build
+the whole time. A later check showed the same 133 MB file downloading in 1.5 seconds and the build then succeeded on the
+first try. An SSH session that was running the build in the foreground also dropped and killed it, so run long builds
+detached (`nohup`) and poll a status file. Two details to remember: the server checkout was already at the new commit
+while the containers still ran the previous images, which is harmless but means a hand rebuild would pick up the new
+code; and a temporary compose override with `build.network: host` was used for part of the retries (kept outside the
+repo and deleted afterwards).
+
+2026-10-27 deploy (`be6c82b5`, tag `github-app-deploy-2026-10-27`; `git log 8496a546..be6c82b5` is the exact range):
+
+- **Hallbook:** discovery falls back to skills.sh (#1152).
+- **CLI and dashboard:** the guided `aletheore demo` is integrated and the dashboard check states are corrected (#1150).
+- **Release:** the package is 0.12.0 (#1149), published to PyPI the day before; the running services now report it.
+- **Dependencies:** setuptools 84.2.1 in the embedding image (#1151), numpy 2.5.4 (#1140), the `anthropic` requirement
+  in `src` (#1144), and three GitHub Actions bumps (#1138, #1145, #1146).
+
+**Previous:** CURRENT as of 2026-10-26 - `app-server`, both scan workers, `health-worker` and `scheduler`
 run `master` at commit `8496a546` (tag `github-app-deploy-2026-10-26`); `jina-embed` was rebuilt but its image did not
 change, so it was left running; `postgres`, `redis`, `caddy` and `autoheal` were not touched. 33 commits since the
 previous deploy (`64d80b2f`). No migration (newest applied row is still `074_skill_hub_personal_identity.sql`), and no
