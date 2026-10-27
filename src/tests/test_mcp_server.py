@@ -274,6 +274,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_list_skills",
         "aletheore_ask",
         "aletheore_find_skill",
+        "aletheore_find_external_skills",
         "aletheore_search_skills",
         "aletheore_get_skill",
         "aletheore_get_skill_file",
@@ -281,7 +282,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_remove_custom_skill",
     }
     assert expected.issubset(names)
-    assert len(names) == 45
+    assert len(names) == 46
     assert "aletheore_answer" not in names
 
 
