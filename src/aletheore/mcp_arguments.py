@@ -96,6 +96,10 @@ ARGUMENT_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "task": "One sentence describing what you are about to do: the technology and the kind of work.",
         "category": "Optional Hallbook category to search within, e.g. 'debugging' or 'security'.",
     },
+    "aletheore_find_external_skills": {
+        "task": "Short task description, shared with skills.sh only with user authorization; exclude private context, code, logs and secrets. Limited to 200 characters.",
+        "limit": "Maximum external recommendations to return (default 5, clamped to 1–8).",
+    },
     "aletheore_search_skills": {
         "query": "What you are about to do, in keywords, e.g. 'flaky test' or 'stripe webhooks'.",
         "category": "Optional Hallbook category to search within.",

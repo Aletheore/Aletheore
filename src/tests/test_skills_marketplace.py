@@ -127,3 +127,22 @@ async def test_external_mcp_tool_is_absent_without_network_effect(tmp_path):
     assert "aletheore_find_skill" in names
     assert "aletheore_search_skills" in names
     assert "aletheore_find_external_skills" not in names
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("network", [False, True])
+async def test_external_lookup_guidance_matches_consent(tmp_path, network):
+    effects = frozenset({"read", "network"} if network else {"read"})
+    server = build_server(tmp_path, allow=effects)
+    tools = {tool.name: tool for tool in await server.list_tools()}
+    assert ("aletheore_find_external_skills" in server.instructions) is network
+    local_guidance = tools["aletheore_find_skill"].description
+    assert "is listed" in local_guidance
+    assert "user authorized an external lookup" in local_guidance
+    if network:
+        arguments = tools["aletheore_find_external_skills"].input_schema["properties"]
+        assert "user authorization" in arguments["task"]["description"]
+        assert "1–8" in arguments["limit"]["description"]
+    snippet = skill_hub.AGENT_INSTRUCTION_SNIPPET
+    assert "is available" in snippet
+    assert "user authorized an external lookup" in snippet
