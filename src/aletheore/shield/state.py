@@ -2,10 +2,12 @@
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 _OFFLINE_VALUES = {"1", "true", "yes"}
+_SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
 @dataclass
@@ -49,13 +51,7 @@ def registry_lookups_enabled(repo: Path) -> bool:
 
 
 def session_state_path(repo: Path, session_id: str) -> Path | None:
-    """Path of the JSON file for one session, or None when the id is empty or could escape the directory."""
-    if (
-        not session_id
-        or "\x00" in session_id
-        or "/" in session_id
-        or "\\" in session_id
-        or session_id in (".", "..")
-    ):
+    """Path of the JSON file for one session, or None when the id is empty or is not a plain file-name token."""
+    if not _SESSION_ID.fullmatch(session_id) or session_id.endswith("."):
         return None
     return shield_dir(repo) / "sessions" / f"{session_id}.json"

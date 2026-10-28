@@ -4,8 +4,7 @@ import fnmatch
 import posixpath
 
 _PATTERNS = (
-    ".env",
-    ".env.*",
+    ".env*",
     "*.pem",
     "*.key",
     "*.p12",
@@ -16,8 +15,7 @@ _PATTERNS = (
     "id_dsa*",
     "id_ecdsa*",
     "id_ed25519*",
-    "credentials.json",
-    "credentials",
+    "credentials*",
     "secrets.json",
     "secrets.yml",
     "secrets.yaml",

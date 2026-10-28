@@ -1,5 +1,6 @@
 """Git helpers for Shield: one subprocess wrapper and a plain-words repository state check."""
 
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,6 +8,8 @@ from pathlib import Path
 from aletheore.git_exec import git_executable
 
 _TIMED_OUT = 124
+_SPAWN_FAILED = 127
+_INHERITED_GIT_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
 
 
 @dataclass(frozen=True)
@@ -26,12 +29,16 @@ def run_git(
 ) -> "subprocess.CompletedProcess[bytes]":
     """Run git inside repo. Never raises on a non-zero exit; a timeout yields returncode 124 and empty output."""
     command = [git_executable(), *args]
+    full_env = {k: v for k, v in os.environ.items() if k not in _INHERITED_GIT_VARS}
+    full_env.update(env or {})
     try:
         return subprocess.run(
-            command, cwd=str(repo), env=env, input=input, capture_output=True, timeout=timeout, check=False
+            command, cwd=str(repo), env=full_env, input=input, capture_output=True, timeout=timeout, check=False
         )
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(command, _TIMED_OUT, b"", b"")
+    except OSError:
+        return subprocess.CompletedProcess(command, _SPAWN_FAILED, b"", b"")
 
 
 def _unsupported(reason: str, git_dir: Path | None = None) -> RepoState:
@@ -44,6 +51,8 @@ def repo_state(repo: Path) -> RepoState:
         probe = run_git(repo, "rev-parse", "--absolute-git-dir", "--is-bare-repository")
     except FileNotFoundError:
         return _unsupported("git was not found on PATH")
+    if probe.returncode == _TIMED_OUT:
+        return _unsupported("git did not answer in time")
     lines = probe.stdout.decode("utf-8", "replace").splitlines()
     if probe.returncode != 0 or len(lines) < 2:
         return _unsupported("this folder is not a git repository")

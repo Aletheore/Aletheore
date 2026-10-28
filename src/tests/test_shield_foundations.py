@@ -106,8 +106,11 @@ def test_offline_env_disables_registry_lookups(tmp_path, monkeypatch):
 
 def test_session_state_path_sanitizes_ids(tmp_path):
     assert state.session_state_path(tmp_path, "abc-123") == state.shield_dir(tmp_path) / "sessions" / "abc-123.json"
-    for bad in ("", ".", "..", "a/b", "a\\b"):
+    for bad in ("", ".", "..", "a/b", "a\\b", "C:foo", "a:b", "../x", "x\0y", "ends.", ".hidden", "a" * 129):
         assert state.session_state_path(tmp_path, bad) is None
+    for good in ("abc-123", "A.b_c", "a" * 128):
+        p = state.session_state_path(tmp_path, good)
+        assert p.parent == state.shield_dir(tmp_path) / "sessions"
     assert not (tmp_path / ".aletheore").exists()
 
 
@@ -121,7 +124,50 @@ def test_session_state_path_sanitizes_ids(tmp_path):
         ("credentials.json", True),
         ("src/environment.py", False),
         ("src/app.py", False),
+        (".envrc", True),
+        ("credentials.yml", True),
+        ("ID_RSA", True),
+        ("Foo.PEM", True),
+        ("config/.ENV.Production", True),
     ],
 )
 def test_is_denied_path(path, expected):
     assert denylist.is_denied_path(path) is expected
+
+
+def test_run_git_timeout_and_spawn_failure_do_not_raise(tmp_path, monkeypatch):
+    def timeout(*a, **k):
+        raise subprocess.TimeoutExpired("git", 0.01)
+
+    monkeypatch.setattr(gitutil.subprocess, "run", timeout)
+    result = gitutil.run_git(tmp_path, "status", timeout=0.01)
+    assert result.returncode == 124 and result.stdout == b""
+    st = gitutil.repo_state(tmp_path)
+    assert st.ok is False and "not a git repository" not in st.reason
+
+    def broken(*a, **k):
+        raise PermissionError("nope")
+
+    monkeypatch.setattr(gitutil.subprocess, "run", broken)
+    result = gitutil.run_git(tmp_path, "status")
+    assert result.returncode == 127 and result.stdout == b""
+
+
+def test_run_git_drops_inherited_git_vars_but_keeps_explicit_env(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake(command, **k):
+        seen.update(k["env"])
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setenv("GIT_DIR", "/nowhere")
+    monkeypatch.setenv("GIT_INDEX_FILE", "/nowhere/index")
+    monkeypatch.setattr(gitutil.subprocess, "run", fake)
+    gitutil.run_git(tmp_path, "status", env={"GIT_INDEX_FILE": "/mine"})
+    assert "GIT_DIR" not in seen and seen["GIT_INDEX_FILE"] == "/mine"
+
+
+def test_config_registry_lookups_false_without_env(tmp_path, monkeypatch):
+    monkeypatch.delenv("ALETHEORE_SHIELD_OFFLINE", raising=False)
+    state.save_config(tmp_path, state.ShieldConfig(registry_lookups=False))
+    assert state.registry_lookups_enabled(tmp_path) is False
