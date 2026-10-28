@@ -5,9 +5,12 @@ fixed User-Agent. Anything that is not a definite HTTP 404 yields exists=None
 ("could not check"); this module never reports a package as missing on a guess.
 """
 
+import http.client
 import json
+import os
 import re
 import socket
+import tempfile
 import ssl
 import urllib.error
 import urllib.parse
@@ -35,9 +38,23 @@ class RegistryInfo:
 
 
 def _norm(ecosystem: str, name: str) -> str:
+    """PyPI names compare case-insensitively with -_. folded; npm names keep their case."""
     if ecosystem == "PyPI":
         return re.sub(r"[-_.]+", "-", name).lower()
-    return name.lower()
+    return name
+
+
+_BAD_CHARS = re.compile(r"[\x00-\x20\x7f\\]")
+MAX_BODY_BYTES = 8 * 1024 * 1024
+
+
+def _valid_name(ecosystem: str, name: str) -> bool:
+    if not isinstance(name, str) or name in ("", ".", "..") or _BAD_CHARS.search(name):
+        return False
+    slashes = name.count("/")
+    if slashes == 0:
+        return True
+    return ecosystem == "npm" and slashes == 1 and name.startswith("@") and not name.startswith("@/") and not name.endswith("/")
 
 
 def _url(ecosystem: str, name: str) -> str:
@@ -95,7 +112,7 @@ def _from_cache(entry, now: datetime) -> RegistryInfo | None:
 
 
 def _write_cache(path: Path, key: str, info: RegistryInfo, now: datetime) -> None:
-    cache = _read_cache(path)
+    cache = {k: v for k, v in _read_cache(path).items() if _from_cache(v, now) is not None}
     cache[key] = {
         "cached_at": now.isoformat(),
         "exists": info.exists,
@@ -103,9 +120,11 @@ def _write_cache(path: Path, key: str, info: RegistryInfo, now: datetime) -> Non
     }
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(cache), encoding="utf-8")
-        tmp.replace(path)
+        with tempfile.NamedTemporaryFile(
+            "w", dir=path.parent, prefix=path.name + ".", suffix=".tmp", delete=False, encoding="utf-8"
+        ) as handle:
+            handle.write(json.dumps(cache))
+        os.replace(handle.name, path)
     except OSError:
         pass  # caching is best effort
 
@@ -123,6 +142,8 @@ def lookup_package(
     opener: Callable | None = None,
     now: datetime | None = None,
 ) -> RegistryInfo:
+    if not _valid_name(ecosystem, name):
+        return RegistryInfo(None, None, "invalid package name")
     now = now or datetime.now(timezone.utc)
     path = cache_path if cache_path is not None else DEFAULT_REGISTRY_CACHE_PATH
     key = f"{ecosystem}:{_norm(ecosystem, name)}"
@@ -133,8 +154,12 @@ def lookup_package(
     request = urllib.request.Request(_url(ecosystem, name), headers={"User-Agent": USER_AGENT})
     try:
         with (opener or _default_opener)(request, timeout=timeout) as response:
-            raw = response.read()
+            raw = response.read(MAX_BODY_BYTES + 1)
     except urllib.error.HTTPError as error:
+        try:
+            error.close()
+        except Exception:
+            pass
         if error.code == 404:
             info = RegistryInfo(False, None, None)
             _write_cache(path, key, info, now)
@@ -144,6 +169,11 @@ def lookup_package(
         return RegistryInfo(None, None, f"registry error (HTTP {error.code})")
     except (OSError, socket.timeout):  # URLError, timeouts, resets
         return RegistryInfo(None, None, "offline or timed out")
+    except (http.client.HTTPException, ValueError):
+        return RegistryInfo(None, None, "registry connection failed")
+
+    if len(raw) > MAX_BODY_BYTES:
+        return RegistryInfo(None, None, "response too large")
 
     try:
         data = json.loads(raw)

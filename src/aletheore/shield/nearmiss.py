@@ -6,22 +6,22 @@ deletion, substitution or adjacent transposition counts as 1.
 
 import functools
 import json
-import re
 from pathlib import Path
+
+from aletheore.shield.registry import _norm as _registry_norm
 
 MIN_LENGTH = 5
 _DATA = Path(__file__).resolve().parents[1] / "data" / "popular_packages.json"
 
 
+def _near_norm(ecosystem: str, name: str) -> str:
+    # npm names are case-sensitive for lookup, but typosquat comparison ignores case.
+    return _registry_norm(ecosystem, name).lower()
+
+
 @functools.lru_cache(maxsize=1)
 def load_popular() -> dict:
     return json.loads(_DATA.read_text(encoding="utf-8"))
-
-
-def _norm(ecosystem: str, name: str) -> str:
-    if ecosystem == "PyPI":
-        return re.sub(r"[-_.]+", "-", name).lower()
-    return name.lower()
 
 
 def _within_one(a: str, b: str) -> bool:
@@ -44,13 +44,13 @@ def _within_one(a: str, b: str) -> bool:
 def _index(ecosystem: str) -> tuple[frozenset[str], tuple[tuple[str, str], ...]]:
     key = "pypi" if ecosystem == "PyPI" else "npm"
     names = load_popular().get(key, [])
-    normed = tuple((_norm(ecosystem, n), n) for n in names)
+    normed = tuple((_near_norm(ecosystem, n), n) for n in names)
     return frozenset(n for n, _ in normed), normed
 
 
 def near_miss(ecosystem: str, name: str) -> str | None:
     """The popular package `name` is one edit away from, or None."""
-    target = _norm(ecosystem, name)
+    target = _near_norm(ecosystem, name)
     if len(target) < MIN_LENGTH:
         return None
     popular, ordered = _index(ecosystem)

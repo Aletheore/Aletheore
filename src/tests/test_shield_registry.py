@@ -1,7 +1,11 @@
+import http.client
 import io
 import json
 import socket
 import urllib.error
+import urllib.request
+
+import pytest
 from datetime import datetime, timedelta, timezone
 
 from aletheore.network_plan import shield_network_plan
@@ -176,3 +180,64 @@ def test_shield_network_plan_lists_only_package_names_and_the_off_switch():
         assert "ALETHEORE_SHIELD_OFFLINE=1" in entry["disable"]
         assert "registry_lookups" in entry["disable"]
     assert all(not e["enabled"] for e in shield_network_plan(registry_lookups=False))
+
+
+@pytest.fixture(autouse=True)
+def _no_real_network(monkeypatch):
+    def boom(*args, **kwargs):
+        raise AssertionError("test tried to reach the network")
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+
+
+class _BrokenBody:
+    def __init__(self, error):
+        self.error = error
+
+    def read(self, *args):
+        raise self.error
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_http_client_errors_mean_not_checked(tmp_path):
+    for error in (http.client.IncompleteRead(b"x"), http.client.BadStatusLine("x"), http.client.InvalidURL("x"), ValueError("x")):
+        info = lookup_package(
+            "PyPI", "demo", cache_path=tmp_path / "c.json", opener=lambda r, timeout=None, e=error: _BrokenBody(e), now=NOW
+        )
+        assert info.exists is None
+        assert info.reason == "registry connection failed"
+
+
+@pytest.mark.parametrize(
+    "eco,name",
+    [("npm", ""), ("npm", "."), ("npm", ".."), ("npm", "a\x00b"), ("npm", "a\nb"), ("npm", "a\rb"), ("npm", "a\\b"),
+     ("npm", "a b"), ("npm", "a/b"), ("npm", "@a/b/c"), ("npm", "@/b"), ("npm", "@a/"), ("PyPI", "@a/b"), ("PyPI", "a/b")],
+)
+def test_invalid_names_make_no_request(tmp_path, eco, name):
+    opener = _Opener(RuntimeError("must not be called"))
+    info = lookup_package(eco, name, cache_path=tmp_path / "c.json", opener=opener, now=NOW)
+    assert (info.exists, info.reason) == (None, "invalid package name")
+    assert opener.requests == []
+
+
+def test_oversized_response_is_not_checked(tmp_path):
+    from aletheore.shield import registry
+
+    info, _ = _lookup(tmp_path, "npm", "big", b"x" * (registry.MAX_BODY_BYTES + 1))
+    assert (info.exists, info.reason) == (None, "response too large")
+
+
+def test_npm_cache_key_preserves_case_and_expired_entries_are_pruned(tmp_path):
+    path = tmp_path / "c.json"
+    lookup_package("npm", "JSONStream", cache_path=path, opener=_Opener({"time": {}}), now=NOW)
+    lookup_package("npm", "jsonstream", cache_path=path, opener=_Opener(_http_error("u", 404)), now=NOW)
+    cache = json.loads(path.read_text())
+    assert cache["npm:JSONStream"]["exists"] is True and cache["npm:jsonstream"]["exists"] is False
+    lookup_package("npm", "other", cache_path=path, opener=_Opener({"time": {}}), now=NOW + timedelta(hours=30))
+    assert set(json.loads(path.read_text())) == {"npm:other"}
+    assert [p.name for p in tmp_path.iterdir() if p.name != "c.json"] == []
