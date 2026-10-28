@@ -28,6 +28,7 @@ from rich.table import Table
 from rich.text import Text
 
 from aletheore._lazy import lazy_module
+from aletheore.cli_presentation import AletheoreGroup, SILENT_ROUTES
 from aletheore.adapters.anthropic_native import AnthropicAdapter
 from aletheore.adapters.claude_code import AdapterInvocationError, ClaudeCodeAdapter
 from aletheore.adapters.codex_cli import CodexCliAdapter
@@ -448,11 +449,12 @@ _COMMAND_SUMMARIES = [
 ]
 
 
-# Two commands the banner does not list but the "All commands" picker does. The banner (and so the plain `aletheore`
+# Additional commands and aliases available in the "All commands" picker. The banner (and so the plain `aletheore`
 # output) keeps its own list exactly as it was.
 _PICKER_ONLY_SUMMARIES = [
     ("hallbook", "browse, search and read the licences of the library of vetted agent skills"),
     ("config", "manage local CLI preferences, such as crash reporting"),
+    ("skill-hub", "alias for the Hallbook skills command group"),
 ]
 _COMMAND_DESCRIPTIONS = dict(_COMMAND_SUMMARIES + _PICKER_ONLY_SUMMARIES)
 # The picker groups every command above by task, each exactly once.
@@ -461,7 +463,7 @@ _COMMAND_GROUPS = [
         "Scan and explore",
         ["scan", "demo", "index", "query", "locate", "usages", "dependents", "tests-for", "cycles", "diff", "verify", "healthcheck"],
     ),
-    ("Agents and skills", ["mcp", "mcp-install", "audit", "hallbook", "hook", "tokens"]),
+    ("Agents and skills", ["mcp", "mcp-install", "audit", "hallbook", "skill-hub", "hook", "tokens"]),
     ("Dashboard and watch", ["dashboard", "watch", "init"]),
     ("Account", ["login", "logout", "status", "config"]),
 ]
@@ -2174,6 +2176,7 @@ def _dashboard(repo_path: str, port: int) -> int:
 
 
 app = typer.Typer(
+    cls=AletheoreGroup,
     name="aletheore",
     help="Evidence-grounded repository audit — a deterministic scanner, MCP server, live "
     "dashboard, and a GitHub Action that posts PR diffs.",
@@ -2210,13 +2213,8 @@ def _run_cli(args: list[str]) -> int:
 def _menu_header() -> Text:
     from aletheore import ui
 
-    header = Text()
-    # The block-letter wordmark needs about 28 rows with the menu; on a short window (or a narrow one) show the
-    # plain name instead, so the menu is never cropped by the terminal.
-    art = ui.wordmark_lines(console.width) if console.height >= 28 else ["ALETHEORE"]
-    for line in art:
-        header.append(line + "\n", style="bold")
-    header.append("\n" + ui.TAGLINE + "\n", style="dim")
+    header = ui.command_header("", width=console.width, height=console.height)
+    header.append("\n")
     version = _installed_version()
     folder = Path.cwd()
     shown = str(folder)
@@ -2273,24 +2271,92 @@ _MAIN_MENU = [
     ("connect", "Connect your coding agent", "Claude Code, Codex, Cursor, Antigravity, ..."),
     ("dashboard", "Open the dashboard", "a live local view"),
     ("account", "Account", "sign in, sign out, status"),
+    ("meter", "Token savings meter", "view measured local savings and estimates"),
     ("commands", "All commands", "every command, grouped by task"),
     ("demo", "Take the guided demo", "scan, query and coding-agent evidence"),
     ("quit", "Quit", ""),
 ]
 
-# What Enter does on a command in the "All commands" picker. Commands that need nothing run as they are; the three
-# in _COMMAND_PROMPTS ask for their one required argument first; the rest print their own --help.
+# Menu actions use the same CLI entry points: defaults for simple commands, prompts for required input,
+# and submenus discovered from Click for command groups. The MCP protocol server opens its usage screen.
 _COMMAND_RUNS = {
     "demo": ["demo"],
     "scan": ["scan", "."], "audit": ["audit", "."], "query": ["query"], "dashboard": ["dashboard", "."],
     "init": ["init", "."], "cycles": ["cycles"], "login": ["login"], "logout": ["logout"], "status": ["status"],
+    "index": ["index", "."], "watch": ["watch", "."],
 }
 _COMMAND_PROMPTS = {
     "diff": ["Baseline evidence file (old air.json)", "Evidence file to compare (new air.json)"],
     "verify": ["Report to check (path to a markdown file)"],
     "healthcheck": ["Base URL of the running server (for example http://localhost:8000)"],
+    "locate": ["Symbol or definition to find"],
+    "usages": ["Symbol to find usages of"],
+    "dependents": ["File to find dependents of"],
+    "tests-for": ["File to find candidate tests for"],
 }
-_COMMAND_HELP = ("mcp", "watch", "config", "index", "locate", "usages", "dependents", "tests-for", "hook", "tokens")
+_COMMAND_HELP = ("mcp",)
+
+
+def _click_command(path: list[str]):
+    """Return a Click command from the same tree used by the CLI entry point."""
+    from typer.main import get_command
+
+    command = get_command(app)
+    for part in path:
+        children = getattr(command, "commands", None)
+        if not children or part not in children:
+            return None
+        command = children[part]
+    return command
+
+
+def _command_group_flow(path: list[str], group, kwargs: dict) -> bool:
+    """Browse and run every nested command exposed by a Click command group."""
+    from aletheore import ui
+
+    children = getattr(group, "commands", {}) or {}
+    rows = [
+        ui.MenuItem(name, name, (command.help or "").partition("\n")[0])
+        for name, command in children.items()
+    ]
+    rows.append(ui.MenuItem("", "Back"))
+    start = 0
+    while True:
+        _clear_screen()
+        heading = ui.command_header(" / ".join(part.title() for part in path),
+                                    width=console.width, height=console.height, subtitle="choose a command")
+        choice = ui.choose(rows, console, header=heading, start=start, numbers=False,
+                           footer="up/down to move, enter to open or run, q to go back", **kwargs)
+        if choice is None or not choice.key:
+            return False
+        start = [row.key for row in rows].index(choice.key)
+        child = children[choice.key]
+        child_path = [*path, choice.key]
+        if getattr(child, "commands", None):
+            if _command_group_flow(child_path, child, kwargs):
+                return True
+            continue
+
+        route = tuple("hallbook" if name == "skill-hub" else name for name in child_path)
+        if route in SILENT_ROUTES:
+            # Event consumers cannot be run from an arrow-key picker: they wait on stdin.
+            _run_cli([*child_path, "--help"])
+            return True
+
+        args = []
+        for parameter in child.params:
+            if not parameter.required:
+                continue
+            answer = _ask(f"{parameter.human_readable_name} for {' '.join(child_path)}")
+            if not answer:
+                break
+            if isinstance(parameter, click.Option):
+                args.extend([parameter.opts[0], answer])
+            else:
+                args.append(answer)
+        else:
+            _run_cli([*child_path, *args])
+            return True
 
 
 def _command_args(name: str, answers: list[str]) -> list[str]:
@@ -2310,7 +2376,8 @@ def _connect_flow(kwargs: dict) -> bool:
            for name in targets]
     sub.append(ui.MenuItem("all", "All of them", f"writes config for all {len(targets)} above, including Claude Desktop's global one"))
     sub.append(ui.MenuItem("back", "Back"))
-    choice = ui.choose(sub, console, header=Text("Connect which coding agent to this folder?", style="bold"),
+    choice = ui.choose(sub, console, header=ui.command_header("Connect your coding agent",
+                       width=console.width, height=console.height, subtitle=str(Path.cwd())),
                        footer="up/down to move, enter to choose, q to go back", **kwargs)
     if choice is None or choice.key == "back":
         return False
@@ -2325,7 +2392,7 @@ def _account_flow(kwargs: dict) -> bool:
            ui.MenuItem("login", "Sign in", "with your GitHub account"),
            ui.MenuItem("logout", "Sign out", ""),
            ui.MenuItem("back", "Back")]
-    choice = ui.choose(sub, console, header=Text("Account", style="bold"),
+    choice = ui.choose(sub, console, header=ui.command_header("Account", width=console.width, height=console.height),
                        footer="up/down to move, enter to choose, q to go back", **kwargs)
     if choice is None or choice.key == "back":
         return False
@@ -2339,13 +2406,45 @@ def _skills_flow(kwargs: dict) -> None:
     SkillsBrowser(console, read_key=kwargs.get("read_key"), ask=_ask, clear=_clear_screen).run()
 
 
+def _meter_flow(kwargs: dict, pause: Callable[[], None]) -> None:
+    """Show the branded report with project selection and explicit read-guard actions."""
+    from aletheore import read_guard_setup, ui
+
+    project = Path.cwd()
+    while True:
+        _clear_screen()
+        args = ["tokens", "meter", "--path", str(project)]
+        _run_cli(args)
+        enabled = read_guard_setup.is_installed(project)
+        rows = [ui.MenuItem("refresh", "Refresh", "read the latest local observations"),
+                ui.MenuItem("guard", "Disable read guard" if enabled else "Enable read guard",
+                            "remove Aletheore's hooks" if enabled else "review changes before enabling Claude Code hooks"),
+                ui.MenuItem("project", "Choose project", "view another project's savings and settings"),
+                ui.MenuItem("back", "Back")]
+        picked = ui.choose(rows, console, footer="up/down to move, enter to choose, q to go back", **kwargs)
+        if picked is None or picked.key == "back":
+            return
+        if picked.key == "guard":
+            _run_cli([*args, "--disable-read-guard" if enabled else "--enable-read-guard"])
+            pause()
+        elif picked.key == "project":
+            answer = _ask("Project directory")
+            if answer:
+                chosen = Path(answer).expanduser().resolve()
+                if chosen.is_dir():
+                    project = chosen
+                else:
+                    console.print(Text(f"Project directory does not exist: {chosen}"))
+                    pause()
+
+
 def _run_command(name: str, kwargs: dict) -> bool:
     """Run one command picked from the "All commands" list. True when it printed something worth reading."""
     if name == "mcp-install":
         return _connect_flow(kwargs)
-    if name == "hallbook":
-        _skills_flow(kwargs)
-        return False
+    command = _click_command([name])
+    if getattr(command, "commands", None):
+        return _command_group_flow([name], command, kwargs)
     if name in _COMMAND_RUNS:
         _run_cli(_COMMAND_RUNS[name])
         return True
@@ -2371,8 +2470,8 @@ def _commands_flow(kwargs: dict, pause: Callable[[], None]) -> None:
     group_start = 0
     while True:
         _clear_screen()
-        header = Text("All commands\n", style="bold")
-        header.append("grouped by what you are doing", style="dim")
+        header = ui.command_header("All commands", width=console.width, height=console.height,
+                                   subtitle="grouped by what you are doing")
         picked = ui.choose(groups, console, header=header, start=group_start,
                            footer="up/down to move, enter to open, q to go back", numbers=False, **kwargs)
         if picked is None or not picked.key:
@@ -2384,8 +2483,8 @@ def _commands_flow(kwargs: dict, pause: Callable[[], None]) -> None:
         start = 0
         while True:
             _clear_screen()
-            header = Text(f"{picked.label}\n", style="bold")
-            header.append("enter runs a command or opens it", style="dim")
+            header = ui.command_header(picked.label, width=console.width, height=console.height,
+                                       subtitle="enter runs a command or opens it")
             command = ui.choose(rows, console, header=header, start=start, numbers=False,
                                 footer="up/down to move, enter to run, q to go back", **kwargs)
             if command is None or not command.key:
@@ -2430,6 +2529,9 @@ def _run_menu(read_key=None, pause=None) -> None:
         elif picked.key == "account":
             if not _account_flow(kwargs):
                 continue
+        elif picked.key == "meter":
+            _meter_flow(kwargs, pause)
+            continue
         elif picked.key == "commands":
             _commands_flow(kwargs, pause)
             continue

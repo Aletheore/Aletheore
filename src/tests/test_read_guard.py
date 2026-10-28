@@ -222,3 +222,38 @@ def test_cli_hook_pre_read_end_to_end(tmp_path: Path, monkeypatch):
     assert result.exit_code == 0
     out = json.loads(result.output)
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_main_pre_records_exact_size_only_for_an_actual_denial(tmp_path: Path):
+    from aletheore.token_meter import load_events
+
+    repo = _scanned_repo(tmp_path)
+    target = repo / "a.py"
+    target.write_text("x = 123\n")
+    payload = {"session_id": "s1", "cwd": str(repo), "tool_input": {"file_path": str(target)}}
+    read_guard.record_read(payload)
+
+    out = io.StringIO()
+    assert read_guard.main_pre(stdin=io.StringIO(json.dumps(payload)), stdout=out,
+                               environ={"ALETHEORE_READ_GUARD": "1"}) == 0
+    events, corrupt = load_events(repo)
+    assert corrupt == 0
+    assert len(events) == 1
+    assert events[0].source == "read_guard"
+    assert events[0].size_bytes == len(target.read_bytes())
+
+
+def test_meter_record_failure_never_breaks_or_changes_the_hook_decision(tmp_path: Path, monkeypatch):
+    from aletheore import token_meter
+
+    repo = _scanned_repo(tmp_path)
+    target = repo / "a.py"
+    target.write_text("x = 123\n")
+    payload = {"session_id": "s1", "cwd": str(repo), "tool_input": {"file_path": str(target)}}
+    read_guard.record_read(payload)
+    monkeypatch.setattr(token_meter, "record_read_guard", lambda *args, **kwargs: (_ for _ in ()).throw(OSError()))
+
+    out = io.StringIO()
+    assert read_guard.main_pre(stdin=io.StringIO(json.dumps(payload)), stdout=out,
+                               environ={"ALETHEORE_READ_GUARD": "1"}) == 0
+    assert json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecision"] == "deny"

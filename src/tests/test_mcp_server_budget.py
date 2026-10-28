@@ -3,7 +3,8 @@ import json
 import pytest
 
 from aletheore.mcp_server import _toon_result, build_server, read_evidence
-from aletheore.query import find_vulnerabilities
+from aletheore.query import find_endpoints, find_vulnerabilities
+from aletheore.token_meter import load_events
 from tests.test_mcp_server import make_repo_with_evidence, tool_result_body
 
 BUDGET_PARAMS = {"section", "offset", "limit", "filter"}
@@ -129,3 +130,72 @@ async def test_unknown_section_is_a_clear_error_not_a_crash(tmp_path):
     server = build_server(repo)
     body = tool_result_body(await server.call_tool("aletheore_endpoints", {"section": "nope"}))["result"]
     assert "unknown section" in body["error"] and body["sections"]["endpoints"] == 5
+
+
+@pytest.mark.asyncio
+async def test_meter_records_exact_chars_only_for_real_trim_not_pages_or_small_results(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALETHEORE_MCP_BUDGET_CHARS", "3000")
+    repo = make_repo_with_evidence(tmp_path)
+    bloat(repo, 300)
+    server = build_server(repo)
+
+    original = _toon_result(find_endpoints(read_evidence(repo), None))
+    first = await server.call_tool("aletheore_endpoints", {})
+    events, corrupt = load_events(repo)
+    assert corrupt == 0 and len(events) == 1
+    event = events[0]
+    assert event.source == "mcp_budget"
+    assert event.original_chars == len(original)
+    assert event.delivered_chars == len(first.content[0].text)
+    assert event.delivered_chars < event.original_chars
+
+    await server.call_tool("aletheore_endpoints", {"section": "endpoints", "offset": 0, "limit": 5})
+    events_after_page, _ = load_events(repo)
+    assert len(events_after_page) == 1
+
+
+@pytest.mark.asyncio
+async def test_meter_does_not_create_events_for_results_that_fit(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+    await server.call_tool("aletheore_vulnerabilities", {})
+    assert load_events(repo) == ([], 0)
+    assert not (repo / ".aletheore" / "token_meter").exists()
+
+
+@pytest.mark.asyncio
+async def test_meter_recording_failure_never_breaks_mcp_response(tmp_path, monkeypatch):
+    from aletheore import token_meter
+
+    monkeypatch.setenv("ALETHEORE_MCP_BUDGET_CHARS", "3000")
+    repo = make_repo_with_evidence(tmp_path)
+    bloat(repo, 300)
+    monkeypatch.setattr(token_meter, "record_mcp_trim", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    server = build_server(repo)
+    response = await server.call_tool("aletheore_endpoints", {})
+    assert response.content and "_budget" in response.content[0].text
+
+
+@pytest.mark.asyncio
+async def test_meter_records_semantic_code_search_trimming(tmp_path, monkeypatch):
+    from aletheore import mcp_server
+
+    monkeypatch.setenv("ALETHEORE_MCP_BUDGET_CHARS", "3000")
+    repo = make_repo_with_evidence(tmp_path)
+    results = [
+        {"module_path": f"module_{index}.py", "symbol_name": f"symbol_{index}", "text": "x" * 500}
+        for index in range(200)
+    ]
+    monkeypatch.setattr(mcp_server, "search_index", lambda *args, **kwargs: results)
+    server = build_server(repo)
+
+    original_chars = len(_toon_result(results))
+    response = await server.call_tool("aletheore_search_codebase", {"query": "example", "k": 200})
+    body = tool_result_body(response)["result"]
+    assert "_budget" in body
+    events, corrupt = load_events(repo)
+    assert corrupt == 0 and len(events) == 1
+    assert events[0].source == "mcp_budget"
+    assert events[0].original_chars == original_chars
+    assert events[0].delivered_chars == len(response.content[0].text)
+    assert events[0].delivered_chars < events[0].original_chars

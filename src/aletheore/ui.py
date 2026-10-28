@@ -43,6 +43,18 @@ def wordmark_lines(width: int = 80) -> list[str]:
 TAGLINE = "Evidence-grounded code intelligence. Every answer cites a real file and line."
 
 
+def command_header(title: str, *, width: int, height: int, subtitle: str = "") -> Text:
+    """The shared heading for command screens and menu pages."""
+    brand = wordmark_lines(width) if height >= 28 and supports_unicode() else ["ALETHEORE"]
+    heading = Text("\n".join(brand), style="bold")
+    heading.append("\n\n" + TAGLINE, style="dim")
+    if title:
+        heading.append("\n\n" + title, style="bold")
+    if subtitle:
+        heading.append("\n" + subtitle, style="dim")
+    return heading
+
+
 # --- environment checks ------------------------------------------------------------------------------------------
 
 
