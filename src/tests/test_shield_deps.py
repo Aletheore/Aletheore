@@ -4,6 +4,16 @@ import subprocess
 from aletheore.shield.deps import DepRef, NotChecked, added_dependencies
 
 
+import pytest
+
+from aletheore.shield import deps as _deps
+
+
+@pytest.fixture(autouse=True)
+def _nothing_installed(monkeypatch):
+    monkeypatch.setattr(_deps, "_installed_import_names", lambda: set())
+
+
 def _git(repo, *args):
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
 
@@ -157,4 +167,28 @@ def test_lockfile_transitives_are_not_reported(tmp_path):
     lock = {"name": "p", "lockfileVersion": 3, "packages": {"": {"name": "p"},
             "node_modules/transitivex": {"version": "1.0.0"}}}
     _write(repo, "package-lock.json", json.dumps(lock))
+    assert added_dependencies(repo)[0] == []
+
+
+def test_names_declared_in_other_manifest_files_suppress_imports(tmp_path):
+    repo = _init(tmp_path / "r", {
+        "requirements-dev.txt": "devfromreq==1.0\n",
+        "pyproject.toml": "[dependency-groups]\ndev=['grouplib>=1']\n[project]\nname='x'\nversion='1'\n",
+        "app.py": "x = 1\n",
+    })
+    _write(repo, "app.py", "import devfromreq\nimport grouplib\nx = 1\n")
+    assert added_dependencies(repo)[0] == []
+
+
+def test_declared_dist_containing_import_name_suppresses(tmp_path):
+    repo = _init(tmp_path / "r", {"requirements.txt": "foo-bar==1.0\n", "app.py": "x = 1\n"})
+    _write(repo, "app.py", "import foo\nimport zzqhallucinated\n")
+    refs, _ = added_dependencies(repo)
+    assert refs == [DepRef("PyPI", "zzqhallucinated", "import", "app.py")]
+
+
+def test_installed_module_import_is_skipped_even_when_mapped(tmp_path, monkeypatch):
+    monkeypatch.setattr(_deps, "_installed_import_names", lambda: {"yaml", "six"})
+    repo = _init(tmp_path / "r", {"app.py": "x = 1\n"})
+    _write(repo, "app.py", "import yaml\nimport six\n")
     assert added_dependencies(repo)[0] == []

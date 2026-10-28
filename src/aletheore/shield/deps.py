@@ -155,6 +155,8 @@ def _gather(repo: Path, working: list[str]) -> _Facts:
         pure = PurePosixPath(rel)
         name = pure.name
         if not _skipped_dir(rel):
+            # Deliberately broad (favours precision): any directory name or module stem anywhere in the repo
+            # counts as local, which may hide a real import of a package whose name matches a local folder.
             facts.local_dirs.update(pure.parts[:-1])
             if name.endswith((".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")):
                 facts.local_dirs.add(pure.stem)
@@ -264,6 +266,63 @@ def _manifest_where(repo: Path, owners: list[str], ecosystem: str, name: str) ->
     return first or (owners[0] if owners else ".")
 
 
+_DIST_START = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _dist_names(lines) -> set[str]:
+    found = set()
+    for line in lines:
+        if isinstance(line, str):
+            match = _DIST_START.match(line.strip())
+            if match:
+                found.add(_norm_py(match.group(0)))
+    return found
+
+
+def _declared_python_names(repo: Path, working: list[str]) -> set[str]:
+    """Distribution names declared anywhere in the tree, including files collect_pins does not read."""
+    found: set[str] = set()
+    for rel in working:
+        name = PurePosixPath(rel).name
+        if _skipped_dir(rel):
+            continue
+        try:
+            if name.startswith("requirements") and name.endswith(".txt") or (
+                    PurePosixPath(rel).parent.name == "requirements" and name.endswith(".txt")):
+                found |= _dist_names(l for l in (_read(repo, rel) or "").splitlines()
+                                     if not l.strip().startswith(("#", "-")))
+            elif name == "pyproject.toml":
+                data = _toml(_read(repo, rel))
+                project = data.get("project") if isinstance(data.get("project"), dict) else {}
+                for group in (project.get("optional-dependencies") or {}).values():
+                    found |= _dist_names(group if isinstance(group, list) else [])
+                for group in (data.get("dependency-groups") or {}).values():
+                    found |= _dist_names(group if isinstance(group, list) else [])
+                tool = data.get("tool") if isinstance(data.get("tool"), dict) else {}
+                poetry = tool.get("poetry") if isinstance(tool.get("poetry"), dict) else {}
+                groups = [poetry.get("dependencies"), poetry.get("dev-dependencies")]
+                groups += [g.get("dependencies") for g in (poetry.get("group") or {}).values() if isinstance(g, dict)]
+                pdm = tool.get("pdm") if isinstance(tool.get("pdm"), dict) else {}
+                for group in (pdm.get("dev-dependencies") or {}).values():
+                    found |= _dist_names(group if isinstance(group, list) else [])
+                for deps in groups:
+                    if isinstance(deps, dict):
+                        found |= _dist_names(deps)
+            elif name == "Pipfile":
+                data = _toml(_read(repo, rel))
+                for key in ("packages", "dev-packages"):
+                    if isinstance(data.get(key), dict):
+                        found |= _dist_names(data[key])
+            elif name == "setup.cfg":
+                text = _read(repo, rel) or ""
+                found |= _dist_names(
+                    l for m in re.finditer(r"(?ms)^(?:install_requires|[\w-]+)\s*=\s*\n((?:[ \t]+.*\n?)+)", text)
+                    for l in m.group(1).splitlines() if l.strip())
+        except Exception:  # unparseable files are skipped silently
+            continue
+    return found
+
+
 # ---- main entry point -------------------------------------------------------------------
 
 def added_dependencies(repo: Path, base: str = "HEAD") -> tuple[list[DepRef], list[NotChecked]]:
@@ -282,6 +341,7 @@ def added_dependencies(repo: Path, base: str = "HEAD") -> tuple[list[DepRef], li
     base_pins = _base_pins(repo, base, has_base)
     known = {(eco, _norm(eco, name)) for name, _v, eco in base_pins}
     declared_py = {_norm_py(name) for name, _v, eco in pins_now + base_pins if eco == "PyPI"}
+    declared_py |= _declared_python_names(repo, working)
     declared_npm = {name.lower() for name, _v, eco in pins_now + base_pins if eco == "npm"} | facts.declared_npm
 
     candidates: dict[tuple[str, str], DepRef] = {}
@@ -341,6 +401,8 @@ def _import_ref(imp, rel, is_py, facts, import_map, installed, declared_py, decl
     if is_py:
         if imp in facts.local_dirs or imp.lower() in facts.local_dirs or imp in imports.PY_NAMESPACE_ROOTS:
             return None
+        if imp in installed:
+            return None
         dist = import_map.get(imp)
         if dist:
             dist = _norm_py(dist)
@@ -348,7 +410,11 @@ def _import_ref(imp, rel, is_py, facts, import_map, installed, declared_py, decl
                 return None
             return DepRef("PyPI", dist, "import", rel)
         name = _norm_py(imp)
-        if name in declared_py or name in facts.local_py or imp in installed:
+        if name in declared_py or name in facts.local_py:
+            return None
+        # Heuristic: import name and distribution name often differ only by a prefix/suffix
+        # (foo-bar provides `foo`), so a declared name containing or contained in it counts as declared.
+        if any(len(name) >= 3 and (name in d or d in name) for d in declared_py if len(d) >= 3):
             return None
         return DepRef("PyPI", name, "import", rel)
     lowered = imp.lower()
