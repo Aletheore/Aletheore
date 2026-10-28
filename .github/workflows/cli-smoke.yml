@@ -51,7 +51,10 @@ jobs:
           echo "$BIN" >> "$GITHUB_PATH"
 
       - name: Portability and menu regressions against the installed package
-        run: python -m pytest src/tests/test_cli_portability.py src/tests/test_cli_presentation.py src/tests/test_ui.py src/tests/test_tokens_meter_cli.py src/tests/test_read_guard_setup.py src/tests/test_cli_agent_adapters.py -q
+        run:
+          python -m pytest src/tests/test_cli_portability.py src/tests/test_cli_presentation.py
+          src/tests/test_ui.py src/tests/test_tokens_meter_cli.py src/tests/test_read_guard_setup.py
+          src/tests/test_cli_agent_adapters.py -q
 
       - name: CLI smoke
         run: python .github/scripts/cli_smoke.py
