@@ -43,3 +43,18 @@ def scan_network_plan(*, vulnerabilities: bool, licenses: bool, static_analysis:
             "disable": "ALETHEORE_CRASH_REPORTING=0 or aletheore config crash-reporting off",
         },
     ]
+
+
+_SHIELD_OFF = "ALETHEORE_SHIELD_OFFLINE=1 or registry_lookups: false in the shield config"
+
+
+def shield_network_plan(*, registry_lookups: bool) -> list[dict]:
+    """Describe the package-registry lookups Shield's guard may make."""
+    sends = (
+        "Only the package name of each newly added dependency, to check that it exists and when it was first published. "
+        "Never versions, repository names, file paths or source code."
+    )
+    return [
+        {"service": "PyPI registry", "enabled": registry_lookups, "sends": sends, "disable": _SHIELD_OFF},
+        {"service": "npm registry", "enabled": registry_lookups, "sends": sends, "disable": _SHIELD_OFF},
+    ]
