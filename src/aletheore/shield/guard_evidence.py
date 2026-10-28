@@ -31,6 +31,10 @@ from aletheore.signature_diff import find_changed_signatures
 from aletheore.tests_for import candidate_tests
 
 REFRESH_MIN_INTERVAL_S = 60.0
+# `scanned_at` is stamped when a scan ENDS, 2.5-9 s after it began reading files, so a file edited during the scan
+# has an mtime before `scanned_at` yet is missing from the evidence. A file counts as newer than the evidence when
+# it was modified later than `scanned_at` minus this margin.
+STALENESS_MARGIN_S = 15.0
 _MARKER_NAME = "refresh.marker"
 _LIST_CAP = 5
 _SIGNATURE_FINDINGS_CAP = 5
@@ -62,7 +66,46 @@ def _mtime(path: Path) -> float | None:
         return None
 
 
-def start_background_refresh(repo: Path, changed: list[str] | None = None) -> bool:
+def _scan_time(scanned_at: object) -> float | None:
+    try:
+        return datetime.fromisoformat(str(scanned_at)).timestamp()
+    except ValueError:
+        return None
+
+
+def _safe_relative(rel: str) -> str | None:
+    """`rel` as a clean repo-relative posix path, or None when it is absolute or climbs out with `..`."""
+    normalised = rel.replace("\\", "/")
+    path = PurePosixPath(normalised)
+    if path.is_absolute() or ".." in path.parts or (len(normalised) > 1 and normalised[1] == ":"):
+        return None
+    return normalised
+
+
+def _claim_marker(marker: Path) -> bool:
+    """Atomically take the refresh marker; False when another caller holds it (started under 60 s ago)."""
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    try:
+        os.close(os.open(marker, flags))
+        return True
+    except FileExistsError:
+        pass
+    last = _mtime(marker)
+    if last is not None and 0 <= time.time() - last < REFRESH_MIN_INTERVAL_S:
+        return False
+    # Stale marker: remove it, then race for the exclusive create again; only one caller wins.
+    try:
+        marker.unlink()
+    except FileNotFoundError:
+        pass
+    try:
+        os.close(os.open(marker, flags))
+        return True
+    except FileExistsError:
+        return False
+
+
+def start_background_refresh(repo: Path, changed: list[str] | None = None, scanned_at: object = None) -> bool:
     """Start a detached re-scan of `repo`; True only when a process was started.
 
     Does nothing when the repo has no evidence yet (the first scan is the user's to run; this never creates
@@ -76,17 +119,18 @@ def start_background_refresh(repo: Path, changed: list[str] | None = None) -> bo
     if evidence_time is None:
         return False
     if changed:
-        edit_times = [t for t in (_mtime(repo / rel) for rel in changed) if t is not None]
-        if edit_times and evidence_time >= max(edit_times):
+        safe = [r for r in (_safe_relative(c) for c in changed) if r is not None]
+        edit_times = [t for t in (_mtime(repo / rel) for rel in safe) if t is not None]
+        reference = _scan_time(scanned_at)
+        if reference is None:
+            reference = evidence_time  # written at the end of the scan, so never earlier than scanned_at
+        if edit_times and reference - STALENESS_MARGIN_S >= max(edit_times):
             return False
     marker = state.shield_dir(repo) / _MARKER_NAME
-    last = _mtime(marker)
-    if last is not None and 0 <= time.time() - last < REFRESH_MIN_INTERVAL_S:
-        return False
     try:
         state.shield_dir(repo, create=True)
-        marker.write_text(str(os.getpid()), encoding="utf-8")
-        os.utime(marker)
+        if not _claim_marker(marker):
+            return False
     except OSError:
         return False  # without the marker the storm guard cannot work, so start nothing
     options: dict = {"start_new_session": True}
@@ -155,7 +199,10 @@ def _relevant_changed(repo: Path, changed: list[str], known: set[str]) -> list[s
     from aletheore.scanner.graph import LANGUAGE_BY_EXTENSION
 
     relevant = []
-    for rel in changed:
+    for raw in changed:
+        rel = _safe_relative(raw)
+        if rel is None:
+            continue
         path = PurePosixPath(rel)
         if rel in known or (path.suffix in LANGUAGE_BY_EXTENSION and not set(path.parts) & set(IGNORED_DIRS)):
             if (Path(repo) / rel).exists():
@@ -165,14 +212,13 @@ def _relevant_changed(repo: Path, changed: list[str], known: set[str]) -> list[s
 
 def _files_newer_than(repo: Path, files: list[str], scanned_at: object) -> list[str] | None:
     """Files modified after the scan; None when the scan time is unreadable."""
-    try:
-        scan_time = datetime.fromisoformat(str(scanned_at)).timestamp()
-    except ValueError:
+    scan_time = _scan_time(scanned_at)
+    if scan_time is None:
         return None
     newer = []
     for rel in files:
         modified = _mtime(Path(repo) / rel)
-        if modified is not None and modified > scan_time:
+        if modified is not None and modified > scan_time - STALENESS_MARGIN_S:
             newer.append(rel)
     return newer
 
@@ -233,10 +279,12 @@ def _signature_findings(base: dict, head: dict, changed: set[str]) -> list[Findi
     moved = [c for c in find_changed_signatures(base, head) if c["file"] in changed]
     findings = []
     for change in moved[:_SIGNATURE_FINDINGS_CAP]:
-        importers = sorted(p for p in (by_path.get(change["file"], {}).get("imported_by") or []) if p != change["file"])
-        who = f"file-level: each of {len(importers)} file(s) imports the module {change['file']}: {_cap(importers)}" if importers else (
-            "no file in the scan imports the module"
-        )
+        imported_by = by_path.get(change["file"], {}).get("imported_by") or []
+        importers = sorted(p for p in imported_by if p != change["file"])
+        if importers:
+            who = f"file-level: each of {len(importers)} file(s) imports the module {change['file']}: {_cap(importers)}"
+        else:
+            who = "no file in the scan imports the module"
         findings.append(
             Finding(
                 "signatures",
@@ -300,7 +348,10 @@ def evidence_checks(
     try:
         head = evidence_io.load_evidence(repo)
     except FileNotFoundError:
-        return [], ["no scan evidence (.aletheore/air.json); run aletheore scan to enable dependents, signature and risk checks"]
+        return [], [
+            "no scan evidence (.aletheore/air.json); run aletheore scan to enable dependents, signature and "
+            "risk checks"
+        ]
     except Exception as exc:  # noqa: BLE001
         return [], [f"scan evidence could not be read ({type(exc).__name__}); run aletheore scan"]
 
@@ -313,7 +364,7 @@ def evidence_checks(
     if newer is None:
         return [], ["scan evidence has no readable scan time, so its age cannot be checked; run aletheore scan"]
     if newer:
-        started = start_background_refresh(repo, newer)
+        started = start_background_refresh(repo, newer, head.get("scanned_at"))
         followup = "a refresh was started" if started else "run aletheore scan"
         return [], [
             f"evidence is older than {len(newer)} changed file(s); dependents, signature and new-risk checks "
@@ -329,7 +380,9 @@ def evidence_checks(
             if affected:
                 findings.append(affected)
         if base_evidence is None:
-            not_checked.append("no base evidence was saved for this session, so signature and new-risk checks were skipped")
+            not_checked.append(
+                "no base evidence was saved for this session, so signature and new-risk checks were skipped"
+            )
         else:
             findings.extend(_signature_findings(base_evidence, head, set(changed)))
             findings.extend(_risk_findings(base_evidence, head))

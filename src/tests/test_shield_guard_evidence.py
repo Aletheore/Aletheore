@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -170,7 +171,7 @@ def test_new_cycle_and_new_secret_are_reported(repo):
 
 def test_stale_evidence_is_labelled_and_skips_dependent_checks(repo, monkeypatch):
     started = []
-    monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda r, changed=None: started.append(1) or True)
+    monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda r, changed=None, scanned_at=None: started.append(1) or True)
     _write_evidence(repo, _evidence(_core_modules(), scanned_at=PAST))
     findings, not_checked = evidence_checks(repo, ["app/core.py"], _evidence(_core_modules("(a)")))
     assert findings == []  # no false "no dependents", no signature or risk claims from stale data
@@ -179,7 +180,7 @@ def test_stale_evidence_is_labelled_and_skips_dependent_checks(repo, monkeypatch
 
 
 def test_stale_evidence_says_to_scan_when_no_refresh_started(repo, monkeypatch):
-    monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda r, changed=None: False)
+    monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda r, changed=None, scanned_at=None: False)
     _write_evidence(repo, _evidence(_core_modules(), scanned_at=PAST))
     _, not_checked = evidence_checks(repo, ["app/core.py"], None)
     assert "aletheore scan" in not_checked[0] and "refresh was started" not in not_checked[0]
@@ -276,7 +277,7 @@ def test_refresh_module_runs_rebuild(repo, monkeypatch):
     seen = []
     monkeypatch.setattr(watch, "rebuild", lambda path, report, **kw: seen.append((path, kw)))
     assert refresh.main([str(repo)]) == 0
-    assert seen and seen[0][0] == repo.resolve() or seen[0][0] == repo
+    assert seen and seen[0][0] in (repo, repo.resolve())
     assert refresh.main([]) == 2
 
 
@@ -312,3 +313,82 @@ def test_hostile_session_id_never_escapes_sessions_dir(repo, sid):
     sessions = state.shield_dir(repo) / "sessions"
     written = [p for p in repo.rglob("*") if "base-air" in p.name]
     assert all(p.parent == sessions for p in written)
+
+
+# ---- review fixes ------------------------------------------------------------------------------------------------
+
+
+def _set_mtime(path: Path, epoch: float) -> None:
+    os.utime(path, (epoch, epoch))
+
+
+def test_file_edited_during_the_scan_counts_as_stale_but_one_well_before_does_not(repo, monkeypatch):
+    monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda *a, **k: False)
+    scanned = time.time() - 1000
+    stamp = datetime.fromtimestamp(scanned, tz=timezone.utc).isoformat()
+    _write_evidence(repo, _evidence(_core_modules(), scanned_at=stamp))
+    core = repo / "app" / "core.py"
+    _set_mtime(core, scanned - 3)  # edited a few seconds before scanned_at: the scan may not have seen it
+    _, not_checked = evidence_checks(repo, ["app/core.py"], None)
+    assert "older than 1 changed file(s)" in not_checked[0]
+    _set_mtime(core, scanned - guard_evidence.STALENESS_MARGIN_S - 60)
+    findings, not_checked = evidence_checks(repo, ["app/core.py"], None)
+    assert any(f.check == "affected" for f in findings)
+    assert all("older than" not in r for r in not_checked)
+
+
+def test_refresh_guard_uses_the_same_margin(repo, no_spawn):
+    air = _write_evidence(repo, _evidence(_core_modules()))
+    scanned = time.time() - 1000
+    stamp = datetime.fromtimestamp(scanned, tz=timezone.utc).isoformat()
+    core = repo / "app" / "core.py"
+    _set_mtime(air, scanned + 5)
+    _set_mtime(core, scanned - 3)
+    assert guard_evidence.start_background_refresh(repo, ["app/core.py"], stamp) is True
+    marker = next(state.shield_dir(repo).glob("refresh*"))
+    _set_mtime(marker, time.time() - 120)
+    _set_mtime(core, scanned - guard_evidence.STALENESS_MARGIN_S - 60)
+    assert guard_evidence.start_background_refresh(repo, ["app/core.py"], stamp) is False
+
+
+def test_refresh_marker_is_claimed_atomically(repo, no_spawn):
+    _write_evidence(repo, _evidence(_core_modules()))
+    marker = state.shield_dir(repo, create=True) / guard_evidence._MARKER_NAME
+    assert guard_evidence._claim_marker(marker) is True
+    assert guard_evidence._claim_marker(marker) is False  # a concurrent second caller loses
+    _set_mtime(marker, time.time() - 120)
+    assert guard_evidence._claim_marker(marker) is True  # stale marker replaced, exactly one winner
+    assert guard_evidence._claim_marker(marker) is False
+
+
+@pytest.mark.parametrize("rel", ["../outside.py", "/etc/passwd", "a/../../b.py", "..\\x.py", "C:\\x.py"])
+def test_unsafe_changed_paths_are_ignored(repo, rel, monkeypatch):
+    assert guard_evidence._safe_relative(rel) is None
+    (repo.parent / "outside.py").write_text("x = 1\n")
+    _write_evidence(repo, _evidence(_core_modules(), scanned_at=PAST))
+    monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda *a, **k: False)
+    _, not_checked = evidence_checks(repo, [rel], None)
+    assert all("older than" not in r for r in not_checked)
+    assert guard_evidence._safe_relative("app\\core.py") == "app/core.py"
+
+
+def _ring(names):
+    """Modules importing each other in a ring, starting the walk at names[0]."""
+    return [_mod(n, imports=[names[(i + 1) % len(names)]]) for i, n in enumerate(names)]
+
+
+def test_preexisting_cycles_beyond_the_listing_cap_are_not_reported_as_new():
+    old_rings = [[f"g{g}a.py", f"g{g}b.py", f"g{g}c.py"][: 2 + (g % 2)] for g in range(8)]
+    old = _evidence([m for ring in old_rings for m in _ring(ring)])
+    new = _evidence([m for ring in old_rings for m in _ring(ring)] + _ring(["n1.py", "n2.py"]))
+    cycles = new_risks(old, new)["cycles"]
+    assert len(cycles) == 1 and set(cycles[0]["members"]) == {"n1.py", "n2.py"}
+
+
+def test_rotated_cycle_start_is_not_new():
+    old = _evidence(_ring(["a.py", "b.py", "c.py"]))
+    new = _evidence(_ring(["b.py", "c.py", "a.py"]))
+    assert new_risks(old, new)["cycles"] == []
+    selfy = _evidence([_mod("s.py", imports=["s.py"])])
+    assert [c["members"] for c in new_risks(_evidence([_mod("s.py")]), selfy)["cycles"]] == [["s.py"]]
+    assert new_risks(selfy, selfy)["cycles"] == []

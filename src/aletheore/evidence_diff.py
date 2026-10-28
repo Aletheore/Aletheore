@@ -8,7 +8,7 @@ network access.
 from __future__ import annotations
 
 from aletheore.history import compute_diff
-from aletheore.query import find_import_cycles
+from aletheore.query import _shortest_cycle, import_cycle_components
 
 
 def real_new_secrets(curated: dict) -> list[dict]:
@@ -30,19 +30,30 @@ def vulnerability_check_skipped_in(old: dict, new: dict) -> list[str]:
     return [name for name, checked in (("the old", checked_old), ("the new", checked_new)) if not checked]
 
 
-def _cycle_groups(evidence: dict) -> list[dict]:
-    result = find_import_cycles(evidence)
-    groups = list(result.get("cycle_groups") or [])
-    for path in result.get("self_importing_modules") or []:
-        groups.append({"size": 1, "example_cycle": [path, path], "members": [path], "members_truncated": False})
-    return groups
-
-
 def new_cycles(old: dict, new: dict) -> list[dict]:
-    """Import-cycle groups in `new` that share no module with any cycle group in `old`. A cycle that merely grew
-    or shrank is the same cycle, not a new one."""
-    seen = {m for group in _cycle_groups(old) for m in group["members"]}
-    return [g for g in _cycle_groups(new) if not seen.intersection(g["members"])]
+    """Import-cycle groups in `new` that share no module with any cycle group in `old`. A cycle that merely grew,
+    shrank or was found from a different start module is the same cycle, not a new one.
+
+    Works on the full strongly-connected components computed from each snapshot's module graph (evidence stores the
+    graph, not a cycle list), so the listing caps of `find_import_cycles` cannot hide an old cycle."""
+    old_groups, old_self, _ = import_cycle_components(old)
+    seen = {m for group in old_groups for m in group} | set(old_self)
+    new_groups, new_self, graph = import_cycle_components(new)
+    found = []
+    for component in sorted(new_groups, key=lambda c: (-len(c), c[0])):
+        if not seen.intersection(component):
+            found.append(
+                {
+                    "size": len(component),
+                    "example_cycle": _shortest_cycle(component, graph),
+                    "members": component,
+                    "members_truncated": False,
+                }
+            )
+    for path in new_self:
+        if path not in seen:
+            found.append({"size": 1, "example_cycle": [path, path], "members": [path], "members_truncated": False})
+    return found
 
 
 def new_risks(old: dict, new: dict) -> dict[str, list[dict]]:
