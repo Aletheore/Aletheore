@@ -336,6 +336,8 @@ def test_restore_refuses_paths_that_escape_the_repository(tmp_path):
             input=(
                 f"040000 tree {inner}\t..\n"
                 f"040000 tree {inner}\t.aletheore\n"
+                f"040000 tree {inner}\t.Aletheore\n"
+                f"040000 tree {inner}\t.aletheore.\n"
                 f"100644 blob {blob}\t.env\n"
                 f"040000 tree {inner}\t.git\n"
                 f"100644 blob {a_blob}\ta.txt\n"
@@ -351,6 +353,8 @@ def test_restore_refuses_paths_that_escape_the_repository(tmp_path):
     assert set(plan.blocked) == {
         "../escape.txt",
         ".aletheore/escape.txt",
+        ".Aletheore/escape.txt",
+        ".aletheore./escape.txt",
         ".env",
         ".git/escape.txt",
     }
@@ -360,7 +364,8 @@ def test_restore_refuses_paths_that_escape_the_repository(tmp_path):
 
     assert result.restored == ()
     assert not (tmp_path / "escape.txt").exists()
-    assert not (repo / ".env").exists() and not (repo / ".aletheore").exists()
+    assert not (repo / ".env").exists()
+    assert not any(p.name.lower().startswith(".aletheore") for p in repo.iterdir())
     assert sorted(p.name for p in (repo / ".git").iterdir()) == git_dir_before
 
 
@@ -425,3 +430,171 @@ def test_restore_puts_a_symbolic_link_back_without_following_it(tmp_path):
     assert result.restored == ("link",)
     assert os.readlink(repo / "link") == "a.txt"
     assert (repo / "a.txt").read_bytes() == b"a\n"
+
+
+# ---------------------------------------------------------------------------- line endings follow git checkout
+
+
+def test_restore_without_conversion_is_byte_exact(tmp_path):
+    repo = _init(tmp_path / "repo")
+    payload = b"mixed\r\nendings\nand \x00 bytes\r\n"
+    (repo / "m.txt").write_bytes(payload)
+    before = _take(repo, 0)
+    (repo / "m.txt").write_bytes(b"x\n")
+
+    cp.restore_checkpoint(repo, before, "s")
+
+    assert (repo / "m.txt").read_bytes() == payload
+
+
+def test_autocrlf_true_turns_an_lf_file_into_crlf_like_checkout(tmp_path):
+    # Not byte exact by design: capture stores the LF blob and restore writes it as `git checkout` would,
+    # which with core.autocrlf=true means CRLF line endings.
+    repo = _init(tmp_path / "repo")
+    _git(repo, "config", "core.autocrlf", "true")
+    (repo / "lf.txt").write_bytes(b"one\ntwo\n")
+    before = _take(repo, 0)
+    (repo / "lf.txt").write_bytes(b"clobbered\n")
+
+    cp.restore_checkpoint(repo, before, "s")
+
+    assert (repo / "lf.txt").read_bytes() == b"one\r\ntwo\r\n"
+
+
+def test_autocrlf_input_turns_a_crlf_file_into_lf_like_checkout(tmp_path):
+    # Not byte exact by design: core.autocrlf=input normalizes CRLF to LF on capture and converts nothing
+    # on checkout, so the restored file has LF line endings, as `git checkout` would write it.
+    repo = _init(tmp_path / "repo")
+    _git(repo, "config", "core.autocrlf", "input")
+    (repo / "crlf.txt").write_bytes(b"one\r\ntwo\r\n")
+    before = _take(repo, 0)
+    (repo / "crlf.txt").write_bytes(b"clobbered\n")
+
+    cp.restore_checkpoint(repo, before, "s")
+
+    assert (repo / "crlf.txt").read_bytes() == b"one\ntwo\n"
+
+
+# ---------------------------------------------------------------------------- concurrency and partial failure
+
+
+def _three_file_repo(tmp_path):
+    repo = _init(tmp_path / "repo")
+    (repo / "b").mkdir()
+    (repo / "b" / "x.txt").write_bytes(b"old x\n")
+    (repo / "c.txt").write_bytes(b"old c\n")
+    before = _take(repo, 0)
+    (repo / "a.txt").write_bytes(b"new a\n")
+    (repo / "b" / "x.txt").write_bytes(b"new x\n")
+    (repo / "c.txt").write_bytes(b"new c\n")
+    return repo, before
+
+
+def _contents(repo):
+    return {p: (repo / p).read_bytes() for p in ("a.txt", "b/x.txt", "c.txt")}
+
+
+def _safety_ref(repo, before):
+    (safety,) = [c.ref for c in cp.list_checkpoints(repo) if c.ref != before.ref]
+    return safety
+
+
+def _temps(repo):
+    return [p.name for p in repo.rglob("*aletheore-restore*")]
+
+
+def test_concurrent_edit_after_planning_is_never_overwritten(tmp_path, monkeypatch):
+    repo, before = _three_file_repo(tmp_path)
+    real_stage = cp._stage
+
+    def stage_then_agent_edits(top, entries, created):
+        staged = real_stage(top, entries, created)
+        (repo / "b" / "x.txt").write_bytes(b"agent edit after the safety checkpoint\n")
+        return staged
+
+    monkeypatch.setattr(cp, "_stage", stage_then_agent_edits)
+
+    with pytest.raises(cp.CheckpointError) as caught:
+        cp.restore_checkpoint(repo, before, "s")
+
+    message = str(caught.value)
+    assert (
+        repo / "b" / "x.txt"
+    ).read_bytes() == b"agent edit after the safety checkpoint\n"
+    assert (repo / "a.txt").read_bytes() == b"a\n"
+    assert (repo / "c.txt").read_bytes() == b"new c\n"
+    assert "b/x.txt changed" in message
+    assert "Restored: a.txt" in message and "Not written: b/x.txt, c.txt" in message
+    assert _safety_ref(repo, before) in message
+    assert _temps(repo) == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX folder permissions")
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores permissions"
+)
+def test_read_only_folder_midway_writes_nothing(tmp_path):
+    repo, before = _three_file_repo(tmp_path)
+    os.chmod(repo / "b", 0o555)
+    try:
+        with pytest.raises(cp.CheckpointError) as caught:
+            cp.restore_checkpoint(repo, before, "s")
+    finally:
+        os.chmod(repo / "b", 0o755)
+
+    assert "b/x.txt" in str(caught.value)
+    assert "Nothing was restored" in str(caught.value)
+    assert _contents(repo) == {
+        "a.txt": b"new a\n",
+        "b/x.txt": b"new x\n",
+        "c.txt": b"new c\n",
+    }
+    assert _temps(repo) == []
+
+
+def test_failing_filter_writes_nothing(tmp_path):
+    repo = _init(tmp_path / "repo")
+    _git(repo, "config", "filter.lfs.clean", "cat")
+    _git(repo, "config", "filter.lfs.smudge", "aletheore-no-such-filter-binary %f")
+    _git(repo, "config", "filter.lfs.required", "true")
+    (repo / ".gitattributes").write_bytes(b"*.bin filter=lfs\n")
+    (repo / "z.bin").write_bytes(b"big asset\n")
+    before = _take(repo, 0)
+    (repo / "a.txt").write_bytes(b"changed a\n")
+    (repo / "z.bin").write_bytes(b"changed asset\n")
+
+    with pytest.raises(cp.CheckpointError) as caught:
+        cp.restore_checkpoint(repo, before, "s")
+
+    assert "z.bin" in str(caught.value)
+    assert "Nothing was restored" in str(caught.value)
+    assert (repo / "a.txt").read_bytes() == b"changed a\n"
+    assert (repo / "z.bin").read_bytes() == b"changed asset\n"
+    assert _temps(repo) == []
+
+
+def test_failure_while_moving_files_into_place_reports_what_was_done(
+    tmp_path, monkeypatch
+):
+    repo, before = _three_file_repo(tmp_path)
+    real_replace = os.replace
+
+    def failing_replace(src, dst, *args, **kwargs):
+        if str(dst).endswith("c.txt"):
+            raise PermissionError("simulated lock")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(cp.os, "replace", failing_replace)
+
+    with pytest.raises(cp.CheckpointError) as caught:
+        cp.restore_checkpoint(repo, before, "s")
+
+    message = str(caught.value)
+    assert "Restored: a.txt, b/x.txt" in message and "Not written: c.txt" in message
+    assert _safety_ref(repo, before) in message
+    assert _contents(repo) == {
+        "a.txt": b"a\n",
+        "b/x.txt": b"old x\n",
+        "c.txt": b"new c\n",
+    }
+    assert _temps(repo) == []

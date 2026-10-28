@@ -21,6 +21,9 @@ checkout, and never touches the index, branches or stash. It refuses any path it
 names that would leave the repository or enter .git, paths the capture rules exclude, paths under a
 symbolic link or inside a nested repository, and files whose current content the safety checkpoint
 could not hold (too large, unreadable, ignored), so undo can never destroy what it cannot give back.
+Restore is two-phase (stage every file to a temporary file, then verify each target is unchanged since the
+plan and move it into place), and restored bytes follow the repository's line-ending and filter
+configuration exactly as `git checkout` would write them.
 """
 
 import json
@@ -29,6 +32,7 @@ import re
 import secrets
 import shutil
 import stat
+import sys
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -716,6 +720,8 @@ _LINK_MODE = "120000"
 _EXEC_MODE = "100755"
 _RESTORABLE_MODES = ("100644", _EXEC_MODE, _LINK_MODE)
 _GIT_DIR_NAMES = (".git", "git~1")  # git~1 is the Windows short name of .git
+# The blob of a missing path. diff-tree prints all zeros for it (40 or 64, by hash), normalized to this.
+_ABSENT = ""
 
 
 @dataclass(frozen=True)
@@ -739,17 +745,29 @@ class RestoreResult:
 @dataclass(frozen=True)
 class _Entry:
     path: str
-    mode: str
-    blob: str
+    mode: str  # the checkpoint's mode for path
+    blob: str  # the checkpoint's blob for path
+    seen_mode: str  # the mode the plan saw on disk ("000000" when absent)
+    seen_blob: str  # the blob the plan saw on disk (_ABSENT when absent)
 
 
 @dataclass(frozen=True)
 class _Restore:
     plan: RestorePlan
-    entries: tuple[
-        _Entry, ...
-    ]  # what to_write needs: the checkpoint's mode and blob per path
+    entries: tuple[_Entry, ...]  # one per to_write path
     current_tree: str
+
+
+@dataclass(frozen=True)
+class _Staged:
+    entry: _Entry
+    target: str
+    temp: str
+
+
+def _same_name(part: str, name: str) -> bool:
+    """Compare a path part as Windows and case-insensitive file systems do: trailing dots and spaces dropped."""
+    return part.rstrip(". ").lower() == name
 
 
 def _safe_relative(path: str) -> bool:
@@ -760,28 +778,36 @@ def _safe_relative(path: str) -> bool:
         if part in ("", ".", ".."):
             return False
         # Windows ignores trailing dots and spaces, so ".git." and ".git " name the .git folder there.
-        if part.rstrip(". ").lower() in _GIT_DIR_NAMES:
+        if any(_same_name(part, name) for name in _GIT_DIR_NAMES):
             return False
         if os.name == "nt" and (":" in part or "\\" in part):
             return False
     return True
 
 
-def _parent_problem(top: Path, path: str, create: bool) -> str | None:
+def _is_private(path: str) -> bool:
+    """True for Shield's own .aletheore/ folder, under any spelling a file system treats as the same."""
+    first, sep, _ = path.partition("/")
+    return bool(sep) and _same_name(first, _PRIVATE_DIR.rstrip("/"))
+
+
+def _parent_problem(
+    top: Path, path: str, created: list[str] | None = None
+) -> str | None:
     """Why path's parent folders cannot be written safely, or None. Every existing parent must be a real
-    folder (not a symbolic link, not a file) outside any nested repository. With create, missing parents
-    are made one level at a time, so no link is ever followed."""
-    base = os.fspath(top)
-    prefix = base
+    folder (not a symbolic link, not a file) outside any nested repository. When created is a list, missing
+    parents are made one level at a time (so no link is ever followed) and appended to it."""
+    prefix = os.fspath(top)
     for part in path.split("/")[:-1]:
         prefix = os.path.join(prefix, part)
         try:
             info = os.lstat(prefix)
         except FileNotFoundError:
-            if not create:
+            if created is None:
                 return None  # everything below is missing too, so nothing there can be a link
             try:
                 os.mkdir(prefix)
+                created.append(prefix)
             except FileExistsError:
                 pass
             except OSError as exc:
@@ -801,8 +827,8 @@ def _parent_problem(top: Path, path: str, create: bool) -> str | None:
     return None
 
 
-def _parse_raw_diff(output: bytes) -> list[tuple[str, str, str, str, str]]:
-    """(status, old mode, old blob, new mode, path) per record of `diff-tree -r -z` raw output."""
+def _parse_raw_diff(output: bytes) -> list[tuple[str, str, str, str, str, str]]:
+    """(status, old mode, old blob, new mode, new blob, path) per record of `diff-tree -r -z` raw output."""
     records = []
     items = output.split(b"\0")
     pos = 0
@@ -812,9 +838,9 @@ def _parse_raw_diff(output: bytes) -> list[tuple[str, str, str, str, str]]:
         fields = meta.decode("ascii", "replace").lstrip(":").split(" ")
         if len(fields) != 5 or not raw_path:
             continue
-        old_mode, new_mode, old_blob, _new_blob, status = fields
+        old_mode, new_mode, old_blob, new_blob, status = fields
         records.append(
-            (status[:1], old_mode, old_blob, new_mode, _decode_path(raw_path))
+            (status[:1], old_mode, old_blob, new_mode, new_blob, _decode_path(raw_path))
         )
     return records
 
@@ -863,7 +889,7 @@ def _restore_plan(top: Path, checkpoint: Checkpoint, scratch: Path) -> _Restore:
         top,
         [
             blob
-            for status, mode, blob, _, _ in records
+            for status, mode, blob, _, _, _ in records
             if status != "A" and mode in _RESTORABLE_MODES
         ],
     )
@@ -873,13 +899,13 @@ def _restore_plan(top: Path, checkpoint: Checkpoint, scratch: Path) -> _Restore:
     entries: list[_Entry] = []
     left: list[str] = []
     blocked: list[str] = []
-    for status, mode, blob, _new_mode, path in records:
+    for status, mode, blob, seen_mode, seen_blob, path in records:
         if status == "A":
             left.append(path)
             continue
         refuse = (
             not _safe_relative(path)
-            or path.startswith(_PRIVATE_DIR)
+            or _is_private(path)
             or is_denied_path(path)
             or path in skipped_then
             or path in not_captured_now
@@ -887,7 +913,7 @@ def _restore_plan(top: Path, checkpoint: Checkpoint, scratch: Path) -> _Restore:
             or (mode == _LINK_MODE and os.name == "nt")
             or blob not in sizes
             or (mode != _LINK_MODE and sizes[blob] > MAX_FILE_BYTES)
-            or _parent_problem(top, path, create=False) is not None
+            or _parent_problem(top, path) is not None
         )
         if not refuse:
             try:
@@ -904,7 +930,15 @@ def _restore_plan(top: Path, checkpoint: Checkpoint, scratch: Path) -> _Restore:
         if refuse:
             blocked.append(path)
         else:
-            entries.append(_Entry(path=path, mode=mode, blob=blob))
+            entries.append(
+                _Entry(
+                    path=path,
+                    mode=mode,
+                    blob=blob,
+                    seen_mode=seen_mode,
+                    seen_blob=seen_blob if seen_blob.strip("0") else _ABSENT,
+                )
+            )
     plan = RestorePlan(
         to_write=tuple(e.path for e in entries),
         left_in_place=tuple(left),
@@ -924,16 +958,19 @@ def plan_restore(repo: Path, checkpoint: Checkpoint) -> RestorePlan:
 
 
 def _blob_bytes(top: Path, entry: _Entry) -> bytes:
-    """The bytes to put on disk. Files get git's checkout conversion for their path (line endings, smudge
-    filters), which is the inverse of the conversion applied when the checkpoint was captured; with no
-    conversion configured the blob comes back byte for byte. Links get their target verbatim."""
+    """The bytes to put on disk, as `git checkout` would write them: files get git's checkout conversion for
+    their path (core.autocrlf, eol and text attributes, smudge filters); links get their target verbatim."""
     if entry.mode == _LINK_MODE:
         args: tuple[str, ...] = ("cat-file", "blob", entry.blob)
     else:
         args = ("cat-file", "--filters", f"--path={entry.path}", entry.blob)
     read = run_git(top, *args, timeout=_WRITE_TIMEOUT_S)
     if read.returncode != 0:
-        raise CheckpointError(f"git could not read {entry.path} from the checkpoint")
+        detail = read.stderr.decode("utf-8", "replace").strip()
+        raise CheckpointError(
+            f"git could not read {entry.path} from the checkpoint"
+            + (f": {detail}" if detail else "")
+        )
     return read.stdout
 
 
@@ -947,9 +984,25 @@ def _permissions(entry: _Entry, previous: os.stat_result | None) -> int | None:
     return bits & ~0o111
 
 
-def _write_entry(top: Path, entry: _Entry) -> None:
-    """Write one file next to its target and move it into place, replacing a file or link, never a folder."""
-    problem = _parent_problem(top, entry.path, create=True)
+def _remove_quietly(path: str) -> None:
+    try:
+        if os.path.lexists(path):
+            os.remove(path)
+    except OSError:
+        pass
+
+
+def _remove_empty_folders(created: list[str]) -> None:
+    for folder in reversed(created):
+        try:
+            os.rmdir(folder)  # fails, harmlessly, once anything is inside
+        except OSError:
+            pass
+
+
+def _stage_one(top: Path, entry: _Entry, created: list[str], data: bytes) -> _Staged:
+    """Write entry's bytes to a temporary file next to its target. The target itself is not touched."""
+    problem = _parent_problem(top, entry.path, created)
     if problem is not None:
         raise CheckpointError(f"refused to write {entry.path}: {problem}")
     target = os.path.join(top, *entry.path.split("/"))
@@ -967,7 +1020,6 @@ def _write_entry(top: Path, entry: _Entry) -> None:
         raise CheckpointError(f"could not read {entry.path}: {exc}") from exc
     if previous is not None and stat.S_ISDIR(previous.st_mode):
         raise CheckpointError(f"refused to write {entry.path}: a folder is in the way")
-    data = _blob_bytes(top, entry)
     temp = os.path.join(
         parent, f".{os.path.basename(target)}.aletheore-restore-{secrets.token_hex(4)}"
     )
@@ -981,17 +1033,125 @@ def _write_entry(top: Path, entry: _Entry) -> None:
             handle = os.open(temp, flags, fresh)
             with os.fdopen(handle, "wb") as out:
                 out.write(data)
+                out.flush()
+                os.fsync(out.fileno())
             bits = _permissions(entry, previous)
             if bits is not None:
                 os.chmod(temp, bits)
-        os.replace(temp, target)
     except OSError as exc:
-        try:
-            if os.path.lexists(temp):
-                os.remove(temp)
-        except OSError:
-            pass
+        _remove_quietly(temp)
         raise CheckpointError(f"could not write {entry.path}: {exc}") from exc
+    return _Staged(entry=entry, target=target, temp=temp)
+
+
+def _stage(top: Path, entries: tuple[_Entry, ...], created: list[str]) -> list[_Staged]:
+    """Phase 1: read every file from the checkpoint and write it to a temporary file. On any failure every
+    temporary file and every folder made here is removed and CheckpointError is raised: nothing was restored."""
+    staged: list[_Staged] = []
+    total = 0
+    try:
+        for entry in entries:
+            data = _blob_bytes(top, entry)
+            total += len(data)
+            if total > MAX_TOTAL_BYTES:
+                raise CheckpointError(
+                    "the files to restore exceed the checkpoint size cap"
+                )
+            staged.append(_stage_one(top, entry, created, data))
+    except BaseException as exc:
+        for item in staged:
+            _remove_quietly(item.temp)
+        _remove_empty_folders(created)
+        if isinstance(exc, CheckpointError):
+            raise CheckpointError(f"{exc}. Nothing was restored.") from exc
+        raise
+    return staged
+
+
+def _on_disk_blob(top: Path, entry: _Entry) -> str:
+    """The blob id of what is at entry's path now, hashed the way capture hashes it; _ABSENT when missing."""
+    target = os.path.join(top, *entry.path.split("/"))
+    try:
+        info = os.lstat(target)
+    except (FileNotFoundError, NotADirectoryError):
+        return _ABSENT
+    if stat.S_ISLNK(info.st_mode):
+        if entry.seen_mode != _LINK_MODE:
+            return "link"
+        found = run_git(
+            top,
+            "hash-object",
+            "--no-filters",
+            "--stdin",
+            input=os.fsencode(os.readlink(target)),
+        )
+    elif stat.S_ISREG(info.st_mode):
+        if entry.seen_mode == _LINK_MODE:
+            return "file"
+        found = run_git(
+            top,
+            *_INDEX_CONFIG,
+            "hash-object",
+            f"--path={entry.path}",
+            "--",
+            target,
+            timeout=_WRITE_TIMEOUT_S,
+        )
+    else:
+        return "other"
+    if found.returncode != 0:
+        raise CheckpointError(f"git could not hash {entry.path}")
+    return found.stdout.decode("ascii", "replace").strip()
+
+
+def _clear_read_only(target: str) -> None:
+    """Windows refuses to replace a read-only file; the safety checkpoint holds it, so lift the flag."""
+    if sys.platform != "win32":
+        return
+    try:
+        mode = os.lstat(target).st_mode
+    except OSError:
+        return
+    if stat.S_ISREG(mode) and not mode & stat.S_IWRITE:
+        os.chmod(target, mode | stat.S_IWRITE)
+
+
+def _commit(
+    top: Path, staged: list[_Staged], created: list[str], safety: Checkpoint
+) -> list[str]:
+    """Phase 2: check each target still holds what the plan saw, then move its temporary file into place."""
+    restored: list[str] = []
+    for position, item in enumerate(staged):
+        try:
+            try:
+                now = _on_disk_blob(top, item.entry)
+            except OSError as exc:
+                raise CheckpointError(
+                    f"could not read {item.entry.path}: {exc}"
+                ) from exc
+            if now != item.entry.seen_blob:
+                raise CheckpointError(
+                    f"{item.entry.path} changed after the safety checkpoint was saved, so it was not"
+                    " overwritten"
+                )
+            try:
+                _clear_read_only(item.target)
+                os.replace(item.temp, item.target)
+            except OSError as exc:
+                raise CheckpointError(
+                    f"could not write {item.entry.path}: {exc}"
+                ) from exc
+        except CheckpointError as exc:
+            for rest in staged[position:]:
+                _remove_quietly(rest.temp)
+            _remove_empty_folders(created)
+            pending = [rest.entry.path for rest in staged[position:]]
+            raise CheckpointError(
+                f"{exc}. Restored: {', '.join(restored) or 'none'}. Not written: {', '.join(pending)}."
+                f" The safety checkpoint {safety.ref} holds every file as it was before this restore."
+            ) from exc
+        restored.append(item.entry.path)
+    return restored
 
 
 def restore_checkpoint(
@@ -1004,10 +1164,21 @@ def restore_checkpoint(
     that latest checkpoint is the safety one. When no safety checkpoint can be had, CheckpointError is raised
     and nothing is written, so RestoreResult.safety is only None if no write could have happened.
 
-    Then writes only plan_restore's to_write files, each from the checkpoint's blob. Files that are new since
-    the checkpoint are left in place, blocked files are not touched, and reset, clean, checkout, the index,
-    branches and stash are never used. Raises CheckpointError if a write fails; files already written stay
-    written and the safety checkpoint holds what they replaced.
+    Then writes only plan_restore's to_write files, in two phases. Phase 1 reads every file from the
+    checkpoint and writes it to a temporary file beside its target; any failure there (a smudge filter that
+    fails, a folder that cannot be written) removes the temporary files and raises with nothing restored.
+    Phase 2 moves each temporary file into place, but first re-hashes the target and refuses to overwrite a
+    file that changed since the plan (so a concurrent edit, which the safety checkpoint does not hold, is
+    never lost). If phase 2 stops midway, CheckpointError names the files restored, the files not written and
+    the safety checkpoint ref.
+
+    Bytes follow the repository's git line-ending and filter configuration exactly as `git checkout` would:
+    capture applied git's clean conversion and restore applies the checkout conversion. With no conversion
+    configured, files come back byte for byte; with core.autocrlf=true an LF-only text file comes back with
+    CRLF, and with core.autocrlf=input a CRLF file comes back with LF, as a checkout would write them.
+
+    Files that are new since the checkpoint are left in place, blocked files are not touched, and reset,
+    clean, checkout, the index, branches and stash are never used.
     """
     repo = Path(repo)
     state = repo_state(repo)
@@ -1031,12 +1202,7 @@ def restore_checkpoint(
         raise CheckpointError(
             "the files changed while the safety checkpoint was being saved; nothing was restored, try again"
         )
-    restored: list[str] = []
-    for entry in work.entries:
-        try:
-            _write_entry(layout.top, entry)
-        except CheckpointError as exc:
-            done = ", ".join(restored) if restored else "none"
-            raise CheckpointError(f"{exc} (already restored: {done})") from exc
-        restored.append(entry.path)
+    created: list[str] = []
+    staged = _stage(layout.top, work.entries, created)
+    restored = _commit(layout.top, staged, created, safety)
     return RestoreResult(restored=tuple(restored), safety=safety)
