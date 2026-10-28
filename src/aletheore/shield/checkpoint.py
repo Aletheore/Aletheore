@@ -14,6 +14,13 @@ commits), never the previous checkpoint, so pruning a ref really lets git collec
 
 Refs are named refs/aletheore/checkpoints/<worktree key>/<UTC timestamp>-<8 hex of commit>, so one
 worktree's newest checkpoint is found without reading any other worktree's commits.
+
+Restore (undo) first saves a safety checkpoint of the current files, then writes back only the files
+whose content differs from the chosen checkpoint. It never deletes a file, never runs reset, clean or
+checkout, and never touches the index, branches or stash. It refuses any path it could not safely write:
+names that would leave the repository or enter .git, paths the capture rules exclude, paths under a
+symbolic link or inside a nested repository, and files whose current content the safety checkpoint
+could not hold (too large, unreadable, ignored), so undo can never destroy what it cannot give back.
 """
 
 import json
@@ -701,3 +708,335 @@ def changed_since(repo: Path, checkpoint: Checkpoint) -> list[str]:
             "git could not compare the checkpoint with the working tree"
         )
     return [_decode_path(raw) for raw in _split_z(diff.stdout)]
+
+
+# ---------------------------------------------------------------------------- restoring checkpoints
+
+_LINK_MODE = "120000"
+_EXEC_MODE = "100755"
+_RESTORABLE_MODES = ("100644", _EXEC_MODE, _LINK_MODE)
+_GIT_DIR_NAMES = (".git", "git~1")  # git~1 is the Windows short name of .git
+
+
+@dataclass(frozen=True)
+class RestorePlan:
+    # Files whose content differs from the checkpoint or that are missing now; restore writes these.
+    to_write: tuple[str, ...]
+    # Files that exist now but not in the checkpoint. Never deleted, so undo cannot destroy new work.
+    left_in_place: tuple[str, ...]
+    # Files that differ but that restore refuses to touch: unsafe names, paths the capture rules exclude,
+    # paths under a symbolic link or inside a nested repository, and files whose current content the
+    # safety checkpoint cannot hold (too large, unreadable, ignored). Never written, never deleted.
+    blocked: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RestoreResult:
+    restored: tuple[str, ...]
+    safety: Checkpoint | None
+
+
+@dataclass(frozen=True)
+class _Entry:
+    path: str
+    mode: str
+    blob: str
+
+
+@dataclass(frozen=True)
+class _Restore:
+    plan: RestorePlan
+    entries: tuple[
+        _Entry, ...
+    ]  # what to_write needs: the checkpoint's mode and blob per path
+    current_tree: str
+
+
+def _safe_relative(path: str) -> bool:
+    """True for a plain repo-relative path: no absolute path, no empty, "." or ".." part, never inside .git."""
+    if not path or path.startswith("/") or "\0" in path:
+        return False
+    for part in path.split("/"):
+        if part in ("", ".", ".."):
+            return False
+        # Windows ignores trailing dots and spaces, so ".git." and ".git " name the .git folder there.
+        if part.rstrip(". ").lower() in _GIT_DIR_NAMES:
+            return False
+        if os.name == "nt" and (":" in part or "\\" in part):
+            return False
+    return True
+
+
+def _parent_problem(top: Path, path: str, create: bool) -> str | None:
+    """Why path's parent folders cannot be written safely, or None. Every existing parent must be a real
+    folder (not a symbolic link, not a file) outside any nested repository. With create, missing parents
+    are made one level at a time, so no link is ever followed."""
+    base = os.fspath(top)
+    prefix = base
+    for part in path.split("/")[:-1]:
+        prefix = os.path.join(prefix, part)
+        try:
+            info = os.lstat(prefix)
+        except FileNotFoundError:
+            if not create:
+                return None  # everything below is missing too, so nothing there can be a link
+            try:
+                os.mkdir(prefix)
+            except FileExistsError:
+                pass
+            except OSError as exc:
+                return f"could not create the folder {prefix}: {exc}"
+            try:
+                info = os.lstat(prefix)
+            except OSError as exc:
+                return f"could not read the folder {prefix}: {exc}"
+        except OSError as exc:
+            return f"could not read {prefix}: {exc}"
+        if stat.S_ISLNK(info.st_mode):
+            return f"{prefix} is a symbolic link"
+        if not stat.S_ISDIR(info.st_mode):
+            return f"{prefix} is not a folder"
+        if os.path.lexists(os.path.join(prefix, ".git")):
+            return f"{prefix} is a nested repository"
+    return None
+
+
+def _parse_raw_diff(output: bytes) -> list[tuple[str, str, str, str, str]]:
+    """(status, old mode, old blob, new mode, path) per record of `diff-tree -r -z` raw output."""
+    records = []
+    items = output.split(b"\0")
+    pos = 0
+    while pos + 1 < len(items):
+        meta, raw_path = items[pos], items[pos + 1]
+        pos += 2
+        fields = meta.decode("ascii", "replace").lstrip(":").split(" ")
+        if len(fields) != 5 or not raw_path:
+            continue
+        old_mode, new_mode, old_blob, _new_blob, status = fields
+        records.append(
+            (status[:1], old_mode, old_blob, new_mode, _decode_path(raw_path))
+        )
+    return records
+
+
+def _blob_sizes(top: Path, blobs: list[str]) -> dict[str, int]:
+    if not blobs:
+        return {}
+    found = run_git(
+        top,
+        "cat-file",
+        "--batch-check",
+        input=b"".join(f"{sha}\n".encode("ascii") for sha in blobs),
+        timeout=_WRITE_TIMEOUT_S,
+    )
+    if found.returncode != 0:
+        raise CheckpointError("git could not read the checkpoint's files")
+    sizes: dict[str, int] = {}
+    for line in found.stdout.decode("ascii", "replace").splitlines():
+        parts = line.split(" ")
+        if len(parts) == 3 and parts[1] == "blob" and parts[2].isdigit():
+            sizes[parts[0]] = int(parts[2])
+    return sizes
+
+
+def _restore_plan(top: Path, checkpoint: Checkpoint, scratch: Path) -> _Restore:
+    """Diff the checkpoint against a fresh snapshot of the working tree, taken with the same capture rules."""
+    snapshot = _snapshot(top, scratch)
+    if snapshot is None:
+        raise CheckpointError("git could not snapshot the working tree")
+    diff = run_git(
+        top,
+        "diff-tree",
+        "-r",
+        "-z",
+        "--no-renames",
+        checkpoint.tree,
+        snapshot.tree,
+        timeout=_WRITE_TIMEOUT_S,
+    )
+    if diff.returncode != 0:
+        raise CheckpointError(
+            "git could not compare the checkpoint with the working tree"
+        )
+    records = _parse_raw_diff(diff.stdout)
+    sizes = _blob_sizes(
+        top,
+        [
+            blob
+            for status, mode, blob, _, _ in records
+            if status != "A" and mode in _RESTORABLE_MODES
+        ],
+    )
+    # The full list: these are files on disk now whose content the safety checkpoint cannot hold.
+    not_captured_now = set(snapshot.skipped)
+    skipped_then = set(checkpoint.skipped)
+    entries: list[_Entry] = []
+    left: list[str] = []
+    blocked: list[str] = []
+    for status, mode, blob, _new_mode, path in records:
+        if status == "A":
+            left.append(path)
+            continue
+        refuse = (
+            not _safe_relative(path)
+            or path.startswith(_PRIVATE_DIR)
+            or is_denied_path(path)
+            or path in skipped_then
+            or path in not_captured_now
+            or mode not in _RESTORABLE_MODES
+            or (mode == _LINK_MODE and os.name == "nt")
+            or blob not in sizes
+            or (mode != _LINK_MODE and sizes[blob] > MAX_FILE_BYTES)
+            or _parent_problem(top, path, create=False) is not None
+        )
+        if not refuse:
+            try:
+                info = os.lstat(os.path.join(top, *path.split("/")))
+            except (FileNotFoundError, NotADirectoryError):
+                info = None
+            except OSError:
+                refuse = True
+                info = None
+            if info is not None:
+                # A folder would have to be deleted; a file absent from the fresh snapshot (ignored, say)
+                # was not captured, so overwriting it would lose content the safety checkpoint lacks.
+                refuse = stat.S_ISDIR(info.st_mode) or status == "D"
+        if refuse:
+            blocked.append(path)
+        else:
+            entries.append(_Entry(path=path, mode=mode, blob=blob))
+    plan = RestorePlan(
+        to_write=tuple(e.path for e in entries),
+        left_in_place=tuple(left),
+        blocked=tuple(blocked),
+    )
+    return _Restore(plan=plan, entries=tuple(entries), current_tree=snapshot.tree)
+
+
+def plan_restore(repo: Path, checkpoint: Checkpoint) -> RestorePlan:
+    """What restoring checkpoint would do to the working tree now. Writes nothing.
+    Raises CheckpointError when git cannot answer."""
+    layout = _layout(Path(repo))
+    if layout is None:
+        raise CheckpointError("this folder is not a git working tree")
+    with _scratch_dir() as scratch:
+        return _restore_plan(layout.top, checkpoint, scratch).plan
+
+
+def _blob_bytes(top: Path, entry: _Entry) -> bytes:
+    """The bytes to put on disk. Files get git's checkout conversion for their path (line endings, smudge
+    filters), which is the inverse of the conversion applied when the checkpoint was captured; with no
+    conversion configured the blob comes back byte for byte. Links get their target verbatim."""
+    if entry.mode == _LINK_MODE:
+        args: tuple[str, ...] = ("cat-file", "blob", entry.blob)
+    else:
+        args = ("cat-file", "--filters", f"--path={entry.path}", entry.blob)
+    read = run_git(top, *args, timeout=_WRITE_TIMEOUT_S)
+    if read.returncode != 0:
+        raise CheckpointError(f"git could not read {entry.path} from the checkpoint")
+    return read.stdout
+
+
+def _permissions(entry: _Entry, previous: os.stat_result | None) -> int | None:
+    """Permission bits for a rewritten file: the old file's, with the executable bits set per the checkpoint."""
+    if previous is None or not stat.S_ISREG(previous.st_mode) or os.name == "nt":
+        return None
+    bits = stat.S_IMODE(previous.st_mode)
+    if entry.mode == _EXEC_MODE:
+        return bits | ((bits & 0o444) >> 2)
+    return bits & ~0o111
+
+
+def _write_entry(top: Path, entry: _Entry) -> None:
+    """Write one file next to its target and move it into place, replacing a file or link, never a folder."""
+    problem = _parent_problem(top, entry.path, create=True)
+    if problem is not None:
+        raise CheckpointError(f"refused to write {entry.path}: {problem}")
+    target = os.path.join(top, *entry.path.split("/"))
+    parent = os.path.dirname(target)
+    real_top = os.path.realpath(top)
+    if os.path.commonpath([real_top, os.path.realpath(parent)]) != real_top:
+        raise CheckpointError(
+            f"refused to write {entry.path}: it is outside the repository"
+        )
+    try:
+        previous: os.stat_result | None = os.lstat(target)
+    except FileNotFoundError:
+        previous = None
+    except OSError as exc:
+        raise CheckpointError(f"could not read {entry.path}: {exc}") from exc
+    if previous is not None and stat.S_ISDIR(previous.st_mode):
+        raise CheckpointError(f"refused to write {entry.path}: a folder is in the way")
+    data = _blob_bytes(top, entry)
+    temp = os.path.join(
+        parent, f".{os.path.basename(target)}.aletheore-restore-{secrets.token_hex(4)}"
+    )
+    try:
+        if entry.mode == _LINK_MODE:
+            os.symlink(os.fsdecode(data), temp)
+        else:
+            # The OS applies the umask to these, as it does for files git checks out.
+            fresh = 0o777 if entry.mode == _EXEC_MODE else 0o666
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+            handle = os.open(temp, flags, fresh)
+            with os.fdopen(handle, "wb") as out:
+                out.write(data)
+            bits = _permissions(entry, previous)
+            if bits is not None:
+                os.chmod(temp, bits)
+        os.replace(temp, target)
+    except OSError as exc:
+        try:
+            if os.path.lexists(temp):
+                os.remove(temp)
+        except OSError:
+            pass
+        raise CheckpointError(f"could not write {entry.path}: {exc}") from exc
+
+
+def restore_checkpoint(
+    repo: Path, checkpoint: Checkpoint, session_id: str
+) -> RestoreResult:
+    """Put the working tree's files back to how they were in checkpoint. Never prompts; callers confirm first.
+
+    First saves a safety checkpoint of the current files (take_checkpoint with force), so the restore can
+    itself be undone. When the current files equal the latest checkpoint, take_checkpoint saves nothing and
+    that latest checkpoint is the safety one. When no safety checkpoint can be had, CheckpointError is raised
+    and nothing is written, so RestoreResult.safety is only None if no write could have happened.
+
+    Then writes only plan_restore's to_write files, each from the checkpoint's blob. Files that are new since
+    the checkpoint are left in place, blocked files are not touched, and reset, clean, checkout, the index,
+    branches and stash are never used. Raises CheckpointError if a write fails; files already written stay
+    written and the safety checkpoint holds what they replaced.
+    """
+    repo = Path(repo)
+    state = repo_state(repo)
+    if not state.ok:
+        raise CheckpointError(state.reason or "Shield cannot work in this repository")
+    layout = _layout(repo)
+    if layout is None:
+        raise CheckpointError("this folder is not a git working tree")
+    safety = take_checkpoint(repo, session_id, force=True)
+    if safety is None:
+        safety = _latest_checkpoint(layout)
+    if safety is None:
+        raise CheckpointError(
+            "could not save a safety checkpoint of the current files; nothing was restored"
+        )
+    with _scratch_dir() as scratch:
+        work = _restore_plan(layout.top, checkpoint, scratch)
+    if work.current_tree != safety.tree:
+        # Either files changed after the safety checkpoint, or take_checkpoint failed and the latest
+        # checkpoint is stale. Either way the safety checkpoint does not hold what would be overwritten.
+        raise CheckpointError(
+            "the files changed while the safety checkpoint was being saved; nothing was restored, try again"
+        )
+    restored: list[str] = []
+    for entry in work.entries:
+        try:
+            _write_entry(layout.top, entry)
+        except CheckpointError as exc:
+            done = ", ".join(restored) if restored else "none"
+            raise CheckpointError(f"{exc} (already restored: {done})") from exc
+        restored.append(entry.path)
+    return RestoreResult(restored=tuple(restored), safety=safety)
