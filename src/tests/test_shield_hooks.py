@@ -626,6 +626,59 @@ def test_module_runs_as_a_real_subprocess(tmp_path):
         assert len(_checkpoints(repo)) == 1
 
 
+@pytest.mark.parametrize("state", ["detached", "merge"])
+def test_turn_end_runs_after_an_edit_in_an_unsupported_repo_state(state, tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    if state == "detached":
+        _git(repo, "checkout", "-q", "--detach")
+    else:
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, check=True).stdout
+        (repo / ".git" / "MERGE_HEAD").write_bytes(head)
+    calls = _fake_guard(monkeypatch, _report("zz does not exist on PyPI."))
+    assert _run("pre-edit", _payload(repo)) == (0, "", "")
+    assert _checkpoints(repo) == []  # no checkpoint in this state
+    assert _state(repo)["edited"] is True
+    out = _run("turn-end", _payload(repo, event="Stop", stop_hook_active=False))[1]
+    assert "zz does not exist on PyPI." in json.loads(out)["systemMessage"]
+    assert calls
+
+
+def test_guard_evidence_imports_without_the_evidence_reader():
+    code = (
+        "import sys, aletheore.shield.guard_evidence, aletheore.shield.hooks; "
+        "heavy = [m for m in ('aletheore.evidence', 'aletheore.dependents', 'aletheore.evidence_diff', "
+        "'aletheore.signature_diff', 'aletheore.tests_for', 'aletheore.vulnerabilities') if m in sys.modules]; "
+        "print(','.join(heavy))"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, env=_subprocess_env(), timeout=30, check=False
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == b""
+
+
+@pytest.mark.parametrize("broken", ["write", "flush"])
+def test_write_guard_swallows_a_broken_stdout(broken, tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _fake_guard(monkeypatch, _report("a"))
+    monkeypatch.setenv("ALETHEORE_HOOK_DEBUG", "1")  # an exception escaping _write would print a traceback
+
+    class Broken(io.StringIO):
+        def write(self, text):
+            if broken == "write":
+                raise BrokenPipeError
+            return super().write(text)
+
+        def flush(self):
+            if broken == "flush":
+                raise BrokenPipeError
+
+    err = io.StringIO()
+    payload = json.dumps(_payload(repo, event="PostToolUse"))
+    assert hooks.main(["post-edit"], stdin=io.StringIO(payload), stdout=Broken(), stderr=err) == 0
+    assert err.getvalue() == ""
+
+
 def test_closed_stdout_does_not_change_the_exit_code(tmp_path):
     repo = _init(tmp_path / "r")
     (repo / "a.py").write_text("import reqests\n", encoding="utf-8")  # a near-miss finding to print

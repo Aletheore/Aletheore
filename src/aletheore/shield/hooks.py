@@ -278,20 +278,23 @@ def _pre_edit(payload: dict | None) -> Output | None:
     repo = _edit_repo(payload)
     if repo is None:
         return None
+    session_id = _session_id(payload)
+    path = _state_path(repo, session_id)
+    # Written first, before any git work and before the repo-state gate: the session did edit this repository,
+    # so turn-end (the only in-session guard with registry lookups) must run even in a detached-HEAD, merge or
+    # rebase state where checkpoints are not taken, or when the checkpoint is cut off by the hard stop.
+    _update_state(path, {"edited": True})
     from aletheore.shield import checkpoint, guard_evidence
     from aletheore.shield.gitutil import repo_state
 
     checked = repo_state(repo.top)
     if not checked.ok:
-        return None
-    session_id = _session_id(payload)
-    path = _state_path(repo, session_id)
+        return None  # only the checkpoint, prune and base-evidence work needs a supported repository state
     now = _now()
     last = _load_state(path).get("last_prune")
     due = not isinstance(last, (int, float)) or not 0 <= now - last < PRUNE_INTERVAL_S
-    # Written first, before the slow part: turn-end must know this session edited even if the checkpoint is
-    # cut off by the hard stop, and claiming the prune here stops a parallel call from pruning too.
-    _update_state(path, {"edited": True, **({"last_prune": now} if due else {})})
+    if due:
+        _update_state(path, {"last_prune": now})  # claimed before pruning, so a parallel call skips it
     if session_id:
         guard_evidence.save_base_evidence(repo.top, session_id)  # idempotent: keeps the first copy
     checkpoint.take_checkpoint(repo.top, session_id, checked=checked)
