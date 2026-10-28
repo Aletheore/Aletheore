@@ -232,6 +232,7 @@
     "starlette",
     "setuptools",
     "nohup",
-    "numpy"
+    "numpy",
+    "deepwiki"
   ]
 }
