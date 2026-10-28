@@ -101,7 +101,7 @@ def check_pmd(repo_path: Path, timeout: int | None = None) -> dict:
 
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=resolved_timeout + 10, cwd=repo_path
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=resolved_timeout + 10, cwd=repo_path
         )
     except subprocess.TimeoutExpired:
         return {"checked": False, "reason": f"pmd timed out after {resolved_timeout}s", "findings": []}

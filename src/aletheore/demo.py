@@ -40,7 +40,7 @@ def create_demo() -> tuple[Path, dict]:
                 [executable, "-c", f"core.hooksPath={hooks}", "-c", "commit.gpgsign=false",
                  "-c", "maintenance.auto=false", "-c", "gc.auto=0",
                  "-c", "user.name=Aletheore Demo", "-c", "user.email=demo@example.invalid", *args],
-                cwd=repo, env=env, check=True, capture_output=True, text=True, timeout=30, shell=False,
+                cwd=repo, env=env, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, shell=False,
             )
 
         git("init", "--quiet", "--template=")

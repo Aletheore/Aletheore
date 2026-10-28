@@ -7,12 +7,14 @@ Usage: python cli_smoke.py
 
 import json
 import os
+import queue
 import shutil
 import signal
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -77,7 +79,7 @@ def spawn(args, cwd=None, **envx):
 
 def stop(p):
     try:
-        p.send_signal(signal.CTRL_C_EVENT if WIN else signal.SIGINT)
+        p.send_signal(signal.CTRL_BREAK_EVENT if WIN else signal.SIGINT)
         p.wait(10)
     except Exception:
         p.kill()
@@ -94,6 +96,16 @@ def wait_for(pred, secs):
             return True
         time.sleep(0.5)
     return False
+
+
+def protocol_line(process, timeout=60):
+    """A broken stdio server must fail the check instead of hanging the CI job."""
+    lines = queue.Queue()
+    threading.Thread(target=lambda: lines.put(process.stdout.readline()), daemon=True).start()
+    try:
+        return lines.get(timeout=timeout)
+    except queue.Empty:
+        return b""
 
 
 # ---------------------------------------------------------------- fixture repo
@@ -149,6 +161,38 @@ check("query symbol-source", rc == 0 and "getcwd" in out, out)
 check("query unknown module is clean", run(["query", "imports", "../../etc/passwd", "--path", str(repo)])[0] == 1)
 rc, out = run(["query", "changes", "--path", str(repo)])
 check("query changes", rc == 0, out)
+
+# ---------------------------------------------------------------- tokens and direct-exec hooks
+rc, out = run(["tokens", "meter", "--path", str(repo), "--plain"])
+check("meter plain output is one line", rc == 0 and len(out.strip().splitlines()) == 1 and "unmeasured" in out, out)
+settings_dir = repo / ".claude"
+settings_dir.mkdir()
+settings = settings_dir / "settings.json"
+original = {"custom": "日本 é", "permissions": {"deny": ["user-rule"]}}
+settings.write_text(json.dumps(original, ensure_ascii=False), encoding="utf-8-sig")
+rc, out = run(["tokens", "profile", "core", "--path", str(repo), "--yes"])
+check("token profile handles Unicode BOM settings", rc == 0 and "Monitor" in json.loads(settings.read_text(encoding="utf-8"))["permissions"]["deny"], out)
+rc, out = run(["tokens", "profile", "off", "--path", str(repo)])
+check("token profile removal preserves user settings", rc == 0 and json.loads(settings.read_text(encoding="utf-8")) == original, out)
+rc, out = run(["tokens", "meter", "--path", str(repo), "--enable-read-guard"], stdin="no\n")
+check("read guard requires consent", rc == 1 and not (settings_dir / "settings.local.json").exists(), out)
+rc, out = run(["tokens", "meter", "--path", str(repo), "--enable-read-guard", "--yes"])
+check("read guard install", rc == 0 and (settings_dir / "settings.local.json").exists(), out)
+hooks = json.loads((settings_dir / "settings.local.json").read_text(encoding="utf-8"))["hooks"]
+payload = json.dumps({"cwd": str(repo), "session_id": "smoke", "tool_input": {"file_path": str(repo / "src" / "ünï_日本.py")}}, ensure_ascii=False)
+for event in ("PostToolUse", "PreToolUse"):
+    hook = hooks[event][0]["hooks"][0]
+    result = subprocess.run([hook["command"], *hook["args"]], input=payload, capture_output=True,
+                            encoding="utf-8", env=env(), timeout=60)
+    ok = result.returncode == 0 and not result.stderr
+    if event == "PreToolUse":
+        ok = ok and '"permissionDecision": "deny"' in result.stdout
+    check(f"{event} direct-exec hook with Unicode stdin", ok, result.stdout + result.stderr)
+rc, out = run(["tokens", "meter", "--path", str(repo), "--plain"])
+check("meter records real hook denial", rc == 0 and "1 unchanged full reread(s) denied" in out, out)
+rc, out = run(["tokens", "meter", "--path", str(repo), "--disable-read-guard"])
+check("read guard removal", rc == 0 and not (settings_dir / "settings.local.json").exists(), out)
+
 rc, out = run(["diff", str(snaps[0]), str(snaps[-1])])
 check("diff json", rc == 0 and json.loads(out), out)
 rc, out = run(["diff", str(snaps[0]), str(snaps[-1]), "--format", "sarif"])
@@ -243,20 +287,18 @@ check("dashboard port freed", wait_for(lambda: _bindable(port), 10))
 # ---------------------------------------------------------------- watch
 w = spawn(["watch", str(repo), "--debounce", "1"])
 lines: list[str] = []
-import threading
-
-threading.Thread(target=lambda: [lines.append(l) for l in w.stdout], daemon=True).start()
-check("watch starts", wait_for(lambda: any("watching" in l for l in lines), 60), lines)
+threading.Thread(target=lambda: [lines.append(line) for line in w.stdout], daemon=True).start()
+check("watch starts", wait_for(lambda: any("watching" in line for line in lines), 60), lines)
 time.sleep(5)
 (repo / "node_modules" / "pkg" / "i.js").write_text("module.exports = 2\n")
 time.sleep(4)
-check("watch ignores node_modules edits", not any("changed" in l for l in lines), lines)
+check("watch ignores node_modules edits", not any("changed" in line for line in lines), lines)
 (repo / "src" / "a.py").write_text("def f():\n    return 2\n", encoding="utf-8")
-check("watch rebuilds on source edit", wait_for(lambda: any("file(s) changed" in l for l in lines), 90), lines)
+check("watch rebuilds on source edit", wait_for(lambda: any("file(s) changed" in line for line in lines), 90), lines)
 (repo / "newtop").mkdir()
 time.sleep(3)
 (repo / "newtop" / "n.py").write_text("def n():\n    return 1\n", encoding="utf-8")
-check("watch sees a top-level dir created after startup", wait_for(lambda: any("n.py" in l for l in lines), 90), lines)
+check("watch sees a top-level dir created after startup", wait_for(lambda: any("n.py" in line for line in lines), 90), lines)
 w.send_signal(signal.CTRL_BREAK_EVENT if WIN else signal.SIGINT)
 try:
     w.wait(15)
@@ -308,12 +350,12 @@ init = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolV
 try:
     m.stdin.write((json.dumps(init) + "\n").encode())
     m.stdin.flush()
-    line = m.stdout.readline()
+    line = protocol_line(m)
     check("mcp server answers initialize over stdio", b'"result"' in line, line)
     m.stdin.write((json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n").encode())
     m.stdin.write((json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}) + "\n").encode())
     m.stdin.flush()
-    line = m.stdout.readline()
+    line = protocol_line(m)
     check("mcp server lists tools", b"aletheore_scan" in line or b"aletheore_overview" in line, line[:300])
 finally:
     m.kill()

@@ -29,6 +29,7 @@ from rich.text import Text
 
 from aletheore._lazy import lazy_module
 from aletheore.cli_presentation import AletheoreGroup, SILENT_ROUTES
+from aletheore.hook_config import python_hook
 from aletheore.adapters.anthropic_native import AnthropicAdapter
 from aletheore.adapters.claude_code import AdapterInvocationError, ClaudeCodeAdapter
 from aletheore.adapters.codex_cli import CodexCliAdapter
@@ -225,15 +226,21 @@ def _resolve_path(positional: str, option: Optional[str]) -> str:
     Not `option or positional` - an explicit `--path ""` is still a choice
     and should not silently fall back to the positional default.
     """
-    if option is None:
-        return positional
-    if positional != "." and Path(positional).resolve() != Path(option).resolve():
-        _stderr_console.print(
-            f"[bold red]error:[/bold red] the PATH argument ({positional!r}) and --path ({option!r}) "
-            "name different folders; give only one of them"
-        )
-        raise typer.Exit(code=2)
-    return option
+    chosen = positional if option is None else option
+    try:
+        if not chosen.strip():
+            raise ValueError("repository path must not be empty")
+        expanded = str(Path(chosen).expanduser()) if chosen.startswith("~") else chosen
+        if option is not None and positional != "." and Path(positional).expanduser().resolve() != Path(expanded).resolve():
+            _stderr_console.print(
+                f"[bold red]error:[/bold red] the PATH argument ({positional!r}) and --path ({option!r}) "
+                "name different folders; give only one of them"
+            )
+            raise typer.Exit(code=2)
+        return expanded
+    except (OSError, RuntimeError, ValueError) as exc:
+        _stderr_console.print(Text(f"error: invalid repository path: {exc}"))
+        raise typer.Exit(code=2) from exc
 
 
 def _load_evidence_or_exit(repo: Path) -> dict:
@@ -1509,10 +1516,14 @@ def _aletheore_command() -> str:
     # resolves - preserving today's behavior rather than writing something
     # obviously broken.
     # Windows console scripts are aletheore.exe (in Scripts/), never a bare "aletheore".
-    for name in ("aletheore", "aletheore.exe"):
-        sibling = Path(sys.executable).parent / name
-        if sibling.exists():
-            return str(sibling)
+    parent = Path(sys.executable).parent
+    directories = [parent, parent / "Scripts"] if sys.platform == "win32" else [parent]
+    names = ("aletheore.exe", "aletheore") if sys.platform == "win32" else ("aletheore", "aletheore.exe")
+    for directory in directories:
+        for name in names:
+            sibling = directory / name
+            if sibling.is_file():
+                return str(sibling)
     return shutil.which("aletheore") or "aletheore"
 
 
@@ -2196,7 +2207,10 @@ def _run_cli(args: list[str]) -> int:
     from typer.main import get_command
 
     try:
-        get_command(app).main(args=args, prog_name="aletheore", standalone_mode=False)
+        # Let Typer format its own usage errors and exits. New Typer versions
+        # use a separate Click runtime, so external click exception types and
+        # context globals are not interchangeable with Typer's.
+        get_command(app).main(args=args, prog_name="aletheore", standalone_mode=True)
         return 0
     except click.exceptions.Exit as exc:
         return exc.exit_code
@@ -2218,7 +2232,7 @@ def _menu_header() -> Text:
     version = _installed_version()
     folder = Path.cwd()
     shown = str(folder)
-    home = str(Path.home())
+    home = str(user_home())
     if shown == home:
         shown = "~"
     elif shown.startswith(home + os.sep):
@@ -2259,7 +2273,7 @@ def _ask(question: str) -> str:
     """Ask one question on the terminal; an empty answer (or Ctrl-C) means "never mind"."""
     try:
         return typer.prompt(question, default="", show_default=False).strip()
-    except (click.Abort, EOFError):
+    except (typer.Abort, click.Abort, EOFError):
         return ""
 
 
@@ -2310,7 +2324,7 @@ def _click_command(path: list[str]):
     return command
 
 
-def _command_group_flow(path: list[str], group, kwargs: dict) -> bool:
+def _command_group_flow(path: list[str], group, kwargs: dict, pause=None) -> bool:
     """Browse and run every nested command exposed by a Click command group."""
     from aletheore import ui
 
@@ -2333,36 +2347,91 @@ def _command_group_flow(path: list[str], group, kwargs: dict) -> bool:
         child = children[choice.key]
         child_path = [*path, choice.key]
         if getattr(child, "commands", None):
-            if _command_group_flow(child_path, child, kwargs):
+            if _command_group_flow(child_path, child, kwargs, pause):
                 return True
             continue
 
         route = tuple("hallbook" if name == "skill-hub" else name for name in child_path)
+        if route == ("tokens", "meter"):
+            _meter_flow(kwargs, _pause if pause is None else pause)
+            continue
         if route in SILENT_ROUTES:
             # Event consumers cannot be run from an arrow-key picker: they wait on stdin.
             _run_cli([*child_path, "--help"])
             return True
 
-        args = []
+        args, options = [], []
         for parameter in child.params:
-            if not parameter.required:
+            optional_argument = isinstance(parameter, typer.core.TyperArgument) and parameter.default is None
+            if not parameter.required and not optional_argument:
                 continue
-            answer = _ask(f"{parameter.human_readable_name} for {' '.join(child_path)}")
+            suffix = " (leave blank for the default)" if not parameter.required else ""
+            answer = _ask(f"{parameter.human_readable_name} for {' '.join(child_path)}{suffix}")
             if not answer:
-                break
-            if isinstance(parameter, click.Option):
-                args.extend([parameter.opts[0], answer])
+                if parameter.required:
+                    break
+                continue
+            if isinstance(parameter, typer.core.TyperOption):
+                options.append(f"{parameter.opts[0]}={answer}")
             else:
                 args.append(answer)
         else:
-            _run_cli([*child_path, *args])
+            separator = ["--"] if any(arg.startswith("-") for arg in args) else []
+            _run_cli([*child_path, *options, *separator, *args])
             return True
 
 
 def _command_args(name: str, answers: list[str]) -> list[str]:
     if name == "healthcheck":
         return ["healthcheck", ".", "--base-url", answers[0]]
-    return [name, *answers]
+    separator = ["--"] if any(answer.startswith("-") for answer in answers) else []
+    return [name, *separator, *answers]
+
+
+def _query_flow(kwargs: dict) -> bool:
+    """Explore every query kind from the same catalogue shown by `query --help`."""
+    from aletheore import ui
+
+    rows = [ui.MenuItem(kind, kind, group) for group, kinds in QUERY_KIND_GROUPS.items() for kind in kinds]
+    rows.append(ui.MenuItem("", "Back"))
+    start = 0
+    while True:
+        _clear_screen()
+        header = ui.command_header("Explore the evidence", width=console.width, height=console.height,
+                                   subtitle="choose a query; results read the current project's evidence")
+        picked = ui.choose(rows, console, header=header, start=start, numbers=False,
+                           footer="up/down to move, enter to choose, q to go back", **kwargs)
+        if picked is None or not picked.key:
+            return False
+        start = [row.key for row in rows].index(picked.key)
+        kind = picked.key
+        required = QUERY_FUNCTIONS.get(kind, (None, False))[1] or kind in (
+            "answer", "search-codebase", "symbol-source", "ast-pattern"
+        )
+        target = None
+        if required or kind not in ("schema", "changes"):
+            target = _ask(_QUERY_TARGET_HINTS.get(kind, "Target or filter") + ("" if required else " (optional; blank for all)"))
+            if required and not target:
+                continue
+        values = [kind, *([target] if target else [])]
+        options = []
+        if kind == "symbol-source":
+            symbol = _ask("Function or class name")
+            if not symbol:
+                continue
+            values.append(symbol)
+        elif kind == "ast-pattern":
+            language = _ask("Language grammar (for example python)")
+            if not language:
+                continue
+            options.append(f"--language={language}")
+        elif kind == "answer":
+            agent = _ask("Agent name (optional; blank to detect installed agents)")
+            if agent:
+                options.append(f"--agent={agent}")
+        separator = ["--"] if any(value.startswith("-") for value in values) else []
+        _run_cli(["query", *options, *separator, *values])
+        return True
 
 
 def _connect_flow(kwargs: dict) -> bool:
@@ -2430,21 +2499,26 @@ def _meter_flow(kwargs: dict, pause: Callable[[], None]) -> None:
         elif picked.key == "project":
             answer = _ask("Project directory")
             if answer:
-                chosen = Path(answer).expanduser().resolve()
-                if chosen.is_dir():
-                    project = chosen
-                else:
-                    console.print(Text(f"Project directory does not exist: {chosen}"))
+                try:
+                    chosen = Path(answer).expanduser().resolve()
+                    if not chosen.is_dir():
+                        raise ValueError(f"Project directory does not exist: {chosen}")
+                except (OSError, RuntimeError, ValueError) as exc:
+                    console.print(Text(f"error: invalid project directory: {exc}"))
                     pause()
+                else:
+                    project = chosen
 
 
-def _run_command(name: str, kwargs: dict) -> bool:
+def _run_command(name: str, kwargs: dict, pause=None) -> bool:
     """Run one command picked from the "All commands" list. True when it printed something worth reading."""
     if name == "mcp-install":
         return _connect_flow(kwargs)
+    if name == "query":
+        return _query_flow(kwargs)
     command = _click_command([name])
     if getattr(command, "commands", None):
-        return _command_group_flow([name], command, kwargs)
+        return _command_group_flow([name], command, kwargs, pause)
     if name in _COMMAND_RUNS:
         _run_cli(_COMMAND_RUNS[name])
         return True
@@ -2490,7 +2564,7 @@ def _commands_flow(kwargs: dict, pause: Callable[[], None]) -> None:
             if command is None or not command.key:
                 break
             start = [r.key for r in rows].index(command.key)
-            if _run_command(command.key, kwargs):
+            if _run_command(command.key, kwargs, pause):
                 pause()
                 return
 
@@ -2515,7 +2589,8 @@ def _run_menu(read_key=None, pause=None) -> None:
         if picked.key == "scan":
             _run_cli(["scan", "."])
         elif picked.key == "query":
-            _run_cli(["query"])
+            if not _query_flow(kwargs):
+                continue
         elif picked.key == "audit":
             _run_cli(["audit", "."])
         elif picked.key == "skills":
@@ -3057,6 +3132,7 @@ def query(
         console.print(_query_kinds_panel())
         raise typer.Exit(code=0)
     _warn_ignored_query_flags(kind, full, agent, k_given, language, exclude, under, no_tests)
+    repo_path = _resolve_path(repo_path, None)
     raise typer.Exit(
         code=_query(kind, target, repo_path, full, agent, 10 if k_given is None else k_given, symbol, language, exclude, under, no_tests)
     )
@@ -3430,24 +3506,11 @@ def hook_evidence_snippet(
     mode: str = typer.Option("inject", "--mode", help="inject (short block) or pointer (one line)"),
 ) -> None:
     import json as _json
-    import shlex as _shlex
-    import sys as _sys
 
     if mode not in ("inject", "pointer"):
         console.print(f"[bold red]error:[/bold red] unknown mode {mode!r}; choose inject or pointer")
         raise typer.Exit(code=2)
-    # The interpreter path can hold spaces (a pipx venv lives under "Application Support" on macOS), so the
-    # command is built from an argv list and quoted for the shell that will run it.
-    argv = [_sys.executable, "-m", "aletheore.evidence_hook", "--mode", mode]
-    if _sys.platform == "win32":
-        # cmd.exe style: quote an argument that is empty or holds a space, tab, quote or cmd metacharacter
-        command = " ".join(
-            '"' + arg.replace('"', '\\"') + '"' if not arg or any(c in arg for c in ' \t"&^|<>()') else arg
-            for arg in argv
-        )
-    else:
-        command = _shlex.join(argv)
-    entry = lambda matcher: [{"matcher": matcher, "hooks": [{"type": "command", "command": command}]}]  # noqa: E731
+    entry = lambda matcher: [{"matcher": matcher, "hooks": [python_hook("aletheore.evidence_hook", "--mode", mode)]}]  # noqa: E731
     typer.echo(
         _json.dumps(
             {"hooks": {"PreToolUse": entry("Edit|MultiEdit|Write"), "PostToolUse": entry("Read")}}, indent=2
@@ -3573,8 +3636,6 @@ def skill_hub_list(
 ) -> None:
     # typer.echo, not console.print: titles come from skill frontmatter (or a
     # custom skill's file name) and must not be parsed as Rich markup.
-    from aletheore import ui
-
     _check_category_or_exit(category)
     # A pipe gets every line whole; a terminal gets lines cut to its width so none wraps.
     width = _plain_width() if sys.stdout.isatty() else None
@@ -3665,13 +3726,9 @@ def skill_hub_hook(
             soft_wrap=True,
         )
         raise typer.Exit(code=2)
-    executable = sys.executable
-    if " " in executable:
-        executable = f'"{executable}"'
-    command = f"{executable} -m aletheore.hallbook_hook --mode {mode}"
     settings = {
         "hooks": {
-            "UserPromptSubmit": [{"hooks": [{"type": "command", "command": command}]}]
+            "UserPromptSubmit": [{"hooks": [python_hook("aletheore.hallbook_hook", "--mode", mode)]}]
         }
     }
     typer.echo(json.dumps(settings, ensure_ascii=False))
@@ -4193,10 +4250,9 @@ def main() -> None:
     # non-UTF-8-terminal case, matching this file's off-crash-path
     # printed-error philosophy, rather than crashing the CLI while it's
     # trying to report an unrelated error.
-    for stream in (sys.stdout, sys.stderr):
-        reconfigure = getattr(stream, "reconfigure", None)
-        if reconfigure is not None:
-            reconfigure(encoding="utf-8", errors="backslashreplace")
+    from aletheore._launcher import configure_stdio
+
+    configure_stdio()
 
     # A deleted working directory (a removed git worktree, a cleaned-up
     # scratch dir) makes os.getcwd() raise FileNotFoundError, and every
@@ -4235,6 +4291,14 @@ def main() -> None:
 
     try:
         app()
+    except BrokenPipeError:
+        # A consumer such as `head` can close its pipe before the CLI finishes.
+        # Replace the stream to prevent a second exception during Python's final flush.
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+        raise SystemExit(0)
+    except (OSError, UnicodeError) as exc:
+        _stderr_console.print(Text(f"error: {exc}"))
+        raise SystemExit(1) from exc
     except (typer.Exit, click.exceptions.Exit, SystemExit, KeyboardInterrupt):
         raise
     except Exception as exc:

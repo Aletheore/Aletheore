@@ -9,6 +9,9 @@ on:
   pull_request:
     paths:
       - "src/aletheore/**"
+      - "src/tests/test_cli_portability.py"
+      - "src/tests/test_cli_presentation.py"
+      - "src/tests/test_ui.py"
       - ".github/scripts/cli_smoke.py"
       - ".github/workflows/cli-smoke.yml"
 
@@ -28,7 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.12", "3.14"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -44,8 +47,11 @@ jobs:
         run: |
           python -m venv "$RUNNER_TEMP/venv"
           if [ -d "$RUNNER_TEMP/venv/Scripts" ]; then BIN="$RUNNER_TEMP/venv/Scripts"; else BIN="$RUNNER_TEMP/venv/bin"; fi
-          "$BIN/python" -m pip install ./src
+          "$BIN/python" -m pip install './src[dev]'
           echo "$BIN" >> "$GITHUB_PATH"
+
+      - name: Portability and menu regressions against the installed package
+        run: python -m pytest src/tests/test_cli_portability.py src/tests/test_cli_presentation.py src/tests/test_ui.py src/tests/test_tokens_meter_cli.py src/tests/test_read_guard_setup.py src/tests/test_cli_agent_adapters.py -q
 
       - name: CLI smoke
         run: python .github/scripts/cli_smoke.py

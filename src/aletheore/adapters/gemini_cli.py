@@ -3,6 +3,7 @@ import shutil
 import subprocess
 
 from aletheore.adapters.base import AdapterInvocationError, AgentAdapter
+from aletheore.subprocess_utils import command_argv
 
 INVOCATION_TIMEOUT_SECONDS = 600
 
@@ -30,16 +31,22 @@ class GeminiCliAdapter(AgentAdapter):
         gemini_path = os.path.abspath(gemini_path)
         try:
             result = subprocess.run(
-                [gemini_path, "-p", instruction],
+                command_argv(gemini_path, "-p", instruction),
                 cwd=cwd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
+                stdin=subprocess.DEVNULL,
                 timeout=INVOCATION_TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired as exc:
             raise AdapterInvocationError(
                 f"gemini invocation timed out after {INVOCATION_TIMEOUT_SECONDS}s"
             ) from exc
+
+        except OSError as exc:
+            raise AdapterInvocationError(f"{self.name} could not start: {exc}") from exc
 
         if result.returncode != 0:
             raise AdapterInvocationError(

@@ -47,7 +47,7 @@ def _has_commits(repo_path: Path) -> bool:
     try:
         result = subprocess.run(
             ["git", "-C", str(repo_path), "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -93,7 +93,7 @@ def check_bearer(repo_path: Path, timeout: int | None = None) -> dict:
     cmd.append(".")
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=repo_path)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, cwd=repo_path)
     except subprocess.TimeoutExpired:
         return {"checked": False, "reason": f"bearer timed out after {timeout}s", "findings": []}
     except OSError as exc:

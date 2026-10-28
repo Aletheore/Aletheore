@@ -370,6 +370,7 @@ def test_meter_menu_opens_setup_only_after_user_selects_enable(monkeypatch, tmp_
 def test_the_menu_remembers_where_you_were(monkeypatch):
     ran = []
     monkeypatch.setattr(cli, "_run_cli", lambda args: ran.append(args) or 0)
+    monkeypatch.setattr(cli, "_query_flow", lambda kwargs: ran.append(["query"]) or True)
     # pick "Explore the evidence" (second), come back: the highlight is still on it, enter picks it again
     cli._run_menu(read_key=_keys(DOWN, ENTER, ENTER, "q"), pause=lambda: None)
     assert ran == [["query"], ["query"]]
@@ -464,6 +465,7 @@ def test_every_picker_command_has_an_action():
 def test_enter_on_a_command_that_needs_nothing_runs_it_directly(monkeypatch, name, expected):
     ran = []
     monkeypatch.setattr(cli, "_run_cli", lambda args: ran.append(args) or 0)
+    monkeypatch.setattr(cli, "_query_flow", lambda kwargs: ran.append(["query"]) or True)
     cli._run_menu(read_key=_keys(*_pick_command(*_group_row(name)), "q"), pause=lambda: None)
     assert ran == [expected]
 
@@ -515,8 +517,8 @@ def test_tokens_meter_is_reachable_from_all_commands_and_hallbook_browse_stays_a
     cli._run_menu(read_key=_keys(*_pick_command(group, row), ENTER, "q"), pause=lambda: None)
     assert ran == [["mcp-install", ".", "--target", "claude-code"]]
     group, row = _group_row("tokens")
-    cli._run_menu(read_key=_keys(*_pick_command(group, row), *((DOWN,) * 2), ENTER, "q"), pause=lambda: None)
-    assert ran[-1] == ["tokens", "meter"]
+    cli._run_menu(read_key=_keys(*_pick_command(group, row), *((DOWN,) * 2), ENTER, "q", "q", "q", "q", "q"), pause=lambda: None)
+    assert ran[-1] == ["tokens", "meter", "--path", str(Path.cwd())]
     skills_position = [i[0] for i in cli._MAIN_MENU].index("skills")
     cli._run_menu(read_key=_keys(*((DOWN,) * skills_position), ENTER, "q"), pause=lambda: None)
     assert skills == [True]

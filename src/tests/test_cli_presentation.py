@@ -4,6 +4,7 @@ import json
 
 import click
 import pytest
+from typer.core import TyperArgument
 from click.testing import CliRunner
 from typer.main import get_command
 
@@ -100,7 +101,7 @@ def test_meter_has_one_heading_or_one_plain_line(monkeypatch, tmp_path, plain):
         assert result.output.count("Token savings meter") == 1
 
 
-@pytest.mark.parametrize("path", [p for p in COMMAND_PATHS if len(p) > 1], ids=lambda path: " ".join(path))
+@pytest.mark.parametrize("path", [p for p in COMMAND_PATHS if len(p) > 1 and p != ("tokens", "meter")], ids=lambda path: " ".join(path))
 def test_nested_menu_commands_accept_required_arguments_and_protocols_show_help(monkeypatch, path):
     command = cli._click_command(list(path))
     parent = cli._click_command(list(path[:-1]))
@@ -113,5 +114,5 @@ def test_nested_menu_commands_accept_required_arguments_and_protocols_show_help(
     if route in SILENT_ROUTES:
         assert ran == [[*path, "--help"]]
     else:
-        required = [p for p in command.params if p.required]
+        required = [p for p in command.params if p.required or (isinstance(p, TyperArgument) and p.default is None)]
         assert ran == [[*path, *("value with spaces" for _ in required)]]

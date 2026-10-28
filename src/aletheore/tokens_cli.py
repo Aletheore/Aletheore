@@ -15,10 +15,15 @@ tokens_app = typer.Typer(help="measure coding-agent context cost and local token
 
 def _project_dir(path: Path | None, project: Path | None) -> Path:
     """--path is the documented name (every other command uses it); --project is kept as a hidden alias."""
-    if path is not None and project is not None and path.resolve() != project.resolve():
-        typer.echo("error: --path and --project name different folders; give only one of them", err=True)
-        raise typer.Exit(2)
-    chosen = path if path is not None else project if project is not None else Path(".")
+    try:
+        if path is not None and project is not None and path.expanduser().resolve() != project.expanduser().resolve():
+            typer.echo("error: --path and --project name different folders; give only one of them", err=True)
+            raise typer.Exit(2)
+        chosen = path if path is not None else project if project is not None else Path(".")
+        chosen = chosen.expanduser().resolve()
+    except (OSError, RuntimeError, ValueError) as exc:
+        typer.echo(f"error: invalid project path: {exc}", err=True)
+        raise typer.Exit(2) from exc
     # Exit 1 for both, matching the other commands' path checks (_checked_dir); 2 is for conflicting flags.
     if not chosen.exists():
         typer.echo(f"error: project directory does not exist: {chosen}", err=True)
@@ -59,7 +64,7 @@ def audit(
             saved = 1 - after.input_side_tokens / before.input_side_tokens
             typer.echo(f"with profile {compare} (denying {len(deny)} tools): {after.input_side_tokens:,} "
                        f"({saved:.0%} lower)")
-    except tp.ProfileError as e:
+    except (tp.ProfileError, OSError, UnicodeError) as e:
         typer.echo(f"error: {e}", err=True)
         raise typer.Exit(1)
 
@@ -86,19 +91,26 @@ def profile(
             raise typer.Exit(1)
         added = tp.apply_deny(project, deny)
         typer.echo(f"added {len(added)} deny entries")
-    except tp.ProfileError as e:
+    except (tp.ProfileError, OSError, UnicodeError) as e:
         typer.echo(f"error: {e}", err=True)
         raise typer.Exit(1)
 
 
 def _meter_profile_status(project: Path) -> str:
-    settings_path, sidecar_path = tp._paths(project)
     try:
+        settings_path, sidecar_path = tp._paths(project)
         sidecar = tp._load(sidecar_path)
         added = tp._validated_added(sidecar, sidecar_path)
-    except Exception:
+        settings = tp._load(settings_path)
+        permissions = settings.get("permissions", {})
+        if not isinstance(permissions, dict):
+            raise tp.ProfileError("invalid permissions")
+        deny = permissions.get("deny", [])
+        if not isinstance(deny, list) or not all(isinstance(item, str) for item in deny):
+            raise tp.ProfileError("invalid deny entries")
+    except (tp.ProfileError, OSError, UnicodeError):
         return "unknown (the Aletheore profile record is unreadable)"
-    return "active" if added else "not active"
+    return "active" if set(added).intersection(deny) else "not active"
 
 
 def _period_source_text(totals, *, source: str, guard_configured: bool) -> str:
@@ -139,6 +151,7 @@ def _render_meter_plain(summary, *, guard_configured: bool, profile_status: str)
     help="show local context savings by source and period; --enable-read-guard is opt-in and consent-gated",
 )
 def meter(
+    ctx: typer.Context,
     path: Path = typer.Option(None, "--path", help="project directory (default: current directory)"),
     project: Path = typer.Option(None, "--project", hidden=True, help="alias for --path"),
     plain: bool = typer.Option(False, "--plain", help="emit a single line for scripts and status displays"),
@@ -193,7 +206,8 @@ def meter(
         else:
             from aletheore.meter_ui import print_meter
 
-            print_meter(summary, project, guard_configured=guard_configured, profile_status=profile_status)
-    except read_guard_setup.ReadGuardSetupError as exc:
+            print_meter(summary, project, guard_configured=guard_configured, profile_status=profile_status,
+                        header_shown=ctx.meta.get("aletheore.header_shown", False))
+    except (read_guard_setup.ReadGuardSetupError, OSError, UnicodeError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1)

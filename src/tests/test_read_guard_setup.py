@@ -18,13 +18,14 @@ def test_setup_preview_shows_both_hooks_without_writing(tmp_path: Path):
     assert set(plan.entries) == {"PreToolUse", "PostToolUse"}
     for event, entry in plan.entries.items():
         assert entry["matcher"] == "Read"
-        command = entry["hooks"][0]["command"]
+        hook = entry["hooks"][0]
+        command = [hook["command"], *hook["args"]]
         assert "aletheore.read_guard" in command
         assert "--setup-id" in command
         assert (
-            (" pre " in f" {command} ")
+            ("pre" in command)
             if event == "PreToolUse"
-            else (" post " in f" {command} ")
+            else ("post" in command)
         )
 
 

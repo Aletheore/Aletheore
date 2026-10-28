@@ -155,7 +155,7 @@ def check_sonarqube(
         cmd.append(f"-Dsonar.token={token}")
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=repo_path)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, cwd=repo_path)
     except subprocess.TimeoutExpired:
         return {"checked": False, "reason": f"sonar-scanner timed out after {timeout}s", "findings": []}
     except OSError as exc:

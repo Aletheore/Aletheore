@@ -56,12 +56,9 @@ def render_meter(summary, project: Path, *, guard_configured: bool, profile_stat
     return Group(*lead, Panel(Group(*content), title="Local savings", title_align="left"), notes, settings)
 
 
-def print_meter(summary, project: Path, *, guard_configured: bool, profile_status: str) -> None:
-    import click
-
+def print_meter(summary, project: Path, *, guard_configured: bool, profile_status: str,
+                header_shown: bool = False) -> None:
     console = Console(color_system=None, highlight=False)
-    ctx = click.get_current_context(silent=True)
-    shown = ctx is not None and ctx.meta.get("aletheore.header_shown", False)
     console.print(render_meter(summary, project, guard_configured=guard_configured,
                                profile_status=profile_status, width=console.width, height=console.height,
-                               include_heading=not shown))
+                               include_heading=not header_shown))

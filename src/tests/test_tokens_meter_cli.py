@@ -146,6 +146,9 @@ def test_explicit_read_guard_setup_and_removal_are_reversible(tmp_path: Path):
 def test_meter_reports_profile_configured_without_claiming_savings(tmp_path: Path):
     d = tmp_path / ".claude"
     d.mkdir()
+    (d / "settings.json").write_text(
+        json.dumps({"permissions": {"deny": ["Monitor"]}}), encoding="utf-8"
+    )
     (d / "aletheore-tokens.json").write_text(
         json.dumps({"added": ["Monitor"], "created_file": True})
     )

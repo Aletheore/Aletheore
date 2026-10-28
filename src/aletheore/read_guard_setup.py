@@ -5,16 +5,21 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shlex
-import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from aletheore.hook_config import python_hook
+from aletheore.user_paths import is_link_or_junction
+
 SETTINGS_RELATIVE_PATH = Path(".claude") / "settings.local.json"
 SIDECAR_NAME = "aletheore-read-guard-hooks.json"
 _EVENTS = ("PreToolUse", "PostToolUse")
+
+
+def _is_link(path: Path) -> bool:
+    return is_link_or_junction(path)
 
 
 class ReadGuardSetupError(ValueError):
@@ -37,7 +42,7 @@ def _load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeError, ValueError) as exc:
         raise ReadGuardSetupError(
             f"{path} is unreadable or invalid JSON; nothing was changed"
@@ -81,26 +86,9 @@ def _write_json(
             pass
 
 
-def _command(event: str, setup_id: str) -> str:
-    # read_guard.py's module entry point sets the opt-in env var itself. Build
-    # a quoted command from the active interpreter, as evidence-snippet does.
+def _command(event: str, setup_id: str) -> dict:
     event_arg = "pre" if event == "PreToolUse" else "post"
-    argv = [
-        sys.executable,
-        "-m",
-        "aletheore.read_guard",
-        event_arg,
-        "--setup-id",
-        setup_id,
-    ]
-    if sys.platform == "win32":
-        return " ".join(
-            '"' + arg.replace('"', '\\"') + '"'
-            if not arg or any(char in arg for char in ' \t"&^|<>()')
-            else arg
-            for arg in argv
-        )
-    return shlex.join(argv)
+    return python_hook("aletheore.read_guard", event_arg, "--setup-id", setup_id)
 
 
 def _validated_existing_entries(
@@ -127,9 +115,9 @@ def is_installed(project: Path) -> bool:
     settings_path = project / SETTINGS_RELATIVE_PATH
     sidecar_path = settings_path.parent / SIDECAR_NAME
     if (
-        settings_path.parent.is_symlink()
-        or settings_path.is_symlink()
-        or sidecar_path.is_symlink()
+        _is_link(settings_path.parent)
+        or _is_link(settings_path)
+        or _is_link(sidecar_path)
         or not settings_path.is_file()
         or not sidecar_path.is_file()
     ):
@@ -155,9 +143,9 @@ def plan_install(project: Path) -> InstallPlan:
     settings_path = project / SETTINGS_RELATIVE_PATH
     sidecar_path = settings_path.parent / SIDECAR_NAME
     if (
-        settings_path.parent.is_symlink()
-        or settings_path.is_symlink()
-        or sidecar_path.is_symlink()
+        _is_link(settings_path.parent)
+        or _is_link(settings_path)
+        or _is_link(sidecar_path)
     ):
         raise ReadGuardSetupError(
             "Claude settings paths may not be symlinks; nothing was changed"
@@ -221,13 +209,11 @@ def plan_install(project: Path) -> InstallPlan:
     entries = {
         "PreToolUse": {
             "matcher": "Read",
-            "hooks": [{"type": "command", "command": _command("PreToolUse", setup_id)}],
+            "hooks": [_command("PreToolUse", setup_id)],
         },
         "PostToolUse": {
             "matcher": "Read",
-            "hooks": [
-                {"type": "command", "command": _command("PostToolUse", setup_id)}
-            ],
+            "hooks": [_command("PostToolUse", setup_id)],
         },
     }
     after = json.loads(json.dumps(settings))
@@ -290,9 +276,9 @@ def remove(project: Path) -> list[str]:
     settings_path = Path(project) / SETTINGS_RELATIVE_PATH
     sidecar_path = settings_path.parent / SIDECAR_NAME
     if (
-        settings_path.parent.is_symlink()
-        or settings_path.is_symlink()
-        or sidecar_path.is_symlink()
+        _is_link(settings_path.parent)
+        or _is_link(settings_path)
+        or _is_link(sidecar_path)
     ):
         raise ReadGuardSetupError(
             "Claude settings paths may not be symlinks; nothing was changed"

@@ -5,6 +5,21 @@ import tempfile
 from pathlib import Path
 
 
+def is_link_or_junction(path: Path) -> bool:
+    """Recognize Windows directory junctions on Python 3.11 as well as symlinks."""
+    if path.is_symlink():
+        return True
+    junction = getattr(path, "is_junction", None)
+    if junction is not None:
+        return junction()
+    if os.name == "nt":
+        try:
+            return getattr(path.lstat(), "st_reparse_tag", None) == 0xA0000003
+        except FileNotFoundError:
+            return False
+    return False
+
+
 def user_home() -> Path:
     """Path.home(), but never raising.
 

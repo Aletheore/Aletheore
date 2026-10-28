@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import json
+import math
 import os
+import shutil
 import subprocess
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
+
+from aletheore.subprocess_utils import command_argv
+from aletheore.user_paths import is_link_or_junction
 
 PROFILES = ("core", "core+web", "off")
 
@@ -43,6 +49,12 @@ def build_deny_list(seen_tools: Iterable[str] | None, profile: str) -> list[str]
 
 def _paths(project: Path) -> tuple[Path, Path]:
     d = Path(project) / ".claude"
+    try:
+        for path in (d, d / "settings.json", d / SIDECAR_NAME):
+            if is_link_or_junction(path):
+                raise ProfileError(f"{path}: linked settings are not modified; use a project-local settings file")
+    except (OSError, RuntimeError) as exc:
+        raise ProfileError(f"could not inspect project settings: {exc}") from exc
     return d / "settings.json", d / SIDECAR_NAME
 
 
@@ -50,8 +62,8 @@ def _load(path: Path) -> dict:
     if not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text())
-    except json.JSONDecodeError as e:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (json.JSONDecodeError, UnicodeError) as e:
         raise ProfileError(f"{path} is not valid JSON ({e}); fix it first, nothing was changed") from e
     if not isinstance(data, dict):
         raise ProfileError(f"{path} is not a JSON object; nothing was changed")
@@ -60,9 +72,14 @@ def _load(path: Path) -> dict:
 
 def _write(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n")
-    os.replace(tmp, path)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with tmp.open("x", encoding="utf-8", newline="\n") as stream:
+            json.dump(data, stream, indent=2, ensure_ascii=False)
+            stream.write("\n")
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _validated_added(sidecar: dict, sidecar_path: Path) -> list[str]:
@@ -70,6 +87,8 @@ def _validated_added(sidecar: dict, sidecar_path: Path) -> list[str]:
     `added` as a bare string would otherwise be iterated character by character (`list("WebFetch")`), silently
     corrupting both which entries get removed and the file this call reports having removed."""
     added = sidecar.get("added", [])
+    if "created_file" in sidecar and not isinstance(sidecar["created_file"], bool):
+        raise ProfileError(f"{sidecar_path}: 'created_file' is not a boolean; nothing was changed")
     if not isinstance(added, list) or not all(isinstance(t, str) for t in added):
         raise ProfileError(f"{sidecar_path}: 'added' is not a list of strings; nothing was changed")
     return added
@@ -87,7 +106,7 @@ def apply_deny(project: Path, deny: list[str]) -> list[str]:
     if not isinstance(perms, dict):
         raise ProfileError(f"{settings_path}: 'permissions' is not an object; nothing was changed")
     existing = perms.get("deny", [])
-    if not isinstance(existing, list):
+    if not isinstance(existing, list) or not all(isinstance(item, str) for item in existing):
         raise ProfileError(f"{settings_path}: 'permissions.deny' is not a list; nothing was changed")
     previously_added = _validated_added(sidecar, sidecar_path)
     added = [t for t in deny if t not in existing]
@@ -115,7 +134,12 @@ def remove_deny(project: Path) -> list[str]:
     created_file = sidecar.get("created_file", False)
     settings = _load(settings_path)
     perms = settings.get("permissions", {})
-    deny = [t for t in perms.get("deny", []) if t not in added]
+    if not isinstance(perms, dict):
+        raise ProfileError(f"{settings_path}: 'permissions' is not an object; nothing was changed")
+    existing = perms.get("deny", [])
+    if not isinstance(existing, list) or not all(isinstance(item, str) for item in existing):
+        raise ProfileError(f"{settings_path}: 'permissions.deny' is not a list of strings; nothing was changed")
+    deny = [t for t in existing if t not in added]
     if deny:
         perms["deny"] = deny
     else:
@@ -150,24 +174,44 @@ def parse_audit(stream: str) -> Audit:
             ev = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if not isinstance(ev, dict):
+            continue
         if ev.get("type") == "system" and ev.get("subtype") == "init":
-            tools = [str(t) for t in ev.get("tools") or []]
+            received = ev.get("tools")
+            if isinstance(received, list) and all(isinstance(t, str) for t in received):
+                tools = received
         elif ev.get("type") == "result":
+            if ev.get("is_error"):
+                raise ProfileError("the audit request reported a failure")
             usage = ev.get("usage") or {}
             cost = ev.get("total_cost_usd")
-    total = sum(int(usage.get(k, 0) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+    if not isinstance(usage, dict):
+        raise ProfileError("the audit request returned invalid token usage")
+    counts = [0 if usage.get(k) is None else usage[k] for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")]
+    if any(isinstance(n, bool) or not isinstance(n, int) or n < 0 for n in counts):
+        raise ProfileError("the audit request returned invalid token usage")
+    total = sum(counts)
+    if cost is not None and (isinstance(cost, bool) or not isinstance(cost, (int, float)) or not math.isfinite(cost) or cost < 0):
+        cost = None
     if not tools or total == 0:
         raise ProfileError("the audit request returned no tool list or no token usage; is `claude` installed and signed in?")
     return Audit(tools=tools, input_side_tokens=total, cost_usd=cost)
 
 
 def _default_runner(cmd: list[str], cwd: Path) -> str:
+    executable = shutil.which(cmd[0])
+    if not executable:
+        raise ProfileError("`claude` was not found on PATH")
     try:
-        p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
-    except FileNotFoundError as e:
-        raise ProfileError("`claude` was not found on PATH") from e
+        resolved = command_argv(os.path.abspath(executable), *cmd[1:])
+        p = subprocess.run(resolved, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=120, stdin=subprocess.DEVNULL)
+    except OSError as e:
+        raise ProfileError(f"could not start claude: {e}") from e
     except subprocess.TimeoutExpired as e:
         raise ProfileError("the audit request timed out after 120s") from e
+    if p.returncode:
+        raise ProfileError(f"claude audit failed (exit {p.returncode}): {p.stderr.strip()}")
     return p.stdout
 
 
