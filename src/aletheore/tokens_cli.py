@@ -13,9 +13,14 @@ from aletheore import token_profile as tp
 tokens_app = typer.Typer(help="measure coding-agent context cost and local token savings")
 
 
-def _project_dir(path: Path | None, project: Path | None) -> Path:
+def _project_dir(path: Path | str | None, project: Path | str | None) -> Path:
     """--path is the documented name (every other command uses it); --project is kept as a hidden alias."""
     try:
+        for supplied in (path, project):
+            if supplied is not None and not str(supplied).strip():
+                raise ValueError("project path must not be empty")
+        path = Path(path) if path is not None else None
+        project = Path(project) if project is not None else None
         if path is not None and project is not None and path.expanduser().resolve() != project.expanduser().resolve():
             typer.echo("error: --path and --project name different folders; give only one of them", err=True)
             raise typer.Exit(2)
@@ -42,8 +47,8 @@ def _confirm(question: str, yes: bool) -> bool:
 
 @tokens_app.command("audit", help="send one tiny request to see the tools your agent loads and its fixed token cost")
 def audit(
-    path: Path = typer.Option(None, "--path", help="project directory to measure in (default: current directory)"),
-    project: Path = typer.Option(None, "--project", hidden=True, help="alias for --path"),
+    path: str = typer.Option(None, "--path", metavar="PATH", help="project directory to measure in (default: current directory)"),
+    project: str = typer.Option(None, "--project", metavar="PATH", hidden=True, help="alias for --path"),
     compare: str = typer.Option("", "--compare", help="also measure with this profile's deny list (core or core+web)"),
     yes: bool = typer.Option(False, "--yes", help="skip the cost confirmation"),
 ) -> None:
@@ -72,8 +77,8 @@ def audit(
 @tokens_app.command("profile", help="apply or remove a lean tool profile in the project's .claude/settings.json")
 def profile(
     name: str = typer.Argument(..., help="core, core+web, or off"),
-    path: Path = typer.Option(None, "--path", help="project directory (default: current directory)"),
-    project: Path = typer.Option(None, "--project", hidden=True, help="alias for --path"),
+    path: str = typer.Option(None, "--path", metavar="PATH", help="project directory (default: current directory)"),
+    project: str = typer.Option(None, "--project", metavar="PATH", hidden=True, help="alias for --path"),
     yes: bool = typer.Option(False, "--yes", help="apply without asking"),
 ) -> None:
     project = _project_dir(path, project)
@@ -152,8 +157,8 @@ def _render_meter_plain(summary, *, guard_configured: bool, profile_status: str)
 )
 def meter(
     ctx: typer.Context,
-    path: Path = typer.Option(None, "--path", help="project directory (default: current directory)"),
-    project: Path = typer.Option(None, "--project", hidden=True, help="alias for --path"),
+    path: str = typer.Option(None, "--path", metavar="PATH", help="project directory (default: current directory)"),
+    project: str = typer.Option(None, "--project", metavar="PATH", hidden=True, help="alias for --path"),
     plain: bool = typer.Option(False, "--plain", help="emit a single line for scripts and status displays"),
     enable_read_guard: bool = typer.Option(False, "--enable-read-guard", help="preview and consent to add local Read hooks"),
     disable_read_guard: bool = typer.Option(False, "--disable-read-guard", help="remove only the local Read hooks Aletheore added"),

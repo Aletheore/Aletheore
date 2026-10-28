@@ -163,6 +163,8 @@ rc, out = run(["query", "changes", "--path", str(repo)])
 check("query changes", rc == 0, out)
 
 # ---------------------------------------------------------------- tokens and direct-exec hooks
+rc, out = run(["tokens", "profile", "core", "--path", "", "--yes"], cwd=repo)
+check("empty token project rejected without settings changes", rc == 2 and not (repo / ".claude").exists(), out)
 rc, out = run(["tokens", "meter", "--path", str(repo), "--plain"])
 check("meter plain output is one line", rc == 0 and len(out.strip().splitlines()) == 1 and "unmeasured" in out, out)
 settings_dir = repo / ".claude"

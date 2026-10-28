@@ -92,6 +92,17 @@ def test_profile_write_failure_is_an_actionable_cli_error(monkeypatch, tmp_path)
     assert "error:" in result.output and "access denied" in result.output
 
 
+@pytest.mark.parametrize("args", [["meter"], ["profile", "core"], ["audit"]])
+@pytest.mark.parametrize("option", ["--path", "--project"])
+def test_empty_token_project_is_rejected_before_any_action(args, option, monkeypatch, tmp_path):
+    from aletheore.tokens_cli import tokens_app
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(tokens_app, [*args, option, "", "--yes"])
+    assert result.exit_code == 2
+    assert "project path must not be empty" in result.output
+    assert not list(tmp_path.iterdir())
+
+
 def test_profile_rejects_directory_junctions(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "is_junction", lambda path: path.name == ".claude", raising=False)
     with pytest.raises(tp.ProfileError, match="linked settings"):
