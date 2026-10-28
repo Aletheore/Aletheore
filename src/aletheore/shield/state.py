@@ -55,3 +55,17 @@ def session_state_path(repo: Path, session_id: str) -> Path | None:
     if not _SESSION_ID.fullmatch(session_id) or session_id.endswith("."):
         return None
     return shield_dir(repo) / "sessions" / f"{session_id}.json"
+
+
+_BASE_EVIDENCE_SUFFIX = ".base-air"
+
+
+def session_base_evidence_path(repo: Path, session_id: str) -> Path | None:
+    """Path of the session's saved copy of the evidence taken at its start, or None for an unusable session id.
+
+    Uses the same id rules as `session_state_path`, and refuses an id ending in the suffix itself so this file can
+    never be the state file of another session ("x.base-air" would map to the same name as the base of "x").
+    """
+    if session_state_path(repo, session_id) is None or session_id.endswith(_BASE_EVIDENCE_SUFFIX):
+        return None
+    return shield_dir(repo) / "sessions" / f"{session_id}{_BASE_EVIDENCE_SUFFIX}.json"

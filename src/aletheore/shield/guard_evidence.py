@@ -1,0 +1,338 @@
+"""Shield guard checks that read the scan evidence: what a change reaches, which signatures moved, which risks are new.
+
+Hard rules, from the hook-contract spike (a full re-parse takes 2.5 s on a 976-file repo, 9 s on 8k files, and a hook
+has 2 s):
+
+- Nothing here ever re-scans inline. Checks read `.aletheore/air.json` as it is on disk.
+- When that evidence is older than a changed file, the checks that would be wrong on stale data (dependents,
+  signatures, new risks) are skipped and say so in `not_checked`; a stale graph never produces a "no dependents".
+  A detached refresh is started instead (`start_background_refresh`), at most once a minute.
+- Messages state facts with counts and names and give no advice. Signature findings are file-level: they name the
+  files that import the module, never claim anything about call sites.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess  # nosec B404 - starts this package's own refresh module with a fixed argument list, no shell
+import sys
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path, PurePosixPath
+
+from aletheore import dependents, evidence_diff
+from aletheore import evidence as evidence_io
+from aletheore.scope_filter import is_test_path
+from aletheore.shield import state
+from aletheore.signature_diff import find_changed_signatures
+from aletheore.tests_for import candidate_tests
+
+REFRESH_MIN_INTERVAL_S = 60.0
+_MARKER_NAME = "refresh.marker"
+_LIST_CAP = 5
+_SIGNATURE_FINDINGS_CAP = 5
+_EVIDENCE_REL = Path(".aletheore") / "air.json"
+
+
+@dataclass(frozen=True)
+class Finding:
+    check: str  # "dependencies" | "affected" | "signatures" | "risks"
+    severity: str  # "warn" | "info"
+    message: str
+    evidence: str
+
+
+def _cap(items: list[str], limit: int = _LIST_CAP) -> str:
+    shown = ", ".join(items[:limit])
+    return f"{shown} and {len(items) - limit} more" if len(items) > limit else shown
+
+
+# --------------------------------------------------------------------------------------------------
+# Background refresh
+# --------------------------------------------------------------------------------------------------
+
+
+def _mtime(path: Path) -> float | None:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def start_background_refresh(repo: Path, changed: list[str] | None = None) -> bool:
+    """Start a detached re-scan of `repo`; True only when a process was started.
+
+    Does nothing when the repo has no evidence yet (the first scan is the user's to run; this never creates
+    `.aletheore/`), when the evidence file is already newer than every changed file given, or when a refresh was
+    started within the last 60 seconds (a marker file in Shield's state directory), so a burst of edits cannot
+    spawn a burst of scans.
+    """
+    repo = Path(repo)
+    evidence_file = repo / _EVIDENCE_REL
+    evidence_time = _mtime(evidence_file)
+    if evidence_time is None:
+        return False
+    if changed:
+        edit_times = [t for t in (_mtime(repo / rel) for rel in changed) if t is not None]
+        if edit_times and evidence_time >= max(edit_times):
+            return False
+    marker = state.shield_dir(repo) / _MARKER_NAME
+    last = _mtime(marker)
+    if last is not None and 0 <= time.time() - last < REFRESH_MIN_INTERVAL_S:
+        return False
+    try:
+        state.shield_dir(repo, create=True)
+        marker.write_text(str(os.getpid()), encoding="utf-8")
+        os.utime(marker)
+    except OSError:
+        return False  # without the marker the storm guard cannot work, so start nothing
+    options: dict = {"start_new_session": True}
+    if os.name == "nt":
+        options = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
+    try:
+        subprocess.Popen(  # noqa: S603  # nosec B603 - fixed argv, our own module, no shell
+            [sys.executable, "-m", "aletheore.shield.refresh", str(repo)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **options,
+        )
+    except OSError:
+        return False
+    return True
+
+
+# --------------------------------------------------------------------------------------------------
+# Base evidence: the scan as it was when the session started
+# --------------------------------------------------------------------------------------------------
+
+
+def save_base_evidence(repo: Path, session_id: str) -> Path | None:
+    """Copy `.aletheore/air.json` to the session's base-evidence file, once; later calls keep the first copy.
+    None when the session id is unusable, there is no evidence to copy, or the copy failed."""
+    destination = state.session_base_evidence_path(repo, session_id)
+    source = Path(repo) / _EVIDENCE_REL
+    if destination is None or not source.is_file():
+        return None
+    if destination.exists():
+        return destination
+    temporary = destination.with_name(destination.name + f".{os.getpid()}.tmp")
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, temporary)
+        os.replace(temporary, destination)
+    except OSError:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        return None
+    return destination
+
+
+def load_base_evidence(repo: Path, session_id: str) -> dict | None:
+    """The session's saved base evidence, or None when it is missing, unreadable or not valid evidence."""
+    path = state.session_base_evidence_path(repo, session_id)
+    if path is None or not path.is_file():
+        return None
+    try:
+        return evidence_io.load_evidence_file(path)
+    except Exception:  # noqa: BLE001  # corrupt, truncated or incompatible: all mean "no base"
+        return None
+
+
+# --------------------------------------------------------------------------------------------------
+# Checks
+# --------------------------------------------------------------------------------------------------
+
+
+def _relevant_changed(repo: Path, changed: list[str], known: set[str]) -> list[str]:
+    """Changed files the scan would have looked at: modules it knows, or paths of a language it parses."""
+    from aletheore.scanner.detect import IGNORED_DIRS
+    from aletheore.scanner.graph import LANGUAGE_BY_EXTENSION
+
+    relevant = []
+    for rel in changed:
+        path = PurePosixPath(rel)
+        if rel in known or (path.suffix in LANGUAGE_BY_EXTENSION and not set(path.parts) & set(IGNORED_DIRS)):
+            if (Path(repo) / rel).exists():
+                relevant.append(rel)
+    return relevant
+
+
+def _files_newer_than(repo: Path, files: list[str], scanned_at: object) -> list[str] | None:
+    """Files modified after the scan; None when the scan time is unreadable."""
+    try:
+        scan_time = datetime.fromisoformat(str(scanned_at)).timestamp()
+    except ValueError:
+        return None
+    newer = []
+    for rel in files:
+        modified = _mtime(Path(repo) / rel)
+        if modified is not None and modified > scan_time:
+            newer.append(rel)
+    return newer
+
+
+def _has_pytest_config(repo: Path) -> bool:
+    def text(name: str) -> str:
+        try:
+            return (Path(repo) / name).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+
+    return (
+        "[tool.pytest" in text("pyproject.toml")
+        or (Path(repo) / "pytest.ini").is_file()
+        or "[pytest]" in text("tox.ini")
+        or "[tool:pytest]" in text("setup.cfg")
+    )
+
+
+def _affected_finding(repo: Path, head: dict, targets: list[str]) -> Finding | None:
+    reached, direct = dependents.dependents_of(head, set(targets))
+    reached = [p for p in reached if not is_test_path(p)]
+    direct_count = len([p for p in direct if not is_test_path(p)])
+    high: set[str] = set()
+    low: set[str] = set()
+    for target in targets:
+        h, lo = candidate_tests(head, target)
+        high.update(h)
+        low.update(lo)
+    high_list = sorted(high)
+    low_list = sorted(low - high)
+    if not reached and not high_list and not low_list:
+        return None
+
+    subject = targets[0] if len(targets) == 1 else f"{len(targets)} changed files"
+    verb = "is" if len(targets) == 1 else "are"
+    sentences = []
+    if reached:
+        sentences.append(
+            f"{subject} {verb} imported by {len(reached)} file(s) ({direct_count} directly): {_cap(reached)}."
+        )
+    if high_list:
+        text = f"Test files that import it or are named for it: {_cap(high_list)}."
+        python_tests = [p for p in high_list if p.endswith(".py")]
+        if python_tests and _has_pytest_config(repo):
+            command = "pytest " + " ".join(python_tests[:_LIST_CAP])
+            if len(python_tests) > _LIST_CAP:
+                command += f" (and {len(python_tests) - _LIST_CAP} more test files)"
+            text += f" Command: {command}."
+        sentences.append(text)
+    if low_list:
+        sentences.append(f"{len(low_list)} more test file(s) reach it only through other imports.")
+    return Finding("affected", "info", " ".join(sentences), "import graph in .aletheore/air.json")
+
+
+def _signature_findings(base: dict, head: dict, changed: set[str]) -> list[Finding]:
+    by_path = {m["path"]: m for m in head["repository"]["modules"] if m.get("path")}
+    moved = [c for c in find_changed_signatures(base, head) if c["file"] in changed]
+    findings = []
+    for change in moved[:_SIGNATURE_FINDINGS_CAP]:
+        importers = sorted(p for p in (by_path.get(change["file"], {}).get("imported_by") or []) if p != change["file"])
+        who = f"file-level: each of {len(importers)} file(s) imports the module {change['file']}: {_cap(importers)}" if importers else (
+            "no file in the scan imports the module"
+        )
+        findings.append(
+            Finding(
+                "signatures",
+                "warn",
+                f"{change['function']} in {change['file']} changed parameters from {change['old_params']} to "
+                f"{change['new_params']}; {who}.",
+                "function parameters in session-start vs current .aletheore/air.json",
+            )
+        )
+    if len(moved) > _SIGNATURE_FINDINGS_CAP:
+        rest = moved[_SIGNATURE_FINDINGS_CAP:]
+        findings.append(
+            Finding(
+                "signatures",
+                "warn",
+                f"{len(rest)} more changed function signature(s): "
+                + _cap([f"{c['function']} in {c['file']}" for c in rest]) + ".",
+                "function parameters in session-start vs current .aletheore/air.json",
+            )
+        )
+    return findings
+
+
+def _cycle_text(cycle: list[str]) -> str:
+    if not cycle:
+        return "?"
+    closed = cycle if cycle[0] == cycle[-1] else [*cycle, cycle[0]]
+    return " -> ".join(closed)
+
+
+def _risk_findings(base: dict, head: dict) -> list[Finding]:
+    risks = evidence_diff.new_risks(base, head)
+    source = "session-start vs current .aletheore/air.json"
+    findings = []
+    if risks["secrets"]:
+        names = [f"{s.get('path')}:{s.get('line')} ({s.get('pattern')})" for s in risks["secrets"]]
+        findings.append(Finding("risks", "warn", f"{len(names)} new secret finding(s): {_cap(names)}.", source))
+    if risks["vulnerabilities"]:
+        names = [f"{v.get('package')} {v.get('advisory_id')}" for v in risks["vulnerabilities"]]
+        findings.append(
+            Finding("risks", "warn", f"{len(names)} new dependency vulnerability finding(s): {_cap(names)}.", source)
+        )
+    if risks["layer_violations"]:
+        names = [f"{v.get('from')} -> {v.get('to')}" for v in risks["layer_violations"]]
+        findings.append(Finding("risks", "warn", f"{len(names)} new layer violation(s): {_cap(names)}.", source))
+    if risks["cycles"]:
+        names = [_cycle_text(c.get("example_cycle") or c.get("members") or []) for c in risks["cycles"]]
+        findings.append(Finding("risks", "warn", f"{len(names)} new import cycle(s): {_cap(names, 3)}.", source))
+    return findings
+
+
+def evidence_checks(
+    repo: Path, changed: list[str], base_evidence: dict | None
+) -> tuple[list[Finding], list[str]]:
+    """(findings, not_checked reasons) for `changed` (repo-relative posix paths) from the evidence on disk.
+
+    Never re-scans inline. When the evidence predates a changed file the stale-sensitive checks are skipped, a
+    detached refresh is requested, and the reason says so.
+    """
+    repo = Path(repo)
+    try:
+        head = evidence_io.load_evidence(repo)
+    except FileNotFoundError:
+        return [], ["no scan evidence (.aletheore/air.json); run aletheore scan to enable dependents, signature and risk checks"]
+    except Exception as exc:  # noqa: BLE001
+        return [], [f"scan evidence could not be read ({type(exc).__name__}); run aletheore scan"]
+
+    try:
+        known = {m["path"] for m in head["repository"]["modules"] if m.get("path")}
+    except (KeyError, TypeError):
+        return [], ["scan evidence has an unexpected shape; run aletheore scan"]
+
+    newer = _files_newer_than(repo, _relevant_changed(repo, changed, known), head.get("scanned_at"))
+    if newer is None:
+        return [], ["scan evidence has no readable scan time, so its age cannot be checked; run aletheore scan"]
+    if newer:
+        started = start_background_refresh(repo, newer)
+        followup = "a refresh was started" if started else "run aletheore scan"
+        return [], [
+            f"evidence is older than {len(newer)} changed file(s); dependents, signature and new-risk checks "
+            f"skipped ({followup})"
+        ]
+
+    findings: list[Finding] = []
+    not_checked: list[str] = []
+    targets = sorted({c for c in changed if c in known})
+    try:
+        if targets:
+            affected = _affected_finding(repo, head, targets)
+            if affected:
+                findings.append(affected)
+        if base_evidence is None:
+            not_checked.append("no base evidence was saved for this session, so signature and new-risk checks were skipped")
+        else:
+            findings.extend(_signature_findings(base_evidence, head, set(changed)))
+            findings.extend(_risk_findings(base_evidence, head))
+    except (KeyError, TypeError, ValueError) as exc:
+        not_checked.append(f"evidence checks stopped on unexpected evidence shape ({type(exc).__name__})")
+    return findings, not_checked
