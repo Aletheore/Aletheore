@@ -39,6 +39,9 @@ def _clean(text: str, limit: int | None = None) -> str:
     return text
 
 
+clean_text = _clean  # public name for other Shield modules that write untrusted text
+
+
 @dataclass(frozen=True)
 class GuardReport:
     findings: tuple[Finding, ...]
