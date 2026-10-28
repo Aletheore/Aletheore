@@ -78,3 +78,15 @@ download checksum in this Dockerfile to contain exactly 64 hexadecimal character
 Windows CI caught newline translation in the new rollback fingerprint check. The atomic JSON writer
 now explicitly writes LF on every OS, matching the serialized ownership fingerprint. Added an
 exact-byte serialization regression; rollback still preserves a concurrently changed record.
+
+## Further review on 65d3885b
+
+- Thread 40 (`mcp_server.py`, unnecessary fallback cost): the fallback is inside the `_budget`
+  overview gate and only runs if the original measurement is absent. Added a real-budget regression
+  proving an untrimmed result serializes exactly once.
+- Thread 41 (`mcp_server.py`, fallback exception): put the fallback measurement inside best-effort
+  error handling. An injected serialization failure still returns the already encoded bounded
+  response and emits a debug diagnostic.
+- Thread 42 (`Dockerfile.scan-worker`, checksum length): false positive. The corrected digest has
+  **64** characters, as verified by the regression, downloaded artifact, and Maven Central. The
+  previous value had **65**, not 64. Do not restore it.

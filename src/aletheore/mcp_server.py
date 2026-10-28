@@ -353,18 +353,18 @@ def _metered_budget(repo_path: Path, data: object, *, record: bool = True, **opt
         size_of(bounded)
     if record and isinstance(bounded, dict) and isinstance(bounded.get("_budget"), dict):
         delivered_chars = len(last_text)
-        # Current apply_budget measures the original overview by identity. Keep
-        # recording correct if a future implementation measures a copied input.
-        if original_chars is None:
-            original_chars = len(_toon_result(data))
-        if delivered_chars < original_chars:
-            try:
+        try:
+            # Current apply_budget measures the original overview by identity.
+            # Keep recording correct if a future implementation measures a copy.
+            if original_chars is None:
+                original_chars = len(_toon_result(data))
+            if delivered_chars < original_chars:
                 from aletheore.token_meter import record_mcp_trim
 
                 record_mcp_trim(repo_path, original_chars, delivered_chars)
-            except Exception:
-                # Bookkeeping must never affect a protocol response.
-                logging.getLogger(__name__).debug("token meter event recording failed", exc_info=True)
+        except Exception:
+            # Even a fallback measurement must not affect a protocol response.
+            logging.getLogger(__name__).debug("token meter event recording failed", exc_info=True)
     return last_text
 
 

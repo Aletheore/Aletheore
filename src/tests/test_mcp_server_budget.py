@@ -243,3 +243,35 @@ def test_meter_serializes_returned_result_even_after_intermediate_measurements(t
     monkeypatch.setattr(token_meter, 'record_mcp_trim', lambda *args: recorded.append(args))
     assert mcp_server._metered_budget(tmp_path, original) == mcp_server._toon_result(bounded)
     assert recorded[0][1:] == (len(mcp_server._toon_result(original)), len(mcp_server._toon_result(bounded)))
+
+
+def test_untrimmed_result_serializes_only_once(tmp_path, monkeypatch):
+    from aletheore import mcp_server
+    calls = []
+    encode = mcp_server._toon_result
+    original = {'items': ['small']}
+    def serializer(value):
+        calls.append(value)
+        return encode(value)
+    monkeypatch.setattr(mcp_server, '_toon_result', serializer)
+    assert mcp_server._metered_budget(tmp_path, original, budget_chars=10000) == encode(original)
+    assert calls == [original]
+
+
+def test_fallback_measurement_failure_cannot_break_response(tmp_path, monkeypatch, caplog):
+    from aletheore import mcp_server
+    original = {'items': ['x' * 200] * 100}
+    bounded = {'items': ['x'], '_budget': {'trimmed': True}}
+    encode = mcp_server._toon_result
+    def serializer(value):
+        if value is original:
+            raise ValueError('controlled fallback failure')
+        return encode(value)
+    def budget(value, *, size_of, **kwargs):
+        size_of(bounded)
+        return bounded
+    monkeypatch.setattr(mcp_server, '_toon_result', serializer)
+    monkeypatch.setattr(mcp_server, 'apply_budget', budget)
+    with caplog.at_level('DEBUG', logger='aletheore.mcp_server'):
+        assert mcp_server._metered_budget(tmp_path, original) == encode(bounded)
+    assert 'token meter event recording failed' in caplog.text
