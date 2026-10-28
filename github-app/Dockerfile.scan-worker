@@ -82,8 +82,10 @@ RUN curl -sfL -o /tmp/gosec.tar.gz \
     && ln -s /opt/pmd-bin-7.28.0/bin/pmd /usr/local/bin/pmd \
     && curl -fsSL -o /opt/pmd-bin-7.28.0/lib/guava-33.7.2-jre.jar \
       https://repo.maven.apache.org/maven2/com/google/guava/guava/33.7.2-jre/guava-33.7.2-jre.jar \
-    && echo "b530942257fb935f8b2cfaa5f8eb5bd59c555fd8e8d01b8ce98912e077ea606c2  /opt/pmd-bin-7.28.0/lib/guava-33.7.2-jre.jar" | sha256sum -c - \
-    && rm /opt/pmd-bin-7.28.0/lib/guava-33.7.1-jre.jar
+    && echo "b530942257fb935f8b2cfaa5f8eb5bd59c555fd8e8d01b8ce98912e077ea606c  /opt/pmd-bin-7.28.0/lib/guava-33.7.2-jre.jar" | sha256sum -c - \
+    && rm /opt/pmd-bin-7.28.0/lib/guava-33.7.1-jre.jar \
+    && pmd --version \
+    && trivy --version
 # PMD still bundles Guava 33.7.1; replace it with 33.7.2 to fix
 # CVE-2026-102554 until PMD ships a patched distribution.
 # PMD 7.28.0 bumps its bundled jsoup to 1.23.2, closing CVE-2026-75140

@@ -205,3 +205,15 @@ def test_failed_install_does_not_delete_concurrently_changed_sidecar(tmp_path, m
     with pytest.raises(PermissionError):
         install(tmp_path)
     assert json.loads(sidecar.read_text()) == {'other': True}
+
+
+def test_partial_sidecar_write_never_reaches_destination(tmp_path, monkeypatch):
+    from aletheore import read_guard_setup as setup
+    def fail_mid_write(data, stream, **kwargs):
+        stream.write('{"partial":')
+        raise OSError('disk full')
+    monkeypatch.setattr(setup.json, 'dump', fail_mid_write)
+    with pytest.raises(OSError, match='disk full'):
+        install(tmp_path)
+    assert not (tmp_path / '.claude' / setup.SIDECAR_NAME).exists()
+    assert not list((tmp_path / '.claude').glob('*.tmp'))

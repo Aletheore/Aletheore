@@ -353,7 +353,11 @@ def _metered_budget(repo_path: Path, data: object, *, record: bool = True, **opt
         size_of(bounded)
     if record and isinstance(bounded, dict) and isinstance(bounded.get("_budget"), dict):
         delivered_chars = len(last_text)
-        if original_chars is not None and delivered_chars < original_chars:
+        # Current apply_budget measures the original overview by identity. Keep
+        # recording correct if a future implementation measures a copied input.
+        if original_chars is None:
+            original_chars = len(_toon_result(data))
+        if delivered_chars < original_chars:
             try:
                 from aletheore.token_meter import record_mcp_trim
 

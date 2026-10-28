@@ -44,3 +44,33 @@ The scan-worker image gate reported CVE-2026-102554 in PMD's Guava 33.7.1 and CV
 Trivy's go-jose 4.1.5. PMD 7.28.0 and Trivy 0.76.1 remain the latest upstream releases. Replace
 Guava with checksum-verified 33.7.2 and rebuild the pinned Trivy release source with go-jose 4.1.6.
 The HIGH/CRITICAL security gate is unchanged.
+
+## Follow-up review on b3e173aa
+
+- [Thread 33](https://github.com/Aletheore/Aletheore/pull/1158#discussion_r4401134018): Strict
+  bare-field/value matching is intentional. Added an AST audit of every production CLI markup call
+  proving that no caller relies on unused values.
+- [Thread 34](https://github.com/Aletheore/Aletheore/pull/1158#discussion_r4401134305): No partial
+  destination is possible: \_write_json writes a unique temporary file, fsyncs, and atomically
+  replaces the destination. Added a mid-write disk-full regression proving no sidecar/temp survives.
+  Changed ownership content must be preserved.
+- [Thread 35](https://github.com/Aletheore/Aletheore/pull/1158#discussion_r4401134589): Verified all
+  three callers: plan_install/remove propagate the documented setup error; tokens meter catches it.
+  is_installed propagates filesystem inspection failure to the same CLI handler instead of falsely
+  reporting an active hook.
+- [Thread 36](https://github.com/Aletheore/Aletheore/pull/1158#discussion_r4401134904): The exact
+  pinned Trivy build completed successfully in CI with -mod=readonly (job122844660429); no tidy or
+  unrelated dependency updates are needed.
+- [Thread 37](https://github.com/Aletheore/Aletheore/pull/1158#discussion_r4401135250): Added pmd
+  --version and trivy --version checks to the image build; also validating actual PMD rule execution
+  in the resulting image.
+- [Thread 38](https://github.com/Aletheore/Aletheore/pull/1158#discussion_r4401135552): Added a
+  fallback original measurement if a future apply_budget implementation measures a copy, and a
+  regression exercising that scenario.
+- [Thread 39](https://github.com/Aletheore/Aletheore/pull/1158#discussion_r4401135849): The final
+  identity check already handles the described ordering. Added a regression that measures bounded,
+  then an unrelated candidate, then returns bounded; the response remains the bounded result.
+
+The first rebuild also caught a checksum transcription error. Recomputed Guava's SHA-256 from the
+downloaded JAR, matched Maven Central's published digest, and added a regression requiring every
+download checksum in this Dockerfile to contain exactly 64 hexadecimal characters.

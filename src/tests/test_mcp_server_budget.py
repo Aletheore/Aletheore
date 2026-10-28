@@ -222,3 +222,24 @@ def test_meter_reuses_original_and_final_budget_serializations(tmp_path, monkeyp
     assert mcp_server._metered_budget(tmp_path, original) == encode(bounded)
     assert len(seen) == 2
     assert seen[0] is original and seen[1] is bounded
+
+
+@pytest.mark.parametrize('measure_original', [False, True])
+def test_meter_serializes_returned_result_even_after_intermediate_measurements(tmp_path, monkeypatch, measure_original):
+    from aletheore import mcp_server
+    original = {'items': ['x' * 200] * 100}
+    bounded = {'items': ['x'], '_budget': {'trimmed': True}}
+    def budget(value, *, size_of, **options):
+        if measure_original:
+            size_of(value)
+        else:
+            size_of(dict(value))
+        size_of(bounded)
+        size_of({'intermediate': 'must never be returned'})
+        return bounded
+    monkeypatch.setattr(mcp_server, 'apply_budget', budget)
+    recorded = []
+    from aletheore import token_meter
+    monkeypatch.setattr(token_meter, 'record_mcp_trim', lambda *args: recorded.append(args))
+    assert mcp_server._metered_budget(tmp_path, original) == mcp_server._toon_result(bounded)
+    assert recorded[0][1:] == (len(mcp_server._toon_result(original)), len(mcp_server._toon_result(bounded)))

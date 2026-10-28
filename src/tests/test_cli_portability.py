@@ -419,3 +419,21 @@ def test_protocol_reader_surfaces_worker_errors_without_timeout():
     with pytest.raises(RuntimeError, match='protocol read failed') as failure:
         namespace['protocol_line'](process, timeout=0.5)
     assert isinstance(failure.value.__cause__, OSError)
+
+
+def test_all_cli_markup_calls_match_the_strict_placeholder_contract():
+    tree = ast.parse(Path(cli.__file__).read_text(encoding='utf-8'))
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Name) and n.func.id == '_markup']
+    assert len(calls) >= 100
+    for call in calls:
+        assert isinstance(call.args[0], ast.Constant), call.lineno
+        assert call.args[0].value.count('{}') == len(call.args) - 1, call.lineno
+
+
+def test_scan_worker_download_checksums_are_sha256_digests():
+    import re
+    dockerfile = Path(__file__).parents[2] / 'github-app' / 'Dockerfile.scan-worker'
+    digests = re.findall(r'echo "([a-f0-9]+)  ', dockerfile.read_text(encoding='utf-8'))
+    assert len(digests) == 4
+    assert all(len(value) == 64 for value in digests)
