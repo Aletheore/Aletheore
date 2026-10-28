@@ -50,7 +50,9 @@ def test_default_meter_uses_the_package_style_and_explains_empty_state(tmp_path:
     assert "Evidence-grounded code intelligence" in result.output
     assert "No savings recorded yet" in result.output
     assert result.output.count("read savings unmeasured") == 1
-    assert "settings.local.json" in result.output
+    # Rich may fold the filename when the platform's temporary path nearly
+    # fills a line (Linux and Windows have different prefix lengths).
+    assert "settings.local.json" in result.output.replace("\n", "")
     assert ".----." not in result.output
     assert "| o  o |" not in result.output
     assert (
