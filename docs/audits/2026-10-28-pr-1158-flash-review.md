@@ -74,3 +74,7 @@ The HIGH/CRITICAL security gate is unchanged.
 The first rebuild also caught a checksum transcription error. Recomputed Guava's SHA-256 from the
 downloaded JAR, matched Maven Central's published digest, and added a regression requiring every
 download checksum in this Dockerfile to contain exactly 64 hexadecimal characters.
+
+Windows CI caught newline translation in the new rollback fingerprint check. The atomic JSON writer
+now explicitly writes LF on every OS, matching the serialized ownership fingerprint. Added an
+exact-byte serialization regression; rollback still preserves a concurrently changed record.

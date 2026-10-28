@@ -76,7 +76,7 @@ def _write_json(
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        with temp.open("x", encoding="utf-8") as stream:
+        with temp.open("x", encoding="utf-8", newline="\n") as stream:
             set_replacement_mode(path, stream.fileno())
             json.dump(data, stream, indent=2)
             stream.write("\n")

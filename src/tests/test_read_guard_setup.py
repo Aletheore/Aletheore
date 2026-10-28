@@ -217,3 +217,9 @@ def test_partial_sidecar_write_never_reaches_destination(tmp_path, monkeypatch):
         install(tmp_path)
     assert not (tmp_path / '.claude' / setup.SIDECAR_NAME).exists()
     assert not list((tmp_path / '.claude').glob('*.tmp'))
+
+
+def test_sidecar_serialization_has_stable_newlines_on_every_os(tmp_path):
+    plan = install(tmp_path)
+    expected = (json.dumps(plan.sidecar_after, indent=2) + '\n').encode('utf-8')
+    assert plan.sidecar_path.read_bytes() == expected
