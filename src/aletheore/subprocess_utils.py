@@ -64,7 +64,9 @@ def _java_scanner_argv(shim: Path, args: tuple[str, ...], cwd: Path | None) -> l
     if not java or Path(java).suffix.lower() in (".bat", ".cmd"):
         raise FileNotFoundError("a native Java executable is required to run this scanner")
     if shim.stem.lower() == "pmd":
-        classpath = ";".join(filter(None, [os.environ.get("CLASSPATH"), str(home / "conf"), str(home / "lib" / "*")]))
+        # This integration selects bundled rules only. A global CLASSPATH
+        # (especially '.') must not load classes from the scanned repository.
+        classpath = f"{home / 'conf'};{home / 'lib' / '*'}"
         return [os.path.abspath(java), "-cp", classpath, spec[1], *args]
     return [os.path.abspath(java), "-Djava.awt.headless=true", "-Djdk.http.auth.tunneling.disabledSchemes=",
             "-cp", str(home / "lib" / "*"), f"-Dscanner.home={home}",

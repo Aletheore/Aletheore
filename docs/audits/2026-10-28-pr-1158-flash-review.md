@@ -107,3 +107,14 @@ literally. Standard npm launchers start Node directly. Unsupported batch wrapper
 scanner error instead of passing arguments through cmd.exe. Java VM overrides use JAVA_TOOL_OPTIONS;
 shell-specific launcher option strings are rejected with that migration instruction. Added coverage
 for all seven scanner error paths and both standard Java distribution layouts.
+
+## Scanner-launcher follow-up review
+
+- PMD's allegedly uncaught OSError is already caught immediately below the call; the seven-scanner
+  regression also exercises PMD's exact error path.
+- Gosec custom batch wrappers are intentionally refused with `checked: false` and an explicit
+  reason; standard native Windows gosec executables remain supported.
+- Upstream PMD does prepend CLASSPATH, contrary to the review's premise. For this integration's
+  fixed built-in rules, isolate the classpath to the installed PMD conf/lib directories. This also
+  prevents global `.` or quoted/stale JAR entries from loading classes from a scanned repository.
+  Added a global-classpath regression.

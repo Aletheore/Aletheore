@@ -493,3 +493,19 @@ def test_standard_windows_java_scanners_bypass_batch_shell(tmp_path, monkeypatch
         assert str(home / 'conf') in argv[2]
     else:
         assert f'-Dproject.home={tmp_path.resolve()}' in argv
+
+
+def test_windows_pmd_ignores_global_classpath(tmp_path, monkeypatch):
+    home = tmp_path / 'pmd'
+    (home / 'bin').mkdir(parents=True)
+    (home / 'lib').mkdir()
+    (home / 'lib' / 'pmd-cli-7.28.0.jar').touch()
+    shim = home / 'bin' / 'pmd.bat'
+    shim.touch()
+    monkeypatch.setenv('CLASSPATH', '.;"C:\\unrelated jars\\old-pmd.jar"')
+    monkeypatch.delenv('PMD_JAVA_OPTS', raising=False)
+    monkeypatch.setattr(subprocess_utils.sys, 'platform', 'win32')
+    monkeypatch.setattr(subprocess_utils.shutil, 'which', lambda _: str(tmp_path / 'java.exe'))
+    argv = subprocess_utils.command_argv(str(shim), 'check', cwd=tmp_path)
+    assert argv[2] == f"{home / 'conf'};{home / 'lib' / '*'}"
+    assert 'old-pmd.jar' not in argv[2]
