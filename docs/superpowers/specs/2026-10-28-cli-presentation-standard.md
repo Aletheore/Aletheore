@@ -8,6 +8,8 @@ Owner direction: carry Aletheore's design through every command and make command
 
 The root `AletheoreGroup` applies the heading to interactive CLI invocations, including nested commands and help. The heading goes to stderr so JSON, source text, and copyable snippets on stdout retain their output contracts. The meter detects an existing heading instead of rendering it twice. Noninteractive command output and the meter's `--plain` mode retain their existing formats. MCP and event-consuming hooks remain undecorated during execution; their help screens use the shared design.
 
+Interpolated values in Rich markup are escaped so repository paths, user input, server messages, and errors cannot become formatting tags or trigger markup tracebacks. Literal output remains literal, including square brackets in file names.
+
 ## Menu access
 
 All registered root commands appear under All commands. Command groups discover their children from the same Click tree used by the CLI. Required values are prompted and passed as argument strings without invoking a shell. Navigation commands run after collecting their required inputs. Hook event consumers display usage rather than waiting for JSON on the menu's keyboard input. MCP configuration remains available through Connect your coding agent.

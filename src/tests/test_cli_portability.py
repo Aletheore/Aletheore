@@ -186,6 +186,30 @@ def test_menu_positional_input_cannot_become_an_option():
     assert cli._command_args("locate", ["--help"]) == ["locate", "--", "--help"]
 
 
+@pytest.mark.parametrize("args,code", [
+    (["query", "[/]"], 1),
+    (["config", "crash-reporting", "[/]"], 1),
+    (["hook", "evidence-snippet", "--mode", "[/]"], 2),
+    (["mcp", "--profile", "[/]"], 2),
+    (["audit", "--agent", "[/]"], 2),
+])
+def test_user_input_is_not_interpreted_as_rich_markup(args, code):
+    result = CliRunner().invoke(cli.app, args)
+    assert result.exit_code == code
+    assert isinstance(result.exception, SystemExit)
+    assert "[/]" in result.output
+
+
+def test_existing_config_path_with_brackets_is_printed_literally(tmp_path):
+    project = tmp_path / "[/]"
+    project.mkdir(parents=True)
+    (project / ".aletheore.json").write_text("{}", encoding="utf-8")
+    result = CliRunner().invoke(cli.app, ["init", str(project), "--yes"])
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert str(project) in result.output.replace("\n", "")
+
+
 def test_menu_cli_returns_usage_failure_and_command_exit_codes(tmp_path):
     assert cli._run_cli(["tokens", "profile"]) == 2
     assert cli._run_cli(["tokens", "profile", "invalid", "--path", str(tmp_path)]) == 1
@@ -305,3 +329,24 @@ def test_text_subprocesses_never_depend_on_the_host_locale():
             text = keywords.get("text")
             if isinstance(text, ast.Constant) and text.value is True:
                 assert "encoding" in keywords, f"{path}:{call.lineno} uses the host locale"
+
+
+def test_cli_markup_interpolations_are_explicitly_escaped():
+    tree = ast.parse(Path(cli.__file__).read_text(encoding="utf-8"))
+    for call in ast.walk(tree):
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "print" and isinstance(call.func.value, ast.Name)
+                and call.func.value.id in ("console", "_stderr_console")
+                and call.args and isinstance(call.args[0], ast.JoinedStr)):
+            continue
+        if any(kw.arg == "markup" and isinstance(kw.value, ast.Constant) and kw.value.value is False
+               for kw in call.keywords):
+            continue
+        for value in call.args[0].values:
+            if not isinstance(value, ast.FormattedValue):
+                continue
+            expression = value.value
+            if isinstance(expression, ast.Name) and expression.id == "color":
+                continue  # _print_result's internal style name, never user content
+            assert (isinstance(expression, ast.Call) and isinstance(expression.func, ast.Name)
+                    and expression.func.id in ("escape", "escape_markup")), call.lineno
