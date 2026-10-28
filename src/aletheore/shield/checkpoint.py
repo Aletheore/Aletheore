@@ -5,13 +5,22 @@ temporary index file outside the repository, so the user's index, branches, stas
 working tree are never touched. It holds tracked and untracked files, minus anything git ignores,
 deny-listed secret files, Shield's own .aletheore/ folder, and files over the size caps.
 
+Speed: the temporary index starts as a byte copy of the user's index (read only, mtime preserved), so
+git reuses its stat data and only re-hashes files that changed. If that seeded index cannot produce a
+tree (for example it holds conflict entries), the snapshot is rebuilt once from an empty index.
+
 Each checkpoint commit's parent is the HEAD commit at capture time (none in a repository without
 commits), never the previous checkpoint, so pruning a ref really lets git collect its objects.
+
+Refs are named refs/aletheore/checkpoints/<worktree key>/<UTC timestamp>-<8 hex of commit>, so one
+worktree's newest checkpoint is found without reading any other worktree's commits.
 """
 
 import json
 import os
+import re
 import secrets
+import shutil
 import stat
 import tempfile
 from collections.abc import Iterator
@@ -25,6 +34,7 @@ from aletheore.shield.gitutil import repo_state, run_git
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_TOTAL_BYTES = 100 * 1024 * 1024
+MAX_SKIPPED_STORED = 200
 
 REF_PREFIX = "refs/aletheore/checkpoints/"
 _SUBJECT = "aletheore shield checkpoint"
@@ -32,6 +42,7 @@ _FORMAT_VERSION = 1
 _GITLINK_MODE = "160000"
 _PRIVATE_DIR = ".aletheore/"
 _WRITE_TIMEOUT_S = 60.0
+_SAFE_WORKTREE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _IDENT_ENV = {
     "GIT_AUTHOR_NAME": "Aletheore Shield",
     "GIT_AUTHOR_EMAIL": "shield@aletheore.invalid",
@@ -39,8 +50,8 @@ _IDENT_ENV = {
     "GIT_COMMITTER_EMAIL": "shield@aletheore.invalid",
 }
 # Config that must not leak from the user's setup into our temporary index or our private refs:
-# safecrlf would abort hashing, splitIndex would drop sharedindex files into .git, reflogs and
-# reference-transaction hooks are for the user's refs, not ours.
+# safecrlf would abort hashing, splitIndex would drop sharedindex files into .git, fsmonitor and the
+# untracked cache are for the user's index, reflogs and reference-transaction hooks are for the user's refs.
 _INDEX_CONFIG = (
     "-c",
     "core.safecrlf=false",
@@ -48,6 +59,8 @@ _INDEX_CONFIG = (
     "core.splitIndex=false",
     "-c",
     "core.untrackedCache=false",
+    "-c",
+    "core.fsmonitor=false",
 )
 _REF_CONFIG = ("-c", "core.logAllRefUpdates=false")
 
@@ -64,7 +77,10 @@ class Checkpoint:
     created_at: datetime
     session: str
     files: int
+    # The first MAX_SKIPPED_STORED skipped names; skipped_count is the full number.
     skipped: tuple[str, ...]
+    skipped_count: int = 0
+    skipped_truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -78,6 +94,14 @@ class _Snapshot:
     tree: str
     files: int
     skipped: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _Plan:
+    add: list[str]  # paths hashed from disk into the index
+    drop: list[str]  # tracked paths that must not be in the snapshot
+    links: dict[str, str]  # gitlinks to keep, path -> commit
+    skipped: list[str]
 
 
 @dataclass(frozen=True)
@@ -109,6 +133,10 @@ def _split_z(output: bytes) -> list[bytes]:
     return [item for item in output.split(b"\0") if item]
 
 
+def _paths_input(paths: list[str]) -> bytes:
+    return b"".join(_encode_path(p) + b"\0" for p in paths)
+
+
 def _layout(repo: Path) -> _Layout | None:
     """Top of the working tree, and which worktree this is ("" for the main one)."""
     probe = run_git(
@@ -126,6 +154,17 @@ def _layout(repo: Path) -> _Layout | None:
     return _Layout(top=top, worktree="" if same else git_dir.name)
 
 
+def _worktree_prefix(worktree: str) -> str:
+    """The ref folder for one worktree. Never collides: "main", "wt-<name>" or "wtx-<hex of name>"."""
+    if not worktree:
+        key = "main"
+    elif _SAFE_WORKTREE_NAME.fullmatch(worktree):
+        key = f"wt-{worktree}"
+    else:
+        key = "wtx-" + worktree.encode("utf-8", "surrogateescape").hex()
+    return f"{REF_PREFIX}{key}/"
+
+
 @contextmanager
 def _scratch_dir() -> Iterator[Path]:
     """A private directory outside the repository for the temporary index (and an empty hooks path)."""
@@ -138,42 +177,80 @@ def _scratch_dir() -> Iterator[Path]:
 # ---------------------------------------------------------------------------- building a tree
 
 
-def _list_candidates(top: Path) -> tuple[list[str], dict[str, str], list[str]] | None:
-    """Tracked paths, tracked gitlinks (path -> commit) and untracked non-ignored paths, each sorted."""
-    tracked_out = run_git(top, "ls-files", "-s", "-z")
-    untracked_out = run_git(top, "ls-files", "-o", "--exclude-standard", "-z")
+def _list_candidates(
+    top: Path, env: dict[str, str] | None
+) -> tuple[list[str], dict[str, str], list[str], set[str]] | None:
+    """Tracked paths, tracked gitlinks (path -> commit), untracked non-ignored paths (each sorted), and
+    tracked paths flagged assume-unchanged or skip-worktree, whose index entries git will not refresh."""
+    tracked_out = run_git(top, "ls-files", "-s", "-v", "-z", env=env)
+    untracked_out = run_git(top, "ls-files", "-o", "--exclude-standard", "-z", env=env)
     if tracked_out.returncode != 0 or untracked_out.returncode != 0:
         return None
     tracked: set[str] = set()
     gitlinks: dict[str, str] = {}
+    flagged: set[str] = set()
     for record in _split_z(tracked_out.stdout):
         meta, _, raw_path = record.partition(b"\t")
         fields = meta.split(b" ")
-        if not raw_path or len(fields) != 3:
+        if not raw_path or len(fields) != 4:
             continue
+        tag, mode, sha = (f.decode("ascii", "replace") for f in fields[:3])
         path = _decode_path(raw_path)
-        if fields[0].decode("ascii", "replace") == _GITLINK_MODE:
-            gitlinks[path] = fields[1].decode("ascii")
-        else:
-            tracked.add(path)
+        if mode == _GITLINK_MODE:
+            gitlinks[path] = sha
+            continue
+        tracked.add(path)
+        if tag.islower() or tag == "S":
+            flagged.add(path)
     untracked = {_decode_path(raw) for raw in _split_z(untracked_out.stdout)} - tracked
-    return sorted(tracked), gitlinks, sorted(untracked)
+    return sorted(tracked), gitlinks, sorted(untracked), flagged
+
+
+def _under_symlink(top: Path, path: str, cache: dict[str, bool]) -> bool:
+    """True when a parent folder of path is a symbolic link; git refuses paths "beyond a symbolic link"."""
+    prefix = ""
+    for part in path.split("/")[:-1]:
+        prefix = f"{prefix}/{part}" if prefix else part
+        hit = cache.get(prefix)
+        if hit is None:
+            try:
+                hit = stat.S_ISLNK(os.lstat(os.path.join(top, prefix)).st_mode)
+            except OSError:
+                hit = False
+            cache[prefix] = hit
+        if hit:
+            return True
+    return False
+
+
+def _readable(path: str, info: os.stat_result) -> bool:
+    """Cheap readability test: the owner bit for our own files, a real access() call otherwise."""
+    getuid = getattr(os, "getuid", None)
+    if getuid is not None and info.st_uid == getuid():
+        return bool(info.st_mode & stat.S_IRUSR)
+    return os.access(path, os.R_OK)
 
 
 def _select(top: Path, ordered: list[str]) -> tuple[list[str], list[str]]:
     """Choose which paths go into the snapshot. Missing paths are left out silently (absent = deleted)."""
     chosen: list[str] = []
     skipped: list[str] = []
+    links_seen: dict[str, bool] = {}
+    base = os.fspath(top) + os.sep
     total = 0
     for position, path in enumerate(ordered):
         if path.startswith(_PRIVATE_DIR):
             continue
-        if path.endswith("/") or is_denied_path(path):
+        if (
+            path.endswith("/")
+            or is_denied_path(path)
+            or _under_symlink(top, path, links_seen)
+        ):
             # A trailing slash is an untracked nested repository; git cannot hold its files here.
             skipped.append(path)
             continue
         try:
-            info = os.lstat(top / path)
+            info = os.lstat(base + path)
         except (FileNotFoundError, NotADirectoryError):
             continue
         except OSError:
@@ -186,9 +263,7 @@ def _select(top: Path, ordered: list[str]) -> tuple[list[str], list[str]]:
             skipped.append(path)
             continue
         size = info.st_size
-        if not is_link and (
-            size > MAX_FILE_BYTES or not os.access(top / path, os.R_OK)
-        ):
+        if not is_link and (size > MAX_FILE_BYTES or not _readable(base + path, info)):
             skipped.append(path)
             continue
         if total + size > MAX_TOTAL_BYTES:
@@ -201,20 +276,53 @@ def _select(top: Path, ordered: list[str]) -> tuple[list[str], list[str]]:
     return chosen, skipped
 
 
-def _snapshot(top: Path, scratch: Path) -> _Snapshot | None:
-    """Hash the working tree into a temporary index in scratch and return its tree id."""
-    listed = _list_candidates(top)
+def _plan(top: Path, env: dict[str, str] | None) -> _Plan | None:
+    listed = _list_candidates(top, env)
     if listed is None:
         return None
-    tracked, gitlinks, untracked = listed
+    tracked, gitlinks, untracked, flagged = listed
     # Tracked files first: when the total cap is hit, the user's source wins over untracked output.
     chosen, skipped = _select(top, tracked + untracked)
-    links = {
-        path: sha for path, sha in gitlinks.items() if not path.startswith(_PRIVATE_DIR)
-    }
-    env = {"GIT_INDEX_FILE": str(scratch / "index")}
+    keep = set(chosen)
+    links = {p: sha for p, sha in gitlinks.items() if not p.startswith(_PRIVATE_DIR)}
+    drop = [p for p in tracked if p not in keep]
+    drop.extend(p for p in gitlinks if p not in links)
+    # A seeded index would keep stale content for flagged entries; drop them so --add re-hashes from disk.
+    drop.extend(p for p in chosen if p in flagged)
+    return _Plan(add=chosen, drop=sorted(drop), links=links, skipped=skipped)
 
-    if chosen:
+
+def _real_index(top: Path) -> Path | None:
+    """The user's index file for this worktree (linked worktrees have their own)."""
+    found = run_git(top, "rev-parse", "--git-path", "index")
+    if found.returncode != 0:
+        return None
+    path = Path(found.stdout.decode("utf-8", "surrogateescape").rstrip("\n"))
+    if not path.is_absolute():
+        path = top / path
+    return path if path.is_file() else None
+
+
+def _write_tree(top: Path, index: Path, plan: _Plan, seeded: bool) -> str | None:
+    """Fill the index at `index` per plan and return the tree id. A seeded index already holds a copy of
+    the user's entries, so tracked paths that must stay out are removed and gitlinks are already there."""
+    env = {"GIT_INDEX_FILE": str(index)}
+    if seeded:
+        if plan.drop:
+            dropped = run_git(
+                top,
+                *_INDEX_CONFIG,
+                "update-index",
+                "--force-remove",
+                "-z",
+                "--stdin",
+                env=env,
+                input=_paths_input(plan.drop),
+                timeout=_WRITE_TIMEOUT_S,
+            )
+            if dropped.returncode != 0:
+                return None
+    if plan.add:
         added = run_git(
             top,
             *_INDEX_CONFIG,
@@ -224,36 +332,64 @@ def _snapshot(top: Path, scratch: Path) -> _Snapshot | None:
             "-z",
             "--stdin",
             env=env,
-            input=b"".join(_encode_path(p) + b"\0" for p in chosen),
+            input=_paths_input(plan.add),
             timeout=_WRITE_TIMEOUT_S,
         )
         if added.returncode != 0:
             return None
-    if links:
+    if not seeded and plan.links:
         info = b"".join(
             f"{_GITLINK_MODE} {sha}\t".encode("ascii") + _encode_path(path) + b"\0"
-            for path, sha in sorted(links.items())
+            for path, sha in sorted(plan.links.items())
         )
-        if (
-            run_git(
-                top,
-                *_INDEX_CONFIG,
-                "update-index",
-                "-z",
-                "--index-info",
-                env=env,
-                input=info,
-            ).returncode
-            != 0
-        ):
+        linked = run_git(
+            top,
+            *_INDEX_CONFIG,
+            "update-index",
+            "-z",
+            "--index-info",
+            env=env,
+            input=info,
+        )
+        if linked.returncode != 0:
             return None
     written = run_git(
         top, *_INDEX_CONFIG, "write-tree", env=env, timeout=_WRITE_TIMEOUT_S
     )
     tree = written.stdout.decode("ascii", "replace").strip()
-    if written.returncode != 0 or not tree:
+    return tree if written.returncode == 0 and tree else None
+
+
+def _snapshot(top: Path, scratch: Path) -> _Snapshot | None:
+    """Hash the working tree into a temporary index in scratch and return its tree id."""
+    seeded_index = scratch / "seeded-index"
+    seeded = False
+    real = _real_index(top)
+    if real is not None:
+        try:
+            # Read-only copy; copy2 keeps the mtime, which git needs to judge the cached stat data.
+            shutil.copy2(real, seeded_index)
+            seeded = True
+        except OSError:
+            seeded = False
+    # List from the copy, not the live index, so an entry added meanwhile cannot slip past the rules.
+    list_env = {"GIT_INDEX_FILE": str(seeded_index)} if seeded else None
+    plan = _plan(top, list_env)
+    if plan is None and seeded:
+        # git could not read the copy (for example a split index): list from the live index instead.
+        seeded = False
+        plan = _plan(top, None)
+    if plan is None:
         return None
-    return _Snapshot(tree=tree, files=len(chosen) + len(links), skipped=tuple(skipped))
+    tree = _write_tree(top, seeded_index, plan, True) if seeded else None
+    if tree is None:
+        # Seeded index unusable (for example conflict entries): rebuild once from an empty index.
+        tree = _write_tree(top, scratch / "fresh-index", plan, False)
+    if tree is None:
+        return None
+    return _Snapshot(
+        tree=tree, files=len(plan.add) + len(plan.links), skipped=tuple(plan.skipped)
+    )
 
 
 # ---------------------------------------------------------------------------- reading checkpoints
@@ -279,7 +415,9 @@ def _parse_commit(ref: str, commit: str, body: bytes) -> _Stored | None:
         files = meta["files"]
         skipped = meta["skipped"]
         worktree = meta["worktree"]
-    except (ValueError, KeyError, TypeError):
+        skipped_count = meta.get("skipped_count", len(skipped))
+        truncated = meta.get("truncated", False)
+    except (ValueError, KeyError, TypeError, AttributeError):
         return None
     if not (
         isinstance(session, str)
@@ -287,6 +425,9 @@ def _parse_commit(ref: str, commit: str, body: bytes) -> _Stored | None:
         and isinstance(worktree, str)
         and isinstance(skipped, list)
         and all(isinstance(s, str) for s in skipped)
+        and isinstance(skipped_count, int)
+        and not isinstance(skipped_count, bool)
+        and isinstance(truncated, bool)
     ):
         return None
     checkpoint = Checkpoint(
@@ -297,18 +438,20 @@ def _parse_commit(ref: str, commit: str, body: bytes) -> _Stored | None:
         session=session,
         files=files,
         skipped=tuple(skipped),
+        skipped_count=skipped_count,
+        skipped_truncated=truncated,
     )
     return _Stored(checkpoint=checkpoint, worktree=worktree)
 
 
-def _read_all(top: Path) -> list[_Stored]:
-    """Every checkpoint Shield wrote in this repository (all worktrees), newest first. Foreign refs are skipped."""
+def _list_refs(top: Path, prefix: str) -> list[tuple[str, str]]:
+    """(ref, commit) under prefix, newest name first. Only names are read, no commit bodies."""
     refs_out = run_git(
         top,
         "for-each-ref",
         "--sort=-refname",
         "--format=%(objectname) %(objecttype) %(refname)",
-        REF_PREFIX,
+        prefix,
     )
     if refs_out.returncode != 0:
         return []
@@ -317,6 +460,11 @@ def _read_all(top: Path) -> list[_Stored]:
         parts = line.split(" ", 2)
         if len(parts) == 3 and parts[1] == "commit":
             refs.append((parts[2], parts[0]))
+    return refs
+
+
+def _load(top: Path, refs: list[tuple[str, str]]) -> list[_Stored]:
+    """Parse the commits behind refs in one cat-file call; refs Shield did not write are dropped."""
     if not refs:
         return []
     batch = run_git(
@@ -350,23 +498,33 @@ def _read_all(top: Path) -> list[_Stored]:
     return stored
 
 
-def _for_worktree(layout: _Layout) -> list[Checkpoint]:
-    return [
-        s.checkpoint for s in _read_all(layout.top) if s.worktree == layout.worktree
-    ]
+def _for_worktree(layout: _Layout, limit: int) -> list[Checkpoint]:
+    """Up to limit of this worktree's checkpoints, newest first, parsing only as many bodies as needed."""
+    refs = _list_refs(layout.top, _worktree_prefix(layout.worktree))
+    found: list[Checkpoint] = []
+    start = 0
+    while len(found) < limit and start < len(refs):
+        chunk = refs[start : start + limit]
+        start += limit
+        found.extend(
+            s.checkpoint
+            for s in _load(layout.top, chunk)
+            if s.worktree == layout.worktree
+        )
+    return found[:limit]
 
 
 def _latest_checkpoint(layout: _Layout) -> Checkpoint | None:
-    found = _for_worktree(layout)
+    found = _for_worktree(layout, 1)
     return found[0] if found else None
 
 
 def list_checkpoints(repo: Path, limit: int = 50) -> list[Checkpoint]:
     """This worktree's checkpoints, newest first."""
     layout = _layout(Path(repo))
-    if layout is None:
+    if layout is None or limit <= 0:
         return []
-    return _for_worktree(layout)[: max(limit, 0)]
+    return _for_worktree(layout, limit)
 
 
 # ---------------------------------------------------------------------------- writing checkpoints
@@ -375,16 +533,19 @@ def list_checkpoints(repo: Path, limit: int = 50) -> list[Checkpoint]:
 def _message(
     session_id: str, created_at: datetime, snapshot: _Snapshot, worktree: str
 ) -> bytes:
+    count = len(snapshot.skipped)
     meta = {
         "v": _FORMAT_VERSION,
         "session": session_id,
         "created_at": created_at.isoformat(),
         "files": snapshot.files,
-        "skipped": list(snapshot.skipped),
+        "skipped": list(snapshot.skipped[:MAX_SKIPPED_STORED]),
+        "skipped_count": count,
+        "truncated": count > MAX_SKIPPED_STORED,
         "worktree": worktree,
         "nonce": secrets.token_hex(8),
     }
-    subject = f"{_SUBJECT}: {snapshot.files} files, {len(snapshot.skipped)} skipped"
+    subject = f"{_SUBJECT}: {snapshot.files} files, {count} skipped"
     return (
         subject + "\n\n" + json.dumps(meta, ensure_ascii=True, sort_keys=True) + "\n"
     ).encode("ascii")
@@ -403,7 +564,12 @@ def _store(
     )
     stamp = f"@{int(created_at.timestamp())} +0000"
     env = {**_IDENT_ENV, "GIT_AUTHOR_DATE": stamp, "GIT_COMMITTER_DATE": stamp}
-    prefix = REF_PREFIX + created_at.strftime("%Y%m%dT%H%M%S%fZ") + "-"
+    prefix = (
+        _worktree_prefix(layout.worktree)
+        + created_at.strftime("%Y%m%dT%H%M%S%fZ")
+        + "-"
+    )
+    count = len(snapshot.skipped)
     # A fresh nonce per attempt gives a fresh commit id, so a ref name collision can only be retried, never shared.
     for _attempt in range(3):
         made = run_git(
@@ -439,7 +605,9 @@ def _store(
                 created_at=created_at,
                 session=session_id,
                 files=snapshot.files,
-                skipped=snapshot.skipped,
+                skipped=snapshot.skipped[:MAX_SKIPPED_STORED],
+                skipped_count=count,
+                skipped_truncated=count > MAX_SKIPPED_STORED,
             )
     return None
 
@@ -486,7 +654,7 @@ def prune_checkpoints(
     cutoff = _utc(now) - timedelta(days=keep_days)
     seen: dict[str, int] = {}
     deleted = 0
-    for stored in _read_all(layout.top):
+    for stored in _load(layout.top, _list_refs(layout.top, REF_PREFIX)):
         rank = seen.get(stored.worktree, 0)
         seen[stored.worktree] = rank + 1
         checkpoint = stored.checkpoint

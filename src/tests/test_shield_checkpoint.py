@@ -1,4 +1,7 @@
+import dataclasses
+import os
 import subprocess
+import tempfile
 import threading
 import unicodedata
 from datetime import datetime, timedelta, timezone
@@ -73,6 +76,7 @@ def _git_state(repo):
         ),
         "stash": _git(repo, "stash", "list"),
         "index": index,
+        "index_mtime": (repo / ".git" / "index").stat().st_mtime_ns,
         "branches": _git(repo, "branch", "-a", "-v", "--no-abbrev"),
         "reflog": _git(repo, "reflog", "--all"),
         "head": (repo / ".git" / "HEAD").read_bytes(),
@@ -429,3 +433,206 @@ def test_user_config_cannot_leak_into_checkpoint_writes(tmp_path):
         n for n in (repo / ".git").iterdir() if n.name.startswith("sharedindex")
     ]
     assert sorted(p.name for p in (repo / ".git").iterdir()) == before
+
+
+def test_seeded_index_leaves_user_index_bytes_and_mtime_unchanged(
+    tmp_path, monkeypatch
+):
+    repo = _init(tmp_path / "repo")
+    for i in range(5):
+        (repo / f"f{i}.txt").write_text(f"{i}\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "more")
+    (repo / "f2.txt").write_text("edited on disk\n")
+    real_index = repo / ".git" / "index"
+    before = (real_index.read_bytes(), real_index.stat().st_mtime_ns)
+    seeds = []
+    real_copy2 = cp.shutil.copy2
+
+    def spy(src, dst, **kwargs):
+        seeds.append(os.path.realpath(src))
+        return real_copy2(src, dst, **kwargs)
+
+    monkeypatch.setattr(cp.shutil, "copy2", spy)
+
+    result = cp.take_checkpoint(repo, "s", now=T0)
+
+    assert result is not None
+    assert seeds == [os.path.realpath(real_index)]
+    assert (real_index.read_bytes(), real_index.stat().st_mtime_ns) == before
+    assert _blob(repo, result.commit, "f2.txt") == b"edited on disk\n"
+    assert _blob(repo, result.commit, "f3.txt") == b"3\n"
+    assert cp.changed_since(repo, result) == []
+
+
+def test_flagged_index_entries_are_captured_from_disk(tmp_path):
+    repo = _init(tmp_path / "repo")
+    (repo / "b.txt").write_text("b\n")
+    _git(repo, "add", "b.txt")
+    _git(repo, "commit", "-q", "-m", "b")
+    _git(repo, "update-index", "--assume-unchanged", "a.txt")
+    _git(repo, "update-index", "--skip-worktree", "b.txt")
+    (repo / "a.txt").write_text("a on disk\n")
+    (repo / "b.txt").write_text("b on disk\n")
+
+    result = cp.take_checkpoint(repo, "s", now=T0)
+
+    assert result is not None
+    assert _blob(repo, result.commit, "a.txt") == b"a on disk\n"
+    assert _blob(repo, result.commit, "b.txt") == b"b on disk\n"
+
+
+def test_unmerged_index_entries_still_yield_a_checkpoint(tmp_path):
+    repo = _init(tmp_path / "repo")
+    base = _git(repo, "symbolic-ref", "--short", "HEAD").decode().strip()
+    _git(repo, "checkout", "-q", "-b", "other")
+    (repo / "a.txt").write_text("other side\n")
+    _git(repo, "commit", "-q", "-am", "other")
+    _git(repo, "checkout", "-q", base)
+    (repo / "a.txt").write_text("base side\n")
+    _git(repo, "commit", "-q", "-am", "base")
+    picked = subprocess.run(
+        ["git", "cherry-pick", "other"], cwd=repo, capture_output=True
+    )
+    assert picked.returncode != 0
+    assert b"\t" in _git(repo, "ls-files", "-u")
+    index_before = (repo / ".git" / "index").read_bytes()
+
+    result = cp.take_checkpoint(repo, "s", now=T0)
+
+    assert result is not None
+    assert b"<<<<<<<" in _blob(repo, result.commit, "a.txt")
+    assert (repo / ".git" / "index").read_bytes() == index_before
+
+
+def test_seeded_failure_retries_with_a_fresh_index(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "repo")
+    (repo / "new.txt").write_text("n\n")
+    real_run_git = cp.run_git
+    failed = []
+
+    def flaky(top, *args, env=None, **kwargs):
+        if (
+            "write-tree" in args
+            and env
+            and env["GIT_INDEX_FILE"].endswith("seeded-index")
+        ):
+            failed.append(True)
+            return subprocess.CompletedProcess(args, 128, b"", b"boom")
+        return real_run_git(top, *args, env=env, **kwargs)
+
+    monkeypatch.setattr(cp, "run_git", flaky)
+
+    result = cp.take_checkpoint(repo, "s", now=T0)
+
+    assert failed == [True]
+    assert result is not None
+    assert _tree_paths(repo, result.tree) == {"a.txt", "new.txt"}
+
+
+def test_scratch_dir_is_removed_when_snapshot_raises(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "repo")
+    (repo / "a.txt").write_text("dirty\n")
+    scratch_root = tmp_path / "scratch-root"
+    scratch_root.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(scratch_root))
+    real_run_git = cp.run_git
+
+    def exploding(top, *args, **kwargs):
+        if "write-tree" in args:
+            raise RuntimeError("boom")
+        return real_run_git(top, *args, **kwargs)
+
+    monkeypatch.setattr(cp, "run_git", exploding)
+
+    with pytest.raises(RuntimeError):
+        cp.take_checkpoint(repo, "s", now=T0)
+    with pytest.raises(RuntimeError):
+        cp.changed_since(repo, cp.Checkpoint("r", "c", "t", T0, "s", 0, ()))
+    assert [
+        p.name for p in scratch_root.iterdir() if p.name.startswith("aletheore-shield-")
+    ] == []
+
+
+def test_changed_since_raises_when_git_fails(tmp_path):
+    repo = _init(tmp_path / "repo")
+    result = cp.take_checkpoint(repo, "s", now=T0)
+    assert result is not None
+    bogus = dataclasses.replace(result, tree="0" * 40)
+    with pytest.raises(cp.CheckpointError):
+        cp.changed_since(repo, bogus)
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    with pytest.raises(cp.CheckpointError):
+        cp.changed_since(plain, result)
+
+
+def test_tracked_path_under_symlinked_folder_is_skipped(tmp_path):
+    repo = _init(tmp_path / "repo")
+    (repo / "d").mkdir()
+    (repo / "d" / "f.txt").write_text("f\n")
+    _git(repo, "add", "d/f.txt")
+    _git(repo, "commit", "-q", "-m", "d")
+    (repo / "d").rename(repo / "real")
+    try:
+        os.symlink("real", repo / "d", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks cannot be created here")
+
+    result = cp.take_checkpoint(repo, "s", now=T0)
+
+    assert result is not None
+    assert "d/f.txt" in result.skipped
+    paths = _tree_paths(repo, result.tree)
+    assert "real/f.txt" in paths and "d/f.txt" not in paths
+
+
+def test_skipped_list_is_bounded(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "repo")
+    monkeypatch.setattr(cp, "MAX_SKIPPED_STORED", 3)
+    for i in range(5):
+        (repo / f"credentials-{i}").write_text("x\n")
+
+    result = cp.take_checkpoint(repo, "s", now=T0)
+
+    assert result is not None
+    assert result.skipped == ("credentials-0", "credentials-1", "credentials-2")
+    assert result.skipped_count == 5 and result.skipped_truncated is True
+    assert cp.list_checkpoints(repo) == [result]
+    raw = _git(repo, "cat-file", "commit", result.commit).decode()
+    assert "credentials-4" not in raw
+
+
+def test_small_skipped_list_is_not_truncated(tmp_path):
+    repo = _init(tmp_path / "repo")
+    (repo / ".env").write_text("X=1\n")
+    result = cp.take_checkpoint(repo, "s", now=T0)
+    assert result is not None
+    assert result.skipped == (".env",)
+    assert result.skipped_count == 1 and result.skipped_truncated is False
+
+
+def test_latest_lookup_reads_one_body_and_refs_carry_worktree(tmp_path, monkeypatch):
+    main = _init(tmp_path / "main")
+    linked = tmp_path / "linked"
+    _git(main, "worktree", "add", "-q", "-b", "side", str(linked))
+    made = []
+    for i in range(4):
+        (main / "a.txt").write_text(f"{i}\n")
+        made.append(cp.take_checkpoint(main, "s", now=T0 + timedelta(minutes=i)))
+    (linked / "a.txt").write_text("linked\n")
+    other = cp.take_checkpoint(linked, "l", now=T0 + timedelta(minutes=9))
+    assert all(made) and other is not None
+    assert all(c.ref.startswith(cp.REF_PREFIX + "main/") for c in made)
+    assert other.ref.startswith(cp.REF_PREFIX + "wt-linked/")
+
+    loaded = []
+    real_load = cp._load
+
+    def counting(top, refs):
+        loaded.append(len(refs))
+        return real_load(top, refs)
+
+    monkeypatch.setattr(cp, "_load", counting)
+    assert cp.list_checkpoints(main, limit=1) == [made[-1]]
+    assert loaded == [1]

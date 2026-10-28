@@ -2,6 +2,7 @@
 
 import fnmatch
 import posixpath
+import re
 
 _PATTERNS = (
     ".env*",
@@ -25,7 +26,11 @@ _PATTERNS = (
 )
 
 
+# One compiled alternation: the same fnmatch semantics, but cheap enough to run on every file in a checkpoint.
+_DENIED = re.compile("|".join(f"(?:{fnmatch.translate(p)})" for p in _PATTERNS))
+
+
 def is_denied_path(rel_path: str) -> bool:
     """True when the file name matches a secret-bearing pattern. Matching is on the base name, case-insensitive."""
     name = posixpath.basename(rel_path.replace("\\", "/")).lower()
-    return any(fnmatch.fnmatchcase(name, pattern) for pattern in _PATTERNS)
+    return _DENIED.match(name) is not None
