@@ -42,7 +42,7 @@ def _git(repo, *args):
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
 
 
-def _init(path, *, aletheore=True):
+def _init(path, *, aletheore=False):
     path.mkdir(parents=True, exist_ok=True)
     _git(path, "init", "-q")
     _git(path, "config", "user.name", "T")
@@ -94,6 +94,25 @@ def _fake_guard(monkeypatch, *reports):
 
 def _checkpoints(repo):
     return cp.list_checkpoints(repo, limit=100)
+
+
+def _state_file(repo, session="s1"):
+    return Path(repo) / ".git" / "aletheore-shield" / f"hook-{session}.json"
+
+
+def _state(repo, session="s1"):
+    return json.loads(_state_file(repo, session).read_text(encoding="utf-8"))
+
+
+def _edited(repo, session="s1"):
+    """Mark the session as one that edited, as pre-edit does."""
+    path = _state_file(repo, session)
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps({"edited": True}), encoding="utf-8")
+
+
+def _only_skipped(*reasons):
+    return GuardReport((), tuple(reasons))
 
 
 # ------------------------------------------------------------------------------------------- robustness
@@ -179,7 +198,7 @@ def test_pre_edit_from_a_subfolder_uses_the_repo_root(tmp_path):
 
 
 def test_pre_edit_saves_base_evidence_once(tmp_path, monkeypatch):
-    repo = _init(tmp_path / "r")
+    repo = _init(tmp_path / "r", aletheore=True)
     calls = []
     real = guard_evidence.save_base_evidence
 
@@ -227,12 +246,43 @@ def test_pre_edit_does_not_create_aletheore_folder(tmp_path):
     assert not (repo / ".aletheore").exists()
 
 
-def test_pre_edit_with_invalid_session_id_still_checkpoints_but_writes_no_state(tmp_path):
+def test_pre_edit_with_invalid_session_id_checkpoints_and_keeps_nosession_state(tmp_path):
     repo = _init(tmp_path / "r")
     assert _run("pre-edit", _payload(repo, session="../evil")) == (0, "", "")
     made = _checkpoints(repo)
     assert len(made) == 1 and made[0].session == ""
-    assert not (repo / ".aletheore" / "shield").exists()
+    assert _state(repo, "nosession")["edited"] is True
+    assert not (repo / ".aletheore").exists()
+    assert not list((repo / ".git" / "aletheore-shield").glob("*evil*"))
+
+
+def test_hook_state_lives_in_the_git_dir_and_never_creates_aletheore(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _fake_guard(monkeypatch, _report("a"))
+    _run("pre-edit", _payload(repo))
+    _run("post-edit", _payload(repo, event="PostToolUse"))
+    _run("turn-end", _payload(repo, event="Stop"))
+    assert set(_state(repo)) >= {"edited", "last_prune", "last_edit_sha"}
+    assert not (repo / ".aletheore").exists()
+
+
+def test_pre_edit_in_a_nested_repo_checkpoints_the_nested_repo(tmp_path):
+    outer = _init(tmp_path / "outer")
+    inner = _init(outer / "nested" / "inner")
+    payload = _payload(outer, path="nested/inner/sub/x.py")  # cwd is the outer repo; sub/ does not exist yet
+    assert _run("pre-edit", payload) == (0, "", "")
+    assert len(_checkpoints(inner)) == 1
+    assert _checkpoints(outer) == []
+    assert _state_file(inner).exists() and not _state_file(outer).exists()
+
+
+def test_post_edit_in_a_nested_repo_guards_the_nested_repo(tmp_path, monkeypatch):
+    outer = _init(tmp_path / "outer")
+    inner = _init(outer / "inner")
+    seen = []
+    monkeypatch.setattr(guard, "run_guard", lambda r, **k: seen.append(Path(r)) or GuardReport((), ()))
+    _run("post-edit", _payload(outer, event="PostToolUse", path="inner/x.py"))
+    assert [p.resolve() for p in seen] == [inner.resolve()]
 
 
 def test_prune_runs_at_most_once_per_hour_per_session(tmp_path, monkeypatch):
@@ -255,9 +305,8 @@ def test_prune_runs_at_most_once_per_hour_per_session(tmp_path, monkeypatch):
 
 def test_corrupt_session_state_file_is_ignored(tmp_path, monkeypatch):
     repo = _init(tmp_path / "r")
-    sessions = repo / ".aletheore" / "shield" / "sessions"
-    sessions.mkdir(parents=True)
-    state_file = sessions / "s1.json"
+    state_file = _state_file(repo)
+    state_file.parent.mkdir()
     state_file.write_text("{not json", encoding="utf-8")
     pruned = []
     monkeypatch.setattr(cp, "prune_checkpoints", lambda r, **k: pruned.append(r) or 0)
@@ -285,18 +334,16 @@ def test_concurrent_pre_edit_hooks_do_not_collide(tmp_path):
         t.join(30)
     assert results == {"s1": (0, "", ""), "s2": (0, "", "")}
     made = _checkpoints(repo)
-    assert 1 <= len(made) <= 2
-    assert {c.session for c in made} <= {"s1", "s2"}
+    assert sorted(c.session for c in made) == ["s1", "s2"]  # identical trees, but each session gets its own
     assert len({c.ref for c in made}) == len(made)
     for session in ("s1", "s2"):
-        state_file = repo / ".aletheore" / "shield" / "sessions" / f"{session}.json"
-        assert isinstance(json.loads(state_file.read_text(encoding="utf-8")), dict)
+        assert _state(repo, session)["edited"] is True
 
 
 # ------------------------------------------------------------------------------------------- post-edit
 
 
-def test_post_edit_prints_additional_context_only_when_text_is_new(tmp_path, monkeypatch):
+def test_post_edit_prints_additional_context_only_when_findings_are_new(tmp_path, monkeypatch):
     repo = _init(tmp_path / "r")
     calls = _fake_guard(
         monkeypatch, _report("x does not exist on PyPI."), _report("x does not exist on PyPI."), GuardReport((), ())
@@ -308,10 +355,42 @@ def test_post_edit_prints_additional_context_only_when_text_is_new(tmp_path, mon
     assert list(data) == ["hookSpecificOutput"]
     assert data["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
     assert "x does not exist on PyPI." in data["hookSpecificOutput"]["additionalContext"]
-    assert _run("post-edit", payload) == (0, "", "")  # identical text: said already
+    assert _run("post-edit", payload) == (0, "", "")  # identical findings: said already
     assert _run("post-edit", payload) == (0, "", "")  # nothing to say
     assert calls[0]["budget_s"] == hooks.POST_EDIT_BUDGET_S
     assert calls[0]["lookups"] is False  # registry lookups never run per edit
+
+
+def test_post_edit_is_silent_when_only_checks_were_skipped(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _fake_guard(monkeypatch, _only_skipped("no scan evidence (.aletheore/air.json); run aletheore scan"))
+    assert _run("post-edit", _payload(repo, event="PostToolUse")) == (0, "", "")
+
+
+def test_post_edit_dedupes_on_findings_not_on_skipped_reasons(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    finding = Finding("dependencies", "warn", "a", "pyproject.toml")
+    _fake_guard(
+        monkeypatch,
+        GuardReport((finding,), ("evidence is older than 1 changed file(s)",)),
+        GuardReport((finding,), ("evidence is older than 2 changed file(s)",)),
+    )
+    payload = _payload(repo, event="PostToolUse")
+    first = json.loads(_run("post-edit", payload)[1])["hookSpecificOutput"]["additionalContext"]
+    assert "not checked: evidence is older than 1" in first  # the reason still travels with findings
+    assert _run("post-edit", payload) == (0, "", "")
+
+
+def test_post_edit_drops_the_lookups_off_reason(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    finding = Finding("dependencies", "info", "b is one edit from requests.", "a.py")
+    _fake_guard(monkeypatch, GuardReport(
+        (finding,), ("registry lookups are off, so 1 new dependency name was not checked for existence or age",)
+    ))
+    out = _run("post-edit", _payload(repo, event="PostToolUse"))[1]
+    text = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "one edit from requests" in text
+    assert "registry lookups are off" not in text and "not checked" not in text
 
 
 def test_post_edit_repeats_findings_that_come_back_after_clearing(tmp_path, monkeypatch):
@@ -345,6 +424,7 @@ def test_post_edit_ignores_a_file_outside_the_repo(tmp_path, monkeypatch):
 
 def test_turn_end_prints_guard_text_only_when_there_is_something(tmp_path, monkeypatch):
     repo = _init(tmp_path / "r")
+    _edited(repo)
     calls = _fake_guard(monkeypatch, GuardReport((), ()), _report("y is one edit from requests."))
     payload = _payload(repo, event="Stop", stop_hook_active=False)
     assert _run("turn-end", payload) == (0, "", "")
@@ -354,27 +434,50 @@ def test_turn_end_prints_guard_text_only_when_there_is_something(tmp_path, monke
     assert "y is one edit from requests." in data["systemMessage"]
     assert "decision" not in out
     assert calls[0]["budget_s"] == hooks.TURN_END_BUDGET_S
+    assert _run("turn-end", payload) == (0, "", "")  # same text as the last turn end
+
+
+def test_turn_end_shows_skipped_checks_to_the_user(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _edited(repo)
+    _fake_guard(monkeypatch, _only_skipped("no scan evidence"))
+    out = _run("turn-end", _payload(repo, event="Stop"))[1]
+    assert "not checked: no scan evidence" in json.loads(out)["systemMessage"]
+
+
+def test_turn_end_is_silent_in_a_session_that_did_not_edit(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    calls = _fake_guard(monkeypatch, _report("a"))
+    assert _run("turn-end", _payload(repo, event="Stop")) == (0, "", "")
+    _edited(repo, "other-session")
+    assert _run("turn-end", _payload(repo, event="Stop")) == (0, "", "")
+    assert calls == []
 
 
 def test_turn_end_is_silent_when_stop_hook_active(tmp_path, monkeypatch):
     repo = _init(tmp_path / "r")
+    _edited(repo)
     calls = _fake_guard(monkeypatch, _report("a"))
     assert _run("turn-end", _payload(repo, event="Stop", stop_hook_active=True)) == (0, "", "")
     assert calls == []
 
 
-def test_turn_end_does_not_repeat_text_post_edit_already_gave(tmp_path, monkeypatch):
+def test_turn_end_and_post_edit_dedupe_separately(tmp_path, monkeypatch):
     repo = _init(tmp_path / "r")
     _fake_guard(monkeypatch, _report("a"))
+    _run("pre-edit", _payload(repo))
     assert _run("post-edit", _payload(repo, event="PostToolUse"))[1]
-    assert _run("turn-end", _payload(repo, event="Stop", stop_hook_active=False)) == (0, "", "")
+    out = _run("turn-end", _payload(repo, event="Stop", stop_hook_active=False))[1]
+    assert "warn: a" in json.loads(out)["systemMessage"]  # the user has not seen it yet
+    state = _state(repo)
+    assert state["last_edit_sha"] and state["last_turn_sha"]
 
 
 # ------------------------------------------------------------------------------------------- session-end
 
 
 def test_session_end_writes_a_receipt(tmp_path, monkeypatch):
-    repo = _init(tmp_path / "r")
+    repo = _init(tmp_path / "r", aletheore=True)
     _fake_guard(monkeypatch)
     (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
     _run("pre-edit", _payload(repo))
@@ -383,6 +486,7 @@ def test_session_end_writes_a_receipt(tmp_path, monkeypatch):
     written = list((repo / ".aletheore" / "shield" / "receipts").glob("*-s1.md"))
     assert len(written) == 1
     assert "a.py" in written[0].read_text(encoding="utf-8")
+    assert not _state_file(repo).exists()  # the hook state ends with the session
 
 
 def test_session_end_without_a_checkpoint_writes_nothing(tmp_path, monkeypatch):
@@ -445,6 +549,7 @@ def test_pre_commit_in_a_non_git_dir_never_raises(tmp_path, monkeypatch):
 
 def test_hook_stops_at_budget(tmp_path, monkeypatch):
     repo = _init(tmp_path / "r")
+    _edited(repo)
     release = threading.Event()
 
     def slow(repo_arg, **kwargs):
@@ -461,9 +566,9 @@ def test_hook_stops_at_budget(tmp_path, monkeypatch):
         assert time.monotonic() - start < 2.5
     finally:
         release.set()
-    time.sleep(0.2)  # the abandoned workers finish now; they must still not write anything
-    sessions = repo / ".aletheore" / "shield" / "sessions"
-    assert not (sessions / "s1.json").exists() or "last_guard_sha" not in (sessions / "s1.json").read_text()
+    time.sleep(0.2)  # the abandoned workers finish now; they must still not record anything as said
+    state = _state(repo)
+    assert "last_edit_sha" not in state and "last_turn_sha" not in state
 
 
 def test_stop_constants_match_the_contract():
@@ -493,20 +598,80 @@ def test_agent_output_shapes():
 # ------------------------------------------------------------------------------------------- real process
 
 
+def _subprocess_env():
+    paths = [str(SRC)] + [p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p]
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(paths), "ALETHEORE_SHIELD_OFFLINE": "1"}
+    env["ALETHEORE_HOOK_DEBUG"] = "1"  # so a run cut off by its hard stop says so on stderr
+    return env
+
+
 def test_module_runs_as_a_real_subprocess(tmp_path):
     repo = _init(tmp_path / "r")
-    env = {**os.environ, "PYTHONPATH": str(SRC) + os.pathsep + os.environ.get("PYTHONPATH", "")}
-    env.pop("ALETHEORE_HOOK_DEBUG", None)
+    (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
     start = time.monotonic()
     done = subprocess.run(
         [sys.executable, "-m", "aletheore.shield.hooks", "pre-edit"],
         input=json.dumps(_payload(repo)).encode("utf-8"),
         capture_output=True,
         cwd=str(repo),
-        env=env,
+        env=_subprocess_env(),
         timeout=30,
         check=False,
     )
     assert done.returncode == 0
     assert done.stdout == b""
     assert time.monotonic() - start < 10
+    if b"stopped at its" not in done.stderr:  # a slow runner may legitimately hit the 2 s stop
+        assert done.stderr == b""
+        assert len(_checkpoints(repo)) == 1
+
+
+def test_closed_stdout_does_not_change_the_exit_code(tmp_path):
+    repo = _init(tmp_path / "r")
+    (repo / "a.py").write_text("import reqests\n", encoding="utf-8")  # a near-miss finding to print
+    read_end, write_end = os.pipe()
+    os.close(read_end)
+    try:
+        done = subprocess.run(
+            [sys.executable, "-m", "aletheore.shield.hooks", "post-edit"],
+            input=json.dumps(_payload(repo, event="PostToolUse")).encode("utf-8"),
+            stdout=write_end,
+            stderr=subprocess.PIPE,
+            cwd=str(repo),
+            env=_subprocess_env(),
+            timeout=30,
+            check=False,
+        )
+    finally:
+        os.close(write_end)
+    assert done.returncode == 0
+
+
+def test_broken_stdout_object_is_tolerated(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _fake_guard(monkeypatch, _report("a"))
+
+    class Broken(io.StringIO):
+        def write(self, text):
+            raise BrokenPipeError
+
+    payload = json.dumps(_payload(repo, event="PostToolUse"))
+    assert hooks.main(["post-edit"], stdin=io.StringIO(payload), stdout=Broken(), stderr=io.StringIO()) == 0
+
+
+def test_stop_note_goes_to_stderr_only_when_debugging(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    release = threading.Event()
+    monkeypatch.setattr(guard, "run_guard", lambda r, **k: release.wait(10) and _report("late"))
+    monkeypatch.setattr(hooks, "POST_EDIT_STOP_S", 0.2)
+    monkeypatch.setenv("ALETHEORE_HOOK_DEBUG", "1")
+    try:
+        code, out, err = _run("post-edit", _payload(repo, event="PostToolUse"))
+    finally:
+        release.set()
+    assert (code, out) == (0, "")
+    assert "post-edit stopped at its 0.2 s limit" in err
+
+
+def test_run_and_exit_is_exposed():
+    assert callable(hooks.run_and_exit)

@@ -178,6 +178,27 @@ def test_identical_tree_returns_none(tmp_path):
     assert cp.list_checkpoints(repo) == [second, first]
 
 
+def test_identical_tree_still_checkpoints_a_different_session(tmp_path):
+    repo = _init(tmp_path / "repo")
+    first = cp.take_checkpoint(repo, "s1", now=T0)
+    # Same tree and inside the rate limit, but another session: it still gets its own starting point.
+    second = cp.take_checkpoint(repo, "s2", now=T0 + timedelta(seconds=1))
+    assert first is not None and second is not None
+    assert second.tree == first.tree and second.session == "s2"
+    # The same session again (even forced) with an unchanged tree saves nothing.
+    assert cp.take_checkpoint(repo, "s2", force=True, now=T0 + timedelta(minutes=5)) is None
+
+
+def test_checked_repo_state_skips_the_probe(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "repo")
+    checked = cp.repo_state(repo)
+    monkeypatch.setattr(cp, "repo_state", lambda r: (_ for _ in ()).throw(AssertionError("probed again")))
+    assert cp.take_checkpoint(repo, "s", checked=checked) is not None
+    unsupported = dataclasses.replace(checked, ok=False, reason="x")
+    (repo / "a.txt").write_text("changed\n")
+    assert cp.take_checkpoint(repo, "s", force=True, checked=unsupported) is None
+
+
 def test_rate_limit_returns_none_unless_forced(tmp_path):
     repo = _init(tmp_path / "repo")
     assert cp.take_checkpoint(repo, "s", now=T0) is not None

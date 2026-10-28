@@ -192,3 +192,48 @@ def test_installed_module_import_is_skipped_even_when_mapped(tmp_path, monkeypat
     repo = _init(tmp_path / "r", {"app.py": "x = 1\n"})
     _write(repo, "app.py", "import yaml\nimport six\n")
     assert added_dependencies(repo)[0] == []
+
+
+def _no_pins(*args, **kwargs):
+    raise AssertionError("manifest pins were read although no manifest changed")
+
+
+def test_no_manifest_change_never_reads_pins(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", {
+        "pyproject.toml": "[project]\nname = 'app'\ndependencies = ['requests>=2']\n",
+        "app/main.py": "import os\n",
+    })
+    monkeypatch.setattr(_deps, "collect_pins", _no_pins)
+    _write(repo, "app/main.py", "import os\nimport requests\nimport fastjsonx\n")
+    refs, not_checked = added_dependencies(repo)
+    # requests is declared in [project].dependencies (read without pins); fastjsonx is new
+    assert refs == [DepRef("PyPI", "fastjsonx", "import", "app/main.py")]
+    assert not_checked == []
+
+
+def test_manifest_change_still_reads_pins(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n"})
+    calls = []
+    real = _deps.collect_pins
+    monkeypatch.setattr(_deps, "collect_pins", lambda d: calls.append(d) or real(d))
+    _write(repo, "requirements.txt", "requests==2.0\nfastjsonx==1.0\n")
+    refs, _ = added_dependencies(repo)
+    assert DepRef("PyPI", "fastjsonx", "manifest", "requirements.txt") in refs
+    assert calls  # working tree and base
+
+
+def test_dependency_config_change_reads_pins(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n"})
+    calls = []
+    real = _deps.collect_pins
+    monkeypatch.setattr(_deps, "collect_pins", lambda d: calls.append(d) or real(d))
+    _write(repo, ".npmrc", "registry=https://registry.npmjs.org/\n")
+    added_dependencies(repo)
+    assert calls
+
+
+def test_installed_names_are_listed_only_when_an_import_needs_them(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", {"a.py": "x = 1\n"})
+    monkeypatch.setattr(_deps, "_installed_import_names", lambda: (_ for _ in ()).throw(AssertionError("listed")))
+    _write(repo, "a.py", "x = 2\n")
+    assert added_dependencies(repo) == ([], [])

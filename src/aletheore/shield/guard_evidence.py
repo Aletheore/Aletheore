@@ -13,7 +13,6 @@ has 2 s):
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess  # nosec B404 - starts this package's own refresh module with a fixed argument list, no shell
@@ -23,12 +22,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
-from aletheore import dependents, evidence_diff
-from aletheore import evidence as evidence_io
-from aletheore.scope_filter import is_test_path
 from aletheore.shield import state
-from aletheore.signature_diff import find_changed_signatures
-from aletheore.tests_for import candidate_tests
+
+# The evidence readers and diff helpers (aletheore.evidence, dependents, evidence_diff, signature_diff, tests_for)
+# cost about 400 ms to import. They are imported inside the functions that use them, so the per-edit hook can call
+# save_base_evidence without paying for them, and a repository with no scan never loads them at all.
 
 REFRESH_MIN_INTERVAL_S = 60.0
 # `scanned_at` is stamped when a scan ENDS, 2.5-9 s after it began reading files, so a file edited during the scan
@@ -183,6 +181,8 @@ def load_base_evidence(repo: Path, session_id: str) -> dict | None:
     if path is None or not path.is_file():
         return None
     try:
+        from aletheore import evidence as evidence_io
+
         return evidence_io.load_evidence_file(path)
     except Exception:  # noqa: BLE001  # corrupt, truncated or incompatible: all mean "no base"
         return None
@@ -239,6 +239,10 @@ def _has_pytest_config(repo: Path) -> bool:
 
 
 def _affected_finding(repo: Path, head: dict, targets: list[str]) -> Finding | None:
+    from aletheore import dependents
+    from aletheore.scope_filter import is_test_path
+    from aletheore.tests_for import candidate_tests
+
     reached, direct = dependents.dependents_of(head, set(targets))
     reached = [p for p in reached if not is_test_path(p)]
     direct_count = len([p for p in direct if not is_test_path(p)])
@@ -275,6 +279,8 @@ def _affected_finding(repo: Path, head: dict, targets: list[str]) -> Finding | N
 
 
 def _signature_findings(base: dict, head: dict, changed: set[str]) -> list[Finding]:
+    from aletheore.signature_diff import find_changed_signatures
+
     by_path = {m["path"]: m for m in head["repository"]["modules"] if m.get("path")}
     moved = [c for c in find_changed_signatures(base, head) if c["file"] in changed]
     findings = []
@@ -316,6 +322,8 @@ def _cycle_text(cycle: list[str]) -> str:
 
 
 def _risk_findings(base: dict, head: dict) -> list[Finding]:
+    from aletheore import evidence_diff
+
     risks = evidence_diff.new_risks(base, head)
     source = "session-start vs current .aletheore/air.json"
     findings = []
@@ -346,6 +354,10 @@ def evidence_checks(
     """
     repo = Path(repo)
     try:
+        if not (repo / _EVIDENCE_REL).exists():
+            raise FileNotFoundError(str(repo / _EVIDENCE_REL))  # answered without importing the evidence reader
+        from aletheore import evidence as evidence_io
+
         head = evidence_io.load_evidence(repo)
     except FileNotFoundError:
         return [], [

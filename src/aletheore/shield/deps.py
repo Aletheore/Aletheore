@@ -17,7 +17,6 @@ from aletheore.manifests import EXTRA_SKIPPED_DIRS, MANIFEST_FILENAMES, MANIFEST
 from aletheore.scanner.detect import IGNORED_DIRS
 from aletheore.shield import imports
 from aletheore.shield.gitutil import run_git
-from aletheore.vulnerabilities import collect_pins
 
 _CHECKED = {"PyPI": "Python", "npm": "JavaScript"}
 _ECOSYSTEM_LABEL = {
@@ -94,6 +93,31 @@ def _changed_files(repo: Path, base: str, has_base: bool, working: list[str]) ->
     tracked = run_git(repo, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=AM", base, "--", timeout=30.0)
     others = run_git(repo, "ls-files", "-z", "--others", "--exclude-standard", timeout=30.0)
     return [p for p in dict.fromkeys(_paths(tracked.stdout) + _paths(others.stdout)) if (repo / p).exists()]
+
+
+def collect_pins(directory: Path):
+    """aletheore.vulnerabilities.collect_pins, imported on first use (it costs about 100 ms to import and is only
+    needed when a change touches a dependency manifest)."""
+    from aletheore.vulnerabilities import collect_pins as _collect
+
+    return _collect(directory)
+
+
+# Files whose change can add or re-route a dependency. Only when one of these changed are the manifests on both
+# sides of the diff read and compared; otherwise the manifest pins cannot differ and that work is skipped.
+_DEPENDENCY_CONFIG_NAMES = frozenset(
+    {"pip.conf", "pip.ini", ".npmrc", ".yarnrc.yml", ".yarnrc.yaml", "Pipfile", "Pipfile.lock", "setup.cfg", "setup.py"}
+)
+
+
+def _touches_dependencies(rel: str) -> bool:
+    name = PurePosixPath(rel).name
+    return (
+        _is_manifest(rel)
+        or name in _DEPENDENCY_CONFIG_NAMES
+        or (name.startswith("requirements") and name.endswith(".txt"))
+        or (PurePosixPath(rel).parent.name == "requirements" and name.endswith(".txt"))
+    )
 
 
 def _safe_pins(directory: Path) -> list[tuple[str, str, str]] | None:
@@ -294,6 +318,8 @@ def _declared_python_names(repo: Path, working: list[str]) -> set[str]:
             elif name == "pyproject.toml":
                 data = _toml(_read(repo, rel))
                 project = data.get("project") if isinstance(data.get("project"), dict) else {}
+                dependencies = project.get("dependencies")
+                found |= _dist_names(dependencies if isinstance(dependencies, list) else [])
                 for group in (project.get("optional-dependencies") or {}).values():
                     found |= _dist_names(group if isinstance(group, list) else [])
                 for group in (data.get("dependency-groups") or {}).values():
@@ -330,15 +356,20 @@ def added_dependencies(repo: Path, base: str = "HEAD") -> tuple[list[DepRef], li
     has_base = _has_ref(repo, base)
     working = _working_files(repo)
     facts = _gather(repo, working)
+    changed = _changed_files(repo, base, has_base, working)
 
     pins_now: list = []
     owners_by_pin: dict = {}
     not_checked: list[NotChecked] = []
-    try:
-        pins_now, owners_by_pin, _ = collect_pins(repo)
-    except Exception:
-        not_checked.append(NotChecked("dependency manifests", "a dependency manifest could not be read, so new dependencies were not checked"))
-    base_pins = _base_pins(repo, base, has_base)
+    base_pins: list = []
+    if any(_touches_dependencies(rel) for rel in changed):
+        try:
+            pins_now, owners_by_pin, _ = collect_pins(repo)
+        except Exception:
+            not_checked.append(NotChecked("dependency manifests", "a dependency manifest could not be read, so new dependencies were not checked"))
+        base_pins = _base_pins(repo, base, has_base)
+    # With no manifest in the change, import-only additions are judged against the names the manifests in the
+    # working tree declare (read directly by _declared_python_names and _gather), not against parsed pins.
     known = {(eco, _norm(eco, name)) for name, _v, eco in base_pins}
     declared_py = {_norm_py(name) for name, _v, eco in pins_now + base_pins if eco == "PyPI"}
     declared_py |= _declared_python_names(repo, working)
@@ -370,8 +401,8 @@ def added_dependencies(repo: Path, base: str = "HEAD") -> tuple[list[DepRef], li
         not_checked.append(NotChecked(shown, f"{label} ({eco}) packages are not checked yet"))
 
     import_map = _import_map()
-    installed = _installed_import_names()
-    for rel in _changed_files(repo, base, has_base, working):
+    installed = _LazyNames(_installed_import_names)
+    for rel in changed:
         suffix = PurePosixPath(rel).suffix.lower()
         is_py, is_js = suffix in imports.PY_SUFFIXES, suffix in imports.JS_SUFFIXES
         if not (is_py or is_js) or _skipped_dir(rel):
@@ -395,6 +426,20 @@ def added_dependencies(repo: Path, base: str = "HEAD") -> tuple[list[DepRef], li
         else:
             refs.extend(mine)
     return refs, not_checked
+
+
+class _LazyNames:
+    """A set computed on first membership test: listing installed distributions costs up to a second, and most
+    changes add no import that needs it."""
+
+    def __init__(self, compute):
+        self._compute = compute
+        self._names: set[str] | None = None
+
+    def __contains__(self, name: object) -> bool:
+        if self._names is None:
+            self._names = set(self._compute())
+        return name in self._names
 
 
 def _import_ref(imp, rel, is_py, facts, import_map, installed, declared_py, declared_npm) -> DepRef | None:

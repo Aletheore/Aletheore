@@ -41,7 +41,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from aletheore.shield.denylist import is_denied_path
-from aletheore.shield.gitutil import repo_state, run_git
+from aletheore.shield.gitutil import RepoState, repo_state, run_git
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_TOTAL_BYTES = 100 * 1024 * 1024
@@ -98,6 +98,7 @@ class Checkpoint:
 class _Layout:
     top: Path
     worktree: str
+    index: Path | None = None  # the user's index file for this worktree, when it exists
 
 
 @dataclass(frozen=True)
@@ -150,19 +151,30 @@ def _paths_input(paths: list[str]) -> bytes:
 
 def _layout(repo: Path) -> _Layout | None:
     """Top of the working tree, and which worktree this is ("" for the main one)."""
+    # One git call answers all four (the index path too, which _snapshot would otherwise ask for separately).
     probe = run_git(
-        repo, "rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir"
+        repo,
+        "rev-parse",
+        "--show-toplevel",
+        "--absolute-git-dir",
+        "--git-common-dir",
+        "--git-path",
+        "index",
     )
     lines = probe.stdout.decode("utf-8", "surrogateescape").splitlines()
-    if probe.returncode != 0 or len(lines) != 3:
+    if probe.returncode != 0 or len(lines) != 4:
         return None
-    top, git_dir, common = (Path(line) for line in lines)
+    top, git_dir, common, index = (Path(line) for line in lines)
     if not common.is_absolute():
         common = Path(repo) / common
+    if not index.is_absolute():
+        index = Path(repo) / index
     same = os.path.normcase(os.path.realpath(git_dir)) == os.path.normcase(
         os.path.realpath(common)
     )
-    return _Layout(top=top, worktree="" if same else git_dir.name)
+    return _Layout(
+        top=top, worktree="" if same else git_dir.name, index=index if index.is_file() else None
+    )
 
 
 def _worktree_prefix(worktree: str) -> str:
@@ -371,11 +383,14 @@ def _write_tree(top: Path, index: Path, plan: _Plan, seeded: bool) -> str | None
     return tree if written.returncode == 0 and tree else None
 
 
-def _snapshot(top: Path, scratch: Path) -> _Snapshot | None:
-    """Hash the working tree into a temporary index in scratch and return its tree id."""
+def _snapshot(
+    top: Path, scratch: Path, real_index: Path | None | bool = False
+) -> _Snapshot | None:
+    """Hash the working tree into a temporary index in scratch and return its tree id. `real_index` is the
+    user's index when the caller already knows it (None: there is none); by default it is looked up."""
     seeded_index = scratch / "seeded-index"
     seeded = False
-    real = _real_index(top)
+    real = _real_index(top) if real_index is False else real_index
     if real is not None:
         try:
             # Read-only copy; copy2 keeps the mtime, which git needs to judge the cached stat data.
@@ -630,23 +645,32 @@ def take_checkpoint(
     force: bool = False,
     now: datetime | None = None,
     min_interval_s: float = 5.0,
+    checked: RepoState | None = None,
 ) -> Checkpoint | None:
-    """Snapshot the working tree. None when the repo state is unsupported, when the tree equals the latest
-    checkpoint's tree, when within min_interval_s of the latest one (unless force), or when git fails."""
+    """Snapshot the working tree. None when the repo state is unsupported, or when git fails, or when the
+    latest checkpoint of this worktree belongs to the same session and either is within min_interval_s
+    (unless force) or holds the same tree.
+
+    The rate limit and the unchanged-tree skip compare with the latest checkpoint only when that checkpoint is
+    the same session's, so every session gets a checkpoint of its own starting point even when another session
+    saved an identical tree a moment ago. `force` bypasses only the rate limit. `checked` is a repo_state result
+    the caller already has for this repo (saves the probe)."""
     repo = Path(repo)
-    if not repo_state(repo).ok:
+    if not (checked if checked is not None else repo_state(repo)).ok:
         return None
     layout = _layout(repo)
     if layout is None:
         return None
     created_at = _utc(now)
     latest = _latest_checkpoint(layout)
+    if latest is not None and latest.session != session_id:
+        latest = None
     if latest is not None and not force:
         elapsed = (created_at - latest.created_at).total_seconds()
         if abs(elapsed) < min_interval_s:
             return None
     with _scratch_dir() as scratch:
-        snapshot = _snapshot(layout.top, scratch)
+        snapshot = _snapshot(layout.top, scratch, layout.index)
         if snapshot is None:
             return None
         if latest is not None and snapshot.tree == latest.tree:
@@ -1160,8 +1184,9 @@ def restore_checkpoint(
     """Put the working tree's files back to how they were in checkpoint. Never prompts; callers confirm first.
 
     First saves a safety checkpoint of the current files (take_checkpoint with force), so the restore can
-    itself be undone. When the current files equal the latest checkpoint, take_checkpoint saves nothing and
-    that latest checkpoint is the safety one. When no safety checkpoint can be had, CheckpointError is raised
+    itself be undone. That safety checkpoint is recorded under `session_id`; when the current files equal the
+    latest checkpoint and it belongs to the same session, take_checkpoint saves nothing and that latest
+    checkpoint is the safety one (a different session's identical checkpoint no longer suppresses it). When no safety checkpoint can be had, CheckpointError is raised
     and nothing is written, so RestoreResult.safety is only None if no write could have happened.
 
     Then writes only plan_restore's to_write files, in two phases. Phase 1 reads every file from the
@@ -1187,7 +1212,7 @@ def restore_checkpoint(
     layout = _layout(repo)
     if layout is None:
         raise CheckpointError("this folder is not a git working tree")
-    safety = take_checkpoint(repo, session_id, force=True)
+    safety = take_checkpoint(repo, session_id, force=True, checked=state)
     if safety is None:
         safety = _latest_checkpoint(layout)
     if safety is None:
