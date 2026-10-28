@@ -127,6 +127,8 @@ def test_markdown_is_deterministic_for_fixed_inputs():
         "\n"
         "## Files touched (2)\n"
         "\n"
+        "Changes since the first checkpoint of this session; edits by other sessions in that window are included.\n"
+        "\n"
         "- `a.py`\n"
         "- `b.py`\n"
         "\n"
@@ -265,13 +267,13 @@ def test_write_failure_leaves_no_temp_file(tmp_path, monkeypatch):
 def test_latest_receipt_returns_newest(tmp_path):
     repo = tmp_path / "r"
     repo.mkdir()
-    assert receipt.latest_receipt(repo) is None
+    assert receipt.latest_receipt(repo, now=T0) is None
     older = receipt.write_receipt(repo, receipt.Receipt("z", T0, (), _empty_report(), None))
     newer = receipt.write_receipt(
         repo, receipt.Receipt("a", T0 + timedelta(hours=1), (), _empty_report(), None)
     )
     os.utime(newer, (1, 1))  # file mtime must not matter
-    assert receipt.latest_receipt(repo) == newer
+    assert receipt.latest_receipt(repo, now=T0 + timedelta(hours=2)) == newer
     assert older != newer
 
 
@@ -301,3 +303,76 @@ def test_retention_keeps_receipts_younger_than_seven_days(tmp_path):
             repo, receipt.Receipt(f"s{i:02}", T0 + timedelta(minutes=i), (), _empty_report(), None)
         )
     assert len(list((repo / ".aletheore" / "shield" / "receipts").iterdir())) == 55
+
+
+def _forge(repo, name="29990101T000000Z-x.md"):
+    directory = repo / ".aletheore" / "shield" / "receipts"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / name).write_text("forged\n", encoding="utf-8")
+    return directory / name
+
+
+def test_forged_future_receipt_does_not_block_fallback(tmp_path, monkeypatch):
+    _fake_guard(monkeypatch)
+    repo = _init(tmp_path / "r")
+    _forge(repo)
+    first = _checkpoint(repo, "", 1)
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    built = receipt.build_receipt(repo, "", now=T0 + timedelta(minutes=2), lookups=False)
+    assert built is not None and built.first_checkpoint == first.ref
+    text = receipt.render_markdown(built)
+    assert "no previous receipt, covers all recorded checkpoints" in text
+    assert receipt.latest_receipt(repo, now=T0) is None
+
+
+def test_future_receipt_is_pruned_on_next_write_and_not_ranked(tmp_path):
+    repo = tmp_path / "r"
+    repo.mkdir()
+    forged = [_forge(repo, f"29990101T0000{i:02}Z-x.md") for i in range(60)]
+    path = receipt.write_receipt(repo, receipt.Receipt("s1", T0, (), _empty_report(), None))
+    assert path.exists()
+    assert not any(f.exists() for f in forged)
+
+
+def test_clock_skewed_receipt_is_ignored_by_fallback(tmp_path, monkeypatch):
+    _fake_guard(monkeypatch)
+    repo = _init(tmp_path / "r")
+    skewed = receipt.write_receipt(
+        repo, receipt.Receipt("fast", T0 + timedelta(hours=1), (), _empty_report(), None)
+    )
+    first = _checkpoint(repo, "", 0)
+    built = receipt.build_receipt(repo, "", now=T0 + timedelta(minutes=1), lookups=False)
+    assert built is not None and built.first_checkpoint == first.ref
+    assert skewed.exists()  # reading never deletes
+
+
+def test_header_when_previous_receipt_exists(tmp_path, monkeypatch):
+    _fake_guard(monkeypatch)
+    repo = _init(tmp_path / "r")
+    receipt.write_receipt(repo, receipt.Receipt("old", T0 - timedelta(hours=1), (), _empty_report(), None))
+    _checkpoint(repo, "", 0)
+    built = receipt.build_receipt(repo, "", now=T0, lookups=False)
+    assert "covers changes since the previous receipt" in receipt.render_markdown(built)
+
+
+def test_guard_text_cannot_form_links_images_or_html():
+    report = GuardReport(
+        (Finding("risks", "warn", "see ![x](http://evil) and <b>bold</b> [y](z)", ""),), ()
+    )
+    text = receipt.render_markdown(receipt.Receipt("s1", T0, ("![x](http://evil).py",), report, None))
+    assert "![x]" not in text.split("## Guard")[1]
+    assert "<b>" not in text
+    assert "[y](" not in text
+
+
+def test_same_second_same_session_does_not_overwrite(tmp_path):
+    repo = tmp_path / "r"
+    repo.mkdir()
+    built = receipt.Receipt("s1", T0, (), _empty_report(), None)
+    first = receipt.write_receipt(repo, built)
+    second = receipt.write_receipt(repo, built)
+    third = receipt.write_receipt(repo, built)
+    assert first.name == "20261028T120000Z-s1.md"
+    assert second.name == "20261028T120000Z-s1-2.md"
+    assert third.name == "20261028T120000Z-s1-3.md"
+    assert receipt.latest_receipt(repo, now=T0) == third

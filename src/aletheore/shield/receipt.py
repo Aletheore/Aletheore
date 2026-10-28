@@ -21,6 +21,9 @@ _CHECKPOINT_SCAN = 1000
 _STAMP = "%Y%m%dT%H%M%SZ"
 _RECEIPT_NAME = re.compile(r"(\d{8}T\d{6}Z)-(.+)\.md")
 _NAME_CAP = 300
+# A receipt stamped later than "now" by more than this is forged or from a skewed clock: it is ignored when
+# finding the previous receipt and is pruned on the next write.
+_FUTURE_TOLERANCE = timedelta(minutes=5)
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,7 @@ class Receipt:
     report: GuardReport
     first_checkpoint: str | None
     session_known: bool = True
+    previous_receipt: bool = True  # only meaningful when session_known is False
 
 
 def _utc(moment: datetime | None) -> datetime:
@@ -55,8 +59,9 @@ def _stamp_of(name: str) -> datetime | None:
         return None
 
 
-def _receipt_files(repo: Path) -> list[tuple[datetime, str, Path]]:
-    """Receipt files, newest first by the timestamp in the file name."""
+def _receipt_files(repo: Path, not_after: datetime | None = None) -> list[tuple[datetime, str, Path]]:
+    """Receipt files, newest first by the timestamp in the file name (file mtime breaks ties within a second).
+    With not_after, receipts stamped later than that are left out."""
     try:
         entries = list(_receipts_dir(repo).iterdir())
     except OSError:
@@ -64,28 +69,40 @@ def _receipt_files(repo: Path) -> list[tuple[datetime, str, Path]]:
     found = []
     for path in entries:
         stamp = _stamp_of(path.name)
-        if stamp is not None and path.is_file():
-            found.append((stamp, path.name, path))
-    found.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    return found
+        if stamp is None or (not_after is not None and stamp > not_after) or not path.is_file():
+            continue
+        try:
+            mtime = path.stat().st_mtime_ns
+        except OSError:
+            mtime = 0
+        found.append((stamp, mtime, path.name, path))
+    found.sort(key=lambda item: item[:3], reverse=True)
+    return [(stamp, name, path) for stamp, _, name, path in found]
 
 
-def latest_receipt(repo: Path) -> Path | None:
-    found = _receipt_files(Path(repo))
+def latest_receipt(repo: Path, *, now: datetime | None = None) -> Path | None:
+    """The newest receipt by file-name timestamp. Receipts stamped in the future (beyond a small tolerance) are
+    ignored, so a forged or clock-skewed name cannot shadow real ones."""
+    found = _receipt_files(Path(repo), _utc(now) + _FUTURE_TOLERANCE)
     return found[0][2] if found else None
 
 
-def _session_checkpoints(repo: Path, session_id: str) -> list[Checkpoint]:
+def _session_checkpoints(
+    repo: Path, session_id: str, now: datetime
+) -> tuple[list[Checkpoint], bool]:
     """The checkpoints that belong to the session, oldest first."""
     everything = list_checkpoints(repo, limit=_CHECKPOINT_SCAN)
+    previous = True
     if state.session_state_path(repo, session_id) is not None:
         mine = [c for c in everything if c.session == session_id]
     else:
-        newest = _receipt_files(repo)
+        newest_checkpoint = max((c.created_at for c in everything), default=now)
+        newest = _receipt_files(repo, max(now, newest_checkpoint) + _FUTURE_TOLERANCE)
         since = newest[0][0] if newest else None
+        previous = since is not None
         # Receipt names carry whole seconds, so a checkpoint in the same second counts as before the receipt.
         mine = [c for c in everything if since is None or c.created_at.replace(microsecond=0) > since]
-    return sorted(mine, key=lambda c: c.created_at)
+    return sorted(mine, key=lambda c: c.created_at), previous
 
 
 def build_receipt(
@@ -101,11 +118,11 @@ def build_receipt(
     repo = Path(repo)
     try:
         known = state.session_state_path(repo, session_id) is not None
-        checkpoints = _session_checkpoints(repo, session_id)
+        created = _utc(now)
+        checkpoints, previous = _session_checkpoints(repo, session_id, created)
         if not checkpoints:
             return None
         first = checkpoints[0]
-        created = _utc(now)
         extra: list[str] = []
         try:
             files = tuple(sorted(dict.fromkeys(changed_since(repo, first))))
@@ -126,7 +143,7 @@ def build_receipt(
         if extra:
             report = GuardReport(report.findings, tuple(extra) + tuple(report.not_checked))
         session = session_id if known else "unknown"
-        return Receipt(session, created, files, report, first.ref, known)
+        return Receipt(session, created, files, report, first.ref, known, previous)
     except Exception:  # noqa: BLE001
         return None
 
@@ -137,6 +154,13 @@ def _code(text: str) -> str:
     fence = "`" * (longest + 1)
     pad = " " if text.startswith("`") or text.endswith("`") else ""
     return f"{fence}{pad}{text}{pad}{fence}"
+
+
+def _inert(text: str) -> str:
+    """Make already-cleaned text unable to form links, images or HTML when rendered as Markdown."""
+    return (
+        text.replace("[", "\\[").replace("]", "\\]").replace("<", "&lt;").replace(">", "&gt;")
+    )
 
 
 def _plural(n: int, one: str, many: str) -> str:
@@ -163,12 +187,17 @@ def render_markdown(receipt: Receipt) -> str:
     if receipt.session_known:
         lines.append(f"- Session: {_code(clean_text(receipt.session, _NAME_CAP))}")
     else:
-        lines.append("- Session: session id unavailable: covers changes since the previous receipt")
+        if receipt.previous_receipt:
+            lines.append("- Session: session id unavailable: covers changes since the previous receipt")
+        else:
+            lines.append("- Session: session id unavailable: no previous receipt, covers all recorded checkpoints")
     lines += [
         f"- Created: {created}",
         f"- Guard verdict: {_verdict(receipt.report)}",
         "",
         f"## Files touched ({len(receipt.files)})",
+        "",
+        "Changes since the first checkpoint of this session; edits by other sessions in that window are included.",
         "",
     ]
     shown = receipt.files[:MAX_FILES_LISTED]
@@ -178,7 +207,7 @@ def render_markdown(receipt: Receipt) -> str:
     lines += ["", "## Guard", ""]
     rendered = render_report(receipt.report, max_lines=GUARD_MAX_LINES)
     if rendered:
-        lines += [f"- {clean_text(line)}" for line in rendered.splitlines()]
+        lines += [f"- {_inert(clean_text(line))}" for line in rendered.splitlines()]
     else:
         lines.append("No findings.")
     lines += ["", "## Undo", "", "To undo this session: `aletheore shield undo`", ""]
@@ -191,9 +220,18 @@ def render_markdown(receipt: Receipt) -> str:
 
 def _prune(directory: Path, repo: Path, now: datetime, keep_name: str) -> None:
     cutoff = now - timedelta(days=KEEP_DAYS)
-    for rank, (stamp, name, path) in enumerate(_receipt_files(repo)):
-        if rank < KEEP_RECEIPTS or stamp > cutoff or name == keep_name:
+    future = now + _FUTURE_TOLERANCE
+    rank = 0
+    for stamp, name, path in _receipt_files(repo):
+        if name == keep_name:
+            rank += 1
             continue
+        if stamp > future:  # forged or clock-skewed: never counts toward the kept receipts
+            pass
+        else:
+            rank += 1
+            if rank <= KEEP_RECEIPTS or stamp > cutoff:
+                continue
         try:
             path.unlink()
         except OSError:
@@ -207,7 +245,12 @@ def write_receipt(repo: Path, receipt: Receipt) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     created = _utc(receipt.created_at)
     token = receipt.session if state.session_state_path(repo, receipt.session) is not None else "unknown"
-    target = directory / f"{created.strftime(_STAMP)}-{token}.md"
+    stem = f"{created.strftime(_STAMP)}-{token}"
+    target = directory / f"{stem}.md"
+    suffix = 2
+    while target.exists():  # same second, same session: keep both
+        target = directory / f"{stem}-{suffix}.md"
+        suffix += 1
     handle, temp_name = tempfile.mkstemp(dir=directory, prefix=".receipt-", suffix=".tmp")
     try:
         with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as out:
