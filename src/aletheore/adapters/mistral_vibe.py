@@ -35,7 +35,7 @@ class MistralVibeAdapter(AgentAdapter):
             # this write .aletheore/audit-report.md itself per the manual's
             # instruction - see AgentAdapter.requires_consent's docstring
             # for why that's unrelated to this adapter's requires_consent=False.
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603 - absolute tool, literal argv; batch shims resolved directly to Node
                 command_argv(mistral_vibe_path, "--prompt", instruction, "--auto-approve", "--output", "text"),
                 cwd=cwd,
                 capture_output=True,

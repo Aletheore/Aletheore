@@ -5,6 +5,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from aletheore.subprocess_utils import command_argv
 from aletheore.static_analysis._exclusions import count_real_files, excluded_dir_names, filter_findings
 
 # Real, live-measured finding (2026-09-21): Trivy's secret scanner caught a
@@ -108,8 +109,8 @@ def check_trivy(repo_path: Path, timeout: int | None = None) -> dict:
     cmd.append(".")
 
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=resolved_timeout + 10, cwd=repo_path
+        result = subprocess.run(  # nosec B603 - absolute tool, validated argv; unsupported batch launchers rejected
+            command_argv(*cmd, cwd=repo_path), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=resolved_timeout + 10, cwd=repo_path
         )
     except subprocess.TimeoutExpired:
         return {"checked": False, "reason": f"trivy timed out after {resolved_timeout}s", "findings": []}

@@ -5,6 +5,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from aletheore.subprocess_utils import command_argv
 from aletheore.static_analysis._exclusions import excluded_dir_names, file_census, filter_findings
 
 # Real bug found by an independent benchmark run the same night: a flat
@@ -74,7 +75,8 @@ def check_gosec(repo_path: Path, timeout: int | None = None) -> dict:
         # gosec exits non-zero (confirmed live: exit 1) whenever it finds
         # any issue - the JSON on stdout is authoritative for 0/1; any
         # other code is treated as a real failure, not partial output.
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, cwd=repo_path)
+        result = subprocess.run(command_argv(*cmd, cwd=repo_path),  # nosec B603 - absolute tool, validated argv; unsupported batch launchers rejected
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, cwd=repo_path)
     except subprocess.TimeoutExpired:
         return {"checked": False, "reason": f"gosec timed out after {timeout}s", "findings": []}
     except OSError as exc:

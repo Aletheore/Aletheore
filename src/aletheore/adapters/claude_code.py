@@ -29,7 +29,7 @@ class ClaudeCodeAdapter(AgentAdapter):
             raise AdapterInvocationError("claude is not installed or not on PATH")
         claude_path = os.path.abspath(claude_path)
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603 - absolute tool, literal argv; batch shims resolved directly to Node
                 command_argv(claude_path, "-p", instruction),
                 cwd=cwd,
                 capture_output=True,

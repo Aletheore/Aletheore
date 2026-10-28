@@ -30,7 +30,7 @@ class GeminiCliAdapter(AgentAdapter):
             raise AdapterInvocationError("gemini is not installed or not on PATH")
         gemini_path = os.path.abspath(gemini_path)
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603 - absolute tool, literal argv; batch shims resolved directly to Node
                 command_argv(gemini_path, "-p", instruction),
                 cwd=cwd,
                 capture_output=True,

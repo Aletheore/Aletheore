@@ -35,7 +35,7 @@ class CodexCliAdapter(AgentAdapter):
             # itself per the manual's instruction, not a gap: see
             # AgentAdapter.requires_consent's docstring for why this is
             # unrelated to that flag.
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603 - absolute tool, literal argv; batch shims resolved directly to Node
                 command_argv(codex_path, "exec", "--sandbox", "workspace-write", "-C", cwd, instruction),
                 cwd=cwd,
                 capture_output=True,

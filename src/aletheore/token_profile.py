@@ -6,7 +6,7 @@ import json
 import math
 import os
 import shutil
-import subprocess
+import subprocess  # nosec B404 - intentional fixed CLI invocation, never a shell
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -205,7 +205,8 @@ def _default_runner(cmd: list[str], cwd: Path) -> str:
         raise ProfileError("`claude` was not found on PATH")
     try:
         resolved = command_argv(os.path.abspath(executable), *cmd[1:])
-        p = subprocess.run(resolved, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        p = subprocess.run(resolved,  # nosec B603 - absolute tool, literal argv; validated Windows shim
+                            cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                            timeout=120, stdin=subprocess.DEVNULL)
     except OSError as e:
         raise ProfileError(f"could not start claude: {e}") from e

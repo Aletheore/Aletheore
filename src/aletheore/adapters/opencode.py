@@ -30,7 +30,7 @@ class OpenCodeAdapter(AgentAdapter):
             raise AdapterInvocationError("opencode is not installed or not on PATH")
         opencode_path = os.path.abspath(opencode_path)
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603 - absolute tool, literal argv; batch shims resolved directly to Node
                 command_argv(opencode_path, "run", instruction),
                 cwd=cwd,
                 capture_output=True,

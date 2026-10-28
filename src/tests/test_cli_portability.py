@@ -443,3 +443,53 @@ def test_rebuilt_trivy_uses_upstreams_version_symbol():
     dockerfile = Path(__file__).parents[2] / 'github-app' / 'Dockerfile.scan-worker'
     content = dockerfile.read_text(encoding='utf-8')
     assert '-X github.com/aquasecurity/trivy/pkg/version/app.ver=0.76.1' in content
+
+
+@pytest.mark.parametrize('scanner', ['bandit', 'bearer', 'gosec', 'pmd', 'semgrep', 'sonarqube', 'trivy'])
+def test_scanner_rejects_unsupported_batch_launchers_cleanly(tmp_path, monkeypatch, scanner):
+    module = importlib.import_module(f'aletheore.static_analysis.{scanner}_scanner')
+    for name in ('has_real_file', 'file_census'):
+        if hasattr(module, name):
+            monkeypatch.setattr(module, name, (lambda *a: (True, 2)) if name == 'file_census' else (lambda *a: True))
+    if scanner == 'bearer':
+        monkeypatch.setattr(module, '_has_commits', lambda *a: True)
+    (tmp_path / 'main.py').write_text('x = 1')
+    (tmp_path / 'Main.java').write_text('class Main {}')
+    monkeypatch.delenv('ALETHEORE_DISABLE_SEMGREP', raising=False)
+    monkeypatch.setattr(module.shutil, 'which', lambda _: str(tmp_path / 'tool.cmd'))
+    monkeypatch.setattr(module, 'command_argv', Mock(side_effect=OSError('unsupported batch launcher')))
+    run = Mock()
+    monkeypatch.setattr(module.subprocess, 'run', run)
+    kwargs = {'host_url': 'http://localhost:9000'} if scanner == 'sonarqube' else {}
+    result = getattr(module, f'check_{scanner}')(tmp_path, **kwargs)
+    assert result['checked'] is False
+    assert 'unsupported batch launcher' in result['reason']
+    run.assert_not_called()
+
+
+@pytest.mark.parametrize('name,jar,main', [
+    ('pmd', 'pmd-cli-7.28.0.jar', 'net.sourceforge.pmd.cli.PmdCli'),
+    ('sonar-scanner', 'sonar-scanner-cli-7.0.jar', 'org.sonarsource.scanner.cli.Main'),
+])
+def test_standard_windows_java_scanners_bypass_batch_shell(tmp_path, monkeypatch, name, jar, main):
+    home = tmp_path / 'tools & 日本'
+    (home / 'bin').mkdir(parents=True)
+    (home / 'lib').mkdir()
+    (home / 'lib' / jar).touch()
+    shim = home / 'bin' / f'{name}.bat'
+    shim.write_text('@echo off')
+    java = home / 'jre' / 'bin' / 'java.exe'
+    java.parent.mkdir(parents=True)
+    java.touch()
+    for env in ('PMD_JAVA_OPTS', 'SONAR_SCANNER_OPTS', 'SONAR_SCANNER_DEBUG_OPTS'):
+        monkeypatch.delenv(env, raising=False)
+    monkeypatch.setattr(subprocess_utils.sys, 'platform', 'win32')
+    argument = '日本 & echo injected | more %PATH% "quoted"\nnext'
+    argv = subprocess_utils.command_argv(str(shim), argument, cwd=tmp_path)
+    assert argv[0] == str(java.absolute())
+    assert argv[-2:] == [main, argument]
+    assert not any(value.lower().endswith(('.bat', '.cmd')) for value in argv)
+    if name == 'pmd':
+        assert str(home / 'conf') in argv[2]
+    else:
+        assert f'-Dproject.home={tmp_path.resolve()}' in argv

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import yaml
 
+from aletheore.subprocess_utils import command_argv
 from aletheore.static_analysis._exclusions import count_real_files, excluded_dir_names, filter_findings
 
 # Matches the real, live-verified invocation from tonight's evaluation
@@ -166,7 +167,8 @@ def check_semgrep(repo_path: Path, timeout: int | None = None) -> dict:
         cmd.append(f"--exclude={name}")
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, cwd=repo_path)
+        result = subprocess.run(command_argv(*cmd, cwd=repo_path),  # nosec B603 - absolute tool, validated argv; unsupported batch launchers rejected
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, cwd=repo_path)
     except subprocess.TimeoutExpired:
         return {"checked": False, "reason": f"semgrep timed out after {timeout}s", "findings": []}
     except OSError as exc:

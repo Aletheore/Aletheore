@@ -193,7 +193,8 @@ hooks = json.loads((settings_dir / "settings.local.json").read_text(encoding="ut
 payload = json.dumps({"cwd": str(repo), "session_id": "smoke", "tool_input": {"file_path": str(repo / "src" / "ünï_日本.py")}}, ensure_ascii=False)
 for event in ("PostToolUse", "PreToolUse"):
     hook = hooks[event][0]["hooks"][0]
-    result = subprocess.run([hook["command"], *hook["args"]], input=payload, capture_output=True,
+    result = subprocess.run([hook["command"], *hook["args"]],  # nosec B603 - generated Python hook in this isolated fixture
+                             input=payload, capture_output=True,
                             encoding="utf-8", env=env(), timeout=60)
     ok = result.returncode == 0 and not result.stderr
     if event == "PreToolUse":

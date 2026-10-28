@@ -30,7 +30,7 @@ class GrokBuildAdapter(AgentAdapter):
             raise AdapterInvocationError("grok is not installed or not on PATH")
         grok_path = os.path.abspath(grok_path)
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603 - absolute tool, literal argv; batch shims resolved directly to Node
                 command_argv(grok_path, "-p", instruction),
                 cwd=cwd,
                 capture_output=True,
