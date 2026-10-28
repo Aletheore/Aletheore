@@ -8,7 +8,7 @@ RUN curl -fsSL -o source.tar.gz https://codeload.github.com/aquasecurity/trivy/t
     && tar -xzf source.tar.gz --strip-components=1 \
     && go mod edit -require=github.com/go-jose/go-jose/v4@v4.1.6 \
     && go mod download github.com/go-jose/go-jose/v4 \
-    && CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -p 2 -mod=readonly -trimpath -ldflags="-s -w -X main.version=0.76.1" -o /trivy ./cmd/trivy
+    && CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -p 2 -mod=readonly -trimpath -ldflags="-s -w -X github.com/aquasecurity/trivy/pkg/version/app.ver=0.76.1" -o /trivy ./cmd/trivy
 
 FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 

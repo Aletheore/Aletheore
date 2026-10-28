@@ -437,3 +437,9 @@ def test_scan_worker_download_checksums_are_sha256_digests():
     digests = re.findall(r'echo "([a-f0-9]+)  ', dockerfile.read_text(encoding='utf-8'))
     assert len(digests) == 4
     assert all(len(value) == 64 for value in digests)
+
+
+def test_rebuilt_trivy_uses_upstreams_version_symbol():
+    dockerfile = Path(__file__).parents[2] / 'github-app' / 'Dockerfile.scan-worker'
+    content = dockerfile.read_text(encoding='utf-8')
+    assert '-X github.com/aquasecurity/trivy/pkg/version/app.ver=0.76.1' in content
