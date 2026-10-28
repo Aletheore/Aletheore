@@ -710,6 +710,29 @@ def prune_checkpoints(
     return deleted
 
 
+def delete_all_checkpoints(repo: Path) -> int:
+    """Delete every ref under REF_PREFIX, for all worktrees; returns how many were deleted.
+
+    Only the refs go. The commits they pointed at stay in the object store until git's own housekeeping drops
+    them; this never runs gc, prune or anything else that rewrites the object store."""
+    layout = _layout(Path(repo))
+    if layout is None:
+        return 0
+    listed = run_git(layout.top, "for-each-ref", "--format=%(objectname) %(refname)", REF_PREFIX)
+    if listed.returncode != 0:
+        return 0
+    deleted = 0
+    for line in listed.stdout.decode("utf-8", "surrogateescape").splitlines():
+        sha, _, ref = line.partition(" ")
+        if not ref.startswith(REF_PREFIX):
+            continue
+        # Passing the old value means a ref that changed under us is not deleted.
+        result = run_git(layout.top, *_REF_CONFIG, "update-ref", "--no-deref", "-d", ref, sha)
+        if result.returncode == 0:
+            deleted += 1
+    return deleted
+
+
 def changed_since(repo: Path, checkpoint: Checkpoint) -> list[str]:
     """Repo-relative paths whose content differs between the checkpoint and the working tree now, compared
     with the same capture rules (so ignored, deny-listed and oversized files are not reported).
