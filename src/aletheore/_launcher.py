@@ -10,6 +10,7 @@ importing aletheore.cli never inspects sys.argv or exits the interpreter.
 
 from __future__ import annotations
 
+import logging
 import sys
 
 
@@ -21,7 +22,8 @@ def configure_stdio() -> None:
             try:
                 reconfigure(encoding="utf-8", errors="backslashreplace" if stream is not sys.stdin else "replace")
             except (OSError, ValueError):
-                pass
+                # Debug only: protocol hooks must keep stdout/stderr silent.
+                logging.getLogger(__name__).debug("UTF-8 stream configuration unavailable", exc_info=True)
 
 
 def main() -> None:

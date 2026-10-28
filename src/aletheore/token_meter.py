@@ -83,6 +83,8 @@ def _make_event(
         facts = {"original_chars": original_chars, "delivered_chars": delivered_chars}
     else:
         return None
+    # Naive timestamps deliberately mean local wall time, matching summarize(now=...).
+    # Callers with UTC values must supply timezone.utc explicitly.
     timestamp = occurred_at or datetime.now(timezone.utc)
     if timestamp.tzinfo is None:
         timestamp = timestamp.astimezone()

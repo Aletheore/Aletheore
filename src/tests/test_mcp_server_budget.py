@@ -199,3 +199,26 @@ async def test_meter_records_semantic_code_search_trimming(tmp_path, monkeypatch
     assert events[0].original_chars == original_chars
     assert events[0].delivered_chars == len(response.content[0].text)
     assert events[0].delivered_chars < events[0].original_chars
+
+
+def test_meter_reuses_original_and_final_budget_serializations(tmp_path, monkeypatch):
+    from aletheore import mcp_server
+    original = {'items': ['x' * 200] * 100}
+    bounded = {'items': ['x'], '_budget': {'trimmed': True}}
+    seen = []
+    encode = mcp_server._toon_result
+
+    def serializer(value):
+        seen.append(value)
+        return encode(value)
+
+    def budget(value, *, size_of, **options):
+        size_of(value)
+        size_of(bounded)
+        return bounded
+
+    monkeypatch.setattr(mcp_server, '_toon_result', serializer)
+    monkeypatch.setattr(mcp_server, 'apply_budget', budget)
+    assert mcp_server._metered_budget(tmp_path, original) == encode(bounded)
+    assert len(seen) == 2
+    assert seen[0] is original and seen[1] is bounded

@@ -147,7 +147,7 @@ def _render_meter_plain(summary, *, guard_configured: bool, profile_status: str)
         chunks.append("enable with --enable-read-guard (shows changes and asks first)")
     chunks.append(f"Lean profile: {profile_status}; token savings unmeasured")
     if summary.corrupt_events:
-        chunks.append(f"warning: {summary.corrupt_events} corrupt meter event file(s) skipped")
+        chunks.append(f"warning: {summary.corrupt_events} unreadable, unsafe, or corrupt meter files/state paths skipped")
     return "Aletheore meter | " + " | ".join(chunks)
 
 

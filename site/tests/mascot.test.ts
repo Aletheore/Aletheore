@@ -1,6 +1,13 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
+import { AletheoreMascot } from "@/components/site/aletheore-mascot";
+import { Logo } from "@/components/site/logo";
+import { Hero } from "@/components/scenes/hero";
+
+vi.mock("@/components/scenes/graph-canvas", () => ({ GraphCanvas: () => null }));
 import { MASCOT_POSE_COORDINATES } from "@/lib/aletheore-mascot";
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -27,12 +34,10 @@ describe("Aletheore mascot assets and component contract", () => {
     ]);
     const cells = entries.map(([, { x, y }]) => `${Math.round((x / 100) * 3)}:${Math.round((y / 100) * 3)}`);
     expect(new Set(cells).size).toBe(16);
-    for (const [, { x, y }] of entries) {
-      expect(x).toBeGreaterThanOrEqual(0);
-      expect(x).toBeLessThanOrEqual(100);
-      expect(y).toBeGreaterThanOrEqual(0);
-      expect(y).toBeLessThanOrEqual(100);
-    }
+    entries.forEach(([, { x, y }], index) => {
+      expect(x).toBeCloseTo(((index % 4) * 100) / 3, 10);
+      expect(y).toBeCloseTo((Math.floor(index / 4) * 100) / 3, 10);
+    });
   });
 
   it("ships transparent master and pose-sheet PNGs", () => {
@@ -46,14 +51,17 @@ describe("Aletheore mascot assets and component contract", () => {
   });
 
   it("keeps the mascot in the shared logo without replacing the official mark", () => {
-    const logo = readFileSync(new URL("../src/components/site/logo.tsx", import.meta.url), "utf8");
-    expect(logo).toContain("AletheoreMascot");
-    expect(logo).toContain('src="/logo-mark.png"');
+    const logo = renderToStaticMarkup(createElement(Logo));
+    expect(logo).toContain('data-pose="neutral"');
+    expect(logo).toContain('data-motion="idle"');
+    const src = logo.match(/<img[^>]+src="([^"]*)"/)![1];
+    expect(decodeURIComponent(src)).toContain("/logo-mark.png");
   });
 
   it("shows the typing/work loop beside the homepage evidence headline", () => {
-    const hero = readFileSync(new URL("../src/components/scenes/hero.tsx", import.meta.url), "utf8");
-    expect(hero).toContain('pose="typing" motion="typing"');
+    const hero = renderToStaticMarkup(createElement(Hero));
+    expect(hero).toContain('data-pose="typing"');
+    expect(hero).toContain('data-motion="typing"');
   });
 
   it("provides discreet state animations and a reduced-motion fallback", () => {
@@ -63,5 +71,20 @@ describe("Aletheore mascot assets and component contract", () => {
     expect(css).toContain('data-motion="jump"');
     expect(css).toContain("@media (prefers-reduced-motion: reduce)");
     expect(css).toContain("aletheore-mascot-jump-poses");
+    const reduced = [...css.matchAll(/@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)^\}/gm)]
+      .map((match) => match[1]).find((block) => block.includes(".aletheore-mascot"));
+    expect(reduced).toBeDefined();
+    expect(reduced).toMatch(/animation:\s*none/);
+    expect(reduced).not.toContain("background-position");
   });
+});
+
+// All poses retain their requested frame when animations are disabled.
+it.each(Object.keys(MASCOT_POSE_COORDINATES))("renders the requested %s pose literally", (pose) => {
+  const key = pose as keyof typeof MASCOT_POSE_COORDINATES;
+  const { x, y } = MASCOT_POSE_COORDINATES[key];
+  const html = renderToStaticMarkup(createElement(AletheoreMascot, { pose: key, motion: "jump", label: "Aletheore" }));
+  expect(html).toContain(`background-position:${x}% ${y}%`);
+  expect(html).toContain('role="img"');
+  expect(html).toContain('aria-label="Aletheore"');
 });

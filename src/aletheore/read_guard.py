@@ -148,7 +148,11 @@ def _pre_read_decision(payload: dict[str, Any], *, record_meter_event: bool = Fa
 
 
 def pre_read_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
-    """The JSON a PreToolUse hook should print, or None to allow silently."""
+    """Compute a decision without recording meter events.
+
+    Hook entry points use main_pre, which records actual emitted denials. Keeping
+    this evaluator free of metering avoids counting previews or repeated checks.
+    """
     return _pre_read_decision(payload)
 
 
@@ -223,6 +227,8 @@ def _module_main() -> int:
 
     parser = argparse.ArgumentParser(description="Aletheore's optional local unchanged-read guard hook")
     parser.add_argument("event", choices=("pre", "post"))
+    # Ownership marker used by the installer to identify its exact hook entries,
+    # not an authentication token. Running this module is explicit opt-in itself.
     parser.add_argument("--setup-id", help=argparse.SUPPRESS)
     args = parser.parse_args()
     os.environ[READ_GUARD_ENV_VAR] = "1"

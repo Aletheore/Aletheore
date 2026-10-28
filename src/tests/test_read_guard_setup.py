@@ -146,3 +146,62 @@ def test_setup_refuses_symlinked_claude_settings_directory(tmp_path: Path):
     with pytest.raises(ReadGuardSetupError, match="may not be symlinks"):
         plan_install(tmp_path)
     assert list(outside.iterdir()) == []
+
+
+@pytest.mark.parametrize('during_write', [False, True])
+def test_remove_preserves_concurrent_sidecar_changes_and_reports_accurately(tmp_path, monkeypatch, during_write):
+    from aletheore import read_guard_setup as setup
+    config = tmp_path / '.claude' / 'settings.local.json'
+    config.parent.mkdir()
+    config.write_text('{"custom": true}')
+    plan = install(tmp_path)
+    before = config.read_bytes()
+    fingerprint = setup._fingerprint
+    calls = 0
+
+    def inspect(path):
+        nonlocal calls
+        if path == plan.sidecar_path:
+            calls += 1
+            if calls == (3 if during_write else 2):
+                path.write_text(path.read_text() + '\n')
+        return fingerprint(path)
+
+    monkeypatch.setattr(setup, '_fingerprint', inspect)
+    with pytest.raises(ReadGuardSetupError) as failure:
+        remove(tmp_path)
+    assert plan.sidecar_path.exists()
+    if during_write:
+        assert 'hooks were removed' in str(failure.value)
+        assert json.loads(config.read_text()) == {'custom': True}
+    else:
+        assert 'nothing was changed' in str(failure.value)
+        assert config.read_bytes() == before
+
+
+def test_install_rolls_back_new_sidecar_on_settings_oserror(tmp_path, monkeypatch):
+    from aletheore import read_guard_setup as setup
+    writer = setup._write_json
+    def fail_settings(path, *args, **kwargs):
+        if path.name == 'settings.local.json':
+            raise PermissionError('denied')
+        return writer(path, *args, **kwargs)
+    monkeypatch.setattr(setup, '_write_json', fail_settings)
+    with pytest.raises(PermissionError):
+        install(tmp_path)
+    assert not (tmp_path / '.claude' / setup.SIDECAR_NAME).exists()
+
+
+def test_failed_install_does_not_delete_concurrently_changed_sidecar(tmp_path, monkeypatch):
+    from aletheore import read_guard_setup as setup
+    writer = setup._write_json
+    sidecar = tmp_path / '.claude' / setup.SIDECAR_NAME
+    def fail_settings(path, *args, **kwargs):
+        if path.name == 'settings.local.json':
+            sidecar.write_text('{"other": true}')
+            raise PermissionError('denied')
+        return writer(path, *args, **kwargs)
+    monkeypatch.setattr(setup, '_write_json', fail_settings)
+    with pytest.raises(PermissionError):
+        install(tmp_path)
+    assert json.loads(sidecar.read_text()) == {'other': True}

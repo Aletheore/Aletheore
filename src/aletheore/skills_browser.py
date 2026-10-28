@@ -99,8 +99,8 @@ class SkillsBrowser:
         if self._read_key is not None:
             kwargs["read_key"] = self._read_key
         header = kwargs.get("header")
-        if isinstance(header, Text):
-            title, _, subtitle = header.plain.partition("\n")
+        if isinstance(header, (Text, str)):
+            title, _, subtitle = (header.plain if isinstance(header, Text) else header).partition("\n")
             kwargs["header"] = ui.command_header(title, width=self.console.width,
                                                   height=self.console.height, subtitle=subtitle)
         return ui.choose(items, self.console, **kwargs)

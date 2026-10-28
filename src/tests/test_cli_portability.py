@@ -365,3 +365,57 @@ def test_markup_inserts_exact_literal_values_with_template_styles(value):
     start = len("Before ")
     assert any(span.start == start and span.end == start + len(value) and span.style == "bold"
                for span in result.spans)
+
+
+@pytest.mark.parametrize("template,values,expected", [
+    ('[bold]{"name": {}}[/bold]', ('日本',), '{"name": 日本}'),
+    ('[dim]\ufffc {} \ufffc[/dim]', ('[x]\\[y]',), '\ufffc [x]\\[y] \ufffc'),
+    ('literal {braces} and }', (), 'literal {braces} and }'),
+])
+def test_markup_keeps_literal_braces_and_replacement_characters(template, values, expected):
+    from aletheore.ui import markup
+    assert markup(template, *values).plain == expected
+
+
+def test_undecodable_windows_shim_has_actionable_adapter_error(tmp_path, monkeypatch):
+    shim = tmp_path / 'agent.cmd'
+    shim.write_bytes(b'@echo off\nrem \xff\n')
+    monkeypatch.setattr(subprocess_utils.sys, 'platform', 'win32')
+    with pytest.raises(OSError, match='unsupported encoding'):
+        subprocess_utils.command_argv(str(shim), 'hello')
+
+
+def test_windows_junction_inspection_error_is_a_setup_error(tmp_path, monkeypatch):
+    from aletheore import read_guard_setup as setup
+    monkeypatch.setattr(setup, 'is_link_or_junction', Mock(side_effect=PermissionError('denied')))
+    with pytest.raises(setup.ReadGuardSetupError, match='cannot be inspected; nothing was changed'):
+        setup.plan_install(tmp_path)
+
+
+@pytest.mark.parametrize('as_text', [False, True])
+def test_skills_browser_preserves_all_header_lines(monkeypatch, as_text):
+    from io import StringIO
+    from rich.console import Console
+    from rich.text import Text
+    from aletheore import skills_browser, ui
+    choose = Mock()
+    monkeypatch.setattr(ui, 'choose', choose)
+    header = 'Title\nFirst context\nSecond context'
+    skills_browser.SkillsBrowser(Console(file=StringIO())).choose(
+        [ui.MenuItem('x', 'X')], header=Text(header) if as_text else header)
+    rendered = choose.call_args.kwargs['header'].plain
+    assert rendered.endswith(header)
+
+
+def test_protocol_reader_surfaces_worker_errors_without_timeout():
+    import queue
+    import threading
+    script = Path(__file__).parents[2] / '.github' / 'scripts' / 'cli_smoke.py'
+    tree = ast.parse(script.read_text(encoding='utf-8'))
+    function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'protocol_line')
+    namespace = {'queue': queue, 'threading': threading}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(script), 'exec'), namespace)
+    process = SimpleNamespace(stdout=SimpleNamespace(readline=Mock(side_effect=OSError('pipe failed'))))
+    with pytest.raises(RuntimeError, match='protocol read failed') as failure:
+        namespace['protocol_line'](process, timeout=0.5)
+    assert isinstance(failure.value.__cause__, OSError)

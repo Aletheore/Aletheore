@@ -116,3 +116,18 @@ def test_nested_menu_commands_accept_required_arguments_and_protocols_show_help(
     else:
         required = [p for p in command.params if p.required or (isinstance(p, TyperArgument) and p.default is None)]
         assert ran == [[*path, *("value with spaces" for _ in required)]]
+
+
+@pytest.mark.parametrize("route", [["tokens"], ["hallbook"], ["skill-hub"], ["hook"], ["config"]])
+def test_nested_group_help_has_exactly_one_heading(monkeypatch, route):
+    monkeypatch.setattr(ui, "is_interactive", lambda: True)
+    result = CliRunner().invoke(get_command(cli.app), [*route, "--help"])
+    assert result.exit_code == 0, result.output
+    assert result.output.count(ui.TAGLINE) == 1
+
+
+def test_tokens_options_must_follow_the_leaf_command(monkeypatch):
+    monkeypatch.setattr(ui, "is_interactive", lambda: True)
+    result = CliRunner().invoke(get_command(cli.app), ["tokens", "--path", ".", "meter"])
+    assert result.exit_code == 2
+    assert "No such option" in result.output

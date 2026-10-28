@@ -2346,6 +2346,7 @@ def _command_group_flow(path: list[str], group, kwargs: dict, pause=None) -> boo
             answer = _ask(f"{parameter.human_readable_name} for {' '.join(child_path)}{suffix}")
             if not answer:
                 if parameter.required:
+                    console.print("[dim]Command cancelled; no value was entered.[/dim]")
                     break
                 continue
             if isinstance(parameter, typer.core.TyperOption):

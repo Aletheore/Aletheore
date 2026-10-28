@@ -44,7 +44,7 @@ def render_meter(summary, project: Path, *, guard_configured: bool, profile_stat
     if not (project / ".aletheore").is_dir():
         content.append(Text("\nScan this project first to create the local evidence used by the meter."))
     if summary.corrupt_events:
-        content.append(Text(f"\nSkipped {summary.corrupt_events} corrupt event file(s); totals may be incomplete.", style="bold"))
+        content.append(Text(f"\nSkipped {summary.corrupt_events} unreadable, unsafe, or corrupt meter files/state paths; totals may be incomplete.", style="bold"))
 
     notes = Text("— no observations · ~ estimates: file bytes ÷ 4 or omitted characters ÷ 4.\n", style="dim")
     notes.append("Local observations are measured; tokens are not model-reported usage.", style="dim")

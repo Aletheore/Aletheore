@@ -101,9 +101,18 @@ def wait_for(pred, secs):
 def protocol_line(process, timeout=60):
     """A broken stdio server must fail the check instead of hanging the CI job."""
     lines = queue.Queue()
-    threading.Thread(target=lambda: lines.put(process.stdout.readline()), daemon=True).start()
+    def read():
+        try:
+            lines.put(process.stdout.readline())
+        except Exception as exc:
+            lines.put(exc)
+
+    threading.Thread(target=read, daemon=True).start()
     try:
-        return lines.get(timeout=timeout)
+        result = lines.get(timeout=timeout)
+        if isinstance(result, Exception):
+            raise RuntimeError("stdio protocol read failed") from result
+        return result
     except queue.Empty:
         return b""
 

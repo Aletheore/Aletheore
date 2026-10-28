@@ -19,7 +19,10 @@ _EVENTS = ("PreToolUse", "PostToolUse")
 
 
 def _is_link(path: Path) -> bool:
-    return is_link_or_junction(path)
+    try:
+        return is_link_or_junction(path)
+    except OSError as exc:
+        raise ReadGuardSetupError(f"{path} cannot be inspected; nothing was changed") from exc
 
 
 class ReadGuardSetupError(ValueError):
@@ -261,13 +264,15 @@ def install(project: Path, plan: InstallPlan | None = None) -> InstallPlan:
             plan.settings_after,
             expected_fingerprint=plan.settings_fingerprint,
         )
-    except ReadGuardSetupError:
+    except (ReadGuardSetupError, OSError, UnicodeError):
         # If the settings file changed after the first check, remove only the
         # ownership record this install just wrote, leaving the changed file.
         if plan.sidecar_fingerprint is None:
             try:
-                plan.sidecar_path.unlink(missing_ok=True)
-            except OSError:
+                written = (json.dumps(plan.sidecar_after, indent=2) + "\n").encode("utf-8")
+                if _fingerprint(plan.sidecar_path) == hashlib.sha256(written).hexdigest():
+                    plan.sidecar_path.unlink(missing_ok=True)
+            except (OSError, ReadGuardSetupError):
                 pass
         raise
     return plan
@@ -313,6 +318,8 @@ def remove(project: Path) -> list[str]:
             hooks.pop(event, None)
     if not hooks:
         settings.pop("hooks", None)
+    if _fingerprint(sidecar_path) != sidecar_fingerprint:
+        raise ReadGuardSetupError(f"{sidecar_path} changed during removal; nothing was changed")
     if settings:
         _write_json(settings_path, settings, expected_fingerprint=settings_fingerprint)
     elif sidecar.get("created_settings_file") and settings_path.exists():
@@ -325,7 +332,7 @@ def remove(project: Path) -> list[str]:
         _write_json(settings_path, settings, expected_fingerprint=settings_fingerprint)
     if _fingerprint(sidecar_path) != sidecar_fingerprint:
         raise ReadGuardSetupError(
-            f"{sidecar_path} changed during removal; nothing was changed"
+            f"{sidecar_path} changed during removal; hooks were removed but the changed ownership record was preserved"
         )
     sidecar_path.unlink()
     return removed

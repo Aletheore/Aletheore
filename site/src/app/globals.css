@@ -80,7 +80,6 @@ body {
   .aletheore-mascot[data-motion="jump"] { animation: none; transform: none; }
   .aletheore-mascot[data-motion="typing"] .aletheore-mascot__art,
   .aletheore-mascot[data-motion="jump"] .aletheore-mascot__art { animation: none; }
-  .aletheore-mascot[data-motion="jump"] .aletheore-mascot__art { background-position: 0 66.666667% !important; }
 }
 
 /* Four L-shaped corner marks framing a scene or card. */

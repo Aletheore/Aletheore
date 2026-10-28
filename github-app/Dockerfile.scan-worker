@@ -1,3 +1,15 @@
+# Trivy v0.76.1 is the latest release but bundles go-jose v4.1.5
+# (CVE-2026-116587). Rebuild the exact release with only that dependency patched.
+FROM --platform=$BUILDPLATFORM golang:1.27.3-bookworm@sha256:05237276236793ebedaf0b87dab86add9ec9adc66ebef2dbc3107c18254cde1c AS trivy-build
+ARG TARGETARCH
+WORKDIR /build
+RUN curl -fsSL -o source.tar.gz https://codeload.github.com/aquasecurity/trivy/tar.gz/e713f67f7d54decdcd9b3132c9751833dcced698 \
+    && echo "5bcd06d8bdae338978b8ef597cb23cd0ff2e710d1ea9097c1143ec6b07d362d6  source.tar.gz" | sha256sum -c - \
+    && tar -xzf source.tar.gz --strip-components=1 \
+    && go mod edit -require=github.com/go-jose/go-jose/v4@v4.1.6 \
+    && go mod download github.com/go-jose/go-jose/v4 \
+    && CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -p 2 -mod=readonly -trimpath -ldflags="-s -w -X main.version=0.76.1" -o /trivy ./cmd/trivy
+
 FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 
 WORKDIR /app
@@ -56,12 +68,8 @@ RUN apt-get update \
 # (.asc) for this asset, so the pinned hash below was computed locally from
 # the real, currently-published pmd-dist-7.28.0-bin.zip (and matching
 # GitHub's own published asset digest) rather than left unverified.
-RUN curl -sfL -o /tmp/trivy.tar.gz \
-      https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz \
-    && echo "c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0  /tmp/trivy.tar.gz" | sha256sum -c - \
-    && tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy \
-    && rm /tmp/trivy.tar.gz \
-    && curl -sfL -o /tmp/gosec.tar.gz \
+COPY --from=trivy-build /trivy /usr/local/bin/trivy
+RUN curl -sfL -o /tmp/gosec.tar.gz \
       https://github.com/securego/gosec/releases/download/v2.29.0/gosec_2.29.0_linux_amd64.tar.gz \
     && echo "6431b119741c1f4a50fdfcf94e782e16b9e642afc8c7fa9b5d39d48bf3003095  /tmp/gosec.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/gosec.tar.gz -C /usr/local/bin gosec \
@@ -71,7 +79,13 @@ RUN curl -sfL -o /tmp/trivy.tar.gz \
     && echo "f974ba571f7bc01c73fffe11bade25fbc1f438698f9e9c00e416e8d65e9fbac2  /tmp/pmd-dist.zip" | sha256sum -c - \
     && unzip -q /tmp/pmd-dist.zip -d /opt \
     && rm /tmp/pmd-dist.zip \
-    && ln -s /opt/pmd-bin-7.28.0/bin/pmd /usr/local/bin/pmd
+    && ln -s /opt/pmd-bin-7.28.0/bin/pmd /usr/local/bin/pmd \
+    && curl -fsSL -o /opt/pmd-bin-7.28.0/lib/guava-33.7.2-jre.jar \
+      https://repo.maven.apache.org/maven2/com/google/guava/guava/33.7.2-jre/guava-33.7.2-jre.jar \
+    && echo "b530942257fb935f8b2cfaa5f8eb5bd59c555fd8e8d01b8ce98912e077ea606c2  /opt/pmd-bin-7.28.0/lib/guava-33.7.2-jre.jar" | sha256sum -c - \
+    && rm /opt/pmd-bin-7.28.0/lib/guava-33.7.1-jre.jar
+# PMD still bundles Guava 33.7.1; replace it with 33.7.2 to fix
+# CVE-2026-102554 until PMD ships a patched distribution.
 # PMD 7.28.0 bumps its bundled jsoup to 1.23.2, closing CVE-2026-75140
 # (memory exhaustion in XmlTreeBuilder; fixed in 1.23.2) that this repo's own
 # container-security.yml image scan flagged on 7.27.0's jsoup 1.23.1. It also

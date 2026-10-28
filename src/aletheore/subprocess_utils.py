@@ -11,7 +11,10 @@ def command_argv(executable: str, *args: str) -> list[str]:
     if sys.platform != "win32" or Path(executable).suffix.lower() not in (".cmd", ".bat"):
         return [executable, *args]
     shim = Path(executable)
-    text = shim.read_text(encoding="utf-8-sig")
+    try:
+        text = shim.read_text(encoding="utf-8-sig")
+    except UnicodeError as exc:
+        raise OSError(f"unsupported encoding in batch launcher {shim}; reinstall the agent with npm") from exc
     # npm's cmd-shim uses %dp0% or %~dp0 to locate its JS entry point. Run
     # Node directly: cmd.exe otherwise expands metacharacters and truncates
     # multiline prompts, even when subprocess was called with shell=False.
