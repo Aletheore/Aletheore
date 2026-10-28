@@ -71,12 +71,22 @@ RUN curl -sfL -o /tmp/trivy.tar.gz \
     && echo "f974ba571f7bc01c73fffe11bade25fbc1f438698f9e9c00e416e8d65e9fbac2  /tmp/pmd-dist.zip" | sha256sum -c - \
     && unzip -q /tmp/pmd-dist.zip -d /opt \
     && rm /tmp/pmd-dist.zip \
+    && rm /opt/pmd-bin-7.28.0/lib/guava-33.7.1-jre.jar \
+    && curl -sfL -o /opt/pmd-bin-7.28.0/lib/guava-33.7.2-jre.jar \
+      https://repo1.maven.org/maven2/com/google/guava/guava/33.7.2-jre/guava-33.7.2-jre.jar \
+    && echo "b530942257fb935f8b2cfaa5f8eb5bd59c555fd8e8d01b8ce98912e077ea606c  /opt/pmd-bin-7.28.0/lib/guava-33.7.2-jre.jar" | sha256sum -c - \
     && ln -s /opt/pmd-bin-7.28.0/bin/pmd /usr/local/bin/pmd
 # PMD 7.28.0 bumps its bundled jsoup to 1.23.2, closing CVE-2026-75140
 # (memory exhaustion in XmlTreeBuilder; fixed in 1.23.2) that this repo's own
 # container-security.yml image scan flagged on 7.27.0's jsoup 1.23.1. It also
 # no longer ships jline-3.21.0.jar (org.jline:jline-remote-telnet, two HIGH
 # DoS CVEs), so the explicit delete that 7.27.0 needed is gone.
+# PMD 7.28.0 still bundles guava 33.7.1-jre, which this repo's image scan flags
+# for CVE-2026-102554 (HIGH, denial of service; fixed in 33.7.2), and 7.28.0 is
+# the newest stable PMD. So the jar is swapped for 33.7.2-jre from Maven Central
+# (sha256 matches the .sha256 Central publishes for it). The `rm` is deliberately
+# strict: when a PMD upgrade bundles a different guava the build fails here,
+# which is the cue to drop this override.
 
 RUN groupadd --system aletheore \
     && useradd --system --gid aletheore --home-dir /app --no-create-home aletheore \
