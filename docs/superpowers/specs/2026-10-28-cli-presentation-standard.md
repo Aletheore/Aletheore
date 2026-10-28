@@ -8,7 +8,7 @@ Owner direction: carry Aletheore's design through every command and make command
 
 The root `AletheoreGroup` applies the heading to interactive CLI invocations, including nested commands and help. The heading goes to stderr so JSON, source text, and copyable snippets on stdout retain their output contracts. The meter detects an existing heading instead of rendering it twice. Noninteractive command output and the meter's `--plain` mode retain their existing formats. MCP and event-consuming hooks remain undecorated during execution; their help screens use the shared design.
 
-Interpolated values in Rich markup are escaped so repository paths, user input, server messages, and errors cannot become formatting tags or trigger markup tracebacks. Literal output remains literal, including square brackets in file names.
+Interpolated values are inserted as literal Rich Text spans so repository paths, user input, server messages, and errors cannot become formatting tags or trigger markup tracebacks. Only the static template is parsed. Literal output remains exact, including Windows backslashes before bracketed folder names.
 
 ## Menu access
 

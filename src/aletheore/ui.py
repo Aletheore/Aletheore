@@ -93,6 +93,29 @@ _ENTER = {"\r", "\n", "\r\n"}
 _QUIT = {"q", "Q", "\x1b", "\x03", "\x04"}
 
 
+def markup(template: str, *values: object) -> Text:
+    """Format trusted markup while inserting values as literal, styled Text.
+
+    Rich's string escaping can consume backslashes before non-tag brackets
+    in Windows paths. Only the template is parsed; values never enter its parser.
+    """
+    marker = "\ufffc"
+    styled = Text.from_markup(template.format(*(marker for _ in values)))
+    output = Text()
+    cursor = 0
+    for value in values:
+        position = styled.plain.index(marker, cursor)
+        output.append(styled[cursor:position])
+        placeholder = styled[position:position + 1]
+        literal = Text(str(value), style=placeholder.style)
+        for span in placeholder.spans:
+            literal.stylize(span.style)
+        output.append(literal)
+        cursor = position + 1
+    output.append(styled[cursor:])
+    return output
+
+
 def _read_key() -> str:
     return click.getchar()
 

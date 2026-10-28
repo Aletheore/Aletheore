@@ -331,7 +331,7 @@ def test_text_subprocesses_never_depend_on_the_host_locale():
                 assert "encoding" in keywords, f"{path}:{call.lineno} uses the host locale"
 
 
-def test_cli_markup_interpolations_are_explicitly_escaped():
+def test_cli_markup_interpolations_use_literal_text():
     tree = ast.parse(Path(cli.__file__).read_text(encoding="utf-8"))
     for call in ast.walk(tree):
         if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
@@ -342,11 +342,15 @@ def test_cli_markup_interpolations_are_explicitly_escaped():
         if any(kw.arg == "markup" and isinstance(kw.value, ast.Constant) and kw.value.value is False
                for kw in call.keywords):
             continue
-        for value in call.args[0].values:
-            if not isinstance(value, ast.FormattedValue):
-                continue
-            expression = value.value
-            if isinstance(expression, ast.Name) and expression.id == "color":
-                continue  # _print_result's internal style name, never user content
-            assert (isinstance(expression, ast.Call) and isinstance(expression.func, ast.Name)
-                    and expression.func.id in ("escape", "escape_markup")), call.lineno
+        assert not any(isinstance(value, ast.FormattedValue) for value in call.args[0].values), call.lineno
+
+
+@pytest.mark.parametrize("value", [r"C:\folder\[\]", r"C:\folder\[2026]", r"C:\folder\[file]",
+                                   "C:\\folder\\", "[/]", "[bold]literal[/bold]", ":warning: 日本"])
+def test_markup_inserts_exact_literal_values_with_template_styles(value):
+    from aletheore import ui
+    result = ui.markup("[bold]Before {} after[/bold]", value)
+    assert result.plain == f"Before {value} after"
+    start = len("Before ")
+    assert any(span.start == start and span.end == start + len(value) and span.style == "bold"
+               for span in result.spans)
