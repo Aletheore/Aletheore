@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from aletheore.hook_config import python_hook
-from aletheore.user_paths import is_link_or_junction
+from aletheore.user_paths import is_link_or_junction, set_replacement_mode
 
 SETTINGS_RELATIVE_PATH = Path(".claude") / "settings.local.json"
 SIDECAR_NAME = "aletheore-read-guard-hooks.json"
@@ -74,6 +74,7 @@ def _write_json(
     temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         with temp.open("x", encoding="utf-8") as stream:
+            set_replacement_mode(path, stream.fileno())
             json.dump(data, stream, indent=2)
             stream.write("\n")
             stream.flush()

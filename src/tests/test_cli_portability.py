@@ -3,6 +3,8 @@
 import importlib
 import ast
 import json
+import os
+import stat
 import shutil
 import subprocess
 import sys
@@ -57,6 +59,29 @@ def test_profile_preserves_unicode_and_accepts_windows_utf8_bom(tmp_path):
     tp.apply_deny(tmp_path, ["Monitor"])
     tp.remove_deny(tmp_path)
     assert json.loads(settings.read_text(encoding="utf-8")) == {"custom": "日本 é"}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits; Windows inherits directory ACLs")
+@pytest.mark.parametrize("existing", [False, True])
+def test_settings_replacements_keep_private_permissions(tmp_path, existing):
+    from aletheore import read_guard_setup
+    directory = tmp_path / ".claude"
+    directory.mkdir()
+    settings = directory / "settings.json"
+    local = directory / "settings.local.json"
+    for path in (settings, local):
+        if existing:
+            path.write_text("{}", encoding="utf-8")
+            path.chmod(0o600)
+    tp.apply_deny(tmp_path, ["Monitor"])
+    read_guard_setup.install(tmp_path)
+    assert stat.S_IMODE(settings.stat().st_mode) == 0o600
+    assert stat.S_IMODE(local.stat().st_mode) == 0o600
+    tp.remove_deny(tmp_path)
+    read_guard_setup.remove(tmp_path)
+    if existing:
+        assert stat.S_IMODE(settings.stat().st_mode) == 0o600
+        assert stat.S_IMODE(local.stat().st_mode) == 0o600
 
 
 def test_profile_write_failure_is_an_actionable_cli_error(monkeypatch, tmp_path):
@@ -171,6 +196,38 @@ def test_menu_prompt_cancellation_uses_typers_runtime(monkeypatch):
     import typer
     monkeypatch.setattr(typer, "prompt", Mock(side_effect=typer.Abort()))
     assert cli._ask("cancel") == ""
+
+
+def test_expected_filesystem_failure_is_not_reported_as_a_crash(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "init_cli_sentry", lambda: None)
+    monkeypatch.setattr(cli, "is_crash_reporting_enabled", lambda: True)
+    monkeypatch.setattr(cli, "has_shown_crash_reporting_notice", lambda: True)
+    report = Mock()
+    monkeypatch.setattr(cli.sentry_sdk, "capture_exception", report)
+    monkeypatch.setattr(cli, "app", Mock(side_effect=PermissionError("access denied")))
+    with pytest.raises(SystemExit) as exited:
+        cli.main()
+    assert exited.value.code == 1
+    assert "error: access denied" in capsys.readouterr().err
+    report.assert_not_called()
+
+
+def test_closed_output_pipe_exits_cleanly(monkeypatch):
+    monkeypatch.setattr(cli, "init_cli_sentry", lambda: None)
+    monkeypatch.setattr(cli, "is_crash_reporting_enabled", lambda: False)
+    monkeypatch.setattr(cli, "app", Mock(side_effect=BrokenPipeError()))
+    # Register the original stream for restoration after main replaces it.
+    original = sys.stdout
+    monkeypatch.setattr(sys, "stdout", original)
+    with pytest.raises(SystemExit) as exited:
+        cli.main()
+    stream = sys.stdout
+    try:
+        assert exited.value.code == 0
+        assert Path(stream.name).name == Path(os.devnull).name
+    finally:
+        sys.stdout = original
+        stream.close()
 
 
 @pytest.mark.parametrize("kind", cli.QUERY_KIND_CHOICES)

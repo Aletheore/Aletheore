@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from aletheore.subprocess_utils import command_argv
-from aletheore.user_paths import is_link_or_junction
+from aletheore.user_paths import is_link_or_junction, set_replacement_mode
 
 PROFILES = ("core", "core+web", "off")
 
@@ -75,6 +75,7 @@ def _write(path: Path, data: dict) -> None:
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         with tmp.open("x", encoding="utf-8", newline="\n") as stream:
+            set_replacement_mode(path, stream.fileno())
             json.dump(data, stream, indent=2, ensure_ascii=False)
             stream.write("\n")
         os.replace(tmp, path)

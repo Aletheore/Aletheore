@@ -20,6 +20,23 @@ def is_link_or_junction(path: Path) -> bool:
     return False
 
 
+def set_replacement_mode(path: Path, fd: int) -> None:
+    """Keep an existing POSIX settings file's permissions; create new ones privately."""
+    if os.name == "nt":
+        # Windows files inherit ACLs from the project directory. POSIX mode
+        # bits do not represent that ACL and chmod would toggle read-only.
+        return
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        mode = 0o600
+    else:
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError(f"refusing to replace non-regular settings file: {path}")
+        mode = stat.S_IMODE(info.st_mode)
+    os.fchmod(fd, mode)
+
+
 def user_home() -> Path:
     """Path.home(), but never raising.
 

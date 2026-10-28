@@ -20,7 +20,7 @@ Token savings meter is also a home-menu item, with refresh, project selection, a
 
 Piped stdin, stdout, stderr, and text subprocess output use explicit UTF-8. Generated Claude hooks use executable-plus-arguments configuration with Python UTF-8 mode, avoiding shell-dependent quoting. Windows npm agent launchers resolve to their Node entry point before prompts are passed; custom batch wrappers fail with an actionable error instead of passing prompts through a shell. Native agent executables remain supported.
 
-Settings accept UTF-8 BOMs, preserve unrelated values, and reject linked settings paths, including Windows junctions on Python 3.11. Profile writes use unique temporary files and atomic replacement. A profile is reported active only when its recorded deny entries are still present in settings. Expected filesystem and agent-start failures produce command errors. Menu invocation delegates error formatting and exit handling to Typer, including releases with a separate Click runtime.
+Settings accept UTF-8 BOMs, preserve unrelated values, and reject linked settings paths, including Windows junctions on Python 3.11. Profile writes use unique temporary files and atomic replacement. Settings replacement preserves existing POSIX permissions and gives new files mode 0600; Windows uses the project directory's inherited ACLs. A profile is reported active only when its recorded deny entries are still present in settings. Expected filesystem and agent-start failures produce command errors. Menu invocation delegates error formatting and exit handling to Typer, including releases with a separate Click runtime.
 
 ## Regression coverage
 
