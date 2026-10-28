@@ -1,8 +1,10 @@
 # Shield spike: Claude Code hook contract and evidence refresh timing
 
 Date: 2026-10-28. Claude Code 2.1.310, run headless (`claude -p`) against a scratch git repo with a
-logging hook registered in `.claude/settings.local.json`. Three runs, about $0.31 in total. All
-statements below marked **Verified** were observed in those runs; none are taken from documentation.
+logging hook registered in `.claude/settings.local.json`. Three runs, about $0.31 in total. Statements
+marked **Verified** were observed in those runs. Anything else is marked "documented, not verified"
+(taken from the existing hook code and tests or from Claude Code's hook documentation, not observed live)
+or "not tested, documented, not verified" (not tested and not covered by anything I read).
 Sessions ran under `permission_mode: "auto"` with `--allowedTools Write`.
 
 ## Event names and payloads
@@ -18,7 +20,8 @@ Every event is delivered as one JSON object on stdin. Common fields on all four 
 | `SessionEnd` | `reason` (saw `"other"` for a headless run) | No `permission_mode`, no `effort`. |
 
 Only the `Write` tool was exercised; `Edit` and `MultiEdit` payload shapes are documented, not verified
-(the existing `evidence_hook.py` and `test_evidence_hook.py` already encode `tool_input.file_path` for them).
+(the existing `evidence_hook.py` and `test_evidence_hook.py` already encode `tool_input.file_path` for them,
+which is the only thing taken from them).
 `cwd` in the logs was the directory `claude` was launched in.
 
 ## Session id availability
@@ -29,8 +32,8 @@ every run the `session_id` was identical across all four events (and equal to th
 same id. `prompt_id` is also present on all four and identifies one user prompt; it is constant across
 the events of a single-prompt run.
 
-Not tested: `/clear`, `--resume`, `--continue` (whether the id changes), subagents, interactive sessions,
-and SessionEnd firing on Ctrl-C or crash.
+Not tested, documented, not verified: whether the id changes on `/clear`, `--resume` or `--continue`;
+behaviour with subagents; interactive sessions; SessionEnd firing on Ctrl-C or crash.
 
 ## Agent-visible output shape
 
@@ -47,13 +50,12 @@ and by asking the model to report what it saw.
 
 Consequences: Shield can speak to the agent mid-session (PostToolUse) and at turn end (Stop block). A
 Stop block makes the agent do another turn, so it must be used sparingly and must honour
-`stop_hook_active` to avoid loops. Stop does not accept `hookSpecificOutput.additionalContext`; the
-only agent-visible Stop channel observed is the block reason (that combination was not tested and is
-documented, not verified).
+`stop_hook_active` to avoid loops. Whether Stop honours `hookSpecificOutput.additionalContext` was not tested, documented, not verified;
+the only agent-visible Stop channel observed is the block reason.
 
 Side observation: a `Stop hook error occurred` notification appeared in the stream after a block. It
-is a user-facing notice, and the agent still received the reason. Whether it shows in the interactive UI
-as an error was not checked.
+is a user-facing notice, and the agent still received the reason. How it renders in the interactive UI is
+not tested, documented, not verified.
 
 ## Evidence refresh timing
 
@@ -69,28 +71,31 @@ measured (it returns right after writing evidence when no index exists).
 | This repo's `src/` copy | 8438 (mostly fixtures and tests) | 31.4 | 9.8, 9.0, 8.8 | No |
 | `~/Documents/GitHub/Veridion` (976 files; 356 py, 94 ts/tsx) | 976 | 6.7 | 3.0, 2.5, 2.5 | No |
 
-This is the largest repo I could find under `~/Documents/GitHub` that had a real source tree; `~/dev`
-does not exist. `rebuild` does a full re-parse (no incremental scan in core), so cost scales with file
-count. Even the mid-size repo misses 2 s.
+Only the `src/` copy (8438 files) is a large case. The second repo (976 files) is smaller; it was the
+biggest real source tree I found under `~/Documents/GitHub`, and `~/dev` does not exist. `rebuild` does a
+full re-parse (no incremental scan in core), so cost scales with file count. Even the 976-file repo
+misses 2 s.
 
 ## Decisions
 
 Which spec fallbacks apply (spec sections "Hook triggers and session identity" and "Evidence freshness"):
 
-1. **Session id: the primary path holds.** `session_id` is on all four events and constant. Fallback (b)
-   (receipt "since the previous receipt", idle-gap grouping of 30 minutes) is not needed for
-   Claude Code. Keep it only as a degraded mode for a missing or empty id, validating the id the way
-   `_session_state_path` does.
-2. **Agent-visible output: fallback (a) is not needed.** PostToolUse `additionalContext` and Stop
-   `decision: block` both reach the agent. Guard may speak to the agent at turn end via a block. Use
-   `systemMessage` for user-only text. The printing-at-pre-commit path still stands as the path outside
-   Claude Code.
-3. **Stop hook discipline.** Block at most once per turn: if `stop_hook_active` is true, exit 0 with no
-   output. A block costs an extra model turn.
-4. **Evidence freshness: the spec default applies.** `rebuild` takes about 2.5 s on a ~1k-file repo and
-   about 9 s on a large one, over the 2 s agent-hook hard stop. Do NOT call `rebuild` inline in a hook.
-   Guard reads evidence on disk and states when it is older than the changed files, as the spec says.
-   Refreshing evidence is out of scope for v1 hooks; if ever wanted, run it detached (as the existing
-   background watcher does), never in the hook's 2 s budget.
+1. **Session id: the primary path holds.** `session_id` is on all four events and constant. Spec
+   fallback (b) (receipt "since the previous receipt", checkpoints grouped by a 30-minute idle gap)
+   applies only when `session_id` is empty or invalid (validate it the way `_session_state_path` does).
+2. **Agent-visible output: spec fallback (a) is not needed for mid-session text; it is used at turn end.**
+   Per situation, v1 Guard uses:
+   - Reach the agent mid-session: PostToolUse or PreToolUse, stdout, exit 0,
+     `{"hookSpecificOutput":{"hookEventName":"PostToolUse"|"PreToolUse","additionalContext":"<text>"}}`.
+   - Turn end (Stop): user-visible only, `{"systemMessage":"<text>"}`. No `decision: block` in v1
+     (controller ruling). If `stop_hook_active` is true, emit nothing.
+   - Outside Claude Code: print at pre-commit, as the spec says.
+3. **Stop hook discipline.** No block in v1 (a block costs an extra model turn and risks loops); skip any
+   Stop output when `stop_hook_active` is true.
+4. **Evidence freshness: the spec default applies.** `rebuild` is a full re-parse: about 2.5 s on a
+   976-file repo and about 9 s on the 8438-file case, both over the 2 s agent-hook hard stop. Task 7 will
+   NOT run it inline in a hook. Guard spawns a detached background refresh (as the existing watcher does)
+   and reports evidence staleness, i.e. states when evidence is older than the changed files, as the spec
+   says.
 5. **Index not covered.** If an index exists, `rebuild` additionally embeds chunks; that only makes it
    slower, which reinforces decision 4.
