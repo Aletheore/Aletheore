@@ -26,6 +26,17 @@ _REGISTRY_LABEL = {"PyPI": "PyPI", "npm": "npm"}
 _CHECK_ORDER = ("dependencies", "affected", "signatures", "risks")
 _SKIPPED_REASONS_SHOWN = 2
 _clock = time.monotonic
+LINE_CAP = 200
+SKIPPED_CAP = 300
+_UNSAFE = re.compile("[\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
+
+
+def _clean(text: str, limit: int | None = None) -> str:
+    """One line, no terminal/bidi control characters, bounded length."""
+    text = _UNSAFE.sub("?", " ".join(str(text).split()))
+    if limit is not None and len(text) > limit:
+        text = text[: limit - 1] + "\u2026"
+    return text
 
 
 @dataclass(frozen=True)
@@ -148,9 +159,10 @@ def _dependency_findings(
             findings.append(Finding("dependencies", "info", f"{ref.name} was first published {_days_ago(first, now)} days ago.", ref.where))
 
     if not lookups and ordered:
+        verb = "was" if len(ordered) == 1 else "were"
         not_checked.append(
             f"registry lookups are off, so {_count(len(ordered), 'new dependency name', 'new dependency names')} "
-            "were not checked for existence or age"
+            f"{verb} not checked for existence or age"
         )
     if skipped_cap:
         not_checked.append(f"{skipped_cap} more names not looked up (limit {MAX_LOOKUPS} per run)")
@@ -176,49 +188,54 @@ def run_guard(
     not_checked: list[str] = []
     try:
         enabled = state.registry_lookups_enabled(repo) if lookups is None else bool(lookups)
-        changed = _changed_files(repo, base)
-
         refs, unchecked = added_dependencies(repo, base)
         by_reason: dict[str, int] = {}
         for item in unchecked:
             by_reason[item.reason] = by_reason.get(item.reason, 0) + 1
         for reason, count in by_reason.items():
             not_checked.append(f"{_count(count, 'dependency', 'dependencies')} not checked: {reason}")
-
         findings.extend(_dependency_findings(refs, enabled, deadline, opener, not_checked))
-
+    except Exception as exc:  # noqa: BLE001 - the guard must never break a hook
+        not_checked.append(f"dependency check failed ({type(exc).__name__})")
+    try:
+        changed = _changed_files(repo, base)
         evidence_findings, evidence_skipped = evidence_checks(repo, changed, base_evidence)
         findings.extend(evidence_findings)
         not_checked.extend(evidence_skipped)
-    except Exception as exc:  # noqa: BLE001 - the guard must never break a hook
-        not_checked.append(f"guard stopped on an unexpected error ({type(exc).__name__})")
-    return GuardReport(tuple(findings), tuple(dict.fromkeys(not_checked)))
+    except Exception as exc:  # noqa: BLE001
+        not_checked.append(f"evidence check failed ({type(exc).__name__})")
+    findings = [
+        Finding(f.check, f.severity, _clean(f.message), _clean(f.evidence)) for f in findings
+    ]
+    return GuardReport(tuple(findings), tuple(dict.fromkeys(_clean(n) for n in not_checked)))
 
 
 def _line(finding: Finding) -> str:
-    message = " ".join(finding.message.split())
-    evidence = " ".join(finding.evidence.split())
-    text = f"{finding.severity}: {message}"
-    return f"{text} ({evidence})" if evidence else text
+    message = _clean(finding.message)
+    evidence = _clean(finding.evidence)
+    text = f"{_clean(finding.severity)}: {message}"
+    return _clean(f"{text} ({evidence})" if evidence else text, LINE_CAP)
 
 
 def render_report(report: GuardReport, *, max_lines: int = 12) -> str:
     if not report.findings and not report.not_checked:
         return ""
+    max_lines = max(1, max_lines)
     ordered = sorted(
         report.findings,
-        key=lambda f: (_CHECK_ORDER.index(f.check) if f.check in _CHECK_ORDER else len(_CHECK_ORDER), f.severity != "warn"),
+        key=lambda f: (f.severity != "warn", _CHECK_ORDER.index(f.check) if f.check in _CHECK_ORDER else len(_CHECK_ORDER)),
     )
     skipped_line = ""
     if report.not_checked:
-        shown = "; ".join(report.not_checked[:_SKIPPED_REASONS_SHOWN])
+        shown = "; ".join(_clean(n) for n in report.not_checked[:_SKIPPED_REASONS_SHOWN])
         extra = len(report.not_checked) - _SKIPPED_REASONS_SHOWN
-        skipped_line = f"not checked: {shown}" + (f" (+{extra} more)" if extra > 0 else "")
-    room = max(max_lines - (1 if skipped_line else 0), 0)
+        skipped_line = _clean(f"not checked: {shown}" + (f" (+{extra} more)" if extra > 0 else ""), SKIPPED_CAP)
+    keep_skipped = bool(skipped_line) and (max_lines >= 2 or not ordered)
+    room = max_lines - (1 if keep_skipped else 0)
     lines = [_line(f) for f in ordered]
     if len(lines) > room:
-        keep = max(room - 1, 0)
-        lines = lines[:keep] + ([f"+{len(ordered) - keep} more"] if room else [])
-    if skipped_line:
+        keep = room - 1
+        lines = lines[:keep] + [f"+{len(ordered) - keep} more"]
+    if keep_skipped:
         lines.append(skipped_line)
     return "\n".join(lines)

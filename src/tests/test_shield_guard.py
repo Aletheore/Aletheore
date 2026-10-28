@@ -277,7 +277,7 @@ def test_render_is_silent_when_clean():
 def test_render_groups_by_check_with_evidence():
     report = GuardReport((_f("risks", "warn", "r"), _f("dependencies", "info", "d"), _f("affected", "warn", "a")), ())
     lines = render_report(report).splitlines()
-    assert [line.split(": ")[1].split(" ")[0] for line in lines] == ["d", "a", "r"]
+    assert [line.split(": ")[1].split(" ")[0] for line in lines] == ["a", "r", "d"]
     assert all("(e)" in line for line in lines)
 
 
@@ -299,3 +299,94 @@ def test_render_mentions_skipped_checks_in_one_line():
 
 def test_render_skipped_only_is_not_silent():
     assert render_report(GuardReport((), ("registry lookups are off",))) == "not checked: registry lookups are off"
+
+
+# ---- output safety and bounds ----------------------------------------------------------------------------------
+
+HOSTILE = "evil\x1b]0;pwn\x07\x1b[2Jname\nline2\u202eRTL\u200b\x9b"
+_BAD = ["\x1b", "\x07", "\x9b", "\u202e", "\u200b", "\r"]
+
+
+def test_render_strips_control_and_bidi_characters():
+    report = GuardReport((_f("dependencies", "warn", HOSTILE, HOSTILE),), (HOSTILE,))
+    out = render_report(report)
+    assert not any(bad in out for bad in _BAD)
+    assert len(out.splitlines()) == 2
+
+
+def test_run_guard_output_is_sanitised_for_hostile_names(tmp_path):
+    repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n"})
+    _write(repo, "requirements.txt", "requests==2.0\nzzqnopkgx==1.0\n")
+    report = run_guard(repo, opener=_Opener(default=None))
+    hostile = GuardReport(report.findings + (Finding("risks", "warn", HOSTILE, HOSTILE),), report.not_checked + (HOSTILE,))
+    out = render_report(hostile)
+    assert not any(bad in out for bad in _BAD)
+    # also sanitised at construction
+    for f in run_guard(repo, opener=_Opener(default=None)).findings:
+        assert "\x1b" not in f.message + f.evidence
+
+
+def test_render_bounds_line_length():
+    report = GuardReport((_f("dependencies", "warn", "x" * 5000, "y" * 5000),), ("z" * 5000,))
+    lines = render_report(report).splitlines()
+    assert len(lines[0]) <= 200 and lines[0].endswith("\u2026")
+    assert len(lines[1]) <= 300
+
+
+@pytest.mark.parametrize("max_lines", [-1, 0, 1, 2, 3])
+def test_render_never_exceeds_max_lines_and_counts_dropped(max_lines):
+    findings = tuple(_f("dependencies", "info", f"m{i}") for i in range(6))
+    out = render_report(GuardReport(findings, ("why",)), max_lines=max_lines).splitlines()
+    assert 1 <= len(out) <= max(1, max_lines)
+    shown = [line for line in out if line.startswith("info:")]
+    more = [line for line in out if line.startswith("+")]
+    assert more and len(shown) + int(more[0].split()[0][1:]) == 6
+    if max_lines >= 2:
+        assert out[-1].startswith("not checked:")
+
+
+def test_render_warn_before_info_under_cap():
+    findings = tuple(_f("dependencies", "info", f"i{i}") for i in range(20)) + (_f("risks", "warn", "risk"),)
+    out = render_report(GuardReport(findings, ()), max_lines=3).splitlines()
+    assert out[0].startswith("warn: risk") and out[-1] == "+19 more"
+
+
+def test_stage_failure_keeps_other_stage(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n"})
+    _write(repo, "requirements.txt", "requests==2.0\nzzqnopkgx==1.0\n")
+
+    def broken(*a, **k):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(guard, "evidence_checks", broken)
+    report = run_guard(repo, opener=_Opener(default=None))
+    assert any("does not exist" in f.message for f in report.findings)
+    assert any("evidence check failed" in line for line in report.not_checked)
+    monkeypatch.setattr(guard, "added_dependencies", broken)
+    report = run_guard(repo, opener=_Opener(default=None))
+    assert any("dependency check failed" in line for line in report.not_checked)
+
+
+def test_offline_grammar_singular_and_plural(tmp_path):
+    repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n"})
+    _write(repo, "requirements.txt", "requests==2.0\nzzqa==1.0\n")
+    one = run_guard(repo, lookups=False)
+    assert any("1 new dependency name was not checked" in n for n in one.not_checked)
+    _write(repo, "requirements.txt", "requests==2.0\nzzqa==1.0\nzzqb==1.0\n")
+    two = run_guard(repo, lookups=False)
+    assert any("2 new dependency names were not checked" in n for n in two.not_checked)
+
+
+def test_rendered_spec_scenario(tmp_path):
+    repo = _init(tmp_path / "r", {
+        "requirements.txt": "requests==2.0\n",
+        "package.json": json.dumps({"name": "root", "workspaces": ["packages/*"]}),
+        "packages/core/package.json": json.dumps({"name": "@acme/core", "version": "1.0.0"}),
+    })
+    _write(repo, "requirements.txt", "requests==2.0\nzzqnopkgx==1.0\nreqeusts==1.0\n")
+    _write(repo, "package.json", json.dumps({"name": "root", "workspaces": ["packages/*"],
+                                             "dependencies": {"@acme/core": "1.0.0"}}))
+    out = render_report(run_guard(repo, opener=_Opener({"reqeusts": 3}, default=None)))
+    assert "zzqnopkgx does not exist on PyPI" in out
+    assert "reqeusts is one edit from the popular package requests" in out
+    assert "acme" not in out
