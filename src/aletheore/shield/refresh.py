@@ -11,9 +11,17 @@ from pathlib import Path
 
 
 def main(argv: list[str] | None = None) -> int:
+    """`<repo> [<start time>]`. With the start time the guard recorded in its marker, a successful rebuild is
+    followed by a completion record naming that start and the evidence file this rebuild wrote."""
     args = sys.argv[1:] if argv is None else argv
-    if len(args) != 1:
+    if len(args) not in (1, 2):
         return 2
+    started = None
+    if len(args) == 2:
+        try:
+            started = float(args[1])
+        except ValueError:
+            started = None
     from aletheore import watch
 
     try:
@@ -23,6 +31,13 @@ def main(argv: list[str] | None = None) -> int:
         watch.rebuild(Path(args[0]), lambda _message: None, allow_hosted=False, edit_gitignore=False)
     except Exception:  # noqa: BLE001  # nosec B110 - detached, nothing to report to
         return 1
+    if started is not None:
+        from aletheore.shield import guard_evidence
+
+        try:
+            guard_evidence.record_refresh_finished(Path(args[0]), started)
+        except Exception:  # noqa: BLE001  # nosec B110 - without the record the guard falls back to its margin
+            return 1
     return 0
 
 

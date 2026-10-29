@@ -413,6 +413,11 @@ def _record_refresh(repo: Path, started: float) -> Path:
     return marker
 
 
+def _finish_refresh(repo: Path, started: float) -> None:
+    """What Shield's refresh process records once its rebuild returned: its start and the evidence it wrote."""
+    guard_evidence.record_refresh_finished(repo, started)
+
+
 def _stamp(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
 
@@ -430,8 +435,9 @@ def test_file_edited_before_the_refresh_started_is_fresh_once_it_finished(repo, 
     monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda *a, **k: False)
     started = time.time() - 100
     air = _write_evidence(repo, _evidence(_core_modules(), scanned_at=_stamp(started + 2)))
-    _set_mtime(air, started + 3)  # the refresh wrote its evidence after it started: it finished
+    _set_mtime(air, started + 3)  # the refresh wrote its evidence after it started
     _record_refresh(repo, started)
+    _finish_refresh(repo, started)  # ... and recorded that write as its own
     core = repo / "app" / "core.py"
     _set_mtime(core, started - 1)  # inside the old 15 s margin, but before the refresh began reading files
     findings, not_checked = evidence_checks(repo, ["app/core.py"], None)
@@ -499,6 +505,7 @@ def test_finished_refresh_lets_a_newer_edit_start_another_inside_the_minute(repo
     air = _write_evidence(repo, _evidence(_core_modules(), scanned_at=_stamp(started + 4)))
     _set_mtime(air, started + 5)  # finished
     _record_refresh(repo, started)
+    _finish_refresh(repo, started)
     _set_mtime(repo / "app" / "core.py", started + 10)  # edited after that refresh started
     assert guard_evidence.start_background_refresh(repo, ["app/core.py"], _stamp(started + 4)) is True
     assert len(no_spawn) == 1
@@ -510,7 +517,112 @@ def test_finished_refresh_still_throttles_when_nothing_is_newer_than_its_start(r
     air = _write_evidence(repo, _evidence(_core_modules(), scanned_at=_stamp(started + 4)))
     _set_mtime(air, started + 5)
     _record_refresh(repo, started)
+    _finish_refresh(repo, started)
     _set_mtime(repo / "app" / "core.py", started - 1)  # covered by that refresh
     assert guard_evidence.start_background_refresh(repo, ["app/core.py"], _stamp(started + 4)) is False
     assert guard_evidence.start_background_refresh(repo, None) is False  # no files given: 60 s throttle
     assert no_spawn == []
+
+
+# ---- refresh completion is tied to Shield's own evidence write (re-review F2) ---------------------------------------
+# Another writer (MCP watcher, `aletheore watch`, a manual scan) can rewrite air.json after a Shield refresh started
+# although its scan read the files earlier; only the completion record Shield's own refresh writes may move the
+# coverage boundary to the refresh start.
+
+
+def test_another_writer_finishing_after_the_start_does_not_count_as_the_refresh(repo, monkeypatch):
+    monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda *a, **k: False)
+    now = time.time()
+    _record_refresh(repo, now - 10)  # Shield's refresh started and is still running
+    air = _write_evidence(repo, _evidence(_core_modules(), scanned_at=_stamp(now - 9)))
+    _set_mtime(air, now - 9)  # a concurrent scan, which read the files around now - 15, wrote this
+    _set_mtime(repo / "app" / "core.py", now - 12)  # edited after that scan read it, before the refresh started
+    _, not_checked = evidence_checks(repo, ["app/core.py"], None)
+    assert "older than 1 changed file(s)" in not_checked[0]
+
+
+def test_completion_record_for_other_evidence_falls_back_to_the_margin(repo, monkeypatch):
+    monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda *a, **k: False)
+    started = time.time() - 100
+    air = _write_evidence(repo, _evidence(_core_modules(), scanned_at=_stamp(started + 2)))
+    _set_mtime(air, started + 3)
+    _record_refresh(repo, started)
+    _finish_refresh(repo, started)
+    core = repo / "app" / "core.py"
+    _set_mtime(core, started - 1)
+    findings, _ = evidence_checks(repo, ["app/core.py"], None)
+    assert any(f.check == "affected" for f in findings)  # Shield's own write: fresh
+    _set_mtime(air, started + 4)  # another writer rewrote air.json since
+    _, not_checked = evidence_checks(repo, ["app/core.py"], None)
+    assert "older than 1 changed file(s)" in not_checked[0]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [None, "", "garbage", "[]", '{"started": "x", "evidence_mtime_ns": 1}', '{"started": NaN, "evidence_mtime_ns": 1}',
+     '{"started": 1.0}', '{"started": 1.0, "evidence_mtime_ns": "1"}', '{"started": 1.0, "evidence_mtime_ns": true}',
+     "FUTURE"],
+)
+def test_unusable_completion_record_falls_back_to_the_margin(repo, monkeypatch, content):
+    monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda *a, **k: False)
+    started = time.time() - 100
+    air = _write_evidence(repo, _evidence(_core_modules(), scanned_at=_stamp(started + 2)))
+    _set_mtime(air, started + 3)
+    _record_refresh(repo, started)
+    done = state.shield_dir(repo) / guard_evidence._DONE_NAME
+    if content == "FUTURE":
+        content = json.dumps({"started": time.time() + 3600, "evidence_mtime_ns": air.stat().st_mtime_ns})
+    if content is not None:
+        done.write_text(content, encoding="utf-8")
+    _set_mtime(repo / "app" / "core.py", started - 1)
+    _, not_checked = evidence_checks(repo, ["app/core.py"], None)
+    assert "older than 1 changed file(s)" in not_checked[0]
+
+
+def test_completion_record_without_evidence_is_ignored(repo):
+    _record_refresh(repo, time.time() - 10)
+    _finish_refresh(repo, time.time() - 10)  # no air.json: nothing is recorded, nothing raises
+    assert guard_evidence._finished_refresh_start(repo) is None
+
+
+def test_crashed_refresh_is_not_finished_and_stops_blocking_after_the_timeout(repo, no_spawn, monkeypatch):
+    now = time.time()
+    air = _write_evidence(repo, _evidence(_core_modules(), scanned_at=_stamp(now - 25)))
+    _set_mtime(air, now - 20)  # some other writer, after the refresh started
+    _record_refresh(repo, now - 30)  # started, never recorded a completion
+    _set_mtime(repo / "app" / "core.py", now - 5)
+    assert guard_evidence._finished_refresh_start(repo) is None
+    # Not finished, so the "finished, newer edit" shortcut does not apply: it still counts as running.
+    assert guard_evidence.start_background_refresh(repo, ["app/core.py"], _stamp(now - 25)) is False
+    _record_refresh(repo, now - guard_evidence.REFRESH_RUNNING_TIMEOUT_S - 5)
+    assert guard_evidence.start_background_refresh(repo, ["app/core.py"], _stamp(now - 25)) is True
+    assert len(no_spawn) == 1
+
+
+def test_refresh_child_gets_its_start_time(repo, no_spawn):
+    air = _write_evidence(repo, _evidence(_core_modules()))
+    _set_mtime(air, time.time() - 100)
+    assert guard_evidence.start_background_refresh(repo, ["app/core.py"]) is True
+    (args, _kwargs), = no_spawn
+    assert float(args[0][4]) == guard_evidence._refresh_started_at(_marker(repo))
+
+
+def test_refresh_module_records_completion_only_after_a_successful_rebuild(repo, monkeypatch):
+    air = _write_evidence(repo, _evidence(_core_modules()))
+    started = time.time() - 5
+    state.shield_dir(repo, create=True)
+    monkeypatch.setattr(watch, "rebuild", lambda path, report, **kw: _set_mtime(air, started + 1))
+    assert refresh.main([str(repo), repr(started)]) == 0
+    assert guard_evidence._finished_refresh_start(repo) == started
+
+    (state.shield_dir(repo) / guard_evidence._DONE_NAME).unlink()
+
+    def boom(*a, **k):
+        raise RuntimeError("scan failed")
+
+    monkeypatch.setattr(watch, "rebuild", boom)
+    assert refresh.main([str(repo), repr(started)]) == 1
+    assert not (state.shield_dir(repo) / guard_evidence._DONE_NAME).exists()
+    monkeypatch.setattr(watch, "rebuild", lambda path, report, **kw: None)
+    assert refresh.main([str(repo), "nan"]) == 0  # an unusable start records nothing
+    assert not (state.shield_dir(repo) / guard_evidence._DONE_NAME).exists()

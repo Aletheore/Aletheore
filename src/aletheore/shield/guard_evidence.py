@@ -8,14 +8,17 @@ has 2 s):
   signatures, new risks) are skipped and say so in `not_checked`; a stale graph never produces a "no dependents".
   A detached refresh is started instead (`start_background_refresh`), at most once a minute, except that a
   finished refresh lets the next one start at once for a file edited after it began.
-- The refresh marker records when the last refresh started. Once the evidence file has been rewritten since, every
-  file modified before that start is in the evidence (the refresh read files after it started).
+- The refresh marker records when the last refresh started; the refresh process passes that start back in a
+  completion record with the nanosecond mtime of the evidence it wrote. While `air.json` still has that mtime, every
+  file modified before the start is in the evidence (the refresh read files after it started). Otherwise (no record,
+  or another writer rewrote `air.json`) freshness falls back to `scanned_at` minus a 15 s margin.
 - Messages state facts with counts and names and give no advice. Signature findings are file-level: they name the
   files that import the module, never claim anything about call sites.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import shutil
@@ -41,6 +44,7 @@ REFRESH_RUNNING_TIMEOUT_S = 120.0
 # it was modified later than `scanned_at` minus this margin.
 STALENESS_MARGIN_S = 15.0
 _MARKER_NAME = "refresh.marker"
+_DONE_NAME = "refresh.done"  # written by the refresh process itself: its start and the evidence mtime it produced
 _LIST_CAP = 5
 _SIGNATURE_FINDINGS_CAP = 5
 _EVIDENCE_REL = Path(".aletheore") / "air.json"
@@ -96,13 +100,57 @@ def _refresh_started_at(marker: Path) -> float | None:
     return value if math.isfinite(value) else None
 
 
-def _finished_refresh_start(repo: Path) -> float | None:
-    """When the last refresh started, if the evidence file has been written since (so that refresh finished)."""
-    started = _refresh_started_at(state.shield_dir(repo) / _MARKER_NAME)
-    evidence_time = _mtime(Path(repo) / _EVIDENCE_REL)
-    if started is None or evidence_time is None or evidence_time < started:
+def _evidence_mtime_ns(repo: Path) -> int | None:
+    try:
+        return (Path(repo) / _EVIDENCE_REL).stat().st_mtime_ns
+    except OSError:
         return None
-    return started
+
+
+def record_refresh_finished(repo: Path, started: float) -> None:
+    """Called by Shield's refresh process after its rebuild returned: record its start time and the mtime of the
+    evidence it wrote (atomically replaced). Records nothing when the start is unusable or there is no evidence."""
+    mtime_ns = _evidence_mtime_ns(repo)
+    if mtime_ns is None or not math.isfinite(started):
+        return
+    done = state.shield_dir(repo) / _DONE_NAME
+    temporary = done.with_name(f"{done.name}.{os.getpid()}.{time.monotonic_ns()}.tmp")
+    try:
+        temporary.write_text(json.dumps({"started": started, "evidence_mtime_ns": mtime_ns}), encoding="utf-8")
+        os.replace(temporary, done)
+    except OSError:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+
+
+def _finished_refresh_start(repo: Path) -> float | None:
+    """When the last Shield refresh started, only if that refresh finished and wrote the evidence on disk now.
+
+    The completion record its own process writes must name the current `air.json` mtime (to the nanosecond). Any
+    other writer (the MCP watcher, `aletheore watch`, a manual scan) changes that mtime, and its scan may have read
+    files before the refresh started, so then there is no trusted start and the caller falls back to the margin."""
+    try:
+        data = json.loads((state.shield_dir(repo) / _DONE_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    started, recorded = data.get("started"), data.get("evidence_mtime_ns")
+    if isinstance(started, bool) or not isinstance(started, (int, float)) or not math.isfinite(started):
+        return None
+    if isinstance(recorded, bool) or not isinstance(recorded, int):
+        return None
+    if started > time.time() or recorded != _evidence_mtime_ns(repo):
+        return None
+    return float(started)
+
+
+def _refresh_finished(repo: Path, started: float) -> bool:
+    """Whether the refresh that recorded `started` in the marker has written its completion record."""
+    finished = _finished_refresh_start(repo)
+    return finished is not None and finished == started
 
 
 def _covered_until(repo: Path, scan_time: float) -> float:
@@ -142,13 +190,13 @@ def _write_marker(marker: Path, started: float) -> bool:
             pass
 
 
-def _claim_marker(marker: Path, evidence_time: float | None = None, newest_edit: float | None = None) -> bool:
+def _claim_marker(marker: Path, newest_edit: float | None = None) -> bool:
     """Atomically take the refresh marker and record the start time in it; False when a refresh may not start.
 
-    A previous refresh blocks a new one while it is still running (its evidence not rewritten since it started)
-    and younger than REFRESH_RUNNING_TIMEOUT_S. One that has finished blocks a new one for REFRESH_MIN_INTERVAL_S,
-    unless a changed file was modified after it started (`newest_edit`). A marker without a readable start time
-    falls back to its mtime."""
+    A previous refresh blocks a new one while it is still running (it has not written its completion record; see
+    `_finished_refresh_start`) and is younger than REFRESH_RUNNING_TIMEOUT_S, so one that crashed stops blocking
+    after that. One that has finished blocks a new one for REFRESH_MIN_INTERVAL_S, unless a changed file was
+    modified after it started (`newest_edit`). A marker without a readable start time falls back to its mtime."""
     now = time.time()
     if _write_marker(marker, now):
         return True
@@ -157,11 +205,12 @@ def _claim_marker(marker: Path, evidence_time: float | None = None, newest_edit:
         started = _mtime(marker)
     if started is not None:
         age = now - started
-        running = evidence_time is not None and evidence_time < started
+        # marker.parent is <repo>/.aletheore/shield
+        running = not _refresh_finished(marker.parent.parent.parent, started)
         if running:
             if 0 <= age < REFRESH_RUNNING_TIMEOUT_S:
                 return False
-        elif not (newest_edit is not None and evidence_time is not None and newest_edit > started):
+        elif not (newest_edit is not None and newest_edit > started):
             if 0 <= age < REFRESH_MIN_INTERVAL_S:
                 return False
     # Replaceable marker: remove it, then race for the exclusive create again; only one caller wins.
@@ -200,16 +249,19 @@ def start_background_refresh(repo: Path, changed: list[str] | None = None, scann
     marker = state.shield_dir(repo) / _MARKER_NAME
     try:
         state.shield_dir(repo, create=True)
-        if not _claim_marker(marker, evidence_time, newest_edit):
+        if not _claim_marker(marker, newest_edit):
             return False
     except OSError:
         return False  # without the marker the storm guard cannot work, so start nothing
+    started = _refresh_started_at(marker)
+    if started is None:
+        return False  # the marker this call just wrote is gone or unreadable: the refresh could not report back
     options: dict = {"start_new_session": True}
     if os.name == "nt":
         options = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
     try:
         subprocess.Popen(  # noqa: S603  # nosec B603 - fixed argv, our own module, no shell
-            [sys.executable, "-m", "aletheore.shield.refresh", str(repo)],
+            [sys.executable, "-m", "aletheore.shield.refresh", str(repo), repr(started)],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
