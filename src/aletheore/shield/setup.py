@@ -70,6 +70,7 @@ SH_SHELLS = frozenset({"sh", "bash", "dash", "zsh", "ksh", "ash", "mksh"})
 SETTINGS_RELATIVE = PurePosixPath(".claude/settings.local.json")
 RECORD_NAME = "setup-record.json"
 BACKUP_NAME = "original-settings.local.json.bak"
+KEEP_EXCLUDE_BLOCK = f"{MARK_START}\n/.aletheore/\n{MARK_END}\n"
 EXCLUDE_BLOCK = f"{MARK_START}\n/.aletheore/\n/{SETTINGS_RELATIVE.as_posix()}\n{MARK_END}\n"
 DIFF_MAX_LINES = 200
 PLAN_CHANGED = "setup plan changed since it was shown"
@@ -994,7 +995,9 @@ def _remove_settings(where: _Where, record: _Record) -> Path | None:
     return path
 
 
-def _remove_block(where: _Where, path: Path, record: _Record, *, hook: bool) -> Path | None:
+def _remove_block(
+    where: _Where, path: Path, record: _Record, *, hook: bool, keep_ignore: bool = False
+) -> Path | None:
     if path.is_symlink() or not path.is_file() or not _contained(path, where.common_dir):
         return None
     try:
@@ -1006,7 +1009,16 @@ def _remove_block(where: _Where, path: Path, record: _Record, *, hook: bool) -> 
     if block is None:
         return None
     empty = _only_shebang(left) if hook else not left
-    if _record_name(where, path) in record.created and empty:
+    if keep_ignore:
+        # Scan evidence is still in .aletheore/: leave a block with only that line (same markers), so a later
+        # `off` or a re-setup replaces it cleanly.
+        core_start = text.find(MARK_START)
+        core_end = text.find(MARK_END, core_start) + len(MARK_END)
+        new = text[:core_start] + KEEP_EXCLUDE_BLOCK.rstrip("\n") + text[core_end:]
+        _write_atomic(path, new.encode("utf-8"), mode)
+    elif not hook and empty and block == KEEP_EXCLUDE_BLOCK.strip("\n"):
+        path.unlink()  # only the kept line was in it: Shield created this file
+    elif _record_name(where, path) in record.created and empty:
         path.unlink()
     else:
         _write_atomic(path, left.encode("utf-8"), mode)
@@ -1036,9 +1048,6 @@ def _remove(where: _Where, *, purge: bool, rollback: bool = False) -> list[Path]
             done = _remove_block(where, hook, record, hook=True)
             if done is not None:
                 changed.append(done)
-        done = _remove_block(where, where.exclude, record, hook=False)
-        if done is not None:
-            changed.append(done)
 
     shield = _shield_dir(where)
     setup_folder = _setup_dir(where)
@@ -1058,15 +1067,24 @@ def _remove(where: _Where, *, purge: bool, rollback: bool = False) -> list[Path]
                 shutil.rmtree(folder)
                 changed.append(folder)
 
-    folders = [_from_record(where, name) for name in record.created]
-    for folder in sorted(folders, key=lambda p: len(p.parts), reverse=True):
-        try:
-            inside = any(_contained(folder, root) for root in (where.top, where.common_dir, where.git_dir))
-            if inside and folder.is_dir() and not folder.is_symlink() and not any(folder.iterdir()):
-                folder.rmdir()
-                changed.append(folder)
-        except OSError:
-            continue
+    def prune_created() -> None:
+        folders = [_from_record(where, name) for name in record.created]
+        for folder in sorted(folders, key=lambda p: len(p.parts), reverse=True):
+            try:
+                inside = any(_contained(folder, root) for root in (where.top, where.common_dir, where.git_dir))
+                if inside and folder.is_dir() and not folder.is_symlink() and not any(folder.iterdir()):
+                    folder.rmdir()
+                    changed.append(folder)
+            except OSError:
+                continue
+
+    prune_created()
+    if not _other_worktrees_set_up(where):
+        keep = not rollback and (where.top / ".aletheore").is_dir()
+        done = _remove_block(where, where.exclude, record, hook=False, keep_ignore=keep)
+        if done is not None:
+            changed.append(done)
+        prune_created()  # the exclude file may have been the last thing in a folder setup created
     return changed
 
 

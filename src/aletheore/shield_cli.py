@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import contextlib
 import io
-import os
 import sys
 from datetime import timezone
 from pathlib import Path
@@ -369,7 +368,10 @@ def off(
     _out("Shield will remove:")
     _out("  - the hooks Shield registered in .claude/settings.local.json")
     _out("  - Shield's block in the git hook")
-    _out("  - Shield's block in .git/info/exclude")
+    if (repo / ".aletheore").is_dir():
+        _out("  - Shield's block in .git/info/exclude, except a one-line exclude for .aletheore/ (scan evidence stays there)")
+    else:
+        _out("  - Shield's block in .git/info/exclude")
     _out("  - Shield's config")
     if purge:
         _out("  - checkpoints, receipts and hook state (--purge)")
@@ -400,7 +402,10 @@ def off(
     if not removed:
         _out("Nothing to remove.")
     if (repo / ".aletheore").exists():
-        _out("Scan evidence in .aletheore/ was left alone; delete .aletheore/ yourself to remove it.")
+        _out(
+            "Kept a git exclude for .aletheore/ because scan evidence remains there (delete .aletheore/ yourself, "
+            "then run `aletheore shield off` again to drop it)."
+        )
     if shared_blocks_kept(repo):
         _out("Another worktree still uses Shield: the shared git hook was kept.")
 

@@ -566,3 +566,51 @@ def test_success_message_names_receipts_config_and_check(repo):
     r = runner.invoke(app, ["shield", "--path", str(repo), "--yes"])
     assert ".aletheore/shield/receipts/" in r.output and ".aletheore/shield/config.json" in r.output
     assert "aletheore shield check" in r.output
+
+
+# ----------------------------------------------------------------------------- exclude kept while evidence remains
+
+
+def _exclude(repo):
+    return repo / ".git" / "info" / "exclude"
+
+
+def _off(repo, *extra):
+    r = runner.invoke(app, ["shield", "off", "--yes", "--path", str(repo), *extra])
+    assert r.exit_code == 0, r.output
+    return r
+
+
+@pytest.mark.parametrize("extra", [(), ("--purge",)])
+def test_off_keeps_a_one_line_exclude_while_scan_evidence_remains(repo, extra):
+    original = _exclude(repo).read_bytes() if _exclude(repo).exists() else None
+    _setup_on(repo)
+    (repo / ".aletheore" / "history").mkdir(parents=True, exist_ok=True)
+    (repo / ".aletheore" / "history" / "snap.json").write_text("{}", encoding="utf-8")
+    r = _off(repo, *extra)
+    assert _git(repo, "status", "--porcelain").stdout.decode().strip() == ""
+    lines = [ln for ln in _exclude(repo).read_text(encoding="utf-8").splitlines()
+             if ln.strip() and not ln.startswith("#") or "aletheore" in ln]
+    assert [ln for ln in lines if ln.startswith("/")] == ["/.aletheore/"]
+    assert "Kept a git exclude for .aletheore/" in r.output
+    # second off is idempotent and still keeps the line
+    _off(repo, *extra)
+    assert "/.aletheore/" in _exclude(repo).read_text(encoding="utf-8")
+    assert _git(repo, "status", "--porcelain").stdout.decode().strip() == ""
+    # once the evidence is gone, off drops the exclude to how it was
+    import shutil
+    shutil.rmtree(repo / ".aletheore")
+    _off(repo, *extra)
+    after = _exclude(repo).read_bytes() if _exclude(repo).exists() else None
+    assert after == original or (original is None and after in (None, b""))
+    assert b"aletheore" not in (after or b"")
+
+
+def test_off_without_evidence_restores_exclude_byte_for_byte(repo):
+    _exclude(repo).parent.mkdir(parents=True, exist_ok=True)
+    _exclude(repo).write_bytes(b"# mine\n*.log")
+    _setup_on(repo)
+    import shutil
+    shutil.rmtree(repo / ".aletheore")
+    _off(repo)
+    assert _exclude(repo).read_bytes() == b"# mine\n*.log"
