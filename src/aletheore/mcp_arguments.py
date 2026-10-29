@@ -57,7 +57,7 @@ ARGUMENT_DESCRIPTIONS: dict[str, dict[str, str]] = {
     },
     "aletheore_page": {
         "tool": "The evidence tool whose cut result you are paging, e.g. aletheore_endpoints.",
-        "target": "The same target you gave that tool, if it takes one.",
+        "target": "The same target you gave that tool, if it takes one (none for a repo-wide result).",
         **_PAGING,
     },
     "aletheore_changes": {

@@ -210,6 +210,7 @@ def _section_view(
     size_of: SizeOf,
     budget: int,
     sort_by: Mapping[str, Callable[[Any], Any]] | None,
+    scope: str | None = None,
 ) -> dict:
     if section not in lists:
         return BudgetError(
@@ -238,6 +239,8 @@ def _section_view(
         }
         if needle:
             out["unfiltered_total"] = unfiltered_total
+        if scope is not None:
+            out["scope"] = scope
         return out
 
     used = _json_len(view([]))
@@ -279,6 +282,7 @@ def apply_budget(
     filter: str | None = None,  # noqa: A002 - matches the tool parameter name agents see
     sort_by: Mapping[str, Callable[[Any], Any]] | None = None,
     how_to_get_more: str | None = None,
+    scope: str | None = None,
 ) -> Any:
     """Bound `data` to `budget_chars` as measured by `size_of`, or page one of its lists.
 
@@ -304,4 +308,4 @@ def apply_budget(
         if size_of(data) <= budget_chars:
             return data
         return _overview(data, lists, size_of, budget_chars, sort_by, how_to_get_more) if lists else data
-    return _section_view(lists, section, offset, limit, filter, size_of, budget_chars, sort_by)
+    return _section_view(lists, section, offset, limit, filter, size_of, budget_chars, sort_by, scope)

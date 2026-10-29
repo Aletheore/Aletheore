@@ -329,3 +329,46 @@ async def test_a_client_still_passing_the_old_paging_arguments_gets_a_loud_error
         assert next(iter(arguments)) in str(error.value) and "Extra inputs are not permitted" in str(error.value)
     ok = await server.call_tool("aletheore_endpoints", {})
     assert ok.is_error is not True
+
+
+@pytest.mark.asyncio
+async def test_a_page_of_an_optional_target_tool_says_which_scope_it_was_read_from(tmp_path):
+    # aletheore_ownership is the one evidence tool whose target is optional: with none it is repo-wide. A page read
+    # without the target the cut result was made with would otherwise look like the same list and not be.
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    repo_wide = tool_result_body(await server.call_tool("aletheore_page", {"tool": "aletheore_ownership", "section": "$"}))["result"]
+    assert repo_wide["scope"] == "repo-wide"
+
+    scoped = tool_result_body(
+        await server.call_tool("aletheore_page", {"tool": "aletheore_ownership", "section": "$", "target": "a.py"})
+    )["result"]
+    assert scoped["scope"] == "a.py"
+
+    # Tools with a required target or none need no echo: the call already names it, or there is none to name.
+    bloat(repo, 5)
+    plain = tool_result_body(await build_server(repo).call_tool(
+        "aletheore_page", {"tool": "aletheore_endpoints", "section": "endpoints"}
+    ))["result"]
+    assert "scope" not in plain
+
+
+def test_rejecting_unknown_arguments_never_breaks_server_startup_when_fastmcp_internals_differ():
+    from unittest.mock import MagicMock
+
+    from aletheore.mcp_server import _reject_unknown_arguments
+
+    no_metadata = MagicMock(); no_metadata.name = "aletheore_imports"; no_metadata.fn_metadata = None
+    no_model = MagicMock(); no_model.name = "aletheore_symbols"; no_model.fn_metadata.arg_model = None
+    unrelated = MagicMock(); unrelated.name = "aletheore_find_skill"
+    broken_model = MagicMock(); broken_model.name = "aletheore_endpoints"
+    broken_model.fn_metadata.arg_model.model_rebuild.side_effect = RuntimeError("internals moved")
+    server = MagicMock()
+    server._tool_manager.list_tools.return_value = [no_metadata, no_model, unrelated, broken_model]
+    _reject_unknown_arguments(server, {"aletheore_imports", "aletheore_symbols", "aletheore_endpoints"})  # must not raise
+
+    class NoManager:
+        pass
+
+    _reject_unknown_arguments(NoManager(), {"aletheore_imports"})  # a server without the private manager: skip, do not raise

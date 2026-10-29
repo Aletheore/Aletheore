@@ -766,13 +766,7 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path, only
             _guard_evidence_read_errors(tool_func)
         )
 
-    # A pydantic arguments model ignores unknown arguments by default. These 18 tools used to take section/offset/limit/
-    # filter, so a client still sending them must fail loudly, not receive the first page and believe it paged. Set after
-    # registration: it changes validation only, not the published schema.
-    for tool in mcp_instance._tool_manager.list_tools():
-        if tool.name in _TOOL_NAME_TO_QUERY_KIND:
-            tool.fn_metadata.arg_model.model_config["extra"] = "forbid"
-            tool.fn_metadata.arg_model.model_rebuild(force=True)
+    _reject_unknown_arguments(mcp_instance, set(_TOOL_NAME_TO_QUERY_KIND))
 
     pageable = {
         name: (*QUERY_FUNCTIONS[kind], kind in optional_target_kinds, kind)
@@ -781,6 +775,32 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path, only
     }
     if pageable:
         _register_page_tool(mcp_instance, repo_path, pageable, query_budget_chars)
+
+
+def _reject_unknown_arguments(mcp_instance: MCPServer, tool_names: set[str]) -> None:
+    """Make the named tools fail on an argument they do not declare, instead of ignoring it.
+
+    A pydantic arguments model ignores unknown arguments by default. The 18 evidence tools used to take section, offset,
+    limit and filter, so a client still sending them must get an error, not the first page believing it paged. Set after
+    registration: it changes validation only, not the published schema.
+
+    This reaches into FastMCP internals (the tool manager and each tool's argument model), which are not public API. If
+    they differ in some release it is skipped, with a warning, rather than taking down every tool registration: the
+    server then ignores stale arguments as before, which is the failure this hardening only exists to make louder."""
+    try:
+        tools = list(mcp_instance._tool_manager.list_tools())
+    except Exception:  # noqa: BLE001 - a missing or changed private attribute must not stop the server starting
+        logging.getLogger(__name__).warning("could not reject unknown tool arguments: FastMCP internals differ")
+        return
+    for tool in tools:
+        if tool.name not in tool_names:
+            continue
+        try:
+            arg_model = tool.fn_metadata.arg_model
+            arg_model.model_config["extra"] = "forbid"
+            arg_model.model_rebuild(force=True)
+        except Exception:  # noqa: BLE001 - same reason: skip this tool, keep the others
+            logging.getLogger(__name__).warning("could not reject unknown arguments for %s", tool.name)
 
 
 def _how_to_page(tool_name: str, target: str | None) -> str:
@@ -832,6 +852,8 @@ def _register_page_tool(mcp_instance: MCPServer, repo_path: Path, pageable: dict
             limit=limit,
             filter=filter,
             sort_by=_QUERY_BUDGET_SORT_BY.get(kind),
+            # With an optional target the same section path exists repo-wide and per file; say which one this page is.
+            scope=(target or "repo-wide") if optional_target else None,
         )
 
 
