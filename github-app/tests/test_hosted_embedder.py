@@ -1,5 +1,6 @@
 import importlib
 import math
+import types
 
 import httpx
 import pytest
@@ -82,7 +83,7 @@ def test_retryable_status_is_retried_with_backoff_then_succeeds(monkeypatch):
     results = iter([_response(429), _response(503), _response(200, [[1.0]])])
     monkeypatch.setattr(he.httpx, "post", lambda *a, **k: next(results))
     slept = []
-    monkeypatch.setattr(he.time, "sleep", slept.append)
+    monkeypatch.setattr(he, "time", types.SimpleNamespace(sleep=slept.append))
 
     assert he.embed_batch(["x"]) == ([[1.0]], 7)
     assert slept == [0.5, 1.0]  # waits before each retry, doubling, and not before the first attempt
@@ -290,7 +291,7 @@ def test_a_network_timeout_is_retried_like_a_retryable_status(monkeypatch):
         return outcome
 
     monkeypatch.setattr(he.httpx, "post", fake_post)
-    monkeypatch.setattr(he.time, "sleep", lambda s: None)
+    monkeypatch.setattr(he, "time", types.SimpleNamespace(sleep=lambda s: None))
 
     assert he.embed_batch(["x"])[0] == [[1.0]]
 
@@ -299,7 +300,7 @@ def test_giving_up_after_the_last_attempt_reports_the_last_status_and_sleeps_onl
     attempts = []
     slept = []
     monkeypatch.setattr(he.httpx, "post", lambda *a, **k: attempts.append(1) or _response(429))
-    monkeypatch.setattr(he.time, "sleep", slept.append)
+    monkeypatch.setattr(he, "time", types.SimpleNamespace(sleep=slept.append))
 
     with pytest.raises(he.EmbedderUnavailable, match="429"):
         he.embed_batch(["x"])
@@ -311,7 +312,7 @@ def test_giving_up_after_the_last_attempt_reports_the_last_status_and_sleeps_onl
 def test_a_single_attempt_never_sleeps(monkeypatch):
     slept = []
     monkeypatch.setattr(he.httpx, "post", lambda *a, **k: _response(503))
-    monkeypatch.setattr(he.time, "sleep", slept.append)
+    monkeypatch.setattr(he, "time", types.SimpleNamespace(sleep=slept.append))
 
     with pytest.raises(he.EmbedderUnavailable):
         he.embed_batch(["x"], retries=1)
@@ -325,7 +326,7 @@ def test_the_in_flight_slot_is_released_while_backing_off(monkeypatch):
     free_during_sleep = []
     results = iter([_response(429), _response(200, [[1.0]])])
     monkeypatch.setattr(he.httpx, "post", lambda *a, **k: next(results))
-    monkeypatch.setattr(he.time, "sleep", lambda s: free_during_sleep.append(he._IN_FLIGHT._value))
+    monkeypatch.setattr(he, "time", types.SimpleNamespace(sleep=lambda s: free_during_sleep.append(he._IN_FLIGHT._value)))
 
     he.embed_batch(["x"])
 
@@ -354,7 +355,7 @@ def _remote_client(monkeypatch):
     import scan_worker.embedding_client as ec
 
     ec = importlib.reload(ec)  # a fresh module also means a fresh circuit breaker
-    monkeypatch.setattr(he.time, "sleep", lambda s: None)
+    monkeypatch.setattr(he, "time", types.SimpleNamespace(sleep=lambda s: None))
     return ec
 
 
