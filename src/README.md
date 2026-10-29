@@ -507,20 +507,25 @@ checkpoints you can restore, and a receipt per agent session. It makes no model 
 account. Shield is built for Claude Code hooks plus a Git pre-commit hook.
 
 ```text
-aletheore shield [--path DIR] [--yes]
+aletheore shield setup [--path DIR] [--yes]
+aletheore shield status [--path DIR]
 aletheore shield undo [REF] [--path DIR] [--yes]
 aletheore shield off [--purge] [--path DIR] [--yes]
 aletheore shield check [--no-lookups] [--path DIR]
+aletheore shield [--path DIR] [--yes]
 ```
 
-- `aletheore shield` with Shield off prints the plan (every file it will create or edit, with a
-  diff, and the network note) and asks you to type `yes`. `--yes` skips the question; without a
-  terminal and without `--yes` nothing is changed. If Shield is already on it prints the status:
-  the checkpoint count, the latest receipt and the next commands. Setup is applied first; if the
-  repository has no evidence yet, a quick local scan follows, and a failed scan only prints a
-  warning.
+- `setup` prints the plan (every file it will create or edit, with a diff, and the network note)
+  and asks you to type `yes`. `--yes` skips the question; without a terminal and without `--yes`
+  nothing is changed. Setup is applied first; if the repository has no evidence yet, a quick local
+  scan follows, and a failed scan only prints a warning. Run again on a repository where Shield is
+  on, it shows only what needs updating (for example hook entries in the old command format, or a
+  removed Git hook block) and otherwise says there is nothing to change.
+- `status` prints whether Shield is on, the checkpoint count, the latest receipt, notes on anything
+  missing, and the next commands. It changes nothing.
+- `aletheore shield` on its own is shorthand: `setup` while Shield is off here, `status` once it is on.
 - `--path DIR` selects the repository (default: the current directory). Given to `shield`
-  itself, `--path` and `--yes` also apply to `undo`, `off` and `check`.
+  itself, `--path` and `--yes` also apply to the subcommands.
 - `undo [REF]` lists the newest checkpoints and restores the one you pick. `REF` is a full ref, its
   short name (the part after `refs/aletheore/checkpoints/`) or a unique ending. With `--yes` and no
   `REF`, the newest checkpoint is used. Before writing, it shows the files it will write, files it
@@ -580,10 +585,11 @@ layer-convention findings appear only when the evidence came from a full `alethe
 first scan and its background refresh do not run those checks (the refresh carries the last full
 scan's results forward). Messages give facts and counts, not advice.
 
-**Exit codes.** `shield`, `undo` and `off` exit 0 on success or when nothing needed doing, and 1 when
-the path is not a Git repository, setup is blocked or fails (it is rolled back), or nothing could
-be asked because there is no terminal and no `--yes`. `check` exits 0 even when it finds
-problems; it exits 1 only when the path is not a Git repository.
+**Exit codes.** `shield`, `setup`, `status`, `undo` and `off` exit 0 on success or when nothing
+needed doing, and 1 when the path is not a Git repository, setup is blocked or fails (it is rolled
+back), or nothing could be asked because there is no terminal and no `--yes`. `check` exits 0 even
+when it finds problems; it exits 1 only when the path is not a Git repository. Errors and refusals
+are printed to stderr as `error: ...`; plans, status and reports go to stdout.
 
 **Network.** Only with registry lookups on, and only at turn end, commit and `check` (never after an
 edit or at session end): the package name goes to `pypi.org` or `registry.npmjs.org`. Versions, paths
@@ -614,7 +620,8 @@ The setup screen prints the active network plan.
   blob. It refuses paths under symlinks, inside nested repositories or outside the repository.
 - Checkpoint refs are ordinary Git refs; `git push --mirror` would push them.
 - Tools that generate Git hooks (pre-commit, lefthook, husky) can overwrite Shield's block in the
-  `pre-commit` hook; the `aletheore shield` status then notes that the Git hook is not installed.
+  `pre-commit` hook; `aletheore shield status` then notes that the Git hook is not installed, and
+  `aletheore shield setup` puts the block back.
 - Shield is designed for macOS, Linux and Windows. The CI jobs for all three run the unit tests;
   hooks have not been exercised against a real Claude Code session on Windows.
 

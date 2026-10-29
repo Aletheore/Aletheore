@@ -169,13 +169,19 @@ aletheore shield
 ```
 
 `aletheore shield` shows every change it plans, with a diff for each file, then waits.
-Type `yes` to set it up. Nothing is written before that. Setup changes:
+Type `yes` to set it up. Nothing is written before that. Once Shield is on, the same command shows
+its status. The explicit forms are `aletheore shield setup` and `aletheore shield status`; setup
+run again shows only what needs updating. Setup changes:
 
 - `.claude/settings.local.json`: Claude Code hooks for four events (before an edit, after an
-  edit, end of turn, end of session). This file is personal and is not committed.
+  edit, end of turn, end of session), each the Python interpreter plus arguments, so no shell
+  quoting is involved. This file is personal and is not committed. Entries an earlier Shield
+  wrote as one shell-command string are noted by `aletheore shield status`; `aletheore shield setup`
+  updates them in place.
 - The Git `pre-commit` hook: a marked block that prints Shield's report and never fails the commit.
   Tools that generate Git hooks (pre-commit, lefthook, husky) can overwrite that block;
-  `aletheore shield` then notes in its status that the Git hook is missing.
+  `aletheore shield status` then notes that the Git hook is missing, and `aletheore shield setup`
+  puts it back.
 - `.git/info/exclude`: a marked block that keeps Shield's files out of `git status`.
   `.gitignore` is not touched.
 - `.aletheore/shield/config.json`, and private records under the Git directory.

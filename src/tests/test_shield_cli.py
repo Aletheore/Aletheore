@@ -505,7 +505,7 @@ def test_status_notes_are_shown_with_what_to_do(repo, monkeypatch):
         lambda r: type(status)(True, 0, None, ("git hook not installed", "weird\x1b[31m note")),
     )
     r = runner.invoke(app, ["shield", "--path", str(repo)])
-    assert "git hook not installed" in r.output and "add the block shown during setup" in r.output
+    assert "git hook not installed (run `aletheore shield setup` to add it" in r.output
     assert "\x1b" not in r.output
 
 
@@ -633,3 +633,82 @@ def test_off_without_evidence_restores_exclude_byte_for_byte(repo):
     shutil.rmtree(repo / ".aletheore")
     _off(repo)
     assert _exclude(repo).read_bytes() == b"# mine\n*.log"
+
+
+# ---------------------------------------------------------------- setup and status subcommands
+
+
+def test_setup_subcommand_runs_the_first_run_flow(repo, scans):
+    r = runner.invoke(app, ["shield", "setup", "--path", str(repo)], input="yes\n")
+    assert r.exit_code == 0, r.output
+    assert "Shield will make these changes" in r.output and "Shield is on." in r.output
+    assert shield_cli.shield_status(repo).enabled and len(scans) == 1
+
+
+def test_setup_subcommand_takes_the_group_options_too(repo):
+    r = runner.invoke(app, ["shield", "--path", str(repo), "--yes", "setup"])
+    assert r.exit_code == 0, r.output
+    assert shield_cli.shield_status(repo).enabled
+
+
+def test_setup_subcommand_when_already_set_up_changes_nothing(repo):
+    _setup_on(repo)
+    before = _snapshot(repo)
+    r = runner.invoke(app, ["shield", "setup", "--path", str(repo)])
+    assert r.exit_code == 0, r.output
+    assert "already set up" in r.output
+    assert _snapshot(repo) == before
+
+
+def test_setup_subcommand_updates_legacy_hook_entries(repo, monkeypatch):
+    import shlex
+
+    _setup_on(repo)
+    path = repo / ".claude" / "settings.local.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for entries in data["hooks"].values():
+        for entry in entries:
+            entry["hooks"] = [{"type": "command", "command": shlex.join([h["command"], *h["args"][2:]])}
+                              for h in entry["hooks"]]
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+    status = runner.invoke(app, ["shield", "status", "--path", str(repo)])
+    assert "old command format; run `aletheore shield setup` to update" in status.stdout
+
+    r = runner.invoke(app, ["shield", "setup", "--path", str(repo)], input="yes\n")
+    assert r.exit_code == 0, r.output
+    assert "old command format" in r.output and '"args"' in r.output
+    hooks = json.loads(path.read_text(encoding="utf-8"))["hooks"]
+    assert all("args" in h for entries in hooks.values() for e in entries for h in e["hooks"])
+    assert "old command format" not in runner.invoke(app, ["shield", "status", "--path", str(repo)]).output
+
+
+def test_status_subcommand_reports_without_changing_anything(repo):
+    before = _snapshot(repo)
+    r = runner.invoke(app, ["shield", "status", "--path", str(repo)])
+    assert r.exit_code == 0, r.output
+    assert "Shield is off" in r.stdout and "aletheore shield setup" in r.stdout
+    assert "Shield is on" not in r.stdout
+    assert _snapshot(repo) == before
+
+    _setup_on(repo)
+    cp.take_checkpoint(repo, "s1", force=True)
+    before = _snapshot(repo)
+    r = runner.invoke(app, ["shield", "--path", str(repo), "status"])
+    assert r.exit_code == 0, r.output
+    assert "Shield is on" in r.stdout and "checkpoints: 1" in r.stdout
+    assert _snapshot(repo) == before
+
+
+def test_status_subcommand_outside_git_is_an_error(tmp_path):
+    folder = tmp_path / "plain"
+    folder.mkdir()
+    r = runner.invoke(app, ["shield", "status", "--path", str(folder)])
+    assert r.exit_code == 1 and "needs a git repository" in r.output
+
+
+def test_shield_help_lists_setup_and_status():
+    r = runner.invoke(app, ["shield", "--help"])
+    assert r.exit_code == 0
+    for name in ("setup", "status", "undo", "off", "check"):
+        assert name in r.output

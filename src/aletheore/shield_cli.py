@@ -194,14 +194,18 @@ def _first_scan(repo: Path) -> None:
 
 
 _NOTE_HINTS = {
-    "agent hooks not registered": "add the hooks snippet shown during setup, or run `aletheore shield off` and set up again",
-    "agent hooks partly registered": "add the hooks snippet shown during setup",
-    "git hook not installed": "add the block shown during setup to .git/hooks/pre-commit",
+    "agent hooks not registered": "run `aletheore shield setup` to add them, or add the hooks snippet it shows",
+    "agent hooks partly registered": "run `aletheore shield setup` to add the missing ones",
+    "git hook not installed": "run `aletheore shield setup` to add it, or add the block it shows to the pre-commit hook",
 }
 
 
 def _status(repo: Path) -> None:
     status = shield_status(repo)
+    if not status.enabled:
+        _out(f"Shield is off in {_safe(repo)}.")
+        _out("  aletheore shield setup   set it up (shows every change first)")
+        return
     _out(f"Shield is on in {_safe(repo)}.")
     _out(f"  checkpoints: {status.checkpoints}")
     if status.latest_receipt is not None:
@@ -224,6 +228,8 @@ def shield(
     path: Path = typer.Option(None, "--path", help="repository (default: current directory)"),
     yes: bool = typer.Option(False, "--yes", help="set up without asking"),
 ) -> None:
+    """A local safety net for AI-written changes: guard, undo, receipts. On its own, `aletheore shield` is
+    shorthand for `shield setup` until Shield is on here, and for `shield status` after that."""
     ctx.obj = {"path": path, "yes": yes}
     if ctx.invoked_subcommand is not None:
         return
@@ -231,9 +237,38 @@ def shield(
     if shield_status(repo).enabled:
         _status(repo)
         return
+    _setup(repo, yes)
+
+
+@shield_app.command("setup", help="set Shield up here, or update an existing setup (shows every change first)")
+def setup_command(
+    ctx: typer.Context,
+    path: Path = typer.Option(None, "--path", help="repository (default: current directory)"),
+    yes: bool = typer.Option(False, "--yes", help="set up without asking"),
+) -> None:
+    path, yes = _opts(ctx, path, yes)
+    repo = _resolve_repo(path)
+    _setup(repo, yes, already_on=shield_status(repo).enabled)
+
+
+@shield_app.command("status", help="show whether Shield is on, its checkpoints and latest receipt (changes nothing)")
+def status_command(
+    ctx: typer.Context,
+    path: Path = typer.Option(None, "--path", help="repository (default: current directory)"),
+) -> None:
+    path, _ = _opts(ctx, path, False)
+    _status(_resolve_repo(path))
+
+
+def _setup(repo: Path, yes: bool, *, already_on: bool = False) -> None:
+    """The first-run flow: show the plan, ask, apply, run the first scan. With `already_on`, an empty plan is not an
+    error: Shield is set up and nothing needs updating."""
     plan = plan_setup(repo)
     if isinstance(plan, SetupBlocked):
         raise _fail(f"Shield cannot be set up here: {_safe(plan.reason)}")
+    if not plan and already_on:
+        _out(f"Shield is already set up in {_safe(repo)}; nothing to change.")
+        return
     if not plan:
         raise _fail("Shield found nothing to set up here.")
     _out(f"Shield will make these changes in {_safe(repo)}:")

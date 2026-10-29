@@ -448,7 +448,7 @@ _COMMAND_SUMMARIES = [
     ("init", "scaffold a repository-local .aletheore.json config file"),
     ("hook", "commands for coding-agent hooks (read guard)"),
     ("tokens", "measure and reduce the tokens a coding agent re-reads every turn"),
-    ("shield", "set up the local safety net for AI-written changes: guard, undo, receipts"),
+    ("shield", "the local safety net for AI-written changes: setup, status, undo, off, check"),
     ("login", "authenticate and save a managed-audit API token"),
     ("logout", "clear the locally saved managed-audit and Hallbook tokens"),
     ("status", "installed version, update availability, and login state"),

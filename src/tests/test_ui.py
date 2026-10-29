@@ -524,6 +524,25 @@ def test_tokens_meter_is_reachable_from_all_commands_and_hallbook_browse_stays_a
     assert skills == [True]
 
 
+def test_shield_setup_and_status_are_reachable_from_all_commands(monkeypatch):
+    shown = {}
+    real_choose = ui.choose
+
+    def recording(items, console, **kwargs):
+        if kwargs.get("header") is not None and any(item.key == "setup" for item in items):
+            shown.update({item.key: item.hint for item in items if item.key})
+        return real_choose(items, console, **kwargs)
+
+    ran = []
+    monkeypatch.setattr(ui, "choose", recording)
+    monkeypatch.setattr(cli, "_run_cli", lambda args: ran.append(args) or 0)
+    cli._run_menu(read_key=_keys(*_pick_command(*_group_row("shield")), ENTER, "q"), pause=lambda: None)
+    cli._run_menu(read_key=_keys(*_pick_command(*_group_row("shield")), DOWN, ENTER, "q"), pause=lambda: None)
+    assert ran == [["shield", "setup"], ["shield", "status"]]
+    assert list(shown) == ["setup", "status", "undo", "off", "check"]
+    assert all(shown.values()) and "set" in shown["setup"] and "on" in shown["status"]
+
+
 def test_all_nested_click_commands_are_listed_in_the_picker(monkeypatch):
     from typer.main import get_command
 
