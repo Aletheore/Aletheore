@@ -955,7 +955,7 @@ def _try_auto_pull_ollama_model(model: str, base_url: str = DEFAULT_EMBEDDING_BA
         result = subprocess.run(
             [ollama_path, "pull", model],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=OLLAMA_PULL_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -1096,7 +1096,7 @@ def _try_auto_install_ollama(confirm_fn: Callable[[], bool] | None = None) -> bo
             [sh_path],
             input=script.text,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=OLLAMA_INSTALL_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:

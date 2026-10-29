@@ -167,7 +167,7 @@ network requirements. See the [MCP guide](src/README.md#aletheore-mcp-path).
 | MCP server | Let a coding agent query repository evidence | `aletheore mcp-install --help` |
 | AI audit | Generate a report using a configured coding-agent CLI or API provider | `aletheore audit --help` |
 | Hallbook | Search the bundled coding-agent skill catalog | `aletheore hallbook search "code review"` |
-| Agent context tools | Measure context overhead and inspect optional tool profiles | `aletheore tokens --help` |
+| Agent context tools | Inspect tool overhead and local context savings | `aletheore tokens meter` |
 | GitHub Action | Report new and resolved findings between a PR's base and head | [Action setup](#run-in-github-actions) |
 | Hosted GitHub App | Run PR reviews and use managed repository features | [Install the app](https://github.com/apps/aletheore/installations/new) |
 

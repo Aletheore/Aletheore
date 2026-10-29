@@ -43,6 +43,18 @@ def wordmark_lines(width: int = 80) -> list[str]:
 TAGLINE = "Evidence-grounded code intelligence. Every answer cites a real file and line."
 
 
+def command_header(title: str, *, width: int, height: int, subtitle: str = "") -> Text:
+    """The shared heading for command screens and menu pages."""
+    brand = wordmark_lines(width) if height >= 28 and supports_unicode() else ["ALETHEORE"]
+    heading = Text("\n".join(brand), style="bold")
+    heading.append("\n\n" + TAGLINE, style="dim")
+    if title:
+        heading.append("\n\n" + title, style="bold")
+    if subtitle:
+        heading.append("\n" + subtitle, style="dim")
+    return heading
+
+
 # --- environment checks ------------------------------------------------------------------------------------------
 
 
@@ -79,6 +91,39 @@ _UP = {"\x1b[A", "\x1bOA", "\xe0H", "\x00H", "k", "K"}
 _DOWN = {"\x1b[B", "\x1bOB", "\xe0P", "\x00P", "j", "J"}
 _ENTER = {"\r", "\n", "\r\n"}
 _QUIT = {"q", "Q", "\x1b", "\x03", "\x04"}
+
+
+def markup(template: str, *values: object) -> Text:
+    """Format trusted markup while inserting values as literal, styled Text.
+
+    Rich's string escaping can consume backslashes before non-tag brackets
+    in Windows paths. Only the template is parsed; values never enter its parser.
+    Each bare {} inserts one value; all other braces are displayed literally.
+    """
+    # Only bare {} fields are substitutions; other braces are literal (e.g.
+    # code snippets). Choose a marker absent from the template itself.
+    parts = template.split("{}")
+    if len(parts) != len(values) + 1:
+        raise ValueError("markup requires one {} field per value")
+    marker_index = 0
+    marker = f"\ufffc{marker_index}\ufffd"
+    while marker in template:
+        marker_index += 1
+        marker = f"\ufffc{marker_index}\ufffd"
+    styled = Text.from_markup(marker.join(parts))
+    output = Text()
+    cursor = 0
+    for value in values:
+        position = styled.plain.index(marker, cursor)
+        output.append(styled[cursor:position])
+        placeholder = styled[position:position + len(marker)]
+        literal = Text(str(value), style=placeholder.style)
+        for span in placeholder.spans:
+            literal.stylize(span.style)
+        output.append(literal)
+        cursor = position + len(marker)
+    output.append(styled[cursor:])
+    return output
 
 
 def _read_key() -> str:

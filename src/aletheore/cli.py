@@ -22,12 +22,14 @@ import typer
 import typer.rich_utils as _typer_rich_utils
 import uvicorn
 from rich.console import Console, Group
-from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
 from aletheore._lazy import lazy_module
+from aletheore.cli_presentation import AletheoreGroup, SILENT_ROUTES
+from aletheore.hook_config import python_hook
+from aletheore.ui import markup as _markup
 from aletheore.adapters.anthropic_native import AnthropicAdapter
 from aletheore.adapters.claude_code import AdapterInvocationError, ClaudeCodeAdapter
 from aletheore.adapters.codex_cli import CodexCliAdapter
@@ -54,7 +56,6 @@ from aletheore.preferences import (
     stored_crash_reporting_enabled,
 )
 from aletheore import skill_hub
-from rich.markup import escape as escape_markup
 from aletheore.sentry_reporting import init_cli_sentry
 from aletheore.evidence import (
     EvidenceWriteError,
@@ -224,25 +225,30 @@ def _resolve_path(positional: str, option: Optional[str]) -> str:
     Not `option or positional` - an explicit `--path ""` is still a choice
     and should not silently fall back to the positional default.
     """
-    if option is None:
-        return positional
-    if positional != "." and Path(positional).resolve() != Path(option).resolve():
-        _stderr_console.print(
-            f"[bold red]error:[/bold red] the PATH argument ({positional!r}) and --path ({option!r}) "
-            "name different folders; give only one of them"
-        )
-        raise typer.Exit(code=2)
-    return option
+    chosen = positional if option is None else option
+    try:
+        if not chosen.strip():
+            raise ValueError("repository path must not be empty")
+        expanded = str(Path(chosen).expanduser()) if chosen.startswith("~") else chosen
+        if option is not None and positional != "." and Path(positional).expanduser().resolve() != Path(expanded).resolve():
+            _stderr_console.print(
+                _markup('[bold red]error:[/bold red] the PATH argument ({}) and --path ({}) name different folders; give only one of them', repr(positional), repr(option))
+            )
+            raise typer.Exit(code=2)
+        return expanded
+    except (OSError, RuntimeError, ValueError) as exc:
+        _stderr_console.print(Text(f"error: invalid repository path: {exc}"))
+        raise typer.Exit(code=2) from exc
 
 
 def _load_evidence_or_exit(repo: Path) -> dict:
     """The repo's evidence, or a one-line `error:` on stderr and exit 1 (never a traceback, and the
     'run aletheore scan' hint exactly once)."""
     if not repo.exists():
-        _stderr_console.print(f"[bold red]error:[/bold red] path does not exist: {escape(str(repo))}")
+        _stderr_console.print(_markup('[bold red]error:[/bold red] path does not exist: {}', repo))
         raise typer.Exit(code=1)
     if not repo.is_dir():
-        _stderr_console.print(f"[bold red]error:[/bold red] path is not a directory: {escape(str(repo))}")
+        _stderr_console.print(_markup('[bold red]error:[/bold red] path is not a directory: {}', repo))
         raise typer.Exit(code=1)
     try:
         return load_evidence(repo)
@@ -256,10 +262,10 @@ def _checked_dir(path: str) -> str:
     """Exit with a one-line error, not a traceback, when PATH isn't a directory."""
     p = Path(path)
     if not p.exists():
-        _stderr_console.print(f"[bold red]error:[/bold red] path does not exist: {escape(str(p))}")
+        _stderr_console.print(_markup('[bold red]error:[/bold red] path does not exist: {}', p))
         raise typer.Exit(code=1)
     if not p.is_dir():
-        _stderr_console.print(f"[bold red]error:[/bold red] path is not a directory: {escape(str(p))}")
+        _stderr_console.print(_markup('[bold red]error:[/bold red] path is not a directory: {}', p))
         raise typer.Exit(code=1)
     return path
 
@@ -287,8 +293,7 @@ def _workspace_guard(path: str, yes: bool) -> None:
         return
     resolved = Path(path).expanduser().resolve()
     _stderr_console.print(
-        f"[bold]{resolved}[/bold] is {reason}, not a project: no .git, package.json, pyproject.toml or other "
-        "project files were found there. Using it would read everything inside."
+        _markup('[bold]{}[/bold] is {}, not a project: no .git, package.json, pyproject.toml or other project files were found there. Using it would read everything inside.', resolved, reason)
     )
     hint = "Pass the project's path instead, for example `aletheore scan ~/code/my-project`."
     if ui.is_interactive():
@@ -298,9 +303,9 @@ def _workspace_guard(path: str, yes: bool) -> None:
             answer = ""
         if answer in ("y", "yes"):
             return
-        _stderr_console.print(f"Cancelled. {hint}")
+        _stderr_console.print(_markup('Cancelled. {}', hint))
         raise typer.Exit(code=1)
-    _stderr_console.print(f"{hint} Or add --yes to use this folder anyway.")
+    _stderr_console.print(_markup('{} Or add --yes to use this folder anyway.', hint))
     raise typer.Exit(code=2)
 
 
@@ -406,9 +411,9 @@ def _print_result(title: str, lines: list[str], color: str = "green") -> None:
     width, including mid-filename - corrupting the path if the line is
     ever copied. soft_wrap leaves wrapping to the terminal instead, which
     never inserts a literal character into the copyable text."""
-    console.print(f"[bold {color}]✓ {title}[/bold {color}]")
+    console.print(Text(f"✓ {title}", style=f"bold {color}"))
     for line in lines:
-        console.print(f"  {line}", soft_wrap=True)
+        console.print(_markup('  {}', line), soft_wrap=True)
 
 
 def _print_query_result(result: object) -> None:
@@ -417,7 +422,7 @@ def _print_query_result(result: object) -> None:
     try:
         print(to_toon({"result": result}))
     except ToonEncodingError as exc:
-        console.print(f"[yellow]warning: TOON encoding failed ({exc}); falling back to JSON[/yellow]")
+        console.print(_markup('[yellow]warning: TOON encoding failed ({}); falling back to JSON[/yellow]', exc))
         print(json.dumps({"result": result}, indent=2, default=str))
 
 
@@ -448,11 +453,12 @@ _COMMAND_SUMMARIES = [
 ]
 
 
-# Two commands the banner does not list but the "All commands" picker does. The banner (and so the plain `aletheore`
+# Additional commands and aliases available in the "All commands" picker. The banner (and so the plain `aletheore`
 # output) keeps its own list exactly as it was.
 _PICKER_ONLY_SUMMARIES = [
     ("hallbook", "browse, search and read the licences of the library of vetted agent skills"),
     ("config", "manage local CLI preferences, such as crash reporting"),
+    ("skill-hub", "alias for the Hallbook skills command group"),
 ]
 _COMMAND_DESCRIPTIONS = dict(_COMMAND_SUMMARIES + _PICKER_ONLY_SUMMARIES)
 # The picker groups every command above by task, each exactly once.
@@ -461,7 +467,7 @@ _COMMAND_GROUPS = [
         "Scan and explore",
         ["scan", "demo", "index", "query", "locate", "usages", "dependents", "tests-for", "cycles", "diff", "verify", "healthcheck"],
     ),
-    ("Agents and skills", ["mcp", "mcp-install", "audit", "hallbook", "hook", "tokens"]),
+    ("Agents and skills", ["mcp", "mcp-install", "audit", "hallbook", "skill-hub", "hook", "tokens"]),
     ("Dashboard and watch", ["dashboard", "watch", "init"]),
     ("Account", ["login", "logout", "status", "config"]),
 ]
@@ -537,7 +543,7 @@ def _make_progress_printer(is_tty: bool | None = None) -> Callable[[str], None]:
             if state["in_place"]:
                 print(file=sys.stderr)
                 state["in_place"] = False
-            _stderr_console.print(f"  [green]→[/green] {message}")
+            _stderr_console.print(_markup('  [green]→[/green] {}', message))
 
     def finish() -> None:
         # scan's own report() calls always end on a non-overwritable message
@@ -584,7 +590,7 @@ class _ElapsedTicker:
         if self._is_tty:
             self._thread.start()
         else:
-            console.print(f"  [green]→[/green] {self._label}...")
+            console.print(_markup('  [green]→[/green] {}...', self._label))
         return self
 
     def __exit__(self, *exc_info) -> None:
@@ -594,7 +600,7 @@ class _ElapsedTicker:
             print()
         else:
             elapsed = int(time.monotonic() - self._start)
-            console.print(f"  [green]→[/green] {self._label}: done ({elapsed}s elapsed)")
+            console.print(_markup('  [green]→[/green] {}: done ({}s elapsed)', self._label, elapsed))
 
 
 def _resolve_check_toggles(
@@ -690,10 +696,10 @@ def _scan(
         try:
             check_evidence_writable(repo)
         except EvidenceWriteError as exc:
-            _stderr_console.print(f"[bold red]error:[/bold red] {escape_markup(str(exc))}")
+            _stderr_console.print(_markup('[bold red]error:[/bold red] {}', exc))
             return 1, {}, repo
 
-    _stderr_console.print(f"Scanning {repo}...")
+    _stderr_console.print(_markup('Scanning {}...', repo))
     try:
         evidence = scan_repository(
             repo,
@@ -708,20 +714,18 @@ def _scan(
             progress=_make_progress_printer(),
         )
     except GitAnalysisError as exc:
-        console.print(f"[bold red]error:[/bold red] {exc}")
+        console.print(_markup('[bold red]error:[/bold red] {}', exc))
         return GIT_ANALYSIS_RESOURCE_EXIT_CODE, {}, repo
     try:
         evidence_path = write_evidence(evidence, repo)
     except EvidenceWriteError as exc:
-        _stderr_console.print(f"[bold red]error:[/bold red] {escape_markup(str(exc))}")
+        _stderr_console.print(_markup('[bold red]error:[/bold red] {}', exc))
         return 1, {}, repo
     try:
         snapshot_path = save_snapshot(evidence, repo)
     except OSError as exc:
         _stderr_console.print(
-            f"[bold red]error:[/bold red] evidence was written to {escape_markup(str(evidence_path))} but the "
-            f"snapshot could not be saved to {escape_markup(str(repo / '.aletheore' / 'history'))}: "
-            f"{escape_markup((exc.strerror or exc.__class__.__name__).lower())}"
+            _markup('[bold red]error:[/bold red] evidence was written to {} but the snapshot could not be saved to {}: {}', evidence_path, repo / '.aletheore' / 'history', (exc.strerror or exc.__class__.__name__).lower())
         )
         return 1, {}, repo
     result_lines = [f"Evidence written to {evidence_path}", f"Snapshot saved to {snapshot_path}"]
@@ -751,13 +755,13 @@ def _audit(
         known_names = [a.name for a in KNOWN_ADAPTERS]
         if forced_agent not in known_names:
             _stderr_console.print(
-                f"[bold red]error:[/bold red] unknown agent {forced_agent!r}; choose one of: {', '.join(known_names)}"
+                _markup('[bold red]error:[/bold red] unknown agent {}; choose one of: {}', repr(forced_agent), ', '.join(known_names))
             )
             return 2
         try:
             select_adapter(KNOWN_ADAPTERS, forced_name=forced_agent, interactive=False)
         except (NoAdapterAvailableError, AmbiguousAdapterError) as exc:
-            _stderr_console.print(f"[bold red]error:[/bold red] {exc}")
+            _stderr_console.print(_markup('[bold red]error:[/bold red] {}', exc))
             return 1
     scan_exit_code, _evidence, evidence_path = _scan(
         repo_path, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints, map_schema,
@@ -772,30 +776,29 @@ def _audit(
             KNOWN_ADAPTERS, forced_name=forced_agent, interactive=sys.stdin.isatty()
         )
     except (NoAdapterAvailableError, AmbiguousAdapterError) as exc:
-        console.print(f"[bold red]error:[/bold red] {exc}")
-        console.print(f"Evidence is still available at {evidence_path} for manual use.")
+        console.print(_markup('[bold red]error:[/bold red] {}', exc))
+        console.print(_markup('Evidence is still available at {} for manual use.', evidence_path))
         return 1
 
     if adapter.requires_consent:
         console.print(
-            f"[bold yellow]This will send this repository's evidence "
-            f"(not source code) to {adapter.name}'s API.[/bold yellow]"
+            _markup("[bold yellow]This will send this repository's evidence (not source code) to {}'s API.[/bold yellow]", adapter.name)
         )
         if not _confirm("Continue? [y/N]: "):
             console.print("Cancelled - no data was sent.")
             return 0
 
-    console.print(f"Running audit with [bold]{adapter.name}[/bold]...")
+    console.print(_markup('Running audit with [bold]{}[/bold]...', adapter.name))
     try:
         with _ElapsedTicker(f"Waiting on {adapter.name}"):
             report_path = run_reasoning_phase(adapter, repo_path=str(repo), manual_dir=MANUAL_DIR)
     except AdapterInvocationError as exc:
-        console.print(f"[bold red]error:[/bold red] {exc}")
-        console.print(f"Evidence is still available at {evidence_path} for manual use.")
+        console.print(_markup('[bold red]error:[/bold red] {}', exc))
+        console.print(_markup('Evidence is still available at {} for manual use.', evidence_path))
         return 1
     except OSError as exc:
-        _stderr_console.print(f"[bold red]error:[/bold red] could not write the audit report: {escape_markup(_os_error_text(exc))}")
-        console.print(f"Evidence is still available at {evidence_path} for manual use.")
+        _stderr_console.print(_markup('[bold red]error:[/bold red] could not write the audit report: {}', _os_error_text(exc)))
+        console.print(_markup('Evidence is still available at {} for manual use.', evidence_path))
         return 1
 
     report_file = Path(report_path)
@@ -805,8 +808,7 @@ def _audit(
         report_file.write_text(report_text + verification_section, encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         _stderr_console.print(
-            f"[bold red]error:[/bold red] could not update {escape_markup(str(report_file))}: "
-            f"{escape_markup(_os_error_text(exc))}"
+            _markup('[bold red]error:[/bold red] could not update {}: {}', report_file, _os_error_text(exc))
         )
         return 1
 
@@ -862,8 +864,8 @@ def _managed_audit(
         with _ElapsedTicker("Waiting on the managed audit service"):
             report_text = run_managed_audit_request(evidence, resolved_token, repo_full_name=repo_full_name)
     except (ManagedAuditError, httpx.HTTPError, KeyError, ValueError) as exc:
-        console.print(f"[bold red]error:[/bold red] managed audit failed: {exc}")
-        console.print(f"Evidence is still available at {evidence_path} for manual use.")
+        console.print(_markup('[bold red]error:[/bold red] managed audit failed: {}', exc))
+        console.print(_markup('Evidence is still available at {} for manual use.', evidence_path))
         return 1
 
     report_path = repo / ".aletheore" / "audit-report.md"
@@ -872,8 +874,7 @@ def _managed_audit(
         report_path.write_text(report_text, encoding="utf-8")
     except OSError as exc:
         _stderr_console.print(
-            f"[bold red]error:[/bold red] could not write {escape_markup(str(report_path))}: "
-            f"{escape_markup(_os_error_text(exc))}"
+            _markup('[bold red]error:[/bold red] could not write {}: {}', report_path, _os_error_text(exc))
         )
         return 1
     _print_result("Managed audit complete", [f"Report written to {report_path}"])
@@ -915,8 +916,7 @@ def _print_update_notice_if_available() -> None:
         return
     latest_version = version_note.removeprefix("update available: ")
     console.print(
-        f"\n[bold yellow]Update available:[/bold yellow] {installed_version} → {latest_version}. "
-        "Run [cyan]pipx upgrade aletheore[/cyan] (or [cyan]pip install --upgrade aletheore[/cyan])."
+        _markup('\n[bold yellow]Update available:[/bold yellow] {} → {}. Run [cyan]pipx upgrade aletheore[/cyan] (or [cyan]pip install --upgrade aletheore[/cyan]).', installed_version, latest_version)
     )
 
 
@@ -951,12 +951,12 @@ def _query_schema(repo_path: str) -> int:
     try:
         evidence = load_evidence(repo)
     except (FileNotFoundError, IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
-        console.print(f"[bold red]error:[/bold red] {exc}")
+        console.print(_markup('[bold red]error:[/bold red] {}', exc))
         return 1
 
     schema = evidence["repository"]["database"]["schema"]
     if not schema["checked"]:
-        console.print(f"[yellow]schema mapping not run:[/yellow] {schema['reason']}")
+        console.print(_markup('[yellow]schema mapping not run:[/yellow] {}', schema['reason']))
         return 1
     diagram = build_schema_diagram(evidence)
     if diagram is None:
@@ -1002,10 +1002,10 @@ def _index(repo_path: str) -> int:
     try:
         evidence = load_evidence(repo)
     except FileNotFoundError as exc:
-        console.print(f"[bold red]error:[/bold red] {exc}")
+        console.print(_markup('[bold red]error:[/bold red] {}', exc))
         return 1
     except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
-        console.print(f"[bold red]error:[/bold red] {exc}")
+        console.print(_markup('[bold red]error:[/bold red] {}', exc))
         return 1
     console.print(
         "Building semantic search index (embedding via local Ollama, "
@@ -1031,10 +1031,10 @@ def _index(repo_path: str) -> int:
         count = build_index(repo, evidence, on_progress=on_progress)
     except Exception as exc:
         report.finish()  # type: ignore[attr-defined]
-        console.print(f"[bold red]error:[/bold red] {exc}")
+        console.print(_markup('[bold red]error:[/bold red] {}', exc))
         return 1
     report.finish()  # type: ignore[attr-defined]
-    console.print(f"[green]Indexed {count} chunks.[/green]")
+    console.print(_markup('[green]Indexed {} chunks.[/green]', count))
     return 0
 
 
@@ -1083,14 +1083,14 @@ def _query(
         # suggestion is worse than none, since it sends the user off to run
         # something they never meant.
         suggestions = difflib.get_close_matches(kind, QUERY_KIND_CHOICES, n=1)
-        console.print(f"[bold red]error:[/bold red] '{kind}' is not a valid query kind.")
+        console.print(_markup("[bold red]error:[/bold red] '{}' is not a valid query kind.", kind))
         if suggestions:
-            console.print(f"Did you mean [bold cyan]{suggestions[0]}[/bold cyan]?\n")
+            console.print(_markup('Did you mean [bold cyan]{}[/bold cyan]?\n', suggestions[0]))
         console.print(_query_kinds_panel())
         return 1
 
     if not Path(repo_path).exists():
-        _stderr_console.print(f"[bold red]error:[/bold red] path does not exist: {escape(str(Path(repo_path).resolve()))}")
+        _stderr_console.print(_markup('[bold red]error:[/bold red] path does not exist: {}', Path(repo_path).resolve()))
         return 1
 
     if kind == "schema":
@@ -1112,10 +1112,10 @@ def _query(
         try:
             result = search_index(Path(repo_path).resolve(), target, k=k, language=language)
         except IndexNotFoundError as exc:
-            console.print(f"[bold red]error:[/bold red] {exc}")
+            console.print(_markup('[bold red]error:[/bold red] {}', exc))
             return 1
         except IndexDimensionMismatchError as exc:
-            console.print(f"[bold red]error:[/bold red] {exc}")
+            console.print(_markup('[bold red]error:[/bold red] {}', exc))
             return 1
         if any(item.get("keyword_only") for item in result):
             console.print("[dim]keyword-only: embeddings still building[/dim]")
@@ -1139,10 +1139,10 @@ def _query(
         try:
             result = search_ast_pattern(Path(repo_path).resolve(), language, target, ignored_paths)
         except UnknownLanguageError as exc:
-            console.print(f"[bold red]error:[/bold red] {exc}")
+            console.print(_markup('[bold red]error:[/bold red] {}', exc))
             return 1
         except InvalidPatternError as exc:
-            console.print(f"[bold red]error:[/bold red] invalid tree-sitter query: {exc}")
+            console.print(_markup('[bold red]error:[/bold red] invalid tree-sitter query: {}', exc))
             return 1
         _print_query_result(result)
         return 0
@@ -1156,12 +1156,11 @@ def _query(
                 KNOWN_ADAPTERS, forced_name=forced_agent, interactive=sys.stdin.isatty()
             )
         except (NoAdapterAvailableError, AmbiguousAdapterError) as exc:
-            console.print(f"[bold red]error:[/bold red] {exc}")
+            console.print(_markup('[bold red]error:[/bold red] {}', exc))
             return 1
         if adapter.requires_consent:
             console.print(
-                f"[bold yellow]This will send retrieved code chunks and your question "
-                f"to {adapter.name}'s API.[/bold yellow]"
+                _markup("[bold yellow]This will send retrieved code chunks and your question to {}'s API.[/bold yellow]", adapter.name)
             )
             if not _confirm("Continue? [y/N]: "):
                 console.print("Cancelled - no data was sent.")
@@ -1172,10 +1171,10 @@ def _query(
         try:
             result = answer_question(Path(repo_path).resolve(), target, adapter, k=k)
         except IndexNotFoundError as exc:
-            console.print(f"[bold red]error:[/bold red] {exc}")
+            console.print(_markup('[bold red]error:[/bold red] {}', exc))
             return 1
         except IndexDimensionMismatchError as exc:
-            console.print(f"[bold red]error:[/bold red] {exc}")
+            console.print(_markup('[bold red]error:[/bold red] {}', exc))
             return 1
         _print_query_result(result)
         return 0
@@ -1347,7 +1346,7 @@ def _diff(
 def _verify(report_path: str, repo_path: str) -> int:
     report_file = Path(report_path)
     if not report_file.exists():
-        console.print(f"[bold red]error:[/bold red] report file not found: {report_file}")
+        console.print(_markup('[bold red]error:[/bold red] report file not found: {}', report_file))
         return 1
 
     repo = Path(repo_path).resolve()
@@ -1355,8 +1354,7 @@ def _verify(report_path: str, repo_path: str) -> int:
     if evidence is None:
         evidence_path = repo / ".aletheore" / "air.json"
         console.print(
-            f"[bold red]error:[/bold red] no usable evidence at {evidence_path} - "
-            f"run 'aletheore scan {repo}' first"
+            _markup("[bold red]error:[/bold red] no usable evidence at {} - run 'aletheore scan {}' first", evidence_path, repo)
         )
         return 1
 
@@ -1369,10 +1367,10 @@ def _verify(report_path: str, repo_path: str) -> int:
         # read runs. Same class of bug as the MCP crashes fixed alongside
         # this: a real, unhandled exception two lines below a check that
         # looks like it already guarded against exactly this.
-        console.print(f"[bold red]error:[/bold red] could not read {report_file}: {exc}")
+        console.print(_markup('[bold red]error:[/bold red] could not read {}: {}', report_file, exc))
         return 1
     except UnicodeDecodeError as exc:
-        console.print(f"[bold red]error:[/bold red] {report_file} is not valid UTF-8: {exc}")
+        console.print(_markup('[bold red]error:[/bold red] {} is not valid UTF-8: {}', report_file, exc))
         return 1
     result = verify_citations(report_text, evidence, fetch_line_count=local_line_count_fetcher(repo))
     total = result["total_citations"]
@@ -1380,10 +1378,10 @@ def _verify(report_path: str, repo_path: str) -> int:
     unverified = result["unverified"]
 
     if total == 0:
-        console.print(f"No `file:line` citations found in {report_file}.")
+        console.print(_markup('No `file:line` citations found in {}.', report_file))
         return 0
 
-    console.print(f"{verified} of {total} citations in {report_file} verified against {repo}.")
+    console.print(_markup('{} of {} citations in {} verified against {}.', verified, total, report_file, repo))
     if unverified:
         console.print("[bold red]Unverified citations:[/bold red]")
         for citation in unverified:
@@ -1463,7 +1461,7 @@ def _mcp(repo_path: str, forced_agent: str | None = None, watch: bool = True, pr
                 KNOWN_ADAPTERS, forced_name=forced_agent, interactive=False
             )
         except (NoAdapterAvailableError, AmbiguousAdapterError) as exc:
-            _stderr_console.print(f"[bold red]error:[/bold red] {exc}")
+            _stderr_console.print(_markup('[bold red]error:[/bold red] {}', exc))
             return 1
     # Watching is on by default: the server is the long-lived process an agent
     # drives, so it is where stale evidence hurts and where the watcher's
@@ -1507,10 +1505,14 @@ def _aletheore_command() -> str:
     # resolves - preserving today's behavior rather than writing something
     # obviously broken.
     # Windows console scripts are aletheore.exe (in Scripts/), never a bare "aletheore".
-    for name in ("aletheore", "aletheore.exe"):
-        sibling = Path(sys.executable).parent / name
-        if sibling.exists():
-            return str(sibling)
+    parent = Path(sys.executable).parent
+    directories = [parent, parent / "Scripts"] if sys.platform == "win32" else [parent]
+    names = ("aletheore.exe", "aletheore") if sys.platform == "win32" else ("aletheore", "aletheore.exe")
+    for directory in directories:
+        for name in names:
+            sibling = directory / name
+            if sibling.is_file():
+                return str(sibling)
     return shutil.which("aletheore") or "aletheore"
 
 
@@ -1858,9 +1860,7 @@ def _write_toml_mcp_client_config(
         original = config_path.read_bytes()  # bytes: the backup must be exact, CRLF and BOM included
         if _toml_has_comment(original.decode("utf-8", errors="replace")):
             console.print(
-                f"[yellow]Warning:[/yellow] {escape(str(config_path))} has comments; rewriting it as TOML "
-                "does not preserve them. The original is kept next to it as "
-                f"{escape(config_path.name)}.bak."
+                _markup('[yellow]Warning:[/yellow] {} has comments; rewriting it as TOML does not preserve them. The original is kept next to it as {}.bak.', config_path, config_path.name)
             )
         backup_path = config_path.with_name(config_path.name + ".bak")
         try:
@@ -1900,8 +1900,7 @@ def _mcp_install(path: str, targets: list[str], yes: bool = False) -> int:
     unknown = [target for target in selected if target not in all_targets]
     if unknown:
         _stderr_console.print(
-            f"[bold red]error:[/bold red] unknown target(s): {', '.join(unknown)}. "
-            f"Valid targets: {', '.join(all_targets)}"
+            _markup('[bold red]error:[/bold red] unknown target(s): {}. Valid targets: {}', ', '.join(unknown), ', '.join(all_targets))
         )
         return 1
 
@@ -1965,7 +1964,7 @@ def _mcp_install(path: str, targets: list[str], yes: bool = False) -> int:
             where = f" {config_path}" if config_path is not None else ""
             message, security_skip = f"skipped (could not write{where}: {_os_error_text(exc)})", False
         any_security_skip = any_security_skip or security_skip
-        console.print(f"[bold green]{target}[/bold green]: {escape(message)}")
+        console.print(_markup('[bold green]{}[/bold green]: {}', target, message))
         if message.startswith(("wrote ", "updated ")):
             written.add(target)
         elif not (target == "claude-desktop" and not targets and _claude_desktop_config_path() is None):
@@ -1973,8 +1972,7 @@ def _mcp_install(path: str, targets: list[str], yes: bool = False) -> int:
 
     if not written:
         _stderr_console.print(
-            "[bold red]error:[/bold red] nothing was written; "
-            f"skipped or failed: {', '.join(failed) or 'none'}"
+            _markup('[bold red]error:[/bold red] nothing was written; skipped or failed: {}', ', '.join(failed) or 'none')
         )
         return 1
 
@@ -1995,7 +1993,7 @@ def _mcp_install(path: str, targets: list[str], yes: bool = False) -> int:
         )
         # soft_wrap: a copy-pasteable shell command containing a full repo
         # path must not get a real newline inserted at the console width.
-        console.print(f"  claude mcp add aletheore -- {_aletheore_command()} mcp {repo_path}", soft_wrap=True)
+        console.print(_markup('  claude mcp add aletheore -- {} mcp {}', _aletheore_command(), repo_path), soft_wrap=True)
         console.print(
             "\n[bold]PyCharm / other JetBrains IDEs:[/bold] not auto-configured - there's no single "
             "stable, documented file format to script against yet. Instead: open Settings | Tools | "
@@ -2003,10 +2001,7 @@ def _mcp_install(path: str, targets: list[str], yes: bool = False) -> int:
             "at the .mcp.json written above."
         )
     console.print(
-        "[bold]vim / Neovim / Emacs / other terminal editors:[/bold] no native MCP client exists "
-        "in any of them - support depends entirely on whichever AI plugin you have installed "
-        "(e.g. avante.nvim, codecompanion.nvim). Point that plugin's own MCP config at: "
-        f"aletheore mcp {repo_path}"
+        _markup("[bold]vim / Neovim / Emacs / other terminal editors:[/bold] no native MCP client exists in any of them - support depends entirely on whichever AI plugin you have installed (e.g. avante.nvim, codecompanion.nvim). Point that plugin's own MCP config at: aletheore mcp {}", repo_path)
     )
     if "codex-cli" in written:
         console.print(
@@ -2015,17 +2010,14 @@ def _mcp_install(path: str, targets: list[str], yes: bool = False) -> int:
             "server is silently not loaded) - accept Codex's trust prompt for this directory, or "
             "register it for every project instead:"
         )
-        console.print(f"  codex mcp add aletheore -- {_aletheore_command()} mcp {repo_path}", soft_wrap=True)
+        console.print(_markup('  codex mcp add aletheore -- {} mcp {}', _aletheore_command(), repo_path), soft_wrap=True)
         console.print(
             "Also note: writing .codex/config.toml reformats it - any hand-written comments are not "
             "preserved; the original is kept as config.toml.bak."
         )
     if "claude-desktop" in written:
         console.print(
-            f"[bold]Claude Desktop:[/bold] wrote a config shared across every project on this "
-            f"machine, keyed as \"{_claude_desktop_server_name(repo_path)}\" so installing for a "
-            "different repo later won't overwrite this one. Fully quit and reopen Claude Desktop "
-            "to pick it up - MCP servers only load at startup."
+            _markup('[bold]Claude Desktop:[/bold] wrote a config shared across every project on this machine, keyed as "{}" so installing for a different repo later won\'t overwrite this one. Fully quit and reopen Claude Desktop to pick it up - MCP servers only load at startup.', _claude_desktop_server_name(repo_path))
         )
     if any_security_skip:
         _stderr_console.print(
@@ -2035,7 +2027,7 @@ def _mcp_install(path: str, targets: list[str], yes: bool = False) -> int:
         return 1
     if failed:
         _stderr_console.print(
-            f"\n[bold red]error:[/bold red] not configured: {', '.join(failed)} - see the lines above."
+            _markup('\n[bold red]error:[/bold red] not configured: {} - see the lines above.', ', '.join(failed))
         )
         return 1
     return 0
@@ -2062,7 +2054,7 @@ def _watch(repo_path: str, debounce: float) -> int:
     repo = Path(repo_path).resolve()
 
     def report(message: str) -> None:
-        console.print(f"[dim]{time.strftime('%H:%M:%S')}[/dim] {message}")
+        console.print(_markup('[dim]{}[/dim] {}', time.strftime('%H:%M:%S'), message))
 
     if not (repo / ".aletheore" / "air.json").exists():
         # Nothing to keep current yet: scan once now, otherwise the watcher would sit idle
@@ -2081,7 +2073,7 @@ def _watch(repo_path: str, debounce: float) -> int:
                 " The OS file-watch limit was reached; raise fs.inotify.max_user_watches "
                 "(Linux) or point 'aletheore watch' at a smaller directory."
             )
-        console.print(f"[bold red]error:[/bold red] could not watch {repo}: {exc}.{hint}")
+        console.print(_markup('[bold red]error:[/bold red] could not watch {}: {}.{}', repo, exc, hint))
         return 1
     except KeyboardInterrupt:
         # Ctrl-C is how this command is meant to end, so it exits 0 with a
@@ -2097,16 +2089,16 @@ def _offer_scan_before_dashboard(repo: Path) -> bool:
     from aletheore import ui
 
     hint = f"aletheore scan {repo}"
-    console.print(f"[bold]No scan found for {repo}.[/bold] The dashboard shows what a scan finds, so it would open empty.")
+    console.print(_markup('[bold]No scan found for {}.[/bold] The dashboard shows what a scan finds, so it would open empty.', repo))
     if not ui.is_interactive():
-        console.print(f"Run this first, then open the dashboard again:\n\n  {hint}\n")
+        console.print(_markup('Run this first, then open the dashboard again:\n\n  {}\n', hint))
         return False
     try:
         scan_now = typer.confirm("Scan it now?", default=True)
     except EOFError:  # input closed: treated as "no". Ctrl-C (click.Abort) is left to abort as it does at any prompt.
         scan_now = False
     if not scan_now:
-        console.print(f"Run this when you are ready, then open the dashboard again:\n\n  {hint}\n")
+        console.print(_markup('Run this when you are ready, then open the dashboard again:\n\n  {}\n', hint))
         return False
     exit_code, _evidence, _evidence_path = _scan(str(repo), None, None)
     return exit_code == 0
@@ -2126,13 +2118,11 @@ def _dashboard(repo_path: str, port: int) -> int:
     # not hypothetical: this exact sequence was hit against a real stale
     # process on the default port.
     if not 1 <= port <= 65535:
-        console.print(f"[bold red]error:[/bold red] --port must be between 1 and 65535 (got {port}).")
+        console.print(_markup('[bold red]error:[/bold red] --port must be between 1 and 65535 (got {}).', port))
         return 1
     if not _port_is_available(host, port):
         console.print(
-            f"[bold red]error:[/bold red] port {port} is already in use - probably another "
-            f"aletheore dashboard (or something else) is already bound to it.\n"
-            f"Pass --port to use a different one, or stop whatever's using {port}."
+            _markup("[bold red]error:[/bold red] port {} is already in use - probably another aletheore dashboard (or something else) is already bound to it.\nPass --port to use a different one, or stop whatever's using {}.", port, port)
         )
         return 1
 
@@ -2142,7 +2132,7 @@ def _dashboard(repo_path: str, port: int) -> int:
 
     app = build_app(repo)
     url = f"http://{host}:{port}"
-    console.print(f"[green]Dashboard running at[/green] {url}")
+    console.print(_markup('[green]Dashboard running at[/green] {}', url))
     # Opened shortly after the server starts listening, not before - the tab
     # would otherwise race uvicorn's bind and hit connection-refused.
     if os.environ.get("ALETHEORE_NO_BROWSER") != "1":
@@ -2174,6 +2164,7 @@ def _dashboard(repo_path: str, port: int) -> int:
 
 
 app = typer.Typer(
+    cls=AletheoreGroup,
     name="aletheore",
     help="Evidence-grounded repository audit — a deterministic scanner, MCP server, live "
     "dashboard, and a GitHub Action that posts PR diffs.",
@@ -2184,7 +2175,7 @@ app = typer.Typer(
 
 def _version_callback(value: bool) -> None:
     if value:
-        console.print(f"aletheore {_installed_version()}")
+        console.print(_markup('aletheore {}', _installed_version()))
         raise typer.Exit(code=0)
 
 
@@ -2193,7 +2184,10 @@ def _run_cli(args: list[str]) -> int:
     from typer.main import get_command
 
     try:
-        get_command(app).main(args=args, prog_name="aletheore", standalone_mode=False)
+        # Let Typer format its own usage errors and exits. New Typer versions
+        # use a separate Click runtime, so external click exception types and
+        # context globals are not interchangeable with Typer's.
+        get_command(app).main(args=args, prog_name="aletheore", standalone_mode=True)
         return 0
     except click.exceptions.Exit as exc:
         return exc.exit_code
@@ -2210,17 +2204,12 @@ def _run_cli(args: list[str]) -> int:
 def _menu_header() -> Text:
     from aletheore import ui
 
-    header = Text()
-    # The block-letter wordmark needs about 28 rows with the menu; on a short window (or a narrow one) show the
-    # plain name instead, so the menu is never cropped by the terminal.
-    art = ui.wordmark_lines(console.width) if console.height >= 28 else ["ALETHEORE"]
-    for line in art:
-        header.append(line + "\n", style="bold")
-    header.append("\n" + ui.TAGLINE + "\n", style="dim")
+    header = ui.command_header("", width=console.width, height=console.height)
+    header.append("\n")
     version = _installed_version()
     folder = Path.cwd()
     shown = str(folder)
-    home = str(Path.home())
+    home = str(user_home())
     if shown == home:
         shown = "~"
     elif shown.startswith(home + os.sep):
@@ -2261,7 +2250,7 @@ def _ask(question: str) -> str:
     """Ask one question on the terminal; an empty answer (or Ctrl-C) means "never mind"."""
     try:
         return typer.prompt(question, default="", show_default=False).strip()
-    except (click.Abort, EOFError):
+    except (typer.Abort, click.Abort, EOFError):
         return ""
 
 
@@ -2273,30 +2262,154 @@ _MAIN_MENU = [
     ("connect", "Connect your coding agent", "Claude Code, Codex, Cursor, Antigravity, ..."),
     ("dashboard", "Open the dashboard", "a live local view"),
     ("account", "Account", "sign in, sign out, status"),
+    ("meter", "Token savings meter", "view measured local savings and estimates"),
     ("commands", "All commands", "every command, grouped by task"),
     ("demo", "Take the guided demo", "scan, query and coding-agent evidence"),
     ("quit", "Quit", ""),
 ]
 
-# What Enter does on a command in the "All commands" picker. Commands that need nothing run as they are; the three
-# in _COMMAND_PROMPTS ask for their one required argument first; the rest print their own --help.
+# Menu actions use the same CLI entry points: defaults for simple commands, prompts for required input,
+# and submenus discovered from Click for command groups. The MCP protocol server opens its usage screen.
 _COMMAND_RUNS = {
     "demo": ["demo"],
     "scan": ["scan", "."], "audit": ["audit", "."], "query": ["query"], "dashboard": ["dashboard", "."],
     "init": ["init", "."], "cycles": ["cycles"], "login": ["login"], "logout": ["logout"], "status": ["status"],
+    "index": ["index", "."], "watch": ["watch", "."],
 }
 _COMMAND_PROMPTS = {
     "diff": ["Baseline evidence file (old air.json)", "Evidence file to compare (new air.json)"],
     "verify": ["Report to check (path to a markdown file)"],
     "healthcheck": ["Base URL of the running server (for example http://localhost:8000)"],
+    "locate": ["Symbol or definition to find"],
+    "usages": ["Symbol to find usages of"],
+    "dependents": ["File to find dependents of"],
+    "tests-for": ["File to find candidate tests for"],
 }
-_COMMAND_HELP = ("mcp", "watch", "config", "index", "locate", "usages", "dependents", "tests-for", "hook", "tokens")
+_COMMAND_HELP = ("mcp",)
+
+
+def _click_command(path: list[str]):
+    """Return a Click command from the same tree used by the CLI entry point."""
+    from typer.main import get_command
+
+    command = get_command(app)
+    for part in path:
+        children = getattr(command, "commands", None)
+        if not children or part not in children:
+            return None
+        command = children[part]
+    return command
+
+
+def _command_group_flow(path: list[str], group, kwargs: dict, pause=None) -> bool:
+    """Browse and run every nested command exposed by a Click command group."""
+    from aletheore import ui
+
+    children = getattr(group, "commands", {}) or {}
+    rows = [
+        ui.MenuItem(name, name, (command.help or "").partition("\n")[0])
+        for name, command in children.items()
+    ]
+    rows.append(ui.MenuItem("", "Back"))
+    start = 0
+    while True:
+        _clear_screen()
+        heading = ui.command_header(" / ".join(part.title() for part in path),
+                                    width=console.width, height=console.height, subtitle="choose a command")
+        choice = ui.choose(rows, console, header=heading, start=start, numbers=False,
+                           footer="up/down to move, enter to open or run, q to go back", **kwargs)
+        if choice is None or not choice.key:
+            return False
+        start = [row.key for row in rows].index(choice.key)
+        child = children[choice.key]
+        child_path = [*path, choice.key]
+        if getattr(child, "commands", None):
+            if _command_group_flow(child_path, child, kwargs, pause):
+                return True
+            continue
+
+        route = tuple("hallbook" if name == "skill-hub" else name for name in child_path)
+        if route == ("tokens", "meter"):
+            _meter_flow(kwargs, _pause if pause is None else pause)
+            continue
+        if route in SILENT_ROUTES:
+            # Event consumers cannot be run from an arrow-key picker: they wait on stdin.
+            _run_cli([*child_path, "--help"])
+            return True
+
+        args, options = [], []
+        for parameter in child.params:
+            optional_argument = isinstance(parameter, typer.core.TyperArgument) and parameter.default is None
+            if not parameter.required and not optional_argument:
+                continue
+            suffix = " (leave blank for the default)" if not parameter.required else ""
+            answer = _ask(f"{parameter.human_readable_name} for {' '.join(child_path)}{suffix}")
+            if not answer:
+                if parameter.required:
+                    console.print("[dim]Command cancelled; no value was entered.[/dim]")
+                    break
+                continue
+            if isinstance(parameter, typer.core.TyperOption):
+                options.append(f"{parameter.opts[0]}={answer}")
+            else:
+                args.append(answer)
+        else:
+            separator = ["--"] if any(arg.startswith("-") for arg in args) else []
+            _run_cli([*child_path, *options, *separator, *args])
+            return True
 
 
 def _command_args(name: str, answers: list[str]) -> list[str]:
     if name == "healthcheck":
         return ["healthcheck", ".", "--base-url", answers[0]]
-    return [name, *answers]
+    separator = ["--"] if any(answer.startswith("-") for answer in answers) else []
+    return [name, *separator, *answers]
+
+
+def _query_flow(kwargs: dict) -> bool:
+    """Explore every query kind from the same catalogue shown by `query --help`."""
+    from aletheore import ui
+
+    rows = [ui.MenuItem(kind, kind, group) for group, kinds in QUERY_KIND_GROUPS.items() for kind in kinds]
+    rows.append(ui.MenuItem("", "Back"))
+    start = 0
+    while True:
+        _clear_screen()
+        header = ui.command_header("Explore the evidence", width=console.width, height=console.height,
+                                   subtitle="choose a query; results read the current project's evidence")
+        picked = ui.choose(rows, console, header=header, start=start, numbers=False,
+                           footer="up/down to move, enter to choose, q to go back", **kwargs)
+        if picked is None or not picked.key:
+            return False
+        start = [row.key for row in rows].index(picked.key)
+        kind = picked.key
+        required = QUERY_FUNCTIONS.get(kind, (None, False))[1] or kind in (
+            "answer", "search-codebase", "symbol-source", "ast-pattern"
+        )
+        target = None
+        if required or kind not in ("schema", "changes"):
+            target = _ask(_QUERY_TARGET_HINTS.get(kind, "Target or filter") + ("" if required else " (optional; blank for all)"))
+            if required and not target:
+                continue
+        values = [kind, *([target] if target else [])]
+        options = []
+        if kind == "symbol-source":
+            symbol = _ask("Function or class name")
+            if not symbol:
+                continue
+            values.append(symbol)
+        elif kind == "ast-pattern":
+            language = _ask("Language grammar (for example python)")
+            if not language:
+                continue
+            options.append(f"--language={language}")
+        elif kind == "answer":
+            agent = _ask("Agent name (optional; blank to detect installed agents)")
+            if agent:
+                options.append(f"--agent={agent}")
+        separator = ["--"] if any(value.startswith("-") for value in values) else []
+        _run_cli(["query", *options, *separator, *values])
+        return True
 
 
 def _connect_flow(kwargs: dict) -> bool:
@@ -2310,7 +2423,8 @@ def _connect_flow(kwargs: dict) -> bool:
            for name in targets]
     sub.append(ui.MenuItem("all", "All of them", f"writes config for all {len(targets)} above, including Claude Desktop's global one"))
     sub.append(ui.MenuItem("back", "Back"))
-    choice = ui.choose(sub, console, header=Text("Connect which coding agent to this folder?", style="bold"),
+    choice = ui.choose(sub, console, header=ui.command_header("Connect your coding agent",
+                       width=console.width, height=console.height, subtitle=str(Path.cwd())),
                        footer="up/down to move, enter to choose, q to go back", **kwargs)
     if choice is None or choice.key == "back":
         return False
@@ -2325,7 +2439,7 @@ def _account_flow(kwargs: dict) -> bool:
            ui.MenuItem("login", "Sign in", "with your GitHub account"),
            ui.MenuItem("logout", "Sign out", ""),
            ui.MenuItem("back", "Back")]
-    choice = ui.choose(sub, console, header=Text("Account", style="bold"),
+    choice = ui.choose(sub, console, header=ui.command_header("Account", width=console.width, height=console.height),
                        footer="up/down to move, enter to choose, q to go back", **kwargs)
     if choice is None or choice.key == "back":
         return False
@@ -2339,13 +2453,50 @@ def _skills_flow(kwargs: dict) -> None:
     SkillsBrowser(console, read_key=kwargs.get("read_key"), ask=_ask, clear=_clear_screen).run()
 
 
-def _run_command(name: str, kwargs: dict) -> bool:
+def _meter_flow(kwargs: dict, pause: Callable[[], None]) -> None:
+    """Show the branded report with project selection and explicit read-guard actions."""
+    from aletheore import read_guard_setup, ui
+
+    project = Path.cwd()
+    while True:
+        _clear_screen()
+        args = ["tokens", "meter", "--path", str(project)]
+        _run_cli(args)
+        enabled = read_guard_setup.is_installed(project)
+        rows = [ui.MenuItem("refresh", "Refresh", "read the latest local observations"),
+                ui.MenuItem("guard", "Disable read guard" if enabled else "Enable read guard",
+                            "remove Aletheore's hooks" if enabled else "review changes before enabling Claude Code hooks"),
+                ui.MenuItem("project", "Choose project", "view another project's savings and settings"),
+                ui.MenuItem("back", "Back")]
+        picked = ui.choose(rows, console, footer="up/down to move, enter to choose, q to go back", **kwargs)
+        if picked is None or picked.key == "back":
+            return
+        if picked.key == "guard":
+            _run_cli([*args, "--disable-read-guard" if enabled else "--enable-read-guard"])
+            pause()
+        elif picked.key == "project":
+            answer = _ask("Project directory")
+            if answer:
+                try:
+                    chosen = Path(answer).expanduser().resolve()
+                    if not chosen.is_dir():
+                        raise ValueError(f"Project directory does not exist: {chosen}")
+                except (OSError, RuntimeError, ValueError) as exc:
+                    console.print(Text(f"error: invalid project directory: {exc}"))
+                    pause()
+                else:
+                    project = chosen
+
+
+def _run_command(name: str, kwargs: dict, pause=None) -> bool:
     """Run one command picked from the "All commands" list. True when it printed something worth reading."""
     if name == "mcp-install":
         return _connect_flow(kwargs)
-    if name == "hallbook":
-        _skills_flow(kwargs)
-        return False
+    if name == "query":
+        return _query_flow(kwargs)
+    command = _click_command([name])
+    if getattr(command, "commands", None):
+        return _command_group_flow([name], command, kwargs, pause)
     if name in _COMMAND_RUNS:
         _run_cli(_COMMAND_RUNS[name])
         return True
@@ -2371,8 +2522,8 @@ def _commands_flow(kwargs: dict, pause: Callable[[], None]) -> None:
     group_start = 0
     while True:
         _clear_screen()
-        header = Text("All commands\n", style="bold")
-        header.append("grouped by what you are doing", style="dim")
+        header = ui.command_header("All commands", width=console.width, height=console.height,
+                                   subtitle="grouped by what you are doing")
         picked = ui.choose(groups, console, header=header, start=group_start,
                            footer="up/down to move, enter to open, q to go back", numbers=False, **kwargs)
         if picked is None or not picked.key:
@@ -2384,14 +2535,14 @@ def _commands_flow(kwargs: dict, pause: Callable[[], None]) -> None:
         start = 0
         while True:
             _clear_screen()
-            header = Text(f"{picked.label}\n", style="bold")
-            header.append("enter runs a command or opens it", style="dim")
+            header = ui.command_header(picked.label, width=console.width, height=console.height,
+                                       subtitle="enter runs a command or opens it")
             command = ui.choose(rows, console, header=header, start=start, numbers=False,
                                 footer="up/down to move, enter to run, q to go back", **kwargs)
             if command is None or not command.key:
                 break
             start = [r.key for r in rows].index(command.key)
-            if _run_command(command.key, kwargs):
+            if _run_command(command.key, kwargs, pause):
                 pause()
                 return
 
@@ -2416,7 +2567,8 @@ def _run_menu(read_key=None, pause=None) -> None:
         if picked.key == "scan":
             _run_cli(["scan", "."])
         elif picked.key == "query":
-            _run_cli(["query"])
+            if not _query_flow(kwargs):
+                continue
         elif picked.key == "audit":
             _run_cli(["audit", "."])
         elif picked.key == "skills":
@@ -2430,6 +2582,9 @@ def _run_menu(read_key=None, pause=None) -> None:
         elif picked.key == "account":
             if not _account_flow(kwargs):
                 continue
+        elif picked.key == "meter":
+            _meter_flow(kwargs, pause)
+            continue
         elif picked.key == "commands":
             _commands_flow(kwargs, pause)
             continue
@@ -2790,7 +2945,7 @@ def init(
     _workspace_guard(path, yes)
     config_path = Path(path) / ".aletheore.json"
     if config_path.exists():
-        console.print(f"[bold red]error:[/bold red] {config_path} already exists - not overwriting it.")
+        console.print(_markup('[bold red]error:[/bold red] {} already exists - not overwriting it.', config_path))
         raise typer.Exit(code=1)
 
     default_config = {
@@ -2806,11 +2961,10 @@ def init(
         config_path.write_text(json.dumps(default_config, indent=2) + "\n", encoding="utf-8")
     except OSError as exc:
         _stderr_console.print(
-            f"[bold red]error:[/bold red] could not write {escape_markup(str(config_path))}: "
-            f"{escape_markup(_os_error_text(exc))}"
+            _markup('[bold red]error:[/bold red] could not write {}: {}', config_path, _os_error_text(exc))
         )
         raise typer.Exit(code=1)
-    console.print(f"[bold green]Wrote {config_path}[/bold green]")
+    console.print(_markup('[bold green]Wrote {}[/bold green]', config_path))
     # A Table (not console.print per key) so a description that wraps to a
     # second line lands under the key column instead of the terminal's left
     # edge - plain console.print has no concept of a hanging indent.
@@ -2955,6 +3109,7 @@ def query(
         console.print(_query_kinds_panel())
         raise typer.Exit(code=0)
     _warn_ignored_query_flags(kind, full, agent, k_given, language, exclude, under, no_tests)
+    repo_path = _resolve_path(repo_path, None)
     raise typer.Exit(
         code=_query(kind, target, repo_path, full, agent, 10 if k_given is None else k_given, symbol, language, exclude, under, no_tests)
     )
@@ -3177,7 +3332,7 @@ def mcp(
 ) -> None:
     if profile not in ("full", "nav", "router", "lean"):
         _stderr_console.print(
-            f"[bold red]error:[/bold red] unknown profile {profile!r}; choose full, nav, router or lean"
+            _markup('[bold red]error:[/bold red] unknown profile {}; choose full, nav, router or lean', repr(profile))
         )
         raise typer.Exit(code=2)
     path = _resolve_path(path, path_option)
@@ -3328,24 +3483,11 @@ def hook_evidence_snippet(
     mode: str = typer.Option("inject", "--mode", help="inject (short block) or pointer (one line)"),
 ) -> None:
     import json as _json
-    import shlex as _shlex
-    import sys as _sys
 
     if mode not in ("inject", "pointer"):
-        console.print(f"[bold red]error:[/bold red] unknown mode {mode!r}; choose inject or pointer")
+        console.print(_markup('[bold red]error:[/bold red] unknown mode {}; choose inject or pointer', repr(mode)))
         raise typer.Exit(code=2)
-    # The interpreter path can hold spaces (a pipx venv lives under "Application Support" on macOS), so the
-    # command is built from an argv list and quoted for the shell that will run it.
-    argv = [_sys.executable, "-m", "aletheore.evidence_hook", "--mode", mode]
-    if _sys.platform == "win32":
-        # cmd.exe style: quote an argument that is empty or holds a space, tab, quote or cmd metacharacter
-        command = " ".join(
-            '"' + arg.replace('"', '\\"') + '"' if not arg or any(c in arg for c in ' \t"&^|<>()') else arg
-            for arg in argv
-        )
-    else:
-        command = _shlex.join(argv)
-    entry = lambda matcher: [{"matcher": matcher, "hooks": [{"type": "command", "command": command}]}]  # noqa: E731
+    entry = lambda matcher: [{"matcher": matcher, "hooks": [python_hook("aletheore.evidence_hook", "--mode", mode)]}]  # noqa: E731
     typer.echo(
         _json.dumps(
             {"hooks": {"PreToolUse": entry("Edit|MultiEdit|Write"), "PostToolUse": entry("Read")}}, indent=2
@@ -3369,18 +3511,17 @@ def config_crash_reporting(
     env_override = crash_reporting_env_override()
     if state is None:
         current = "on" if is_crash_reporting_enabled() else "off"
-        console.print(f"Crash reporting: {current}")
+        console.print(_markup('Crash reporting: {}', current))
         if env_override is not None:
             stored = "on" if stored_crash_reporting_enabled() else "off"
             console.print(
-                f"(set by the ALETHEORE_CRASH_REPORTING={env_override} environment variable, "
-                f"which overrides the saved preference: {stored})"
+                _markup('(set by the ALETHEORE_CRASH_REPORTING={} environment variable, which overrides the saved preference: {})', env_override, stored)
             )
         raise typer.Exit(code=0)
 
     normalized = state.strip().lower()
     if normalized not in ("on", "off"):
-        console.print(f"[bold red]error:[/bold red] expected 'on' or 'off', got '{state}'")
+        console.print(_markup("[bold red]error:[/bold red] expected 'on' or 'off', got '{}'", state))
         raise typer.Exit(code=1)
 
     if not set_crash_reporting_enabled(normalized == "on"):
@@ -3389,12 +3530,11 @@ def config_crash_reporting(
             "(is the config directory writable?); crash reporting was not changed"
         )
         raise typer.Exit(code=1)
-    console.print(f"[bold green]Crash reporting turned {normalized}.[/bold green]")
+    console.print(_markup('[bold green]Crash reporting turned {}.[/bold green]', normalized))
     if env_override is not None:
         effective = "on" if is_crash_reporting_enabled() else "off"
         console.print(
-            f"Note: the ALETHEORE_CRASH_REPORTING={env_override} environment variable "
-            f"overrides this setting, so crash reporting stays {effective} while it is set."
+            _markup('Note: the ALETHEORE_CRASH_REPORTING={} environment variable overrides this setting, so crash reporting stays {} while it is set.', env_override, effective)
         )
 
 
@@ -3443,9 +3583,8 @@ app.add_typer(skill_hub_app, name="skill-hub", hidden=True)
 
 def _hallbook_error(message: str) -> None:
     """Print `error: ...` the way every other command does (text escaped, never wrapped) and exit 1."""
-    from rich.markup import escape
 
-    console.print(f"[bold red]error:[/bold red] {escape(message)}", soft_wrap=True)
+    console.print(_markup('[bold red]error:[/bold red] {}', message), soft_wrap=True)
     raise typer.Exit(code=1)
 
 
@@ -3471,8 +3610,6 @@ def skill_hub_list(
 ) -> None:
     # typer.echo, not console.print: titles come from skill frontmatter (or a
     # custom skill's file name) and must not be parsed as Rich markup.
-    from aletheore import ui
-
     _check_category_or_exit(category)
     # A pipe gets every line whole; a terminal gets lines cut to its width so none wraps.
     width = _plain_width() if sys.stdout.isatty() else None
@@ -3559,17 +3696,13 @@ def skill_hub_hook(
 ) -> None:
     if mode not in skill_hub.HOOK_MODES:
         console.print(
-            f"[bold red]error:[/bold red] unknown mode '{escape_markup(mode)}'; use one of: {', '.join(skill_hub.HOOK_MODES)}",
+            _markup("[bold red]error:[/bold red] unknown mode '{}'; use one of: {}", mode, ', '.join(skill_hub.HOOK_MODES)),
             soft_wrap=True,
         )
         raise typer.Exit(code=2)
-    executable = sys.executable
-    if " " in executable:
-        executable = f'"{executable}"'
-    command = f"{executable} -m aletheore.hallbook_hook --mode {mode}"
     settings = {
         "hooks": {
-            "UserPromptSubmit": [{"hooks": [{"type": "command", "command": command}]}]
+            "UserPromptSubmit": [{"hooks": [python_hook("aletheore.hallbook_hook", "--mode", mode)]}]
         }
     }
     typer.echo(json.dumps(settings, ensure_ascii=False))
@@ -3733,8 +3866,8 @@ def skill_hub_add(
     except ValueError as exc:
         _hallbook_error(str(exc))
     for warning in warnings:
-        _stderr_console.print(f"[bold]WARNING:[/bold] {escape_markup(warning)}.", soft_wrap=True)
-    console.print(f"[bold green]Added custom skill[/bold green] {skill_id}")
+        _stderr_console.print(_markup('[bold]WARNING:[/bold] {}.', warning), soft_wrap=True)
+    console.print(_markup('[bold green]Added custom skill[/bold green] {}', skill_id))
     if note:
         typer.echo(note)
 
@@ -3746,9 +3879,9 @@ def skill_hub_remove(name: str) -> None:
     except ValueError as exc:
         _hallbook_error(str(exc))
     if existed:
-        console.print(f"[bold green]Removed custom skill[/bold green] custom/{escape_markup(name)}")
+        console.print(_markup('[bold green]Removed custom skill[/bold green] custom/{}', name))
     else:
-        console.print(f"custom/{escape_markup(name)} was not present - nothing to remove.")
+        console.print(_markup('custom/{} was not present - nothing to remove.', name))
     if note:
         typer.echo(note)
 
@@ -3779,15 +3912,14 @@ def login() -> None:
 
     if _os.environ.get("ALETHEORE_API_URL"):
         console.print(
-            f"[yellow]Using ALETHEORE_API_URL={_os.environ['ALETHEORE_API_URL']} instead of app.aletheore.com "
-            "(for testing against your own server).[/yellow]\n"
+            _markup('[yellow]Using ALETHEORE_API_URL={} instead of app.aletheore.com (for testing against your own server).[/yellow]\n', _os.environ['ALETHEORE_API_URL'])
         )
 
     try:
         code = request_device_code()
         console.print("First, authenticate with GitHub:")
-        console.print(f"  1. Go to: [bold]{code.verification_uri}[/bold]")
-        console.print(f"  2. Enter code: [bold cyan]{code.user_code}[/bold cyan]")
+        console.print(_markup('  1. Go to: [bold]{}[/bold]', code.verification_uri))
+        console.print(_markup('  2. Enter code: [bold cyan]{}[/bold cyan]', code.user_code))
         console.print("Waiting for authorization...")
         github_token = poll_for_access_token(code)
 
@@ -3813,8 +3945,7 @@ def login() -> None:
             personal_token_saved = True
         except Exception as exc:  # noqa: BLE001 - best-effort by design
             console.print(
-                "[bold yellow]warning:[/bold yellow] Hallbook personal login unavailable "
-                f"right now ({type(exc).__name__}) - continuing without it."
+                _markup('[bold yellow]warning:[/bold yellow] Hallbook personal login unavailable right now ({}) - continuing without it.', type(exc).__name__)
             )
 
         if personal_token_saved:
@@ -3845,7 +3976,7 @@ def login() -> None:
             else:
                 console.print("Multiple paid installations found - pick one:")
                 for index, candidate in enumerate(resolved, start=1):
-                    console.print(f"  {index}. {candidate['account_login']}")
+                    console.print(_markup('  {}. {}', index, candidate['account_login']))
                 while True:
                     try:
                         raw = input(f"Enter a number [1-{len(resolved)}]: ").strip()
@@ -3856,7 +3987,7 @@ def login() -> None:
                         installation = resolved[int(raw) - 1]
                         break
                     console.print(
-                        f"[bold red]error:[/bold red] enter a number between 1 and {len(resolved)}"
+                        _markup('[bold red]error:[/bold red] enter a number between 1 and {}', len(resolved))
                     )
 
             token = mint_cli_token(github_token, installation["installation_id"], label)
@@ -3880,9 +4011,7 @@ def login() -> None:
 
         if installation_account_login is not None:
             console.print(
-                f"[bold green]Logged in.[/bold green] Token saved for "
-                f"[bold]{installation_account_login}[/bold]. "
-                "This replaces any previously saved token."
+                _markup('[bold green]Logged in.[/bold green] Token saved for [bold]{}[/bold]. This replaces any previously saved token.', installation_account_login)
             )
             console.print(HOSTED_EMBEDDINGS_DISCLOSURE)
         else:
@@ -3890,17 +4019,17 @@ def login() -> None:
                 "[bold green]Logged in.[/bold green] Personal token saved for Hallbook."
             )
     except DeviceFlowError as exc:
-        console.print(f"[bold red]error:[/bold red] {exc}")
+        console.print(_markup('[bold red]error:[/bold red] {}', exc))
         raise typer.Exit(code=1) from exc
     except httpx.HTTPStatusError as exc:
         # The server answered with an error status, so the connection is fine: show its reason instead of a
         # misleading "check your connection" hint.
         from aletheore.device_auth import describe_login_http_error
 
-        console.print(f"[bold red]error:[/bold red] {describe_login_http_error(exc)}", soft_wrap=True)
+        console.print(_markup('[bold red]error:[/bold red] {}', describe_login_http_error(exc)), soft_wrap=True)
         raise typer.Exit(code=1) from exc
     except (httpx.HTTPError, KeyError, ValueError) as exc:
-        console.print(f"[bold red]error:[/bold red] login failed ({type(exc).__name__}: {exc}) - check your connection and retry")
+        console.print(_markup('[bold red]error:[/bold red] login failed ({}: {}) - check your connection and retry', type(exc).__name__, exc))
         raise typer.Exit(code=1) from exc
 
 
@@ -3911,19 +4040,13 @@ def _logout_revoke_failed(exc: Exception, all_devices: bool) -> None:
         # The user asked to revoke every token. Removing the only local token now would leave nothing to
         # authenticate a retry with, and the other tokens would stay valid. Keep it.
         console.print(
-            "[bold red]error:[/bold red] couldn't revoke your personal tokens on the "
-            f"server ({type(exc).__name__}). You are still logged in on this machine; "
-            "retry `aletheore logout --all-devices` when you are online."
+            _markup("[bold red]error:[/bold red] couldn't revoke your personal tokens on the server ({}). You are still logged in on this machine; retry `aletheore logout --all-devices` when you are online.", type(exc).__name__)
         )
         raise typer.Exit(code=1) from exc
     # A plain offline logout must still log the user out locally;
     # the server-side revoke failing is a warning, not a blocker.
     console.print(
-        "[bold yellow]warning:[/bold yellow] couldn't revoke the personal "
-        f"token on the server ({type(exc).__name__}) - it was removed from "
-        "this machine, but it has no expiry and stays valid on the server "
-        "until it is revoked. To revoke it, log in again and run "
-        "`aletheore logout --all-devices`."
+        _markup("[bold yellow]warning:[/bold yellow] couldn't revoke the personal token on the server ({}) - it was removed from this machine, but it has no expiry and stays valid on the server until it is revoked. To revoke it, log in again and run `aletheore logout --all-devices`.", type(exc).__name__)
     )
 
 
@@ -3948,9 +4071,7 @@ def _revoke_managed_audit_token_best_effort() -> None:
     else:
         return
     console.print(
-        f"[bold yellow]warning:[/bold yellow] couldn't revoke the CLI token on the server ({reason}) - it was "
-        "removed from this machine but may still count toward your token limit. You can revoke it in the "
-        "dashboard at https://aletheore.com."
+        _markup("[bold yellow]warning:[/bold yellow] couldn't revoke the CLI token on the server ({}) - it was removed from this machine but may still count toward your token limit. You can revoke it in the dashboard at https://aletheore.com.", reason)
     )
 
 
@@ -4026,7 +4147,7 @@ def status() -> None:
         if installed_version == "unknown"
         else _check_for_update(installed_version)
     )
-    console.print(f"Aletheore v{installed_version} ({version_note})")
+    console.print(_markup('Aletheore v{} ({})', installed_version, version_note))
 
     env_override = crash_reporting_env_override()
     crash_reporting_state = "on" if is_crash_reporting_enabled() else "off"
@@ -4036,7 +4157,7 @@ def status() -> None:
         )
     elif crash_reporting_state == "off":
         crash_reporting_state += " (run 'aletheore config crash-reporting on' to enable)"
-    console.print(f"Crash reporting: {crash_reporting_state}")
+    console.print(_markup('Crash reporting: {}', crash_reporting_state))
 
     if not credentials.has_api_key(
         "ALETHEORE_API_TOKEN",
@@ -4056,7 +4177,7 @@ def status() -> None:
             console.print("A token is saved locally, but it couldn't be verified right now.")
         else:
             console.print(
-                f"Logged in as: [bold]{who.get('account_login', '?')}[/bold] ({who.get('plan', '?')} plan)"
+                _markup('Logged in as: [bold]{}[/bold] ({} plan)', who.get('account_login', '?'), who.get('plan', '?'))
             )
 
     # Independent of the managed-audit/installation check above: Hallbook
@@ -4091,10 +4212,9 @@ def main() -> None:
     # non-UTF-8-terminal case, matching this file's off-crash-path
     # printed-error philosophy, rather than crashing the CLI while it's
     # trying to report an unrelated error.
-    for stream in (sys.stdout, sys.stderr):
-        reconfigure = getattr(stream, "reconfigure", None)
-        if reconfigure is not None:
-            reconfigure(encoding="utf-8", errors="backslashreplace")
+    from aletheore._launcher import configure_stdio
+
+    configure_stdio()
 
     # A deleted working directory (a removed git worktree, a cleaned-up
     # scratch dir) makes os.getcwd() raise FileNotFoundError, and every
@@ -4133,6 +4253,14 @@ def main() -> None:
 
     try:
         app()
+    except BrokenPipeError:
+        # A consumer such as `head` can close its pipe before the CLI finishes.
+        # Replace the stream to prevent a second exception during Python's final flush.
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+        raise SystemExit(0)
+    except (OSError, UnicodeError) as exc:
+        _stderr_console.print(Text(f"error: {exc}"))
+        raise SystemExit(1) from exc
     except (typer.Exit, click.exceptions.Exit, SystemExit, KeyboardInterrupt):
         raise
     except Exception as exc:

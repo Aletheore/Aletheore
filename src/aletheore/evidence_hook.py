@@ -161,7 +161,7 @@ def _fill_history_from_git(repo_path: Path, index: dict) -> None:
         result = subprocess.run(  # noqa: S603  # nosec B603 - fixed argv, absolute git, no shell
             [git_executable(), "-C", str(repo_path), "log", "--no-merges", "--name-only", "--format=%x00", f"-n{_GIT_LOG_COMMITS}"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=_GIT_LOG_TIMEOUT,
             check=False,
         )

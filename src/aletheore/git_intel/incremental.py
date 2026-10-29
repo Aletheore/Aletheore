@@ -91,7 +91,7 @@ def _scan_root_prefix(repo_path: Path) -> str:
     # it excluded, matching how the rest of the scanner treats repo_path as
     # the analysis root.
     result = subprocess.run(  # nosec B603 - argv[0] is git_executable()'s absolute path, args are fixed
-        [git_executable(), "rev-parse", "--show-prefix"], cwd=repo_path, capture_output=True, text=True, errors="ignore"
+        [git_executable(), "rev-parse", "--show-prefix"], cwd=repo_path, capture_output=True, text=True, encoding="utf-8", errors="ignore"
     )
     return result.stdout.strip() if result.returncode == 0 else ""
 
@@ -169,7 +169,7 @@ def stream_commit_touches(
             cwd=repo_path,
             stdout=subprocess.PIPE,
             stderr=stderr_file,
-            text=True,
+            text=True, encoding="utf-8",
             errors="ignore",
         )
     except BaseException:
@@ -266,7 +266,7 @@ def _root_commit_key(repo_path: Path) -> str:
         [git_executable(), "rev-list", "--max-parents=0", "HEAD"],
         cwd=repo_path,
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         errors="ignore",
     )
     root_shas = sorted(line for line in roots_result.stdout.strip().splitlines() if line)
@@ -288,7 +288,7 @@ def compute_repo_key(repo_path: Path) -> str:
         [git_executable(), "remote", "get-url", "origin"],
         cwd=repo_path,
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         errors="ignore",
     )
     remote_url = remote_result.stdout.strip()

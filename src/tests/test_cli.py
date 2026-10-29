@@ -3452,8 +3452,9 @@ def test_every_path_taking_command_accepts_the_path_option():
 def test_resolve_path_prefers_the_option_but_keeps_the_positional_default():
     assert _resolve_path(".", None) == "."
     assert _resolve_path(".", "/somewhere") == "/somewhere"
-    # Not `option or positional` - an explicit empty string is still a choice.
-    assert _resolve_path(".", "") == ""
+    # An explicit empty value must not silently select the working directory.
+    with pytest.raises(typer.Exit):
+        _resolve_path(".", "")
 
 
 def test_healthcheck_without_base_url_explains_what_a_base_url_is():
@@ -3935,7 +3936,8 @@ def test_hallbook_hook_prints_valid_settings_json_with_the_hook_module():
     hook = settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]
     assert hook["type"] == "command"
     assert sys.executable in hook["command"]
-    assert "-m aletheore.hallbook_hook --mode hint" in hook["command"]
+    assert hook["args"] == ["-X", "utf8", "-m", "aletheore.hallbook_hook", "--mode", "hint"]
+    assert hook["command"] == sys.executable
 
 
 def test_logout_all_devices_keeps_the_token_when_the_revoke_fails(tmp_path, monkeypatch):
@@ -3992,7 +3994,8 @@ def test_importing_the_cli_never_exits_even_for_the_hook_command(monkeypatch):
     importlib.reload(cli_module)  # would raise SystemExit if the old import-time hook were back
 
 
-def test_launcher_runs_the_hook_without_importing_the_cli(monkeypatch):
+@pytest.mark.parametrize("alias", ["hallbook", "skill-hub"])
+def test_launcher_runs_the_hook_without_importing_the_cli(monkeypatch, alias):
     import sys
 
     from aletheore import _launcher
@@ -4003,7 +4006,7 @@ def test_launcher_runs_the_hook_without_importing_the_cli(monkeypatch):
         seen["argv"] = argv
         return 0
 
-    monkeypatch.setattr(sys, "argv", ["aletheore", "hallbook", "suggest", "--mode", "hint"])
+    monkeypatch.setattr(sys, "argv", ["aletheore", alias, "suggest", "--mode", "hint"])
     monkeypatch.setattr("aletheore.hallbook_hook.main", fake_hook_main)
     with pytest.raises(SystemExit) as excinfo:
         _launcher.main()

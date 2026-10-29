@@ -1,6 +1,7 @@
 import io
 import os
 import sys
+from pathlib import Path
 
 import pytest
 from rich.cells import cell_len
@@ -346,9 +347,30 @@ def test_menu_choices_run_the_matching_commands(monkeypatch):
     assert ran == [["scan", "."], ["audit", "."]]
 
 
+def test_token_meter_has_a_direct_home_menu_item(monkeypatch):
+    ran = []
+    monkeypatch.setattr(cli, "_run_cli", lambda args: ran.append(args) or 0)
+    position = [row[0] for row in cli._MAIN_MENU].index("meter")
+    cli._run_menu(read_key=_keys(*([DOWN] * position), ENTER, "q", "q"), pause=lambda: None)
+    assert ran == [["tokens", "meter", "--path", str(Path.cwd())]]
+
+
+def test_meter_menu_opens_setup_only_after_user_selects_enable(monkeypatch, tmp_path):
+    ran = []
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "_run_cli", lambda args: ran.append(args) or 0)
+    cli._meter_flow({"read_key": _keys(DOWN, ENTER, "q")}, pause=lambda: None)
+    assert ran == [
+        ["tokens", "meter", "--path", str(tmp_path)],
+        ["tokens", "meter", "--path", str(tmp_path), "--enable-read-guard"],
+        ["tokens", "meter", "--path", str(tmp_path)],
+    ]
+
+
 def test_the_menu_remembers_where_you_were(monkeypatch):
     ran = []
     monkeypatch.setattr(cli, "_run_cli", lambda args: ran.append(args) or 0)
+    monkeypatch.setattr(cli, "_query_flow", lambda kwargs: ran.append(["query"]) or True)
     # pick "Explore the evidence" (second), come back: the highlight is still on it, enter picks it again
     cli._run_menu(read_key=_keys(DOWN, ENTER, ENTER, "q"), pause=lambda: None)
     assert ran == [["query"], ["query"]]
@@ -420,8 +442,9 @@ def test_every_banner_command_is_in_the_picker_exactly_once_with_the_banner_desc
 def test_every_picker_command_has_an_action():
     for _, names in cli._COMMAND_GROUPS:
         for name in names:
+            group = cli._click_command([name])
             assert (name in cli._COMMAND_RUNS or name in cli._COMMAND_PROMPTS or name in cli._COMMAND_HELP
-                    or name in ("mcp-install", "hallbook")), name
+                    or name == "mcp-install" or bool(getattr(group, "commands", None))), name
 
 
 @pytest.mark.parametrize(
@@ -432,6 +455,8 @@ def test_every_picker_command_has_an_action():
         ("audit", ["audit", "."]),
         ("dashboard", ["dashboard", "."]),
         ("init", ["init", "."]),
+        ("index", ["index", "."]),
+        ("watch", ["watch", "."]),
         ("login", ["login"]),
         ("logout", ["logout"]),
         ("status", ["status"]),
@@ -440,6 +465,7 @@ def test_every_picker_command_has_an_action():
 def test_enter_on_a_command_that_needs_nothing_runs_it_directly(monkeypatch, name, expected):
     ran = []
     monkeypatch.setattr(cli, "_run_cli", lambda args: ran.append(args) or 0)
+    monkeypatch.setattr(cli, "_query_flow", lambda kwargs: ran.append(["query"]) or True)
     cli._run_menu(read_key=_keys(*_pick_command(*_group_row(name)), "q"), pause=lambda: None)
     assert ran == [expected]
 
@@ -450,6 +476,10 @@ def test_enter_on_a_command_that_needs_nothing_runs_it_directly(monkeypatch, nam
         ("diff", ["old.json", "new.json"], ["diff", "old.json", "new.json"]),
         ("verify", ["report.md"], ["verify", "report.md"]),
         ("healthcheck", ["http://localhost:8000"], ["healthcheck", ".", "--base-url", "http://localhost:8000"]),
+        ("locate", ["parse_config"], ["locate", "parse_config"]),
+        ("usages", ["parse_config"], ["usages", "parse_config"]),
+        ("dependents", ["src/example.py"], ["dependents", "src/example.py"]),
+        ("tests-for", ["src/example.py"], ["tests-for", "src/example.py"]),
     ],
 )
 def test_commands_with_one_required_argument_ask_for_it_and_pass_it_on(monkeypatch, name, answers, expected):
@@ -470,7 +500,7 @@ def test_an_empty_answer_cancels_the_command_instead_of_running_it(monkeypatch):
     assert ran == []
 
 
-@pytest.mark.parametrize("name", ["mcp", "watch", "config"])
+@pytest.mark.parametrize("name", ["mcp"])
 def test_the_remaining_commands_show_their_own_help(monkeypatch, name):
     ran = []
     monkeypatch.setattr(cli, "_run_cli", lambda args: ran.append(args) or 0)
@@ -478,7 +508,7 @@ def test_the_remaining_commands_show_their_own_help(monkeypatch, name):
     assert ran == [[name, "--help"]]
 
 
-def test_mcp_install_in_the_picker_is_the_connect_flow_and_hallbook_the_skills_submenu(monkeypatch):
+def test_tokens_meter_is_reachable_from_all_commands_and_hallbook_browse_stays_available(monkeypatch):
     ran, skills = [], []
     monkeypatch.setattr(cli, "_run_cli", lambda args: ran.append(args) or 0)
     monkeypatch.setattr(cli, "_skills_flow", lambda kwargs: skills.append(True))
@@ -486,9 +516,28 @@ def test_mcp_install_in_the_picker_is_the_connect_flow_and_hallbook_the_skills_s
     # the first agent in the Connect list is chosen: one agent, never "all of them"
     cli._run_menu(read_key=_keys(*_pick_command(group, row), ENTER, "q"), pause=lambda: None)
     assert ran == [["mcp-install", ".", "--target", "claude-code"]]
-    group, row = _group_row("hallbook")
-    cli._run_menu(read_key=_keys(*_pick_command(group, row), "q", "q", "q"), pause=lambda: None)
+    group, row = _group_row("tokens")
+    cli._run_menu(read_key=_keys(*_pick_command(group, row), *((DOWN,) * 2), ENTER, "q", "q", "q", "q", "q"), pause=lambda: None)
+    assert ran[-1] == ["tokens", "meter", "--path", str(Path.cwd())]
+    skills_position = [i[0] for i in cli._MAIN_MENU].index("skills")
+    cli._run_menu(read_key=_keys(*((DOWN,) * skills_position), ENTER, "q"), pause=lambda: None)
     assert skills == [True]
+
+
+def test_all_nested_click_commands_are_listed_in_the_picker(monkeypatch):
+    from typer.main import get_command
+
+    root = get_command(app)
+    for name, command in root.commands.items():
+        if not getattr(command, "commands", None):
+            continue
+        shown = []
+        def capture_rows(items, console, **kwargs):
+            shown.extend(item.key for item in items if item.key)
+            return None
+        monkeypatch.setattr(ui, "choose", capture_rows)
+        cli._run_command(name, {})
+        assert shown == list(command.commands)
 
 
 def test_back_leaves_the_picker_and_the_menu_comes_back_without_running_anything(monkeypatch):

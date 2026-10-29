@@ -8,6 +8,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from aletheore.subprocess_utils import command_argv
 from aletheore.static_analysis._exclusions import excluded_dir_names, filter_findings
 
 DEFAULT_SONARQUBE_TIMEOUT_SECONDS = 600
@@ -155,7 +156,8 @@ def check_sonarqube(
         cmd.append(f"-Dsonar.token={token}")
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=repo_path)
+        result = subprocess.run(command_argv(*cmd, cwd=repo_path),  # nosec B603 - absolute tool, validated argv; unsupported batch launchers rejected
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, cwd=repo_path)
     except subprocess.TimeoutExpired:
         return {"checked": False, "reason": f"sonar-scanner timed out after {timeout}s", "findings": []}
     except OSError as exc:

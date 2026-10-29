@@ -462,6 +462,44 @@ show that cost and let you trim the part you do not use. Everything is local; no
 The profile is off until you apply it. A tool the profile denies is unavailable to the agent in that project, so
 switch to `core+web` or `off` if your work needs it.
 
+### `aletheore tokens meter`
+
+The meter reports local savings observed from two event families: an unchanged full-file reread denied by the opt-in read
+guard, and an MCP evidence-query or semantic code-search response shortened by the output budget. It shows today,
+this Monday-start week, and all-time totals per source. It stores only timestamps and byte/character counts under
+`.aletheore/token_meter/events/`; it does not store paths, file contents, MCP payloads, or agent transcripts.
+
+Open **Token savings meter** from the home menu for Aletheore's monochrome report and actions to refresh, choose a
+project, or review and enable the read guard. The regular command uses the same report design. The `--plain` option
+keeps the single-line output for scripts.
+
+```bash
+aletheore tokens meter
+aletheore tokens meter --plain  # one line for a status display or script
+```
+
+The website uses the reusable A-mark mascot with matching idle, typing, working, explaining, reading, review, success,
+caution, wave, walk, and jump poses. The site's reduced-motion setting keeps it still; the CLI report stays text-based.
+“Measured” refers to byte/character sizes directly
+observed by the hook or MCP server. Token figures are **estimates**, using `ceil(bytes / 4)` for denied rereads and
+`ceil(serialized characters omitted / 4)` for shortened MCP responses. The model tokenizer and counterfactual agent
+behavior are not visible to Aletheore, so the figures are not model-reported token usage. Dollar values are not
+shown. Profile application is reported as configuration only; its per-turn savings remain unmeasured.
+
+The read guard stays opt-in. If it has not recorded events, the meter says that savings are unmeasured. To enable
+it for the current project, run `aletheore tokens meter --enable-read-guard`. Aletheore first prints the exact
+project-local `.claude/settings.local.json` hooks and ownership sidecar it would add, then requires you to type
+`yes`. A decline changes nothing. Use `aletheore tokens meter --disable-read-guard` to remove only the hook entries
+Aletheore added. Restart Claude Code after enabling or disabling. The read guard records only in a repo that already
+has `.aletheore/` state (for example, after a scan); setup does not create scan state.
+
+Metering begins when this version records events, so earlier activity is not reconstructed. A denied reread's byte
+size is not necessarily its exact model-token cost or a saving if the agent no longer has the earlier content.
+MCP omission counts measure the serialized result-size difference, including the truncation marker; later page requests
+are not counted as savings. Missing event history means no events have been recorded yet. Corrupt event files are
+skipped with a warning and can make totals incomplete. Delete `.aletheore/token_meter/` in that repo to clear the
+meter history.
+
 ### `aletheore query <kind> [target]`
 
 Answers one targeted question from an existing `air.json`, without re-scanning or an LLM

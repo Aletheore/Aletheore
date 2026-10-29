@@ -96,8 +96,8 @@ def _is_full_read(tool_input: dict[str, Any]) -> bool:
     return "offset" not in tool_input and "limit" not in tool_input
 
 
-def pre_read_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
-    """The JSON a PreToolUse hook on Read should print, or None to allow silently with no output."""
+def _pre_read_decision(payload: dict[str, Any], *, record_meter_event: bool = False) -> dict[str, Any] | None:
+    """Build the hook decision; meter only when called from the enabled hook entry point."""
     tool_input = payload.get("tool_input")
     session_id = payload.get("session_id")
     cwd = payload.get("cwd")
@@ -122,7 +122,7 @@ def pre_read_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
     if record.get("sha256") != current_hash or record.get("size") != current_size:
         return None
 
-    return {
+    decision = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
@@ -136,6 +136,25 @@ def pre_read_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
             ),
         }
     }
+    if record_meter_event:
+        try:
+            from aletheore.token_meter import record_read_guard
+
+            record_read_guard(Path(cwd), current_size)
+        except Exception:
+            # Meter state must never change the allow/deny decision or fail a hook.
+            _LOG.debug("token meter event recording failed", exc_info=True)
+    return decision
+
+
+def pre_read_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Compute a decision without recording meter events.
+
+    Hook entry points use main_pre, which records actual emitted denials. Keeping
+    this evaluator free of metering avoids counting previews or repeated checks.
+    """
+    return _pre_read_decision(payload)
+
 
 
 def record_read(payload: dict[str, Any]) -> None:
@@ -177,7 +196,7 @@ def main_pre(stdin=None, stdout=None, environ=None) -> int:
         payload = json.loads((stdin or sys.stdin).read() or "{}")
         if not isinstance(payload, dict):
             return 0
-        out = pre_read_decision(payload)
+        out = _pre_read_decision(payload, record_meter_event=True)
         if out:
             (stdout or sys.stdout).write(json.dumps(out))
     except Exception:  # a hook must never block the agent; keep the reason for debugging
@@ -200,3 +219,21 @@ def main_post(stdin=None, stdout=None, environ=None) -> int:
     except Exception:  # a hook must never block the agent; keep the reason for debugging
         _LOG.debug("read guard hook failed; allowing the call", exc_info=True)
     return 0
+
+
+def _module_main() -> int:
+    """Entry point used by the consent-installed Claude Code hooks."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Aletheore's optional local unchanged-read guard hook")
+    parser.add_argument("event", choices=("pre", "post"))
+    # Ownership marker used by the installer to identify its exact hook entries,
+    # not an authentication token. Running this module is explicit opt-in itself.
+    parser.add_argument("--setup-id", help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    os.environ[READ_GUARD_ENV_VAR] = "1"
+    return main_pre() if args.event == "pre" else main_post()
+
+
+if __name__ == "__main__":
+    raise SystemExit(_module_main())

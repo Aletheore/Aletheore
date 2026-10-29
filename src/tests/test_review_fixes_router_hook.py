@@ -24,9 +24,9 @@ def test_snippet_quotes_an_interpreter_path_with_spaces(monkeypatch):
     monkeypatch.setattr(sys, "executable", "/Users/a/Library/Application Support/venv/bin/python")
     result = runner.invoke(cli.app, ["hook", "evidence-snippet"])
     assert result.exit_code == 0
-    command = json.loads(result.stdout)["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
-    assert command.startswith("'/Users/a/Library/Application Support/venv/bin/python' -m aletheore.evidence_hook")
-    assert command.endswith("--mode inject")
+    hook = json.loads(result.stdout)["hooks"]["PostToolUse"][0]["hooks"][0]
+    assert hook["command"] == sys.executable
+    assert hook["args"] == ["-X", "utf8", "-m", "aletheore.evidence_hook", "--mode", "inject"]
 
 
 @pytest.mark.parametrize(

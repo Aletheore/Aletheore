@@ -45,7 +45,7 @@ _memo: dict[tuple[str, str, str], HistoryFacts] = {}
 
 def _git(repo_path: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(  # nosec B603 - argv[0] is git_executable()'s absolute path, args are fixed
-        [git_executable(), *args], cwd=repo_path, capture_output=True, text=True, errors="ignore"
+        [git_executable(), *args], cwd=repo_path, capture_output=True, text=True, encoding="utf-8", errors="ignore"
     )
 
 

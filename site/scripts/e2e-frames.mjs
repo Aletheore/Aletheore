@@ -54,8 +54,11 @@ for (const route of ROUTES) for (const p of passes) {
 
   const height = await page.evaluate(() => document.documentElement.scrollHeight);
   const seen = new Set();
+  // The pinned scene advances once per 55% of viewport height. Sample more often than that so fast
+  // scroll jumps cannot step over a state and report a false missing-step failure.
+  const scrollHop = Math.round(p.viewport.height * 0.45);
   let i = 0;
-  for (let y = 0; y < height; y += Math.round(p.viewport.height * 0.6), i++) {
+  for (let y = 0; y < height; y += scrollHop, i++) {
     await page.evaluate((v) => window.scrollTo(0, v), y);
     await new Promise((r) => setTimeout(r, 350));
     const step = await page.evaluate(() => document.querySelector("[data-active-step]")?.getAttribute("data-active-step"));
