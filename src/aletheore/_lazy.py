@@ -43,6 +43,15 @@ class _LazyModule:
         # import this whole module exists for.
         return type(self._load())
 
+    @property
+    def __dict__(self):
+        # pytest 9.2's monkeypatch.setattr restores the original value from `target.__dict__`.
+        # Without this proxy it saw the stand-in's own (empty) dict, concluded the attribute had
+        # no original value, and on undo deleted it from the real module - so the first test
+        # that patched e.g. `aletheore.cli.sentry_sdk.capture_exception` removed it for every
+        # later test. vars(stand_in) now matches vars(real_module), like a real import would.
+        return self._load().__dict__
+
     def __setattr__(self, attr: str, value) -> None:
         setattr(self._load(), attr, value)
 
