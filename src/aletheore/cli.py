@@ -667,6 +667,8 @@ def _scan(
     check_static_analysis: bool | None = None,
     check_bearer: bool | None = None,
     check_joern: bool | None = None,
+    edit_gitignore: bool = True,
+    progress: Callable[[str], None] | None = None,
 ) -> tuple[int, dict, Path]:
     repo = Path(repo_path).resolve()
     (
@@ -695,7 +697,8 @@ def _scan(
             _stderr_console.print(f"[bold red]error:[/bold red] {escape_markup(str(exc))}")
             return 1, {}, repo
 
-    _stderr_console.print(f"Scanning {repo}...")
+    if progress is None:
+        _stderr_console.print(f"Scanning {repo}...")
     try:
         evidence = scan_repository(
             repo,
@@ -707,13 +710,14 @@ def _scan(
             check_static_analysis=resolved_static_analysis,
             run_bearer=resolved_bearer,
             run_joern=resolved_joern,
-            progress=_make_progress_printer(),
+            progress=progress or _make_progress_printer(),
+            edit_gitignore=edit_gitignore,
         )
     except GitAnalysisError as exc:
         console.print(f"[bold red]error:[/bold red] {exc}")
         return GIT_ANALYSIS_RESOURCE_EXIT_CODE, {}, repo
     try:
-        evidence_path = write_evidence(evidence, repo)
+        evidence_path = write_evidence(evidence, repo, edit_gitignore=edit_gitignore)
     except EvidenceWriteError as exc:
         _stderr_console.print(f"[bold red]error:[/bold red] {escape_markup(str(exc))}")
         return 1, {}, repo

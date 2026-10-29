@@ -16,7 +16,7 @@ What setup touches, and nothing else:
   symlinked or undecodable hook gets a snippet. `core.hooksPath` inside the git dir is edited; anywhere else
   (husky's `.husky/`, a shared global folder) gets a snippet, because those hooks are tracked or shared.
 - `git rev-parse --git-path info/exclude` (also shared by linked worktrees): a marked block that keeps
-  `/.aletheore/shield/` and `/.claude/settings.local.json` out of `git status`. `.gitignore` is never touched.
+  `/.aletheore/` (Shield state and scan evidence) and `/.claude/settings.local.json` out of `git status`. `.gitignore` is never touched.
 - `<top>/.aletheore/shield/config.json` (Shield's config, created when missing).
 - `<git dir>/aletheore-shield/setup/` (outside the working tree, so a cloned repository cannot plant or redirect
   it): `setup-record.json`, which only this module reads and writes (what setup created: files, folders, settings
@@ -70,7 +70,7 @@ SH_SHELLS = frozenset({"sh", "bash", "dash", "zsh", "ksh", "ash", "mksh"})
 SETTINGS_RELATIVE = PurePosixPath(".claude/settings.local.json")
 RECORD_NAME = "setup-record.json"
 BACKUP_NAME = "original-settings.local.json.bak"
-EXCLUDE_BLOCK = f"{MARK_START}\n/.aletheore/shield/\n/{SETTINGS_RELATIVE.as_posix()}\n{MARK_END}\n"
+EXCLUDE_BLOCK = f"{MARK_START}\n/.aletheore/\n/{SETTINGS_RELATIVE.as_posix()}\n{MARK_END}\n"
 DIFF_MAX_LINES = 200
 PLAN_CHANGED = "setup plan changed since it was shown"
 _SHARED = "shared by all linked worktrees of this repository"

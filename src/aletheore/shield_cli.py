@@ -7,6 +7,9 @@ through rich markup, so a hostile file name cannot inject escape sequences or st
 
 from __future__ import annotations
 
+import contextlib
+import io
+import os
 import sys
 from datetime import timezone
 from pathlib import Path
@@ -19,6 +22,7 @@ from aletheore.shield.gitutil import run_git
 from aletheore.shield.guard import _UNSAFE, clean_text, render_report, run_guard
 from aletheore.shield.receipt import latest_receipt
 from aletheore.shield.setup import (
+    PLAN_CHANGED,
     SetupBlocked,
     SetupChange,
     apply_setup,
@@ -60,9 +64,40 @@ def _interactive() -> bool:
 
 
 def _confirm(question: str, yes: bool) -> bool:
+    """Only the word "yes" (any case, trimmed) confirms. tokens_cli._confirm compares exactly; Shield is
+    forgiving about case but never about "y"."""
     if yes:
         return True
-    return typer.prompt(f"{question} Type 'yes' to continue", default="no").strip().lower() == "yes"
+    answer = typer.prompt(f"{question} Type 'yes' to continue", default="no").strip().lower()
+    if answer == "yes":
+        return True
+    if answer.startswith("y"):
+        _out("Only 'yes' sets it up.")
+    return False
+
+
+def _opts(ctx: typer.Context, path: Path | None, yes: bool) -> tuple[Path | None, bool]:
+    """A subcommand's own --path/--yes win; otherwise the ones given to `aletheore shield` itself apply."""
+    inherited = ctx.obj if isinstance(ctx.obj, dict) else {}
+    return (path if path is not None else inherited.get("path")), bool(yes or inherited.get("yes"))
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+_PRIVATE = "aletheore-shield"
+
+
+def _is_private(path: Path) -> bool:
+    return _PRIVATE in Path(path).parts
+
+
+def _rel(repo: Path, path: Path) -> str:
+    try:
+        return Path(path).relative_to(repo).as_posix()
+    except ValueError:
+        return str(path)
 
 
 def _fail(message: str, code: int = 1) -> "typer.Exit":
@@ -95,8 +130,8 @@ def _when(checkpoint: Checkpoint) -> str:
 # ---------------------------------------------------------------- setup / status
 
 
-def _show_change(change: SetupChange) -> None:
-    _out(f"  {_safe(change.kind)}: {_safe(change.path)}")
+def _show_change(repo: Path, change: SetupChange) -> None:
+    _out(f"  {_safe(change.kind)}: {_safe(_rel(repo, change.path))}")
     _out(f"      {_safe(change.description)}")
     if change.kind == "snippet":
         if change.detail:
@@ -129,13 +164,32 @@ def _show_network(repo: Path) -> None:
 
 
 def _first_scan(repo: Path) -> None:
+    """The quick local scan Shield's evidence checks read. Never raises: setup already succeeded."""
     from aletheore import cli
 
-    _out("")
-    _out("No evidence yet; running a quick local scan (no network, no history, no external scanners)...")
-    code, _evidence, _path = cli._scan(str(repo), False, False, False, None, None, False, False, False)
-    if code != 0:
-        _out("The first scan did not finish. Shield works without it; run `aletheore scan` later.")
+    _out("Scanning (local only)...")
+    captured = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(captured), contextlib.redirect_stderr(captured):
+            code, _evidence, _path = cli._scan(
+                str(repo), False, False, False, None, None, False, False, False,
+                edit_gitignore=False, progress=lambda _message: None,
+            )
+    except (Exception, KeyboardInterrupt) as exc:  # noqa: BLE001
+        code, captured = 1, io.StringIO(type(exc).__name__)
+    if code == 0:
+        _out("Scanning done.")
+        return
+    lines = [ln for ln in captured.getvalue().splitlines() if ln.strip()]
+    reason = f" ({_safe(lines[-1])})" if lines else ""
+    _out(f"The first scan did not finish{reason}. Shield works without it; run `aletheore scan` later.")
+
+
+_NOTE_HINTS = {
+    "agent hooks not registered": "add the hooks snippet shown during setup, or run `aletheore shield off` and set up again",
+    "agent hooks partly registered": "add the hooks snippet shown during setup",
+    "git hook not installed": "add the block shown during setup to .git/hooks/pre-commit",
+}
 
 
 def _status(repo: Path) -> None:
@@ -143,12 +197,13 @@ def _status(repo: Path) -> None:
     _out(f"Shield is on in {_safe(repo)}.")
     _out(f"  checkpoints: {status.checkpoints}")
     if status.latest_receipt is not None:
-        _out(f"  latest receipt: {_safe(status.latest_receipt)}")
+        _out(f"  latest receipt: {_safe(_rel(repo, status.latest_receipt))}")
         _out("  open it to see what the last session changed.")
     else:
         _out("  latest receipt: none yet")
     for note in status.notes:
-        _out(f"  note: {_safe(note)}")
+        hint = next((h for key, h in _NOTE_HINTS.items() if note.startswith(key)), "")
+        _out(f"  note: {_safe(note)}" + (f" ({hint})" if hint else ""))
     _out("")
     _out("  aletheore shield check   run the guard now")
     _out("  aletheore shield undo    put files back to a checkpoint")
@@ -161,6 +216,7 @@ def shield(
     path: Path = typer.Option(None, "--path", help="repository (default: current directory)"),
     yes: bool = typer.Option(False, "--yes", help="set up without asking"),
 ) -> None:
+    ctx.obj = {"path": path, "yes": yes}
     if ctx.invoked_subcommand is not None:
         return
     repo = _resolve_repo(path)
@@ -173,8 +229,18 @@ def shield(
     if not plan:
         raise _fail("Shield found nothing to set up here.")
     _out(f"Shield will make these changes in {_safe(repo)}:")
-    for change in plan:
-        _show_change(change)
+    visible = [c for c in plan if not _is_private(c.path)]
+    for change in visible:
+        _show_change(repo, change)
+    if len(visible) < len(plan):
+        _out("  Shield's private records in .git/aletheore-shield/ (not shown)")
+    needs_scan = not (repo / ".aletheore" / "air.json").exists()
+    if needs_scan:
+        _out("")
+        _out(
+            "Then run a first local scan (no network): it writes evidence into .aletheore/ (not tracked by git) "
+            "- this stays after `shield off`; delete .aletheore/ yourself to remove it."
+        )
     _show_network(repo)
     _out("")
     _out("Checkpoints are kept as git refs under refs/aletheore/checkpoints/ and never touch your branches.")
@@ -183,15 +249,16 @@ def shield(
     if not _confirm("Set up Shield with the changes above?", yes):
         _out("Nothing changed.")
         raise typer.Exit(0)
-    needs_scan = not (repo / ".aletheore" / "air.json").exists()
     # Setup goes first: the scan creates .aletheore/, which would make the plan the user just approved stale.
     try:
         apply_setup(repo, approved=list(plan))
-    except ValueError:
-        raise _fail(
-            "Files changed while you were reading the plan; nothing was written. "
-            "Run `aletheore shield` again."
-        )
+    except ValueError as exc:
+        if str(exc) == PLAN_CHANGED:
+            raise _fail(
+                "Files changed while you were reading the plan; nothing was written. "
+                "Run `aletheore shield` again."
+            )
+        raise _fail(f"Shield setup failed and was rolled back: {_safe(exc) or 'ValueError'}")
     except Exception as exc:  # noqa: BLE001 - apply_setup rolls itself back; the user needs a sentence, not a trace
         raise _fail(f"Shield setup failed and was rolled back: {_safe(exc) or type(exc).__name__}")
     if needs_scan:
@@ -199,6 +266,9 @@ def shield(
     _out("")
     _out("Shield is on.")
     _out("  checkpoints: git refs under refs/aletheore/checkpoints/")
+    _out("  receipts:    .aletheore/shield/receipts/ (hidden from git status; open one to see what a session changed)")
+    _out("  config:      .aletheore/shield/config.json")
+    _out("  check now:   aletheore shield check")
     _out("  undo:        aletheore shield undo")
     _out("  remove:      aletheore shield off")
 
@@ -221,10 +291,12 @@ def _pick(checkpoints: list[Checkpoint], ref: str) -> Checkpoint:
 
 @shield_app.command("undo", help="put files back to how they were at a checkpoint")
 def undo(
+    ctx: typer.Context,
     ref: str = typer.Argument(None, help="checkpoint ref (or its unique ending); default: choose from the list"),
     path: Path = typer.Option(None, "--path", help="repository (default: current directory)"),
     yes: bool = typer.Option(False, "--yes", help="restore without asking"),
 ) -> None:
+    path, yes = _opts(ctx, path, yes)
     repo = _resolve_repo(path)
     checkpoints = list_checkpoints(repo, 50)
     if not checkpoints:
@@ -236,7 +308,7 @@ def undo(
     else:
         _out("Checkpoints (newest first):")
         for number, item in enumerate(shown, start=1):
-            _out(f"  {number}. {_safe(_short_ref(item.ref))}  {_when(item)}  {item.files} files")
+            _out(f"  {number}. {_safe(_short_ref(item.ref))}  {_when(item)}  {_plural(item.files, 'file')}")
         if _interactive() and not yes:
             number = typer.prompt("Which checkpoint?", default=1, type=int)
             if not 1 <= number <= len(shown):
@@ -247,16 +319,20 @@ def undo(
         else:
             raise _fail("Nothing was changed. Run in a terminal, or pass a checkpoint ref with --yes.")
     plan = plan_restore(repo, chosen)
-    _out(f"Restoring {_safe(_short_ref(chosen.ref))} from {_when(chosen)}.")
+    _out(f"Checkpoint {_safe(_short_ref(chosen.ref))} from {_when(chosen)}:")
     _out(f"  files that will be written: {len(plan.to_write)}")
     for name in plan.to_write[:20]:
         _out(f"    {_safe(name)}")
     if len(plan.to_write) > 20:
         _out(f"    ... and {len(plan.to_write) - 20} more")
     if plan.left_in_place:
-        _out(f"  files left in place (not in the checkpoint, never deleted): {len(plan.left_in_place)}")
+        _out(f"  {_plural(len(plan.left_in_place), 'file')} left in place (not in the checkpoint, never deleted):")
+        for name in plan.left_in_place[:10]:
+            _out(f"    {_safe(name)}")
+        if len(plan.left_in_place) > 10:
+            _out(f"    ... and {len(plan.left_in_place) - 10} more")
     if plan.blocked:
-        _out(f"  files left untouched because restoring them is not safe: {len(plan.blocked)}")
+        _out(f"  {_plural(len(plan.blocked), 'file')} left untouched because restoring is not safe:")
         for name in plan.blocked[:10]:
             _out(f"    {_safe(name)}")
     if not plan.to_write:
@@ -271,7 +347,7 @@ def undo(
         result = restore_checkpoint(repo, chosen, session_id="cli-undo")
     except CheckpointError as exc:
         raise _fail(f"Undo did not complete: {_safe(exc)}")
-    _out(f"Restored {len(result.restored)} files.")
+    _out(f"Restored {_plural(len(result.restored), 'file')}.")
     for name in result.restored[:20]:
         _out(f"  {_safe(name)}")
     if result.safety is not None:
@@ -283,10 +359,12 @@ def undo(
 
 @shield_app.command("off", help="remove Shield's hooks, config and git hook block")
 def off(
+    ctx: typer.Context,
     purge: bool = typer.Option(False, "--purge", help="also delete checkpoints, receipts and hook state"),
     yes: bool = typer.Option(False, "--yes", help="remove without asking"),
     path: Path = typer.Option(None, "--path", help="repository (default: current directory)"),
 ) -> None:
+    path, yes = _opts(ctx, path, yes)
     repo = _resolve_repo(path)
     _out("Shield will remove:")
     _out("  - the hooks Shield registered in .claude/settings.local.json")
@@ -306,12 +384,23 @@ def off(
         removed = remove_setup(repo, purge=purge)
     except Exception as exc:  # noqa: BLE001
         raise _fail(f"Removing Shield failed: {_safe(exc) or type(exc).__name__}")
-    if removed:
+    public = [p for p in removed if not _is_private(p)]
+    restored = [p for p in public if Path(p).exists()]
+    gone = [p for p in public if not Path(p).exists()]
+    if restored:
+        _out("Restored to how they were:")
+        for item in restored:
+            _out(f"  {_safe(_rel(repo, item))}")
+    if gone:
         _out("Removed:")
-        for item in removed:
-            _out(f"  {_safe(item)}")
-    else:
+        for item in gone:
+            _out(f"  {_safe(_rel(repo, item))}")
+    if len(public) < len(removed):
+        _out("Removed Shield's private records in .git/aletheore-shield/.")
+    if not removed:
         _out("Nothing to remove.")
+    if (repo / ".aletheore").exists():
+        _out("Scan evidence in .aletheore/ was left alone; delete .aletheore/ yourself to remove it.")
     if shared_blocks_kept(repo):
         _out("Another worktree still uses Shield: the shared git hook was kept.")
 
@@ -321,9 +410,11 @@ def off(
 
 @shield_app.command("check", help="run the guard now over the current changes")
 def check(
+    ctx: typer.Context,
     path: Path = typer.Option(None, "--path", help="repository (default: current directory)"),
     no_lookups: bool = typer.Option(False, "--no-lookups", help="do not ask package registries about new dependencies"),
 ) -> None:
+    path, _ = _opts(ctx, path, False)
     repo = _resolve_repo(path)
     try:
         report = run_guard(repo, lookups=False if no_lookups else None, budget_s=6.0)

@@ -34,8 +34,8 @@ def _hermetic(monkeypatch, tmp_path):
 
     scans = []
 
-    def fake_scan(repo, *args):
-        scans.append((repo, args))
+    def fake_scan(repo, *args, **kwargs):
+        scans.append((repo, args, kwargs))
         out = Path(repo) / ".aletheore"
         out.mkdir(exist_ok=True)
         (out / "air.json").write_text("{}", encoding="utf-8")
@@ -355,3 +355,214 @@ def test_help_lists_shield():
 
     assert "shield" in dict(cli._COMMAND_SUMMARIES)
     assert "shield" in dict(cli._COMMAND_GROUPS)["Agents and skills"]
+
+
+# ----------------------------------------------------------------------------- review fixes
+
+
+def test_consent_screen_announces_the_first_scan_and_that_it_stays(repo):
+    r = runner.invoke(app, ["shield", "--path", str(repo)], input="no\n")
+    assert "first local scan (no network)" in r.output
+    assert "stays after `shield off`" in r.output and "delete .aletheore/ yourself" in r.output
+
+
+def test_no_scan_sentence_when_evidence_exists(repo):
+    (repo / ".aletheore").mkdir()
+    (repo / ".aletheore" / "air.json").write_text("{}", encoding="utf-8")
+    r = runner.invoke(app, ["shield", "--path", str(repo)], input="no\n")
+    assert "first local scan" not in r.output
+
+
+def test_first_scan_is_quiet_and_never_edits_gitignore(repo, scans):
+    r = runner.invoke(app, ["shield", "--path", str(repo), "--yes"])
+    assert r.exit_code == 0, r.output
+    assert scans[0][2]["edit_gitignore"] is False
+    assert "Scanning done." in r.output
+
+
+def test_real_scan_leaves_git_status_clean(repo, monkeypatch):
+    from aletheore import cli
+    monkeypatch.undo()  # drop every patch, including the fake scan
+    for key, value in (("GIT_CONFIG_NOSYSTEM", "1"), ("ALETHEORE_SHIELD_OFFLINE", "1"),
+                       ("ALETHEORE_NO_UPDATE_CHECK", "1"), ("ALETHEORE_CRASH_REPORTING", "0")):
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(shield_cli, "_interactive", lambda: True)
+    r = runner.invoke(app, ["shield", "--path", str(repo), "--yes"])
+    assert r.exit_code == 0, r.output
+    assert (repo / ".aletheore" / "air.json").exists()
+    assert not (repo / ".gitignore").exists()
+    status = _git(repo, "status", "--porcelain").stdout.decode()
+    assert status.strip() == "", status
+
+
+@pytest.mark.parametrize("exc", [RuntimeError("boom"), KeyboardInterrupt()])
+def test_first_scan_failure_is_a_warning_not_a_traceback(repo, monkeypatch, exc):
+    from aletheore import cli
+
+    def boom(*a, **k):
+        raise exc
+
+    monkeypatch.setattr(cli, "_scan", boom)
+    r = runner.invoke(app, ["shield", "--path", str(repo), "--yes"])
+    assert r.exit_code == 0, r.output
+    assert "first scan did not finish" in r.output
+    assert "Shield is on." in r.output
+    assert shield_cli.shield_status(repo).enabled
+
+
+def test_group_path_and_yes_reach_subcommands(tmp_path, monkeypatch):
+    a, b = _init(tmp_path / "a"), _init(tmp_path / "b")
+    _setup_on(b)
+    monkeypatch.chdir(a)
+    r = runner.invoke(app, ["shield", "--path", str(b), "off", "--yes"])
+    assert r.exit_code == 0, r.output
+    assert not shield_cli.shield_status(b).enabled
+    # `check` and `undo` honour the group --path too
+    cp.take_checkpoint(b, "s1", force=True)
+    r = runner.invoke(app, ["shield", "--path", str(b), "undo", "--yes"])
+    assert "Checkpoint " in r.output or "Nothing to restore" in r.output
+    (b / "requirements.txt").write_text("brandnewpkg==1.0\n", encoding="utf-8")
+    r = runner.invoke(app, ["shield", "--path", str(b), "check", "--no-lookups"])
+    assert "brandnewpkg" in r.output or "not checked" in r.output
+
+
+def test_off_output_is_relative_and_never_calls_a_restored_file_removed(repo):
+    settings = repo / ".claude" / "settings.local.json"
+    settings.parent.mkdir()
+    settings.write_text(json.dumps({"theme": "dark"}), encoding="utf-8")
+    _setup_on(repo)
+    r = runner.invoke(app, ["shield", "off", "--yes", "--path", str(repo)])
+    assert r.exit_code == 0, r.output
+    restored, _, removed = r.output.partition("Removed:")
+    assert "Restored to how they were:" in r.output
+    assert ".claude/settings.local.json" in restored
+    assert ".claude/settings.local.json" not in removed
+    assert str(repo) not in r.output.replace("Shield is", "")
+    assert "aletheore-shield/setup" not in r.output
+    assert "private records" in r.output
+    assert "delete .aletheore/ yourself" in r.output
+
+
+def test_plan_hides_private_records_and_uses_relative_paths(repo):
+    r = runner.invoke(app, ["shield", "--path", str(repo)], input="no\n")
+    assert str(repo) not in r.output.split("Network:")[0].split("\n", 1)[1]
+    assert "setup-record" not in r.output and "private records" in r.output
+
+
+@pytest.mark.parametrize("answer", ["y\n", "Y\n", "ye\n"])
+def test_a_y_answer_does_not_apply(repo, answer):
+    r = runner.invoke(app, ["shield", "--path", str(repo)], input=answer)
+    assert "Only 'yes' sets it up" in r.output
+    assert not shield_cli.shield_status(repo).enabled
+
+
+@pytest.mark.parametrize("answer", ["YES\n", " Yes \n"])
+def test_yes_is_case_insensitive_and_trimmed(repo, answer):
+    r = runner.invoke(app, ["shield", "--path", str(repo)], input=answer)
+    assert r.exit_code == 0, r.output
+    assert shield_cli.shield_status(repo).enabled
+
+
+def test_no_lookups_flag_reaches_the_guard(repo, monkeypatch):
+    monkeypatch.delenv("ALETHEORE_SHIELD_OFFLINE")
+    seen = []
+    real = shield_cli.run_guard
+
+    def spy(repo_, **kw):
+        seen.append(kw["lookups"])
+        return real(repo_, **kw)
+
+    monkeypatch.setattr(shield_cli, "run_guard", spy)
+    runner.invoke(app, ["shield", "check", "--no-lookups", "--path", str(repo)])
+    runner.invoke(app, ["shield", "check", "--path", str(repo)])
+    assert seen == [False, None]
+
+
+def test_status_notes_are_shown_with_what_to_do(repo, monkeypatch):
+    _setup_on(repo)
+    status = shield_cli.shield_status(repo)
+    monkeypatch.setattr(
+        shield_cli, "shield_status",
+        lambda r: type(status)(True, 0, None, ("git hook not installed", "weird\x1b[31m note")),
+    )
+    r = runner.invoke(app, ["shield", "--path", str(repo)])
+    assert "git hook not installed" in r.output and "add the block shown during setup" in r.output
+    assert "\x1b" not in r.output
+
+
+def test_status_prints_receipt_relative(repo, monkeypatch):
+    _setup_on(repo)
+    receipt = repo / ".aletheore" / "shield" / "receipts" / "r.md"
+    status = shield_cli.shield_status(repo)
+    monkeypatch.setattr(shield_cli, "shield_status", lambda r: type(status)(True, 1, receipt, ()))
+    r = runner.invoke(app, ["shield", "--path", str(repo)])
+    assert "receipt: .aletheore/shield/receipts/r.md" in r.output
+
+
+def test_undo_shows_blocked_and_left_in_place_lists(repo, monkeypatch):
+    first, _ = _two_checkpoints(repo)
+    (repo / "a.txt").write_text("x\n", encoding="utf-8")
+    plan = cp.RestorePlan(("a.txt",), tuple(f"new{i}.txt" for i in range(12)), ("locked\x1b[31m.txt",))
+    monkeypatch.setattr(shield_cli, "plan_restore", lambda r, c: plan)
+    r = runner.invoke(app, ["shield", "undo", "--path", str(repo)], input="1\nno\n")
+    assert "12 files left in place" in r.output and "new9.txt" in r.output and "... and 2 more" in r.output
+    assert "1 file left untouched" in r.output and "locked?[31m.txt" in r.output
+    assert "\x1b" not in r.output
+
+
+def test_off_and_undo_refuse_without_a_terminal_or_yes(repo, monkeypatch):
+    _setup_on(repo)
+    _two_checkpoints(repo)
+    (repo / "a.txt").write_text("keep\n", encoding="utf-8")
+    monkeypatch.setattr(shield_cli, "_interactive", lambda: False)
+    before = {k: v for k, v in _snapshot(repo).items() if ".git/objects" not in k.as_posix()}
+    ref = cp.list_checkpoints(repo, 5)[0].ref
+    for args in (["off"], ["undo", ref]):
+        r = runner.invoke(app, ["shield", *args, "--path", str(repo)])
+        assert r.exit_code == 1, (args, r.output)
+        assert "Nothing was changed" in r.output
+    assert {k: v for k, v in _snapshot(repo).items() if ".git/objects" not in k.as_posix()} == before
+
+
+def test_undo_picks_by_unique_suffix_and_rejects_ambiguous(repo, monkeypatch):
+    first, second = _two_checkpoints(repo)
+    (repo / "a.txt").write_text("over\n", encoding="utf-8")
+    suffix = first.ref.rsplit("-", 1)[-1]
+    r = runner.invoke(app, ["shield", "undo", suffix, "--yes", "--path", str(repo)])
+    assert r.exit_code == 0, r.output
+    assert (repo / "a.txt").read_text(encoding="utf-8") == "one\n"
+    import dataclasses
+
+    twins = [dataclasses.replace(first, ref="refs/aletheore/checkpoints/x/1-same"),
+             dataclasses.replace(second, ref="refs/aletheore/checkpoints/y/2-same")]
+    monkeypatch.setattr(shield_cli, "list_checkpoints", lambda r, n: twins)
+    r = runner.invoke(app, ["shield", "undo", "same", "--yes", "--path", str(repo)])
+    assert r.exit_code == 1 and "more than one" in r.output
+
+
+def test_off_says_when_the_shared_hook_was_kept(repo, monkeypatch):
+    _setup_on(repo)
+    monkeypatch.setattr(shield_cli, "shared_blocks_kept", lambda r: True)
+    r = runner.invoke(app, ["shield", "off", "--yes", "--path", str(repo)])
+    assert "Another worktree still uses Shield" in r.output
+
+
+def test_plan_changed_and_other_value_errors_differ(repo, monkeypatch):
+    def changed(*a, **k):
+        raise ValueError(shield_cli.PLAN_CHANGED)
+
+    def other(*a, **k):
+        raise ValueError("settings.local.json is not valid")
+
+    monkeypatch.setattr(shield_cli, "apply_setup", changed)
+    r = runner.invoke(app, ["shield", "--path", str(repo), "--yes"])
+    assert "nothing was written" in r.output.lower()
+    monkeypatch.setattr(shield_cli, "apply_setup", other)
+    r = runner.invoke(app, ["shield", "--path", str(repo), "--yes"])
+    assert "not valid" in r.output and "nothing was written" not in r.output.lower()
+
+
+def test_success_message_names_receipts_config_and_check(repo):
+    r = runner.invoke(app, ["shield", "--path", str(repo), "--yes"])
+    assert ".aletheore/shield/receipts/" in r.output and ".aletheore/shield/config.json" in r.output
+    assert "aletheore shield check" in r.output
