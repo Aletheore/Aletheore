@@ -27,7 +27,10 @@ five writers, ran `SAVE`, copied the dump to `backups/redis_final_2026-10-29T15-
 the new volume without starting it, loaded the dump into the volume with AOF off, ran `CONFIG SET appendonly yes`,
 waited for the rewrite, and started Redis on the final flags (592 keys against 593 before; the difference is one TTL'd
 marker that expired). The writers were then restarted. The old anonymous volume (`fb1c000366e7...`) was kept as a
-rollback. Redis now has its own backup, `scripts/backup-redis.sh` (retention 14, owner-only files).
+rollback. Redis now has its own backup, `github-app/scripts/backup-redis.sh`, run daily at 03:15 by cron next to the
+Postgres one. It writes `backups/aletheore_redis_<timestamp>.rdb` (retention 14, owner-only files) and keeps a dump only
+after `redis-check-rdb` parses it end to end. The `redis_dump_*` and `redis_final_*` files in the same directory are the
+manual dumps taken for this migration, and the script never prunes them.
 
 Verified live over SSH after the migration: all ten containers up and the app services `healthy`;
 `https://app.aletheore.com/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`; zero lines

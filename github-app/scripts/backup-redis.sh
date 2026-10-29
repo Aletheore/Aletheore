@@ -26,14 +26,18 @@ BACKUP_FILE="${BACKUP_DIR}/aletheore_redis_${TIMESTAMP}.rdb"
 mkdir -p "${BACKUP_DIR}"
 
 # Write to a .tmp path first so an interrupted dump never leaves a partial
-# file at the final name for the pruning step or a restore to pick up.
+# file at the final name for the pruning step or a restore to pick up, and
+# remove it on any failure so stale .tmp files cannot accumulate.
+trap 'rm -f "${BACKUP_FILE}.tmp"' EXIT
 docker compose exec -T redis redis-cli --rdb - > "${BACKUP_FILE}.tmp"
 
-# An RDB starts with the magic "REDIS"; refuse to keep anything else (an empty
-# file or an error message) as a backup.
-if [ "$(head -c 5 "${BACKUP_FILE}.tmp")" != "REDIS" ]; then
-  rm -f "${BACKUP_FILE}.tmp"
-  echo "Redis backup failed: output is not an RDB file" >&2
+# Only promote a dump that parses end to end. redis-check-rdb (shipped in the
+# Redis image) reads the whole file and its checksum, so a stream that was cut
+# short or an error message in place of a dump is rejected.
+if ! docker compose exec -T redis sh -c \
+  'cat > /tmp/aletheore-verify.rdb && redis-check-rdb /tmp/aletheore-verify.rdb >/dev/null 2>&1; rc=$?; rm -f /tmp/aletheore-verify.rdb; exit $rc' \
+  < "${BACKUP_FILE}.tmp"; then
+  echo "Redis backup failed: the dump did not validate as a complete RDB" >&2
   exit 1
 fi
 mv "${BACKUP_FILE}.tmp" "${BACKUP_FILE}"
