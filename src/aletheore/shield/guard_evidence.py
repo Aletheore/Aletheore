@@ -6,13 +6,17 @@ has 2 s):
 - Nothing here ever re-scans inline. Checks read `.aletheore/air.json` as it is on disk.
 - When that evidence is older than a changed file, the checks that would be wrong on stale data (dependents,
   signatures, new risks) are skipped and say so in `not_checked`; a stale graph never produces a "no dependents".
-  A detached refresh is started instead (`start_background_refresh`), at most once a minute.
+  A detached refresh is started instead (`start_background_refresh`), at most once a minute, except that a
+  finished refresh lets the next one start at once for a file edited after it began.
+- The refresh marker records when the last refresh started. Once the evidence file has been rewritten since, every
+  file modified before that start is in the evidence (the refresh read files after it started).
 - Messages state facts with counts and names and give no advice. Signature findings are file-level: they name the
   files that import the module, never claim anything about call sites.
 """
 
 from __future__ import annotations
 
+import math
 import os
 import shutil
 import subprocess  # nosec B404 - starts this package's own refresh module with a fixed argument list, no shell
@@ -29,6 +33,9 @@ from aletheore.shield import state
 # save_base_evidence without paying for them, and a repository with no scan never loads them at all.
 
 REFRESH_MIN_INTERVAL_S = 60.0
+# A refresh whose marker is younger than this and whose evidence has not been rewritten since it started is taken to
+# be still running, and no second one starts; an older one is taken to have died, so it cannot block forever.
+REFRESH_RUNNING_TIMEOUT_S = 120.0
 # `scanned_at` is stamped when a scan ENDS, 2.5-9 s after it began reading files, so a file edited during the scan
 # has an mtime before `scanned_at` yet is missing from the evidence. A file counts as newer than the evidence when
 # it was modified later than `scanned_at` minus this margin.
@@ -80,27 +87,89 @@ def _safe_relative(rel: str) -> str | None:
     return normalised
 
 
-def _claim_marker(marker: Path) -> bool:
-    """Atomically take the refresh marker; False when another caller holds it (started under 60 s ago)."""
-    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+def _refresh_started_at(marker: Path) -> float | None:
+    """The start time the refresh marker records, or None when it is missing, empty or not a finite number."""
     try:
-        os.close(os.open(marker, flags))
+        value = float(marker.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _finished_refresh_start(repo: Path) -> float | None:
+    """When the last refresh started, if the evidence file has been written since (so that refresh finished)."""
+    started = _refresh_started_at(state.shield_dir(repo) / _MARKER_NAME)
+    evidence_time = _mtime(Path(repo) / _EVIDENCE_REL)
+    if started is None or evidence_time is None or evidence_time < started:
+        return None
+    return started
+
+
+def _covered_until(repo: Path, scan_time: float) -> float:
+    """Files modified at or before this time are in the evidence: the start of a refresh that has finished since, or
+    `scanned_at` minus the margin when there is no such refresh (or it is older than that)."""
+    started = _finished_refresh_start(repo)
+    fallback = scan_time - STALENESS_MARGIN_S
+    return fallback if started is None else max(started, fallback)
+
+
+def _write_marker(marker: Path, started: float) -> bool:
+    """Create the marker holding `started`, only if it does not exist yet; True when this caller created it.
+
+    The content goes into a private temporary file first and is hard-linked into place, so the marker never exists
+    without its start time; where hard links are unavailable it falls back to an exclusive create and write."""
+    temporary = marker.with_name(f"{marker.name}.{os.getpid()}.{time.monotonic_ns()}.tmp")
+    try:
+        temporary.write_text(repr(started), encoding="utf-8")
+        try:
+            os.link(temporary, marker)
+            return True
+        except FileExistsError:
+            return False
+        except OSError:
+            pass
+        try:
+            descriptor = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            return False
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(repr(started))
         return True
-    except FileExistsError:
-        pass
-    last = _mtime(marker)
-    if last is not None and 0 <= time.time() - last < REFRESH_MIN_INTERVAL_S:
-        return False
-    # Stale marker: remove it, then race for the exclusive create again; only one caller wins.
+    finally:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+
+
+def _claim_marker(marker: Path, evidence_time: float | None = None, newest_edit: float | None = None) -> bool:
+    """Atomically take the refresh marker and record the start time in it; False when a refresh may not start.
+
+    A previous refresh blocks a new one while it is still running (its evidence not rewritten since it started)
+    and younger than REFRESH_RUNNING_TIMEOUT_S. One that has finished blocks a new one for REFRESH_MIN_INTERVAL_S,
+    unless a changed file was modified after it started (`newest_edit`). A marker without a readable start time
+    falls back to its mtime."""
+    now = time.time()
+    if _write_marker(marker, now):
+        return True
+    started = _refresh_started_at(marker)
+    if started is None:
+        started = _mtime(marker)
+    if started is not None:
+        age = now - started
+        running = evidence_time is not None and evidence_time < started
+        if running:
+            if 0 <= age < REFRESH_RUNNING_TIMEOUT_S:
+                return False
+        elif not (newest_edit is not None and evidence_time is not None and newest_edit > started):
+            if 0 <= age < REFRESH_MIN_INTERVAL_S:
+                return False
+    # Replaceable marker: remove it, then race for the exclusive create again; only one caller wins.
     try:
         marker.unlink()
     except FileNotFoundError:
         pass
-    try:
-        os.close(os.open(marker, flags))
-        return True
-    except FileExistsError:
-        return False
+    return _write_marker(marker, now)
 
 
 def start_background_refresh(repo: Path, changed: list[str] | None = None, scanned_at: object = None) -> bool:
@@ -108,26 +177,30 @@ def start_background_refresh(repo: Path, changed: list[str] | None = None, scann
 
     Does nothing when the repo has no evidence yet (the first scan is the user's to run; this never creates
     `.aletheore/`), when the evidence file is already newer than every changed file given, or when a refresh was
-    started within the last 60 seconds (a marker file in Shield's state directory), so a burst of edits cannot
-    spawn a burst of scans.
+    started within the last 60 seconds (a marker file in Shield's state directory, which also records when the
+    refresh started), so a burst of edits cannot spawn a burst of scans. A refresh still running blocks a new one for
+    up to two minutes; a finished one lets a new one start at once when a changed file was modified after it began.
     """
     repo = Path(repo)
     evidence_file = repo / _EVIDENCE_REL
     evidence_time = _mtime(evidence_file)
     if evidence_time is None:
         return False
+    newest_edit = None
     if changed:
         safe = [r for r in (_safe_relative(c) for c in changed) if r is not None]
         edit_times = [t for t in (_mtime(repo / rel) for rel in safe) if t is not None]
         reference = _scan_time(scanned_at)
         if reference is None:
             reference = evidence_time  # written at the end of the scan, so never earlier than scanned_at
-        if edit_times and reference - STALENESS_MARGIN_S >= max(edit_times):
-            return False
+        if edit_times:
+            newest_edit = max(edit_times)
+            if _covered_until(repo, reference) >= newest_edit:
+                return False
     marker = state.shield_dir(repo) / _MARKER_NAME
     try:
         state.shield_dir(repo, create=True)
-        if not _claim_marker(marker):
+        if not _claim_marker(marker, evidence_time, newest_edit):
             return False
     except OSError:
         return False  # without the marker the storm guard cannot work, so start nothing
@@ -215,10 +288,11 @@ def _files_newer_than(repo: Path, files: list[str], scanned_at: object) -> list[
     scan_time = _scan_time(scanned_at)
     if scan_time is None:
         return None
+    covered = _covered_until(repo, scan_time)
     newer = []
     for rel in files:
         modified = _mtime(Path(repo) / rel)
-        if modified is not None and modified > scan_time - STALENESS_MARGIN_S:
+        if modified is not None and modified > covered:
             newer.append(rel)
     return newer
 

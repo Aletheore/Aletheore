@@ -247,10 +247,11 @@ def test_refresh_spawns_detached_child_once_per_minute(repo, no_spawn):
     # Spawn-storm guard: a second request inside 60 s starts nothing.
     assert guard_evidence.start_background_refresh(repo, ["app/core.py"]) is False
     assert len(no_spawn) == 1
-    # A marker older than 60 s no longer blocks.
-    marker = next(state.shield_dir(repo).glob("refresh*"))
-    past = time.time() - 61
-    os.utime(marker, (past, past))
+    # The evidence was not rewritten since that refresh started, so it counts as running until it is older than
+    # REFRESH_RUNNING_TIMEOUT_S; after that it is taken to have died and no longer blocks.
+    _record_refresh(repo, time.time() - 61)
+    assert guard_evidence.start_background_refresh(repo, ["app/core.py"]) is False
+    _record_refresh(repo, time.time() - guard_evidence.REFRESH_RUNNING_TIMEOUT_S - 1)
     assert guard_evidence.start_background_refresh(repo, ["app/core.py"]) is True
 
 
@@ -347,8 +348,7 @@ def test_refresh_guard_uses_the_same_margin(repo, no_spawn):
     _set_mtime(air, scanned + 5)
     _set_mtime(core, scanned - 3)
     assert guard_evidence.start_background_refresh(repo, ["app/core.py"], stamp) is True
-    marker = next(state.shield_dir(repo).glob("refresh*"))
-    _set_mtime(marker, time.time() - 120)
+    _record_refresh(repo, time.time() - 300)
     _set_mtime(core, scanned - guard_evidence.STALENESS_MARGIN_S - 60)
     assert guard_evidence.start_background_refresh(repo, ["app/core.py"], stamp) is False
 
@@ -358,7 +358,7 @@ def test_refresh_marker_is_claimed_atomically(repo, no_spawn):
     marker = state.shield_dir(repo, create=True) / guard_evidence._MARKER_NAME
     assert guard_evidence._claim_marker(marker) is True
     assert guard_evidence._claim_marker(marker) is False  # a concurrent second caller loses
-    _set_mtime(marker, time.time() - 120)
+    _record_refresh(repo, time.time() - 120)
     assert guard_evidence._claim_marker(marker) is True  # stale marker replaced, exactly one winner
     assert guard_evidence._claim_marker(marker) is False
 
@@ -394,3 +394,123 @@ def test_rotated_cycle_start_is_not_new():
     selfy = _evidence([_mod("s.py", imports=["s.py"])])
     assert [c["members"] for c in new_risks(_evidence([_mod("s.py")]), selfy)["cycles"]] == [["s.py"]]
     assert new_risks(selfy, selfy)["cycles"] == []
+
+
+# ---- refresh start time (final review) ---------------------------------------------------------------------------
+# The refresh stamps `scanned_at` when it ends, seconds after it began reading files; the 15 s margin alone made a
+# file edited just before the refresh look newer than the evidence it produced. The marker records when the refresh
+# started, and once the evidence is rewritten after that, everything modified before the start counts as covered.
+
+
+def _marker(repo: Path) -> Path:
+    return state.shield_dir(repo, create=True) / guard_evidence._MARKER_NAME
+
+
+def _record_refresh(repo: Path, started: float) -> Path:
+    marker = _marker(repo)
+    marker.write_text(repr(started), encoding="utf-8")
+    _set_mtime(marker, started)
+    return marker
+
+
+def _stamp(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+
+
+def test_refresh_records_its_start_time_in_the_marker(repo, no_spawn):
+    air = _write_evidence(repo, _evidence(_core_modules()))
+    _set_mtime(air, time.time() - 100)
+    before = time.time()
+    assert guard_evidence.start_background_refresh(repo, ["app/core.py"]) is True
+    recorded = guard_evidence._refresh_started_at(_marker(repo))
+    assert recorded is not None and before - 1 <= recorded <= time.time() + 1
+
+
+def test_file_edited_before_the_refresh_started_is_fresh_once_it_finished(repo, monkeypatch):
+    monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda *a, **k: False)
+    started = time.time() - 100
+    air = _write_evidence(repo, _evidence(_core_modules(), scanned_at=_stamp(started + 2)))
+    _set_mtime(air, started + 3)  # the refresh wrote its evidence after it started: it finished
+    _record_refresh(repo, started)
+    core = repo / "app" / "core.py"
+    _set_mtime(core, started - 1)  # inside the old 15 s margin, but before the refresh began reading files
+    findings, not_checked = evidence_checks(repo, ["app/core.py"], None)
+    assert any(f.check == "affected" for f in findings)
+    assert all("older than" not in r for r in not_checked)
+    _set_mtime(core, started + 1)  # edited after the refresh started: it may not be in the evidence
+    _, not_checked = evidence_checks(repo, ["app/core.py"], None)
+    assert "older than 1 changed file(s)" in not_checked[0]
+
+
+def test_unfinished_refresh_falls_back_to_the_margin(repo, monkeypatch):
+    monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda *a, **k: False)
+    started = time.time() - 100
+    air = _write_evidence(repo, _evidence(_core_modules(), scanned_at=_stamp(started - 5)))
+    _set_mtime(air, started - 4)  # evidence predates the refresh start: that refresh has not finished
+    _record_refresh(repo, started)
+    _set_mtime(repo / "app" / "core.py", started - 6)
+    _, not_checked = evidence_checks(repo, ["app/core.py"], None)
+    assert "older than 1 changed file(s)" in not_checked[0]
+
+
+@pytest.mark.parametrize("content", [None, "", "garbage", "nan", "inf"])
+def test_no_usable_marker_falls_back_to_the_margin(repo, monkeypatch, content):
+    monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda *a, **k: False)
+    scanned = time.time() - 1000
+    air = _write_evidence(repo, _evidence(_core_modules(), scanned_at=_stamp(scanned)))
+    _set_mtime(air, scanned + 1)
+    if content is not None:
+        marker = _marker(repo)
+        marker.write_text(content, encoding="utf-8")
+        _set_mtime(marker, scanned - 50)
+    core = repo / "app" / "core.py"
+    _set_mtime(core, scanned - 3)
+    _, not_checked = evidence_checks(repo, ["app/core.py"], None)
+    assert "older than 1 changed file(s)" in not_checked[0]
+    _set_mtime(core, scanned - guard_evidence.STALENESS_MARGIN_S - 60)
+    findings, _ = evidence_checks(repo, ["app/core.py"], None)
+    assert any(f.check == "affected" for f in findings)
+
+
+def test_running_refresh_throttles_a_new_one(repo, no_spawn):
+    now = time.time()
+    air = _write_evidence(repo, _evidence(_core_modules(), scanned_at=_stamp(now - 100)))
+    _set_mtime(air, now - 100)
+    _record_refresh(repo, now - 10)  # started 10 s ago, evidence not rewritten since: still running
+    _set_mtime(repo / "app" / "core.py", now - 5)
+    assert guard_evidence.start_background_refresh(repo, ["app/core.py"], _stamp(now - 100)) is False
+    assert no_spawn == []
+
+
+def test_crashed_refresh_does_not_block_forever(repo, no_spawn):
+    now = time.time()
+    air = _write_evidence(repo, _evidence(_core_modules(), scanned_at=_stamp(now - 1000)))
+    _set_mtime(air, now - 1000)
+    _record_refresh(repo, now - guard_evidence.REFRESH_RUNNING_TIMEOUT_S - 5)  # never finished
+    _set_mtime(repo / "app" / "core.py", now - 5)
+    assert guard_evidence.start_background_refresh(repo, ["app/core.py"], _stamp(now - 1000)) is True
+    assert len(no_spawn) == 1
+    assert guard_evidence._refresh_started_at(_marker(repo)) >= now - 1
+
+
+def test_finished_refresh_lets_a_newer_edit_start_another_inside_the_minute(repo, no_spawn):
+    now = time.time()
+    started = now - 20
+    air = _write_evidence(repo, _evidence(_core_modules(), scanned_at=_stamp(started + 4)))
+    _set_mtime(air, started + 5)  # finished
+    _record_refresh(repo, started)
+    _set_mtime(repo / "app" / "core.py", started + 10)  # edited after that refresh started
+    assert guard_evidence.start_background_refresh(repo, ["app/core.py"], _stamp(started + 4)) is True
+    assert len(no_spawn) == 1
+
+
+def test_finished_refresh_still_throttles_when_nothing_is_newer_than_its_start(repo, no_spawn):
+    now = time.time()
+    started = now - 20
+    air = _write_evidence(repo, _evidence(_core_modules(), scanned_at=_stamp(started + 4)))
+    _set_mtime(air, started + 5)
+    _record_refresh(repo, started)
+    _set_mtime(repo / "app" / "core.py", started - 1)  # covered by that refresh
+    assert guard_evidence.start_background_refresh(repo, ["app/core.py"], _stamp(started + 4)) is False
+    assert guard_evidence.start_background_refresh(repo, None) is False  # no files given: 60 s throttle
+    assert no_spawn == []
