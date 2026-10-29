@@ -390,3 +390,22 @@ def test_rendered_spec_scenario(tmp_path):
     assert "zzqnopkgx does not exist on PyPI" in out
     assert "reqeusts is one edit from the popular package requests" in out
     assert "acme" not in out
+
+
+@pytest.mark.parametrize(
+    "char",
+    ["؜", "⁠", "⁡", "⁢", "⁣", "⁤", "﻿", "­", "\U000e0000", "\U000e0041",
+     "\U000e007f", "​", "‮", "⁦", "\x1b", "\x9b"],
+)
+def test_clean_text_replaces_invisible_and_format_characters(char):
+    from aletheore.shield import setup
+
+    assert guard.clean_text(f"a{char}b") == "a?b"
+    assert setup._clean(f"a{char}b") in ("a?b", "a\\x1bb", "a\\x9bb")  # setup escapes C0/C1 controls instead
+
+
+def test_guard_and_setup_share_one_format_character_set():
+    from aletheore.shield import setup, state
+
+    assert state.FORMAT_CHARACTERS in guard._UNSAFE.pattern
+    assert state.FORMAT_CHARACTERS in setup._FORMAT.pattern

@@ -81,7 +81,7 @@ _SETUP_DIRNAME = "setup"
 # Characters that would act as line breaks in a terminal or editor although they are not "\n": shown as "?".
 _BREAKS = re.compile("[\x0b\x0c\x1c-\x1e\x85\u2028\u2029]")
 # Bidi and invisible format characters that can make text read differently from what it is: shown as "?".
-_FORMAT = re.compile("[\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]")
+_FORMAT = re.compile("[" + state.FORMAT_CHARACTERS + "]")
 # Remaining C0 controls (tab kept), DEL and C1 controls: shown as \xNN.
 _CONTROL = re.compile("[\x00-\x08\x0a-\x1f\x7f-\x9f]")
 

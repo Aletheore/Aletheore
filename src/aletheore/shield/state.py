@@ -8,6 +8,10 @@ from pathlib import Path
 
 _OFFLINE_VALUES = {"1", "true", "yes"}
 _SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+# Bidi controls, zero-width and invisible format characters (soft hyphen, Arabic letter mark, word joiner and
+# invisible operators, byte order mark, tag characters) that can make text read differently from what it is.
+# A regex character-class body shared by the guard's and setup's text cleaners, which show each as "?".
+FORMAT_CHARACTERS = "\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\U000e0000-\U000e007f"
 
 
 @dataclass

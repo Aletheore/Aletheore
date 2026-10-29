@@ -28,7 +28,8 @@ _SKIPPED_REASONS_SHOWN = 2
 _clock = time.monotonic
 LINE_CAP = 200
 SKIPPED_CAP = 300
-_UNSAFE = re.compile("[\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
+# C0 and C1 controls plus the shared bidi/invisible format characters.
+_UNSAFE = re.compile("[\x00-\x1f\x7f-\x9f" + state.FORMAT_CHARACTERS + "]")
 
 
 def _clean(text: str, limit: int | None = None) -> str:
