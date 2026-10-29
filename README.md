@@ -20,6 +20,7 @@
   <a href="https://securityscorecards.dev/viewer/?uri=github.com/Aletheore/Aletheore"><img src="https://api.securityscorecards.dev/projects/github.com/Aletheore/Aletheore/badge" alt="OpenSSF Scorecard"></a>
   <a href="https://pepy.tech/projects/aletheore"><img src="https://static.pepy.tech/personalized-badge/aletheore?period=total&amp;units=INTERNATIONAL_SYSTEM&amp;left_color=BLACK&amp;right_color=GREEN&amp;left_text=downloads" alt="PyPI downloads"></a>
   <a href="https://mcpvault.io/servers/aletheore/health?utm_source=external_badge&amp;utm_medium=referral&amp;utm_campaign=mcp_health_report"><img src="https://mcpvault.io/badge/aletheore.svg" alt="MCPVault status"></a>
+  <a href="https://deepwiki.com/Aletheore/Aletheore"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
 </p>
 
 <p align="center">
