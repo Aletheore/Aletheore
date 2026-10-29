@@ -5,7 +5,10 @@ What setup touches, and nothing else:
 
 - `<top>/.claude/settings.local.json` (personal, not committed, because the commands hold an absolute interpreter
   path): four Claude Code hook entries, PreToolUse and PostToolUse (matcher `Edit|MultiEdit|Write`), Stop and
-  SessionEnd, each running `<python> -m aletheore.shield.hooks <event>`. The file is merged, never overwritten.
+  SessionEnd, each running `<python> -X utf8 -m aletheore.shield.hooks <event>` in the exec form
+  (`hook_config.python_hook`: `command` is the interpreter, `args` the rest, so no shell quoting is involved). Entries
+  an earlier Shield wrote as one shell-command string are still recognised, and setup replaces them in place. The
+  file is merged, never overwritten.
   Before an existing file is edited its exact bytes are saved under `.aletheore/shield/`, so removal puts them back
   byte for byte as long as nobody changed the file since; otherwise removal strips only Shield's entries. A file
   that is not valid JSON, has an unexpected shape, is a symlink, is read-only or is tracked by git is never
@@ -50,7 +53,7 @@ import sys
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-from aletheore.hook_command import build_shield_command
+from aletheore.hook_config import python_hook
 from aletheore.shield import checkpoint, receipt, state
 from aletheore.shield.gitutil import repo_state, run_git
 
@@ -74,6 +77,7 @@ KEEP_EXCLUDE_BLOCK = f"{MARK_START}\n/.aletheore/\n{MARK_END}\n"
 EXCLUDE_BLOCK = f"{MARK_START}\n/.aletheore/\n/{SETTINGS_RELATIVE.as_posix()}\n{MARK_END}\n"
 DIFF_MAX_LINES = 200
 PLAN_CHANGED = "setup plan changed since it was shown"
+LEGACY_NOTE = "agent hooks use the old command format; run `aletheore shield setup` to update"
 _SHARED = "shared by all linked worktrees of this repository"
 _UTF8_BOM = b"\xef\xbb\xbf"
 _HOOK_STATE_DIRNAME = "aletheore-shield"  # hooks.STATE_DIRNAME; not imported so setup stays light
@@ -282,13 +286,14 @@ def _record_bytes(record: _Record) -> bytes:
 # ------------------------------------------------------------------------------------------------ agent hooks
 
 
-def _command(event: str) -> str:
-    return build_shield_command([_interpreter(), "-m", MODULE, event])
+def _hook(event: str) -> dict:
+    """Shield's hook for one event: `hook_config.python_hook` (exec form, UTF-8 mode) run by this interpreter."""
+    return {**python_hook(MODULE, event), "command": _interpreter()}
 
 
 def _entry(matcher: str | None, event: str) -> dict:
     entry: dict = {} if matcher is None else {"matcher": matcher}
-    entry["hooks"] = [{"type": "command", "command": _command(event)}]
+    entry["hooks"] = [_hook(event)]
     return entry
 
 
@@ -298,31 +303,58 @@ def _settings_snippet() -> str:
     )
 
 
-def _our_event(command: str) -> str | None:
-    """The Shield event a command runs: its words hold `-m aletheore.shield.hooks <event>`. None otherwise, so a
-    user's wrapper that merely mentions the module is not mistaken for Shield's own entry."""
-    try:
-        words = shlex.split(command)
-    except ValueError:
-        words = command.split()
+def _module_event(words: list) -> str | None:
     for position in range(len(words) - 2):
         if words[position] == "-m" and words[position + 1] == MODULE and words[position + 2] in SHIELD_EVENTS:
             return words[position + 2]
     return None
 
 
+def _our_event(hook: object) -> str | None:
+    """The Shield event a hook runs, or None when it is not Shield's.
+
+    Exec form (what setup writes): `command` is a string and `args` a list of strings holding
+    `-m aletheore.shield.hooks <event>`. Legacy form (earlier Shield versions, no `args`): the shell words of the
+    `command` string hold the same three words, whether quoted for POSIX sh or as a double-quoted forward-slash
+    Windows path. A user's wrapper that merely mentions the module is not mistaken for Shield's own entry."""
+    if not isinstance(hook, dict) or not isinstance(hook.get("command"), str):
+        return None
+    if "args" in hook:
+        args = hook["args"]
+        if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+            return None
+        return _module_event(args)
+    try:
+        words = shlex.split(hook["command"])
+    except ValueError:
+        words = hook["command"].split()
+    return _module_event(words)
+
+
 def _is_ours(hook: object) -> bool:
-    return isinstance(hook, dict) and isinstance(hook.get("command"), str) and _our_event(hook["command"]) is not None
+    return _our_event(hook) is not None
 
 
-def _commands(entries: list) -> list[str]:
+def _is_legacy(hook: object) -> bool:
+    """One of Shield's hooks still in the single shell-command string form."""
+    return _is_ours(hook) and "args" not in hook  # type: ignore[operator]
+
+
+def _ours(entries: list) -> list[dict]:
     return [
-        hook["command"]
+        hook
         for entry in entries
         if isinstance(entry, dict) and isinstance(entry.get("hooks"), list)
         for hook in entry["hooks"]
         if _is_ours(hook)
     ]
+
+
+def _any_legacy(data: object) -> bool:
+    hooks = data.get("hooks") if isinstance(data, dict) else None
+    if not isinstance(hooks, dict):
+        return False
+    return any(_is_legacy(hook) for entries in hooks.values() if isinstance(entries, list) for hook in _ours(entries))
 
 
 class _Shape(ValueError):
@@ -339,7 +371,7 @@ def _strip_ours(entries: list, only_event: str | None = None) -> bool:
         kept = [
             hook
             for hook in entry["hooks"]
-            if not (_is_ours(hook) and (only_event is None or _our_event(hook["command"]) == only_event))
+            if not (_is_ours(hook) and (only_event is None or _our_event(hook) == only_event))
         ]
         if len(kept) == len(entry["hooks"]):
             continue
@@ -349,6 +381,35 @@ def _strip_ours(entries: list, only_event: str | None = None) -> bool:
         else:
             entries.remove(entry)
     return removed
+
+
+def _place(entries: list, matcher: str | None, event: str) -> bool:
+    """Make `entries` hold Shield's hook for `event` exactly once. The first of Shield's hooks for that event is
+    replaced in place (same entry, same position) when it differs (the legacy string form, another interpreter);
+    further copies are dropped. When there is none, a new entry is appended. Returns whether anything changed."""
+    wanted = _hook(event)
+    found = changed = False
+    for entry in list(entries):
+        if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
+            continue
+        kept = []
+        for hook in entry["hooks"]:
+            if _our_event(hook) != event:
+                kept.append(hook)
+            elif not found:
+                found = True
+                changed = changed or hook != wanted
+                kept.append(wanted)
+            else:
+                changed = True
+        if kept:
+            entry["hooks"] = kept
+        else:
+            entries.remove(entry)
+    if not found:
+        entries.append(_entry(matcher, event))
+        changed = True
+    return changed
 
 
 def _merge(data: object) -> tuple[dict, list[str], bool]:
@@ -370,13 +431,10 @@ def _merge(data: object) -> tuple[dict, list[str], bool]:
         if name not in hooks:
             hooks[name] = []
             created.append(f"hooks.{name}")
-        entries = hooks[name]
-        if _command(event) in _commands(entries):
-            continue
-        # A Shield entry for this event with another interpreter (an older venv) is replaced, not duplicated.
-        _strip_ours(entries, event)
-        entries.append(_entry(matcher, event))
-        changed = True
+        # A Shield entry for this event in the legacy string form or with another interpreter (an older venv) is
+        # replaced where it is, not duplicated.
+        if _place(hooks[name], matcher, event):
+            changed = True
     return data, created, changed
 
 
@@ -624,7 +682,13 @@ def _settings_plan(where: _Where, record: _Record) -> _SettingsPlan:
     if not _owner_can_write(info):
         return snippet("is read-only")
     written = _dump_settings(data, layout)
-    description = "add Shield's four Claude Code hooks; other settings and hooks are kept"
+    if _any_legacy(original):
+        description = (
+            "update Shield's Claude Code hooks from the old command format (one shell string) to the interpreter "
+            "plus arguments, in place; other settings and hooks are kept"
+        )
+    else:
+        description = "add Shield's four Claude Code hooks; other settings and hooks are kept"
     if _dump_settings(original, layout) != raw:
         description += "; this file will be re-formatted (duplicate keys, if any, are merged; the original bytes are restored on removal)"
     step = _Step(
@@ -639,8 +703,11 @@ def _settings_plan(where: _Where, record: _Record) -> _SettingsPlan:
         return _SettingsPlan(step, _sha(written), keep_backup=True)
     if _created_settings(record) and record.settings_sha256 == _sha(raw):
         return _SettingsPlan(step, _sha(written))  # a file Shield created: removal deletes it, no backup needed
-    if any(_commands(v) for v in original.get("hooks", {}).values() if isinstance(v, list)):
-        return _SettingsPlan(step, _sha(written))  # already holds Shield entries: removal strips them
+    if any(_ours(v) for v in original.get("hooks", {}).values() if isinstance(v, list)):
+        # Already holds Shield entries, and someone changed the file since Shield wrote it (or Shield never wrote
+        # it): removal strips Shield's entries. No hash is recorded, so removal never puts back an older original
+        # or deletes the file over the other edits.
+        return _SettingsPlan(step, "")
     return _SettingsPlan(step, _sha(written), backup=raw)
 
 
@@ -1114,9 +1181,17 @@ def _agent_events_registered(where: _Where) -> list[str]:
     found = []
     for name, _matcher, event in AGENT_EVENTS:
         entries = hooks.get(name)
-        if isinstance(entries, list) and any(_our_event(c) == event for c in _commands(entries)):
+        if isinstance(entries, list) and any(_our_event(hook) == event for hook in _ours(entries)):
             found.append(name)
     return found
+
+
+def _legacy_registered(where: _Where) -> bool:
+    try:
+        data, _ = _parse_settings(_settings_path(where).read_bytes())
+    except (OSError, ValueError):
+        return False
+    return _any_legacy(data)
 
 
 def _git_hook_installed(where: _Where) -> bool:
@@ -1141,6 +1216,8 @@ def shield_status(repo: Path) -> ShieldStatus:
     elif len(registered) < len(AGENT_EVENTS):
         missing = ", ".join(name for name, _, _ in AGENT_EVENTS if name not in registered)
         notes.append(f"agent hooks partly registered (missing: {missing})")
+    if registered and _legacy_registered(where):
+        notes.append(LEGACY_NOTE)
     installed = _git_hook_installed(where)
     if not installed:
         notes.append("git hook not installed")

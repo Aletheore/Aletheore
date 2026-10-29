@@ -545,9 +545,14 @@ overwritten; personal, not committed), the Git `pre-commit` hook (a block betwee
 cannot edit safely (invalid JSON, a symlink, read-only, tracked by Git, a hook that is not a shell
 script or lives outside the Git directory) is not written; the plan shows the text to add yourself.
 
-**Hook events.** Each runs `python -m aletheore.shield.hooks <event>`, always exits 0 and has a hard
-time limit. On Windows the hook commands write the interpreter path with forward slashes, in double
-quotes, so they run the same under cmd.exe and Git Bash.
+**Hook events.** Each runs `python -X utf8 -m aletheore.shield.hooks <event>`, always exits 0 and has
+a hard time limit. The four Claude Code entries use the executable-plus-arguments form (`command` is
+the interpreter, `args` the rest), so no shell parses them and paths with spaces or backslashes need
+no quoting on any platform. Earlier Shield versions wrote each entry as one shell-command string;
+`aletheore shield status` notes such entries, and `aletheore shield setup` shows them as an edit that
+replaces each one in place. `aletheore shield off` removes either form. The Git `pre-commit` block is a
+`sh` script, so it quotes the interpreter path for `sh` (with forward slashes on Windows, where Git
+for Windows' `sh` runs it).
 
 | Event | Fired by | What it does | Limit |
 | --- | --- | --- | --- |

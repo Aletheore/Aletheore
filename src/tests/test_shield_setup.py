@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 
-from aletheore import hook_command
 from aletheore.shield import checkpoint as cp
 from aletheore.shield import setup
 from aletheore.shield.setup import SetupBlocked, SetupChange
@@ -87,95 +86,182 @@ USER_SETTINGS_BYTES = (json.dumps(USER_SETTINGS, indent=2, ensure_ascii=False) +
 USER_HOOK_BYTES = b"#!/bin/sh\nset -e\necho user hook ran\nexit 0\n"
 
 
-# ------------------------------------------------------------------------------------------- hook command quoting
+# ---------------------------------------------------------------------------------------- agent hook entries
 
 
-ARGVS = [
-    ["/usr/bin/python3", "-m", "aletheore.evidence_hook", "--mode", "inject"],
-    ["/Users/a/Library/Application Support/venv/bin/python", "-m", "aletheore.shield.hooks", "pre-edit"],
-    ["C:\\Program Files\\Python 3\\python.exe", "-m", "aletheore.shield.hooks", "turn-end"],
-    ['C:\\odd"name\\python.exe', "", "a&b", "x(y)", "tab\there", "it's"],
-]
+def _exec_hook(event, python=FAKE_PY):
+    return {"type": "command", "command": python, "args": ["-X", "utf8", "-m", "aletheore.shield.hooks", event]}
 
 
-def test_build_shield_command_quotes_spaces_for_posix():
-    argv = ["/a b/python", "-m", "aletheore.shield.hooks", "pre-edit"]
-    assert hook_command.build_shield_command(argv, platform="linux") == (
-        "'/a b/python' -m aletheore.shield.hooks pre-edit"
-    )
+def _legacy_hook(event, python=FAKE_PY):
+    """The single shell-string entry Shield wrote before it used the exec form (POSIX quoting)."""
+    return {"type": "command", "command": shlex.join([python, "-m", "aletheore.shield.hooks", event])}
 
 
-def test_build_shield_command_quotes_cmd_metacharacters_on_windows():
-    argv = ["C:\\py\\python.exe", "", "a&b", "x(y)", "tab\there", 'say"hi']
-    assert hook_command.build_shield_command(argv, platform="win32") == (
-        '"C:/py/python.exe" "" "a&b" "x(y)" "tab\there" "say\\"hi"'
-    )
-
-
-def test_build_shield_command_defaults_to_the_running_platform(monkeypatch):
-    monkeypatch.setattr(sys, "platform", "win32")
-    assert hook_command.build_shield_command(["C:\\a b\\py.exe"]) == '"C:/a b/py.exe"'
-    monkeypatch.setattr(sys, "platform", "linux")
-    assert hook_command.build_shield_command(["a b"]) == "'a b'"
-
-
-# Claude Code on Windows can run hook commands through Git Bash, which strips the backslashes from an unquoted
-# C:\Python312\python.exe. Shield's agent hook commands use forward slashes, always double-quoted (both cmd.exe and
-# bash accept that).
 WIN_PY = "C:\\Python312\\python.exe"
 WIN_SPACED_PY = "C:\\Program Files\\Python 3.12\\python.exe"
+READ_GUARD_HOOK = {
+    "type": "command",
+    "command": FAKE_PY,
+    "args": ["-X", "utf8", "-m", "aletheore.read_guard", "pre", "--setup-id", "abc"],
+}
+
+
+def test_agent_hook_entries_use_the_exec_form_of_python_hook(monkeypatch):
+    from aletheore.hook_config import python_hook
+
+    monkeypatch.setattr(setup, "_interpreter", lambda: sys.executable)
+    for _name, _matcher, event in setup.AGENT_EVENTS:
+        assert setup._hook(event) == python_hook("aletheore.shield.hooks", event)
 
 
 @pytest.mark.parametrize(
-    "interpreter, expected",
+    "hook, event",
     [
-        (WIN_PY, '"C:/Python312/python.exe" -m aletheore.shield.hooks pre-edit'),
-        (WIN_SPACED_PY, '"C:/Program Files/Python 3.12/python.exe" -m aletheore.shield.hooks pre-edit'),
+        (_exec_hook("pre-edit"), "pre-edit"),
+        (_exec_hook("session-end", WIN_SPACED_PY), "session-end"),
+        (_legacy_hook("post-edit"), "post-edit"),
+        # earlier Windows versions: forward slashes in double quotes, and before that a bare backslash path
+        ({"type": "command", "command": '"C:/Program Files/Python 3.12/python.exe" -m aletheore.shield.hooks turn-end'},
+         "turn-end"),
+        ({"type": "command", "command": f"{WIN_PY} -m aletheore.shield.hooks turn-end"}, "turn-end"),
     ],
 )
-def test_build_shield_command_uses_quoted_forward_slashes_on_windows(interpreter, expected):
-    argv = [interpreter, "-m", "aletheore.shield.hooks", "pre-edit"]
-    command = hook_command.build_shield_command(argv, platform="win32")
-    assert command == expected
-    assert "\\" not in command
-    assert shlex.split(command)[0] == interpreter.replace("\\", "/")  # what bash hands to exec
+def test_our_event_recognises_the_exec_form_and_every_legacy_string_form(hook, event):
+    assert setup._our_event(hook) == event
+    assert setup._is_ours(hook)
 
 
-def test_build_shield_command_converts_any_backslash_or_spaced_argument_on_windows():
-    argv = ["C:\\py\\python.exe", "-m", "aletheore.shield.hooks", "pre-commit", "--repo", "D:\\my repo\\x"]
-    assert hook_command.build_shield_command(argv, platform="win32") == (
-        '"C:/py/python.exe" -m aletheore.shield.hooks pre-commit --repo "D:/my repo/x"'
-    )
+@pytest.mark.parametrize(
+    "hook",
+    [
+        {"type": "command", "command": "my-wrapper --note aletheore.shield.hooks turn-end"},
+        {"type": "command", "command": "python -m aletheore.shield.hooks bogus"},
+        {"type": "command", "command": "x", "args": ["my-wrapper", "aletheore.shield.hooks", "turn-end"]},
+        {"type": "command", "command": "x", "args": ["-m", "aletheore.shield.hooks", "bogus"]},
+        {"type": "command", "command": "x", "args": ["-m", "aletheore.shield.hooks"]},
+        {"type": "command", "command": "x", "args": "-m aletheore.shield.hooks turn-end"},
+        {"type": "command", "command": "x", "args": [None, "-m", "aletheore.shield.hooks", "turn-end"]},
+        {"type": "command", "command": None, "args": ["-m", "aletheore.shield.hooks", "turn-end"]},
+        # the exec form is judged by its args alone, even when the executable string mentions the module
+        {"type": "command", "command": "py -m aletheore.shield.hooks turn-end", "args": ["--version"]},
+        READ_GUARD_HOOK,
+        "not a dict",
+    ],
+)
+def test_our_event_ignores_hooks_that_are_not_shields(hook):
+    assert setup._our_event(hook) is None
+    assert not setup._is_ours(hook)
 
 
-@pytest.mark.parametrize("platform", ["linux", "darwin"])
-@pytest.mark.parametrize("argv", ARGVS)
-def test_build_shield_command_is_posix_quoting_off_windows(argv, platform):
-    command = hook_command.build_shield_command(argv, platform=platform)
-    assert command == shlex.join(argv) and shlex.split(command) == argv
-
-
-def test_our_event_recognises_the_windows_shield_command():
-    for event in ("pre-edit", "post-edit", "turn-end", "session-end"):
-        argv = [WIN_SPACED_PY, "-m", setup.MODULE, event]
-        assert setup._our_event(hook_command.build_shield_command(argv, platform="win32")) == event
-
-
-def test_windows_agent_hooks_use_forward_slashes_and_merge_idempotently(monkeypatch):
-    monkeypatch.setattr(setup, "_interpreter", lambda: WIN_PY)
-    monkeypatch.setattr(sys, "platform", "win32")
+def test_agent_hooks_merge_idempotently_and_replace_another_interpreter_in_place():
     data, _created, changed = setup._merge({})
     assert changed
-    commands = [h["command"] for entries in data["hooks"].values() for e in entries for h in e["hooks"]]
-    assert len(commands) == 4
-    assert all(c.startswith('"C:/Python312/python.exe" -m aletheore.shield.hooks ') for c in commands)
     assert setup._merge(json.loads(json.dumps(data)))[2] is False  # already there: nothing to change
-    # An entry written by an older version (backslashes, unquoted) is replaced, not duplicated.
-    old = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": f"{WIN_PY} -m {setup.MODULE} turn-end"}]}]}}
+    mine = {"type": "command", "command": "say done"}
+    old = {"hooks": {"Stop": [{"hooks": [mine, _exec_hook("turn-end", "/old/venv/python")]}, {"hooks": [mine]}]}}
     merged, _created, changed = setup._merge(old)
-    assert changed and [h["command"] for e in merged["hooks"]["Stop"] for h in e["hooks"]] == [
-        '"C:/Python312/python.exe" -m aletheore.shield.hooks turn-end'
+    assert changed
+    assert merged["hooks"]["Stop"] == [{"hooks": [mine, _exec_hook("turn-end")]}, {"hooks": [mine]}]
+    # copies left by older setups are dropped, and an entry left with no hooks goes with them
+    doubled = {"hooks": {"Stop": [{"hooks": [_legacy_hook("turn-end")]}, {"hooks": [_exec_hook("turn-end")]},
+                                  {"hooks": [_legacy_hook("turn-end", "/x"), mine]}]}}
+    merged, _created, changed = setup._merge(doubled)
+    assert changed and merged["hooks"]["Stop"] == [{"hooks": [_exec_hook("turn-end")]}, {"hooks": [mine]}]
+
+
+def _write_legacy_settings(repo, monkeypatch, before: bytes | None = None):
+    """Set Shield up the way a version before the exec form did: string commands in settings.local.json."""
+    if before is not None:
+        _settings(repo).parent.mkdir(exist_ok=True)
+        _settings(repo).write_bytes(before)
+    with monkeypatch.context() as patch:
+        patch.setattr(setup, "_hook", _legacy_hook)
+        setup.apply_setup(repo)
+    text = _settings(repo).read_text(encoding="utf-8")
+    assert '"args"' not in text and "aletheore.shield.hooks" in text
+
+
+@pytest.mark.parametrize("before", [None, USER_SETTINGS_BYTES])
+def test_legacy_entries_are_migrated_in_place_and_off_still_restores_the_original(tmp_path, monkeypatch, before):
+    repo = _init(tmp_path / "repo")
+    snapshot = _snapshot(repo)
+    if before is not None:
+        _settings(repo).parent.mkdir()
+        _settings(repo).write_bytes(before)
+        snapshot = _snapshot(repo)
+    _write_legacy_settings(repo, monkeypatch)
+    legacy = json.loads(_settings(repo).read_text(encoding="utf-8"))
+
+    plan = setup.plan_setup(repo)
+    (change,) = [c for c in plan if c.path == _settings(repo)]
+    assert change.kind == "edit" and "old command format" in change.description
+    assert '"args"' in change.diff and "-m aletheore.shield.hooks" in change.diff
+    assert [c.path for c in plan] == [_settings(repo), _record_dir(repo) / "setup-record.json"]
+    setup.apply_setup(repo, plan)
+
+    migrated = json.loads(_settings(repo).read_text(encoding="utf-8"))
+    for name, _matcher, event in setup.AGENT_EVENTS:
+        expected = json.loads(json.dumps(legacy["hooks"][name]))
+        for entry in expected:
+            entry["hooks"] = [_exec_hook(event) if setup._is_ours(h) else h for h in entry["hooks"]]
+        assert migrated["hooks"][name] == expected  # same array, same position, only our command changed
+    assert setup.plan_setup(repo) == []  # idempotent
+
+    setup.remove_setup(repo)
+    assert _snapshot(repo) == snapshot
+
+
+def test_legacy_entry_is_replaced_at_its_position_between_user_hooks(tmp_path):
+    repo = _init(tmp_path / "repo")
+    first = {"type": "command", "command": "echo first"}
+    last = {"type": "command", "command": "echo last"}
+    stop = [{"hooks": [first]}, {"hooks": [first, _legacy_hook("turn-end"), last]}, {"hooks": [last]}]
+    _settings(repo).parent.mkdir()
+    _settings(repo).write_text(json.dumps({"hooks": {"Stop": stop}}, indent=2) + "\n", encoding="utf-8")
+    setup.apply_setup(repo)
+    assert json.loads(_settings(repo).read_text(encoding="utf-8"))["hooks"]["Stop"] == [
+        {"hooks": [first]}, {"hooks": [first, _exec_hook("turn-end"), last]}, {"hooks": [last]}
     ]
+
+
+def test_migrating_a_file_the_user_edited_keeps_their_edit_on_off(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "repo")
+    _write_legacy_settings(repo, monkeypatch)  # Shield created the file
+    data = json.loads(_settings(repo).read_text(encoding="utf-8"))
+    data["model"] = "mine"
+    _settings(repo).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    setup.apply_setup(repo)  # migrates the user's edited file
+    setup.remove_setup(repo)
+    assert json.loads(_settings(repo).read_text(encoding="utf-8")) == {"model": "mine"}
+
+
+def test_off_removes_legacy_and_exec_entries_and_never_read_guard_entries(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "repo")
+    read_guard = {"matcher": "Read", "hooks": [READ_GUARD_HOOK]}
+    _settings(repo).parent.mkdir()
+    _settings(repo).write_text(
+        json.dumps({"hooks": {"PreToolUse": [read_guard, {"matcher": "Edit", "hooks": [_legacy_hook("pre-edit")]}]}})
+        + "\n", encoding="utf-8")
+    setup.apply_setup(repo)
+    data = json.loads(_settings(repo).read_text(encoding="utf-8"))
+    assert data["hooks"]["PreToolUse"][0] == read_guard
+    data["hooks"]["Stop"].append({"hooks": [_legacy_hook("turn-end", "/other/python")]})
+    data["x"] = 1  # force the structural path on removal
+    _settings(repo).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    setup.remove_setup(repo)
+    assert json.loads(_settings(repo).read_text(encoding="utf-8")) == {"hooks": {"PreToolUse": [read_guard]}, "x": 1}
+
+
+def test_status_notes_legacy_entries(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "repo")
+    _write_legacy_settings(repo, monkeypatch)
+    status = setup.shield_status(repo)
+    assert status.enabled
+    assert "agent hooks use the old command format; run `aletheore shield setup` to update" in status.notes
+    assert not any("not registered" in n or "partly" in n for n in status.notes)
+    setup.apply_setup(repo)
+    assert not any("old command format" in n for n in setup.shield_status(repo).notes)
 
 
 # ------------------------------------------------------------------------------------------------------ planning
@@ -230,8 +316,7 @@ def test_apply_registers_the_four_agent_hooks_and_the_git_hook(tmp_path):
             assert entry["matcher"] == "Edit|MultiEdit|Write"
         else:
             assert "matcher" not in entry
-        command = hook_command.build_shield_command([FAKE_PY, "-m", "aletheore.shield.hooks", name])
-        assert entry["hooks"] == [{"type": "command", "command": command}]
+        assert entry["hooks"] == [_exec_hook(name)]
     text = _hook(repo).read_text(encoding="utf-8")
     assert text.startswith("#!/bin/sh\n")
     assert MARK_START in text and MARK_END in text
