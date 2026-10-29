@@ -15,6 +15,9 @@ set -euo pipefail
 # The dump is streamed with `redis-cli --rdb -` (a replication-style sync), so
 # it is a consistent point-in-time RDB without touching the live AOF files.
 
+# Backups hold queue payloads and the budget ledger: owner-only permissions.
+umask 077
+
 BACKUP_DIR="${1:-./backups}"
 RETENTION_COUNT="${2:-14}"
 TIMESTAMP="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
