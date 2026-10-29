@@ -443,6 +443,7 @@ _COMMAND_SUMMARIES = [
     ("init", "scaffold a repository-local .aletheore.json config file"),
     ("hook", "commands for coding-agent hooks (read guard)"),
     ("tokens", "measure and reduce the tokens a coding agent re-reads every turn"),
+    ("shield", "set up the local safety net for AI-written changes: guard, undo, receipts"),
     ("login", "authenticate and save a managed-audit API token"),
     ("logout", "clear the locally saved managed-audit and Hallbook tokens"),
     ("status", "installed version, update availability, and login state"),
@@ -462,7 +463,7 @@ _COMMAND_GROUPS = [
         "Scan and explore",
         ["scan", "demo", "index", "query", "locate", "usages", "dependents", "tests-for", "cycles", "diff", "verify", "healthcheck"],
     ),
-    ("Agents and skills", ["mcp", "mcp-install", "audit", "hallbook", "hook", "tokens"]),
+    ("Agents and skills", ["mcp", "mcp-install", "audit", "hallbook", "hook", "tokens", "shield"]),
     ("Dashboard and watch", ["dashboard", "watch", "init"]),
     ("Account", ["login", "logout", "status", "config"]),
 ]
@@ -2277,7 +2278,7 @@ _COMMAND_PROMPTS = {
     "verify": ["Report to check (path to a markdown file)"],
     "healthcheck": ["Base URL of the running server (for example http://localhost:8000)"],
 }
-_COMMAND_HELP = ("mcp", "watch", "config", "index", "locate", "usages", "dependents", "tests-for", "hook", "tokens")
+_COMMAND_HELP = ("mcp", "watch", "config", "index", "locate", "usages", "dependents", "tests-for", "hook", "tokens", "shield")
 
 
 def _command_args(name: str, answers: list[str]) -> list[str]:
@@ -3334,6 +3335,10 @@ def hook_evidence_snippet(
 from aletheore.tokens_cli import tokens_app  # noqa: E402
 
 app.add_typer(tokens_app, name="tokens")
+
+from aletheore.shield_cli import shield_app  # noqa: E402
+
+app.add_typer(shield_app, name="shield")
 
 
 @config_app.command(
