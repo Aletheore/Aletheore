@@ -13,10 +13,6 @@ _SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 @dataclass
 class ShieldConfig:
     registry_lookups: bool = True
-    # What `setup.apply_setup` created, so removal deletes exactly that and nothing the user owns: paths (relative to
-    # the working-tree top, or absolute outside it) and the settings.local.json keys ("hooks", "hooks.Stop", ...).
-    created_files: tuple[str, ...] = ()
-    created_settings_keys: tuple[str, ...] = ()
 
 
 def shield_dir(repo: Path, *, create: bool = False) -> Path:
@@ -38,27 +34,14 @@ def load_config(repo: Path) -> ShieldConfig:
     if not isinstance(data, dict):
         return ShieldConfig()
     lookups = data.get("registry_lookups", True)
-    return ShieldConfig(
-        registry_lookups=lookups if isinstance(lookups, bool) else True,
-        created_files=_strings(data.get("created_files")),
-        created_settings_keys=_strings(data.get("created_settings_keys")),
-    )
-
-
-def _strings(value: object) -> tuple[str, ...]:
-    if not isinstance(value, list):
-        return ()
-    return tuple(item for item in value if isinstance(item, str) and item)
+    return ShieldConfig(registry_lookups=lookups if isinstance(lookups, bool) else True)
 
 
 def save_config(repo: Path, config: ShieldConfig) -> None:
     directory = shield_dir(repo, create=True)
-    data: dict = {"registry_lookups": config.registry_lookups}
-    if config.created_files:
-        data["created_files"] = list(config.created_files)
-    if config.created_settings_keys:
-        data["created_settings_keys"] = list(config.created_settings_keys)
-    (directory / "config.json").write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    (directory / "config.json").write_text(
+        json.dumps({"registry_lookups": config.registry_lookups}, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def registry_lookups_enabled(repo: Path) -> bool:

@@ -159,8 +159,11 @@ def test_plan_setup_writes_nothing(tmp_path):
     assert _kinds(plan) == {
         (_settings(repo), "create"),
         (_hook(repo), "create"),
+        (repo / ".git" / "info" / "exclude", "create"),
         (repo / ".aletheore" / "shield" / "config.json", "create"),
+        (repo / ".aletheore" / "shield" / "setup-record.json", "create"),
     }
+    assert all(change.diff.startswith("--- a/") for change in plan)
     assert all(change.description for change in plan)
     assert _snapshot(tmp_path) == before
 
@@ -565,3 +568,226 @@ def test_shield_status_mentions_skipped_files_and_repo_state(tmp_path, monkeypat
 def test_setup_change_has_an_empty_detail_by_default(tmp_path):
     change = SetupChange(tmp_path, "create", "x")
     assert change.detail == ""
+
+
+# ------------------------------------------------------------------------------------- review round: fixes 1-8
+
+ODD_LAYOUTS = [
+    b'{\n  "permissions": {"allow": ["a", "b"]}\n}\n',  # inline arrays inside a pretty file
+    b'{"a":1}',  # compact without spaces
+    b'{\n  "name": "caf\\u00e9"\n}\n',  # non-ASCII written as an escape
+    b'{\n  "n": 1.0e2\n}\n',  # a float json would print as 100.0
+    b'{\n  "a": 1,\n  "a": 2\n}\n',  # duplicate keys
+    b'{\n  "a": 1\n}\n\n',  # trailing blank line
+]
+
+
+@pytest.mark.parametrize("content", ODD_LAYOUTS)
+def test_odd_settings_layouts_are_restored_byte_for_byte(tmp_path, content):
+    repo = _init(tmp_path / "repo")
+    _settings(repo).parent.mkdir()
+    _settings(repo).write_bytes(content)
+    (change,) = [c for c in setup.plan_setup(repo) if c.path == _settings(repo)]
+    assert change.kind == "edit" and "re-formatted" in change.description
+    setup.apply_setup(repo)
+    assert _settings(repo).read_bytes() != content
+    setup.remove_setup(repo)
+    assert _settings(repo).read_bytes() == content
+    assert not (repo / ".aletheore" / "shield" / "original-settings.local.json.bak").exists()
+
+
+def test_well_formatted_settings_are_not_announced_as_reformatted(tmp_path):
+    repo = _init(tmp_path / "repo")
+    _settings(repo).parent.mkdir()
+    _settings(repo).write_bytes(USER_SETTINGS_BYTES)
+    (change,) = [c for c in setup.plan_setup(repo) if c.path == _settings(repo)]
+    assert "re-formatted" not in change.description
+
+
+def test_settings_edited_after_setup_fall_back_to_stripping_only_our_entries(tmp_path):
+    repo = _init(tmp_path / "repo")
+    _settings(repo).parent.mkdir()
+    _settings(repo).write_bytes(ODD_LAYOUTS[0])
+    setup.apply_setup(repo)
+    data = json.loads(_settings(repo).read_text(encoding="utf-8"))
+    data["model"] = "later"
+    _settings(repo).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    setup.remove_setup(repo)
+    assert json.loads(_settings(repo).read_text(encoding="utf-8")) == {
+        "permissions": {"allow": ["a", "b"]},
+        "model": "later",
+    }
+
+
+def test_setup_record_survives_config_saves(tmp_path):
+    from aletheore.shield import state
+
+    repo = _init(tmp_path / "repo")
+    before = _snapshot(repo)
+    setup.apply_setup(repo)
+    state.save_config(repo, state.ShieldConfig(registry_lookups=False))  # e.g. the CLI turning lookups off
+    assert not hasattr(state.ShieldConfig(), "created_files")
+    setup.remove_setup(repo)
+    assert _snapshot(repo) == before
+
+
+def test_corrupt_setup_record_is_a_status_note_and_removal_stays_conservative(tmp_path):
+    repo = _init(tmp_path / "repo")
+    setup.apply_setup(repo)
+    (repo / ".aletheore" / "shield" / "setup-record.json").write_text("{nope", encoding="utf-8")
+    assert any("setup record is unreadable" in note for note in setup.shield_status(repo).notes)
+    setup.remove_setup(repo)
+    assert "aletheore.shield.hooks" not in _settings(repo).read_text(encoding="utf-8")
+    assert MARK_START not in _hook(repo).read_text(encoding="utf-8")
+
+
+def _porcelain(repo):
+    return _git(repo, "status", "--porcelain", "--untracked-files=all").stdout.decode()
+
+
+def test_shield_files_stay_out_of_git_status_and_exclude_is_restored(tmp_path):
+    repo = _init(tmp_path / "repo")
+    exclude = repo / ".git" / "info" / "exclude"
+    exclude.parent.mkdir()
+    exclude.write_bytes(b"# mine\n*.log")  # no final newline
+    receipts = repo / ".aletheore" / "shield" / "receipts"
+    setup.apply_setup(repo)
+    receipts.mkdir(parents=True)
+    (receipts / "20261028T000000Z-s1.md").write_text("r\n", encoding="utf-8")
+    assert _porcelain(repo) == ""
+    assert not (repo / ".gitignore").exists()
+    setup.remove_setup(repo, purge=True)
+    assert exclude.read_bytes() == b"# mine\n*.log"
+
+
+def test_exclude_file_shield_created_is_deleted_on_remove(tmp_path):
+    repo = _init(tmp_path / "repo")
+    setup.apply_setup(repo)
+    assert MARK_START in (repo / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+    setup.remove_setup(repo)
+    assert not (repo / ".git" / "info").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32" or getattr(os, "geteuid", lambda: 1)() == 0, reason="needs posix perms")
+def test_failed_apply_rolls_back_everything(tmp_path):
+    repo = _init(tmp_path / "repo")
+    hooks_dir = repo / ".git" / "hooks"
+    hooks_dir.mkdir()
+    os.chmod(hooks_dir, 0o555)
+    before = _snapshot(repo)
+    try:
+        with pytest.raises(OSError):
+            setup.apply_setup(repo)
+        assert _snapshot(repo) == before
+    finally:
+        os.chmod(hooks_dir, 0o755)
+
+
+@pytest.mark.skipif(sys.platform == "win32" or getattr(os, "geteuid", lambda: 1)() == 0, reason="needs posix perms")
+def test_failed_apply_puts_the_original_settings_bytes_back(tmp_path):
+    repo = _init(tmp_path / "repo")
+    _settings(repo).parent.mkdir()
+    _settings(repo).write_bytes(ODD_LAYOUTS[1])
+    hooks_dir = repo / ".git" / "hooks"
+    hooks_dir.mkdir()
+    os.chmod(hooks_dir, 0o555)
+    before = _snapshot(repo)
+    try:
+        with pytest.raises(OSError):
+            setup.apply_setup(repo)
+        assert _snapshot(repo) == before
+    finally:
+        os.chmod(hooks_dir, 0o755)
+
+
+def test_apply_with_the_approved_plan_writes_it(tmp_path):
+    repo = _init(tmp_path / "repo")
+    approved = setup.plan_setup(repo)
+    setup.apply_setup(repo, approved)
+    assert _settings(repo).is_file() and setup.plan_setup(repo) == []
+
+
+def test_apply_refuses_when_the_plan_changed_since_it_was_shown(tmp_path):
+    repo = _init(tmp_path / "repo")
+    approved = setup.plan_setup(repo)
+    _settings(repo).parent.mkdir()
+    _settings(repo).write_bytes(USER_SETTINGS_BYTES)  # appears between showing and applying
+    before = _snapshot(repo)
+    with pytest.raises(ValueError, match="setup plan changed since it was shown"):
+        setup.apply_setup(repo, approved)
+    assert _snapshot(repo) == before
+
+
+def test_edit_diff_shows_the_change_with_labels(tmp_path):
+    repo = _init(tmp_path / "repo")
+    _hook(repo).parent.mkdir(parents=True)
+    _hook(repo).write_bytes(b"#!/bin/sh\necho '\x1b[31mred'\n")
+    os.chmod(_hook(repo), 0o755)
+    (change,) = [c for c in setup.plan_setup(repo) if c.path == _hook(repo)]
+    assert change.diff.startswith("--- a/.git/hooks/pre-commit\n+++ b/.git/hooks/pre-commit\n")
+    assert f"+{MARK_START}" in change.diff and "\x1b" not in change.diff and "\\x1b" in change.diff
+
+
+def test_diff_is_capped(tmp_path):
+    repo = _init(tmp_path / "repo")
+    where = setup._locate(repo)
+    text = setup._diff(where, repo / "x", b"", "".join(f"{i}\n" for i in range(1000)).encode())
+    lines = text.splitlines()
+    assert len(lines) == setup.DIFF_MAX_LINES + 1 and lines[-1].startswith("... (")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="owner write bit")
+def test_read_only_settings_and_hook_get_snippets(tmp_path):
+    repo = _init(tmp_path / "repo")
+    _settings(repo).parent.mkdir()
+    _settings(repo).write_bytes(USER_SETTINGS_BYTES)
+    os.chmod(_settings(repo), 0o444)
+    _hook(repo).parent.mkdir(parents=True)
+    _hook(repo).write_bytes(USER_HOOK_BYTES)
+    os.chmod(_hook(repo), 0o555)
+    kinds = _kinds(setup.plan_setup(repo))
+    assert (_settings(repo), "snippet") in kinds and (_hook(repo), "snippet") in kinds
+    setup.apply_setup(repo)
+    assert _settings(repo).read_bytes() == USER_SETTINGS_BYTES and _hook(repo).read_bytes() == USER_HOOK_BYTES
+
+
+def test_a_user_wrapper_that_mentions_the_module_is_not_ours(tmp_path):
+    repo = _init(tmp_path / "repo")
+    mine = [
+        {"hooks": [{"type": "command", "command": "my-wrapper --note aletheore.shield.hooks turn-end"}]},
+        {"hooks": [{"type": "command", "command": "python -m aletheore.shield.hooks bogus"}]},
+    ]
+    _settings(repo).parent.mkdir()
+    _settings(repo).write_text(json.dumps({"hooks": {"Stop": mine}}, indent=2) + "\n", encoding="utf-8")
+    setup.apply_setup(repo)
+    stop = json.loads(_settings(repo).read_text(encoding="utf-8"))["hooks"]["Stop"]
+    assert stop[:2] == mine and len(stop) == 3
+    data = json.loads(_settings(repo).read_text(encoding="utf-8"))
+    data["x"] = 1  # force the structural path on removal
+    _settings(repo).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    setup.remove_setup(repo)
+    assert json.loads(_settings(repo).read_text(encoding="utf-8")) == {"hooks": {"Stop": mine}, "x": 1}
+
+
+def test_shared_blocks_stay_while_another_worktree_uses_shield(tmp_path):
+    repo = _init(tmp_path / "repo")
+    linked = tmp_path / "linked"
+    _git(repo, "worktree", "add", "-q", "-b", "side", str(linked))
+    setup.apply_setup(repo)
+    setup.apply_setup(linked)
+    assert setup.shared_blocks_kept(linked) is True
+    setup.remove_setup(linked)
+    assert MARK_START in _hook(repo).read_text(encoding="utf-8")
+    assert MARK_START in (repo / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+    assert not _settings(linked).exists()
+    assert setup.shared_blocks_kept(repo) is False
+    setup.remove_setup(repo)
+    assert not _hook(repo).exists() and not (repo / ".git" / "info").exists()
+
+
+def test_descriptions_say_the_hook_and_exclude_are_shared(tmp_path):
+    repo = _init(tmp_path / "repo")
+    plan = setup.plan_setup(repo)
+    for path in (_hook(repo), repo / ".git" / "info" / "exclude"):
+        (change,) = [c for c in plan if c.path == path]
+        assert "shared by all linked worktrees" in change.description
