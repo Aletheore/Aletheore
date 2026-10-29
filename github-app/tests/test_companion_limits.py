@@ -310,3 +310,26 @@ def test_real_async_router_and_redis_when_available(monkeypatch):
         asyncio.run(run())
     finally:
         module.get_redis_client.cache_clear()
+
+
+def test_shutdown_closes_used_pool_without_creating_an_unused_one(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    module.get_redis_client.cache_clear()
+    monkeypatch.setattr(
+        module,
+        "get_settings",
+        Mock(side_effect=AssertionError("must not create a client during shutdown")),
+    )
+    asyncio.run(module.close_redis_client())
+    monkeypatch.setattr(
+        module,
+        "get_settings",
+        lambda: SimpleNamespace(redis_url="redis://localhost:6379/0"),
+    )
+    client = module.get_redis_client()
+    client.aclose = AsyncMock()
+    asyncio.run(module.close_redis_client())
+    client.aclose.assert_awaited_once_with(close_connection_pool=True)
+    assert module.get_redis_client.cache_info().currsize == 0

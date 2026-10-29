@@ -7,7 +7,7 @@ export type Fact = { id: string; title: string; text: string; href: string; comm
 export function plain(html: string) {
   const entities: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", ndash: "–", mdash: "—", lsquo: "‘", rsquo: "’", ldquo: "“", rdquo: "”", hellip: "…" };
   return html.replace(/<[^>]+>/g, " ").replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/gi, (original, entity: string) => {
-    if (!entity.startsWith("#")) return entities[entity] ?? original;
+    if (!entity.startsWith("#")) return Object.hasOwn(entities, entity.toLowerCase()) ? entities[entity.toLowerCase()] : original;
     const code = entity[1].toLowerCase() === "x" ? parseInt(entity.slice(2), 16) : Number(entity.slice(1));
     return code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) ? String.fromCodePoint(code) : "�";
   }).replace(/\s+/g, " ").trim();

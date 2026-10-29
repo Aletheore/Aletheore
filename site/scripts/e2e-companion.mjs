@@ -18,7 +18,8 @@ const base = process.env.COMPANION_TEST_BASE ?? "http://127.0.0.1:3102";
 if (!["127.0.0.1", "localhost"].includes(new URL(base).hostname)) throw new Error("Browser checks require a local test server.");
 let server;
 let browser;
-let release;
+const heldRequests = new Set();
+function releaseHeld() { for (const release of heldRequests) release(); heldRequests.clear(); }
 try {
   if (!process.env.COMPANION_TEST_BASE) {
     server = spawn(process.execPath, [fileURLToPath(new URL("../node_modules/next/dist/bin/next", import.meta.url)), "dev", "--hostname", "127.0.0.1", "--port", "3102"], {
@@ -42,7 +43,7 @@ try {
   page.on("request", async (request) => {
     if (new URL(request.url()).pathname !== "/api/companion") { await request.continue(); return; }
     apiCalls++;
-    if (held) await new Promise((resolve) => { release = resolve; });
+    if (held) await new Promise((resolve) => { heldRequests.add(resolve); });
     try { await request.respond({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "answer", text: "Install Aletheore using the documented CLI quickstart.", command: "pip install aletheore", sources: [{ label: "Developer guide", href: "/developers" }] }) }); } catch { /* Stop aborts the intercepted request. */ }
   });
   const dialogOpen = () => page.waitForFunction(() => document.querySelector("dialog.companion-chat")?.open === true);
@@ -72,14 +73,14 @@ try {
   await page.click(".companion-chat__loading button");
   await page.waitForSelector(".companion-chat__error");
   assert.match(await page.$eval(".companion-chat__error", (el) => el.textContent), /Stopped/);
-  release?.(); release = undefined;
+  releaseHeld();
   await page.click(".companion-chat__tools button");
   await page.click(".companion-chat__clear button");
   await page.waitForFunction(() => !document.querySelector(".companion-chat__turn"));
   await page.click(".companion-close"); await dialogClosed();
   console.log("Companion browser checks passed: desktop/mobile dialogs, navigation persistence, Escape/focus, reduced motion, Stop and Clear. No provider requests.");
 } finally {
-  release?.();
+  releaseHeld();
   await browser?.close();
   if (server && server.exitCode === null) {
     if (process.platform === "win32") execFileSync("taskkill", ["/pid", String(server.pid), "/t", "/f"]);

@@ -53,6 +53,14 @@ def get_redis_client() -> Redis:
     return Redis(connection_pool=ConnectionPool(**options))
 
 
+async def close_redis_client() -> None:
+    """Close only a previously used pool; shutdown must not open a new one."""
+    if get_redis_client.cache_info().currsize:
+        client = get_redis_client()
+        get_redis_client.cache_clear()
+        await client.aclose(close_connection_pool=True)
+
+
 class LimitCommand(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     operation: Literal["reserve", "settle", "disable"]

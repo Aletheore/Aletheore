@@ -32,6 +32,7 @@ export async function evaluateCompanion({ cases, repeats, suite, answer, destina
         tokens += result.usage.total_tokens;
         input += result.usage.prompt_tokens;
         output += result.usage.completion_tokens;
+        if (tokens >= 400000) stopped ??= "Evaluation token cap reached.";
         const pass = result.answer.status === test.status && (!test.contains || result.answer.text.includes(test.contains)) && (!test.command || result.answer.command?.includes(test.command));
         if (!pass) failures++;
         rows.push({ id: test.id, round, pass, expected: test.status, actual: result.answer.status, answer: result.answer, usage: result.usage, selection: "selection" in result ? result.selection : undefined, ms: Date.now() - start });

@@ -196,3 +196,8 @@ it("stops further provider calls after the classifier violates usage limits", as
   const result = await answerQuestion("Install Aletheore", { apiKey: "test-only", fetcher });
   expect(result.usageViolation).toBe(true); expect(result.answer.status).toBe("unverified"); expect(fetcher).toHaveBeenCalledTimes(1);
 });
+
+it("never resolves HTML entity names through Object.prototype", () => {
+  expect(plain("&constructor; &toString; &valueOf; &__proto__;")).toBe("&constructor; &toString; &valueOf; &__proto__;");
+  expect(plain("&AMP; &LT; &GT; &QUOT;")).toBe('& < > "');
+});

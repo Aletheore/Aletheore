@@ -40,7 +40,9 @@ it("bounds time spent waiting for a stalled request body before model admission"
   expect((await pending).status).toBe(408); expect(acquirePermit).not.toHaveBeenCalled(); expect(answerQuestion).not.toHaveBeenCalled();
 });
 
-it("does not infer after cancellation while admission was pending", async () => {
+// After admission a durable hold may exist: generic 503 plus unknown settlement is
+// deliberate. Upload cancellation before any reservation is separately a 408.
+it("retains unknown accounting without inference after cancellation during admission", async () => {
   const aborter = new AbortController();
   const request = new Request(question(), { signal: aborter.signal });
   vi.mocked(acquirePermit).mockImplementation(async () => { aborter.abort(); return permit; });
