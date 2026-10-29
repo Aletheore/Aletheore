@@ -12,6 +12,7 @@ from starlette.requests import ClientDisconnect
 
 from app_server.admin import admin_router
 from app_server.auth import auth_router
+from app_server.companion_limits import companion_limits_router, close_redis_client
 from app_server.config import get_settings
 from app_server.dashboard import dashboard_router
 from app_server.db import claim_webhook_delivery, create_pool, release_webhook_delivery
@@ -43,8 +44,13 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.db_pool = await create_pool(settings.database_url)
-    yield
-    await app.state.db_pool.close()
+    try:
+        yield
+    finally:
+        try:
+            await close_redis_client()
+        finally:
+            await app.state.db_pool.close()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -67,6 +73,7 @@ app.include_router(skill_hub_router)
 app.include_router(managed_audit_router)
 app.include_router(embeddings_router)
 app.include_router(metrics_router)
+app.include_router(companion_limits_router)
 app.include_router(frontend_router)
 app.include_router(paddle_webhook_router)
 app.include_router(runtime_events_router)

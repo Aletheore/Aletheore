@@ -2,7 +2,7 @@ import dataclasses
 import functools
 import inspect
 import json
-from datetime import datetime
+import logging
 import multiprocessing
 import os
 import queue
@@ -330,6 +330,42 @@ def _error_result(data: dict) -> _ToolError:
 def _budget_result(data: object) -> "str | _ToolError":
     """_toon_result for something apply_budget returned: its argument errors become flagged failures."""
     return _error_result(data) if isinstance(data, BudgetError) else _toon_result(data)
+
+
+def _metered_budget(repo_path: Path, data: object, *, record: bool = True, **options) -> str | _ToolError:
+    """Reuse budget measurements and the final serialization for the meter and response."""
+    original_chars = None
+    last_data = None
+    last_text = ""
+
+    def size_of(value):
+        nonlocal original_chars, last_data, last_text
+        last_data = value
+        last_text = _toon_result(value)
+        if value is data:
+            original_chars = len(last_text)
+        return len(last_text)
+
+    bounded = apply_budget(data, size_of=size_of, **options)
+    if isinstance(bounded, BudgetError):
+        return _error_result(bounded)
+    if bounded is not last_data:
+        size_of(bounded)
+    if record and isinstance(bounded, dict) and isinstance(bounded.get("_budget"), dict):
+        delivered_chars = len(last_text)
+        try:
+            # Current apply_budget measures the original overview by identity.
+            # Keep recording correct if a future implementation measures a copy.
+            if original_chars is None:
+                original_chars = len(_toon_result(data))
+            if delivered_chars < original_chars:
+                from aletheore.token_meter import record_mcp_trim
+
+                record_mcp_trim(repo_path, original_chars, delivered_chars)
+        except Exception:
+            # Even a fallback measurement must not affect a protocol response.
+            logging.getLogger(__name__).debug("token meter event recording failed", exc_info=True)
+    return last_text
 
 
 _TOOL_NAME_TO_QUERY_KIND = {
@@ -686,17 +722,15 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path, only
             # ones - including the "requires a target" and "optional target"
             # branches below, which previously had no cap whatsoever.
             def budgeted(result, section, offset, limit, filter):
-                return _budget_result(
-                    apply_budget(
-                        result,
-                        size_of=lambda data: len(_toon_result(data)),
-                        budget_chars=query_budget_chars,
-                        section=section,
-                        offset=offset,
-                        limit=limit,
-                        filter=filter,
-                        sort_by=_QUERY_BUDGET_SORT_BY.get(kind),
-                    )
+                return _metered_budget(
+                    repo_path, result,
+                    record=section is None,
+                    budget_chars=query_budget_chars,
+                    section=section,
+                    offset=offset,
+                    limit=limit,
+                    filter=filter,
+                    sort_by=_QUERY_BUDGET_SORT_BY.get(kind),
                 )
 
             if requires_target:
@@ -1638,9 +1672,7 @@ def _register_search_codebase_tool(
             return _error_result({"error": str(exc)})
         except (EmbeddingProviderUnavailableError, HostedEmbeddingUnavailableError) as exc:
             return _error_result({"error": str(exc)})
-        return _toon_result(
-            apply_budget(results, size_of=lambda data: len(_toon_result(data)), budget_chars=search_budget_chars)
-        )
+        return _metered_budget(repo_path, results, budget_chars=search_budget_chars)
 
 
 def _register_answer_tool(

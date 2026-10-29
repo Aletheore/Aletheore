@@ -90,16 +90,6 @@ USER_HOOK_BYTES = b"#!/bin/sh\nset -e\necho user hook ran\nexit 0\n"
 # ------------------------------------------------------------------------------------------- hook command quoting
 
 
-def _old_snippet_command(argv, platform):
-    """The quoting `hook_evidence_snippet` did inline before it was extracted, verbatim."""
-    if platform == "win32":
-        return " ".join(
-            '"' + arg.replace('"', '\\"') + '"' if not arg or any(c in arg for c in ' \t"&^|<>()') else arg
-            for arg in argv
-        )
-    return shlex.join(argv)
-
-
 ARGVS = [
     ["/usr/bin/python3", "-m", "aletheore.evidence_hook", "--mode", "inject"],
     ["/Users/a/Library/Application Support/venv/bin/python", "-m", "aletheore.shield.hooks", "pre-edit"],
@@ -108,27 +98,25 @@ ARGVS = [
 ]
 
 
-@pytest.mark.parametrize("platform", ["linux", "darwin", "win32"])
-@pytest.mark.parametrize("argv", ARGVS)
-def test_build_hook_command_is_byte_identical_to_the_old_snippet_quoting(argv, platform):
-    assert hook_command.build_hook_command(argv, platform=platform) == _old_snippet_command(argv, platform)
-
-
-def test_build_hook_command_quotes_spaces_for_posix_and_windows():
+def test_build_shield_command_quotes_spaces_for_posix():
     argv = ["/a b/python", "-m", "aletheore.shield.hooks", "pre-edit"]
-    assert hook_command.build_hook_command(argv, platform="linux") == "'/a b/python' -m aletheore.shield.hooks pre-edit"
-    win = ["C:\\Program Files\\py\\python.exe", "-m", "aletheore.shield.hooks", "pre-edit"]
-    assert (
-        hook_command.build_hook_command(win, platform="win32")
-        == '"C:\\Program Files\\py\\python.exe" -m aletheore.shield.hooks pre-edit'
+    assert hook_command.build_shield_command(argv, platform="linux") == (
+        "'/a b/python' -m aletheore.shield.hooks pre-edit"
     )
 
 
-def test_build_hook_command_defaults_to_the_running_platform(monkeypatch):
+def test_build_shield_command_quotes_cmd_metacharacters_on_windows():
+    argv = ["C:\\py\\python.exe", "", "a&b", "x(y)", "tab\there", 'say"hi']
+    assert hook_command.build_shield_command(argv, platform="win32") == (
+        '"C:/py/python.exe" "" "a&b" "x(y)" "tab\there" "say\\"hi"'
+    )
+
+
+def test_build_shield_command_defaults_to_the_running_platform(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
-    assert hook_command.build_hook_command(["a b"]) == '"a b"'
+    assert hook_command.build_shield_command(["C:\\a b\\py.exe"]) == '"C:/a b/py.exe"'
     monkeypatch.setattr(sys, "platform", "linux")
-    assert hook_command.build_hook_command(["a b"]) == "'a b'"
+    assert hook_command.build_shield_command(["a b"]) == "'a b'"
 
 
 # Claude Code on Windows can run hook commands through Git Bash, which strips the backslashes from an unquoted
@@ -162,10 +150,9 @@ def test_build_shield_command_converts_any_backslash_or_spaced_argument_on_windo
 
 @pytest.mark.parametrize("platform", ["linux", "darwin"])
 @pytest.mark.parametrize("argv", ARGVS)
-def test_build_shield_command_matches_build_hook_command_off_windows(argv, platform):
-    assert hook_command.build_shield_command(argv, platform=platform) == hook_command.build_hook_command(
-        argv, platform=platform
-    )
+def test_build_shield_command_is_posix_quoting_off_windows(argv, platform):
+    command = hook_command.build_shield_command(argv, platform=platform)
+    assert command == shlex.join(argv) and shlex.split(command) == argv
 
 
 def test_our_event_recognises_the_windows_shield_command():
@@ -189,23 +176,6 @@ def test_windows_agent_hooks_use_forward_slashes_and_merge_idempotently(monkeypa
     assert changed and [h["command"] for e in merged["hooks"]["Stop"] for h in e["hooks"]] == [
         '"C:/Python312/python.exe" -m aletheore.shield.hooks turn-end'
     ]
-
-
-def test_evidence_snippet_output_is_unchanged(monkeypatch):
-    from typer.testing import CliRunner
-
-    from aletheore import cli
-
-    for platform, exe in (("linux", "/x y/python"), ("win32", "C:\\x y\\python.exe")):
-        monkeypatch.setattr(sys, "platform", platform)
-        monkeypatch.setattr(sys, "executable", exe)
-        result = CliRunner().invoke(cli.app, ["hook", "evidence-snippet", "--mode", "pointer"])
-        assert result.exit_code == 0
-        command = _old_snippet_command([exe, "-m", "aletheore.evidence_hook", "--mode", "pointer"], platform)
-        entry = lambda matcher: [{"matcher": matcher, "hooks": [{"type": "command", "command": command}]}]  # noqa: E731
-        hooks = {"PreToolUse": entry("Edit|MultiEdit|Write"), "PostToolUse": entry("Read")}
-        expected = json.dumps({"hooks": hooks}, indent=2)
-        assert result.stdout == expected + "\n"
 
 
 # ------------------------------------------------------------------------------------------------------ planning
@@ -260,7 +230,7 @@ def test_apply_registers_the_four_agent_hooks_and_the_git_hook(tmp_path):
             assert entry["matcher"] == "Edit|MultiEdit|Write"
         else:
             assert "matcher" not in entry
-        command = hook_command.build_hook_command([FAKE_PY, "-m", "aletheore.shield.hooks", name])
+        command = hook_command.build_shield_command([FAKE_PY, "-m", "aletheore.shield.hooks", name])
         assert entry["hooks"] == [{"type": "command", "command": command}]
     text = _hook(repo).read_text(encoding="utf-8")
     assert text.startswith("#!/bin/sh\n")

@@ -4,6 +4,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from aletheore.subprocess_utils import command_argv
 from aletheore.static_analysis._exclusions import excluded_dir_names, file_census, filter_findings
 
 # Real noise found live testing this against gson (264 real Java files,
@@ -100,8 +101,8 @@ def check_pmd(repo_path: Path, timeout: int | None = None) -> dict:
     ]
 
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=resolved_timeout + 10, cwd=repo_path
+        result = subprocess.run(  # nosec B603 - absolute tool, validated argv; unsupported batch launchers rejected
+            command_argv(*cmd, cwd=repo_path), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=resolved_timeout + 10, cwd=repo_path
         )
     except subprocess.TimeoutExpired:
         return {"checked": False, "reason": f"pmd timed out after {resolved_timeout}s", "findings": []}

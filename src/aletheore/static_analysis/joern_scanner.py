@@ -85,7 +85,7 @@ def check_joern(repo_path: Path, timeout: int = DEFAULT_JOERN_TIMEOUT_SECONDS) -
         try:
             build_result = subprocess.run(
                 [gosrc2cpg, str(repo_path), "-o", str(cpg_path), *exclude_args],
-                capture_output=True, text=True, timeout=timeout, cwd=tmp_path,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, cwd=tmp_path,
             )
         except subprocess.TimeoutExpired:
             return {"checked": False, "reason": f"joern CPG build timed out after {timeout}s", "findings": []}
@@ -106,7 +106,7 @@ def check_joern(repo_path: Path, timeout: int = DEFAULT_JOERN_TIMEOUT_SECONDS) -
                     "--param", f"cpgPath={cpg_path}",
                     "--param", f"outputPath={output_path}",
                 ],
-                capture_output=True, text=True, timeout=timeout, cwd=tmp_path,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, cwd=tmp_path,
             )
         except subprocess.TimeoutExpired:
             return {"checked": False, "reason": f"joern query timed out after {timeout}s", "findings": []}

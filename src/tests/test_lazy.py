@@ -3,6 +3,8 @@ import sys
 from types import ModuleType
 from unittest.mock import patch
 
+import pytest
+
 from aletheore._lazy import lazy_module
 
 
@@ -43,3 +45,18 @@ def test_isinstance_and_ismodule_see_the_real_modules_type():
     stand_in = lazy_module("json")
     assert isinstance(stand_in, ModuleType)
     assert inspect.ismodule(stand_in)
+
+
+def test_monkeypatch_setattr_on_a_lazy_module_restores_the_original_on_undo():
+    # pytest 9.2's MonkeyPatch.undo() restores from `target.__dict__`; a stand-in with its own
+    # empty dict made it delete the attribute from the real module instead of restoring it.
+    import json
+
+    original = json.dumps
+    stand_in = lazy_module("json")
+    patcher = pytest.MonkeyPatch()
+    patcher.setattr(stand_in, "dumps", lambda *args, **kwargs: "patched")
+    assert json.dumps() == "patched"
+    patcher.undo()
+    assert json.dumps is original
+    assert vars(stand_in) is vars(json)

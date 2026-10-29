@@ -3,6 +3,7 @@ import shutil
 import subprocess
 
 from aletheore.adapters.base import AdapterInvocationError, AgentAdapter
+from aletheore.subprocess_utils import command_argv
 
 INVOCATION_TIMEOUT_SECONDS = 600
 
@@ -34,17 +35,23 @@ class CodexCliAdapter(AgentAdapter):
             # itself per the manual's instruction, not a gap: see
             # AgentAdapter.requires_consent's docstring for why this is
             # unrelated to that flag.
-            result = subprocess.run(
-                [codex_path, "exec", "--sandbox", "workspace-write", "-C", cwd, instruction],
+            result = subprocess.run(  # nosec B603 - absolute tool, literal argv; batch shims resolved directly to Node
+                command_argv(codex_path, "exec", "--sandbox", "workspace-write", "-C", cwd, instruction),
                 cwd=cwd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
+                stdin=subprocess.DEVNULL,
                 timeout=INVOCATION_TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired as exc:
             raise AdapterInvocationError(
                 f"codex invocation timed out after {INVOCATION_TIMEOUT_SECONDS}s"
             ) from exc
+
+        except OSError as exc:
+            raise AdapterInvocationError(f"{self.name} could not start: {exc}") from exc
 
         if result.returncode != 0:
             raise AdapterInvocationError(

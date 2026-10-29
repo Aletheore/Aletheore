@@ -1,0 +1,68 @@
+name: Website Tests
+
+on:
+  pull_request:
+    paths:
+      - "site/**"
+      - "github-app/app_server/companion_limit_scripts.json"
+      - ".github/workflows/site-tests.yml"
+  push:
+    branches: [master]
+    paths:
+      - "site/**"
+      - "github-app/app_server/companion_limit_scripts.json"
+      - ".github/workflows/site-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  website:
+    name: Website (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [22, 24]
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npx next typegen
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run e2e:companion
+        if: matrix.node == 22
+
+  redis:
+    name: Companion Redis 7 integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 5s --health-retries 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: sudo apt-get update && sudo apt-get install -y redis-tools
+      - run: npm ci --prefix site
+      - run: npm --prefix site test -- --run tests/companion-limits.test.ts
+        env:
+          COMPANION_TEST_REDIS_URL: redis://127.0.0.1:6379/0

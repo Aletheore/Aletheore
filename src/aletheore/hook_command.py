@@ -1,40 +1,37 @@
-"""Build the shell command line an agent hook runs, quoted for the shell that will run it."""
+"""The shell command line Shield's Claude Code agent hooks run, quoted for the shell that will run it.
+
+Other Aletheore hooks (the evidence snippet, the Hallbook hook) use the exec form in `aletheore.hook_config`
+(`command` plus separate `args`, no shell). Shield's four agent hooks stay a single command string because that is
+the form its setup, status and removal recognise in existing `.claude/settings.local.json` files (`setup._our_event`);
+moving them to the exec form would need a migration of entries already written.
+"""
 
 import shlex
 import sys
 from pathlib import PureWindowsPath
 
-
-def build_hook_command(argv: list[str], *, platform: str | None = None) -> str:
-    """Join argv into one command string.
-
-    The interpreter path can hold spaces (a pipx venv lives under "Application Support" on macOS), so each
-    argument is quoted for the shell: POSIX sh quoting everywhere but Windows, cmd.exe style there. `platform`
-    defaults to `sys.platform`.
-    """
-    if (sys.platform if platform is None else platform) == "win32":
-        # cmd.exe style: quote an argument that is empty or holds a space, tab, quote or cmd metacharacter
-        return " ".join(
-            '"' + arg.replace('"', '\\"') + '"' if not arg or any(c in arg for c in ' \t"&^|<>()') else arg
-            for arg in argv
-        )
-    return shlex.join(argv)
+# cmd.exe metacharacters (plus space, tab and quote) that make a plain argument need quoting.
+_WINDOWS_SPECIAL = ' \t"&^|<>()'
 
 
-def _windows_shield_arg(arg: str, first: bool) -> str:
+def _windows_arg(arg: str, first: bool) -> str:
     if first or "\\" in arg or " " in arg:
+        # Forward slashes and double quotes: Git Bash would strip the backslashes of an unquoted C:\...\python.exe,
+        # and both cmd.exe and bash accept "C:/.../python.exe".
         return '"' + PureWindowsPath(arg).as_posix().replace('"', '\\"') + '"'
-    return build_hook_command([arg], platform="win32")
+    if not arg or any(c in arg for c in _WINDOWS_SPECIAL):
+        return '"' + arg.replace('"', '\\"') + '"'
+    return arg
 
 
 def build_shield_command(argv: list[str], *, platform: str | None = None) -> str:
     """Join argv into the command Shield's agent hooks run.
 
-    Same as `build_hook_command` except on Windows, where Claude Code may run the command through Git Bash: an
-    unquoted `C:\\Python312\\python.exe` would lose its backslashes there. So the interpreter path, and any argument
-    holding a backslash or a space, is written with forward slashes and always double-quoted, which cmd.exe and bash
-    both accept. `build_hook_command` keeps its output byte for byte (the evidence snippet depends on it).
+    POSIX sh quoting (`shlex.join`) everywhere but Windows. On Windows, where Claude Code may run the command
+    through Git Bash, the interpreter path and any argument holding a backslash or a space are written with forward
+    slashes and always double-quoted; other arguments are double-quoted only when empty or holding a cmd.exe
+    metacharacter. `platform` defaults to `sys.platform`.
     """
     if (sys.platform if platform is None else platform) != "win32":
-        return build_hook_command(argv, platform=platform)
-    return " ".join(_windows_shield_arg(arg, position == 0) for position, arg in enumerate(argv))
+        return shlex.join(argv)
+    return " ".join(_windows_arg(arg, position == 0) for position, arg in enumerate(argv))

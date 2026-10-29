@@ -20,6 +20,7 @@
   <a href="https://securityscorecards.dev/viewer/?uri=github.com/Aletheore/Aletheore"><img src="https://api.securityscorecards.dev/projects/github.com/Aletheore/Aletheore/badge" alt="OpenSSF Scorecard"></a>
   <a href="https://pepy.tech/projects/aletheore"><img src="https://static.pepy.tech/personalized-badge/aletheore?period=total&amp;units=INTERNATIONAL_SYSTEM&amp;left_color=BLACK&amp;right_color=GREEN&amp;left_text=downloads" alt="PyPI downloads"></a>
   <a href="https://mcpvault.io/servers/aletheore/health?utm_source=external_badge&amp;utm_medium=referral&amp;utm_campaign=mcp_health_report"><img src="https://mcpvault.io/badge/aletheore.svg" alt="MCPVault status"></a>
+  <a href="https://deepwiki.com/Aletheore/Aletheore"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
 </p>
 
 <p align="center">
@@ -228,7 +229,7 @@ that is the extent of the Windows coverage. See the
 | AI audit | Generate a report using a configured coding-agent CLI or API provider | `aletheore audit --help` |
 | Hallbook | Search the bundled coding-agent skill catalog | `aletheore hallbook search "code review"` |
 | Shield | Check and undo what a coding agent changes in a Git repository | `aletheore shield` |
-| Agent context tools | Measure context overhead and inspect optional tool profiles | `aletheore tokens --help` |
+| Agent context tools | Inspect tool overhead and local context savings | `aletheore tokens meter` |
 | GitHub Action | Report new and resolved findings between a PR's base and head | [Action setup](#run-in-github-actions) |
 | Hosted GitHub App | Run PR reviews and use managed repository features | [Install the app](https://github.com/apps/aletheore/installations/new) |
 

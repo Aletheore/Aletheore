@@ -10,12 +10,26 @@ importing aletheore.cli never inspects sys.argv or exits the interpreter.
 
 from __future__ import annotations
 
+import logging
 import sys
 
 
+def configure_stdio() -> None:
+    """Use UTF-8 for piped hook JSON as well as ordinary terminal output."""
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="backslashreplace" if stream is not sys.stdin else "replace")
+            except (OSError, ValueError):
+                # Debug only: protocol hooks must keep stdout/stderr silent.
+                logging.getLogger(__name__).debug("UTF-8 stream configuration unavailable", exc_info=True)
+
+
 def main() -> None:
+    configure_stdio()
     argv = sys.argv[1:]
-    if len(argv) >= 2 and argv[0] == "hallbook" and argv[1] == "suggest" and "--help" not in argv[2:]:
+    if len(argv) >= 2 and argv[0] in ("hallbook", "skill-hub") and argv[1] == "suggest" and "--help" not in argv[2:]:
         from aletheore.hallbook_hook import main as hook_main
 
         raise SystemExit(hook_main(argv[2:]))
