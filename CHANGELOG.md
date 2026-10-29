@@ -5,6 +5,13 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- Added `aletheore shield`, a local safety net for AI-written changes in a Git repository.
+  After one confirmation it registers Claude Code hooks and a Git pre-commit hook that report
+  new or suspicious dependencies, affected files and candidate tests, signature changes and new
+  risks; keeps checkpoints of the working tree as Git refs that `aletheore shield undo` restores;
+  and writes a receipt per session. It makes no model call and never blocks a commit or an
+  agent turn. Package names, and nothing else, go to PyPI and npm for dependency checks; turn
+  that off with `ALETHEORE_SHIELD_OFFLINE=1`. `aletheore shield off` removes it.
 - Dashboard panels now distinguish checks that did not run from completed checks with
   no findings, including overview counts, secret-history coverage and limited scans.
 - The local demo now guides a pricing change through source, callers, import dependents,

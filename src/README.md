@@ -462,6 +462,105 @@ show that cost and let you trim the part you do not use. Everything is local; no
 The profile is off until you apply it. A tool the profile denies is unavailable to the agent in that project, so
 switch to `core+web` or `off` if your work needs it.
 
+### `aletheore shield`
+
+A local safety net for AI-written changes in a Git repository: a guard that reports on a change,
+checkpoints you can restore, and a receipt per agent session. It makes no model call and needs no
+account. Shield is built for Claude Code hooks plus a Git pre-commit hook.
+
+```text
+aletheore shield [--path DIR] [--yes]
+aletheore shield undo [REF] [--path DIR] [--yes]
+aletheore shield off [--purge] [--path DIR] [--yes]
+aletheore shield check [--no-lookups] [--path DIR]
+```
+
+- `aletheore shield` with Shield off prints the plan (every file it will create or edit, with a
+  diff, and the network note) and asks you to type `yes`. `--yes` skips the question; without a
+  terminal and without `--yes` nothing is changed. If Shield is already on it prints the status:
+  the checkpoint count, the latest receipt and the next commands. Setup is applied first; if the
+  repository has no evidence yet, a quick local scan follows, and a failed scan only prints a
+  warning.
+- `--path DIR` selects the repository (default: the current directory). Given to `shield`
+  itself, `--path` and `--yes` also apply to `undo`, `off` and `check`.
+- `undo [REF]` lists the newest checkpoints and restores the one you pick. `REF` is a full ref, its
+  short name (the part after `refs/aletheore/checkpoints/`) or a unique ending. With `--yes` and no
+  `REF`, the newest checkpoint is used. Before writing, it shows the files it will write, files it
+  leaves in place (not in the checkpoint; never deleted) and files it will not touch because
+  restoring them is not safe. It takes a safety checkpoint first and prints the command that undoes the undo.
+- `off [--purge]` removes the hooks Shield registered, its block in the Git hook, its block in
+  `.git/info/exclude` and its config, and puts back any settings file it edited. Checkpoints and
+  receipts are kept; `--purge` also deletes the checkpoint refs, `.aletheore/shield/` and the hook
+  state. Scan evidence in `.aletheore/` is never removed. While it exists, a one-line git
+  exclude for `.aletheore/` stays; delete `.aletheore/` and run `off` again to drop it. If another
+  linked worktree still uses Shield, the shared Git hook block is kept.
+- `check [--no-lookups]` runs the guard now over the current changes against `HEAD` (budget
+  6 seconds). `--no-lookups` skips registry lookups. It prints one line per finding
+  (`warn:` or `info:`, a message and, in brackets, where) followed by a `not checked:` line for
+  anything skipped, or `No findings; every check ran.` when both are empty.
+
+**What setup changes.** `.claude/settings.local.json` (four hook entries; merged, never
+overwritten; personal, not committed), the Git `pre-commit` hook (a block between
+`# >>> aletheore shield >>>` and `# <<< aletheore shield <<<`), a marked block in
+`.git/info/exclude` covering `/.aletheore/` and `/.claude/settings.local.json`,
+`.aletheore/shield/config.json`, and private records in `<git dir>/aletheore-shield/`. A file Shield
+cannot edit safely (invalid JSON, a symlink, read-only, tracked by Git, a hook that is not a shell
+script or lives outside the Git directory) is not written; the plan shows the text to add yourself.
+
+**Hook events.** Each runs `python -m aletheore.shield.hooks <event>`, always exits 0 and has a hard
+time limit.
+
+| Event | Fired by | What it does | Limit |
+| --- | --- | --- | --- |
+| `pre-edit` | Claude Code `PreToolUse` (Edit, MultiEdit, Write) | Saves the session's base evidence once and checkpoints the working tree; prunes old checkpoints at most hourly | 2 s |
+| `post-edit` | `PostToolUse` (same tools) | Runs the guard without registry lookups; gives the agent only findings that differ from the last ones it was given | 2 s |
+| `turn-end` | `Stop` | In a session that edited, runs the guard with registry lookups and shows the user text that differs from the last turn-end text | 8 s |
+| `session-end` | `SessionEnd` | Writes the receipt, prunes old checkpoints, drops the session state | 8 s |
+| `pre-commit` | Git `pre-commit` | Prints the guard text to stderr, each line prefixed with `aletheore shield:` | 8 s |
+
+Session state is one small JSON file per session in `<git dir>/aletheore-shield/hook-<session>.json`,
+outside the working tree. Checkpoints are commits under `refs/aletheore/checkpoints/<worktree>/`,
+built with Git plumbing so your index, branches, stash and working tree are not touched. They hold
+tracked and untracked files minus ignored files, secret-looking files (such as `.env`), Shield's own
+folder and files over the size caps. Receipts are Markdown files in `.aletheore/shield/receipts/`.
+
+**What the guard checks.** New dependencies from manifest additions and new imports (PyPI and npm
+only; each is checked for existence, age and a near match to a popular package); files that import
+the changed files and candidate tests; changed function signatures, stated per file that imports the
+module; and new secret, vulnerability, layer-violation and import-cycle findings against the session's
+base evidence. Messages give facts and counts, not advice.
+
+**Exit codes.** `shield`, `undo` and `off` exit 0 on success or when nothing needed doing, and 1 when
+the path is not a Git repository, setup is blocked or fails (it is rolled back), or nothing could
+be asked because there is no terminal and no `--yes`. `check` exits 0 even when it finds
+problems; it exits 1 only when the path is not a Git repository.
+
+**Network.** Only with registry lookups on, and only at turn end, commit and `check`: the package name
+goes to `pypi.org` or `registry.npmjs.org`. Versions, paths and source are not sent. Set
+`ALETHEORE_SHIELD_OFFLINE=1` (also `true` or `yes`) or `"registry_lookups": false` in
+`.aletheore/shield/config.json` to turn lookups off; the guard then lists the names as not checked.
+The setup screen prints the active network plan.
+
+**Limits and known gaps.**
+
+- A hook never blocks a commit or an agent turn, and the guard never stops the agent.
+- Evidence is read from `.aletheore/air.json` as it is on disk. If it is older than a changed
+  file, the dependents, signature and new-risk checks are skipped and reported as not checked; a
+  background refresh is started (at most once a minute) instead of a re-scan inside the hook.
+- Registry lookups do not run per edit, only at turn end and commit; at most a fixed number of
+  names are looked up per run, and the rest are listed as not checked.
+- A near match to a popular package is an `info` line by itself; it is a `warn` only when the registry
+  also shows the name does not exist or is recent.
+- Only PyPI and npm are checked; other ecosystems are reported as not checked.
+- Dependency and signature findings are import-level (which files import a module), not call-level.
+  Candidate tests are suggestions and are not run.
+- Undo never deletes a file. It restores bytes the way `git checkout` would, following your
+  line-ending and filter settings, so a restored file can differ in line endings from the checkpoint
+  blob. It refuses paths under symlinks, inside nested repositories or outside the repository.
+- Checkpoint refs are ordinary Git refs; `git push --mirror` would push them.
+- Shield is designed for macOS, Linux and Windows. The CI jobs for all three run the unit tests;
+  hooks have not been exercised against a real Claude Code session on Windows.
+
 ### `aletheore query <kind> [target]`
 
 Answers one targeted question from an existing `air.json`, without re-scanning or an LLM

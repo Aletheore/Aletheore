@@ -157,6 +157,60 @@ For clients you configure manually, the server command is `aletheore mcp .`.
 Optional AI answering, semantic indexing, and external tools have their own setup and
 network requirements. See the [MCP guide](src/README.md#aletheore-mcp-path).
 
+## Check and undo what an agent changes
+
+Shield is a local safety net for AI-written changes in a Git repository. It makes no
+model call.
+
+```bash
+pipx install aletheore   # or: pip install aletheore
+aletheore shield
+```
+
+`aletheore shield` shows every change it plans, with a diff for each file, then waits.
+Type `yes` to set it up. Nothing is written before that. Setup changes:
+
+- `.claude/settings.local.json`: Claude Code hooks for four events (before an edit, after an
+  edit, end of turn, end of session). This file is personal and is not committed.
+- The Git `pre-commit` hook: a marked block that prints Shield's report and never fails the commit.
+- `.git/info/exclude`: a marked block that keeps Shield's files out of `git status`.
+  `.gitignore` is not touched.
+- `.aletheore/shield/config.json`, and private records under the Git directory.
+- A first local scan into `.aletheore/`, if the repository has no evidence yet.
+
+What it does:
+
+- **Guard.** After edits, at the end of a turn and at commit, it reports new or suspicious
+  dependencies (checked against PyPI and npm), files the change reaches and candidate tests,
+  signature changes (stated per file that imports the module, not per call site), and new risks.
+- **Checkpoints.** Before an agent edits, Shield saves the working tree as a Git commit under
+  `refs/aletheore/checkpoints/`. Your branches, index and stash are not touched. Put files back
+  with `aletheore shield undo`; it saves a safety checkpoint first and never deletes a file.
+- **Receipts.** At the end of a session, `.aletheore/shield/receipts/` gets a file listing
+  what changed and what the guard found.
+
+What it does not do:
+
+- It never blocks a commit or an agent turn.
+- It does not run the candidate tests. Dependency and signature checks work at the import
+  level, not the call level.
+- Only PyPI and npm are checked. Any other dependency is reported as "not checked".
+- It does not refresh stale scan evidence inline; checks that need fresh evidence say they were
+  skipped.
+
+Registry lookups send only the package name to `pypi.org` or `registry.npmjs.org`, never versions,
+paths or source. Turn them off with `ALETHEORE_SHIELD_OFFLINE=1` or `"registry_lookups": false` in
+`.aletheore/shield/config.json`. Checkpoint refs are local; `git push --mirror` pushes every ref
+including them, so avoid it or delete the refs first. Undo writes files the way `git checkout`
+would, following your line-ending and filter settings.
+
+`aletheore shield off` removes the hooks, config and marked blocks and keeps checkpoints and
+receipts; `--purge` deletes those too. Scan evidence in `.aletheore/` stays, and so does a
+one-line git exclude for it until you delete `.aletheore/` and run `off` again.
+Shield targets macOS, Linux and Windows; CI runs the unit tests on all three, and
+that is the extent of the Windows coverage. See the
+[command reference](src/README.md#aletheore-shield) for options, limits and exit codes.
+
 ## What you can use
 
 | Surface | Purpose | Start here |
@@ -166,6 +220,7 @@ network requirements. See the [MCP guide](src/README.md#aletheore-mcp-path).
 | MCP server | Let a coding agent query repository evidence | `aletheore mcp-install --help` |
 | AI audit | Generate a report using a configured coding-agent CLI or API provider | `aletheore audit --help` |
 | Hallbook | Search the bundled coding-agent skill catalog | `aletheore hallbook search "code review"` |
+| Shield | Check and undo what a coding agent changes in a Git repository | `aletheore shield` |
 | Agent context tools | Measure context overhead and inspect optional tool profiles | `aletheore tokens --help` |
 | GitHub Action | Report new and resolved findings between a PR's base and head | [Action setup](#run-in-github-actions) |
 | Hosted GitHub App | Run PR reviews and use managed repository features | [Install the app](https://github.com/apps/aletheore/installations/new) |
