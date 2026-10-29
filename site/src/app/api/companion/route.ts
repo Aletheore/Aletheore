@@ -1,3 +1,4 @@
+import { companionEnabled } from "@/lib/companion/enabled";
 import { acquirePermit, LimitError } from "@/lib/companion/limits";
 import { answerQuestion } from "@/lib/companion/service";
 
@@ -5,10 +6,11 @@ export const runtime = "nodejs";
 export const maxDuration = 35;
 const headers = { "Cache-Control": "no-store" };
 function error(message: string, status: number, retryAfter?: number) { return Response.json({ error: message }, { status, headers: { ...headers, ...(retryAfter ? { "Retry-After": String(retryAfter) } : {}) } }); }
-// Public activation still requires deployed-store, provider-cap and Vercel proxy verification.
-// No process-local or fail-open fallback is permitted, including during local review.
+// Enabled only by COMPANION_LIVE_ENABLED=1 plus a provider key (see lib/companion/enabled.ts). Before turning it on:
+// deployed ledger, provider spend cap and Vercel proxy verification. No process-local or fail-open fallback exists.
 export async function POST(request: Request) {
-  if (process.env.NODE_ENV !== "development" || process.env.COMPANION_LIVE_ENABLED !== "1" || !process.env.INDIEROUTER_API_KEY) return error("Chat is not enabled. Please use the developer guide.", 503);
+  const apiKey = process.env.INDIEROUTER_API_KEY;
+  if (!companionEnabled() || !apiKey) return error("Chat is not enabled. Please use the developer guide.", 503);
   const origin = request.headers.get("origin");
   if (!origin || origin !== new URL(request.url).origin) return error("Request origin is not allowed.", 403);
   if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") return error("Expected JSON.", 415);
@@ -47,7 +49,7 @@ export async function POST(request: Request) {
   }
   try {
     request.signal.throwIfAborted();
-    const result = await answerQuestion(data.question.trim(), { apiKey: process.env.INDIEROUTER_API_KEY, history: data.history as string[] | undefined, signal: request.signal });
+    const result = await answerQuestion(data.question.trim(), { apiKey, history: data.history as string[] | undefined, signal: request.signal });
     await permit.settle(result.usage, result.usageReliable, result.usageViolation);
     return Response.json(result.answer, { headers });
   } catch {
