@@ -17,9 +17,11 @@ Events, and what each one does:
   stderr, one `aletheore shield: ` prefixed line each. Never blocks the commit.
 
 Which repository: an edit belongs to the repository that contains the edited file (resolved from the nearest
-existing folder of `tool_input.file_path`, so a nested repository, submodule or worktree under the session's
-folder is checkpointed and guarded on its own); the payload `cwd` is the fallback, and the only source for
-turn-end and session-end.
+existing folder of `tool_input.file_path`); the payload `cwd` is the fallback, and the only source for turn-end
+and session-end. Shield acts on that repository only when it is the session's own (the same working tree as the
+payload `cwd`) or when it turned Shield on itself (`<git dir>/aletheore-shield/setup/setup-record.json`, written by
+`aletheore shield`), so a nested repository, submodule or worktree is checkpointed and guarded on its own only
+after it opted in. An edit anywhere else gets no checkpoint, no base evidence, no hook state and no output.
 
 Hook rules, as in `evidence_hook.py`: every event always returns 0, swallows every exception (a traceback goes
 to stderr only when ALETHEORE_HOOK_DEBUG is set) and runs on a daemon worker thread joined with a hard stop.
@@ -65,6 +67,8 @@ HEADER = "Aletheore Shield guard (working tree vs HEAD):"
 PRE_COMMIT_PREFIX = "aletheore shield: "
 STATE_DIRNAME = "aletheore-shield"
 NO_SESSION_TOKEN = "nosession"
+SETUP_DIRNAME = "setup"  # setup._SETUP_DIRNAME; not imported so the hooks stay light
+SETUP_RECORD_NAME = "setup-record.json"  # setup.RECORD_NAME
 # A post-edit guard runs without registry lookups by design, so saying so to the agent on every edit is noise.
 _POST_EDIT_DROPPED_REASON = "registry lookups are off"
 _GIT_PROBE_TIMEOUT_S = 2.0
@@ -208,16 +212,37 @@ def _inside(path: Path, top: Path) -> bool:
     return True
 
 
+def _same_dir(a: Path, b: Path) -> bool:
+    try:
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    except (OSError, ValueError):
+        return False
+
+
+def _opted_in(repo: _Repo) -> bool:
+    """Whether `aletheore shield` set this repository up (its setup record exists in the git dir)."""
+    try:
+        return (repo.git_dir / STATE_DIRNAME / SETUP_DIRNAME / SETUP_RECORD_NAME).is_file()
+    except OSError:
+        return False
+
+
 def _edit_repo(payload: dict) -> _Repo | None:
-    """The repository the edited file belongs to; None when the payload is no edit or the file is in none."""
+    """The repository the edited file belongs to, when Shield may act on it; None when the payload is no edit, the
+    file is in no repository, or the repository is neither the session's own (the payload `cwd`'s) nor one that
+    turned Shield on with `aletheore shield`. Checkpoints capture untracked files and live in refs a mirror push
+    would publish, so a repository that never agreed to Shield gets nothing written to it."""
     path = _edit_path(payload)
     if path is None:
         return None
     folder = _nearest_dir(path)
     found = _resolve(folder) if folder is not None else None
+    if found is not None and _inside(path, found.top) and _opted_in(found):
+        return found
+    session = _cwd_repo(payload)
     if found is None or not _inside(path, found.top):
-        found = _cwd_repo(payload)
-    if found is None or not _inside(path, found.top):
+        found = session
+    if found is None or session is None or not _inside(path, found.top) or not _same_dir(found.top, session.top):
         return None
     return found
 

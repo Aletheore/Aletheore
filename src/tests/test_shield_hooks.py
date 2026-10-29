@@ -266,9 +266,24 @@ def test_hook_state_lives_in_the_git_dir_and_never_creates_aletheore(tmp_path, m
     assert not (repo / ".aletheore").exists()
 
 
+def _opt_in(repo):
+    """Turn Shield on for `repo` the way `aletheore shield` records it: its setup record in the git dir."""
+    from aletheore.shield import setup
+
+    folder = Path(repo) / ".git" / hooks.STATE_DIRNAME / "setup"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / setup.RECORD_NAME).write_bytes(setup._record_bytes(setup._Record()))
+    return repo
+
+
+def _refs(repo):
+    out = subprocess.run(["git", "for-each-ref", "refs/aletheore/"], cwd=repo, capture_output=True, text=True)
+    return out.stdout.strip()
+
+
 def test_pre_edit_in_a_nested_repo_checkpoints_the_nested_repo(tmp_path):
     outer = _init(tmp_path / "outer")
-    inner = _init(outer / "nested" / "inner")
+    inner = _opt_in(_init(outer / "nested" / "inner"))
     payload = _payload(outer, path="nested/inner/sub/x.py")  # cwd is the outer repo; sub/ does not exist yet
     assert _run("pre-edit", payload) == (0, "", "")
     assert len(_checkpoints(inner)) == 1
@@ -278,11 +293,55 @@ def test_pre_edit_in_a_nested_repo_checkpoints_the_nested_repo(tmp_path):
 
 def test_post_edit_in_a_nested_repo_guards_the_nested_repo(tmp_path, monkeypatch):
     outer = _init(tmp_path / "outer")
-    inner = _init(outer / "inner")
+    inner = _opt_in(_init(outer / "inner"))
     seen = []
     monkeypatch.setattr(guard, "run_guard", lambda r, **k: seen.append(Path(r)) or GuardReport((), ()))
     _run("post-edit", _payload(outer, event="PostToolUse", path="inner/x.py"))
     assert [p.resolve() for p in seen] == [inner.resolve()]
+
+
+def test_edit_in_an_unrelated_repo_leaves_it_untouched(tmp_path, monkeypatch):
+    a = _init(tmp_path / "a", aletheore=True)
+    b = _init(tmp_path / "b", aletheore=True)
+    (b / ".aletheore" / "air.json").write_text("{}", encoding="utf-8")
+    (b / "x.py").write_text("x = 1\n", encoding="utf-8")
+    seen = []
+    monkeypatch.setattr(guard, "run_guard", lambda r, **k: seen.append(Path(r)) or _report("b finding"))
+    payload = _payload(a, path=str(b / "x.py"))
+    assert _run("pre-edit", payload) == (0, "", "")
+    assert _run("post-edit", dict(payload, hook_event_name="PostToolUse")) == (0, "", "")
+    assert _refs(b) == "" and _checkpoints(b) == []
+    assert not (b / ".git" / "aletheore-shield").exists()
+    assert not (b / ".aletheore" / "shield").exists()
+    assert seen == []
+    assert _checkpoints(a) == [] and not _state_file(a).exists()  # the file is not in the session's repo either
+
+
+def test_edit_in_a_nested_repo_that_never_turned_shield_on_is_left_alone(tmp_path, monkeypatch):
+    outer = _init(tmp_path / "outer")
+    inner = _init(outer / "inner")
+    (inner / "untracked.txt").write_text("private\n", encoding="utf-8")
+    seen = []
+    monkeypatch.setattr(guard, "run_guard", lambda r, **k: seen.append(Path(r)) or _report("x"))
+    assert _run("pre-edit", _payload(outer, path="inner/x.py")) == (0, "", "")
+    assert _run("post-edit", _payload(outer, event="PostToolUse", path="inner/x.py")) == (0, "", "")
+    assert _refs(inner) == "" and not (inner / ".git" / "aletheore-shield").exists()
+    assert _checkpoints(outer) == [] and seen == []
+
+
+def test_edit_in_the_session_repo_needs_no_setup_record(tmp_path):
+    repo = _init(tmp_path / "r")
+    (repo / "pkg").mkdir()
+    assert _run("pre-edit", _payload(repo, path="pkg/x.py")) == (0, "", "")
+    assert len(_checkpoints(repo)) == 1 and _state(repo)["edited"] is True
+
+
+def test_cwd_in_a_subfolder_still_counts_as_the_session_repo(tmp_path):
+    repo = _init(tmp_path / "r")
+    (repo / "pkg").mkdir()
+    payload = _payload(repo / "pkg", path=str(repo / "x.py"))
+    assert _run("pre-edit", payload) == (0, "", "")
+    assert len(_checkpoints(repo)) == 1
 
 
 def test_prune_runs_at_most_once_per_hour_per_session(tmp_path, monkeypatch):
@@ -822,3 +881,12 @@ def test_stop_note_goes_to_stderr_only_when_debugging(tmp_path, monkeypatch):
 
 def test_run_and_exit_is_exposed():
     assert callable(hooks.run_and_exit)
+
+
+def test_hooks_look_for_the_setup_record_where_setup_writes_it(tmp_path):
+    from aletheore.shield import setup
+
+    git_dir = tmp_path / ".git"
+    assert setup._setup_dir_for(git_dir) / setup.RECORD_NAME == (
+        git_dir / hooks.STATE_DIRNAME / hooks.SETUP_DIRNAME / hooks.SETUP_RECORD_NAME
+    )
