@@ -1076,3 +1076,69 @@ def test_raw_line_break_controls_in_a_hook_are_shown_as_question_marks(tmp_path)
     (change,) = [c for c in setup.plan_setup(repo) if c.path == _hook(repo)]
     assert _no_hostile(change.diff)
     assert any(line.startswith(" echo a?b?c?d?e?f?g\\x0d") for line in change.diff.split("\n"))
+
+
+# ------------------------------------------------------------------------- living next to the read guard
+
+
+def _hooks(repo):
+    return json.loads(_settings(repo).read_text(encoding="utf-8")).get("hooks")
+
+
+def _read_guard_entries(repo):
+    sidecar = json.loads((repo / ".claude" / "aletheore-read-guard-hooks.json").read_text(encoding="utf-8"))
+    return sidecar["entries"]
+
+
+def test_read_guard_then_shield_then_off_puts_the_read_guard_file_back(tmp_path):
+    from aletheore import read_guard_setup
+
+    repo = _init(tmp_path / "repo")
+    read_guard_setup.install(repo)
+    with_read_guard = _settings(repo).read_bytes()
+    setup.apply_setup(repo)
+    removal = setup.remove_setup_report(repo)
+    assert _settings(repo).read_bytes() == with_read_guard
+    assert _settings(repo) in removal.restored and _settings(repo) not in removal.edited + removal.removed
+    assert read_guard_setup.is_installed(repo)
+    read_guard_setup.remove(repo)
+    assert not _settings(repo).exists()
+
+
+def test_shield_then_read_guard_then_off_leaves_only_the_read_guard(tmp_path):
+    from aletheore import read_guard_setup
+
+    repo = _init(tmp_path / "repo")
+    setup.apply_setup(repo)
+    read_guard_setup.install(repo)
+    removal = setup.remove_setup_report(repo)
+    owned = _read_guard_entries(repo)
+    assert _hooks(repo) == {event: [entry] for event, entry in owned.items()}  # no empty Stop/SessionEnd husk
+    assert _settings(repo) in removal.edited and _settings(repo) not in removal.restored + removal.removed
+    assert read_guard_setup.is_installed(repo)
+    assert (repo / ".claude").is_dir()
+
+
+def test_off_keeps_empty_arrays_shield_did_not_create(tmp_path):
+    repo = _init(tmp_path / "repo")
+    _settings(repo).parent.mkdir()
+    _settings(repo).write_text('{"hooks": {"Stop": []}}\n', encoding="utf-8")
+    setup.apply_setup(repo)
+    data = json.loads(_settings(repo).read_text(encoding="utf-8"))
+    data["model"] = "x"  # force the structural path
+    _settings(repo).write_text(json.dumps(data) + "\n", encoding="utf-8")
+    setup.remove_setup_report(repo)
+    assert json.loads(_settings(repo).read_text(encoding="utf-8")) == {"hooks": {"Stop": []}, "model": "x"}
+
+
+def test_removal_report_sorts_every_path_by_what_happened(tmp_path):
+    repo = _init(tmp_path / "repo")
+    _hook(repo).parent.mkdir(parents=True)
+    _hook(repo).write_bytes(USER_HOOK_BYTES)
+    os.chmod(_hook(repo), 0o755)
+    setup.apply_setup(repo)
+    removal = setup.remove_setup_report(repo)
+    assert _hook(repo) in removal.edited
+    assert _settings(repo) in removal.removed and repo / ".aletheore" / "shield" / "config.json" in removal.removed
+    assert set(removal.changed) == set(removal.restored + removal.edited + removal.removed)
+    assert len(removal.changed) == len(set(removal.changed))

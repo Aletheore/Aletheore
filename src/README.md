@@ -536,7 +536,11 @@ aletheore shield [--path DIR] [--yes]
   receipts are kept; `--purge` also deletes the checkpoint refs, `.aletheore/shield/` and the hook
   state. Scan evidence in `.aletheore/` is never removed. While it exists, a one-line git
   exclude for `.aletheore/` stays; delete `.aletheore/` and run `off` again to drop it. If another
-  linked worktree still uses Shield, the shared Git hook block is kept.
+  linked worktree still uses Shield, the shared Git hook block is kept. The output sorts each file
+  under "Restored to how they were" (the exact bytes from before setup, used when nobody changed the
+  file since Shield wrote it), "Removed Shield's entries from" (only Shield's entries or block taken
+  out, for example when the read guard added its own hooks to the same settings file afterwards)
+  or "Removed". Empty hook lists are deleted only when Shield created them.
 - `check [--no-lookups]` runs the guard now over the current changes against `HEAD` (budget
   6 seconds). `--no-lookups` skips registry lookups. It prints one line per finding
   (`warn:` or `info:`, a message and, in brackets, where) followed by a `not checked:` line for

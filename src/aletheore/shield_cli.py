@@ -2,7 +2,8 @@
 
 This is only the user-facing layer over aletheore.shield.*; every decision about files lives there. All text that
 came from a repository (paths, descriptions, refs, notes) is cleaned before it is printed, and nothing is printed
-through rich markup, so a hostile file name cannot inject escape sequences or styling.
+through rich markup, so a hostile file name cannot inject escape sequences or styling. Errors and refusals go to
+stderr as `error: ...`; plans, status and reports go to stdout.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from aletheore.shield.setup import (
     SetupChange,
     apply_setup,
     plan_setup,
-    remove_setup,
+    remove_setup_report,
     shared_blocks_kept,
     shield_status,
 )
@@ -99,8 +100,13 @@ def _rel(repo: Path, path: Path) -> str:
         return str(path)
 
 
+def _error(message: str) -> None:
+    """An error or refusal: stderr, with the `error:` prefix the rest of the CLI uses."""
+    typer.echo(f"error: {message}", err=True)
+
+
 def _fail(message: str, code: int = 1) -> "typer.Exit":
-    typer.echo(message)
+    _error(message)
     return typer.Exit(code)
 
 
@@ -427,23 +433,22 @@ def off(
         _out("Nothing changed.")
         raise typer.Exit(0)
     try:
-        removed = remove_setup(repo, purge=purge)
+        report = remove_setup_report(repo, purge=purge)
     except Exception as exc:  # noqa: BLE001
         raise _fail(f"Removing Shield failed: {_safe(exc) or type(exc).__name__}")
-    public = [p for p in removed if not _is_private(p)]
-    restored = [p for p in public if Path(p).exists()]
-    gone = [p for p in public if not Path(p).exists()]
-    if restored:
-        _out("Restored to how they were:")
-        for item in restored:
-            _out(f"  {_safe(_rel(repo, item))}")
-    if gone:
-        _out("Removed:")
-        for item in gone:
-            _out(f"  {_safe(_rel(repo, item))}")
-    if len(public) < len(removed):
+    for heading, paths in (
+        ("Restored to how they were:", report.restored),  # the exact bytes from before setup
+        ("Removed Shield's entries from:", report.edited),  # only Shield's part taken out; the rest kept
+        ("Removed:", report.removed),
+    ):
+        public = [p for p in paths if not _is_private(p)]
+        if public:
+            _out(heading)
+            for item in public:
+                _out(f"  {_safe(_rel(repo, item))}")
+    if any(_is_private(p) for p in report.changed):
         _out("Removed Shield's private records in .git/aletheore-shield/.")
-    if not removed:
+    if not report.changed:
         _out("Nothing to remove.")
     if (repo / ".aletheore").exists():
         _out(
@@ -469,7 +474,7 @@ def check(
         report = run_guard(repo, lookups=False if no_lookups else None, budget_s=6.0)
         text = render_report(report, max_lines=40)
     except Exception as exc:  # noqa: BLE001 - informational command: one line, never a trace
-        _out(f"The guard could not run: {_safe(type(exc).__name__)}")
+        _error(f"the guard could not run: {_safe(type(exc).__name__)}")
         return
     if not text:
         _out("No findings; every check ran.")

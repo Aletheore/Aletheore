@@ -105,6 +105,21 @@ class SetupBlocked:
 
 
 @dataclass(frozen=True)
+class Removal:
+    """What `remove_setup_report` did to each path: put back byte for byte, edited (Shield's entries or block
+    taken out, the rest kept) or deleted. `changed` lists every path once, in the order it was handled."""
+
+    restored: list[Path] = field(default_factory=list)
+    edited: list[Path] = field(default_factory=list)
+    removed: list[Path] = field(default_factory=list)
+    changed: list[Path] = field(default_factory=list)
+
+    def add(self, path: Path, how: str) -> None:
+        {"restored": self.restored, "edited": self.edited, "removed": self.removed}[how].append(path)
+        self.changed.append(path)
+
+
+@dataclass(frozen=True)
 class ShieldStatus:
     enabled: bool
     checkpoints: int
@@ -1017,7 +1032,7 @@ def shared_blocks_kept(repo: Path) -> bool:
     return where is not None and _other_worktrees_set_up(where)
 
 
-def _remove_settings(where: _Where, record: _Record) -> Path | None:
+def _remove_settings(where: _Where, record: _Record) -> tuple[Path, str] | None:
     path = _settings_path(where)
     if path.is_symlink() or not path.is_file() or not _contained(path, where.top):
         return None
@@ -1032,10 +1047,10 @@ def _remove_settings(where: _Where, record: _Record) -> Path | None:
         backup = _setup_dir(where) / BACKUP_NAME
         if record.settings_backup and backup.is_file():
             _write_atomic(path, backup.read_bytes(), mode)
-            return path
+            return path, "restored"
         if created:
             path.unlink()
-            return path
+            return path, "removed"
     try:
         data, layout = _parse_settings(raw)
     except ValueError:
@@ -1057,14 +1072,14 @@ def _remove_settings(where: _Where, record: _Record) -> Path | None:
         del data["hooks"]
     if not data and created:
         path.unlink()
-    else:
-        _write_atomic(path, _dump_settings(data, layout), mode)
-    return path
+        return path, "removed"
+    _write_atomic(path, _dump_settings(data, layout), mode)
+    return path, "edited"
 
 
 def _remove_block(
     where: _Where, path: Path, record: _Record, *, hook: bool, keep_ignore: bool = False
-) -> Path | None:
+) -> tuple[Path, str] | None:
     if path.is_symlink() or not path.is_file() or not _contained(path, where.common_dir):
         return None
     try:
@@ -1085,20 +1100,22 @@ def _remove_block(
         _write_atomic(path, new.encode("utf-8"), mode)
     elif not hook and empty and block == KEEP_EXCLUDE_BLOCK.strip("\n"):
         path.unlink()  # only the kept line was in it: Shield created this file
+        return path, "removed"
     elif _record_name(where, path) in record.created and empty:
         path.unlink()
+        return path, "removed"
     else:
         _write_atomic(path, left.encode("utf-8"), mode)
-    return path
+    return path, "edited"
 
 
-def _remove(where: _Where, *, purge: bool, rollback: bool = False) -> list[Path]:
+def _remove(where: _Where, *, purge: bool, rollback: bool = False) -> Removal:
     record = _load_record(where)
-    changed: list[Path] = []
+    report = Removal()
 
     settings = _remove_settings(where, record)
     if settings is not None:
-        changed.append(settings)
+        report.add(*settings)
 
     if not _other_worktrees_set_up(where):
         hook_files = (
@@ -1114,7 +1131,7 @@ def _remove(where: _Where, *, purge: bool, rollback: bool = False) -> list[Path]
         for hook in sorted(hook_files):
             done = _remove_block(where, hook, record, hook=True)
             if done is not None:
-                changed.append(done)
+                report.add(*done)
 
     shield = _shield_dir(where)
     setup_folder = _setup_dir(where)
@@ -1125,14 +1142,14 @@ def _remove(where: _Where, *, purge: bool, rollback: bool = False) -> list[Path]
     for path, root in removable:
         if path.is_file() and _contained(path, root):
             path.unlink()
-            changed.append(path)
+            report.add(path, "removed")
 
     if purge:
         checkpoint.delete_all_checkpoints(where.top)
         for folder, root in ((shield, where.top), (where.git_dir / _HOOK_STATE_DIRNAME, where.git_dir)):
             if folder.is_dir() and not folder.is_symlink() and _contained(folder, root):
                 shutil.rmtree(folder)
-                changed.append(folder)
+                report.add(folder, "removed")
 
     def prune_created() -> None:
         folders = [_from_record(where, name) for name in record.created]
@@ -1141,7 +1158,7 @@ def _remove(where: _Where, *, purge: bool, rollback: bool = False) -> list[Path]
                 inside = any(_contained(folder, root) for root in (where.top, where.common_dir, where.git_dir))
                 if inside and folder.is_dir() and not folder.is_symlink() and not any(folder.iterdir()):
                     folder.rmdir()
-                    changed.append(folder)
+                    report.add(folder, "removed")
             except OSError:
                 continue
 
@@ -1150,9 +1167,9 @@ def _remove(where: _Where, *, purge: bool, rollback: bool = False) -> list[Path]
         keep = not rollback and (where.top / ".aletheore").is_dir()
         done = _remove_block(where, where.exclude, record, hook=False, keep_ignore=keep)
         if done is not None:
-            changed.append(done)
+            report.add(*done)
         prune_created()  # the exclude file may have been the last thing in a folder setup created
-    return changed
+    return report
 
 
 def remove_setup(repo: Path, *, purge: bool = False) -> list[Path]:
@@ -1160,10 +1177,16 @@ def remove_setup(repo: Path, *, purge: bool = False) -> list[Path]:
     Shield wrote it), its git hook and info/exclude blocks (kept while another linked worktree still uses Shield;
     see `shared_blocks_kept`), config.json, the setup record, and the files and folders setup created that are now
     empty. `purge` also deletes all checkpoint refs (no gc), `.aletheore/shield/` and the hook state in the git dir.
-    Returns the paths changed or removed."""
+    Returns the paths changed or removed; `remove_setup_report` says what happened to each."""
+    return remove_setup_report(repo, purge=purge).changed
+
+
+def remove_setup_report(repo: Path, *, purge: bool = False) -> Removal:
+    """`remove_setup`, reporting for each path whether it was restored byte for byte, edited (only Shield's
+    entries or block taken out) or removed."""
     where = _locate(Path(repo))
     if where is None:
-        return []
+        return Removal()
     return _remove(where, purge=purge)
 
 

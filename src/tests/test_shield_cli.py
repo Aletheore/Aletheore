@@ -712,3 +712,121 @@ def test_shield_help_lists_setup_and_status():
     assert r.exit_code == 0
     for name in ("setup", "status", "undo", "off", "check"):
         assert name in r.output
+
+
+# ---------------------------------------------------------------- errors go to stderr
+
+
+def _not_tty(monkeypatch):
+    monkeypatch.setattr(shield_cli, "_interactive", lambda: False)
+
+
+def _apply_fails(monkeypatch, exc):
+    def boom(*a, **k):
+        raise exc
+
+    monkeypatch.setattr(shield_cli, "apply_setup", boom)
+
+
+@pytest.mark.parametrize(
+    "args, prepare, message",
+    [
+        (["shield", "--path", "{plain}"], None, "Shield needs a git repository"),
+        (["shield", "status", "--path", "{plain}"], None, "Shield needs a git repository"),
+        (["shield", "check", "--path", "{plain}"], None, "Shield needs a git repository"),
+        (["shield", "--path", "{missing}"], None, "is not a folder"),
+        (["shield", "--path", "{repo}"], _not_tty, "Run in a terminal or pass --yes"),
+        (["shield", "setup", "--path", "{repo}"], _not_tty, "Run in a terminal or pass --yes"),
+        (["shield", "off", "--path", "{repo}"], _not_tty, "Run in a terminal or pass --yes"),
+        (["shield", "--path", "{repo}", "--yes"],
+         lambda mp: _apply_fails(mp, ValueError(setup.PLAN_CHANGED)), "nothing was written"),
+        (["shield", "--path", "{repo}", "--yes"],
+         lambda mp: _apply_fails(mp, OSError("disk is full")), "disk is full"),
+        (["shield", "undo", "nope", "--yes", "--path", "{repo}"], None, "No checkpoint matches"),
+    ],
+)
+def test_errors_and_refusals_go_to_stderr_with_the_error_prefix(repo, tmp_path, monkeypatch, args, prepare, message):
+    (tmp_path / "plain").mkdir()
+    cp.take_checkpoint(repo, "s1", force=True)
+    if prepare is not None:
+        prepare(monkeypatch)
+    names = {"plain": tmp_path / "plain", "missing": tmp_path / "missing", "repo": repo}
+    r = runner.invoke(app, [a.format(**names) for a in args])
+    assert r.exit_code == 1, r.output
+    assert message in r.stderr and message not in r.stdout
+    assert any(line.startswith("error: ") and message in line for line in r.stderr.splitlines())
+
+
+def test_guard_failure_in_check_is_an_error_line_but_exits_0(repo, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(shield_cli, "run_guard", boom)
+    r = runner.invoke(app, ["shield", "check", "--path", str(repo)])
+    assert r.exit_code == 0
+    assert "error: the guard could not run: RuntimeError" in r.stderr and "could not run" not in r.stdout
+
+
+def test_status_and_plans_stay_on_stdout(repo):
+    r = runner.invoke(app, ["shield", "--path", str(repo)], input="no\n")
+    assert "Shield will make these changes" in r.stdout and "Nothing changed." in r.stdout
+    assert "error:" not in r.output
+    _setup_on(repo)
+    r = runner.invoke(app, ["shield", "status", "--path", str(repo)])
+    assert "Shield is on" in r.stdout and r.stderr == ""
+
+
+# ---------------------------------------------------------------- off next to the read guard
+
+
+def _off_sections(output):
+    """{heading: [indented lines under it]} for the lists `shield off` prints."""
+    sections, current = {}, None
+    for line in output.splitlines():
+        if line.startswith("  ") and current is not None:
+            sections[current].append(line.strip())
+        else:
+            current = line.rstrip(":") if line.endswith(":") else None
+            if current is not None:
+                sections[current] = []
+    return sections
+
+
+def test_off_after_the_read_guard_was_added_says_it_removed_shields_entries(repo):
+    from aletheore import read_guard_setup
+
+    _setup_on(repo)
+    read_guard_setup.install(repo)
+    r = runner.invoke(app, ["shield", "off", "--yes", "--path", str(repo)])
+    assert r.exit_code == 0, r.output
+    sections = _off_sections(r.stdout)
+    assert ".claude/settings.local.json" in sections["Removed Shield's entries from"]
+    assert ".claude/settings.local.json" not in sections.get("Restored to how they were", [])
+    assert ".claude/settings.local.json" not in sections.get("Removed", [])
+    assert read_guard_setup.is_installed(repo)
+
+
+def test_off_with_the_read_guard_set_up_first_restores_its_file(repo):
+    from aletheore import read_guard_setup
+
+    read_guard_setup.install(repo)
+    before = (repo / ".claude" / "settings.local.json").read_bytes()
+    _setup_on(repo)
+    r = runner.invoke(app, ["shield", "off", "--yes", "--path", str(repo)])
+    assert r.exit_code == 0, r.output
+    sections = _off_sections(r.stdout)
+    assert ".claude/settings.local.json" in sections["Restored to how they were"]
+    assert (repo / ".claude" / "settings.local.json").read_bytes() == before
+    assert read_guard_setup.is_installed(repo)
+
+
+def test_off_lists_a_hook_it_only_edited_under_entries_removed(repo):
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    hook.parent.mkdir(parents=True)
+    hook.write_bytes(b"#!/bin/sh\necho mine\n")
+    os.chmod(hook, 0o755)
+    _setup_on(repo)
+    r = runner.invoke(app, ["shield", "off", "--yes", "--path", str(repo)])
+    sections = _off_sections(r.stdout)
+    assert ".git/hooks/pre-commit" in sections["Removed Shield's entries from"]
+    assert ".claude/settings.local.json" in sections["Removed"]
