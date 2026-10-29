@@ -155,8 +155,17 @@ def _show_network(repo: Path) -> None:
             "  Turn this off with ALETHEORE_SHIELD_OFFLINE=1 or `registry_lookups: false` in "
             ".aletheore/shield/config.json."
         )
+    elif state.load_config(repo).registry_lookups:
+        # Only this shell's environment turns them off; hooks Claude Code starts do not inherit it.
+        _out(
+            "  Registry lookups are turned off in this shell (ALETHEORE_SHIELD_OFFLINE is set); hooks started "
+            "elsewhere will still look up unless `registry_lookups` is false in .aletheore/shield/config.json."
+        )
     else:
-        _out("  Registry lookups are turned off here, so the guard makes no network requests.")
+        _out(
+            "  Registry lookups are turned off (`registry_lookups` is false in .aletheore/shield/config.json), so "
+            "the guard makes no network requests."
+        )
     for entry in shield_network_plan(registry_lookups=lookups):
         marker = "on" if entry["enabled"] else "off"
         _out(f"  - {_safe(entry['service'])} ({marker})")

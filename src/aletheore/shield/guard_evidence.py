@@ -441,6 +441,9 @@ def _cycle_text(cycle: list[str]) -> str:
 
 
 def _risk_findings(base: dict, head: dict) -> list[Finding]:
+    """New secrets and import cycles. Vulnerability and layer-violation findings can only appear when the head
+    evidence came from a full `aletheore scan`: Shield's first scan has vulnerabilities off, and the background
+    refresh carries both forward from the last full scan."""
     from aletheore import evidence_diff
 
     risks = evidence_diff.new_risks(base, head)

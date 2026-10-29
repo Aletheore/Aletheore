@@ -104,6 +104,25 @@ def test_first_run_states_the_network_disclosure(repo, monkeypatch):
     assert "registry_lookups" in r.output
 
 
+def test_network_note_says_the_offline_switch_only_covers_this_shell(repo):
+    # ALETHEORE_SHIELD_OFFLINE is set by the fixture; the config still allows lookups, and hooks Claude Code starts
+    # without that variable will look up.
+    r = runner.invoke(app, ["shield", "--path", str(repo)], input="no\n")
+    assert "turned off in this shell (ALETHEORE_SHIELD_OFFLINE is set)" in r.output
+    assert "hooks started elsewhere will still look up" in r.output
+    assert "registry_lookups" in r.output
+    assert "turned off here" not in r.output
+
+
+def test_network_note_when_the_config_turns_lookups_off(repo):
+    from aletheore.shield import state
+
+    state.save_config(repo, state.ShieldConfig(registry_lookups=False))
+    r = runner.invoke(app, ["shield", "--path", str(repo)], input="no\n")
+    assert "the guard makes no network requests" in r.output
+    assert "hooks started elsewhere" not in r.output
+
+
 def test_first_run_yes_installs_and_runs_first_scan_when_missing(repo, scans):
     r = runner.invoke(app, ["shield", "--path", str(repo)], input="yes\n")
     assert r.exit_code == 0, r.output

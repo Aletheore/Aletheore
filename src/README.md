@@ -513,11 +513,15 @@ quotes, so they run the same under cmd.exe and Git Bash.
 
 | Event | Fired by | What it does | Limit |
 | --- | --- | --- | --- |
-| `pre-edit` | Claude Code `PreToolUse` (Edit, MultiEdit, Write) | Saves the session's base evidence once and checkpoints the working tree; prunes old checkpoints at most hourly | 2 s |
+| `pre-edit` | Claude Code `PreToolUse` (Edit, MultiEdit, Write) | Saves the session's base evidence once and checkpoints the working tree; prunes old checkpoints, and base evidence copies older than 7 days, at most hourly | 2 s |
 | `post-edit` | `PostToolUse` (same tools) | Runs the guard without registry lookups; gives the agent only findings that differ from the last ones it was given | 2 s |
 | `turn-end` | `Stop` | In a session that edited, runs the guard with registry lookups and shows the user text that differs from the last turn-end text | 8 s |
-| `session-end` | `SessionEnd` | Writes the receipt, prunes old checkpoints, drops the session state | 8 s |
+| `session-end` | `SessionEnd` | Writes the receipt (without registry lookups), deletes the session's base evidence copy, prunes old checkpoints, drops the session state | 8 s |
 | `pre-commit` | Git `pre-commit` | Prints the guard text to stderr, each line prefixed with `aletheore shield:` | 8 s |
+
+The hooks act on the session's own repository (the one Claude Code runs in). An edit in another
+repository, such as a nested repository, submodule or sibling folder, is checkpointed and guarded only
+if `aletheore shield` was set up in that repository; otherwise nothing is written to it.
 
 Session state is one small JSON file per session in `<git dir>/aletheore-shield/hook-<session>.json`,
 outside the working tree. Checkpoints are commits under `refs/aletheore/checkpoints/<worktree>/`,
@@ -528,16 +532,21 @@ folder and files over the size caps. Receipts are Markdown files in `.aletheore/
 **What the guard checks.** New dependencies from manifest additions and new imports (PyPI and npm
 only; each is checked for existence, age and a near match to a popular package); files that import
 the changed files and candidate tests; changed function signatures, stated per file that imports the
-module; and new secret, vulnerability, layer-violation and import-cycle findings against the session's
-base evidence. Messages give facts and counts, not advice.
+module; and new secret and import-cycle findings against the session's base evidence. Vulnerability and
+layer-convention findings appear only when the evidence came from a full `aletheore scan`: Shield's
+first scan and its background refresh do not run those checks (the refresh carries the last full
+scan's results forward). Messages give facts and counts, not advice.
 
 **Exit codes.** `shield`, `undo` and `off` exit 0 on success or when nothing needed doing, and 1 when
 the path is not a Git repository, setup is blocked or fails (it is rolled back), or nothing could
 be asked because there is no terminal and no `--yes`. `check` exits 0 even when it finds
 problems; it exits 1 only when the path is not a Git repository.
 
-**Network.** Only with registry lookups on, and only at turn end, commit and `check`: the package name
-goes to `pypi.org` or `registry.npmjs.org`. Versions, paths and source are not sent. Set
+**Network.** Only with registry lookups on, and only at turn end, commit and `check` (never after an
+edit or at session end): the package name goes to `pypi.org` or `registry.npmjs.org`. Versions, paths
+and source are not sent. Answers are cached for 24 hours in
+`~/.cache/aletheore/shield-registry-cache.json` (under your user profile on Windows), outside the
+repository; `off --purge` does not delete it. Set
 `ALETHEORE_SHIELD_OFFLINE=1` (also `true` or `yes`) or `"registry_lookups": false` in
 `.aletheore/shield/config.json` to turn lookups off; the guard then lists the names as not checked.
 The setup screen prints the active network plan.
@@ -547,7 +556,9 @@ The setup screen prints the active network plan.
 - A hook never blocks a commit or an agent turn, and the guard never stops the agent.
 - Evidence is read from `.aletheore/air.json` as it is on disk. If it is older than a changed
   file, the dependents, signature and new-risk checks are skipped and reported as not checked; a
-  background refresh is started (at most once a minute) instead of a re-scan inside the hook.
+  background refresh is started instead of a re-scan inside the hook (at most once a minute, but
+  right away once the previous refresh has finished if a file changed after it started). The
+  refresh never edits `.gitignore`.
 - Registry lookups do not run per edit, only at turn end and commit; at most a fixed number of
   names are looked up per run, and the rest are listed as not checked.
 - A near match to a popular package is an `info` line by itself; it is a `warn` only when the registry
@@ -559,6 +570,8 @@ The setup screen prints the active network plan.
   line-ending and filter settings, so a restored file can differ in line endings from the checkpoint
   blob. It refuses paths under symlinks, inside nested repositories or outside the repository.
 - Checkpoint refs are ordinary Git refs; `git push --mirror` would push them.
+- Tools that generate Git hooks (pre-commit, lefthook, husky) can overwrite Shield's block in the
+  `pre-commit` hook; the `aletheore shield` status then notes that the Git hook is not installed.
 - Shield is designed for macOS, Linux and Windows. The CI jobs for all three run the unit tests;
   hooks have not been exercised against a real Claude Code session on Windows.
 

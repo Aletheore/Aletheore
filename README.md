@@ -173,6 +173,8 @@ Type `yes` to set it up. Nothing is written before that. Setup changes:
 - `.claude/settings.local.json`: Claude Code hooks for four events (before an edit, after an
   edit, end of turn, end of session). This file is personal and is not committed.
 - The Git `pre-commit` hook: a marked block that prints Shield's report and never fails the commit.
+  Tools that generate Git hooks (pre-commit, lefthook, husky) can overwrite that block;
+  `aletheore shield` then notes in its status that the Git hook is missing.
 - `.git/info/exclude`: a marked block that keeps Shield's files out of `git status`.
   `.gitignore` is not touched.
 - `.aletheore/shield/config.json`, and private records under the Git directory.
@@ -182,7 +184,9 @@ What it does:
 
 - **Guard.** After edits, at the end of a turn and at commit, it reports new or suspicious
   dependencies (checked against PyPI and npm), files the change reaches and candidate tests,
-  signature changes (stated per file that imports the module, not per call site), and new risks.
+  signature changes (stated per file that imports the module, not per call site), and new secrets
+  and import cycles. Vulnerability and layer-convention findings appear only when the evidence came
+  from a full `aletheore scan`.
 - **Checkpoints.** Before an agent edits, Shield saves the working tree as a Git commit under
   `refs/aletheore/checkpoints/`. Your branches, index and stash are not touched. Put files back
   with `aletheore shield undo`; it saves a safety checkpoint first and never deletes a file.
@@ -199,8 +203,11 @@ What it does not do:
   skipped.
 
 Registry lookups send only the package name to `pypi.org` or `registry.npmjs.org`, never versions,
-paths or source. Turn them off with `ALETHEORE_SHIELD_OFFLINE=1` or `"registry_lookups": false` in
-`.aletheore/shield/config.json`. Checkpoint refs are local; `git push --mirror` pushes every ref
+paths or source. They run only at turn end, at commit and in `aletheore shield check`. Turn them off
+with `ALETHEORE_SHIELD_OFFLINE=1` or `"registry_lookups": false` in
+`.aletheore/shield/config.json`. With lookups on, the answers are cached in
+`~/.cache/aletheore/shield-registry-cache.json` (under your user profile on Windows), outside the
+repository; `off --purge` leaves that file. Checkpoint refs are local; `git push --mirror` pushes every ref
 including them, so avoid it or delete the refs first. Undo writes files the way `git checkout`
 would, following your line-ending and filter settings.
 
