@@ -47,7 +47,11 @@ async def test_every_generic_query_tool_has_paging_parameters_and_documents_them
     server = build_server(make_repo_with_evidence(tmp_path))
     tool = await tool_named(server, "aletheore_endpoints")
     assert set(tool.input_schema["properties"]) == BUDGET_PARAMS
-    assert "section" in tool.description and "All API endpoints" in tool.description
+    assert "All API endpoints" in tool.description
+    # Paging is documented per parameter in the schema and once, as a rule, in the server instructions: repeating it
+    # in every description cost about 90 characters on each of 18 tools, every turn.
+    assert all(tool.input_schema["properties"][name].get("description") for name in BUDGET_PARAMS)
+    assert "section" in server.instructions
     # Real audit finding, found later: aletheore_symbols (requires_target)
     # had no cap either - on this project's own hottest file it rendered to
     # 82,908 characters. A tool that takes a target still takes the same

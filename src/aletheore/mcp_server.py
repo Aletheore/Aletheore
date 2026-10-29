@@ -180,7 +180,9 @@ reflects Git history, not assigned responsibility. Unreferenced-code and securit
 findings or skipped scanners are not proof of safety. AI answers are interpretations to verify against source.
 
 Completeness: inspect totals, truncation flags, omitted counts, skipped checks and unresolved relationships before
-claiming a complete list or a clean result. For tools exposing section/offset/limit/filter, follow their paging hints.
+claiming a complete list or a clean result. Large evidence output is size-capped and paged: a cut result names the
+sections it cut and says how to continue; read more with section (dotted path, '$' for the root), offset and limit,
+and narrow with filter.
 For search or routed results without those arguments, narrow the target/question or use a listed direct tool. A capped
 result is not exhaustive; never invent omitted items. Cite returned locations where available, distinguish evidence
 from inference, and use aletheore_verify_citations for reports. Citation validity does not prove an allegation is true.
@@ -450,8 +452,6 @@ def _severity_key(finding: object) -> int:
 
 _QUERY_BUDGET_SORT_BY = {"static-analysis": {"findings": _severity_key}}
 
-# Said once per tool, so it stays short: a cut result states what was left out and the exact call to continue.
-_QUERY_BUDGET_DOC_SUFFIX = " Large output is size-capped and paged (section/offset); a cut result says how to continue."
 
 _SEARCH_MATCH_CAP = 200
 # Guards the whole regex search against catastrophic backtracking (e.g.
@@ -782,7 +782,7 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path, only
 
         tool_func, budgeted = make_tool()
         tool_func.__name__ = tool_name
-        tool_func.__doc__ = _QUERY_TOOL_DESCRIPTIONS[kind] + (_QUERY_BUDGET_DOC_SUFFIX if budgeted else "")
+        tool_func.__doc__ = _QUERY_TOOL_DESCRIPTIONS[kind]
         mcp_instance.tool(name=tool_name, annotations=READ_ONLY_ANNOTATIONS)(
             _guard_evidence_read_errors(tool_func)
         )

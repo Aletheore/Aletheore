@@ -2461,3 +2461,35 @@ def test_server_instructions_tell_agents_to_search_hallbook_before_specialist_ta
     assert "aletheore_find_skill" in SERVER_INSTRUCTIONS
     assert "aletheore_search_skills" in SERVER_INSTRUCTIONS
     assert "aletheore_get_skill_file" in SERVER_INSTRUCTIONS
+
+
+# --- tool-definition size (the definitions are re-sent to the agent on every turn) --------------------------------
+
+# Measured on master before the paging sentence was removed from every description: 35,459 characters, 46 tools.
+FULL_PROFILE_DEFINITION_CHAR_BUDGET = 34_200
+
+
+async def _full_profile_tools(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo, profile="full", allow=frozenset({"external", "network", "write"}))
+    return server, await server.list_tools()
+
+
+@pytest.mark.asyncio
+async def test_paging_rule_is_stated_once_not_in_every_tool_description(tmp_path):
+    server, tools = await _full_profile_tools(tmp_path)
+
+    assert [t.name for t in tools if "size-capped and paged" in (t.description or "")] == []
+    # The rule lives in the server instructions, where it is paid for once.
+    assert "section" in server.instructions and "offset" in server.instructions
+    assert "how to continue" in server.instructions
+
+
+@pytest.mark.asyncio
+async def test_full_profile_definitions_stay_within_budget(tmp_path):
+    _, tools = await _full_profile_tools(tmp_path)
+    size = sum(
+        len(json.dumps({"name": t.name, "description": t.description, "inputSchema": t.input_schema}, separators=(",", ":")))
+        for t in tools
+    )
+    assert size <= FULL_PROFILE_DEFINITION_CHAR_BUDGET, f"full profile definitions are {size} characters"

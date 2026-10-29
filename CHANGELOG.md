@@ -5,6 +5,9 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
+- The full MCP profile's tool definitions are about 5% smaller (35,459 to 33,821 characters): the paging
+  sentence that ended 18 tool descriptions now appears once in the server instructions, and a test keeps the
+  profile within a size budget. Tool behavior and arguments are unchanged.
 - Dashboard panels now distinguish checks that did not run from completed checks with
   no findings, including overview counts, secret-history coverage and limited scans.
 - The local demo now guides a pricing change through source, callers, import dependents,
