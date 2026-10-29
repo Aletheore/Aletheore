@@ -4,6 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { AletheoreMascot } from "@/components/site/aletheore-mascot";
+import { WebsiteCompanion } from "@/components/site/website-companion";
 import { Logo } from "@/components/site/logo";
 import { Hero } from "@/components/scenes/hero";
 
@@ -50,18 +51,16 @@ describe("Aletheore mascot assets and component contract", () => {
     }
   });
 
-  it("keeps the mascot in the shared logo without replacing the official mark", () => {
+  it("keeps the official logo free of duplicate companions", () => {
     const logo = renderToStaticMarkup(createElement(Logo));
-    expect(logo).toContain('data-pose="neutral"');
-    expect(logo).toContain('data-motion="idle"');
+    expect(logo).not.toContain('data-pose=');
     const src = logo.match(/<img[^>]+src="([^"]*)"/)![1];
     expect(decodeURIComponent(src)).toContain("/logo-mark.png");
   });
 
-  it("shows the typing/work loop beside the homepage evidence headline", () => {
+  it("keeps the homepage headline free of duplicate companions", () => {
     const hero = renderToStaticMarkup(createElement(Hero));
-    expect(hero).toContain('data-pose="typing"');
-    expect(hero).toContain('data-motion="typing"');
+    expect(hero).not.toContain('data-pose=');
   });
 
   it("provides discreet state animations and a reduced-motion fallback", () => {
@@ -87,4 +86,17 @@ it.each(Object.keys(MASCOT_POSE_COORDINATES))("renders the requested %s pose lit
   expect(html).toContain(`background-position:${x}% ${y}%`);
   expect(html).toContain('role="img"');
   expect(html).toContain('aria-label="Aletheore"');
+});
+
+it("renders one accessible corner-companion trigger with its chat initially closed", () => {
+  const html = renderToStaticMarkup(createElement(WebsiteCompanion));
+  expect(html).toContain('aria-label="Chat with Aletheore"');
+  expect(html).toContain('aria-expanded="false"');
+  expect(html).toContain('class="companion-chat"');
+  expect(html).not.toContain('<dialog open');
+  expect(html).toContain('aria-haspopup="dialog"');
+  expect(html).toContain('data-pose="neutral"');
+  expect(html).toContain('<textarea');
+  expect(html).toContain('AVAILABLE YET');
+  expect(html).toContain('disabled=""');
 });

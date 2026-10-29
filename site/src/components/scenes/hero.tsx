@@ -2,7 +2,6 @@ import { Button } from "@/components/ui/button";
 import { evidenceChain } from "@/data/evidence-chain";
 import { graphData as graph } from "@/data/graph";
 import { getStartedHref, installGitHubAppHref } from "@/data/site-links";
-import { AletheoreMascot } from "@/components/site/aletheore-mascot";
 import { GraphCanvas } from "./graph-canvas";
 
 export function Hero() {
@@ -10,10 +9,7 @@ export function Hero() {
   return (
     <section className="mx-auto grid max-w-[1080px] items-center gap-8 px-8 pb-10 pt-14 md:grid-cols-[1.05fr_0.95fr] md:pt-16">
       <div>
-        <div className="mb-3 flex items-center justify-between gap-4">
-          <p className="eyebrow">Evidence-driven code intelligence</p>
-          <AletheoreMascot pose="typing" motion="typing" size={92} />
-        </div>
+        <p className="eyebrow mb-3">Evidence-driven code intelligence</p>
         <h1 className="text-balance font-display text-[clamp(30px,4.4vw,46px)] font-bold leading-[1.06] tracking-[-0.02em]">
           AI code intelligence that has to <span className="text-stamp">show its work.</span>
         </h1>

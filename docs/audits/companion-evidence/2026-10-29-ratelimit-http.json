@@ -1,0 +1,74 @@
+{
+  "accepted": 5,
+  "throttled": 12,
+  "results": [
+    {
+      "status": 429,
+      "retry_after": "60"
+    },
+    {
+      "status": 429,
+      "retry_after": "60"
+    },
+    {
+      "status": 429,
+      "retry_after": "60"
+    },
+    {
+      "status": 429,
+      "retry_after": "60"
+    },
+    {
+      "status": 429,
+      "retry_after": "60"
+    },
+    {
+      "status": 429,
+      "retry_after": "60"
+    },
+    {
+      "status": 429,
+      "retry_after": "60"
+    },
+    {
+      "status": 429,
+      "retry_after": "60"
+    },
+    {
+      "status": 429,
+      "retry_after": "60"
+    },
+    {
+      "status": 429,
+      "retry_after": "60"
+    },
+    {
+      "status": 429,
+      "retry_after": "60"
+    },
+    {
+      "status": 200,
+      "answer_status": "answer"
+    },
+    {
+      "status": 200,
+      "answer_status": "answer"
+    },
+    {
+      "status": 200,
+      "answer_status": "answer"
+    },
+    {
+      "status": 200,
+      "answer_status": "answer"
+    },
+    {
+      "status": 200,
+      "answer_status": "answer"
+    },
+    {
+      "status": 429,
+      "retry_after": "60"
+    }
+  ]
+}

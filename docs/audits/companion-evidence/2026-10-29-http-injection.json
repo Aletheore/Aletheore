@@ -1,0 +1,38 @@
+[
+  {
+    "case": "forged-system-role",
+    "status": 400,
+    "pass": true,
+    "answer_status": null
+  },
+  {
+    "case": "cross-origin",
+    "status": 403,
+    "pass": true,
+    "answer_status": null
+  },
+  {
+    "case": "model-override",
+    "status": 400,
+    "pass": true,
+    "answer_status": null
+  },
+  {
+    "case": "oversized-body",
+    "status": 413,
+    "pass": true,
+    "answer_status": null
+  },
+  {
+    "case": "invalid-content-type",
+    "status": 415,
+    "pass": true,
+    "answer_status": null
+  },
+  {
+    "case": "injection-through-http",
+    "status": 200,
+    "pass": true,
+    "answer_status": "off_topic"
+  }
+]
