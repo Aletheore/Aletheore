@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { FACTS, retrieve } from "@/lib/companion/knowledge";
+import { FACTS, retrieve, plain } from "@/lib/companion/knowledge";
 import { answerQuestion, validateSelection, SYSTEM_PROMPT, SCOPE_PROMPT, API_URL } from "@/lib/companion/service";
 import { POST } from "@/app/api/companion/route";
 
@@ -176,4 +176,23 @@ it("flags token reports above the scope-call cap for an emergency stop", async (
   const fetcher = vi.fn().mockResolvedValue(Response.json({ choices: [{ message: { content: '{"scope":"off_topic"}' } }], usage: { prompt_tokens: 100, completion_tokens: 1000, total_tokens: 1100 } }));
   const result = await answerQuestion("Tell me a joke", { apiKey: "test", fetcher });
   expect(result.usageReliable).toBe(false); expect(result.usageViolation).toBe(true);
+});
+
+it("decodes public documentation entities once as literal text", () => {
+  expect(plain("<p>it&#x27;s&nbsp;local &#8212; safe &amp; clear</p>")).toBe("it's local — safe & clear");
+  expect(plain("&#x110000; &#0; &#xD800;")).toBe("� � �");
+  expect(plain("&amp;lt;script&amp;gt;")).toBe("&lt;script&gt;");
+  for (const fact of FACTS) expect(fact.text).not.toMatch(/&(?:#[0-9]+|#x[0-9a-f]+|[a-z]+);/i);
+});
+it("never duplicates the product overview during retrieval", () => {
+  for (const question of ["What is Aletheore?", "scan", "install CLI", "privacy", "random unknown"]) {
+    const facts = retrieve(question);
+    expect(new Set(facts.map((fact) => fact.id)).size).toBe(facts.length);
+    expect(facts.filter((fact) => fact.id === "flow-scan")).toHaveLength(1);
+  }
+});
+it("stops further provider calls after the classifier violates usage limits", async () => {
+  const fetcher = vi.fn().mockResolvedValue(Response.json({ choices: [{ message: { content: '{"scope":"product"}' } }], usage: { prompt_tokens: 100, completion_tokens: 41, total_tokens: 141 } }));
+  const result = await answerQuestion("Install Aletheore", { apiKey: "test-only", fetcher });
+  expect(result.usageViolation).toBe(true); expect(result.answer.status).toBe("unverified"); expect(fetcher).toHaveBeenCalledTimes(1);
 });

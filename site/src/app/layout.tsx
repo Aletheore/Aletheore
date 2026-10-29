@@ -25,6 +25,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Header />
         <main>{children}</main>
         <Footer />
+        {/* Production chat is deliberately disabled; this prop enables local dev review only.
+            Public activation must add runtime configuration rather than bake a switch into static HTML. */}
         <WebsiteCompanion live={process.env.NODE_ENV === "development" && process.env.COMPANION_LIVE_ENABLED === "1" && Boolean(process.env.INDIEROUTER_API_KEY)} />
       </body>
     </html>

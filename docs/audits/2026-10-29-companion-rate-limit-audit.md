@@ -12,7 +12,7 @@
 
 ## Evidence
 
-- Final website suite with real Redis enabled: **267 passed**, one explicitly opted-in paid-model test skipped. This includes 18 real Lua integration cases and the HTTP-route/unit guardrails. No paid evaluation is triggered by ordinary test runs.
+- At the rate-limit implementation stage, before the PR-review regressions, the website suite with real Redis enabled: **267 passed**, one explicitly opted-in paid-model test skipped. This includes 18 real Lua integration cases and the HTTP-route/unit guardrails. No paid evaluation is triggered by ordinary test runs.
 - Focused backend suite: **19 passed**, including separate bearer auth, rejected commands/overrides, script parity, Redis failure behavior and deployment persistence assertions.
 - Typecheck, ESLint, Ruff and whitespace checks passed.
 - Real Redis 8.10.1 on an isolated private Unix socket, AOF enabled, fsync always, eviction disabled; independent caller functions exercised shared scripts concurrently. Contention cases used 80 distinct clients, 40 same-IP clients, and 60 clients competing for one remaining hold.
@@ -34,4 +34,4 @@ The localhost preview now uses the authenticated backend and isolated shared Red
 The ceilings are conservative application accounting at the checked model prices, not an unconditional guarantee about every provider/hosting invoice. Provider price/billing changes, other applications sharing a credential, catastrophic data loss/restoring stale snapshots, or privileged operator changes require separate controls. A distributed attacker can change network identities and exhaust the permitted budget, but cannot create a new global budget through those identities. Use upstream Vercel WAF controls for raw traffic/hosting-cost exposure. No universal no-bypass claim is made.
 
 Configuration/migration detail: ../superpowers/specs/2026-10-29-companion-spend-limits.md.
-Synthetic HTTP/outage/restart artifacts remain under /private/tmp/aletheore-companion-*-eval.json. No private repository contents or real credential values appear in these reports.
+Synthetic evidence is committed in companion-evidence/2026-10-29-ratelimit-http.json, companion-evidence/2026-10-29-limit-outage.json and companion-evidence/2026-10-29-limit-restart.json. See the PR-review audit for subsequent fixes and current test counts. No private repository contents or real credential values appear in these reports.

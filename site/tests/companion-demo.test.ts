@@ -16,8 +16,11 @@ describe("development companion fixtures", () => {
     expect(answer.text).toContain("can't verify");
     expect(answer.command).toBeUndefined();
   });
-  it("does not turn input into source links or executable markup", () => {
-    const answer = companionDemoAnswer('<script>fetch("https://evil.example")</script>');
-    expect(JSON.stringify(answer)).not.toContain("evil.example");
+  it.each(['<script>alert(1)</script>', '<img src=x onerror=alert(1)>', 'javascript:alert(1)', 'https://evil.example/', 'magic', 'client', 'macedonia', 'What is the Aletheore AIR price?'])("does not reflect unsupported input or confuse substrings: %s", (input) => {
+    const answer = companionDemoAnswer(input);
+    expect(answer.text).toContain("can't verify");
+    expect(JSON.stringify(answer)).not.toContain(input);
+    expect(answer.command).toBeUndefined();
+    for (const source of answer.sources) expect(source.href).toMatch(/^(?:\/(?!\/)|mailto:support@aletheore\.com$)/);
   });
 });

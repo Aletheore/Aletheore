@@ -36,7 +36,7 @@ export function serviceEvalFromEnvironment(): RedisEval {
 }
 // Accept only Vercel's overwritten header in its actual runtime. No visitor IDs or caller-selected buckets.
 export function clientBucket(request: Request): string {
-  const secret = process.env.COMPANION_LIMIT_HMAC_SECRET ?? process.env.COMPANION_LIMIT_SERVICE_TOKEN;
+  const secret = process.env.COMPANION_LIMIT_HMAC_SECRET;
   if (!secret || secret.length < 32) throw new LimitError(503);
   let identity = "local-preview";
   if (process.env.NODE_ENV !== "development") {

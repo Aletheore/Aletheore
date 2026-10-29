@@ -8,7 +8,7 @@ Scope: local integration only. No production deployment or production chat enabl
 - Final evaluation: 84 requests across 42 distinct cases, repeated twice; 0 failed assertions.
 - Reported usage: 66,424 input and 1,161 output tokens, including both scope and evidence selection.
 - Estimated list-rate cost for the final run: ₹0.4731, excluding GST and cache discounts. This is not an account-billing reconciliation.
-- Local website suite: 206 passed; the explicitly opted-in network evaluation is skipped by normal runs. Typecheck, lint and whitespace checks passed.
+- At the grounding-only stage, before the later rate-limit and PR-review regressions, the local website suite had 206 passed; the explicitly opted-in network evaluation is skipped by normal runs. Typecheck, lint and whitespace checks passed.
 - Browser: real installation answer with canonical source link and multiline copyable command; a mixed scan-plus-recipe request was refused. Live-mode disclosure and no-persistence behavior remain explicit.
 - Checked 60 generated development client-asset files for the actual key: no match. The key is supplied only to the server process environment.
 
@@ -70,8 +70,8 @@ Scope: local integration only. No production deployment or production chat enabl
 - The model cannot supply answer prose, command strings or destination URLs: the server maps validated IDs to verbatim public website content. Refusals are server-owned text. No browsing or execution tools are available.
 - The corpus is intentionally small and follows the website data; it is not every CLI manual or every installed-version workflow. Unknown details should be refused. Source accuracy and freshness still need review.
 - Passing these samples does not guarantee correct scope classification or relevance for all future prompts. Wrong passage selection remains possible; keep the on-screen limitation and source links.
-- The route is development-only, with bounded request sizes, same-origin checks, deadline/cancellation, process-local limits and a total-call cap. It stays closed in production until shared rate limits, durable spending limits and rollout controls are implemented.
+- The route is development-only, with bounded request sizes, same-origin checks, deadline/cancellation and a total-call cap. Shared Redis admission/spend controls were added after this evaluation; see the rate-limit audit and PR-review audit for their latest implementation and test counts. Production remains closed pending deployed-path verification, provider caps and rollout approval.
 - Provider requests contain the question, up to two prior answered questions, and public passages. No repository context, transcript database, cookie or localStorage was added. Existing privacy disclosures must be updated before launch.
 - Full Windows/Linux/mobile browser, screen-reader and real Vercel-preview coverage has not been completed for the live integration.
 
-Reproduction: `site/scripts/companion-live-test.md`. Synthetic full-run artifacts remain in `/private/tmp/aletheore-companion-live-eval.json`; earlier failure artifacts are `/private/tmp/aletheore-companion-before-scope-eval.json` and `/private/tmp/aletheore-companion-scope-eval.json`.
+Reproduction: `site/scripts/companion-live-test.md`. The synthetic full-run result is committed at [grounding evidence](companion-evidence/2026-10-29-live.json). Earlier exploratory failure artifacts were temporary local diagnostics; the tables above describe the final grounding-policy evaluation, not the later expanded regression suite.

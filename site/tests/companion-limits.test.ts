@@ -198,3 +198,15 @@ it("fails closed when backend and website policy snapshots differ", async () => 
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ result: [1,200,0], policy: "different-policy" })));
   await expect(acquirePermit(req())).rejects.toMatchObject({ status: 503 });
 });
+
+it("requires an independent stable HMAC secret even when a service token exists", () => {
+  production(); vi.stubEnv("COMPANION_LIMIT_HMAC_SECRET", "");
+  vi.stubEnv("COMPANION_LIMIT_SERVICE_TOKEN", "synthetic-service-token-at-least-32-chars");
+  expect(() => clientBucket(req())).toThrow(LimitError);
+});
+it("retains quota identities when the backend service credential rotates", () => {
+  production(); vi.stubEnv("COMPANION_LIMIT_SERVICE_TOKEN", "synthetic-first-service-token-0123456789");
+  const bucket = clientBucket(req());
+  vi.stubEnv("COMPANION_LIMIT_SERVICE_TOKEN", "synthetic-rotated-service-token-0123456789");
+  expect(clientBucket(req())).toBe(bucket);
+});

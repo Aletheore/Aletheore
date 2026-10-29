@@ -102,6 +102,7 @@ export function WebsiteCompanion({ live = false }: { live?: boolean }) {
     if (live) {
       const aborter = new AbortController();
       controller.current = aborter;
+      const deadline = setTimeout(() => aborter.abort(), 35000);
       try {
         const response = await fetch("/api/companion", {
           method: "POST", headers: { "Content-Type": "application/json" }, signal: aborter.signal,
@@ -115,6 +116,7 @@ export function WebsiteCompanion({ live = false }: { live?: boolean }) {
         if (sequence.current !== id) return;
         setTurns((items) => items.map((turn) => turn.id === id ? { ...turn, error: error instanceof Error && error.message === "limited" ? "The guide has reached its usage limit. Please try later or open the developer guide." : "Couldn't reach the guide. Retry later or open the developer guide." } : turn));
       } finally {
+        clearTimeout(deadline);
         if (sequence.current === id) {
           setPending(false); controller.current = null;
           if (!follow.current) setNewAnswer(true);
@@ -151,18 +153,18 @@ export function WebsiteCompanion({ live = false }: { live?: boolean }) {
             {COMPANION_STARTERS.map((question) => <button type="button" key={question} disabled={pending || !enabled || turns.length >= MAX_TURNS} onClick={() => send(question)}>{question}<span aria-hidden="true"> ↗</span></button>)}
             <button type="button" onClick={() => composer.current?.focus()} disabled={!enabled}>Ask a question<span aria-hidden="true"> ↗</span></button>
           </div>
-          {!enabled && <p>Live chat is still being prepared. <Link href="/developers">Open the developer guide →</Link></p>}
+          {!enabled && <p>Live chat is still being prepared. <Link onClick={dismiss} href="/developers">Open the developer guide →</Link></p>}
           {turns.map((turn) => <div className="companion-chat__turn" key={turn.id}>
             <div className="companion-chat__question"><small>YOU</small><p>{turn.question}</p></div>
-            {turn.answer && <div className="companion-chat__answer"><small>{live ? "ALETHEORE · DOCUMENTATION" : "ALETHEORE · DEMO"}</small><p>{turn.answer.text}</p>{turn.answer.command && <div className="companion-chat__command"><code>{turn.answer.command}</code><button type="button" onClick={() => copy(turn.answer!.command!)} aria-label="Copy command">Copy</button></div>}<nav aria-label="Answer sources">{turn.answer.sources.map((source) => <Link key={source.href} href={source.href}>{source.label} ↗</Link>)}</nav></div>}
-            {turn.error && <div className="companion-chat__error"><p>{turn.error}</p><button type="button" disabled={pending} onClick={() => send(turn.question, turn.id)}>Retry</button> <Link href="/developers">Developer guide ↗</Link></div>}
+            {turn.answer && <div className="companion-chat__answer"><small>{live ? "ALETHEORE · DOCUMENTATION" : "ALETHEORE · DEMO"}</small><p>{turn.answer.text}</p>{turn.answer.command && <div className="companion-chat__command"><code>{turn.answer.command}</code><button type="button" onClick={() => copy(turn.answer!.command!)} aria-label="Copy command">Copy</button></div>}<nav aria-label="Answer sources">{turn.answer.sources.map((source) => <Link key={source.href} onClick={dismiss} href={source.href}>{source.label} ↗</Link>)}</nav></div>}
+            {turn.error && <div className="companion-chat__error"><p>{turn.error}</p><button type="button" disabled={pending} onClick={() => send(turn.question, turn.id)}>Retry</button> <Link onClick={dismiss} href="/developers">Developer guide ↗</Link></div>}
           </div>)}
           {pending && <p className="companion-chat__loading">Finding a little help… <button type="button" onClick={stop}>Stop</button></p>}
         </div>
         {newAnswer && <button type="button" className="companion-chat__new" onClick={() => { follow.current = true; setNewAnswer(false); if (log.current) log.current.scrollTop = log.current.scrollHeight; }}>New answer ↓</button>}
         <footer className="companion-chat__footer">
           {turns.length >= MAX_TURNS && <p role="status" className="companion-chat__privacy">This conversation has reached 20 questions. Clear the conversation to start again.</p>}
-          <p className="companion-chat__privacy">{live ? "AI selects passages from our public docs. Messages go to IndieRouter. Don't include secrets or private code." : DEMO ? "Preview only. Messages stay in this tab and aren't sent to an AI provider. Don't include secrets or private code." : "Browse the docs while we prepare chat."} <Link href="/privacy">Privacy</Link></p>
+          <p className="companion-chat__privacy">{live ? "AI selects passages from our public docs. Messages go to IndieRouter. Don't include secrets or private code." : DEMO ? "Preview only. Messages stay in this tab and aren't sent to an AI provider. Don't include secrets or private code." : "Browse the docs while we prepare chat."} <Link onClick={dismiss} href="/privacy">Privacy</Link></p>
           <form onSubmit={(event) => { event.preventDefault(); send(draft); }}>
             <label className="sr-only" htmlFor={`${bubbleId}-input`}>Your question</label>
             <textarea ref={composer} id={`${bubbleId}-input`} value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={2000} rows={2} placeholder="What would you like to know?" disabled={!enabled} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); send(draft); } }} />

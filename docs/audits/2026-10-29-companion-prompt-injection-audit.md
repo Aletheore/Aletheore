@@ -75,6 +75,6 @@ No product guardrail change was necessary for these additional cases. Added regr
 
 ## Limits
 
-This is a finite, local test set, not a proof of universal injection resistance. Scope and passage selection remain model decisions. Source truth/freshness, unseen languages, future models and attacks still require monitoring and regression tests. The live endpoint remains disabled in production; distributed rate limits, durable cost controls, production privacy disclosures and a Vercel preview review remain launch requirements.
+This is a finite, local test set, not a proof of universal injection resistance. Scope and passage selection remain model decisions. Source truth/freshness, unseen languages, future models and attacks still require monitoring and regression tests. The live endpoint remains disabled in production; shared Redis rate/spend controls were implemented after this evaluation. Their deployed verification, provider hard caps, production privacy disclosures and a Vercel preview review remain launch requirements.
 
-Synthetic artifacts: `/private/tmp/aletheore-companion-injection-eval.json` and `/private/tmp/aletheore-companion-http-injection-eval.json`. Reproduction commands: `site/scripts/companion-live-test.md`. No real key, private repository data or user transcript was included in test prompts.
+Committed synthetic artifacts: [model injection results](companion-evidence/2026-10-29-injection.json) and [HTTP boundary results](companion-evidence/2026-10-29-http-injection.json). Reproduction commands: `site/scripts/companion-live-test.md`. No real key, private repository data or user transcript was included in test prompts.

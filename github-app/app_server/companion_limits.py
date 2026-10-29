@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import functools
 from pathlib import Path
 from typing import Literal
 
@@ -12,13 +13,19 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app_server.redis_client import get_redis_client
+from redis.asyncio import Redis, ConnectionPool
+from redis.asyncio.connection import parse_url
+from redis.backoff import NoBackoff
+from redis.asyncio.retry import Retry
+from starlette.requests import ClientDisconnect
+
+from app_server.config import get_settings
 
 companion_limits_router = APIRouter()
 PREFIX = "aletheore:{companion-budget}"
 LEDGER = f"{PREFIX}:ledger"
 SCRIPTS = json.loads(
-    Path(__file__).with_name("companion_limit_scripts.json").read_text()
+    Path(__file__).with_name("companion_limit_scripts.json").read_text(encoding="utf-8")
 )
 
 POLICY = hashlib.sha256(
@@ -26,6 +33,24 @@ POLICY = hashlib.sha256(
         SCRIPTS[name] for name in ("RESERVE_SCRIPT", "SETTLE_SCRIPT", "DISABLE_SCRIPT")
     ).encode()
 ).hexdigest()
+
+
+@functools.lru_cache(maxsize=1)
+def get_redis_client() -> Redis:
+    """Independent bounded async pool: outages cannot occupy executor threads.
+
+    Override URL timeout/retry parameters deliberately. Never retry an ambiguous
+    admission or depend on the shared queue client's retry defaults.
+    """
+    options = parse_url(get_settings().redis_url)
+    options.update(
+        socket_connect_timeout=0.5,
+        socket_timeout=0.5,
+        max_connections=4,
+        retry=Retry(NoBackoff(), 0),
+        retry_on_error=[],
+    )
+    return Redis(connection_pool=ConnectionPool(**options))
 
 
 class LimitCommand(BaseModel):
@@ -57,6 +82,8 @@ async def companion_limits(request: Request):
         command = LimitCommand.model_validate(json.loads(body))
     except (ValueError, ValidationError):
         raise HTTPException(status_code=400, detail="invalid limit command") from None
+    except ClientDisconnect:
+        raise HTTPException(status_code=400, detail="request disconnected") from None
     except TimeoutError:
         raise HTTPException(status_code=408, detail="request timed out") from None
     if (command.operation == "settle") != (command.cost is not None):
@@ -84,9 +111,8 @@ async def companion_limits(request: Request):
         keys = [LEDGER, reservation]
         args = [command.request_id, command.client_hash]
     try:
-        result = await asyncio.to_thread(
-            get_redis_client().eval, script, len(keys), *keys, *args
-        )
+        async with asyncio.timeout(1.5):
+            result = await get_redis_client().eval(script, len(keys), *keys, *args)
     except Exception:
         # No fail-open, raw Redis diagnostic, key or caller body in errors/logs.
         raise HTTPException(

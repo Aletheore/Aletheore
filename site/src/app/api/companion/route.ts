@@ -11,7 +11,7 @@ export async function POST(request: Request) {
   if (process.env.NODE_ENV !== "development" || process.env.COMPANION_LIVE_ENABLED !== "1" || !process.env.INDIEROUTER_API_KEY) return error("Chat is not enabled. Please use the developer guide.", 503);
   const origin = request.headers.get("origin");
   if (!origin || origin !== new URL(request.url).origin) return error("Request origin is not allowed.", 403);
-  if (!request.headers.get("content-type")?.startsWith("application/json")) return error("Expected JSON.", 415);
+  if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") return error("Expected JSON.", 415);
   let raw = "";
   const reader = request.body?.getReader();
   if (!reader) return error("A question is required.", 400);
@@ -20,8 +20,9 @@ export async function POST(request: Request) {
   const cancelRead = () => { void reader.cancel().catch(() => {}); };
   const bodyDeadline = setTimeout(() => { timedOut = true; cancelRead(); }, 3000);
   request.signal.addEventListener("abort", cancelRead, { once: true });
+  if (request.signal.aborted) cancelRead();
   try {
-    const decoder = new TextDecoder();
+    const decoder = new TextDecoder("utf-8", { fatal: true });
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -31,7 +32,7 @@ export async function POST(request: Request) {
     }
     raw += decoder.decode();
     if (timedOut || request.signal.aborted) return error("Question upload timed out.", 408);
-  } catch { return error("Couldn't read the question.", 400); }
+  } catch { return timedOut || request.signal.aborted ? error("Question upload timed out.", 408) : error("Couldn't read the question.", 400); }
   finally { clearTimeout(bodyDeadline); request.signal.removeEventListener("abort", cancelRead); }
   let body: unknown;
   try { body = JSON.parse(raw); } catch { return error("Invalid JSON.", 400); }
@@ -45,6 +46,7 @@ export async function POST(request: Request) {
     return error(limited ? "The guide has reached its usage limit. Try later or use the developer guide." : "The guide's usage protection is unavailable. Please use the developer guide.", limited ? 429 : 503, cause instanceof LimitError ? cause.retryAfter : 60);
   }
   try {
+    request.signal.throwIfAborted();
     const result = await answerQuestion(data.question.trim(), { apiKey: process.env.INDIEROUTER_API_KEY, history: data.history as string[] | undefined, signal: request.signal });
     await permit.settle(result.usage, result.usageReliable, result.usageViolation);
     return Response.json(result.answer, { headers });

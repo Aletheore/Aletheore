@@ -39,3 +39,23 @@ it("bounds time spent waiting for a stalled request body before model admission"
   await vi.advanceTimersByTimeAsync(3001);
   expect((await pending).status).toBe(408); expect(acquirePermit).not.toHaveBeenCalled(); expect(answerQuestion).not.toHaveBeenCalled();
 });
+
+it("does not infer after cancellation while admission was pending", async () => {
+  const aborter = new AbortController();
+  const request = new Request(question(), { signal: aborter.signal });
+  vi.mocked(acquirePermit).mockImplementation(async () => { aborter.abort(); return permit; });
+  expect((await POST(request)).status).toBe(503);
+  expect(answerQuestion).not.toHaveBeenCalled(); expect(permit.unknown).toHaveBeenCalledTimes(1);
+});
+it("classifies an aborted body stream consistently before admission", async () => {
+  const aborter = new AbortController(); aborter.abort();
+  const body = new ReadableStream({ start(controller) { controller.error(new DOMException("Aborted", "AbortError")); } });
+  const request = new Request(question().url, { method: "POST", headers: question().headers, signal: aborter.signal, body, duplex: "half" } as RequestInit);
+  expect((await POST(request)).status).toBe(408); expect(acquirePermit).not.toHaveBeenCalled();
+});
+it("rejects invalid UTF-8 and misleading content types", async () => {
+  const invalid = new Request(question().url, { method: "POST", headers: question().headers, body: new Uint8Array([255]) });
+  expect((await POST(invalid)).status).toBe(400);
+  const headers = new Headers(question().headers); headers.set("content-type", "application/json-unrelated");
+  expect((await POST(new Request(question(), { headers }))).status).toBe(415); expect(acquirePermit).not.toHaveBeenCalled();
+});

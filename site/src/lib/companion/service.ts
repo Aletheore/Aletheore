@@ -77,6 +77,7 @@ export async function answerQuestion(question: string, options: { apiKey: string
   if (!scope || typeof scope !== "object" || Array.isArray(scope) || Object.keys(scope).length !== 1 || !("scope" in scope) || scope.scope !== "product") {
     return { answer: fallback("off_topic"), usage, usageReliable, usageViolation, corpus: CORPUS_VERSION };
   }
+  if (usageViolation) return { answer: fallback("unverified"), usage, usageReliable, usageViolation, corpus: CORPUS_VERSION };
   const facts = retrieve(question, options.history);
   const selection = await select(SYSTEM_PROMPT, { ...data, FACTS: facts }, 250);
   return { answer: validateSelection(selection, facts), usage, usageReliable, usageViolation, corpus: CORPUS_VERSION, selection };

@@ -34,4 +34,35 @@ elif args.operation == "disable":
         )
     print("Companion model admissions disabled.")
 else:
-    print(json.dumps(client.hgetall(key), sort_keys=True))
+    state = client.hgetall(key)
+    required = {
+        "version",
+        "enabled",
+        "day",
+        "month",
+        "day_used",
+        "month_used",
+        "day_cap",
+        "month_cap",
+    }
+    healthy = (
+        required <= state.keys()
+        and state["version"] == "1"
+        and state["enabled"] in {"0", "1"}
+        and all(
+            state[field].isascii() and state[field].isdigit()
+            for field in required - {"version", "enabled"}
+        )
+        and int(state["day_cap"]) <= 20_000_000
+        and int(state["month_cap"]) <= 500_000_000
+    )
+    print(
+        json.dumps(
+            {"status": "present" if healthy else "missing_or_corrupt", "ledger": state},
+            sort_keys=True,
+        )
+    )
+    if not healthy:
+        raise SystemExit(
+            "Keep chat disabled. Reconcile accounting with provider billing before repair."
+        )
