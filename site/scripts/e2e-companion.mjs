@@ -23,7 +23,7 @@ try {
   if (!process.env.COMPANION_TEST_BASE) {
     server = spawn(process.execPath, [fileURLToPath(new URL("../node_modules/next/dist/bin/next", import.meta.url)), "dev", "--hostname", "127.0.0.1", "--port", "3102"], {
       cwd: fileURLToPath(new URL("..", import.meta.url)), stdio: "ignore",
-      env: { ...process.env, COMPANION_LIVE_ENABLED: "1", INDIEROUTER_API_KEY: "synthetic-browser-test-key" },
+      env: { ...process.env, COMPANION_LIVE_ENABLED: "1", INDIEROUTER_API_KEY: "test" },
     });
     let ready = false;
     for (let attempt = 0; attempt < 120; attempt++) {
