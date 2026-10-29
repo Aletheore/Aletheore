@@ -279,6 +279,8 @@ def test_refresh_module_runs_rebuild(repo, monkeypatch):
     assert refresh.main([str(repo)]) == 0
     assert seen and seen[0][0] in (repo, repo.resolve())
     assert refresh.main([]) == 2
+    assert seen[0][1]["edit_gitignore"] is False
+
 
 
 # ---- base evidence -----------------------------------------------------------------------------------------------
