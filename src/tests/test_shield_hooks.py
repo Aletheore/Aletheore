@@ -496,6 +496,100 @@ def test_session_end_without_a_checkpoint_writes_nothing(tmp_path, monkeypatch):
     assert not (repo / ".aletheore" / "shield" / "receipts").exists()
 
 
+def _base_copy(repo, session="s1"):
+    return Path(repo) / ".aletheore" / "shield" / "sessions" / f"{session}.base-air.json"
+
+
+def test_session_end_deletes_the_sessions_base_evidence_copy(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", aletheore=True)
+    _fake_guard(monkeypatch)
+    (repo / ".aletheore" / "air.json").write_text("{}", encoding="utf-8")
+    other = _base_copy(repo, "s2")
+    other.parent.mkdir(parents=True, exist_ok=True)
+    other.write_text("{}", encoding="utf-8")
+    (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+    _run("pre-edit", _payload(repo))
+    assert _base_copy(repo).is_file()
+    (repo / "a.py").write_text("x = 2\n", encoding="utf-8")
+    _run("session-end", _payload(repo, event="SessionEnd"))
+    assert list((repo / ".aletheore" / "shield" / "receipts").glob("*-s1.md"))
+    assert not _base_copy(repo).exists()
+    assert other.is_file()  # another session's copy is its own
+
+
+def test_session_end_deletes_the_base_copy_even_when_the_receipt_fails(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", aletheore=True)
+    base = _base_copy(repo)
+    base.parent.mkdir(parents=True, exist_ok=True)
+    base.write_text("{}", encoding="utf-8")
+
+    def broken(*a, **k):
+        raise RuntimeError("receipt failed")
+
+    monkeypatch.setattr(receipt, "build_receipt", broken)
+    assert _run("session-end", _payload(repo, event="SessionEnd")) == (0, "", "")
+    assert not base.exists()
+
+
+def test_session_end_never_waits_on_registry_lookups(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    seen = []
+    monkeypatch.setattr(receipt, "build_receipt", lambda *a, **k: seen.append(k) or None)
+    _run("session-end", _payload(repo, event="SessionEnd"))
+    assert seen and seen[0]["lookups"] is False
+
+
+def test_session_end_receipt_guard_runs_without_lookups(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", aletheore=True)
+    calls = _fake_guard(monkeypatch)
+    (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+    _run("pre-edit", _payload(repo))
+    (repo / "a.py").write_text("x = 2\n", encoding="utf-8")
+    _run("session-end", _payload(repo, event="SessionEnd"))
+    assert calls and all(c["lookups"] is False for c in calls)
+
+
+def test_hourly_prune_removes_week_old_base_copies_only(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", aletheore=True)
+    sessions = repo / ".aletheore" / "shield" / "sessions"
+    sessions.mkdir(parents=True)
+    week = 7 * 24 * 3600
+    old = time.time() - week - 3600
+    names = {
+        "old.base-air.json": True,  # removed: a session's copy older than 7 days
+        "fresh.base-air.json": False,
+        "old.json": False,  # hook/session state, not a base copy
+        "notes.txt": False,
+        "bad..base-air.json": False,  # not a session token Shield would write
+        ".base-air.json": False,
+    }
+    for name in names:
+        (sessions / name).write_text("{}", encoding="utf-8")
+        if name != "fresh.base-air.json":
+            os.utime(sessions / name, (old, old))
+    folder = sessions / "dir.base-air.json"
+    folder.mkdir()
+    os.utime(folder, (old, old))
+    outside = repo / ".aletheore" / "shield" / "stray.base-air.json"
+    outside.write_text("{}", encoding="utf-8")
+    os.utime(outside, (old, old))
+    _run("pre-edit", _payload(repo, session="s9"))
+    for name, removed in names.items():
+        assert (sessions / name).exists() is not removed, name
+    assert folder.is_dir() and outside.is_file()
+
+
+def test_base_copy_prune_follows_the_hourly_clock(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", aletheore=True)
+    pruned = []
+    monkeypatch.setattr(guard_evidence, "prune_base_evidence", lambda r, **k: pruned.append(Path(r)) or 0)
+    clock = [1_000_000.0]
+    monkeypatch.setattr(hooks, "_now", lambda: clock[0])
+    _run("pre-edit", _payload(repo))
+    _run("pre-edit", _payload(repo))
+    assert len(pruned) == 1
+
+
 # ------------------------------------------------------------------------------------------- pre-commit
 
 

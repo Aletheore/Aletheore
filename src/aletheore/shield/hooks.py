@@ -3,16 +3,16 @@
 Events, and what each one does:
 
 - `pre-edit` (Claude Code PreToolUse, Edit|MultiEdit|Write): mark the session as one that edits, save the
-  session's base evidence (once), checkpoint the working tree, prune old checkpoints at most once an hour per
-  session. Prints nothing.
+  session's base evidence (once), checkpoint the working tree, prune old checkpoints (and base evidence copies
+  older than 7 days) at most once an hour per session. Prints nothing.
 - `post-edit` (PostToolUse, Edit|MultiEdit|Write): run the guard without registry lookups and, only when it has
   findings whose text differs from the last findings this session was given after an edit, hand them to the
   agent as `hookSpecificOutput.additionalContext` (the shape the hook-contract spike verified).
 - `turn-end` (Stop): in a session that edited, run the guard with registry lookups and show text that differs
   from the last turn-end text to the user as `systemMessage`. Never `decision: block`; silent when
   `stop_hook_active` is true.
-- `session-end` (SessionEnd): write the session receipt, prune old checkpoints, drop the hook state. Prints
-  nothing.
+- `session-end` (SessionEnd): write the session receipt (no registry lookups), delete the session's base
+  evidence copy, prune old checkpoints, drop the hook state. Prints nothing.
 - `pre-commit` (git pre-commit hook; no stdin; repo is the cwd or `--repo <path>`): print the guard text to
   stderr, one `aletheore shield: ` prefixed line each. Never blocks the commit.
 
@@ -300,6 +300,7 @@ def _pre_edit(payload: dict | None) -> Output | None:
     checkpoint.take_checkpoint(repo.top, session_id, checked=checked)
     if due:
         checkpoint.prune_checkpoints(repo.top)
+        guard_evidence.prune_base_evidence(repo.top)  # copies left by sessions that never reached session end
     return None
 
 
@@ -365,12 +366,19 @@ def _session_end(payload: dict | None) -> Output | None:
     repo = _cwd_repo(payload)
     if repo is None:
         return None
-    from aletheore.shield import checkpoint, receipt
+    from aletheore.shield import checkpoint, guard_evidence, receipt
 
     session_id = _session_id(payload)
-    built = receipt.build_receipt(repo.top, session_id, budget_s=SESSION_END_BUDGET_S)
-    if built is not None:
-        receipt.write_receipt(repo.top, built)
+    try:
+        # lookups=False: session end never waits on the network; registry lookups belong to turn end, commit and
+        # `aletheore shield check`.
+        built = receipt.build_receipt(repo.top, session_id, budget_s=SESSION_END_BUDGET_S, lookups=False)
+        if built is not None:
+            receipt.write_receipt(repo.top, built)
+    finally:
+        # The session's copy of the evidence is only needed until its receipt is written, even a failed one.
+        if session_id:
+            guard_evidence.delete_base_evidence(repo.top, session_id)
     # Bounded refs even where no editing session ever reached its hourly prune.
     checkpoint.prune_checkpoints(repo.top)
     if session_id:

@@ -261,6 +261,51 @@ def load_base_evidence(repo: Path, session_id: str) -> dict | None:
         return None
 
 
+def delete_base_evidence(repo: Path, session_id: str) -> None:
+    """Remove the session's base-evidence copy (at session end). Missing files and unusable ids are no-ops."""
+    path = state.session_base_evidence_path(repo, session_id)
+    if path is None:
+        return
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+BASE_EVIDENCE_MAX_AGE_S = 7 * 24 * 3600.0
+_BASE_EVIDENCE_FILE_SUFFIX = ".base-air.json"
+
+
+def prune_base_evidence(repo: Path, *, max_age_s: float = BASE_EVIDENCE_MAX_AGE_S) -> int:
+    """Delete base-evidence copies older than `max_age_s` left by sessions that never reached session end.
+
+    Only regular files directly in Shield's sessions folder whose name is exactly the one
+    `state.session_base_evidence_path` gives a valid session id are touched; returns how many were removed."""
+    sessions = state.shield_dir(repo) / "sessions"
+    try:
+        entries = list(os.scandir(sessions))
+    except OSError:
+        return 0
+    cutoff = time.time() - max_age_s
+    removed = 0
+    for entry in entries:
+        name = entry.name
+        if not name.endswith(_BASE_EVIDENCE_FILE_SUFFIX):
+            continue
+        token = name[: -len(_BASE_EVIDENCE_FILE_SUFFIX)]
+        expected = state.session_base_evidence_path(repo, token)
+        if expected is None or expected.name != name:
+            continue
+        try:
+            if not entry.is_file(follow_symlinks=False) or entry.stat(follow_symlinks=False).st_mtime >= cutoff:
+                continue
+            os.unlink(entry.path)
+            removed += 1
+        except OSError:
+            continue
+    return removed
+
+
 # --------------------------------------------------------------------------------------------------
 # Checks
 # --------------------------------------------------------------------------------------------------
