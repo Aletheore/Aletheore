@@ -1906,6 +1906,10 @@ def _compact_tool_schemas(mcp_instance: MCPServer) -> None:
     admits omitting it. Descriptions, types, enums, required lists and the tool annotations are left exactly as they are.
     """
     for tool in mcp_instance._tool_manager.list_tools():
+        if isinstance(tool.description, str):
+            # Python 3.13 strips a docstring's indentation at compile time; 3.11 and 3.12 keep it, which put about
+            # 1,200 characters of leading spaces into every turn's tool definitions. cleandoc makes them identical.
+            tool.description = inspect.cleandoc(tool.description)
         hints = tool.annotations
         if hints is not None and hints.read_only_hint is True:
             # The spec defines destructiveHint and idempotentHint only for tools that are not read-only.

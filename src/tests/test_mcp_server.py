@@ -2496,3 +2496,22 @@ async def test_full_profile_definitions_stay_within_budget(tmp_path):
         for t in tools
     )
     assert size <= FULL_PROFILE_DEFINITION_CHAR_BUDGET, f"full profile definitions are {size} characters"
+
+
+@pytest.mark.asyncio
+async def test_tool_descriptions_do_not_carry_docstring_indentation_on_any_python(tmp_path):
+    # Python 3.13+ strips a docstring's indentation at compile time; 3.11 and 3.12 keep it, so those versions sent about
+    # 1,200 extra characters of leading spaces on every turn. _compact_tool_schemas normalizes them, so the definitions
+    # are the same size everywhere. Simulate the older behaviour by re-indenting, then check it is undone exactly.
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo, allow=frozenset({"external", "network", "write"}))
+    tools = server._tool_manager.list_tools()
+    expected = {t.name: t.description for t in tools}
+    for tool in tools:
+        first, *rest = (tool.description or "").split("\n")
+        tool.description = "\n".join([first, *("        " + line if line.strip() else line for line in rest)])
+    assert any("\n        " in (t.description or "") for t in tools)  # the re-indent really changed something
+
+    _compact_tool_schemas(server)
+
+    assert {t.name: t.description for t in tools} == expected
