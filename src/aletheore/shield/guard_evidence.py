@@ -107,11 +107,18 @@ def _evidence_mtime_ns(repo: Path) -> int | None:
         return None
 
 
-def record_refresh_finished(repo: Path, started: float) -> None:
-    """Called by Shield's refresh process after its rebuild returned: record its start time and the mtime of the
-    evidence it wrote (atomically replaced). Records nothing when the start is unusable or there is no evidence."""
-    mtime_ns = _evidence_mtime_ns(repo)
-    if mtime_ns is None or not math.isfinite(started):
+def evidence_mtime_ns(repo: Path) -> int | None:
+    """The nanosecond mtime of `.aletheore/air.json`; None when it cannot be read. The refresh takes it right after
+    its own evidence write, before the (possibly long) index build, so another writer's later file is not recorded
+    as Shield's."""
+    return _evidence_mtime_ns(repo)
+
+
+def record_refresh_finished(repo: Path, started: float, mtime_ns: int | None) -> None:
+    """Called by Shield's refresh process after its rebuild returned: record its start time and `mtime_ns`, the
+    mtime of the evidence it wrote, taken right after that write (atomically replaced). Records nothing when the
+    start is unusable or no evidence write was seen."""
+    if not isinstance(mtime_ns, int) or isinstance(mtime_ns, bool) or not math.isfinite(started):
         return
     done = state.shield_dir(repo) / _DONE_NAME
     temporary = done.with_name(f"{done.name}.{os.getpid()}.{time.monotonic_ns()}.tmp")
@@ -133,18 +140,19 @@ def _finished_refresh_start(repo: Path) -> float | None:
     files before the refresh started, so then there is no trusted start and the caller falls back to the margin."""
     try:
         data = json.loads((state.shield_dir(repo) / _DONE_NAME).read_text(encoding="utf-8"))
-    except (OSError, ValueError, UnicodeDecodeError):
+        if not isinstance(data, dict):
+            return None
+        started, recorded = data.get("started"), data.get("evidence_mtime_ns")
+        if isinstance(started, bool) or not isinstance(started, (int, float)):
+            return None
+        started = float(started)  # OverflowError for an absurdly large integer
+        if not math.isfinite(started) or isinstance(recorded, bool) or not isinstance(recorded, int):
+            return None
+        if started > time.time() or recorded != _evidence_mtime_ns(repo):
+            return None
+        return started
+    except Exception:  # noqa: BLE001 - corrupt or hostile content (RecursionError, OverflowError, ...): no trust
         return None
-    if not isinstance(data, dict):
-        return None
-    started, recorded = data.get("started"), data.get("evidence_mtime_ns")
-    if isinstance(started, bool) or not isinstance(started, (int, float)) or not math.isfinite(started):
-        return None
-    if isinstance(recorded, bool) or not isinstance(recorded, int):
-        return None
-    if started > time.time() or recorded != _evidence_mtime_ns(repo):
-        return None
-    return float(started)
 
 
 def _refresh_finished(repo: Path, started: float) -> bool:

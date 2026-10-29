@@ -415,7 +415,7 @@ def _record_refresh(repo: Path, started: float) -> Path:
 
 def _finish_refresh(repo: Path, started: float) -> None:
     """What Shield's refresh process records once its rebuild returned: its start and the evidence it wrote."""
-    guard_evidence.record_refresh_finished(repo, started)
+    guard_evidence.record_refresh_finished(repo, started, guard_evidence.evidence_mtime_ns(repo))
 
 
 def _stamp(epoch: float) -> str:
@@ -611,7 +611,11 @@ def test_refresh_module_records_completion_only_after_a_successful_rebuild(repo,
     air = _write_evidence(repo, _evidence(_core_modules()))
     started = time.time() - 5
     state.shield_dir(repo, create=True)
-    monkeypatch.setattr(watch, "rebuild", lambda path, report, **kw: _set_mtime(air, started + 1))
+    def rebuild(path, report, **kw):
+        _set_mtime(air, started + 1)
+        report("evidence updated")
+
+    monkeypatch.setattr(watch, "rebuild", rebuild)
     assert refresh.main([str(repo), repr(started)]) == 0
     assert guard_evidence._finished_refresh_start(repo) == started
 
@@ -626,3 +630,69 @@ def test_refresh_module_records_completion_only_after_a_successful_rebuild(repo,
     monkeypatch.setattr(watch, "rebuild", lambda path, report, **kw: None)
     assert refresh.main([str(repo), "nan"]) == 0  # an unusable start records nothing
     assert not (state.shield_dir(repo) / guard_evidence._DONE_NAME).exists()
+
+
+
+def _real_rebuild_with_stubbed_scan(monkeypatch, repo, started, *, foreign_write_during_index: bool):
+    """watch.rebuild for real, with the scan, the evidence write and the index build stubbed: the write stamps
+    air.json just after `started`; the index build (which runs after "evidence updated") may let another writer
+    replace air.json, as a manual scan or the MCP watcher could."""
+    from aletheore import evidence, search_index
+
+    air = repo / ".aletheore" / "air.json"
+    (repo / ".aletheore" / "index.lancedb").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(evidence, "scan_repository", lambda *a, **k: {"repository": {"modules": []}})
+
+    def write(ev, path, edit_gitignore=True):
+        air.write_text(json.dumps(_evidence(_core_modules())), encoding="utf-8")
+        _set_mtime(air, started + 1)
+        return air
+
+    def build(*a, **k):
+        if foreign_write_during_index:
+            air.write_text(json.dumps(_evidence(_core_modules())), encoding="utf-8")
+            _set_mtime(air, started + 2)  # another writer, whose scan may have read files before `started`
+        return 0
+
+    monkeypatch.setattr(evidence, "write_evidence", write)
+    monkeypatch.setattr(search_index, "build_index", build)
+
+
+def test_completion_records_the_mtime_of_shields_own_write_not_a_later_one(repo, monkeypatch):
+    _write_evidence(repo, _evidence(_core_modules()))
+    started = time.time() - 50
+    state.shield_dir(repo, create=True)
+    _real_rebuild_with_stubbed_scan(monkeypatch, repo, started, foreign_write_during_index=True)
+    assert refresh.main([str(repo), repr(started)]) == 0
+    done = json.loads((state.shield_dir(repo) / guard_evidence._DONE_NAME).read_text(encoding="utf-8"))
+    assert done["evidence_mtime_ns"] != (repo / ".aletheore" / "air.json").stat().st_mtime_ns
+    assert guard_evidence._finished_refresh_start(repo) is None  # margin fallback
+
+
+def test_completion_is_trusted_when_nothing_else_wrote(repo, monkeypatch):
+    _write_evidence(repo, _evidence(_core_modules()))
+    started = time.time() - 50
+    state.shield_dir(repo, create=True)
+    _real_rebuild_with_stubbed_scan(monkeypatch, repo, started, foreign_write_during_index=False)
+    assert refresh.main([str(repo), repr(started)]) == 0
+    assert guard_evidence._finished_refresh_start(repo) == started
+
+
+def test_no_completion_record_when_the_evidence_was_never_updated(repo, monkeypatch):
+    _write_evidence(repo, _evidence(_core_modules()))
+    state.shield_dir(repo, create=True)
+    monkeypatch.setattr(watch, "rebuild", lambda path, report, **kw: None)  # "evidence updated" never reported
+    assert refresh.main([str(repo), repr(time.time() - 5)]) == 0
+    assert not (state.shield_dir(repo) / guard_evidence._DONE_NAME).exists()
+
+
+@pytest.mark.parametrize(
+    "content",
+    ['{"started": ' + "9" * 400 + ', "evidence_mtime_ns": 1}', "[" * 100_000 + "]" * 100_000],
+    ids=["huge-int", "deep-json"],
+)
+def test_hostile_completion_record_falls_back_without_raising(repo, content):
+    _write_evidence(repo, _evidence(_core_modules()))
+    (state.shield_dir(repo, create=True) / guard_evidence._DONE_NAME).write_text(content, encoding="utf-8")
+    assert guard_evidence._finished_refresh_start(repo) is None
+    assert guard_evidence._covered_until(repo, 1000.0) == 1000.0 - guard_evidence.STALENESS_MARGIN_S

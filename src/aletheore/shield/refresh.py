@@ -12,7 +12,8 @@ from pathlib import Path
 
 def main(argv: list[str] | None = None) -> int:
     """`<repo> [<start time>]`. With the start time the guard recorded in its marker, a successful rebuild is
-    followed by a completion record naming that start and the evidence file this rebuild wrote."""
+    followed by a completion record naming that start and the mtime air.json had right after this rebuild wrote it
+    (none when the rebuild never reported an evidence write)."""
     args = sys.argv[1:] if argv is None else argv
     if len(args) not in (1, 2):
         return 2
@@ -23,19 +24,27 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError:
             started = None
     from aletheore import watch
+    from aletheore.shield import guard_evidence
+
+    repo = Path(args[0])
+    written: list[int | None] = []
+
+    def report(message: str) -> None:
+        # rebuild reports "evidence updated" right after its own write of air.json and before the index build, which
+        # can take minutes; the mtime is taken here so a file another writer puts there later is never recorded.
+        if message == "evidence updated" and not written:
+            written.append(guard_evidence.evidence_mtime_ns(repo))
 
     try:
         # allow_hosted=False: a background process the user never asked for must not send chunks to a hosted
         # embedding provider; an existing local index is still refreshed. edit_gitignore=False: Shield never
         # touches .gitignore (setup hides .aletheore/ through .git/info/exclude).
-        watch.rebuild(Path(args[0]), lambda _message: None, allow_hosted=False, edit_gitignore=False)
+        watch.rebuild(repo, report, allow_hosted=False, edit_gitignore=False)
     except Exception:  # noqa: BLE001  # nosec B110 - detached, nothing to report to
         return 1
-    if started is not None:
-        from aletheore.shield import guard_evidence
-
+    if started is not None and written:
         try:
-            guard_evidence.record_refresh_finished(Path(args[0]), started)
+            guard_evidence.record_refresh_finished(repo, started, written[0])
         except Exception:  # noqa: BLE001  # nosec B110 - without the record the guard falls back to its margin
             return 1
     return 0
