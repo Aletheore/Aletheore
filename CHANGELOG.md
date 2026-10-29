@@ -5,9 +5,12 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 
 ## Unreleased
 
-- The full MCP profile's tool definitions are about 5% smaller (35,459 to 33,821 characters): the paging
-  sentence that ended 18 tool descriptions now appears once in the server instructions, and a test keeps the
-  profile within a size budget. Tool behavior and arguments are unchanged.
+- The full MCP profile's tool definitions are about 24% smaller (35,459 to 26,979 characters, roughly 2,100 fewer
+  tokens on every turn). The paging rule is stated once in the server instructions instead of on 18 tool descriptions,
+  and the four paging arguments (`section`, `offset`, `limit`, `filter`) moved off those 18 evidence tools onto one new
+  tool, `aletheore_page`. A result that was cut to fit the output budget now says to call `aletheore_page` with the tool
+  name, its target, the section and the offset. **Breaking for MCP clients that passed those four arguments to an
+  evidence tool directly:** pass them to `aletheore_page` instead. A test pins a size budget.
 - Dashboard panels now distinguish checks that did not run from completed checks with
   no findings, including overview counts, secret-history coverage and limited scans.
 - The local demo now guides a pricing change through source, callers, import dependents,

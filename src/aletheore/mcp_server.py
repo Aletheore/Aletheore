@@ -181,8 +181,8 @@ findings or skipped scanners are not proof of safety. AI answers are interpretat
 
 Completeness: inspect totals, truncation flags, omitted counts, skipped checks and unresolved relationships before
 claiming a complete list or a clean result. Large evidence output is size-capped and paged: a cut result names the
-sections it cut and says how to continue; read more with section (dotted path, '$' for the root), offset and limit,
-and narrow with filter.
+sections it cut and how to continue with aletheore_page (the tool, its target, section as a dotted path or '$' for the
+root, offset, limit, and filter to narrow).
 For search or routed results without those arguments, narrow the target/question or use a listed direct tool. A capped
 result is not exhaustive; never invent omitted items. Cite returned locations where available, distinguish evidence
 from inference, and use aletheore_verify_citations for reports. Citation validity does not prove an allegation is true.
@@ -703,7 +703,7 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path, only
             continue
         func, requires_target = QUERY_FUNCTIONS[kind]
 
-        def make_tool(func=func, requires_target=requires_target, kind=kind):
+        def make_tool(func=func, requires_target=requires_target, kind=kind, tool_name=tool_name):
             # imports/imported-by/symbols/cluster raise ModuleNotFoundInEvidenceError
             # and branch raises BranchNotFoundInEvidenceError for an unknown target;
             # the rest never raise either, so these except clauses are simply never
@@ -721,62 +721,41 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path, only
             # generic query-wrapper tool gets it now, not just the no-target
             # ones - including the "requires a target" and "optional target"
             # branches below, which previously had no cap whatsoever.
-            def budgeted(result, section, offset, limit, filter):
+            def budgeted(result, target):
                 return _metered_budget(
                     repo_path, result,
-                    record=section is None,
                     budget_chars=query_budget_chars,
-                    section=section,
-                    offset=offset,
-                    limit=limit,
-                    filter=filter,
                     sort_by=_QUERY_BUDGET_SORT_BY.get(kind),
+                    how_to_get_more=_how_to_page(tool_name, target),
                 )
 
             if requires_target:
 
-                def tool(
-                    target: str,
-                    section: str | None = None,
-                    offset: int = 0,
-                    limit: int | None = None,
-                    filter: str | None = None,
-                ) -> str:
+                def tool(target: str) -> str:
                     evidence = read_evidence(repo_path)
                     try:
                         result = func(evidence, target)
                     except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
                         return _error_result({"error": str(exc)})
-                    return budgeted(result, section, offset, limit, filter)
+                    return budgeted(result, target)
 
                 return tool, True
 
             if kind in optional_target_kinds:
 
-                def tool(
-                    target: str | None = None,
-                    section: str | None = None,
-                    offset: int = 0,
-                    limit: int | None = None,
-                    filter: str | None = None,
-                ) -> str:
+                def tool(target: str | None = None) -> str:
                     evidence = read_evidence(repo_path)
                     try:
                         result = func(evidence, target)
                     except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
                         return _error_result({"error": str(exc)})
-                    return budgeted(result, section, offset, limit, filter)
+                    return budgeted(result, target)
 
                 return tool, True
 
-            def tool(
-                section: str | None = None,
-                offset: int = 0,
-                limit: int | None = None,
-                filter: str | None = None,
-            ) -> str:
+            def tool() -> str:
                 evidence = read_evidence(repo_path)
-                return budgeted(func(evidence, None), section, offset, limit, filter)
+                return budgeted(func(evidence, None), None)
 
             return tool, True
 
@@ -785,6 +764,74 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path, only
         tool_func.__doc__ = _QUERY_TOOL_DESCRIPTIONS[kind]
         mcp_instance.tool(name=tool_name, annotations=READ_ONLY_ANNOTATIONS)(
             _guard_evidence_read_errors(tool_func)
+        )
+
+    # A pydantic arguments model ignores unknown arguments by default. These 18 tools used to take section/offset/limit/
+    # filter, so a client still sending them must fail loudly, not receive the first page and believe it paged. Set after
+    # registration: it changes validation only, not the published schema.
+    for tool in mcp_instance._tool_manager.list_tools():
+        if tool.name in _TOOL_NAME_TO_QUERY_KIND:
+            tool.fn_metadata.arg_model.model_config["extra"] = "forbid"
+            tool.fn_metadata.arg_model.model_rebuild(force=True)
+
+    pageable = {
+        name: (*QUERY_FUNCTIONS[kind], kind in optional_target_kinds, kind)
+        for name, kind in _TOOL_NAME_TO_QUERY_KIND.items()
+        if only is None or name in only
+    }
+    if pageable:
+        _register_page_tool(mcp_instance, repo_path, pageable, query_budget_chars)
+
+
+def _how_to_page(tool_name: str, target: str | None) -> str:
+    """The continue-hint a cut result carries: the one call that reads the rest of a list."""
+    arguments = f"tool={tool_name!r}" + (f", target={target!r}" if target else "")
+    return (
+        f"Some lists were cut to fit the output budget. Call aletheore_page with {arguments}, section=<path> and "
+        "offset=<next_offset> to page through one list (optional: limit=<items per page>, filter=<text> to keep "
+        "only items containing that text)."
+    )
+
+
+def _register_page_tool(mcp_instance: MCPServer, repo_path: Path, pageable: dict, budget: int) -> None:
+    """One paging tool for every evidence query, instead of four paging arguments on each of them.
+
+    The four arguments (section, offset, limit, filter) were repeated on 18 tools and cost about 1,900 tokens a turn
+    in tool definitions. The queries are pure reads of the scan evidence, so paging re-runs the named one."""
+    names = sorted(pageable)
+
+    @mcp_instance.tool(name="aletheore_page", annotations=READ_ONLY_ANNOTATIONS)
+    @_guard_evidence_read_errors
+    def aletheore_page(
+        tool: str,
+        section: str,
+        offset: int = 0,
+        limit: int | None = None,
+        filter: str | None = None,  # noqa: A002 - the name agents see on every other tool
+        target: str | None = None,
+    ) -> str:
+        """Read one page of a list from another evidence tool's cut result: pass that tool's name and the same
+        target, plus the section and offset the cut result named."""
+        entry = pageable.get(tool)
+        if entry is None:
+            return _error_result({"error": f"unknown tool {tool!r}", "tools": names})
+        func, requires_target, optional_target, kind = entry
+        if requires_target and not optional_target and not target:
+            return _error_result({"error": f"{tool} needs a target: pass the same target you gave it"})
+        evidence = read_evidence(repo_path)
+        try:
+            result = func(evidence, target if (requires_target or optional_target) else None)
+        except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
+            return _error_result({"error": str(exc)})
+        return _metered_budget(
+            repo_path, result,
+            record=False,  # a page is an explicit slice request, not a saving
+            budget_chars=budget,
+            section=section,
+            offset=offset,
+            limit=limit,
+            filter=filter,
+            sort_by=_QUERY_BUDGET_SORT_BY.get(kind),
         )
 
 

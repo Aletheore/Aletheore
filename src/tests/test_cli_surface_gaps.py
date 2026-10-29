@@ -680,8 +680,8 @@ def test_mcp_application_errors_are_flagged_is_error_but_empty_results_are_not(t
 
 def test_mcp_range_errors_and_empty_search_pattern_are_clear(tmp_path):
     server = _mcp_server_with_evidence(tmp_path)
-    ranged = _call(server, "aletheore_dead_code", {"limit": -5})
-    assert "limit must be at least 1" in ranged.content[0].text and "section" not in ranged.content[0].text
+    ranged = _call(server, "aletheore_page", {"tool": "aletheore_dead_code", "section": "unreachable_modules", "limit": -5})
+    assert "limit must be at least 1" in ranged.content[0].text and "pass section" not in ranged.content[0].text
     for pattern in ("", "   "):
         searched = _call(server, "aletheore_search", {"pattern": pattern})
         assert searched.is_error is True
@@ -742,7 +742,9 @@ def test_mcp_error_flag_is_set_where_the_failure_is_built_not_inferred(tmp_path)
     server = _mcp_server_with_evidence(tmp_path)
     assert _call(server, "aletheore_symbols", {"target": "nope.py"}).is_error is True
     assert not _call(server, "aletheore_symbols", {"target": "app/main.py"}).is_error
-    assert _call(server, "aletheore_dead_code", {"limit": -5}).is_error is True
+    assert _call(
+        server, "aletheore_page", {"tool": "aletheore_dead_code", "section": "unreachable_modules", "limit": -5}
+    ).is_error is True
     assert _call(server, "aletheore_dead_code", {}).is_error is not True
 
 

@@ -1,8 +1,9 @@
 import json
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 
-from aletheore.mcp_server import _toon_result, build_server, read_evidence
+from aletheore.mcp_server import _TOOL_NAME_TO_QUERY_KIND, _toon_result, build_server, read_evidence
 from aletheore.query import find_endpoints, find_vulnerabilities
 from aletheore.token_meter import load_events
 from tests.test_mcp_server import make_repo_with_evidence, tool_result_body
@@ -35,29 +36,38 @@ async def tool_named(server, name):
 
 
 @pytest.mark.asyncio
-async def test_every_generic_query_tool_has_paging_parameters_and_documents_them(tmp_path):
-    # Real audit finding: a whole family of no-target evidence tools
-    # (aletheore_database, aletheore_error_handling, aletheore_environment_variables,
-    # aletheore_static_analysis, aletheore_endpoints, ...) returned their
-    # section raw with no cap at all - on this project's own evidence,
-    # aletheore_database alone rendered to 972,404 characters. This is on
-    # by default, not opt-in behind an env var: an agent has no way to
-    # discover or set one, and the capability this fixes is correctness,
-    # not a token-savings lever that needs benchmarking before shipping.
+async def test_query_tools_share_one_paging_tool_instead_of_four_parameters_each(tmp_path):
+    # Real audit finding: a family of no-target evidence tools (aletheore_database, aletheore_error_handling, ...)
+    # once returned their section raw with no cap - aletheore_database alone rendered to 972,404 characters - so every
+    # query tool is still bounded by default. The four paging arguments used to be repeated on all 18 of them, about
+    # 1,900 tokens a turn; they now live on one tool, aletheore_page, that re-runs the named query and returns a page.
     server = build_server(make_repo_with_evidence(tmp_path))
-    tool = await tool_named(server, "aletheore_endpoints")
-    assert set(tool.input_schema["properties"]) == BUDGET_PARAMS
-    assert "All API endpoints" in tool.description
-    # Paging is documented per parameter in the schema and once, as a rule, in the server instructions: repeating it
-    # in every description cost about 90 characters on each of 18 tools, every turn.
-    assert all(tool.input_schema["properties"][name].get("description") for name in BUDGET_PARAMS)
-    assert "section" in server.instructions
-    # Real audit finding, found later: aletheore_symbols (requires_target)
-    # had no cap either - on this project's own hottest file it rendered to
-    # 82,908 characters. A tool that takes a target still takes the same
-    # budget parameters alongside it, not instead of it.
-    imports = await tool_named(server, "aletheore_imports")
-    assert set(imports.input_schema["properties"]) == {"target"} | BUDGET_PARAMS
+    tools = {t.name: t for t in await server.list_tools()}
+
+    endpoints = tools["aletheore_endpoints"]
+    assert "All API endpoints" in endpoints.description
+    assert not (set(endpoints.input_schema.get("properties") or {}) & BUDGET_PARAMS)
+    # A tool that takes a target still takes only that, and is still bounded.
+    assert set(tools["aletheore_imports"].input_schema["properties"]) == {"target"}
+    # None of the 18 query tools carries the paging arguments any more (other tools, such as aletheore_list, have their
+    # own unrelated `filter`).
+    assert not any(
+        set((tools[name].input_schema.get("properties") or {})) & BUDGET_PARAMS for name in _TOOL_NAME_TO_QUERY_KIND
+    )
+
+    page = tools["aletheore_page"]
+    assert set(page.input_schema["properties"]) == {"tool", "target"} | BUDGET_PARAMS
+    assert all(prop.get("description") for prop in page.input_schema["properties"].values())
+    assert page.input_schema["required"] == ["tool", "section"]
+    assert "aletheore_page" in server.instructions
+
+
+@pytest.mark.asyncio
+async def test_the_paging_tool_is_offered_only_where_a_pageable_tool_is(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    for profile, expected in (("full", True), ("lean", True), ("nav", False), ("router", False)):
+        names = {t.name for t in await build_server(repo, profile=profile).list_tools()}
+        assert ("aletheore_page" in names) is expected, profile
 
 
 @pytest.mark.asyncio
@@ -72,12 +82,17 @@ async def test_over_budget_result_is_bounded_and_pageable_to_the_exact_original(
 
     first = await server.call_tool("aletheore_endpoints", {})
     assert len(first.content[0].text) <= 3000
-    info = tool_result_body(first)["result"]["_budget"]["truncated"]["endpoints"]
+    marker = tool_result_body(first)["result"]["_budget"]
+    info = marker["truncated"]["endpoints"]
     assert info["total"] == 300 and 3 <= info["shown"] < 300
+    # The cut result names the tool that pages it and the tool to pass.
+    assert "aletheore_page" in marker["how_to_get_more"] and "aletheore_endpoints" in marker["how_to_get_more"]
 
     paths, offset = [], 0
     while offset is not None:
-        page = await server.call_tool("aletheore_endpoints", {"section": "endpoints", "offset": offset})
+        page = await server.call_tool(
+            "aletheore_page", {"tool": "aletheore_endpoints", "section": "endpoints", "offset": offset}
+        )
         assert len(page.content[0].text) <= 3000
         body = tool_result_body(page)["result"]
         paths.extend(item["path"] for item in body["items"])
@@ -85,7 +100,9 @@ async def test_over_budget_result_is_bounded_and_pageable_to_the_exact_original(
     assert paths == [f"/r/{i}" for i in range(300)]
 
     filtered = tool_result_body(
-        await server.call_tool("aletheore_endpoints", {"section": "endpoints", "filter": "/r/17"})
+        await server.call_tool(
+            "aletheore_page", {"tool": "aletheore_endpoints", "section": "endpoints", "filter": "/r/17"}
+        )
     )["result"]
     assert filtered["total"] == 11 and filtered["unfiltered_total"] == 300  # /r/17, /r/170 .. /r/179
 
@@ -104,13 +121,16 @@ async def test_a_requires_target_tool_is_bounded_and_pageable_too(tmp_path, monk
 
     first = await server.call_tool("aletheore_symbols", {"target": "a.py"})
     assert len(first.content[0].text) <= 3000
-    info = tool_result_body(first)["result"]["_budget"]["truncated"]["functions"]
+    marker = tool_result_body(first)["result"]["_budget"]
+    info = marker["truncated"]["functions"]
     assert info["total"] == 300 and 3 <= info["shown"] < 300
+    assert "target='a.py'" in marker["how_to_get_more"]  # a targeted tool's continue hint carries its target
 
     names, offset = [], 0
     while offset is not None:
         page = await server.call_tool(
-            "aletheore_symbols", {"target": "a.py", "section": "functions", "offset": offset}
+            "aletheore_page",
+            {"tool": "aletheore_symbols", "target": "a.py", "section": "functions", "offset": offset},
         )
         assert len(page.content[0].text) <= 3000
         body = tool_result_body(page)["result"]
@@ -132,7 +152,9 @@ async def test_unknown_section_is_a_clear_error_not_a_crash(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     bloat(repo, 5)
     server = build_server(repo)
-    body = tool_result_body(await server.call_tool("aletheore_endpoints", {"section": "nope"}))["result"]
+    body = tool_result_body(
+        await server.call_tool("aletheore_page", {"tool": "aletheore_endpoints", "section": "nope"})
+    )["result"]
     assert "unknown section" in body["error"] and body["sections"]["endpoints"] == 5
 
 
@@ -153,7 +175,7 @@ async def test_meter_records_exact_chars_only_for_real_trim_not_pages_or_small_r
     assert event.delivered_chars == len(first.content[0].text)
     assert event.delivered_chars < event.original_chars
 
-    await server.call_tool("aletheore_endpoints", {"section": "endpoints", "offset": 0, "limit": 5})
+    await server.call_tool("aletheore_page", {"tool": "aletheore_endpoints", "section": "endpoints", "offset": 0, "limit": 5})
     events_after_page, _ = load_events(repo)
     assert len(events_after_page) == 1
 
@@ -279,3 +301,31 @@ def test_fallback_measurement_failure_cannot_break_response(tmp_path, monkeypatc
     with caplog.at_level('DEBUG', logger='aletheore.mcp_server'):
         assert mcp_server._metered_budget(tmp_path, original) == encode(bounded)
     assert 'token meter event recording failed' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_the_paging_tool_rejects_an_unknown_tool_and_a_missing_target(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    unknown = tool_result_body(await server.call_tool("aletheore_page", {"tool": "aletheore_nope", "section": "$"}))["result"]
+    assert "aletheore_endpoints" in unknown["tools"] and "unknown" in unknown["error"]
+
+    missing = tool_result_body(await server.call_tool("aletheore_page", {"tool": "aletheore_symbols", "section": "functions"}))["result"]
+    assert "target" in missing["error"]
+
+
+@pytest.mark.asyncio
+async def test_a_client_still_passing_the_old_paging_arguments_gets_a_loud_error_not_a_silent_first_page(tmp_path):
+    # Paging moved to aletheore_page. A pydantic model ignores unknown arguments by default, so without this a client
+    # that still sends section/offset to aletheore_endpoints would quietly get the first page and think it paged.
+    repo = make_repo_with_evidence(tmp_path)
+    bloat(repo, 5)
+    server = build_server(repo)
+    for arguments in ({"section": "endpoints"}, {"offset": 3}):
+        # Over the wire this is an is_error result; the in-process server raises the same ToolError.
+        with pytest.raises(ToolError) as error:
+            await server.call_tool("aletheore_endpoints", arguments)
+        assert next(iter(arguments)) in str(error.value) and "Extra inputs are not permitted" in str(error.value)
+    ok = await server.call_tool("aletheore_endpoints", {})
+    assert ok.is_error is not True

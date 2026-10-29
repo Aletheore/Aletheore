@@ -236,6 +236,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
     expected = {
         "aletheore_imports",
         "aletheore_imported_by",
+        "aletheore_page",
         "aletheore_symbols",
         "aletheore_branch",
         "aletheore_ownership",
@@ -282,7 +283,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_remove_custom_skill",
     }
     assert expected.issubset(names)
-    assert len(names) == 46
+    assert len(names) == 47
     assert "aletheore_answer" not in names
 
 
@@ -326,7 +327,7 @@ async def test_compaction_keeps_what_a_client_needs_to_call_the_tools(tmp_path):
     by_name = {t.name: t for t in await build_server(repo).list_tools()}
     imports = by_name["aletheore_imports"]
     assert imports.input_schema["required"] == ["target"]
-    props = imports.input_schema["properties"]
+    props = by_name["aletheore_page"].input_schema["properties"]
     # optional arguments stay typed (not a union with null) and keep their descriptions
     assert props["section"]["type"] == "string" and props["section"]["description"]
     assert props["offset"]["type"] == "integer" and props["limit"]["type"] == "integer"
@@ -356,6 +357,7 @@ def test_compaction_preserves_non_simple_any_of_schemas():
 LEAN_TOOL_NAMES = {
     "aletheore_ask", "aletheore_imports", "aletheore_imported_by", "aletheore_symbols", "aletheore_get_blast_radius",
     "aletheore_list", "aletheore_overview", "aletheore_locate", "aletheore_symbol_source",
+    "aletheore_page",  # the cut-result continue hint for imports/imported_by/symbols points at it
 }
 
 
@@ -2465,8 +2467,9 @@ def test_server_instructions_tell_agents_to_search_hallbook_before_specialist_ta
 
 # --- tool-definition size (the definitions are re-sent to the agent on every turn) --------------------------------
 
-# Measured on master before the paging sentence was removed from every description: 35,459 characters, 46 tools.
-FULL_PROFILE_DEFINITION_CHAR_BUDGET = 34_200
+# Measured on master: 35,459 characters over 46 tools. The paging sentence moved into the server instructions (33,821)
+# and the four paging arguments moved off 18 tools onto one aletheore_page tool (26,979, 47 tools).
+FULL_PROFILE_DEFINITION_CHAR_BUDGET = 27_500
 
 
 async def _full_profile_tools(tmp_path):

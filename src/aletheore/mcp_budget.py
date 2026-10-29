@@ -148,6 +148,7 @@ def _overview(
     size_of: SizeOf,
     budget: int,
     sort_by: Mapping[str, Callable[[Any], Any]] | None,
+    how_to_get_more: str | None = None,
 ) -> Any:
     ordered = {p: _ordered(p, l, sort_by) for p, l in lists.items()}
     shown = {p: len(l) for p, l in ordered.items()}
@@ -182,7 +183,7 @@ def _overview(
         }
         if not truncated:
             return data
-        marker = {"truncated": truncated, "how_to_get_more": HOW_TO_GET_MORE}
+        marker = {"truncated": truncated, "how_to_get_more": how_to_get_more or HOW_TO_GET_MORE}
         body = _rebuild(data, "", replacements)
         if isinstance(body, list):
             return {"items": body, "_budget": marker}
@@ -277,6 +278,7 @@ def apply_budget(
     limit: int | None = None,
     filter: str | None = None,  # noqa: A002 - matches the tool parameter name agents see
     sort_by: Mapping[str, Callable[[Any], Any]] | None = None,
+    how_to_get_more: str | None = None,
 ) -> Any:
     """Bound `data` to `budget_chars` as measured by `size_of`, or page one of its lists.
 
@@ -301,5 +303,5 @@ def apply_budget(
             )
         if size_of(data) <= budget_chars:
             return data
-        return _overview(data, lists, size_of, budget_chars, sort_by) if lists else data
+        return _overview(data, lists, size_of, budget_chars, sort_by, how_to_get_more) if lists else data
     return _section_view(lists, section, offset, limit, filter, size_of, budget_chars, sort_by)
