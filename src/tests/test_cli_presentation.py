@@ -131,3 +131,11 @@ def test_tokens_options_must_follow_the_leaf_command(monkeypatch):
     result = CliRunner().invoke(get_command(cli.app), ["tokens", "--path", ".", "meter"])
     assert result.exit_code == 2
     assert "No such option" in result.output
+
+
+@pytest.mark.parametrize("args", [["locate"], ["tokens", "bogus"], ["nonsense"]])
+def test_usage_errors_are_not_preceded_by_the_banner(monkeypatch, args):
+    monkeypatch.setattr(ui, "is_interactive", lambda: True)
+    result = CliRunner().invoke(get_command(cli.app), args)
+    assert result.exit_code == 2
+    assert ui.TAGLINE not in result.output
