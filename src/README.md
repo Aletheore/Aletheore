@@ -508,7 +508,8 @@ cannot edit safely (invalid JSON, a symlink, read-only, tracked by Git, a hook t
 script or lives outside the Git directory) is not written; the plan shows the text to add yourself.
 
 **Hook events.** Each runs `python -m aletheore.shield.hooks <event>`, always exits 0 and has a hard
-time limit.
+time limit. On Windows the hook commands write the interpreter path with forward slashes, in double
+quotes, so they run the same under cmd.exe and Git Bash.
 
 | Event | Fired by | What it does | Limit |
 | --- | --- | --- | --- |

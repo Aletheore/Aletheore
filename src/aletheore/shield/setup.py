@@ -50,7 +50,7 @@ import sys
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-from aletheore.hook_command import build_hook_command
+from aletheore.hook_command import build_shield_command
 from aletheore.shield import checkpoint, receipt, state
 from aletheore.shield.gitutil import repo_state, run_git
 
@@ -283,7 +283,7 @@ def _record_bytes(record: _Record) -> bytes:
 
 
 def _command(event: str) -> str:
-    return build_hook_command([_interpreter(), "-m", MODULE, event])
+    return build_shield_command([_interpreter(), "-m", MODULE, event])
 
 
 def _entry(matcher: str | None, event: str) -> dict:

@@ -131,6 +131,66 @@ def test_build_hook_command_defaults_to_the_running_platform(monkeypatch):
     assert hook_command.build_hook_command(["a b"]) == "'a b'"
 
 
+# Claude Code on Windows can run hook commands through Git Bash, which strips the backslashes from an unquoted
+# C:\Python312\python.exe. Shield's agent hook commands use forward slashes, always double-quoted (both cmd.exe and
+# bash accept that).
+WIN_PY = "C:\\Python312\\python.exe"
+WIN_SPACED_PY = "C:\\Program Files\\Python 3.12\\python.exe"
+
+
+@pytest.mark.parametrize(
+    "interpreter, expected",
+    [
+        (WIN_PY, '"C:/Python312/python.exe" -m aletheore.shield.hooks pre-edit'),
+        (WIN_SPACED_PY, '"C:/Program Files/Python 3.12/python.exe" -m aletheore.shield.hooks pre-edit'),
+    ],
+)
+def test_build_shield_command_uses_quoted_forward_slashes_on_windows(interpreter, expected):
+    argv = [interpreter, "-m", "aletheore.shield.hooks", "pre-edit"]
+    command = hook_command.build_shield_command(argv, platform="win32")
+    assert command == expected
+    assert "\\" not in command
+    assert shlex.split(command)[0] == interpreter.replace("\\", "/")  # what bash hands to exec
+
+
+def test_build_shield_command_converts_any_backslash_or_spaced_argument_on_windows():
+    argv = ["C:\\py\\python.exe", "-m", "aletheore.shield.hooks", "pre-commit", "--repo", "D:\\my repo\\x"]
+    assert hook_command.build_shield_command(argv, platform="win32") == (
+        '"C:/py/python.exe" -m aletheore.shield.hooks pre-commit --repo "D:/my repo/x"'
+    )
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+@pytest.mark.parametrize("argv", ARGVS)
+def test_build_shield_command_matches_build_hook_command_off_windows(argv, platform):
+    assert hook_command.build_shield_command(argv, platform=platform) == hook_command.build_hook_command(
+        argv, platform=platform
+    )
+
+
+def test_our_event_recognises_the_windows_shield_command():
+    for event in ("pre-edit", "post-edit", "turn-end", "session-end"):
+        argv = [WIN_SPACED_PY, "-m", setup.MODULE, event]
+        assert setup._our_event(hook_command.build_shield_command(argv, platform="win32")) == event
+
+
+def test_windows_agent_hooks_use_forward_slashes_and_merge_idempotently(monkeypatch):
+    monkeypatch.setattr(setup, "_interpreter", lambda: WIN_PY)
+    monkeypatch.setattr(sys, "platform", "win32")
+    data, _created, changed = setup._merge({})
+    assert changed
+    commands = [h["command"] for entries in data["hooks"].values() for e in entries for h in e["hooks"]]
+    assert len(commands) == 4
+    assert all(c.startswith('"C:/Python312/python.exe" -m aletheore.shield.hooks ') for c in commands)
+    assert setup._merge(json.loads(json.dumps(data)))[2] is False  # already there: nothing to change
+    # An entry written by an older version (backslashes, unquoted) is replaced, not duplicated.
+    old = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": f"{WIN_PY} -m {setup.MODULE} turn-end"}]}]}}
+    merged, _created, changed = setup._merge(old)
+    assert changed and [h["command"] for e in merged["hooks"]["Stop"] for h in e["hooks"]] == [
+        '"C:/Python312/python.exe" -m aletheore.shield.hooks turn-end'
+    ]
+
+
 def test_evidence_snippet_output_is_unchanged(monkeypatch):
     from typer.testing import CliRunner
 
