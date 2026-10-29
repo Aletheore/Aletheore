@@ -161,7 +161,7 @@ def test_plan_setup_writes_nothing(tmp_path):
         (_hook(repo), "create"),
         (repo / ".git" / "info" / "exclude", "create"),
         (repo / ".aletheore" / "shield" / "config.json", "create"),
-        (repo / ".aletheore" / "shield" / "setup-record.json", "create"),
+        (repo / ".git" / "aletheore-shield" / "setup" / "setup-record.json", "create"),
     }
     assert all(change.diff.startswith("--- a/") for change in plan)
     assert all(change.description for change in plan)
@@ -593,7 +593,7 @@ def test_odd_settings_layouts_are_restored_byte_for_byte(tmp_path, content):
     assert _settings(repo).read_bytes() != content
     setup.remove_setup(repo)
     assert _settings(repo).read_bytes() == content
-    assert not (repo / ".aletheore" / "shield" / "original-settings.local.json.bak").exists()
+    assert not (repo / ".git" / "aletheore-shield").exists()
 
 
 def test_well_formatted_settings_are_not_announced_as_reformatted(tmp_path):
@@ -634,7 +634,7 @@ def test_setup_record_survives_config_saves(tmp_path):
 def test_corrupt_setup_record_is_a_status_note_and_removal_stays_conservative(tmp_path):
     repo = _init(tmp_path / "repo")
     setup.apply_setup(repo)
-    (repo / ".aletheore" / "shield" / "setup-record.json").write_text("{nope", encoding="utf-8")
+    (repo / ".git" / "aletheore-shield" / "setup" / "setup-record.json").write_text("{nope", encoding="utf-8")
     assert any("setup record is unreadable" in note for note in setup.shield_status(repo).notes)
     setup.remove_setup(repo)
     assert "aletheore.shield.hooks" not in _settings(repo).read_text(encoding="utf-8")
@@ -791,3 +791,173 @@ def test_descriptions_say_the_hook_and_exclude_are_shared(tmp_path):
     for path in (_hook(repo), repo / ".git" / "info" / "exclude"):
         (change,) = [c for c in plan if c.path == path]
         assert "shared by all linked worktrees" in change.description
+
+
+# ------------------------------------------------------------------------------- review round 2: symlinks, text
+
+
+def _symlink_or_skip(link: Path, target: Path):
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks cannot be created here")
+
+
+def _record_dir(repo):
+    return repo / ".git" / "aletheore-shield" / "setup"
+
+
+def test_record_and_backup_live_in_the_git_dir(tmp_path):
+    repo = _init(tmp_path / "repo")
+    _settings(repo).parent.mkdir()
+    _settings(repo).write_bytes(ODD_LAYOUTS[1])
+    setup.apply_setup(repo)
+    assert (_record_dir(repo) / "setup-record.json").is_file()
+    backup = _record_dir(repo) / "original-settings.local.json.bak"
+    assert backup.read_bytes() == ODD_LAYOUTS[1]
+    if sys.platform != "win32":
+        assert stat.S_IMODE(backup.stat().st_mode) == 0o600
+    assert sorted(p.name for p in (repo / ".aletheore" / "shield").iterdir()) == ["config.json"]
+
+
+def test_backup_diff_does_not_print_the_settings(tmp_path):
+    repo = _init(tmp_path / "repo")
+    _settings(repo).parent.mkdir()
+    _settings(repo).write_bytes(b'{"env": {"TOKEN": "s3cret"}}')
+    (change,) = [c for c in setup.plan_setup(repo) if c.path.name == "original-settings.local.json.bak"]
+    assert "s3cret" not in change.diff and "not displayed" in change.diff and "(28 bytes)" in change.diff
+
+
+def test_backup_temp_file_is_created_private(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "repo")
+    _settings(repo).parent.mkdir()
+    _settings(repo).write_bytes(ODD_LAYOUTS[1])
+    modes = []
+    real_open = os.open
+
+    def recording(path, flags, mode=0o777, *args, **kwargs):
+        if str(path).endswith(".tmp"):
+            modes.append((flags & os.O_EXCL, mode))
+        return real_open(path, flags, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", recording)
+    setup.apply_setup(repo)
+    assert modes and all(excl and mode == 0o600 for excl, mode in modes)
+
+
+def test_dot_claude_symlinked_outside_gets_a_snippet_and_outside_is_untouched(tmp_path):
+    repo = _init(tmp_path / "repo")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "settings.local.json").write_bytes(USER_SETTINGS_BYTES)
+    _symlink_or_skip(repo / ".claude", outside)
+    (change,) = [c for c in setup.plan_setup(repo) if c.path == _settings(repo)]
+    assert change.kind == "snippet" and "symbolic link" in change.description
+    setup.apply_setup(repo)
+    assert (outside / "settings.local.json").read_bytes() == USER_SETTINGS_BYTES
+    assert sorted(p.name for p in outside.iterdir()) == ["settings.local.json"]
+
+
+def test_dangling_dot_claude_symlink_gets_a_snippet(tmp_path):
+    repo = _init(tmp_path / "repo")
+    _symlink_or_skip(repo / ".claude", tmp_path / "nowhere")
+    (change,) = [c for c in setup.plan_setup(repo) if c.path == _settings(repo)]
+    assert change.kind == "snippet"
+    setup.apply_setup(repo)
+    assert not (tmp_path / "nowhere").exists()
+
+
+@pytest.mark.parametrize("linked", [".aletheore", ".aletheore/shield"])
+def test_shield_folder_symlinked_outside_blocks_setup(tmp_path, linked):
+    repo = _init(tmp_path / "repo")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (repo / linked).parent.mkdir(parents=True, exist_ok=True)
+    _symlink_or_skip(repo / linked, outside)
+    blocked = setup.plan_setup(repo)
+    assert isinstance(blocked, SetupBlocked) and "symbolic link" in blocked.reason
+    with pytest.raises(ValueError):
+        setup.apply_setup(repo)
+    assert list(outside.iterdir()) == []
+    assert not _settings(repo).exists() and not _hook(repo).exists()
+
+
+def test_purge_does_not_follow_a_symlinked_shield_folder(tmp_path):
+    repo = _init(tmp_path / "repo")
+    setup.apply_setup(repo)
+    outside = tmp_path / "outside"
+    (outside / "shield").mkdir(parents=True)
+    (outside / "shield" / "keep.txt").write_text("mine\n", encoding="utf-8")
+    shutil_tree = repo / ".aletheore"
+    import shutil
+
+    shutil.rmtree(shutil_tree)
+    _symlink_or_skip(shutil_tree, outside)
+    setup.remove_setup(repo, purge=True)
+    assert (outside / "shield" / "keep.txt").read_text(encoding="utf-8") == "mine\n"
+
+
+def test_hooks_folder_symlinked_outside_gets_a_snippet(tmp_path):
+    repo = _init(tmp_path / "repo")
+    outside = tmp_path / "shared-hooks"
+    outside.mkdir()
+    _symlink_or_skip(repo / ".git" / "hooks", outside)
+    (change,) = [c for c in setup.plan_setup(repo) if c.path.name == "pre-commit"]
+    assert change.kind == "snippet"
+    setup.apply_setup(repo)
+    assert list(outside.iterdir()) == []
+
+
+HOSTILE = "\u202e\u2066x\u200b\u2028y\u0085z\u00ad\ufeff"  # all legal raw inside a JSON string
+
+
+def _no_hostile(text):
+    bad = set("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069\u200b\u200c\u200d\u200e\u200f"
+              "\u061c\u2060\u2061\u2062\u2063\u2064\ufeff\u00ad\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029\x1b\r")
+    return not (bad & set(text))
+
+
+def test_diffs_from_a_hostile_settings_file_are_sanitised(tmp_path):
+    repo = _init(tmp_path / "repo")
+    _settings(repo).parent.mkdir()
+    _settings(repo).write_bytes(('{\n  "note": "' + HOSTILE + '",\n  "x": 1\n}\n').encode("utf-8"))
+    plan = setup.plan_setup(repo)
+    (change,) = [c for c in plan if c.path == _settings(repo)]
+    for item in plan:
+        assert _no_hostile(item.diff) and _no_hostile(item.description)
+    note_lines = [line for line in change.diff.split("\n") if "note" in line]
+    assert note_lines and all("?x?" in line for line in note_lines)  # one line each, nothing split it
+
+
+def test_hostile_core_hooks_path_is_sanitised_in_the_description(tmp_path):
+    repo = _init(tmp_path / "repo")
+    _git(repo, "config", "core.hooksPath", "hooks\u202eevil\u2028x")
+    (change,) = [c for c in setup.plan_setup(repo) if c.path.name == "pre-commit"]
+    assert change.kind == "snippet" and _no_hostile(change.description) and "hooks?evil?x" in change.description
+
+
+def test_duplicate_keys_wording_does_not_promise_content_is_preserved(tmp_path):
+    repo = _init(tmp_path / "repo")
+    _settings(repo).parent.mkdir()
+    _settings(repo).write_bytes(ODD_LAYOUTS[4])
+    (change,) = [c for c in setup.plan_setup(repo) if c.path == _settings(repo)]
+    assert "content preserved" not in change.description and "duplicate keys" in change.description
+
+
+def test_other_worktree_record_is_found_in_its_git_dir(tmp_path):
+    repo = _init(tmp_path / "repo")
+    linked = tmp_path / "linked"
+    _git(repo, "worktree", "add", "-q", "-b", "side", str(linked))
+    setup.apply_setup(linked)
+    assert (repo / ".git" / "worktrees" / "linked" / "aletheore-shield" / "setup" / "setup-record.json").is_file()
+    assert setup.shared_blocks_kept(repo) is True
+
+
+def test_raw_line_break_controls_in_a_hook_are_shown_as_question_marks(tmp_path):
+    repo = _init(tmp_path / "repo")
+    _hook(repo).parent.mkdir(parents=True)
+    _hook(repo).write_bytes("#!/bin/sh\necho a\x0bb\x0cc\x1cd\x1de\x1ef\u2029g\r\n".encode("utf-8"))
+    os.chmod(_hook(repo), 0o755)
+    (change,) = [c for c in setup.plan_setup(repo) if c.path == _hook(repo)]
+    assert _no_hostile(change.diff)
+    assert any(line.startswith(" echo a?b?c?d?e?f?g\\x0d") for line in change.diff.split("\n"))

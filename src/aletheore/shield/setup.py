@@ -17,13 +17,22 @@ What setup touches, and nothing else:
   (husky's `.husky/`, a shared global folder) gets a snippet, because those hooks are tracked or shared.
 - `git rev-parse --git-path info/exclude` (also shared by linked worktrees): a marked block that keeps
   `/.aletheore/shield/` and `/.claude/settings.local.json` out of `git status`. `.gitignore` is never touched.
-- `<top>/.aletheore/shield/config.json` (Shield's config, created when missing) and
-  `<top>/.aletheore/shield/setup-record.json`, which only this module reads and writes: what setup created
-  (files, folders, settings keys), the hash of the settings bytes Shield wrote and whether the original bytes were
-  saved. The record is written before any other file, and a failure part-way rolls back what was done.
+- `<top>/.aletheore/shield/config.json` (Shield's config, created when missing).
+- `<git dir>/aletheore-shield/setup/` (outside the working tree, so a cloned repository cannot plant or redirect
+  it): `setup-record.json`, which only this module reads and writes (what setup created: files, folders, settings
+  keys; the hash of the settings bytes Shield wrote; whether the original bytes were saved), and the private 0600
+  copy of the original settings file. The record is written before any other file, and a failure part-way rolls
+  back what was done.
+
+Every path setup writes must resolve (symlinks followed, including in parent folders) inside the working tree, or
+inside the git dir for the hook, info/exclude and the record. A file behind a folder symlink that leads elsewhere
+gets a snippet; when Shield's own folders lead elsewhere, setup is blocked. Plan text (descriptions and diffs) is
+sanitised: control, bidi and invisible format characters are shown as escapes or `?`, and only `\n` breaks lines.
 
 Removal undoes exactly that. When another linked worktree still has Shield set up, the shared hook block and
-exclude block stay (`shared_blocks_kept`). `purge=True` also deletes every checkpoint ref (never gc or prune),
+exclude block stay (`shared_blocks_kept`). When one worktree created the shared hook file and another turns Shield
+off last, the block goes but a `#!/bin/sh` stub file can remain (only the first worktree's record knew it created
+the file). `purge=True` also deletes every checkpoint ref (never gc or prune),
 `.aletheore/shield/` and the hook state in `<git dir>/aletheore-shield/`.
 """
 
@@ -38,7 +47,7 @@ import shlex
 import shutil
 import stat
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from aletheore.hook_command import build_hook_command
@@ -67,7 +76,13 @@ PLAN_CHANGED = "setup plan changed since it was shown"
 _SHARED = "shared by all linked worktrees of this repository"
 _UTF8_BOM = b"\xef\xbb\xbf"
 _HOOK_STATE_DIRNAME = "aletheore-shield"  # hooks.STATE_DIRNAME; not imported so setup stays light
-_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+_SETUP_DIRNAME = "setup"
+# Characters that would act as line breaks in a terminal or editor although they are not "\n": shown as "?".
+_BREAKS = re.compile("[\x0b\x0c\x1c-\x1e\x85\u2028\u2029]")
+# Bidi and invisible format characters that can make text read differently from what it is: shown as "?".
+_FORMAT = re.compile("[\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]")
+# Remaining C0 controls (tab kept), DEL and C1 controls: shown as \xNN.
+_CONTROL = re.compile("[\x00-\x08\x0a-\x1f\x7f-\x9f]")
 
 
 @dataclass(frozen=True)
@@ -116,14 +131,14 @@ def _absolute(base: Path, value: str) -> Path:
 
 def _locate(repo: Path) -> _Where | None:
     probe = run_git(repo, "rev-parse", "--show-toplevel")
-    lines = probe.stdout.decode("utf-8", "surrogateescape").splitlines()
+    lines = probe.stdout.decode("utf-8", "surrogateescape").rstrip("\n").split("\n")
     if probe.returncode != 0 or len(lines) != 1 or not lines[0]:
         return None
     top = Path(lines[0])
     paths = run_git(
         top, "rev-parse", "--absolute-git-dir", "--git-common-dir", "--git-path", "hooks", "--git-path", "info/exclude"
     )
-    lines = paths.stdout.decode("utf-8", "surrogateescape").splitlines()
+    lines = paths.stdout.decode("utf-8", "surrogateescape").rstrip("\n").split("\n")
     if paths.returncode != 0 or len(lines) != 4:
         return None
     configured = run_git(top, "config", "--get", "core.hooksPath")
@@ -185,6 +200,36 @@ def _shield_dir(where: _Where) -> Path:
     return state.shield_dir(where.top)
 
 
+def _setup_dir_for(git_dir: Path) -> Path:
+    return git_dir / _HOOK_STATE_DIRNAME / _SETUP_DIRNAME
+
+
+def _setup_dir(where: _Where) -> Path:
+    return _setup_dir_for(where.git_dir)
+
+
+def _contained(path: Path, root: Path) -> bool:
+    """Whether path, with every symlink on the way followed (also through folders that do not exist yet or links
+    that dangle), stays inside root."""
+    real = os.path.normcase(os.path.realpath(path))
+    base = os.path.normcase(os.path.realpath(root))
+    try:
+        return os.path.commonpath([real, base]) == base
+    except ValueError:
+        return False
+
+
+def _clean(text: str) -> str:
+    """Text safe to show in a terminal: format characters and stray line breaks become "?", other controls become
+    \\xNN escapes. "\\n" is kept as the only line break."""
+    lines = [_BREAKS.sub("?", _FORMAT.sub("?", line)) for line in text.split("\n")]
+    return "\n".join(_CONTROL.sub(lambda m: f"\\x{ord(m.group()):02x}", line) for line in lines)
+
+
+def _clean_line(text: str) -> str:
+    return _clean(text.replace("\n", "?"))
+
+
 # ------------------------------------------------------------------------------------------------------- record
 
 
@@ -211,7 +256,7 @@ def _strings(value: object) -> list[str]:
 
 
 def _load_record(where: _Where) -> _Record:
-    path = _shield_dir(where) / RECORD_NAME
+    path = _setup_dir(where) / RECORD_NAME
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -465,19 +510,28 @@ def _diff_label(where: _Where, path: Path) -> tuple[str, str]:
     return f"a/{name}", f"b/{name}"
 
 
+def _lines(data: bytes) -> list[str]:
+    """Lines split on "\\n" only, so the diff and the sanitiser agree on where lines end."""
+    text = data.decode("utf-8", "replace")
+    if not text:
+        return []
+    lines = text.split("\n")
+    return lines[:-1] if text.endswith("\n") else lines
+
+
 def _diff(where: _Where, path: Path, old: bytes, new: bytes) -> str:
     """Unified diff of old -> new bytes, with control characters shown as escapes and at most DIFF_MAX_LINES."""
     before, after = _diff_label(where, path)
     lines = list(
         difflib.unified_diff(
-            old.decode("utf-8", "replace").splitlines(),
-            new.decode("utf-8", "replace").splitlines(),
+            _lines(old),
+            _lines(new),
             fromfile=before,
             tofile=after,
             lineterm="",
         )
     )
-    lines = [_CONTROL.sub(lambda m: f"\\x{ord(m.group()):02x}", line) for line in lines]
+    lines = [_clean(line.replace("\n", "?")) for line in lines]
     if len(lines) > DIFF_MAX_LINES:
         lines = lines[:DIFF_MAX_LINES] + [f"... ({len(lines) - DIFF_MAX_LINES} more lines)"]
     return "\n".join(lines) + ("\n" if lines else "")
@@ -528,6 +582,8 @@ def _settings_plan(where: _Where, record: _Record) -> _SettingsPlan:
 
     if path.is_symlink():
         return snippet("is a symbolic link")
+    if not _contained(path, where.top):
+        return snippet("is inside a folder that is a symbolic link leading outside the repository")
     if _is_tracked(where, SETTINGS_RELATIVE):
         return snippet("is committed to git, and the hooks hold a path that only works on this machine")
     if not path.exists():
@@ -569,7 +625,7 @@ def _settings_plan(where: _Where, record: _Record) -> _SettingsPlan:
     written = _dump_settings(data, layout)
     description = "add Shield's four Claude Code hooks; other settings and hooks are kept"
     if _dump_settings(original, layout) != raw:
-        description += "; this file will be re-formatted (content preserved, original bytes restored on removal)"
+        description += "; this file will be re-formatted (duplicate keys, if any, are merged; the original bytes are restored on removal)"
     step = _Step(
         SetupChange(path, "edit", description, diff=_diff(where, path, raw, written)),
         data=written,
@@ -603,6 +659,8 @@ def _hook_step(where: _Where, block: str) -> _Step | None:
         return snippet(f"core.hooksPath is set to {where.hooks_path}, whose hooks are shared or tracked")
     if path.is_symlink():
         return snippet("the pre-commit hook is a symbolic link")
+    if not _contained(path, where.common_dir):
+        return snippet("the hooks folder is a symbolic link leading outside the git folder")
     what = f"git pre-commit hook ({_SHARED}) that prints Shield's report; never blocks a commit"
     if not path.exists():
         dirs = tuple(_missing_dirs(path.parent))
@@ -649,6 +707,8 @@ def _exclude_step(where: _Where) -> _Step | None:
 
     if path.is_symlink():
         return snippet("info/exclude is a symbolic link")
+    if not _contained(path, where.common_dir):
+        return snippet("info/exclude is behind a symbolic link leading outside the git folder")
     if not path.exists():
         dirs = tuple(_missing_dirs(path.parent))
         data = EXCLUDE_BLOCK.encode("utf-8")
@@ -689,25 +749,38 @@ def _config_step(where: _Where) -> _Step | None:
         SetupChange(path, "create", "create Shield's config", diff=_diff(where, path, b"", data)),
         data=data,
         mode=0o644,
-        created=(_record_name(where, path),),
+        make_dirs=tuple(_missing_dirs(path.parent)),
+        created=(*(_record_name(where, d) for d in _missing_dirs(path.parent)), _record_name(where, path)),
     )
 
 
 def _plan(repo: Path) -> _Plan | SetupBlocked:
+    plan = _raw_plan(repo)
+    return plan if isinstance(plan, SetupBlocked) else _sanitised(plan)
+
+
+def _raw_plan(repo: Path) -> _Plan | SetupBlocked:
     checked = repo_state(Path(repo))
     if not checked.ok:
         return SetupBlocked(checked.reason or "this repository is not supported")
     where = _locate(Path(repo))
     if where is None:
         return SetupBlocked("git could not say where this repository's files are")
+    if not _contained(_shield_dir(where) / "config.json", where.top):
+        return SetupBlocked(
+            ".aletheore/shield leads outside the repository through a symbolic link, so Shield's config cannot be "
+            "placed safely; remove that link first"
+        )
+    if not _contained(_setup_dir(where) / RECORD_NAME, where.git_dir):
+        return SetupBlocked("Shield's folder in the git dir is a symbolic link leading elsewhere; remove it first")
     record = _load_record(where)
     plan = _Plan(where)
     settings = _settings_plan(where, record)
     for step in (settings.step, _hook_step(where, git_hook_block(_interpreter())), _exclude_step(where)):
         if step is not None:
             plan.steps.append(step)
-    shield_folder = _shield_dir(where)
-    shield_dirs = tuple(_missing_dirs(shield_folder))
+    setup_folder = _setup_dir(where)
+    setup_dirs = tuple(_missing_dirs(setup_folder))
     config = _config_step(where)
 
     writes = [s for s in plan.steps if s.change.kind != "snippet"]
@@ -723,7 +796,7 @@ def _plan(repo: Path) -> _Plan | SetupBlocked:
         settings_sha256=record.settings_sha256,
         settings_backup=record.settings_backup,
     )
-    for name in [*(_record_name(where, d) for d in shield_dirs), *(n for s in writes for n in s.created)]:
+    for name in [*(_record_name(where, d) for d in setup_dirs), *(n for s in writes for n in s.created)]:
         if name not in new.created:
             new.created.append(name)
     for key in (k for s in writes for k in s.settings_keys):
@@ -733,20 +806,21 @@ def _plan(repo: Path) -> _Plan | SetupBlocked:
         new.settings_sha256 = settings.written_sha
         new.settings_backup = settings.keep_backup or settings.backup is not None
         if settings.backup is not None:
-            backup_path = shield_folder / BACKUP_NAME
+            backup_path = setup_folder / BACKUP_NAME
             plan.steps.append(
                 _Step(
                     SetupChange(
                         backup_path,
                         "create",
                         "copy of settings.local.json as it is now, so removal can put it back byte for byte",
-                        diff=_diff(where, backup_path, b"", settings.backup),
+                        diff=f"copy of your current settings kept privately for exact restore "
+                        f"({len(settings.backup)} bytes); not displayed\n",
                     ),
                     data=settings.backup,
                     mode=0o600,
                 )
             )
-    record_path = shield_folder / RECORD_NAME
+    record_path = setup_folder / RECORD_NAME
     old_bytes = record_path.read_bytes() if record_path.is_file() else b""
     new_bytes = _record_bytes(new)
     if new_bytes != old_bytes:
@@ -760,8 +834,8 @@ def _plan(repo: Path) -> _Plan | SetupBlocked:
                     diff=_diff(where, record_path, old_bytes, new_bytes),
                 ),
                 data=new_bytes,
-                mode=0o644,
-                make_dirs=shield_dirs,
+                mode=0o600,
+                make_dirs=setup_dirs,
             )
         )
     return plan
@@ -776,18 +850,35 @@ def plan_setup(repo: Path) -> list[SetupChange] | SetupBlocked:
     return [step.change for step in plan.steps]
 
 
+def _sanitised(plan: _Plan) -> _Plan:
+    plan.steps = [
+        replace(step, change=replace(step.change, description=_clean_line(step.change.description)))
+        for step in plan.steps
+    ]
+    return plan
+
+
 # ------------------------------------------------------------------------------------------------------- apply
 
 
 def _write_atomic(path: Path, data: bytes, mode: int | None) -> None:
+    """Write through a temporary file that is created private (0600, exclusive, never following a link), then
+    given its final mode and moved into place."""
     temporary = path.with_name(f".{path.name}.aletheore-{os.getpid()}.tmp")
     try:
-        temporary.write_bytes(data)
+        temporary.unlink()
+    except FileNotFoundError:
+        pass
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    descriptor = os.open(temporary, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
         if mode is not None:
             os.chmod(temporary, mode)
         os.replace(temporary, path)
     finally:
-        if temporary.exists():
+        if os.path.lexists(temporary):
             temporary.unlink()
 
 
@@ -809,8 +900,8 @@ def apply_setup(repo: Path, approved: list[SetupChange] | None = None) -> None:
     steps = [s for s in plan.steps if s.change.kind != "snippet"]
     if not steps:
         return
-    record_path = _shield_dir(plan.where) / RECORD_NAME
-    backup_path = _shield_dir(plan.where) / BACKUP_NAME
+    record_path = _setup_dir(plan.where) / RECORD_NAME
+    backup_path = _setup_dir(plan.where) / BACKUP_NAME
     # The record (everything setup intends to create) goes first and the saved original settings second, so an
     # interrupted apply is still removable byte for byte.
     order = {record_path: 0, backup_path: 1}
@@ -838,13 +929,15 @@ def _other_worktrees_set_up(where: _Where) -> bool:
     if listed.returncode != 0:
         return False
     here = os.path.normcase(os.path.realpath(where.top))
-    for line in listed.stdout.decode("utf-8", "surrogateescape").splitlines():
+    for line in listed.stdout.decode("utf-8", "surrogateescape").rstrip("\n").split("\n"):
         if not line.startswith("worktree "):
             continue
         other = Path(line[len("worktree ") :])
-        if os.path.normcase(os.path.realpath(other)) == here:
+        if os.path.normcase(os.path.realpath(other)) == here or not other.is_dir():
             continue
-        if (state.shield_dir(other) / RECORD_NAME).is_file():
+        probe = run_git(other, "rev-parse", "--absolute-git-dir")
+        lines = probe.stdout.decode("utf-8", "surrogateescape").rstrip("\n").split("\n")
+        if probe.returncode == 0 and len(lines) == 1 and (_setup_dir_for(Path(lines[0])) / RECORD_NAME).is_file():
             return True
     return False
 
@@ -858,7 +951,7 @@ def shared_blocks_kept(repo: Path) -> bool:
 
 def _remove_settings(where: _Where, record: _Record) -> Path | None:
     path = _settings_path(where)
-    if path.is_symlink() or not path.is_file():
+    if path.is_symlink() or not path.is_file() or not _contained(path, where.top):
         return None
     try:
         raw = path.read_bytes()
@@ -868,7 +961,7 @@ def _remove_settings(where: _Where, record: _Record) -> Path | None:
     created = _created_settings(record)
     if record.settings_sha256 and _sha(raw) == record.settings_sha256:
         # Nobody changed the file since Shield wrote it: put back exactly what was there before.
-        backup = _shield_dir(where) / BACKUP_NAME
+        backup = _setup_dir(where) / BACKUP_NAME
         if record.settings_backup and backup.is_file():
             _write_atomic(path, backup.read_bytes(), mode)
             return path
@@ -902,7 +995,7 @@ def _remove_settings(where: _Where, record: _Record) -> Path | None:
 
 
 def _remove_block(where: _Where, path: Path, record: _Record, *, hook: bool) -> Path | None:
-    if path.is_symlink() or not path.is_file():
+    if path.is_symlink() or not path.is_file() or not _contained(path, where.common_dir):
         return None
     try:
         text = path.read_bytes().decode("utf-8")
@@ -948,26 +1041,28 @@ def _remove(where: _Where, *, purge: bool, rollback: bool = False) -> list[Path]
             changed.append(done)
 
     shield = _shield_dir(where)
+    setup_folder = _setup_dir(where)
     config_path = shield / "config.json"
-    removable = [shield / BACKUP_NAME, shield / RECORD_NAME]
+    removable = [(setup_folder / BACKUP_NAME, where.git_dir), (setup_folder / RECORD_NAME, where.git_dir)]
     if not rollback or _record_name(where, config_path) in record.created:
-        removable.insert(0, config_path)
-    for path in removable:
-        if path.is_file():
+        removable.insert(0, (config_path, where.top))
+    for path, root in removable:
+        if path.is_file() and _contained(path, root):
             path.unlink()
             changed.append(path)
 
     if purge:
         checkpoint.delete_all_checkpoints(where.top)
-        for folder in (shield, where.git_dir / _HOOK_STATE_DIRNAME):
-            if folder.is_dir() and not folder.is_symlink():
+        for folder, root in ((shield, where.top), (where.git_dir / _HOOK_STATE_DIRNAME, where.git_dir)):
+            if folder.is_dir() and not folder.is_symlink() and _contained(folder, root):
                 shutil.rmtree(folder)
                 changed.append(folder)
 
     folders = [_from_record(where, name) for name in record.created]
     for folder in sorted(folders, key=lambda p: len(p.parts), reverse=True):
         try:
-            if folder.is_dir() and not folder.is_symlink() and not any(folder.iterdir()):
+            inside = any(_contained(folder, root) for root in (where.top, where.common_dir, where.git_dir))
+            if inside and folder.is_dir() and not folder.is_symlink() and not any(folder.iterdir()):
                 folder.rmdir()
                 changed.append(folder)
         except OSError:
