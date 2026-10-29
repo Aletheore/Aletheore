@@ -310,6 +310,11 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # Budget reservations must survive container replacement and acknowledged writes.
+    # Migrate existing Redis data before first switching to this named volume.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "always", "--maxmemory-policy", "noeviction", "--aof-load-truncated", "no"]
+    volumes:
+      - aletheore_redis_data:/data
     # Internal-only, no privileged port, no setuid/capability-bearing
     # binary involved in starting redis-server - safe with no risk to the
     # public-facing path (see caddy below for the one image this was
@@ -455,6 +460,7 @@ services:
       - "no-new-privileges:true"
 
 volumes:
+  aletheore_redis_data:
   aletheore_postgres_data:
   aletheore_caddy_data:
   aletheore_caddy_config:

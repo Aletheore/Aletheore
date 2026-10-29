@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, IBM_Plex_Mono } from "next/font/google";
+import { WebsiteCompanion } from "@/components/site/website-companion";
 import { Footer } from "@/components/site/footer";
 import { Header } from "@/components/site/header";
 import "./globals.css";
@@ -24,6 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Header />
         <main>{children}</main>
         <Footer />
+        <WebsiteCompanion live={process.env.NODE_ENV === "development" && process.env.COMPANION_LIVE_ENABLED === "1" && Boolean(process.env.INDIEROUTER_API_KEY)} />
       </body>
     </html>
   );
