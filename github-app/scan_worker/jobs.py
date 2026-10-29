@@ -26,7 +26,12 @@ from aletheore.code_graph_diff import diff_endpoints, diff_modules
 from aletheore.credentials import has_api_key
 from aletheore.dead_code import is_test_file
 from aletheore.evidence import write_evidence
-from aletheore.git_intel.analyzer import analyze_git, compute_hotspots, compute_recently_updated
+from aletheore.git_intel.analyzer import (
+    analyze_git,
+    compute_high_risk_files,
+    compute_hotspots,
+    compute_recently_updated,
+)
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.evidence_resolution import (
     empty_resolution,
@@ -142,6 +147,7 @@ from scan_worker.flash_review import (
     _diff_valid_lines,
     _line_is_near_diff,
     _lookup_valid_lines,
+    build_change_risk_notes,
     build_referenced_symbol_context,
     fetch_review_file_context,
     files_missing_from_review_context,
@@ -262,6 +268,11 @@ HEALTH_DOWN_RETRY_JOB_TIMEOUT_SECONDS = 60
 # across scans, not each individual PR's ephemeral branch, so every hosted
 # sync uses this one fixed key rather than whatever branch name (or lack
 # of one) a given clone happens to be on.
+# Opt-in switch for the history-based change-risk note in the review prompt. Two controlled
+# runs (24-case PR-review corpus and 25 SWE-bench cases, GLM-5.3-Flash, 5 runs per arm) found no
+# measurable recall gain, so it stays off by default.
+CHANGE_RISK_CONTEXT_ENV = "ALETHEORE_REVIEW_CHANGE_RISK"
+
 GRAPH_BRANCH = "default"
 
 # Bounds the very first (cold) sync of a repo's history to its most recent
@@ -985,6 +996,9 @@ def _sync_persistent_git_graph(installation_id: int, repo_full_name: str, repo_d
         if git_data.get("available"):
             git_data["hotspots"] = compute_hotspots(
                 repo_dir, modules, store=store, depth_cap=GRAPH_COLD_SYNC_DEPTH_CAP, branch=GRAPH_BRANCH
+            )
+            git_data["high_risk_files"] = compute_high_risk_files(
+                repo_dir, store=store, depth_cap=GRAPH_COLD_SYNC_DEPTH_CAP, branch=GRAPH_BRANCH
             )
             git_data["recently_updated"] = compute_recently_updated(
                 repo_dir, store=store, depth_cap=GRAPH_COLD_SYNC_DEPTH_CAP, branch=GRAPH_BRANCH
@@ -3487,6 +3501,11 @@ def _run_flash_review(
             # - see _build_flash_review_user_prompt).
             referenced_symbol_context=referenced_symbol_context,
             sibling_file_context=sibling_file_context,
+            # Off by default: no measured gain (see CHANGE_RISK_CONTEXT_ENV).
+            change_risk_notes=(
+                build_change_risk_notes(evidence, changed_files)
+                if os.environ.get(CHANGE_RISK_CONTEXT_ENV) == "1" else None
+            ),
             # The similarity cache is keyed only by (installation_id,
             # repo_full_name) + diff similarity - it has no notion of
             # which model produced a cached result. Free tier never

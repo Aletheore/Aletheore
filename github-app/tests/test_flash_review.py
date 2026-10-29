@@ -27,6 +27,7 @@ from scan_worker.flash_review import (
     _validate_findings,
     _verify_or_reanchor_citation,
     build_change_impact_context,
+    build_change_risk_notes,
     build_code_evidence_context,
     build_dependency_impact_context,
     build_referenced_symbol_context,
@@ -4729,3 +4730,66 @@ def test_semantic_checker_ignores_non_concurrent_dot_map():
     )
 
     assert findings == []
+
+
+# --- change-risk notes (history-based hotspot signal) -------------------------------------------
+
+_RISK_EVIDENCE = {
+    "git": {
+        "available": True,
+        "high_risk_files": [
+            {"path": "core/engine.py", "risk_score": 0.97, "churn_count": 41},
+            {"path": "core/util.py", "risk_score": 0.85, "churn_count": 12},
+        ],
+    }
+}
+
+
+def test_build_change_risk_notes_lists_only_changed_high_risk_files():
+    notes = build_change_risk_notes(_RISK_EVIDENCE, ["core/engine.py", "docs/readme.md"])
+    assert set(notes) == {"core/engine.py"}
+    assert "0.97" in notes["core/engine.py"] and "41" in notes["core/engine.py"]
+
+
+def test_build_change_risk_notes_is_silent_without_a_high_risk_changed_file():
+    assert build_change_risk_notes(_RISK_EVIDENCE, ["docs/readme.md"]) == {}
+    assert build_change_risk_notes({"git": {"available": False}}, ["core/engine.py"]) == {}
+    assert build_change_risk_notes({"git": {"available": True}}, ["core/engine.py"]) == {}
+    assert build_change_risk_notes(None, ["core/engine.py"]) == {}
+
+
+def test_build_change_risk_notes_never_carries_identity_or_commit_text():
+    evidence = {"git": {"available": True, "high_risk_files": [
+        {"path": "a.py", "risk_score": 0.9, "churn_count": 5, "owners": ["x@example.com"], "subject": "fix secret"}
+    ]}}
+    note = build_change_risk_notes(evidence, ["a.py"])["a.py"]
+    assert "example.com" not in note and "secret" not in note
+
+
+def test_user_prompt_is_unchanged_without_risk_notes_and_appends_them_after_the_diff():
+    plain = _build_flash_review_user_prompt("t", "--- a.py ---\n+x")
+    assert _build_flash_review_user_prompt("t", "--- a.py ---\n+x", change_risk_notes=None) == plain
+    assert _build_flash_review_user_prompt("t", "--- a.py ---\n+x", change_risk_notes={}) == plain
+    with_risk = _build_flash_review_user_prompt(
+        "t", "--- a.py ---\n+x", change_risk_notes={"a.py": "a.py: risk 0.97"}
+    )
+    assert with_risk.startswith(plain)
+    assert "a.py: risk 0.97" in with_risk[len(plain):]
+    assert "merely because" in with_risk
+
+
+def test_per_file_prompt_carries_only_that_files_risk_note():
+    base = _build_per_file_user_prompt("t", "a.py", "@@ -1 +1 @@\n+x")
+    assert _build_per_file_user_prompt("t", "a.py", "@@ -1 +1 @@\n+x", change_risk_note="") == base
+    noted = _build_per_file_user_prompt("t", "a.py", "@@ -1 +1 @@\n+x", change_risk_note="a.py: risk 0.97")
+    assert noted.startswith(base) and "a.py: risk 0.97" in noted
+
+
+def test_generate_findings_per_file_passes_each_file_its_own_risk_note():
+    prompts = []
+    adapter = MagicMock()
+    adapter.simple_completion.side_effect = lambda system, user, cwd: (prompts.append(user) or "review:\n  key_issues_to_review: []\n")
+    patches = (("a.py", "@@ -1 +1 @@\n+x"), ("b.py", "@@ -1 +1 @@\n+y"))
+    _generate_findings_per_file(patches, "t", adapter, change_risk_notes={"a.py": "a.py: RISKNOTE"})
+    with_note = [p for p in prompts if "RISKNOTE" in p]
+    assert len(prompts) == 2 and len(with_note) == 1 and "--- a.py ---" in with_note[0]

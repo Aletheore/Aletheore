@@ -270,12 +270,27 @@ else - still no speculation, still only concrete, grounded issues.
 {moved_code_context}"""
 
 
+# Appended last, after the diff and every other suffix (the same after-the-diff positioning
+# rule as _REFERENCED_SYMBOL_CONTEXT_SUFFIX: context placed before PR-Agent's schema regressed
+# quality). Only ever present when the PR touches a file the repository's own change history
+# marks as high-risk, so a PR touching none gets the exact prompt it got before this existed.
+_CHANGE_RISK_SUFFIX = """
+
+The repository's change history marks these files in this diff as high-risk (frequently changed
+and large). This is background only: examine them with extra care for real regressions, but
+never report a finding merely because a file is high-risk, and still report only concrete,
+grounded issues.
+
+{change_risk_notes}"""
+
+
 def _build_flash_review_user_prompt(
     pr_title: str,
     diff_text: str,
     referenced_symbol_context: str = "",
     sibling_file_context: str = "",
     moved_code_context: str = "",
+    change_risk_notes: dict[str, str] | None = None,
 ) -> str:
     """Fills PR-Agent's real user-prompt template. Plain str.format(), not
     Jinja2 (which isn't a production dependency of this service) - safe
@@ -294,6 +309,8 @@ def _build_flash_review_user_prompt(
         prompt += _SIBLING_FILE_CONTEXT_SUFFIX.format(sibling_file_context=sibling_file_context)
     if moved_code_context:
         prompt += _MOVED_CODE_SUFFIX.format(moved_code_context=moved_code_context)
+    if change_risk_notes:
+        prompt += _CHANGE_RISK_SUFFIX.format(change_risk_notes="\n".join(change_risk_notes.values()))
     return prompt
 
 
@@ -890,6 +907,32 @@ def build_dependency_impact_context(evidence: dict | None, changed_files: list[s
     if not lines:
         return ""
     return "--- deterministic dependency impact context (raw graph facts, not conclusions) ---\n" + "\n".join(lines)
+
+
+MAX_CHANGE_RISK_NOTES = 12
+
+
+def build_change_risk_notes(evidence: dict | None, changed_files: list[str]) -> dict[str, str]:
+    """One short note per changed file the repository's change history marks high-risk.
+
+    Empty when none of the changed files qualifies, so a quiet PR is prompted exactly as before.
+    Only a score and a commit count are carried: no author, email or commit text, keeping the
+    existing rule that contributor identity and history text stay out of the external model prompt.
+    """
+    git = (evidence or {}).get("git") or {}
+    if not git.get("available"):
+        return {}
+    risky = {entry.get("path"): entry for entry in git.get("high_risk_files") or [] if entry.get("path")}
+    notes: dict[str, str] = {}
+    for path in sorted((p for p in changed_files if p in risky), key=lambda p: -float(risky[p].get("risk_score", 0))):
+        entry = risky[path]
+        notes[path] = (
+            f"{path}: risk {float(entry.get('risk_score', 0)):.2f} of 1.00, "
+            f"changed in {int(entry.get('churn_count', 0))} commits"
+        )
+        if len(notes) >= MAX_CHANGE_RISK_NOTES:
+            break
+    return notes
 
 
 MAX_REFERENCED_SYMBOLS = 16
@@ -2540,7 +2583,7 @@ def _same_file(reported: str, filename: str) -> bool:
 
 
 def _build_per_file_user_prompt(
-    pr_title: str, filename: str, patch: str, other_files_context: str = ""
+    pr_title: str, filename: str, patch: str, other_files_context: str = "", change_risk_note: str = ""
 ) -> str:
     """Same PR-Agent user-prompt template _build_flash_review_user_prompt
     fills, scoped to one file's own raw patch instead of the whole PR's
@@ -2561,6 +2604,8 @@ def _build_per_file_user_prompt(
         prompt += _OTHER_FILES_CONTEXT_SUFFIX.format(
             filename=filename, other_files_context=other_files_context
         )
+    if change_risk_note:
+        prompt += _CHANGE_RISK_SUFFIX.format(change_risk_notes=change_risk_note)
     return prompt
 
 
@@ -2569,6 +2614,7 @@ def _generate_findings_per_file(
     pr_title: str,
     adapter,
     share_pr_context: bool = False,
+    change_risk_notes: dict[str, str] | None = None,
 ) -> list[dict]:
     """Runs Flash Review's real generation call once per changed file
     instead of once for the whole PR, then concatenates every file's
@@ -2620,7 +2666,9 @@ def _generate_findings_per_file(
     def _review_one_file(item: tuple[str, str]) -> list[dict]:
         filename, patch = item
         other_files_context = _build_other_files_context(filename, diff_patches) if share_pr_context else ""
-        user_prompt = _build_per_file_user_prompt(pr_title, filename, patch, other_files_context)
+        user_prompt = _build_per_file_user_prompt(
+            pr_title, filename, patch, other_files_context, (change_risk_notes or {}).get(filename, "")
+        )
         # Scaled to this file's own hunk count, not the whole PR's - a
         # single file with many independent changed regions hits the same
         # "(0-5 issues)" undercount review_diff's own hunk-scaled prompt
@@ -2682,6 +2730,7 @@ def review_diff(
     on_cross_file_check_usage: Callable[[int, int, int], None] | None = None,
     share_pr_context_per_file: bool = False,
     merge_repeats: bool = False,
+    change_risk_notes: dict[str, str] | None = None,
 ) -> list[dict]:
     if not diff_text.strip():
         return []
@@ -2778,7 +2827,8 @@ def review_diff(
     # can verify, so this context is LLM-prompt-only.
     moved_code_context = _moved_code_context(_detect_moved_code_blocks(diff_text))
     user_prompt = _build_flash_review_user_prompt(
-        pr_title, diff_text, referenced_symbol_context, sibling_file_context, moved_code_context
+        pr_title, diff_text, referenced_symbol_context, sibling_file_context, moved_code_context,
+        change_risk_notes,
     )
     system_prompt = _flash_review_system_prompt_for_cap(_max_findings_for_diff(diff_patches))
 
@@ -2815,7 +2865,8 @@ def review_diff(
                 on_usage=on_usage, fallback_model=FLASH_REVIEW_FALLBACK_MODEL
             )
         findings = _generate_findings_per_file(
-            diff_patches, pr_title, adapter, share_pr_context=share_pr_context_per_file
+            diff_patches, pr_title, adapter, share_pr_context=share_pr_context_per_file,
+            change_risk_notes=change_risk_notes,
         )
     else:
         if adapter is not None:
