@@ -233,6 +233,9 @@
     "setuptools",
     "nohup",
     "numpy",
+    "appendonly",
+    "appendfsync",
+    "noeviction",
     "deepwiki"
   ]
 }
