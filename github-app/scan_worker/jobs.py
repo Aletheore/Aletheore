@@ -5362,6 +5362,78 @@ def _check_free_tier_provider_keys(redis_conn) -> None:
         )
 
 
+# The website companion's budget ledger (app_server/companion_limits.py; created once by
+# scripts/companion_limits.py). Read-only here: this check never writes the ledger.
+COMPANION_LEDGER_KEY = "aletheore:{companion-budget}:ledger"
+# Month-to-date spend, as a percentage of the monthly cap, that emails the operator once per month.
+COMPANION_BUDGET_ALERT_PERCENTS = (80, 100)
+COMPANION_BUDGET_ALERT_DEDUPE_TTL_SECONDS = 40 * 24 * 60 * 60
+_COMPANION_MICRO_INR = 1_000_000
+
+
+def _check_companion_budget(redis_conn, now: float) -> None:
+    """Emails the operator as the website companion nears and reaches its monthly budget cap.
+
+    The ledger already refuses admissions at the cap; this only makes that visible before and when
+    it happens. Each threshold alerts once per UTC month (not every cycle, unlike the 6h reminders
+    for conditions that need fixing), and a disabled or corrupt ledger alerts through the usual
+    cooldown because the chat is then down. A ledger that does not exist (companion never set up)
+    is silent. Resetting the ledger to bypass the cap is deliberately not an option; the alert says
+    how to stop spending (`scripts/companion_limits.py disable`).
+    """
+    raw = redis_conn.hgetall(COMPANION_LEDGER_KEY)
+    if not raw:
+        return
+    ledger = {_decode_redis_value(k): _decode_redis_value(v) for k, v in raw.items()}
+    if ledger.get("enabled") == "0":
+        _send_ops_alert(
+            redis_conn,
+            "ops_monitor.companion_budget.disabled",
+            "website companion admissions are disabled",
+            "The companion budget ledger has enabled=0 (an operator disable, or a provider "
+            "usage/cost contract violation), so the chat is refusing questions. Check provider "
+            "billing before re-enabling; never reset the ledger.",
+        )
+    try:
+        month = int(ledger["month"])
+        used = int(ledger["month_used"])
+        cap = int(ledger["month_cap"])
+    except (KeyError, ValueError):
+        _send_ops_alert(
+            redis_conn,
+            "ops_monitor.companion_budget.corrupt",
+            "website companion budget ledger is missing or has invalid counters",
+            f"fields={sorted(ledger)} - admissions fail closed until reconciled with provider billing",
+        )
+        return
+    now_utc = datetime.fromtimestamp(now, timezone.utc)
+    if cap <= 0 or month != now_utc.year * 100 + now_utc.month:
+        # Counters from an earlier month: the next reservation rolls them over to zero.
+        return
+    for percent in COMPANION_BUDGET_ALERT_PERCENTS:
+        if used * 100 < cap * percent:
+            continue
+        if not redis_conn.set(
+            f"ops_monitor:companion_budget:{month}:{percent}",
+            "1",
+            nx=True,
+            ex=COMPANION_BUDGET_ALERT_DEDUPE_TTL_SECONDS,
+        ):
+            continue
+        reached = "REACHED" if percent >= 100 else f"passed {percent}%"
+        try:
+            raise OpsMonitorError(f"website companion monthly budget {reached}")
+        except OpsMonitorError as exc:
+            send_error_alert(
+                f"ops_monitor.companion_budget.month_{percent}",
+                exc,
+                f"month={month} used=INR {used / _COMPANION_MICRO_INR:.2f} of "
+                f"INR {cap / _COMPANION_MICRO_INR:.2f}. At the cap the chat stops answering until "
+                "next month. To stop spending now run `python scripts/companion_limits.py disable` "
+                "on the app server; there is deliberately no ledger reset.",
+            )
+
+
 @log_job
 def run_ops_monitor_job() -> None:
     """Small production-readiness checks that feed the existing ops email
@@ -5378,6 +5450,10 @@ def run_ops_monitor_job() -> None:
     _check_backup_freshness(redis_conn, now)
     _check_free_tier_provider_keys(redis_conn)
     _check_webhook_errors(redis_conn, now)
+    try:
+        _check_companion_budget(redis_conn, now)
+    except Exception:  # noqa: BLE001 - a monitoring check must never break the job that hosts it
+        logging.getLogger("scan_worker.jobs").warning("companion budget check failed", exc_info=True)
 
 
 # Each template function takes exactly one positional string arg
