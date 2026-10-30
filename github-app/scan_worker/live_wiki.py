@@ -19,6 +19,7 @@ by the caller, but this module never imports a cache or database client.
 
 import json
 import logging
+import os
 import re
 import statistics
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
@@ -1575,6 +1576,7 @@ def build_file_page_record(
         "imported_by": list(module.get("imported_by", []) or [])[:MAX_RELATED_FILES],
         "related_symbols": related_symbols,
     }
+    repo_context = _trim_file_page_repo_context(repo_context, [file_page_payload])
     if repo_context is not None:
         file_page_payload["repo_context"] = repo_context
     user_prompt = json.dumps(file_page_payload)
@@ -1750,6 +1752,48 @@ def _file_page_request_item(evidence: dict, path: str, subsystem_name: str) -> d
     }
 
 
+def _trim_file_page_repo_context(repo_context: dict | None, request_items: list[dict]) -> dict | None:
+    """Narrows the repo-wide scanner context to what these file pages can use.
+
+    The full context is resent on every file-page call and was ~79% of a
+    call's input tokens on a mid-size repo (34 KB against ~2.4 KB per file
+    item). Entries carrying a "file" key (endpoints, schema tables and
+    relations) are kept only when that file is one of the batch's own files
+    or one it imports / is imported by - the same neighbourhood the item
+    itself already describes. Only "file" is read, never "path": an endpoint's
+    "path" is its URL route, not a source file. Everything else (counts,
+    totals, flags, plain strings such as env var names and unreachable
+    modules) is kept: with nothing to match against, dropping it would be a
+    guess.
+
+    AIRVIEW_FILE_PAGE_TRIM_CONTEXT=off restores the full context, as a kill
+    switch if the narrower context ever reads worse.
+    """
+    if not repo_context or os.environ.get("AIRVIEW_FILE_PAGE_TRIM_CONTEXT", "").lower() == "off":
+        return repo_context
+
+    relevant: set[str] = set()
+    for item in request_items:
+        relevant.add(item["path"])
+        relevant.update(item.get("imports") or [])
+        relevant.update(item.get("imported_by") or [])
+
+    def keep(entry) -> bool:
+        if not isinstance(entry, dict):
+            return True
+        ref = entry.get("file")
+        return ref is None or ref in relevant
+
+    def trim(value):
+        if isinstance(value, list):
+            return [trim(v) for v in value if keep(v)]
+        if isinstance(value, dict):
+            return {k: trim(v) for k, v in value.items()}
+        return value
+
+    return trim(repo_context) or None
+
+
 def _write_file_page_batch(
     evidence: dict,
     targets: list[_FilePageWriteTarget],
@@ -1768,6 +1812,7 @@ def _write_file_page_batch(
     on why.
     """
     items = [{"id": t.path, **t.request_item} for t in targets]
+    repo_context = _trim_file_page_repo_context(repo_context, [t.request_item for t in targets])
     request_body = {"items": items, "repo_context": repo_context} if repo_context is not None else items
     raw = writing_adapter.simple_completion(
         BATCH_FILE_PAGE_WRITING_SYSTEM_PROMPT, json.dumps(request_body), cwd="."

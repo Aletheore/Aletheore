@@ -1097,6 +1097,104 @@ def test_generate_file_pages_batched_repo_context_sent_once_not_per_item():
     assert all("repo_context" not in item for item in captured_body["items"])
 
 
+def _repo_context_evidence() -> dict:
+    return {
+        "repository": {
+            "modules": [
+                {"path": "pkg0/mod.py", "language": "python", "imports": ["pkg1/mod.py"], "imported_by": [],
+                 "symbols": {"functions": [{"name": "do_0", "start_line": 1, "end_line": 2}], "classes": []}},
+                {"path": "pkg1/mod.py", "language": "python", "imports": [], "imported_by": ["pkg0/mod.py"],
+                 "symbols": {"functions": [{"name": "do_1", "start_line": 1, "end_line": 2}], "classes": []}},
+                {"path": "pkg2/mod.py", "language": "python", "imports": [], "imported_by": [],
+                 "symbols": {"functions": [{"name": "do_2", "start_line": 1, "end_line": 2}], "classes": []}},
+            ],
+            "api_endpoints": {
+                "checked": True,
+                "endpoints": [
+                    {"method": "GET", "path": "/own", "file": "pkg0/mod.py", "line": 1, "handler": "own"},
+                    {"method": "GET", "path": "/neighbour", "file": "pkg1/mod.py", "line": 1, "handler": "nb"},
+                    {"method": "GET", "path": "/unrelated", "file": "pkg2/mod.py", "line": 1, "handler": "far"},
+                ],
+            },
+        },
+    }
+
+
+def _capture_file_page_request(evidence: dict, paths: list[str]) -> dict:
+    captured = {}
+
+    def _respond(_system_prompt, user_prompt, cwd):
+        body = json.loads(user_prompt)
+        captured.update(body if isinstance(body, dict) else {"items": body})
+        items = captured["items"] if "items" in captured else [captured]
+        return json.dumps({item.get("id", item.get("path")): {"detail": "stuff."} for item in items})
+
+    writing_adapter = MagicMock()
+    writing_adapter.simple_completion.side_effect = _respond
+    generate_file_pages(evidence, writing_adapter, paths=paths, include_repo_context=True)
+    return captured
+
+
+def test_file_page_repo_context_keeps_only_entries_about_the_batch_and_its_neighbours(monkeypatch):
+    monkeypatch.delenv("AIRVIEW_FILE_PAGE_TRIM_CONTEXT", raising=False)
+
+    captured = _capture_file_page_request(_repo_context_evidence(), ["pkg0/mod.py", "pkg2/mod.py"])
+
+    endpoints = captured["repo_context"]["api_endpoints"]
+    # pkg0 (own), pkg1 (pkg0's import) and pkg2 (own) are all relevant here.
+    assert {e["file"] for e in endpoints} == {"pkg0/mod.py", "pkg1/mod.py", "pkg2/mod.py"}
+
+    captured = _capture_file_page_request(_repo_context_evidence(), ["pkg0/mod.py"])
+
+    endpoints = captured["repo_context"]["api_endpoints"]
+    assert {e["file"] for e in endpoints} == {"pkg0/mod.py", "pkg1/mod.py"}
+
+
+def test_file_page_repo_context_trim_keeps_entries_without_a_file_pointer(monkeypatch):
+    monkeypatch.delenv("AIRVIEW_FILE_PAGE_TRIM_CONTEXT", raising=False)
+    from scan_worker.live_wiki import _trim_file_page_repo_context
+
+    context = {
+        "database_schema": {"tables": [{"name": "t", "file": "far/away.py"}], "tables_total_count": 40},
+        "api_endpoints": [
+            {"method": "GET", "path": "/no-file", "file": None},
+            {"method": "GET", "path": "/pkg0/mod.py", "file": "far/away.py"},
+        ],
+        "environment_variables": ["API_KEY"],
+        "dead_code": {"unreachable_modules": ["far/away.py"]},
+    }
+
+    trimmed = _trim_file_page_repo_context(context, [{"path": "pkg0/mod.py", "imports": [], "imported_by": []}])
+
+    assert trimmed["database_schema"] == {"tables": [], "tables_total_count": 40}
+    # An endpoint's "path" is a URL route: it must never be matched against source files.
+    assert trimmed["api_endpoints"] == [{"method": "GET", "path": "/no-file", "file": None}]
+    # Plain strings carry no file pointer, so they are left alone.
+    assert trimmed["environment_variables"] == ["API_KEY"]
+    assert trimmed["dead_code"] == {"unreachable_modules": ["far/away.py"]}
+
+
+def test_file_page_repo_context_trim_does_not_mutate_the_shared_context(monkeypatch):
+    monkeypatch.delenv("AIRVIEW_FILE_PAGE_TRIM_CONTEXT", raising=False)
+    from scan_worker.live_wiki import _trim_file_page_repo_context
+
+    context = {"api_endpoints": [{"file": "far/away.py"}, {"file": "pkg0/mod.py"}]}
+
+    _trim_file_page_repo_context(context, [{"path": "pkg0/mod.py"}])
+
+    # One repo_context object is shared by every concurrent batch of a build.
+    assert len(context["api_endpoints"]) == 2
+
+
+def test_file_page_repo_context_trim_kill_switch_sends_the_full_context(monkeypatch):
+    monkeypatch.setenv("AIRVIEW_FILE_PAGE_TRIM_CONTEXT", "off")
+
+    captured = _capture_file_page_request(_repo_context_evidence(), ["pkg0/mod.py"])
+
+    endpoints = captured["repo_context"]["api_endpoints"]
+    assert {e["file"] for e in endpoints} == {"pkg0/mod.py", "pkg1/mod.py", "pkg2/mod.py"}
+
+
 def _n_cluster_evidence(n: int) -> dict:
     modules = [
         {
