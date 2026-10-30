@@ -11,6 +11,9 @@ from pathlib import Path
 from aletheore.shield.registry import _norm as _registry_norm
 
 MIN_LENGTH = 5
+# The popular list each ecosystem's names are compared with. Only these two are known; a name from any other
+# ecosystem (or a misspelt ecosystem label) is never compared with either list.
+_LIST_OF = {"PyPI": "pypi", "npm": "npm"}
 _DATA = Path(__file__).resolve().parents[1] / "data" / "popular_packages.json"
 
 
@@ -42,14 +45,16 @@ def _within_one(a: str, b: str) -> bool:
 
 @functools.lru_cache(maxsize=2)
 def _index(ecosystem: str) -> tuple[frozenset[str], tuple[tuple[str, str], ...]]:
-    key = "pypi" if ecosystem == "PyPI" else "npm"
-    names = load_popular().get(key, [])
+    names = load_popular().get(_LIST_OF[ecosystem], [])
     normed = tuple((_near_norm(ecosystem, n), n) for n in names)
     return frozenset(n for n, _ in normed), normed
 
 
 def near_miss(ecosystem: str, name: str) -> str | None:
-    """The popular package `name` is one edit away from, or None."""
+    """The popular package of the same ecosystem that `name` is one edit away from, or None (always None for an
+    ecosystem other than PyPI and npm)."""
+    if ecosystem not in _LIST_OF:
+        return None
     target = _near_norm(ecosystem, name)
     if len(target) < MIN_LENGTH:
         return None

@@ -315,3 +315,11 @@ def test_concurrent_registry_cache_writers_keep_every_entry(tmp_path, monkeypatc
     for t in threads:
         t.join(30)
     assert set(json.loads((tmp_path / "reg.json").read_text(encoding="utf-8"))) == {f"PyPI:name{i}" for i in range(4)}
+
+
+def test_near_miss_compares_only_within_the_names_own_ecosystem():
+    assert nearmiss.near_miss("PyPI", "expres") is None  # npm's "express" is not a PyPI near miss
+    assert nearmiss.near_miss("npm", "reqeusts") is None  # PyPI's "requests" is not an npm near miss
+    for ecosystem in ("crates.io", "Go", "RubyGems", "pypi", "NPM", "", "Maven"):
+        assert nearmiss.near_miss(ecosystem, "expres") is None
+        assert nearmiss.near_miss(ecosystem, "reqeusts") is None
