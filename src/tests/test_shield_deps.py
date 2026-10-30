@@ -724,3 +724,10 @@ def test_changing_an_npm_alias_target_is_a_new_dependency_of_the_new_target(tmp_
     # The same target as before is not new.
     _write(repo, "package.json", json.dumps({"name": "p", "dependencies": {"short": "npm:@acme/real@^1.1"}}))
     assert added_dependencies(repo)[0] == []
+
+
+def test_editable_requirement_lines_declare_their_egg_name(tmp_path):
+    reqs = ("-e git+https://github.com/acme/foo.git#egg=foo\n--editable git+https://x.example/baz.git#egg=baz\n"
+            "--editable=git+https://x.example/qux.git#egg=qux&subdirectory=src\n-e ./local\n-r other.txt\n")
+    repo = _init(tmp_path / "r", {"requirements.txt": reqs, "app.py": "x = 1\n"})
+    assert _deps._declared_python_names(repo, ["requirements.txt"]) == {"foo", "baz", "qux"}

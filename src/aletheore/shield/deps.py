@@ -628,6 +628,21 @@ def _dist_names(lines) -> set[str]:
     return found
 
 
+_EDITABLE = re.compile(r"^(?:-e|--editable)(?:\s+|=)")
+
+
+def _requirement_lines(text: str):
+    """Requirement lines of a requirements file: comments and pip options are left out, except that an editable
+    install (`-e` / `--editable`) is read for the `#egg=` name its location carries."""
+    for line in text.splitlines():
+        line = line.strip()
+        editable = _EDITABLE.match(line)
+        if editable:
+            yield line[editable.end():].strip()
+        elif line and not line.startswith(("#", "-")):
+            yield line
+
+
 _SETUP_CFG_KEYS = ("install_requires", "setup_requires", "tests_require")
 
 
@@ -668,8 +683,7 @@ def _declared_python_names(repo: Path, working: list[str]) -> set[str]:
             continue
         try:
             if is_requirements:
-                found |= _dist_names(l for l in (_read(repo, rel) or "").splitlines()
-                                     if not l.strip().startswith(("#", "-")))
+                found |= _dist_names(_requirement_lines(_read(repo, rel) or ""))
             elif name == "pyproject.toml":
                 data = _toml(_read(repo, rel))
                 project = data.get("project") if isinstance(data.get("project"), dict) else {}
