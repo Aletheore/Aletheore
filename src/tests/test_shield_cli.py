@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 from aletheore import shield_cli
 from aletheore.cli import app
 from aletheore.shield import checkpoint as cp
+from aletheore.shield import guard as guard_mod
 from aletheore.shield import setup
 from aletheore.shield.setup import SetupChange
 
@@ -143,7 +144,7 @@ def test_yes_flag_skips_prompt_and_existing_evidence_is_not_rescanned(repo, scan
     r = runner.invoke(app, ["shield", "--path", str(repo), "--yes"])
     assert r.exit_code == 0, r.output
     assert scans == []
-    assert shield_cli.shield_status(repo).enabled
+    assert setup.shield_status(repo).enabled
 
 
 def test_non_tty_without_yes_exits_1_and_writes_nothing(repo, monkeypatch):
@@ -169,7 +170,7 @@ def test_value_error_from_apply_says_nothing_written(repo, monkeypatch):
     def boom(*a, **k):
         raise ValueError("setup plan changed since it was shown")
 
-    monkeypatch.setattr(shield_cli, "apply_setup", boom)
+    monkeypatch.setattr(setup, "apply_setup", boom)
     before = _snapshot(repo)
     r = runner.invoke(app, ["shield", "--path", str(repo), "--yes"])
     assert r.exit_code == 1
@@ -186,7 +187,7 @@ def test_other_apply_error_gives_reason(repo, monkeypatch):
     def boom(*a, **k):
         raise OSError("disk is full")
 
-    monkeypatch.setattr(shield_cli, "apply_setup", boom)
+    monkeypatch.setattr(setup, "apply_setup", boom)
     r = runner.invoke(app, ["shield", "--path", str(repo), "--yes"])
     assert r.exit_code == 1
     assert "disk is full" in r.output
@@ -271,7 +272,7 @@ def test_undo_checkpoint_error_is_a_message(repo, monkeypatch):
     def boom(*a, **k):
         raise cp.CheckpointError("nothing was written; could not save a safety checkpoint")
 
-    monkeypatch.setattr(shield_cli, "restore_checkpoint", boom)
+    monkeypatch.setattr(cp, "restore_checkpoint", boom)
     r = runner.invoke(app, ["shield", "undo", "--yes", "--path", str(repo)])
     assert r.exit_code == 1
     assert "nothing was written" in r.output
@@ -284,7 +285,7 @@ def test_off_removes_everything_and_names_it(repo):
     assert r.exit_code == 0, r.output
     assert "Removed:" in r.output
     assert "settings.local.json" in r.output or "config.json" in r.output
-    assert not shield_cli.shield_status(repo).enabled
+    assert not setup.shield_status(repo).enabled
     assert not (repo / ".aletheore" / "shield" / "config.json").exists()
 
 
@@ -310,7 +311,7 @@ def test_off_keeps_checkpoint_refs_and_purge_deletes_them(repo):
 
 
 def test_check_clean_repo_prints_all_clear(repo, monkeypatch):
-    monkeypatch.setattr(shield_cli, "render_report", lambda report, max_lines=12: "")
+    monkeypatch.setattr(guard_mod, "render_report", lambda report, max_lines=12: "")
     r = runner.invoke(app, ["shield", "check", "--path", str(repo)])
     assert r.exit_code == 0, r.output
     assert "No findings; every check ran." in r.output
@@ -335,7 +336,7 @@ def test_check_never_traces_back(repo, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("kaboom")
 
-    monkeypatch.setattr(shield_cli, "run_guard", boom)
+    monkeypatch.setattr(guard_mod, "run_guard", boom)
     r = runner.invoke(app, ["shield", "check", "--path", str(repo)])
     assert r.exit_code == 0
     assert "could not run" in r.output and "Traceback" not in r.output
@@ -352,7 +353,7 @@ def test_hostile_path_and_description_never_appear_raw(repo, monkeypatch):
         SetupChange(hostile, "edit", "bad \x1b[2J desc ‮ [bold]x[/bold]\nnext", "", "+\x1b[31mline‮\n-ok\n"),
         SetupChange(hostile, "snippet", "paste\x1b[0m", "add\x1b[1m this‮", ""),
     ]
-    monkeypatch.setattr(shield_cli, "plan_setup", lambda r: changes)
+    monkeypatch.setattr(setup, "plan_setup", lambda r: changes)
     r = runner.invoke(app, ["shield", "--path", str(repo)], input="no\n")
     assert r.exit_code == 0, r.output
     assert "\x1b" not in r.output and "‮" not in r.output and "\x07" not in r.output
@@ -361,7 +362,7 @@ def test_hostile_path_and_description_never_appear_raw(repo, monkeypatch):
 
 
 def test_blocked_setup_prints_reason_escaped(repo, monkeypatch):
-    monkeypatch.setattr(shield_cli, "plan_setup", lambda r: shield_cli.SetupBlocked("bad\x1b[31m‮ reason"))
+    monkeypatch.setattr(setup, "plan_setup", lambda r: setup.SetupBlocked("bad\x1b[31m‮ reason"))
     r = runner.invoke(app, ["shield", "--path", str(repo)])
     assert r.exit_code == 1
     assert "bad" in r.output and "\x1b" not in r.output and "‮" not in r.output
@@ -426,7 +427,7 @@ def test_first_scan_failure_is_a_warning_not_a_traceback(repo, monkeypatch, exc)
     assert r.exit_code == 0, r.output
     assert "first scan did not finish" in r.output
     assert "Shield is on." in r.output
-    assert shield_cli.shield_status(repo).enabled
+    assert setup.shield_status(repo).enabled
 
 
 def test_group_path_and_yes_reach_subcommands(tmp_path, monkeypatch):
@@ -435,7 +436,7 @@ def test_group_path_and_yes_reach_subcommands(tmp_path, monkeypatch):
     monkeypatch.chdir(a)
     r = runner.invoke(app, ["shield", "--path", str(b), "off", "--yes"])
     assert r.exit_code == 0, r.output
-    assert not shield_cli.shield_status(b).enabled
+    assert not setup.shield_status(b).enabled
     # `check` and `undo` honour the group --path too
     cp.take_checkpoint(b, "s1", force=True)
     r = runner.invoke(app, ["shield", "--path", str(b), "undo", "--yes"])
@@ -472,26 +473,26 @@ def test_plan_hides_private_records_and_uses_relative_paths(repo):
 def test_a_y_answer_does_not_apply(repo, answer):
     r = runner.invoke(app, ["shield", "--path", str(repo)], input=answer)
     assert "Only 'yes' sets it up" in r.output
-    assert not shield_cli.shield_status(repo).enabled
+    assert not setup.shield_status(repo).enabled
 
 
 @pytest.mark.parametrize("answer", ["YES\n", " Yes \n"])
 def test_yes_is_case_insensitive_and_trimmed(repo, answer):
     r = runner.invoke(app, ["shield", "--path", str(repo)], input=answer)
     assert r.exit_code == 0, r.output
-    assert shield_cli.shield_status(repo).enabled
+    assert setup.shield_status(repo).enabled
 
 
 def test_no_lookups_flag_reaches_the_guard(repo, monkeypatch):
     monkeypatch.delenv("ALETHEORE_SHIELD_OFFLINE")
     seen = []
-    real = shield_cli.run_guard
+    real = guard_mod.run_guard
 
     def spy(repo_, **kw):
         seen.append(kw["lookups"])
         return real(repo_, **kw)
 
-    monkeypatch.setattr(shield_cli, "run_guard", spy)
+    monkeypatch.setattr(guard_mod, "run_guard", spy)
     runner.invoke(app, ["shield", "check", "--no-lookups", "--path", str(repo)])
     runner.invoke(app, ["shield", "check", "--path", str(repo)])
     assert seen == [False, None]
@@ -499,9 +500,9 @@ def test_no_lookups_flag_reaches_the_guard(repo, monkeypatch):
 
 def test_status_notes_are_shown_with_what_to_do(repo, monkeypatch):
     _setup_on(repo)
-    status = shield_cli.shield_status(repo)
+    status = setup.shield_status(repo)
     monkeypatch.setattr(
-        shield_cli, "shield_status",
+        setup, "shield_status",
         lambda r: type(status)(True, 0, None, ("git hook not installed", "weird\x1b[31m note")),
     )
     r = runner.invoke(app, ["shield", "--path", str(repo)])
@@ -512,8 +513,8 @@ def test_status_notes_are_shown_with_what_to_do(repo, monkeypatch):
 def test_status_prints_receipt_relative(repo, monkeypatch):
     _setup_on(repo)
     receipt = repo / ".aletheore" / "shield" / "receipts" / "r.md"
-    status = shield_cli.shield_status(repo)
-    monkeypatch.setattr(shield_cli, "shield_status", lambda r: type(status)(True, 1, receipt, ()))
+    status = setup.shield_status(repo)
+    monkeypatch.setattr(setup, "shield_status", lambda r: type(status)(True, 1, receipt, ()))
     r = runner.invoke(app, ["shield", "--path", str(repo)])
     assert "receipt: .aletheore/shield/receipts/r.md" in r.output
 
@@ -522,7 +523,7 @@ def test_undo_shows_blocked_and_left_in_place_lists(repo, monkeypatch):
     first, _ = _two_checkpoints(repo)
     (repo / "a.txt").write_text("x\n", encoding="utf-8")
     plan = cp.RestorePlan(("a.txt",), tuple(f"new{i}.txt" for i in range(12)), ("locked\x1b[31m.txt",))
-    monkeypatch.setattr(shield_cli, "plan_restore", lambda r, c: plan)
+    monkeypatch.setattr(cp, "plan_restore", lambda r, c: plan)
     r = runner.invoke(app, ["shield", "undo", "--path", str(repo)], input="1\nno\n")
     assert "12 files left in place" in r.output and "new9.txt" in r.output and "... and 2 more" in r.output
     assert "1 file left untouched" in r.output and "locked?[31m.txt" in r.output
@@ -554,29 +555,29 @@ def test_undo_picks_by_unique_suffix_and_rejects_ambiguous(repo, monkeypatch):
 
     twins = [dataclasses.replace(first, ref="refs/aletheore/checkpoints/x/1-same"),
              dataclasses.replace(second, ref="refs/aletheore/checkpoints/y/2-same")]
-    monkeypatch.setattr(shield_cli, "list_checkpoints", lambda r, n: twins)
+    monkeypatch.setattr(cp, "list_checkpoints", lambda r, n: twins)
     r = runner.invoke(app, ["shield", "undo", "same", "--yes", "--path", str(repo)])
     assert r.exit_code == 1 and "more than one" in r.output
 
 
 def test_off_says_when_the_shared_hook_was_kept(repo, monkeypatch):
     _setup_on(repo)
-    monkeypatch.setattr(shield_cli, "shared_blocks_kept", lambda r: True)
+    monkeypatch.setattr(setup, "shared_blocks_kept", lambda r: True)
     r = runner.invoke(app, ["shield", "off", "--yes", "--path", str(repo)])
     assert "Another worktree still uses Shield" in r.output
 
 
 def test_plan_changed_and_other_value_errors_differ(repo, monkeypatch):
     def changed(*a, **k):
-        raise ValueError(shield_cli.PLAN_CHANGED)
+        raise ValueError(setup.PLAN_CHANGED)
 
     def other(*a, **k):
         raise ValueError("settings.local.json is not valid")
 
-    monkeypatch.setattr(shield_cli, "apply_setup", changed)
+    monkeypatch.setattr(setup, "apply_setup", changed)
     r = runner.invoke(app, ["shield", "--path", str(repo), "--yes"])
     assert "nothing was written" in r.output.lower()
-    monkeypatch.setattr(shield_cli, "apply_setup", other)
+    monkeypatch.setattr(setup, "apply_setup", other)
     r = runner.invoke(app, ["shield", "--path", str(repo), "--yes"])
     assert "not valid" in r.output and "nothing was written" not in r.output.lower()
 
@@ -642,13 +643,13 @@ def test_setup_subcommand_runs_the_first_run_flow(repo, scans):
     r = runner.invoke(app, ["shield", "setup", "--path", str(repo)], input="yes\n")
     assert r.exit_code == 0, r.output
     assert "Shield will make these changes" in r.output and "Shield is on." in r.output
-    assert shield_cli.shield_status(repo).enabled and len(scans) == 1
+    assert setup.shield_status(repo).enabled and len(scans) == 1
 
 
 def test_setup_subcommand_takes_the_group_options_too(repo):
     r = runner.invoke(app, ["shield", "--path", str(repo), "--yes", "setup"])
     assert r.exit_code == 0, r.output
-    assert shield_cli.shield_status(repo).enabled
+    assert setup.shield_status(repo).enabled
 
 
 def test_setup_subcommand_when_already_set_up_changes_nothing(repo):
@@ -714,6 +715,45 @@ def test_shield_help_lists_setup_and_status():
         assert name in r.output
 
 
+# Shield modules that `import aletheore.cli` (so `aletheore --help`, `aletheore scan` and every other command) must
+# not load: only running a shield command may import them.
+HEAVY_SHIELD_MODULES = (
+    "aletheore.shield.setup",
+    "aletheore.shield.checkpoint",
+    "aletheore.shield.guard",
+    "aletheore.shield.guard_evidence",
+    "aletheore.shield.deps",
+    "aletheore.shield.registry",
+    "aletheore.shield.receipt",
+    "aletheore.shield.imports",
+    "aletheore.shield.nearmiss",
+)
+
+_IMPORT_PROBE = """
+import json, sys
+import typer.main
+import aletheore.cli as cli
+group = typer.main.get_command(cli.app).commands["shield"]
+print(json.dumps({
+    "loaded": sorted(m for m in sys.modules if m.startswith("aletheore.shield.")),
+    "commands": {name: (command.help or "") for name, command in group.commands.items()},
+}))
+"""
+
+
+def test_importing_the_cli_does_not_load_shield_modules():
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PYTEST")}
+    env["PYTHONPATH"] = os.pathsep.join([str(Path(shield_cli.__file__).resolve().parents[1]), env.get("PYTHONPATH", "")])
+    probe = subprocess.run(
+        [os.sys.executable, "-c", _IMPORT_PROBE], capture_output=True, text=True, env=env, check=True
+    )
+    found = json.loads(probe.stdout.strip().splitlines()[-1])
+    assert not set(found["loaded"]) & set(HEAVY_SHIELD_MODULES), found["loaded"]
+    # The Click tree, and so `--help` and the menu, still has all five subcommands with their one-liners.
+    assert set(found["commands"]) == {"setup", "status", "undo", "off", "check"}
+    assert all(found["commands"].values())
+
+
 # ---------------------------------------------------------------- errors go to stderr
 
 
@@ -725,7 +765,7 @@ def _apply_fails(monkeypatch, exc):
     def boom(*a, **k):
         raise exc
 
-    monkeypatch.setattr(shield_cli, "apply_setup", boom)
+    monkeypatch.setattr(setup, "apply_setup", boom)
 
 
 @pytest.mark.parametrize(
@@ -761,7 +801,7 @@ def test_guard_failure_in_check_is_an_error_line_but_exits_0(repo, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("kaboom")
 
-    monkeypatch.setattr(shield_cli, "run_guard", boom)
+    monkeypatch.setattr(guard_mod, "run_guard", boom)
     r = runner.invoke(app, ["shield", "check", "--path", str(repo)])
     assert r.exit_code == 0
     assert "error: the guard could not run: RuntimeError" in r.stderr and "could not run" not in r.stdout

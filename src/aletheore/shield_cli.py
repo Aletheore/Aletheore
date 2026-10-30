@@ -13,24 +13,18 @@ import io
 import sys
 from datetime import timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 
-from aletheore.shield import state
-from aletheore.shield.checkpoint import Checkpoint, CheckpointError, list_checkpoints, plan_restore, restore_checkpoint
-from aletheore.shield.gitutil import run_git
-from aletheore.shield.guard import _UNSAFE, clean_text, render_report, run_guard
-from aletheore.shield.receipt import latest_receipt
-from aletheore.shield.setup import (
-    PLAN_CHANGED,
-    SetupBlocked,
-    SetupChange,
-    apply_setup,
-    plan_setup,
-    remove_setup_report,
-    shared_blocks_kept,
-    shield_status,
-)
+if TYPE_CHECKING:
+    from aletheore.shield.checkpoint import Checkpoint
+    from aletheore.shield.setup import SetupChange
+
+# Every aletheore.shield module is imported inside the command that needs it: `aletheore.cli` registers this app at
+# import time, so a top-level import here would make `aletheore --help`, `aletheore scan` and every other command pay
+# for Shield's setup, checkpoint, guard and registry code (tests/test_shield_cli.py pins this). Modules are reached
+# as `module.name` at call time, so patching the name on its own module works.
 
 shield_app = typer.Typer(
     help="a local safety net for AI-written changes: guard, undo, receipts",
@@ -47,11 +41,15 @@ def _out(text: str = "") -> None:
 
 
 def _safe(text: object) -> str:
+    from aletheore.shield.guard import clean_text
+
     return clean_text(str(text))
 
 
 def _safe_block(text: str, indent: str = "    ") -> None:
     """Print a multi-line block with indentation kept but control and bidi characters neutralised."""
+    from aletheore.shield.guard import _UNSAFE
+
     for line in str(text).splitlines():
         _out(indent + _UNSAFE.sub("?", line.expandtabs(4)).rstrip())
 
@@ -114,6 +112,8 @@ def _resolve_repo(path: Path | None) -> Path:
     start = Path(path) if path is not None else Path(".")
     if not start.is_dir():
         raise _fail(f"Shield needs a git repository, and {_safe(start)} is not a folder.")
+    from aletheore.shield.gitutil import run_git
+
     probe = run_git(start, "rev-parse", "--show-toplevel")
     top = probe.stdout.decode("utf-8", "replace").strip()
     if probe.returncode != 0 or not top:
@@ -148,6 +148,7 @@ def _show_change(repo: Path, change: SetupChange) -> None:
 
 def _show_network(repo: Path) -> None:
     from aletheore.network_plan import shield_network_plan
+    from aletheore.shield import state
 
     lookups = state.registry_lookups_enabled(repo)
     _out("")
@@ -207,7 +208,9 @@ _NOTE_HINTS = {
 
 
 def _status(repo: Path) -> None:
-    status = shield_status(repo)
+    from aletheore.shield import setup
+
+    status = setup.shield_status(repo)
     if not status.enabled:
         _out(f"Shield is off in {_safe(repo)}.")
         _out("  aletheore shield setup   set it up (shows every change first)")
@@ -240,7 +243,9 @@ def shield(
     if ctx.invoked_subcommand is not None:
         return
     repo = _resolve_repo(path)
-    if shield_status(repo).enabled:
+    from aletheore.shield import setup
+
+    if setup.shield_status(repo).enabled:
         _status(repo)
         return
     _setup(repo, yes)
@@ -254,7 +259,9 @@ def setup_command(
 ) -> None:
     path, yes = _opts(ctx, path, yes)
     repo = _resolve_repo(path)
-    _setup(repo, yes, already_on=shield_status(repo).enabled)
+    from aletheore.shield import setup
+
+    _setup(repo, yes, already_on=setup.shield_status(repo).enabled)
 
 
 @shield_app.command("status", help="show whether Shield is on, its checkpoints and latest receipt (changes nothing)")
@@ -269,8 +276,10 @@ def status_command(
 def _setup(repo: Path, yes: bool, *, already_on: bool = False) -> None:
     """The first-run flow: show the plan, ask, apply, run the first scan. With `already_on`, an empty plan is not an
     error: Shield is set up and nothing needs updating."""
-    plan = plan_setup(repo)
-    if isinstance(plan, SetupBlocked):
+    from aletheore.shield import setup
+
+    plan = setup.plan_setup(repo)
+    if isinstance(plan, setup.SetupBlocked):
         raise _fail(f"Shield cannot be set up here: {_safe(plan.reason)}")
     if not plan and already_on:
         _out(f"Shield is already set up in {_safe(repo)}; nothing to change.")
@@ -300,9 +309,9 @@ def _setup(repo: Path, yes: bool, *, already_on: bool = False) -> None:
         raise typer.Exit(0)
     # Setup goes first: the scan creates .aletheore/, which would make the plan the user just approved stale.
     try:
-        apply_setup(repo, approved=list(plan))
+        setup.apply_setup(repo, approved=list(plan))
     except ValueError as exc:
-        if str(exc) == PLAN_CHANGED:
+        if str(exc) == setup.PLAN_CHANGED:
             raise _fail(
                 "Files changed while you were reading the plan; nothing was written. "
                 "Run `aletheore shield` again."
@@ -347,7 +356,9 @@ def undo(
 ) -> None:
     path, yes = _opts(ctx, path, yes)
     repo = _resolve_repo(path)
-    checkpoints = list_checkpoints(repo, 50)
+    from aletheore.shield import checkpoint
+
+    checkpoints = checkpoint.list_checkpoints(repo, 50)
     if not checkpoints:
         _out("No checkpoints yet, so there is nothing to undo.")
         raise typer.Exit(0)
@@ -367,7 +378,7 @@ def undo(
             chosen = shown[0]
         else:
             raise _fail("Nothing was changed. Run in a terminal, or pass a checkpoint ref with --yes.")
-    plan = plan_restore(repo, chosen)
+    plan = checkpoint.plan_restore(repo, chosen)
     _out(f"Checkpoint {_safe(_short_ref(chosen.ref))} from {_when(chosen)}:")
     _out(f"  files that will be written: {len(plan.to_write)}")
     for name in plan.to_write[:20]:
@@ -393,8 +404,8 @@ def undo(
         _out("Nothing changed.")
         raise typer.Exit(0)
     try:
-        result = restore_checkpoint(repo, chosen, session_id="cli-undo")
-    except CheckpointError as exc:
+        result = checkpoint.restore_checkpoint(repo, chosen, session_id="cli-undo")
+    except checkpoint.CheckpointError as exc:
         raise _fail(f"Undo did not complete: {_safe(exc)}")
     _out(f"Restored {_plural(len(result.restored), 'file')}.")
     for name in result.restored[:20]:
@@ -433,7 +444,9 @@ def off(
         _out("Nothing changed.")
         raise typer.Exit(0)
     try:
-        report = remove_setup_report(repo, purge=purge)
+        from aletheore.shield import setup
+
+        report = setup.remove_setup_report(repo, purge=purge)
     except Exception as exc:  # noqa: BLE001
         raise _fail(f"Removing Shield failed: {_safe(exc) or type(exc).__name__}")
     for heading, paths in (
@@ -455,7 +468,7 @@ def off(
             "Kept a git exclude for .aletheore/ because scan evidence remains there (delete .aletheore/ yourself, "
             "then run `aletheore shield off` again to drop it)."
         )
-    if shared_blocks_kept(repo):
+    if setup.shared_blocks_kept(repo):
         _out("Another worktree still uses Shield: the shared git hook was kept.")
 
 
@@ -471,8 +484,10 @@ def check(
     path, _ = _opts(ctx, path, False)
     repo = _resolve_repo(path)
     try:
-        report = run_guard(repo, lookups=False if no_lookups else None, budget_s=6.0)
-        text = render_report(report, max_lines=40)
+        from aletheore.shield import guard
+
+        report = guard.run_guard(repo, lookups=False if no_lookups else None, budget_s=6.0)
+        text = guard.render_report(report, max_lines=40)
     except Exception as exc:  # noqa: BLE001 - informational command: one line, never a trace
         _error(f"the guard could not run: {_safe(type(exc).__name__)}")
         return
