@@ -239,7 +239,11 @@ def _edit_repo(payload: dict) -> _Repo | None:
     found = _resolve(folder) if folder is not None else None
     if found is not None and _inside(path, found.top) and _opted_in(found):
         return found
-    session = _cwd_repo(payload)
+    cwd = payload.get("cwd")
+    if found is not None and isinstance(cwd, str) and cwd and _same_dir(Path(cwd), found.top):
+        session = found  # the session runs at this repository's top: no second probe needed
+    else:
+        session = _cwd_repo(payload)
     if found is None or not _inside(path, found.top):
         found = session
     if found is None or session is None or not _inside(path, found.top) or not _same_dir(found.top, session.top):

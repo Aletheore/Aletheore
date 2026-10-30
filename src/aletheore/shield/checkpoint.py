@@ -41,7 +41,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from aletheore.shield.denylist import is_denied_path
-from aletheore.shield.gitutil import RepoState, repo_state, run_git
+from aletheore.shield.gitutil import RepoState, repo_state, run_git, run_git_pair
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_TOTAL_BYTES = 100 * 1024 * 1024
@@ -177,6 +177,17 @@ def _layout(repo: Path) -> _Layout | None:
     )
 
 
+def _layout_from(checked: RepoState) -> _Layout | None:
+    """The layout from a repo_state probe the caller already ran (it asks git the same four questions)."""
+    if not checked.ok or checked.top is None or checked.git_dir is None or checked.common_dir is None:
+        return None
+    same = os.path.normcase(os.path.realpath(checked.git_dir)) == os.path.normcase(
+        os.path.realpath(checked.common_dir)
+    )
+    index = checked.index if checked.index is not None and checked.index.is_file() else None
+    return _Layout(top=checked.top, worktree="" if same else checked.git_dir.name, index=index)
+
+
 def _worktree_prefix(worktree: str) -> str:
     """The ref folder for one worktree. Never collides: "main", "wt-<name>" or "wtx-<hex of name>"."""
     if not worktree:
@@ -205,8 +216,11 @@ def _list_candidates(
 ) -> tuple[list[str], dict[str, str], list[str], set[str]] | None:
     """Tracked paths, tracked gitlinks (path -> commit), untracked non-ignored paths (each sorted), and
     tracked paths flagged assume-unchanged or skip-worktree, whose index entries git will not refresh."""
-    tracked_out = run_git(top, "ls-files", "-s", "-v", "-z", env=env)
-    untracked_out = run_git(top, "ls-files", "-o", "--exclude-standard", "-z", env=env)
+    # The untracked walk is the slowest git call on a big tree; the tracked listing runs alongside it.
+    tracked_out, untracked_out = run_git_pair(
+        top, ("ls-files", "-s", "-v", "-z"), ("ls-files", "-o", "--exclude-standard", "-z"), env=env,
+        runner=run_git,
+    )
     if tracked_out.returncode != 0 or untracked_out.returncode != 0:
         return None
     tracked: set[str] = set()
@@ -230,20 +244,23 @@ def _list_candidates(
 
 
 def _under_symlink(top: Path, path: str, cache: dict[str, bool]) -> bool:
-    """True when a parent folder of path is a symbolic link; git refuses paths "beyond a symbolic link"."""
-    prefix = ""
-    for part in path.split("/")[:-1]:
-        prefix = f"{prefix}/{part}" if prefix else part
-        hit = cache.get(prefix)
-        if hit is None:
+    """True when a parent folder of path is a symbolic link; git refuses paths "beyond a symbolic link".
+
+    `cache` maps a folder to "this folder or one above it is a link", so each folder is looked at once and a file
+    costs one dictionary lookup."""
+    parent = path.rpartition("/")[0]
+    if not parent:
+        return False
+    hit = cache.get(parent)
+    if hit is None:
+        hit = _under_symlink(top, parent, cache)
+        if not hit:
             try:
-                hit = stat.S_ISLNK(os.lstat(os.path.join(top, prefix)).st_mode)
+                hit = stat.S_ISLNK(os.lstat(os.path.join(top, parent)).st_mode)
             except OSError:
                 hit = False
-            cache[prefix] = hit
-        if hit:
-            return True
-    return False
+        cache[parent] = hit
+    return hit
 
 
 def _readable(path: str, info: os.stat_result) -> bool:
@@ -583,11 +600,13 @@ def _store(
     session_id: str,
     created_at: datetime,
     snapshot: _Snapshot,
+    parent: str | None = None,
 ) -> Checkpoint | None:
-    head = run_git(layout.top, "rev-parse", "-q", "--verify", "HEAD^{commit}")
-    parent = (
-        head.stdout.decode("ascii", "replace").strip() if head.returncode == 0 else ""
-    )
+    if parent is None:
+        head = run_git(layout.top, "rev-parse", "-q", "--verify", "HEAD^{commit}")
+        parent = (
+            head.stdout.decode("ascii", "replace").strip() if head.returncode == 0 else ""
+        )
     stamp = f"@{int(created_at.timestamp())} +0000"
     env = {**_IDENT_ENV, "GIT_AUTHOR_DATE": stamp, "GIT_COMMITTER_DATE": stamp}
     prefix = (
@@ -656,9 +675,11 @@ def take_checkpoint(
     saved an identical tree a moment ago. `force` bypasses only the rate limit. `checked` is a repo_state result
     the caller already has for this repo (saves the probe)."""
     repo = Path(repo)
-    if not (checked if checked is not None else repo_state(repo)).ok:
+    checked = checked if checked is not None else repo_state(repo)
+    if not checked.ok:
         return None
-    layout = _layout(repo)
+    # The repo_state probe already answered what _layout asks, and HEAD: two git calls fewer per checkpoint.
+    layout = _layout_from(checked) or _layout(repo)
     if layout is None:
         return None
     created_at = _utc(now)
@@ -675,7 +696,7 @@ def take_checkpoint(
             return None
         if latest is not None and snapshot.tree == latest.tree:
             return None
-        return _store(layout, scratch, session_id, created_at, snapshot)
+        return _store(layout, scratch, session_id, created_at, snapshot, checked.head if checked.top else None)
 
 
 def prune_checkpoints(

@@ -180,6 +180,37 @@ def test_pre_edit_takes_a_checkpoint_and_prints_nothing(tmp_path, monkeypatch):
     assert made[0].session == "s1"
 
 
+def test_pre_edit_warm_path_asks_git_each_question_once(tmp_path, monkeypatch):
+    """The second edit of a session (no prune due) takes one checkpoint with 12 git processes: the repository is
+    probed once (its layout and HEAD come from that probe), and the two file listings run at the same time."""
+    from aletheore.shield import gitutil
+
+    repo = _init(tmp_path / "r")
+    (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+    real_take = cp.take_checkpoint
+    monkeypatch.setattr(cp, "take_checkpoint", lambda *a, **k: real_take(*a, **{**k, "min_interval_s": 0.0}))
+    assert _run("pre-edit", _payload(repo)) == (0, "", "")
+    (repo / "a.py").write_text("x = 2\n", encoding="utf-8")
+    calls = []
+    real_git = gitutil.run_git
+
+    def counting(top, *args, **kwargs):
+        calls.append(args[0] if args[0] != "-c" else next(a for a in args if not a.startswith("-") and "=" not in a))
+        return real_git(top, *args, **kwargs)
+
+    monkeypatch.setattr(gitutil, "run_git", counting)
+    monkeypatch.setattr(cp, "run_git", counting)
+    assert _run("pre-edit", _payload(repo)) == (0, "", "")
+    monkeypatch.setattr(gitutil, "run_git", real_git)
+    monkeypatch.setattr(cp, "run_git", real_git)
+    assert len(_checkpoints(repo)) == 2
+    assert calls.count("rev-parse") == 3  # where the file is, the repository probe, HEAD
+    assert sorted(calls) == sorted([
+        "rev-parse", "rev-parse", "symbolic-ref", "rev-parse", "for-each-ref", "cat-file", "ls-files", "ls-files",
+        "update-index", "write-tree", "commit-tree", "update-ref",
+    ])
+
+
 def test_pre_edit_accepts_a_path_relative_to_cwd(tmp_path):
     repo = _init(tmp_path / "r")
     payload = _payload(repo)
