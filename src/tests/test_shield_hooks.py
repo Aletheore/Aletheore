@@ -933,3 +933,87 @@ def test_session_end_reports_a_receipt_that_could_not_be_built_on_stderr_and_exi
     code, out, err = _run("session-end", _payload(repo, event="SessionEnd"))
     assert code == 0 and out == ""
     assert err == "aletheore shield: receipt could not be built: OSError: refs unreadable\n"
+
+
+def _slow_state_reads(monkeypatch, seconds=0.03):
+    real = hooks._load_state
+
+    def slow(path):
+        data = real(path)
+        time.sleep(seconds)  # widen the read-modify-write window a racing writer could fall into
+        return data
+
+    monkeypatch.setattr(hooks, "_load_state", slow)
+
+
+def test_concurrent_state_updates_never_lose_a_key(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    path = _state_file(repo)
+    path.parent.mkdir()
+    _slow_state_reads(monkeypatch)
+    barrier = threading.Barrier(4)
+
+    def update(index):
+        barrier.wait()
+        hooks._update_state(path, {f"k{index}": index})
+
+    threads = [threading.Thread(target=update, args=(i,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert _state(repo) == {f"k{i}": i for i in range(4)}
+    assert sorted(p.name for p in path.parent.iterdir()) == [path.name]  # no temporary or lock file left
+
+
+def test_concurrent_pre_edits_prune_once(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    pruned = []
+    monkeypatch.setattr(cp, "prune_checkpoints", lambda r, **k: pruned.append(r) or 0)
+    monkeypatch.setattr(cp, "take_checkpoint", lambda *a, **k: None)
+    _slow_state_reads(monkeypatch)
+    barrier = threading.Barrier(4)
+
+    def go():
+        barrier.wait()
+        _run("pre-edit", _payload(repo))
+
+    threads = [threading.Thread(target=go) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(60)
+    assert len(pruned) == 1
+
+
+def test_findings_that_could_not_be_delivered_are_not_marked_as_said(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _fake_guard(monkeypatch, _report("x does not exist on PyPI."))
+
+    class Broken(io.StringIO):
+        def write(self, text):
+            raise BrokenPipeError
+
+    payload = json.dumps(_payload(repo, event="PostToolUse"))
+    assert hooks.main(["post-edit"], stdin=io.StringIO(payload), stdout=Broken(), stderr=io.StringIO()) == 0
+    code, out, _ = _run("post-edit", _payload(repo, event="PostToolUse"))
+    assert code == 0 and "x does not exist on PyPI." in out  # the agent never got it, so it is said again
+
+
+def test_concurrent_post_edits_with_the_same_findings_say_them_once(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _fake_guard(monkeypatch, _report("x does not exist on PyPI."))
+    _slow_state_reads(monkeypatch)
+    barrier = threading.Barrier(4)
+    outputs = []
+
+    def go():
+        barrier.wait()
+        outputs.append(_run("post-edit", _payload(repo, event="PostToolUse"))[1])
+
+    threads = [threading.Thread(target=go) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(60)
+    assert sum(1 for out in outputs if out) == 1

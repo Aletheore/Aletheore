@@ -775,3 +775,35 @@ def test_a_cycle_that_grew_or_shrank_around_one_old_cycle_is_not_new():
     shrank = _evidence([_mod("a.py", imports=["b.py"]), _mod("b.py", imports=["a.py"]), _mod("c.py"), _mod("x.py")])
     assert new_risks(old, grew)["cycles"] == []
     assert new_risks(old, shrank)["cycles"] == []
+
+
+def test_a_stale_refresh_marker_is_replaced_by_exactly_one_of_many_concurrent_callers(repo, no_spawn, monkeypatch):
+    import threading
+
+    _write_evidence(repo, _evidence(_core_modules()))
+    marker = state.shield_dir(repo, create=True) / guard_evidence._MARKER_NAME
+    marker.write_text(repr(time.time() - 3600), encoding="utf-8")  # a refresh that died an hour ago
+    real = guard_evidence._refresh_started_at
+
+    delays = threading.local()
+
+    def slow(path):  # each caller read the dead marker, then reaches the replace step at a different time
+        value = real(path)
+        time.sleep(delays.value)
+        return value
+
+    monkeypatch.setattr(guard_evidence, "_refresh_started_at", slow)
+    barrier = threading.Barrier(6)
+    won = []
+
+    def claim(index):
+        delays.value = 0.03 * index
+        barrier.wait()
+        won.append(guard_evidence._claim_marker(marker))
+
+    threads = [threading.Thread(target=claim, args=(i,)) for i in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert won.count(True) == 1, won

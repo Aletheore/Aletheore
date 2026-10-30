@@ -205,14 +205,25 @@ def _claim_marker(marker: Path, newest_edit: float | None = None) -> bool:
     A previous refresh blocks a new one while it is still running (it has not written its completion record; see
     `_finished_refresh_start`) and is younger than REFRESH_RUNNING_TIMEOUT_S, so one that crashed stops blocking
     after that. One that has finished blocks a new one for REFRESH_MIN_INTERVAL_S, unless a changed file was
-    modified after it started (`newest_edit`). A marker without a readable start time falls back to its mtime."""
+    modified after it started (`newest_edit`). A marker without a readable start time falls back to its mtime.
+
+    Creating a missing marker is an exclusive create. Replacing an existing one happens under `<marker>.lock` and
+    judges the marker as it is inside the lock, so of many callers that all saw the same dead marker only the first
+    replaces it; the others then see its fresh start and decline."""
+    from aletheore.shield.fsutil import atomic_write_text, exclusive
+
     now = time.time()
     if _write_marker(marker, now):
         return True
-    started = _refresh_started_at(marker)
-    if started is None:
-        started = _mtime(marker)
-    if started is not None:
+    with exclusive(marker.with_name(f"{marker.name}.lock")) as held:
+        if not held:
+            return False  # another caller is deciding right now
+        now = time.time()  # after the wait: a marker written meanwhile must not look like it is from the future
+        started = _refresh_started_at(marker)
+        if started is None:
+            started = _mtime(marker)
+        if started is None:
+            return _write_marker(marker, now)  # gone meanwhile: create it exclusively, as above
         age = now - started
         # marker.parent is <repo>/.aletheore/shield
         running = not _refresh_finished(marker.parent.parent.parent, started)
@@ -222,12 +233,8 @@ def _claim_marker(marker: Path, newest_edit: float | None = None) -> bool:
         elif not (newest_edit is not None and newest_edit > started):
             if 0 <= age < REFRESH_MIN_INTERVAL_S:
                 return False
-    # Replaceable marker: remove it, then race for the exclusive create again; only one caller wins.
-    try:
-        marker.unlink()
-    except FileNotFoundError:
-        pass
-    return _write_marker(marker, now)
+        atomic_write_text(marker, repr(now))  # replaced in one step: never absent, never without its start time
+        return True
 
 
 def start_background_refresh(

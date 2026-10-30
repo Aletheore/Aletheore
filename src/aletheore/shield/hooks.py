@@ -26,8 +26,9 @@ after it opted in. An edit anywhere else gets no checkpoint, no base evidence, n
 
 Hook rules, as in `evidence_hook.py`: every event always returns 0, swallows every exception (a traceback goes
 to stderr only when ALETHEORE_HOOK_DEBUG is set) and runs on a daemon worker thread joined with a hard stop.
-The worker only computes; the caller's thread records the state tied to the output (the dedupe hashes) and
-writes the output, so a worker that overruns its stop never prints and never marks text as said. Heavy modules
+The worker only computes; the caller's thread writes the output and only then records the state tied to it (the
+dedupe hashes), so a worker that overruns its stop never prints and never marks text as said, and text a broken
+pipe swallowed is said again next time. Heavy modules
 are imported inside the handlers so the process starts fast.
 
 Session ids: an id `state.session_state_path` rejects (missing, empty, or not a plain file-name token) is
@@ -36,7 +37,9 @@ groups those checkpoints); its hook state is kept under the token `nosession`.
 
 Hook state is a small JSON dict per session in `<git dir>/aletheore-shield/hook-<token>.json`, outside the
 working tree, so it works in repositories that were never scanned and never creates `.aletheore/`. A corrupt
-file reads as empty; writes re-read the file and merge only the keys the writer owns, then replace it atomically.
+file reads as empty; writes take the file's lock (`<file>.lock`, an exclusive create), re-read the file, merge only the
+keys the writer owns and replace it atomically, so concurrent hooks never lose each other's keys. The hourly prune is
+claimed in one locked read-and-write, so concurrent hooks prune once.
 """
 
 from __future__ import annotations
@@ -46,7 +49,6 @@ import os
 import sys
 import threading
 import time
-from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple, NoReturn
 
@@ -269,20 +271,65 @@ def _load_state(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _update_state(path: Path, updates: dict) -> None:
-    """Merge `updates` into the newest copy of the file and replace it atomically. Never raises OSError."""
-    temporary = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+def _state_lock(path: Path) -> Path:
+    return path.with_name(f"{path.name}.lock")
+
+
+def _merge_into(path: Path, updates: dict) -> None:
+    """Merge `updates` into the newest copy of the file and replace it atomically. The caller holds the lock (or
+    could not get it). Never raises OSError."""
+    from aletheore.shield.fsutil import atomic_write_text, debug_note
+
     try:
+        path.parent.mkdir(exist_ok=True)  # inside the git dir, which exists; never creates anything else
         data = _load_state(path)
         data.update(updates)
+        atomic_write_text(path, json.dumps(data, sort_keys=True))
+    except OSError as error:
+        debug_note(f"could not write the hook state {path}", error)
+
+
+def _state_dir_ready(path: Path) -> bool:
+    from aletheore.shield.fsutil import debug_note
+
+    try:
         path.parent.mkdir(exist_ok=True)  # inside the git dir, which exists; never creates anything else
-        temporary.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
-        os.replace(temporary, path)
-    except OSError:
-        try:
-            temporary.unlink()
-        except OSError:
-            pass
+    except OSError as error:
+        debug_note(f"could not create {path.parent}", error)
+        return False
+    return True
+
+
+def _update_state(path: Path, updates: dict) -> None:
+    """Merge `updates` into the state file under its lock, so two hooks writing different keys at once both land.
+    A lock that cannot be had in time (a stuck holder) does not stop the write: losing a concurrent key is better
+    than losing this one. Never raises OSError."""
+    from aletheore.shield.fsutil import debug_note, exclusive
+
+    if not _state_dir_ready(path):
+        return
+    with exclusive(_state_lock(path)) as held:
+        if not held:
+            debug_note(f"writing {path.name} without its lock")
+        _merge_into(path, updates)
+
+
+def _claim_prune(path: Path) -> bool:
+    """Whether this hook should run the hourly prune: True for exactly one caller per interval, which records the
+    time in the same locked step that read it. A lock that cannot be had means another hook is in there: skip."""
+    from aletheore.shield.fsutil import exclusive
+
+    if not _state_dir_ready(path):
+        return False
+    with exclusive(_state_lock(path)) as held:
+        if not held:
+            return False
+        now = _now()  # read after the wait: a time from before it could look older than the claim it waited on
+        last = _load_state(path).get("last_prune")
+        if isinstance(last, (int, float)) and 0 <= now - last < PRUNE_INTERVAL_S:
+            return False
+        _merge_into(path, {"last_prune": now})
+        return True
 
 
 def _sha(text: str) -> str:
@@ -296,10 +343,18 @@ def _sha(text: str) -> str:
 # --------------------------------------------------------------------------------------------------
 
 
+class Said(NamedTuple):
+    """What to record once the output is known to have been delivered: `digest` under `key` in the state `path`."""
+
+    path: Path
+    key: str
+    digest: str
+
+
 class Output(NamedTuple):
     stdout: str = ""
     stderr: str = ""
-    commit: Callable[[], None] | None = None  # state to record once the output is known to be emitted
+    said: Said | None = None  # recorded by the caller's thread only after stdout was written
 
 
 def _pre_edit(payload: dict | None) -> Output | None:
@@ -320,11 +375,7 @@ def _pre_edit(payload: dict | None) -> Output | None:
     checked = repo_state(repo.top)
     if not checked.ok:
         return None  # only the checkpoint, prune and base-evidence work needs a supported repository state
-    now = _now()
-    last = _load_state(path).get("last_prune")
-    due = not isinstance(last, (int, float)) or not 0 <= now - last < PRUNE_INTERVAL_S
-    if due:
-        _update_state(path, {"last_prune": now})  # claimed before pruning, so a parallel call skips it
+    due = _claim_prune(path)  # claimed before pruning, so a parallel call skips it
     if session_id:
         guard_evidence.save_base_evidence(repo.top, session_id)  # idempotent: keeps the first copy
     checkpoint.take_checkpoint(repo.top, session_id, checked=checked)
@@ -341,11 +392,12 @@ def _guard_report(repo: _Repo, session_id: str, *, budget_s: float, lookups: boo
     return guard.run_guard(repo.top, budget_s=budget_s, base_evidence=base, lookups=lookups)
 
 
-def _dedupe(path: Path, key: str, digest: str) -> Callable[[], None] | None:
-    """The commit that records `digest` under `key`, or None when it is already recorded."""
+def _dedupe(path: Path, key: str, digest: str) -> Said | None:
+    """What to record for `digest` under `key`, or None when it is already recorded. The caller's thread checks again
+    under the state lock right before writing, since a concurrent hook may have said it meanwhile."""
     if _load_state(path).get(key) == digest:
         return None
-    return lambda: _update_state(path, {key: digest})
+    return Said(path, key, digest)
 
 
 def _post_edit(payload: dict | None) -> Output | None:
@@ -362,12 +414,12 @@ def _post_edit(payload: dict | None) -> Output | None:
     findings = render_report(GuardReport(report.findings, ()), max_lines=GUARD_MAX_LINES)
     # The hash covers the findings only: "not checked" reasons vary with timing and evidence age, and a change
     # in them alone is not worth interrupting the agent for.
-    commit = _dedupe(_state_path(repo, session_id), "last_edit_sha", _sha(findings) if findings else "")
-    if not findings or commit is None:
-        return Output(commit=commit)
+    said = _dedupe(_state_path(repo, session_id), "last_edit_sha", _sha(findings) if findings else "")
+    if not findings or said is None:
+        return Output(said=said)
     reasons = tuple(r for r in report.not_checked if not r.startswith(_POST_EDIT_DROPPED_REASON))
     text = render_report(GuardReport(report.findings, reasons), max_lines=GUARD_MAX_LINES)
-    return Output(json.dumps(agent_output("post-edit", text)), "", commit)
+    return Output(json.dumps(agent_output("post-edit", text)), "", said)
 
 
 def _turn_end(payload: dict | None) -> Output | None:
@@ -384,10 +436,10 @@ def _turn_end(payload: dict | None) -> Output | None:
 
     report = _guard_report(repo, session_id, budget_s=TURN_END_BUDGET_S, lookups=None)
     text = render_report(report, max_lines=GUARD_MAX_LINES)
-    commit = _dedupe(path, "last_turn_sha", _sha(text) if text else "")
-    if not text or commit is None:
-        return Output(commit=commit)
-    return Output(json.dumps(agent_output("turn-end", text)), "", commit)
+    said = _dedupe(path, "last_turn_sha", _sha(text) if text else "")
+    if not text or said is None:
+        return Output(said=said)
+    return Output(json.dumps(agent_output("turn-end", text)), "", said)
 
 
 def _session_end(payload: dict | None) -> Output | None:
@@ -464,12 +516,36 @@ def _work(event: str, args: list[str], stdin) -> Output | None:
     return _HANDLERS[event](_read_payload(stdin))
 
 
-def _write(stream, text: str) -> None:
+def _write(stream, text: str) -> bool:
+    """Write and flush; False when the stream refused (a closed or broken pipe must not change the outcome)."""
+    from aletheore.shield.fsutil import debug_note
+
     try:
         stream.write(text)
         stream.flush()
-    except Exception:  # noqa: BLE001 - a closed or broken pipe must not change the outcome
-        pass
+    except Exception as error:  # noqa: BLE001
+        debug_note("could not write the hook output", error)
+        return False
+    return True
+
+
+def _deliver(output: Output, stdout) -> None:
+    """Write `output.stdout` and only then record it as said. Both happen under the state lock, after checking the
+    record again, so of two hooks with the same text at once only one says it, and text that never reached the agent
+    (a broken pipe) is said again next time."""
+    said = output.said
+    if said is None:
+        if output.stdout:
+            _write(stdout, output.stdout)
+        return
+    from aletheore.shield.fsutil import exclusive
+
+    _state_dir_ready(said.path)
+    with exclusive(_state_lock(said.path)) as held:
+        if held and _load_state(said.path).get(said.key) == said.digest:
+            return  # a concurrent hook said it already
+        if not output.stdout or _write(stdout, output.stdout):
+            _merge_into(said.path, {said.key: said.digest})
 
 
 def main(argv: list[str] | None = None, stdin=None, stdout=None, stderr=None) -> int:
@@ -502,10 +578,7 @@ def main(argv: list[str] | None = None, stdin=None, stdout=None, stderr=None) ->
         output = result[0]
         if output is None:
             return 0
-        if output.commit is not None:
-            output.commit()
-        if output.stdout:
-            _write(stdout or sys.stdout, output.stdout)
+        _deliver(output, stdout or sys.stdout)
         if output.stderr:
             _write(stderr or sys.stderr, output.stderr)
     except BaseException:
