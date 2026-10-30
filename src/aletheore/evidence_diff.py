@@ -30,12 +30,18 @@ def vulnerability_check_skipped_in(old: dict, new: dict) -> list[str]:
     return [name for name, checked in (("the old", checked_old), ("the new", checked_new)) if not checked]
 
 
+def _module_paths(evidence: dict) -> set[str]:
+    return {m.get("path") or "" for m in evidence["repository"]["modules"]}
+
+
 def new_cycles(old: dict, new: dict) -> list[dict]:
-    """Import-cycle groups in `new` that are not an old cycle group. A group is the same cycle as an old one when it
-    meets exactly one old group and holds all of it or only modules of it: a cycle that merely grew, shrank or was
-    found from a different start module is not new. A group that meets no old group, joins several old groups into
-    one loop, or shares only some modules with an old group (a module left an old cycle and closed a different one)
-    is new.
+    """Import-cycle groups in `new` that are not an old cycle group.
+
+    A group is the same cycle as an old one when it meets exactly one old group and, leaving out modules that only
+    one snapshot has (files added, deleted, renamed or moved), holds all of that group or only modules of it: a
+    cycle that grew, shrank, had a member renamed or moved, or was found from a different start module is not new.
+    A group that meets no old group, joins several old groups into one loop, or shares only some surviving modules
+    with an old group (a module left an old cycle and closed a different one) is new.
 
     Works on the full strongly-connected components computed from each snapshot's module graph (evidence stores the
     graph, not a cycle list), so the listing caps of `find_import_cycles` cannot hide an old cycle."""
@@ -44,17 +50,20 @@ def new_cycles(old: dict, new: dict) -> list[dict]:
     for index, group in enumerate(old_groups):
         for module in group:
             group_of[module] = index
-    old_sizes = [len(group) for group in old_groups]
     new_groups, new_self, graph = import_cycle_components(new)
+    old_paths, new_paths = _module_paths(old), _module_paths(new)
     found = []
     for component in sorted(new_groups, key=lambda c: (-len(c), c[0])):
-        met: dict[int, int] = {}  # old group -> how many of this component's modules are in it
-        for module in component:
-            if module in group_of:
-                met[group_of[module]] = met.get(group_of[module], 0) + 1
+        met = {group_of[module] for module in component if module in group_of}
         if len(met) == 1:
-            (index, shared), = met.items()
-            if shared == old_sizes[index] or shared == len(component):  # holds the old cycle, or lies inside it
+            then = set(old_groups[index := next(iter(met))])
+            now = set(component)
+            added = {module for module in now if module not in old_paths}
+            removed = {module for module in then if module not in new_paths}
+            if len(added) <= len(removed):
+                # Every new file can stand for a deleted one (a rename or move): compare what both snapshots have.
+                now, then = now - added, then - removed
+            if now <= then or then <= now:
                 continue
         found.append(
             {

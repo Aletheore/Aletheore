@@ -807,3 +807,20 @@ def test_a_stale_refresh_marker_is_replaced_by_exactly_one_of_many_concurrent_ca
     for t in threads:
         t.join(30)
     assert won.count(True) == 1, won
+
+
+def test_renaming_or_moving_a_module_inside_an_old_cycle_is_not_a_new_cycle():
+    old = _evidence(_ring(["a.py", "b.py"]))
+    renamed = _evidence(_ring(["a.py", "c.py"]))  # b.py renamed to c.py
+    assert new_risks(old, renamed)["cycles"] == []
+    old3 = _evidence(_ring(["a.py", "b.py", "c.py"]))
+    moved = _evidence(_ring(["a.py", "b.py", "pkg/c.py"]))  # c.py moved into pkg/
+    assert new_risks(old3, moved)["cycles"] == []
+    # A brand-new file joining two modules that were in no cycle is still a new cycle.
+    fresh = _evidence(_ring(["a.py", "b.py"]) + [_mod("x.py", imports=["y.py"]), _mod("y.py", imports=["z.py"]),
+                                                 _mod("z.py", imports=["x.py"])])
+    plain = _evidence(_ring(["a.py", "b.py"]) + [_mod("x.py"), _mod("y.py")])
+    assert [set(c["members"]) for c in new_risks(plain, fresh)["cycles"]] == [{"x.py", "y.py", "z.py"}]
+    # c.py leaving the a-b-c cycle to close a loop with a new file d.py is a new cycle, not a rename.
+    split = _evidence(_ring(["a.py", "b.py"]) + _ring(["c.py", "d.py"]))
+    assert [set(c["members"]) for c in new_risks(old3, split)["cycles"]] == [{"c.py", "d.py"}]
