@@ -55,7 +55,7 @@ async def test_queue_stats_rejects_non_ascii_token_without_500(monkeypatch):
 async def test_queue_stats_returns_counts_for_valid_token(monkeypatch):
     monkeypatch.setenv("INTERNAL_METRICS_TOKEN", "secret-token")
 
-    # "scans" and "health" are separate queues (see scan_worker/scheduler.py)
+    # "scans", "health" and "builds" are separate queues (see scan_worker/scheduler.py)
     # - this test uses distinct counts per queue to prove the response
     # actually breaks stats down per queue rather than reporting "scans"
     # twice under two names.
@@ -63,7 +63,7 @@ async def test_queue_stats_returns_counts_for_valid_token(monkeypatch):
 
     def _fake_queue(name, **kwargs):
         q = MagicMock()
-        q.count = {"scans": 3, "health": 1}[name]
+        q.count = {"scans": 3, "health": 1, "builds": 7}[name]
         fake_queues[name] = q
         return q
 
@@ -77,20 +77,20 @@ async def test_queue_stats_returns_counts_for_valid_token(monkeypatch):
     monkeypatch.setattr("app_server.metrics.get_redis_client", lambda: MagicMock())
     monkeypatch.setattr("app_server.metrics.Queue", _fake_queue)
     monkeypatch.setattr(
-        "app_server.metrics.StartedJobRegistry", _by_queue({"scans": 1, "health": 0})
+        "app_server.metrics.StartedJobRegistry", _by_queue({"scans": 1, "health": 0, "builds": 2})
     )
     monkeypatch.setattr(
-        "app_server.metrics.FailedJobRegistry", _by_queue({"scans": 2, "health": 0})
+        "app_server.metrics.FailedJobRegistry", _by_queue({"scans": 2, "health": 0, "builds": 0})
     )
     monkeypatch.setattr(
-        "app_server.metrics.FinishedJobRegistry", _by_queue({"scans": 4, "health": 2})
+        "app_server.metrics.FinishedJobRegistry", _by_queue({"scans": 4, "health": 2, "builds": 1})
     )
 
     def _worker_count(connection=None, queue=None):
         if queue is None:
             return 6
         name = next(n for n, q in fake_queues.items() if q is queue)
-        return {"scans": 5, "health": 1}[name]
+        return {"scans": 5, "health": 1, "builds": 1}[name]
 
     fake_worker = MagicMock()
     fake_worker.count = _worker_count
@@ -118,6 +118,13 @@ async def test_queue_stats_returns_counts_for_valid_token(monkeypatch):
                 "started_count": 0,
                 "failed_count": 0,
                 "finished_count": 2,
+                "worker_count": 1,
+            },
+            "builds": {
+                "queue_depth": 7,
+                "started_count": 2,
+                "failed_count": 0,
+                "finished_count": 1,
                 "worker_count": 1,
             },
         },

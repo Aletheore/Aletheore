@@ -1,7 +1,9 @@
+import logging
 import time
 
 from redis import Redis
 from rq import Queue
+from rq.registry import StartedJobRegistry
 
 from app_server.config import get_settings
 from app_server.heartbeat import touch_heartbeat
@@ -90,6 +92,51 @@ SCANS_QUEUE_NAME = "scans"
 # of what the AI job queue is doing, especially now that the public status
 # API drops any endpoint not checked in the last 15 minutes.
 HEALTH_QUEUE_NAME = "health"
+# The two catch-up sweeps (and the full builds they run) are real LLM work of up to 1800s per job. On the
+# shared "scans" queue a pair of them held both scan workers for half an hour and starved every PR review
+# behind them (2026-10-30). Worker processes decide which queues they serve (see worker.py), so one
+# replica can be kept for "scans" alone.
+BUILDS_QUEUE_NAME = "builds"
+
+_logger = logging.getLogger("scan_worker.scheduler")
+
+
+def _pending_job_names(*queues) -> set[str]:
+    """Function names of every job currently waiting in, or running from, the given queues.
+
+    Fails open: if the queue cannot be inspected, whatever was gathered so far is returned, so the
+    worst case is a duplicate enqueue (today's behaviour), never housekeeping silently not running.
+    """
+    names: set[str] = set()
+    for queue in queues:
+        try:
+            names.update(job.func_name for job in queue.jobs)
+            for job_id in StartedJobRegistry(queue=queue).get_job_ids():
+                job = queue.fetch_job(job_id)
+                if job is not None:
+                    names.add(job.func_name)
+        except Exception:  # noqa: BLE001
+            _logger.warning("could not inspect a queue for pending jobs; not deduplicating it", exc_info=True)
+    return names
+
+
+class _DedupingQueue:
+    """Wraps a queue so a job whose function is already queued or running is not enqueued again.
+
+    Every scheduler tick enqueues a fresh copy of each housekeeping job. While the workers were busy
+    with long jobs these piled up unboundedly (10 stacked copies of every type, queue depth 154), and
+    the next tick will enqueue the job again anyway once the current one has finished.
+    """
+
+    def __init__(self, queue, pending: set[str]):
+        self._queue = queue
+        self._pending = pending
+
+    def enqueue(self, func, **kwargs):
+        if func in self._pending:
+            _logger.debug("skipping %s: already queued or running", func)
+            return None
+        return self._queue.enqueue(func, **kwargs)
 
 
 def run_forever(
@@ -98,10 +145,14 @@ def run_forever(
 ) -> None:
     settings = get_settings()
     redis_conn = Redis.from_url(settings.redis_url)
-    scans_queue = Queue(SCANS_QUEUE_NAME, connection=redis_conn)
+    raw_scans_queue = Queue(SCANS_QUEUE_NAME, connection=redis_conn)
+    raw_builds_queue = Queue(BUILDS_QUEUE_NAME, connection=redis_conn)
     health_queue = Queue(HEALTH_QUEUE_NAME, connection=redis_conn)
     iterations = 0
     while max_iterations is None or iterations < max_iterations:
+        pending = _pending_job_names(raw_scans_queue, raw_builds_queue)
+        scans_queue = _DedupingQueue(raw_scans_queue, pending)
+        builds_queue = _DedupingQueue(raw_builds_queue, pending)
         health_queue.enqueue(
             "scan_worker.jobs.run_health_check_sweep_job",
             job_timeout=HEALTH_SWEEP_JOB_TIMEOUT_SECONDS,
@@ -134,11 +185,11 @@ def run_forever(
             "scan_worker.jobs.run_llm_spend_reservation_sweep_job",
             job_timeout=LLM_SPEND_RESERVATION_SWEEP_JOB_TIMEOUT_SECONDS,
         )
-        scans_queue.enqueue(
+        builds_queue.enqueue(
             "scan_worker.jobs.run_live_docs_catchup_sweep_job",
             job_timeout=DOCS_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS,
         )
-        scans_queue.enqueue(
+        builds_queue.enqueue(
             "scan_worker.jobs.run_live_wiki_catchup_sweep_job",
             job_timeout=WIKI_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS,
         )

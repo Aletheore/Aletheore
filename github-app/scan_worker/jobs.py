@@ -11,6 +11,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -211,7 +212,10 @@ from scan_worker.slack import (
 
 _JOBS_ROOT_ENV = "ALETHEORE_JOBS_ROOT"
 JOBS_ROOT = Path(os.environ.get(_JOBS_ROOT_ENV, "/tmp/aletheore-jobs"))
-JOB_TEMP_DIR_MAX_AGE_SECONDS = 6 * 3600
+# The longest job that uses a checkout times out at 900s. This used to be 6 hours, which was fine while the
+# directory was memory-backed scratch space that vanished on restart; on a disk-backed volume (large repos
+# overflow a 1 GB tmpfs) a leftover checkout, which may still hold a token in .git/config, must not linger.
+JOB_TEMP_DIR_MAX_AGE_SECONDS = 3600
 AUDIT_COMMENT_MARKER = "<!-- aletheore-audit -->"
 FLASH_REVIEW_MARKER = "<!-- aletheore-flash-review -->"
 # Generous: the one-time full build calls a strong model once per
@@ -386,10 +390,42 @@ WIKI_INCREMENTAL_LLM_RESERVE_USD = 0.10
 DOCS_INCREMENTAL_LLM_RESERVE_USD = 0.10
 
 
+_FALLBACK_JOBS_ROOT = Path("/tmp/aletheore-jobs")
+
+
 def _job_temp_dir() -> Path:
-    path = JOBS_ROOT / str(uuid.uuid4())
-    path.mkdir(parents=True, exist_ok=False)
-    return path
+    # Owner-only: a checkout under here briefly holds a live installation token in .git/config.
+    try:
+        JOBS_ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = JOBS_ROOT / str(uuid.uuid4())
+        path.mkdir(exist_ok=False, mode=0o700)
+        return path
+    except OSError:
+        if JOBS_ROOT == _FALLBACK_JOBS_ROOT:
+            raise
+        # A mounted scratch volume the unprivileged container user cannot write to (or a missing mount) must
+        # degrade to the old in-memory /tmp behaviour, not fail every scan job. Small repos keep working.
+        logging.getLogger("scan_worker.jobs").warning(
+            "job scratch root %s is unusable; falling back to %s", JOBS_ROOT, _FALLBACK_JOBS_ROOT, exc_info=True
+        )
+        _FALLBACK_JOBS_ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = _FALLBACK_JOBS_ROOT / str(uuid.uuid4())
+        path.mkdir(exist_ok=False, mode=0o700)
+        return path
+
+
+def purge_job_scratch_dir() -> None:
+    """Empties this worker's own job scratch directory. Run once at worker start: a worker that has just
+    started owns no jobs, so anything left under its root belongs to a job that died with the previous
+    process (a hard kill skips the scrub that removes the token from .git/config). Each replica needs its
+    own scratch root for this to be safe - see docker-compose.yml."""
+    if not JOBS_ROOT.is_dir():
+        return
+    for entry in JOBS_ROOT.iterdir():
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry, ignore_errors=True)
+        else:
+            entry.unlink(missing_ok=True)
 
 
 def _clone_url(repo_full_name: str, token: str) -> str:
@@ -593,6 +629,39 @@ def _fetch_and_checkout(dest: Path, sha: str, pr_number: int | None) -> None:
     _run_git(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest)
 
 
+@contextmanager
+def _scrub_remote_url_after(checkout_dir: Path, credential_free_url: str):
+    """Wraps work done against a checkout whose origin URL carries a live token, then puts the
+    credential-free URL back (see _clone_ref for why the token must not stay on disk).
+
+    After work that SUCCEEDED the reset stays strict, exactly as the inline `finally` blocks this
+    replaced were: a failure raises, since the scan would otherwise run with a live token on disk.
+
+    After work that already FAILED the reset is best effort. Its own failure used to replace the real
+    error: on 2026-10-30 a full 1 GB tmpfs surfaced only as "git remote set-url ... returned exit
+    status 128" because the reset could not write .git/config.lock either, and the real "unable to
+    write file" error was lost. If the reset cannot be done, the checkout is deleted instead, which
+    keeps the token off disk just as well, and the original error propagates.
+    """
+    try:
+        yield
+    except BaseException:
+        if (checkout_dir / ".git").exists():
+            try:
+                _run_git(["git", "remote", "set-url", "origin", credential_free_url], cwd=checkout_dir)
+            except Exception as reset_exc:  # noqa: BLE001
+                logging.getLogger("scan_worker.jobs").warning(
+                    "could not reset the remote URL after a failed checkout (%s); discarding the checkout "
+                    "so the token is not left on disk",
+                    type(reset_exc).__name__,
+                )
+                shutil.rmtree(checkout_dir, ignore_errors=True)
+        raise
+    else:
+        if (checkout_dir / ".git").exists():
+            _run_git(["git", "remote", "set-url", "origin", credential_free_url], cwd=checkout_dir)
+
+
 def _clone_ref(url: str, ref: str, dest: Path, pr_number: int | None = None) -> None:
     # Scrubs the credentialed URL from dest/.git/config in a finally block
     # covering the clone itself, the same reasoning and shape as
@@ -628,13 +697,10 @@ def _clone_ref(url: str, ref: str, dest: Path, pr_number: int | None = None) -> 
     # still a real transfer saving over a full clone even though (see
     # _fetch_and_checkout's docstring) it can't go shallow: `_run_scan`
     # always walks this checkout's real git history.
-    try:
+    with _scrub_remote_url_after(dest, _url_without_credentials(url)):
         _run_git(["git", "init", "-q", str(dest)])
         _run_git(["git", "remote", "add", "origin", url], cwd=dest)
         _fetch_and_checkout(dest, ref, pr_number)
-    finally:
-        if (dest / ".git").exists():
-            _run_git(["git", "remote", "set-url", "origin", _url_without_credentials(url)], cwd=dest)
 
 
 # Root for persistent, reused-across-scans checkouts (see
@@ -762,21 +828,26 @@ def _ensure_persistent_checkout(
     """
     credential_free_url = _url_without_credentials(url)
     if (checkout_dir / ".git").exists():
-        _run_git(["git", "remote", "set-url", "origin", url], cwd=checkout_dir)
         try:
+            _run_git(["git", "remote", "set-url", "origin", url], cwd=checkout_dir)
+        except subprocess.CalledProcessError:
+            # A checkout a killed job left half-written (empty .git, stale config.lock) makes this very first
+            # call exit 128 on every later job for the repo, forever. Nothing in it is worth keeping: discard
+            # it and fall through to a fresh clone. No token was written, since this is the call that writes it.
+            logging.getLogger("scan_worker.jobs").warning(
+                "persistent checkout at %s is unusable; discarding it and cloning fresh", checkout_dir
+            )
+            shutil.rmtree(checkout_dir, ignore_errors=True)
+    if (checkout_dir / ".git").exists():
+        with _scrub_remote_url_after(checkout_dir, credential_free_url):
             _run_git(["git", "fetch", "-q", "origin"], cwd=checkout_dir)
             _checkout_sha(checkout_dir, checkout_sha, pr_number, force=True)
             _run_git(["git", "clean", "-q", "-fdx"], cwd=checkout_dir)
-        finally:
-            _run_git(["git", "remote", "set-url", "origin", credential_free_url], cwd=checkout_dir)
     else:
         checkout_dir.mkdir(parents=True, exist_ok=True)
-        try:
+        with _scrub_remote_url_after(checkout_dir, credential_free_url):
             _run_git(["git", "clone", "-q", "--no-checkout", url, str(checkout_dir)])
             _checkout_sha(checkout_dir, checkout_sha, pr_number)
-        finally:
-            if (checkout_dir / ".git").exists():
-                _run_git(["git", "remote", "set-url", "origin", credential_free_url], cwd=checkout_dir)
 
 
 def _prepare_head_checkout(
@@ -1887,7 +1958,7 @@ def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
         # that limit mid LLM call and failed the whole initial scan job
         # (Sentry ALETHEORE-5), which the ops monitor then escalated.
         if installation is not None and installation["plan"] == "air":
-            queue = _scans_queue(settings.redis_url)
+            queue = _builds_queue(settings.redis_url)
             for build_job in (
                 "scan_worker.jobs.run_live_wiki_full_build_job",
                 "scan_worker.jobs.run_live_docs_full_build_job",
@@ -2077,14 +2148,11 @@ def _clone_pr_head(url: str, pr_number: int, dest: Path) -> None:
     # via `git clone --no-checkout` (every branch and tag) and THEN
     # fetched the PR ref on top of that - fetching just the one ref is
     # still a real, smaller transfer than that, just not shallow.
-    try:
+    with _scrub_remote_url_after(dest, _url_without_credentials(url)):
         _run_git(["git", "init", "-q", str(dest)])
         _run_git(["git", "remote", "add", "origin", url], cwd=dest)
         _run_git(["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"], cwd=dest)
         _run_git(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest)
-    finally:
-        if (dest / ".git").exists():
-            _run_git(["git", "remote", "set-url", "origin", _url_without_credentials(url)], cwd=dest)
 
 
 def _git_rev_parse_head(repo_dir: Path) -> str | None:
@@ -5007,7 +5075,7 @@ OPS_THRESHOLD_DURATION_SECONDS = 600
 # stale) by any operationally meaningful amount.
 OPS_BACKUP_STALE_SECONDS = 86400 + 600
 OPS_APP_HEALTH_CONSECUTIVE_FAILURES = 2
-OPS_MONITORED_QUEUES = ("scans", "health")
+OPS_MONITORED_QUEUES = ("scans", "health", "builds")
 
 
 class OpsMonitorError(RuntimeError):
@@ -6541,6 +6609,16 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
         return
 
     installation = get_installation_row(dsn, installation_id)
+    if installation is None or installation["plan"] != "air":
+        # AIRview is AIR-only and the sweeps that enqueue builds already filter on it, but a build queued
+        # while the installation was on AIR can wait a long time behind other jobs. If the plan changed
+        # meanwhile it must not keep spending credit (2026-10-30: queued builds kept running after the
+        # Aletheore org was moved air -> flash to stop a spend flood).
+        logging.getLogger("scan_worker.jobs").info(
+            "live wiki full build skipped for installation=%s repo=%s - plan is not AIR",
+            installation_id, repo_full_name,
+        )
+        return
     model_used = airview_model_used(live_wiki.FLASH_MODEL)
 
     # Fast-fail hint only, no lock - see _IncrementalSpendBudget's docstring;
@@ -6671,13 +6749,24 @@ def _scans_queue(redis_url: str):
     return Queue("scans", connection=get_redis_client())
 
 
+def _builds_queue(redis_url: str):
+    """The queue for the long AIRview/Docs LLM builds (up to 1800s each), kept apart from "scans" so a
+    handful of them can never occupy every worker and starve PR reviews - see
+    scan_worker.scheduler.BUILDS_QUEUE_NAME."""
+    from rq import Queue
+
+    from app_server.redis_client import get_redis_client
+
+    return Queue("builds", connection=get_redis_client())
+
+
 def run_live_wiki_full_build_for_installation_job(installation_id: int) -> None:
     """Fans out one full-build job per repo, rather than looping in
     process, so one slow or failing repo can't consume the whole
     installation's build budget or block the others.
     """
     settings = get_settings()
-    queue = _scans_queue(settings.redis_url)
+    queue = _builds_queue(settings.redis_url)
     for repo_full_name in list_repos_for_installation(settings.database_url, installation_id):
         queue.enqueue(
             "scan_worker.jobs.run_live_wiki_full_build_job",
@@ -7173,6 +7262,15 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
         _maybe_sync_docs_to_repo(dsn, installation_id, repo_full_name)
         return
 
+    if plan != "air":
+        # Same reasoning as run_live_wiki_full_build_job: a build queued under AIR must stop spending once
+        # the installation has been downgraded. Everything below this point makes real LLM calls.
+        logging.getLogger("scan_worker.jobs").info(
+            "live docs full build skipped for installation=%s repo=%s - plan is not AIR",
+            installation_id, repo_full_name,
+        )
+        return
+
     client_and_token = _github_client_and_token(installation_id)
     if client_and_token is None:
         set_docs_build_status(dsn, installation_id, repo_full_name, "failed", "could not authenticate with GitHub")
@@ -7254,7 +7352,7 @@ def run_live_docs_full_build_for_installation_job(installation_id: int) -> None:
     block the others.
     """
     settings = get_settings()
-    queue = _scans_queue(settings.redis_url)
+    queue = _builds_queue(settings.redis_url)
     for repo_full_name in list_repos_for_installation(settings.database_url, installation_id):
         queue.enqueue(
             "scan_worker.jobs.run_live_docs_full_build_job",

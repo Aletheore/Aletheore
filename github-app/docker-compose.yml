@@ -98,8 +98,20 @@ services:
       - ALETHEORE_REPO_CHECKOUT_ROOT=/data/aletheore-repo-checkouts
       - ALETHEORE_APP_HEALTH_URL=http://app-server:8000/healthz
       - ALETHEORE_BACKUP_DIR=/app/backups
+      # Per-job scratch checkouts live on disk, not in the 1 GB tmpfs below: a large repo (cal.com, Sentry,
+      # Grafana) overflows it and the PR scan dies with "unable to write file" (2026-10-30). Each replica
+      # has its OWN directory, because scan_worker.jobs.purge_job_scratch_dir empties it at worker start
+      # and a shared one would delete the other replica's live jobs.
+      - ALETHEORE_JOBS_ROOT=/data/aletheore-jobs
+      # This replica serves reviews first and the long AIRview/Docs builds when idle. scan-worker-2 serves
+      # reviews only, so a pair of 30-minute builds can never occupy every worker.
+      - SCAN_WORKER_QUEUES=scans,builds
     volumes:
       - ./app-private-key.pem:/run/secrets/github-app-key.pem:ro
+      # Host directory must exist and be writable by the container's unprivileged "aletheore" user, e.g.
+      # `mkdir -p job-scratch/scan-worker job-scratch/scan-worker-2 && chown -R <uid>:<gid> job-scratch`.
+      # If it is not writable the worker logs a warning and falls back to /tmp (see _job_temp_dir).
+      - ./job-scratch/scan-worker:/data/aletheore-jobs
       # Persistent, reused-across-scans per-repo checkouts (see
       # scan_worker/jobs.py's _ensure_persistent_checkout) - without a real
       # mounted volume here, this would live inside the container's
@@ -170,8 +182,12 @@ services:
       - ALETHEORE_REPO_CHECKOUT_ROOT=/data/aletheore-repo-checkouts
       - ALETHEORE_APP_HEALTH_URL=http://app-server:8000/healthz
       - ALETHEORE_BACKUP_DIR=/app/backups
+      - ALETHEORE_JOBS_ROOT=/data/aletheore-jobs
+      # Reviews only - see scan-worker's SCAN_WORKER_QUEUES comment above.
+      - SCAN_WORKER_QUEUES=scans
     volumes:
       - ./app-private-key.pem:/run/secrets/github-app-key.pem:ro
+      - ./job-scratch/scan-worker-2:/data/aletheore-jobs
       - ./repo-checkouts:/data/aletheore-repo-checkouts
       - ./backups:/app/backups:ro
     tmpfs:

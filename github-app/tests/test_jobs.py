@@ -595,6 +595,125 @@ def test_clone_ref_scrubs_the_token_even_when_the_fetch_fails(tmp_path, monkeypa
     assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
 
 
+_SCRUBBED_URL = "https://github.com/org/repo.git"
+_CREDENTIALED_URL = "https://x-access-token:livetoken@github.com/org/repo.git"
+
+
+def _git_fake_where_fetch_and_scrub_both_fail(calls):
+    # Mirrors the real incident (2026-10-30, a ~1 GB tmpfs filling up on a large repo): the fetch/checkout
+    # fails first with the real reason, then the credential reset's own `git remote set-url` fails too
+    # (it cannot write .git/config.lock either) with exit 128.
+    def fake_run(args, cwd=None, check=None, **kwargs):
+        calls.append(args)
+        if args[:2] == ["git", "init"]:
+            os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+            return subprocess.CompletedProcess(args, 0)
+        if args[:2] == ["git", "fetch"]:
+            raise subprocess.CalledProcessError(1, args, stderr="error: unable to write file a.txt")
+        if args[:3] == ["git", "remote", "set-url"] and args[-1] == _SCRUBBED_URL:
+            raise subprocess.CalledProcessError(128, args, stderr="error: failed to write new configuration file")
+        return subprocess.CompletedProcess(args, 0)
+
+    return fake_run
+
+
+def test_clone_ref_surfaces_the_real_failure_when_the_scrub_also_fails(tmp_path, monkeypatch):
+    # The scrub runs in a cleanup path, so when it fails too its error used to REPLACE the real one: the PR
+    # comment said "set-url returned exit status 128" and nobody could tell the disk was full. The original
+    # error must win, and since the token could not be scrubbed the checkout is discarded instead.
+    from scan_worker.jobs import _clone_ref
+
+    calls = []
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", _git_fake_where_fetch_and_scrub_both_fail(calls))
+
+    dest = tmp_path / "ephemeral-both-fail"
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        _clone_ref(_CREDENTIALED_URL, "badsha", dest)
+
+    assert exc_info.value.returncode == 1
+    assert "unable to write file" in exc_info.value.stderr
+    assert not dest.exists(), "a checkout whose token could not be scrubbed must not be left on disk"
+
+
+def test_clone_pr_head_surfaces_the_real_failure_when_the_scrub_also_fails(tmp_path, monkeypatch):
+    from scan_worker.jobs import _clone_pr_head
+
+    calls = []
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", _git_fake_where_fetch_and_scrub_both_fail(calls))
+
+    dest = tmp_path / "pr-head-both-fail"
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        _clone_pr_head(_CREDENTIALED_URL, 12, dest)
+
+    assert exc_info.value.returncode == 1
+    assert not dest.exists()
+
+
+def test_ensure_persistent_checkout_surfaces_the_real_failure_when_the_scrub_also_fails(tmp_path, monkeypatch):
+    from scan_worker.jobs import _ensure_persistent_checkout
+
+    calls = []
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", _git_fake_where_fetch_and_scrub_both_fail(calls))
+
+    checkout_dir = tmp_path / "persistent-both-fail"
+    (checkout_dir / ".git").mkdir(parents=True)
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        _ensure_persistent_checkout(_CREDENTIALED_URL, "somesha", checkout_dir)
+
+    assert exc_info.value.returncode == 1
+    assert not checkout_dir.exists()
+
+
+def test_clone_ref_still_fails_loudly_when_only_the_scrub_fails(tmp_path, monkeypatch):
+    # The other direction must keep today's strictness: a checkout that SUCCEEDED but could not have its token
+    # scrubbed is a job failure, not something to swallow - the scan would otherwise run with a live token on disk.
+    from scan_worker.jobs import _clone_ref
+
+    def fake_run(args, cwd=None, check=None, **kwargs):
+        if args[:2] == ["git", "init"]:
+            os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+        if args[:3] == ["git", "remote", "set-url"] and args[-1] == _SCRUBBED_URL:
+            raise subprocess.CalledProcessError(128, args, stderr="error: could not lock config file")
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        _clone_ref(_CREDENTIALED_URL, "goodsha", tmp_path / "ephemeral-scrub-only-fails")
+
+    assert exc_info.value.returncode == 128
+
+
+def test_ensure_persistent_checkout_starts_over_when_the_existing_checkout_is_unusable(tmp_path, monkeypatch):
+    # A checkout left half-written by a killed job (empty .git, stale config.lock) makes the reuse path's very
+    # first `git remote set-url` exit 128 on every later job for that repo, forever. Discard it and clone fresh.
+    from scan_worker.jobs import _ensure_persistent_checkout
+
+    calls = []
+    state = {"corrupt": True}
+
+    def fake_run(args, cwd=None, check=None, **kwargs):
+        calls.append(list(args))
+        if args[:3] == ["git", "remote", "set-url"] and state["corrupt"]:
+            raise subprocess.CalledProcessError(128, args, stderr="fatal: not a git repository")
+        if args[:2] == ["git", "clone"]:
+            state["corrupt"] = False
+            os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    checkout_dir = tmp_path / "persistent-unusable"
+    (checkout_dir / ".git").mkdir(parents=True)
+    (checkout_dir / "stale-file").write_text("left over from the killed job")
+
+    _ensure_persistent_checkout(_CREDENTIALED_URL, "somesha", checkout_dir)
+
+    assert [c for c in calls if c[:2] == ["git", "clone"]], "expected a fresh clone after discarding the checkout"
+    assert not (checkout_dir / "stale-file").exists()
+    assert calls[-1][:3] == ["git", "remote", "set-url"] and calls[-1][-1] == _SCRUBBED_URL
+
+
 def test_checkout_sha_falls_back_to_pr_ref_when_direct_checkout_fails(tmp_path, monkeypatch):
     # Real bug found live 2026-09-22: run_pr_scan_job crashed with `git
     # checkout` exit 128 for a PR whose source branch had already been
@@ -9841,7 +9960,8 @@ def test_run_initial_scan_job_enqueues_air_builds_instead_of_running_them_inline
         def enqueue(self, func, **kwargs):
             enqueued.append((func, kwargs))
 
-    monkeypatch.setattr("scan_worker.jobs._scans_queue", lambda redis_url: _FakeQueue())
+    # The long LLM builds go to their own queue, not "scans" (see scan_worker.scheduler.BUILDS_QUEUE_NAME).
+    monkeypatch.setattr("scan_worker.jobs._builds_queue", lambda redis_url: _FakeQueue())
 
     run_initial_scan_job(1, "octocat/hello-world")
 
@@ -9898,7 +10018,7 @@ def test_run_initial_scan_job_logs_a_failed_air_enqueue_and_still_enqueues_the_o
                 raise ConnectionError("redis went away")
             enqueued.append(func)
 
-    monkeypatch.setattr("scan_worker.jobs._scans_queue", lambda redis_url: _FlakyQueue())
+    monkeypatch.setattr("scan_worker.jobs._builds_queue", lambda redis_url: _FlakyQueue())
 
     with caplog.at_level("WARNING", logger="scan_worker.jobs"):
         run_initial_scan_job(1, "octocat/hello-world")
@@ -10274,6 +10394,29 @@ def test_run_live_wiki_full_build_job_generates_and_stores(monkeypatch):
     assert stored["records"] == [fake_record]
     assert stored["commit"] is None
     assert build_status_calls == [("ready", None)]
+
+
+def test_run_live_wiki_full_build_job_makes_no_llm_call_when_the_plan_is_no_longer_air(monkeypatch):
+    # See the docs variant: a build queued under AIR must stop spending once the installation is downgraded,
+    # even though it still has credit left. AIRview is AIR-only.
+    _patch_no_spend_cap(monkeypatch)
+    from scan_worker.jobs import run_live_wiki_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _wiki_evidence())
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "flash", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
+    )
+    monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
+    generate_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.live_wiki.generate_subsystems", lambda *a, **k: generate_calls.append(True) or []
+    )
+
+    run_live_wiki_full_build_job(1, "octocat/hello-world")
+
+    assert generate_calls == []
 
 
 def test_run_live_wiki_full_build_job_records_failed_status_on_error(monkeypatch):
@@ -10958,13 +11101,35 @@ def test_run_live_wiki_full_build_for_installation_job_enqueues_per_repo(monkeyp
         lambda *a, **k: ["octocat/repo1", "octocat/repo2"],
     )
     fake_queue = MagicMock()
-    monkeypatch.setattr("scan_worker.jobs._scans_queue", lambda redis_url: fake_queue)
+    monkeypatch.setattr("scan_worker.jobs._builds_queue", lambda redis_url: fake_queue)
 
     run_live_wiki_full_build_for_installation_job(1)
 
     assert fake_queue.enqueue.call_count == 2
     repo_names = {call.kwargs["repo_full_name"] for call in fake_queue.enqueue.call_args_list}
     assert repo_names == {"octocat/repo1", "octocat/repo2"}
+
+
+def test_run_live_docs_full_build_for_installation_job_enqueues_per_repo_on_the_builds_queue(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from scan_worker.jobs import run_live_docs_full_build_for_installation_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_repos_for_installation",
+        lambda *a, **k: ["octocat/repo1", "octocat/repo2"],
+    )
+    fake_queue = MagicMock()
+    monkeypatch.setattr("scan_worker.jobs._builds_queue", lambda redis_url: fake_queue)
+
+    run_live_docs_full_build_for_installation_job(1)
+
+    assert fake_queue.enqueue.call_count == 2
+    assert all(
+        call.args[0] == "scan_worker.jobs.run_live_docs_full_build_job"
+        for call in fake_queue.enqueue.call_args_list
+    )
 
 
 def test_run_installation_repo_enumeration_retry_job_enqueues_initial_scan_per_repo(monkeypatch):
@@ -11350,6 +11515,36 @@ def test_run_live_docs_full_build_job_skips_llm_call_when_spend_cap_reached(monk
     # get_llm_spend_this_month=999 used to force it under the old
     # mechanism.
     assert "credit balance exhausted" in status_calls[0][1]
+
+
+def test_run_live_docs_full_build_job_makes_no_llm_call_when_the_plan_is_no_longer_air(monkeypatch):
+    # A build queued while an installation was on AIR can sit behind other jobs for a long time. If the plan is
+    # downgraded in between (2026-10-30: the Aletheore org went air -> flash to stop a spend flood), the job must
+    # not keep spending: the sweeps that enqueue builds are AIR-only, and the job itself must agree.
+    from scan_worker.jobs import run_live_docs_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    module = _docs_module(functions=[{"name": "f", "is_public": True, "docstring": None}])
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _docs_evidence([module]))
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "flash", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
+    )
+    monkeypatch.setattr("scan_worker.jobs.list_docs_symbols", lambda *a, **k: [])
+    client_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._github_client_and_token", lambda *a, **k: client_calls.append(True) or (object(), "tok")
+    )
+    adapter_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._live_docs_full_build_writing_adapter",
+        lambda on_usage=None, on_call_failed=None: adapter_calls.append(True),
+    )
+
+    run_live_docs_full_build_job(1, "octocat/hello-world")
+
+    assert adapter_calls == []
+    assert client_calls == []
 
 
 def test_run_live_docs_full_build_job_survives_one_module_failing(monkeypatch):
@@ -12363,6 +12558,41 @@ def test_run_ops_monitor_job_alerts_when_queue_depth_stays_high(monkeypatch):
     assert len(alerts) == 1
     assert alerts[0][0][0] == "ops_monitor.queue_depth.scans"
     assert "scans queue depth=26" in alerts[0][0][2]
+
+
+def test_run_ops_monitor_job_alerts_on_a_backed_up_builds_queue(monkeypatch):
+    """The long AIRview/Docs builds moved to their own queue (2026-10-30 incident). A queue nobody watches
+    is the original failure mode again: a backlog there must raise the same alert "scans" does."""
+    from scan_worker import jobs
+    from scan_worker.jobs import OPS_THRESHOLD_DURATION_SECONDS, run_ops_monitor_job
+
+    class FakeQueue:
+        def __init__(self, name, connection):
+            self.name = name
+            self.count = 26 if name == "builds" else 0
+
+    class FakeFailedRegistry:
+        def __init__(self, queue):
+            self.count = 0
+
+    redis_conn = _FakeRedis()
+    alerts = []
+    monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
+    monkeypatch.setattr("scan_worker.jobs._check_app_health", lambda redis_conn, url: None)
+    monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs._check_free_tier_provider_keys", lambda redis_conn: None)
+    monkeypatch.setattr("scan_worker.jobs._check_webhook_errors", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs.Queue", FakeQueue)
+    monkeypatch.setattr("scan_worker.jobs.FailedJobRegistry", FakeFailedRegistry)
+    monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
+    monkeypatch.setenv("ALETHEORE_OPS_QUEUE_DEPTH_THRESHOLD", "25")
+    monkeypatch.setattr(jobs.time, "time", lambda: 1000.0)
+
+    run_ops_monitor_job()
+    monkeypatch.setattr(jobs.time, "time", lambda: 1000.0 + OPS_THRESHOLD_DURATION_SECONDS + 1)
+    run_ops_monitor_job()
+
+    assert [a[0][0] for a in alerts] == ["ops_monitor.queue_depth.builds"]
 
 
 def test_run_ops_monitor_job_does_not_repeat_alert_within_cooldown(monkeypatch):
