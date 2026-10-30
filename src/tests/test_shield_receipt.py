@@ -407,3 +407,20 @@ def test_receipts_a_little_ahead_of_the_clock_are_kept_and_only_far_future_ones_
     receipt.write_receipt(repo, receipt.Receipt("now", T0, (), _empty_report(), None))
     assert all(p.exists() for p in ahead)
     assert not far.exists()
+
+
+def test_a_swallowed_prune_failure_is_explained_on_stderr_only_when_debugging(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "r"
+    repo.mkdir()
+
+    def broken(*a, **k):
+        raise OSError("disk says no")
+
+    monkeypatch.setattr(receipt, "_prune", broken)
+    receipt.write_receipt(repo, receipt.Receipt("s1", T0, (), _empty_report(), None))
+    assert capsys.readouterr() == ("", "")
+    monkeypatch.setenv("ALETHEORE_HOOK_DEBUG", "1")
+    receipt.write_receipt(repo, receipt.Receipt("s2", T0, (), _empty_report(), None))
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert err == "aletheore shield: could not prune old receipts: OSError: disk says no\n"

@@ -1036,3 +1036,21 @@ def test_a_new_session_state_file_prunes_week_old_ones_left_by_sessions_that_nev
     assert not any(p.exists() for p in old)
     assert all(p.exists() for p in kept) and (folder / "hook-dir.json").is_dir()
     assert _state(repo)["edited"] is True
+
+
+def test_debug_notes_go_to_stderr_and_stdout_stays_the_hook_json(tmp_path):
+    repo = _init(tmp_path / "r")
+    (repo / "a.py").write_text("import reqests\n", encoding="utf-8")  # a near-miss finding to print
+    cache = repo / ".git" / "aletheore-shield" / "pins-cache.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text("{not json", encoding="utf-8")
+    (repo / "requirements.txt").write_text("zzqnew==1\n", encoding="utf-8")  # a manifest change reads the cache
+    env = dict(_subprocess_env(), ALETHEORE_HOOK_DEBUG="1")
+    done = subprocess.run(
+        [sys.executable, "-m", "aletheore.shield.hooks", "post-edit"],
+        input=json.dumps(_payload(repo, event="PostToolUse")).encode("utf-8"),
+        capture_output=True, cwd=str(repo), env=env, timeout=60, check=False,
+    )
+    assert done.returncode == 0
+    assert "hookSpecificOutput" in json.loads(done.stdout)
+    assert b"aletheore shield: ignoring an unreadable pins cache" in done.stderr

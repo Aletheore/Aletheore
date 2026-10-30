@@ -41,6 +41,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from aletheore.shield.denylist import is_denied_path
+from aletheore.shield.fsutil import debug_note
 from aletheore.shield.gitutil import RepoState, repo_state, run_git, run_git_pair
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
@@ -1056,8 +1057,8 @@ def _remove_quietly(path: str) -> None:
     try:
         if os.path.lexists(path):
             os.remove(path)
-    except OSError:
-        pass
+    except OSError as error:
+        debug_note(f"could not remove {path}", error)
 
 
 def _remove_empty_folders(created: list[str]) -> None:

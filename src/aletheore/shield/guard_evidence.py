@@ -30,6 +30,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from aletheore.shield import state
+from aletheore.shield.fsutil import debug_note
 from aletheore.shield.gitutil import UNLIMITED, Budget
 
 # The evidence readers and diff helpers (aletheore.evidence, dependents, evidence_diff, signature_diff, tests_for)
@@ -126,11 +127,12 @@ def record_refresh_finished(repo: Path, started: float, mtime_ns: int | None) ->
     try:
         temporary.write_text(json.dumps({"started": started, "evidence_mtime_ns": mtime_ns}), encoding="utf-8")
         os.replace(temporary, done)
-    except OSError:
+    except OSError as error:
+        debug_note("could not record the finished refresh", error)
         try:
             temporary.unlink()
-        except OSError:
-            pass
+        except OSError as cleanup:
+            debug_note(f"could not remove {temporary}", cleanup)
 
 
 def _finished_refresh_start(repo: Path) -> float | None:
@@ -152,7 +154,10 @@ def _finished_refresh_start(repo: Path) -> float | None:
         if started > time.time() or recorded != _evidence_mtime_ns(repo):
             return None
         return started
-    except Exception:  # noqa: BLE001 - corrupt or hostile content (RecursionError, OverflowError, ...): no trust
+    except FileNotFoundError:
+        return None
+    except Exception as error:  # noqa: BLE001 - corrupt or hostile content (RecursionError, OverflowError, ...)
+        debug_note("ignoring an unreadable refresh completion record", error)
         return None
 
 
@@ -195,8 +200,10 @@ def _write_marker(marker: Path, started: float) -> bool:
     finally:
         try:
             temporary.unlink()
-        except OSError:
+        except FileNotFoundError:
             pass
+        except OSError as error:
+            debug_note(f"could not remove {temporary}", error)
 
 
 def _claim_marker(marker: Path, newest_edit: float | None = None) -> bool:
@@ -315,11 +322,12 @@ def save_base_evidence(repo: Path, session_id: str) -> Path | None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, temporary)
         os.replace(temporary, destination)
-    except OSError:
+    except OSError as error:
+        debug_note("could not save the session's base evidence", error)
         try:
             temporary.unlink()
-        except OSError:
-            pass
+        except OSError as cleanup:
+            debug_note(f"could not remove {temporary}", cleanup)
         return None
     return destination
 
@@ -333,7 +341,8 @@ def load_base_evidence(repo: Path, session_id: str) -> dict | None:
         from aletheore import evidence as evidence_io
 
         return evidence_io.load_evidence_file(path)
-    except Exception:  # noqa: BLE001  # corrupt, truncated or incompatible: all mean "no base"
+    except Exception as error:  # noqa: BLE001  # corrupt, truncated or incompatible: all mean "no base"
+        debug_note(f"ignoring the unreadable base evidence {path}", error)
         return None
 
 
@@ -344,8 +353,10 @@ def delete_base_evidence(repo: Path, session_id: str) -> None:
         return
     try:
         path.unlink()
-    except OSError:
+    except FileNotFoundError:
         pass
+    except OSError as error:
+        debug_note(f"could not delete the base evidence {path}", error)
 
 
 BASE_EVIDENCE_MAX_AGE_S = 7 * 24 * 3600.0

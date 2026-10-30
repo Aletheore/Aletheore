@@ -666,3 +666,16 @@ def test_npm_dependencies_from_paths_or_git_and_aliases_are_not_registry_names(t
     _write(repo, "package-lock.json", json.dumps(lock))
     refs, _ = added_dependencies(repo)
     assert refs == [DepRef("npm", "@acme/real-name", "manifest", "package.json")]
+
+
+def test_an_ignored_corrupt_pins_cache_is_explained_on_stderr_when_debugging(tmp_path, monkeypatch, capsys):
+    repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n"})
+    cache = repo / ".git" / "aletheore-shield" / _deps.PINS_CACHE_NAME
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text("{not json", encoding="utf-8")
+    _write(repo, "requirements.txt", "requests==2.0\nfastjsonx==1.0\n")
+    monkeypatch.setenv("ALETHEORE_HOOK_DEBUG", "1")
+    refs, _ = added_dependencies(repo)
+    out, err = capsys.readouterr()
+    assert [r.name for r in refs] == ["fastjsonx"] and out == ""
+    assert "aletheore shield: ignoring an unreadable pins cache: JSONDecodeError" in err

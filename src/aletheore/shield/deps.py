@@ -30,6 +30,7 @@ from aletheore.manifests import EXTRA_SKIPPED_DIRS, MANIFEST_FILENAMES, MANIFEST
 from aletheore.scanner.detect import IGNORED_DIRS
 from aletheore.shield import changes as _changes
 from aletheore.shield import imports
+from aletheore.shield.fsutil import debug_note
 from aletheore.shield.gitutil import UNLIMITED, Budget, cat_file_batch, run_git
 
 _CHECKED = {"PyPI": "Python", "npm": "JavaScript"}
@@ -121,7 +122,8 @@ def _ignored_patterns(repo: Path) -> list[str]:
 
     try:
         return list(load_repo_config(repo).get("ignored_paths") or [])
-    except Exception:  # noqa: BLE001 - a broken config means "no extra ignores", as in the scanner
+    except Exception as error:  # noqa: BLE001 - a broken config means "no extra ignores", as in the scanner
+        debug_note("could not read .aletheore.json ignored_paths", error)
         return []
 
 
@@ -184,7 +186,10 @@ class _PinCache:
                 if isinstance(key, str) and isinstance(pins, list) and all(
                         isinstance(p, list) and len(p) == 3 and all(isinstance(x, str) for x in p) for p in pins):
                     self.units[key] = [tuple(p) for p in pins]
-        except Exception:  # noqa: BLE001 - missing, unreadable, corrupt or hostile: start empty
+        except FileNotFoundError:
+            self.units = {}
+        except Exception as error:  # noqa: BLE001 - unreadable, corrupt or hostile: start empty
+            debug_note("ignoring an unreadable pins cache", error)
             self.units = {}
 
     def get(self, key: str) -> list[tuple[str, str, str]] | None:
@@ -220,11 +225,12 @@ class _PinCache:
             self.path.parent.mkdir(exist_ok=True)  # inside the git dir, which exists
             temporary.write_text(text, encoding="utf-8")
             os.replace(temporary, self.path)
-        except OSError:
+        except OSError as error:
+            debug_note("could not save the pins cache", error)
             try:
                 temporary.unlink()
-            except OSError:
-                pass
+            except OSError as cleanup:
+                debug_note(f"could not remove {temporary}", cleanup)
 
     def _remove_stale_temporaries(self) -> None:
         """Temporary files a killed hook left behind (the hard stop can end a process mid-write)."""
@@ -236,10 +242,10 @@ class _PinCache:
                 try:
                     if leftover.is_file() and not leftover.is_symlink() and leftover.stat().st_mtime < cutoff:
                         leftover.unlink()
-                except OSError:
-                    continue
-        except OSError:
-            pass
+                except OSError as error:
+                    debug_note(f"could not remove the stale temporary {leftover}", error)
+        except OSError as error:
+            debug_note("could not list the pins cache folder", error)
 
 
 # ---- manifest pins, base and working side --------------------------------------------------
@@ -301,7 +307,8 @@ def _base_unit_pins(
                 break
             try:
                 pins = _parse_into(Path(tmp), str(index), {n: blobs.get(b, b"") for n, b in files.items()})
-            except Exception:  # noqa: BLE001 - an unreadable manifest declares nothing
+            except Exception as error:  # noqa: BLE001 - an unreadable manifest declares nothing
+                debug_note(f"could not parse the base manifests of {folder}", error)
                 pins = []
             cache.put(_unit_key(files), pins)
             found[folder] = pins
@@ -328,7 +335,8 @@ def _working_unit_pins(
                         continue  # as on the base side: a linked manifest belongs to its target's folder
                     shutil.copyfile(repo / rel, unit / name)
                 found[folder] = pins_in_directory(unit)
-            except Exception:  # noqa: BLE001
+            except Exception as error:  # noqa: BLE001
+                debug_note(f"could not parse the manifests of {folder}", error)
                 unreadable.append(folder)
     return found, unreadable, True
 
@@ -498,7 +506,8 @@ def _installed_import_names() -> set[str]:
 
     try:
         return set(importlib.metadata.packages_distributions())
-    except Exception:
+    except Exception as error:  # noqa: BLE001 - a broken installed distribution must not stop the check
+        debug_note("could not list the installed distributions", error)
         return set()
 
 
@@ -610,7 +619,8 @@ def _declared_python_names(repo: Path, working: list[str]) -> set[str]:
                         found |= _dist_names(data[key])
             elif name == "setup.cfg":
                 found |= _setup_cfg_names(_read(repo, rel) or "")
-        except Exception:  # unparseable files are skipped silently
+        except Exception as error:  # noqa: BLE001 - an unparseable file declares nothing
+            debug_note(f"could not read the declared names in {rel}", error)
             continue
     return found
 

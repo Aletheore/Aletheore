@@ -10,6 +10,7 @@ from pathlib import Path
 
 from aletheore.shield import state
 from aletheore.shield.checkpoint import Checkpoint, changed_since, list_checkpoints
+from aletheore.shield.fsutil import debug_note
 from aletheore.shield.guard import GuardReport, clean_text, render_report, run_guard
 from aletheore.shield.guard_evidence import load_base_evidence
 
@@ -246,8 +247,8 @@ def _prune(directory: Path, repo: Path, now: datetime, keep_name: str) -> None:
                 continue
         try:
             path.unlink()
-        except OSError:
-            pass
+        except OSError as error:
+            debug_note(f"could not remove the old receipt {path}", error)
 
 
 def write_receipt(repo: Path, receipt: Receipt) -> Path:
@@ -271,11 +272,11 @@ def write_receipt(repo: Path, receipt: Receipt) -> Path:
     except BaseException:
         try:
             os.unlink(temp_name)
-        except OSError:
-            pass
+        except OSError as error:
+            debug_note(f"could not remove {temp_name}", error)
         raise
     try:
         _prune(directory, repo, created, target.name)
-    except Exception:  # noqa: BLE001 - failing to tidy old receipts must not fail the write
-        pass
+    except Exception as error:  # noqa: BLE001 - failing to tidy old receipts must not fail the write
+        debug_note("could not prune old receipts", error)
     return target

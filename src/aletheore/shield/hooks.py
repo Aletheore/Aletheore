@@ -485,8 +485,10 @@ def _session_end(payload: dict | None) -> Output | None:
     if session_id:
         try:
             _state_path(repo, session_id).unlink()
-        except OSError:
+        except FileNotFoundError:
             pass
+        except OSError as error:
+            _debug(None, f"aletheore shield: could not remove the hook state: {type(error).__name__}: {error}")
     return Output("", failure) if failure else None
 
 

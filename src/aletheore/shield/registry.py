@@ -176,8 +176,10 @@ def lookup_package(
     except urllib.error.HTTPError as error:
         try:
             error.close()
-        except Exception:
-            pass
+        except Exception as closing:  # noqa: BLE001 - the HTTP status is all that is needed
+            from aletheore.shield.fsutil import debug_note
+
+            debug_note("could not close the registry response", closing)
         if error.code == 404:
             info = RegistryInfo(False, None, None)
             _write_cache(path, key, info, now)
