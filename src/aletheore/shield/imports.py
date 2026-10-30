@@ -33,9 +33,17 @@ def _keep_python(names: set[str]) -> set[str]:
     return {n for n in names if n and not n.startswith("_") and n not in sys.stdlib_module_names}
 
 
+def _top(dotted: str) -> str:
+    """The import name a distribution is looked up by: the first part, or the first two under a namespace root
+    (`google.protobuf.json_format` -> `google.protobuf`), since the root alone says nothing about the package."""
+    parts = dotted.split(".")
+    return ".".join(parts[:2]) if parts[0] in PY_NAMESPACE_ROOTS else parts[0]
+
+
 def python_imports(source: str) -> set[str]:
-    """Top-level names of absolute imports. A file that does not parse is read token by token instead, so the imports
-    it does hold are still seen (strings and comments are tokens of their own, never names)."""
+    """Top-level names of absolute imports (two parts under a namespace root, see `_top`). A file that does not parse
+    is read token by token instead, so the imports it does hold are still seen (strings and comments are tokens of
+    their own, never names)."""
     try:
         tree = ast.parse(source)
     except (SyntaxError, ValueError, RecursionError):
@@ -43,9 +51,12 @@ def python_imports(source: str) -> set[str]:
     found: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            found.update(alias.name.split(".")[0] for alias in node.names)
+            found.update(_top(alias.name) for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            found.add(node.module.split(".")[0])
+            if node.module in PY_NAMESPACE_ROOTS:  # from google import protobuf
+                found.update(f"{node.module}.{alias.name}" for alias in node.names if alias.name != "*")
+            else:
+                found.add(_top(node.module))
     return _keep_python(found)
 
 

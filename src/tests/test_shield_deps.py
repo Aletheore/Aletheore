@@ -560,3 +560,55 @@ def test_js_imports_respect_strings_comments_and_regexes(source, expected):
 )
 def test_python_imports_respect_strings_and_survive_syntax_errors(source, expected):
     assert _imports.python_imports(source) == expected
+
+
+# ---- the import-name to distribution map --------------------------------------------------------
+
+
+def test_import_to_dist_map_is_well_formed():
+    data = json.loads((_deps.Path(_deps.__file__).resolve().parents[1] / "data" / "import_to_dist.json").read_text())
+    assert isinstance(data, dict) and data
+    for key, value in data.items():
+        assert isinstance(key, str) and key and key == key.strip()
+        names = [value] if isinstance(value, str) else value
+        assert isinstance(names, list) and names and all(isinstance(n, str) and n for n in names), key
+        assert all(_deps._DIST_START.fullmatch(n) for n in names), key
+        assert len(set(map(_deps._norm_py, names))) == len(names), key
+
+
+@pytest.mark.parametrize(
+    "imp,first",
+    [
+        ("Cryptodome", "pycryptodomex"), ("Crypto", "pycryptodome"), ("win32api", "pywin32"),
+        ("win32con", "pywin32"), ("win32com", "pywin32"), ("pythoncom", "pywin32"), ("pywintypes", "pywin32"),
+        ("win32gui", "pywin32"), ("bson", "pymongo"), ("jwt", "pyjwt"), ("fitz", "pymupdf"),
+        ("multipart", "python-multipart"), ("magic", "python-magic"), ("yaml", "pyyaml"), ("PIL", "pillow"),
+        ("cv2", "opencv-python"), ("sklearn", "scikit-learn"), ("bs4", "beautifulsoup4"),
+        ("dateutil", "python-dateutil"), ("dotenv", "python-dotenv"), ("serial", "pyserial"),
+        ("OpenSSL", "pyopenssl"), ("attr", "attrs"), ("google.protobuf", "protobuf"), ("git", "gitpython"),
+        ("docx", "python-docx"), ("pptx", "python-pptx"), ("usb", "pyusb"), ("zmq", "pyzmq"),
+    ],
+)
+def test_well_known_import_names_map_to_their_distribution(imp, first):
+    ref = _deps._import_ref(imp, "a.py", True, _deps._Facts(set(), set(), set(), set(), set(), {}),
+                            _deps._import_map(), set(), set(), set())
+    assert ref == DepRef("PyPI", first, "import", "a.py")
+
+
+@pytest.mark.parametrize(
+    "imp,declared",
+    [("cv2", "opencv-python-headless"), ("psycopg2", "psycopg2"), ("psycopg2", "psycopg2-binary"),
+     ("Crypto", "pycryptodome"), ("jwt", "PyJWT"), ("magic", "python-magic-bin"), ("PIL", "Pillow")],
+)
+def test_an_import_several_distributions_provide_is_satisfied_by_any_declared_one(imp, declared):
+    ref = _deps._import_ref(imp, "a.py", True, _deps._Facts(set(), set(), set(), set(), set(), {}),
+                            _deps._import_map(), set(), {_deps._norm_py(declared)}, set())
+    assert ref is None
+
+
+def test_namespace_package_imports_resolve_through_the_map_and_unknown_ones_stay_skipped(tmp_path):
+    repo = _init(tmp_path / "r", {"requirements.txt": "google-auth==2\n", "app.py": "x = 1\n"})
+    _write(repo, "app.py", "import google.protobuf.json_format\nfrom google.auth import default\n"
+                           "from google import oauth2\nimport google.cloud.storage\nx = 1\n")
+    refs, _ = added_dependencies(repo)
+    assert refs == [DepRef("PyPI", "protobuf", "import", "app.py")]

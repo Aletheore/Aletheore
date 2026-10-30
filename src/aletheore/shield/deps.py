@@ -453,12 +453,20 @@ def _collect_pyproject(data: dict, facts: _Facts, rel: str, pip_hits: list[str])
 
 
 @lru_cache(maxsize=1)
-def _import_map() -> dict[str, str]:
+def _import_map() -> dict[str, tuple[str, ...]]:
+    """{import name: distributions that provide it, the usual one first}. In the data file a value is one name or a
+    list of names (cv2 comes from opencv-python, opencv-python-headless, ...); any declared one satisfies the import."""
     path = Path(__file__).resolve().parents[1] / "data" / "import_to_dist.json"
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+    found: dict[str, tuple[str, ...]] = {}
+    for key, value in data.items() if isinstance(data, dict) else ():
+        names = [value] if isinstance(value, str) else value
+        if isinstance(key, str) and isinstance(names, list) and names and all(isinstance(n, str) for n in names):
+            found[key] = tuple(names)
+    return found
 
 
 def _installed_import_names() -> set[str]:
@@ -728,16 +736,19 @@ class _LazyNames:
 
 def _import_ref(imp, rel, is_py, facts, import_map, installed, declared_py, declared_npm) -> DepRef | None:
     if is_py:
-        if imp in facts.local_dirs or imp.lower() in facts.local_dirs or imp in imports.PY_NAMESPACE_ROOTS:
+        root = imp.split(".")[0]
+        if root in facts.local_dirs or root.lower() in facts.local_dirs or imp in imports.PY_NAMESPACE_ROOTS:
             return None
         if imp in installed:
             return None
-        dist = import_map.get(imp)
-        if dist:
-            dist = _norm_py(dist)
-            if dist in declared_py or dist in facts.local_py:
+        dists = import_map.get(imp)
+        if dists:
+            normed = [_norm_py(d) for d in dists]
+            if any(d in declared_py or d in facts.local_py for d in normed):
                 return None
-            return DepRef("PyPI", dist, "import", rel)
+            return DepRef("PyPI", normed[0], "import", rel)
+        if root in imports.PY_NAMESPACE_ROOTS:
+            return None  # google.cloud and the like: many distributions, the name alone does not say which
         name = _norm_py(imp)
         if name in declared_py or name in facts.local_py:
             return None
