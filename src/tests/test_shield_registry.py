@@ -241,3 +241,77 @@ def test_npm_cache_key_preserves_case_and_expired_entries_are_pruned(tmp_path):
     lookup_package("npm", "other", cache_path=path, opener=_Opener({"time": {}}), now=NOW + timedelta(hours=30))
     assert set(json.loads(path.read_text())) == {"npm:other"}
     assert [p.name for p in tmp_path.iterdir() if p.name != "c.json"] == []
+
+
+def _fresh_entry(minutes_ago):
+    return {"cached_at": (NOW - timedelta(minutes=minutes_ago)).isoformat(), "exists": True, "first_published": None}
+
+
+def test_registry_cache_stays_bounded_and_keeps_the_newest_entries(tmp_path):
+    from aletheore.shield import registry
+
+    cache = tmp_path / "reg.json"
+    many = registry.REGISTRY_CACHE_MAX_ENTRIES + 500
+    cache.write_text(json.dumps({f"PyPI:p{i}": _fresh_entry(i % 600) for i in range(many)}), encoding="utf-8")
+    _lookup(tmp_path, "PyPI", "newname", _http_error("u", 404))
+    data = json.loads(cache.read_text(encoding="utf-8"))
+    assert len(data) == registry.REGISTRY_CACHE_MAX_ENTRIES
+    assert "PyPI:newname" in data
+    kept_ages = sorted(NOW - datetime.fromisoformat(v["cached_at"]) for k, v in data.items() if k != "PyPI:newname")
+    dropped_youngest = min(
+        NOW - datetime.fromisoformat(_fresh_entry(i % 600)["cached_at"])
+        for i in range(many) if f"PyPI:p{i}" not in data
+    )
+    assert kept_ages[-1] <= dropped_youngest  # the oldest entries went first
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["", "{", "[1, 2]", "null", json.dumps({"PyPI:x": [1]}), json.dumps({"PyPI:x": {"cached_at": 5, "exists": 1}})],
+)
+def test_corrupt_registry_cache_is_ignored_and_replaced(tmp_path, content):
+    cache = tmp_path / "reg.json"
+    cache.write_text(content, encoding="utf-8")
+    info, opener = _lookup(tmp_path, "PyPI", "x", _http_error("u", 404))
+    assert info.exists is False and len(opener.requests) == 1
+    assert set(json.loads(cache.read_text(encoding="utf-8"))) == {"PyPI:x"}
+
+
+def test_registry_cache_write_failure_leaves_no_temporary_file(tmp_path, monkeypatch):
+    import os
+
+    def refuse(*a, **k):
+        raise PermissionError("in use")
+
+    monkeypatch.setattr(os, "replace", refuse)
+    info, _ = _lookup(tmp_path, "PyPI", "x", _http_error("u", 404))
+    assert info.exists is False
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_concurrent_registry_cache_writers_keep_every_entry(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    from aletheore.shield import registry
+
+    real = registry._read_cache
+
+    def slow(path):
+        data = real(path)
+        time.sleep(0.03)
+        return data
+
+    monkeypatch.setattr(registry, "_read_cache", slow)
+    barrier = threading.Barrier(4)
+
+    def go(index):
+        barrier.wait()
+        _lookup(tmp_path, "PyPI", f"name{index}", _http_error("u", 404))
+
+    threads = [threading.Thread(target=go, args=(i,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert set(json.loads((tmp_path / "reg.json").read_text(encoding="utf-8"))) == {f"PyPI:name{i}" for i in range(4)}

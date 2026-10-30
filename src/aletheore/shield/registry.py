@@ -7,10 +7,8 @@ fixed User-Agent. Anything that is not a definite HTTP 404 yields exists=None
 
 import http.client
 import json
-import os
 import re
 import socket
-import tempfile
 import ssl
 import urllib.error
 import urllib.parse
@@ -26,6 +24,10 @@ from aletheore.user_paths import user_home
 
 DEFAULT_REGISTRY_CACHE_PATH = user_home() / ".cache" / "aletheore" / "shield-registry-cache.json"
 CACHE_TTL = timedelta(hours=24)
+# The cache is shared by every repository on the machine: bounded in entries (newest kept) and in the size of file it
+# will read at all (a larger one is ignored as corrupt and replaced).
+REGISTRY_CACHE_MAX_ENTRIES = 2000
+_CACHE_MAX_BYTES = 4 * 1024 * 1024
 USER_AGENT = "aletheore-shield"
 _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
@@ -91,9 +93,12 @@ def _first_published(ecosystem: str, data: dict) -> datetime | None:
 
 
 def _read_cache(path: Path) -> dict:
+    """The cache file as a dict; empty when it is missing, unreadable, oversized or not a JSON object."""
     try:
+        if path.stat().st_size > _CACHE_MAX_BYTES:
+            return {}
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -112,21 +117,34 @@ def _from_cache(entry, now: datetime) -> RegistryInfo | None:
 
 
 def _write_cache(path: Path, key: str, info: RegistryInfo, now: datetime) -> None:
-    cache = {k: v for k, v in _read_cache(path).items() if _from_cache(v, now) is not None}
-    cache[key] = {
-        "cached_at": now.isoformat(),
-        "exists": info.exists,
-        "first_published": info.first_published.isoformat() if info.first_published else None,
-    }
+    """Add one entry: under `<cache>.lock`, re-read the file, drop expired and invalid entries, keep the newest
+    REGISTRY_CACHE_MAX_ENTRIES and replace the file atomically. Best effort: a failure only means no caching."""
+    from aletheore.shield.fsutil import atomic_write_text, debug_note, exclusive
+
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            "w", dir=path.parent, prefix=path.name + ".", suffix=".tmp", delete=False, encoding="utf-8"
-        ) as handle:
-            handle.write(json.dumps(cache))
-        os.replace(handle.name, path)
-    except OSError:
-        pass  # caching is best effort
+    except OSError as error:
+        debug_note("could not create the registry cache folder", error)
+        return
+    with exclusive(path.with_name(f"{path.name}.lock")) as held:
+        if not held:
+            return  # another lookup is writing it right now; this entry is simply not cached
+        live = {}
+        for k, v in _read_cache(path).items():
+            entry = _from_cache(v, now)
+            if entry is not None and k != key:
+                live[k] = (_parse_time(v["cached_at"]), v)
+        newest = sorted(live.items(), key=lambda item: item[1][0], reverse=True)[: REGISTRY_CACHE_MAX_ENTRIES - 1]
+        cache = {k: v for k, (_, v) in reversed(newest)}  # oldest first, the new entry last
+        cache[key] = {
+            "cached_at": now.isoformat(),
+            "exists": info.exists,
+            "first_published": info.first_published.isoformat() if info.first_published else None,
+        }
+        try:
+            atomic_write_text(path, json.dumps(cache))
+        except OSError as error:
+            debug_note("could not write the registry cache", error)
 
 
 def _default_opener(request, timeout=None):
