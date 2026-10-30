@@ -48,6 +48,7 @@ PINS_CACHE_NAME = "pins-cache.json"  # in <git dir>/aletheore-shield/
 PINS_CACHE_MAX_UNITS = 4000
 PINS_CACHE_MAX_BYTES = 16 * 1024 * 1024
 _PINS_CACHE_VERSION = 1
+STALE_TEMPORARY_S = 3600.0
 _STATE_DIRNAME = "aletheore-shield"
 
 TIME_BUDGET_MANIFESTS = "time budget reached; new manifest dependencies were not compared with the base"
@@ -153,14 +154,15 @@ def _parser_version() -> str:
 class _PinCache:
     """{unit key: pins} in <git dir>/aletheore-shield/pins-cache.json. An entry never goes stale while the parsers stay
     the same (the key is the content), and the file records the Aletheore version that parsed it: a file from another
-    version, or a corrupt or oversized one, is ignored, writes are atomic, and the file is bounded (units
-    used by this run are kept first, then the most recent others, up to PINS_CACHE_MAX_UNITS)."""
+    version, or a corrupt, oversized or hostile one, is ignored. Writes are atomic and the file is bounded by
+    PINS_CACHE_MAX_UNITS and PINS_CACHE_MAX_BYTES: units parsed by this run are kept first, then the ones it read,
+    then the most recent others, and older entries are evicted until it fits, so the cache always catches up."""
 
     def __init__(self, git_dir: Path | None) -> None:
         self.path = git_dir / _STATE_DIRNAME / PINS_CACHE_NAME if git_dir is not None else None
-        self.units: dict[str, list[tuple[str, str, str]]] = {}
+        self.units: dict[str, list[tuple[str, str, str]]] = {}  # file order: oldest first
         self.used: list[str] = []
-        self.dirty = False
+        self.parsed: list[str] = []
         if self.path is None:
             return
         try:
@@ -185,22 +187,26 @@ class _PinCache:
 
     def put(self, key: str, pins: list[tuple[str, str, str]]) -> None:
         self.units[key] = pins
-        self.used.append(key)
-        self.dirty = True
+        self.parsed.append(key)
 
     def save(self) -> None:
-        if self.path is None or not self.dirty:
+        if self.path is None or not self.parsed:
             return
-        keep = list(dict.fromkeys(self.used))
-        for key in reversed(list(self.units)):
-            if len(keep) >= PINS_CACHE_MAX_UNITS:
+        self._remove_stale_temporaries()
+        priority = list(dict.fromkeys([*self.parsed, *self.used, *reversed(list(self.units))]))
+        header = {"v": _PINS_CACHE_VERSION, "parser": _parser_version(), "units": {}}
+        size = len(json.dumps(header, separators=(",", ":")))
+        kept: list[str] = []
+        for key in priority:
+            if len(kept) >= PINS_CACHE_MAX_UNITS:
                 break
-            if key not in keep:
-                keep.append(key)
-        units = {key: [list(p) for p in self.units[key]] for key in keep[:PINS_CACHE_MAX_UNITS]}
-        text = json.dumps({"v": _PINS_CACHE_VERSION, "parser": _parser_version(), "units": units}, separators=(",", ":"))
-        if len(text) > PINS_CACHE_MAX_BYTES:
-            return
+            entry = len(json.dumps({key: [list(p) for p in self.units[key]]}, separators=(",", ":"))) - 1
+            if size + entry > PINS_CACHE_MAX_BYTES:
+                continue  # evicted; a smaller entry further down may still fit
+            size += entry
+            kept.append(key)
+        header["units"] = {key: [list(p) for p in self.units[key]] for key in reversed(kept)}  # most valuable last
+        text = json.dumps(header, separators=(",", ":"))
         temporary = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
         try:
             self.path.parent.mkdir(exist_ok=True)  # inside the git dir, which exists
@@ -211,6 +217,21 @@ class _PinCache:
                 temporary.unlink()
             except OSError:
                 pass
+
+    def _remove_stale_temporaries(self) -> None:
+        """Temporary files a killed hook left behind (the hard stop can end a process mid-write)."""
+        import time
+
+        cutoff = time.time() - STALE_TEMPORARY_S
+        try:
+            for leftover in self.path.parent.glob(f"{PINS_CACHE_NAME}.*.tmp"):
+                try:
+                    if leftover.is_file() and not leftover.is_symlink() and leftover.stat().st_mtime < cutoff:
+                        leftover.unlink()
+                except OSError:
+                    continue
+        except OSError:
+            pass
 
 
 # ---- manifest pins, base and working side --------------------------------------------------

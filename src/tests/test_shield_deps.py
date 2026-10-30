@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 
 from aletheore.shield.deps import DepRef, NotChecked, added_dependencies
@@ -372,6 +373,71 @@ def test_pins_parsed_by_another_aletheore_version_are_never_served(tmp_path, par
     refs, _ = added_dependencies(repo)
     assert DepRef("PyPI", "fastjsonx", "manifest", "requirements.txt") in refs
     assert len(parsed) == 2 + 2  # both base folders parsed again, then both changed folders
+
+
+def test_an_over_full_cache_evicts_old_entries_and_catches_up(tmp_path, monkeypatch, parsed):
+    """Old entries filling the size limit are evicted for this run's units, so a run cut short by the time budget is
+    followed by runs that each parse fewer folders, until none is left to parse."""
+    from aletheore.shield.gitutil import Budget
+
+    files = {f"svc{i}/requirements.txt": f"lib{i}==1.0\n" for i in range(6)}
+    repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n", **files})
+    _write(repo, "requirements.txt", "requests==2.0\nfastjsonx==1.0\n")
+    junk = {f"{i:064x}": [[f"oldpkg{i}-" + "x" * 300, "1.0", "PyPI"]] for i in range(5)}
+    cache = _cache_file(repo)
+    cache.parent.mkdir()
+    cache.write_text(json.dumps({"v": 1, "parser": _deps._parser_version(), "units": junk}), encoding="utf-8")
+    monkeypatch.setattr(_deps, "PINS_CACHE_MAX_BYTES", cache.stat().st_size + 900)
+    clock = _Clock()
+    real = _deps.pins_in_directory
+
+    def slow(directory):  # `real` is the `parsed` spy, which records the call
+        clock.t += 1.0
+        return real(directory)
+
+    monkeypatch.setattr(_deps, "pins_in_directory", slow)
+    counts = []
+    for _ in range(6):
+        parsed.clear()
+        clock.t = 0.0
+        refs, _ = added_dependencies(repo, budget=Budget(2.5, clock))
+        counts.append(len(parsed))
+        if refs:
+            break
+    assert refs == [DepRef("PyPI", "fastjsonx", "manifest", "requirements.txt")]
+    assert counts[:3] == [3, 3, 2] and counts[-1] <= 2  # 7 base folders: 3 + 3 + 1, then the changed one
+    assert cache.stat().st_size <= _deps.PINS_CACHE_MAX_BYTES
+
+
+def test_this_runs_parsed_units_are_kept_ahead_of_cache_hits(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n", "a/requirements.txt": "x==1\n",
+                                  "b/requirements.txt": "y==1\n"})
+    _write(repo, "requirements.txt", "requests==2.0\nfastjsonx==1.0\n")
+    added_dependencies(repo)  # all three base folders cached
+    first = set(json.loads(_cache_file(repo).read_text(encoding="utf-8"))["units"])
+    assert len(first) == 3
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "next")
+    monkeypatch.setattr(_deps, "PINS_CACHE_MAX_UNITS", 2)
+    _write(repo, "requirements.txt", "requests==2.0\nfastjsonx==1.0\nzzqthird==1\n")
+    added_dependencies(repo)  # a/ and b/ are hits, the new root folder is parsed: it must be the one kept
+    kept = set(json.loads(_cache_file(repo).read_text(encoding="utf-8"))["units"])
+    assert len(kept) == 2 and len(kept - first) == 1
+
+
+def test_stale_cache_temporaries_are_removed_on_save(tmp_path):
+    repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n"})
+    folder = repo / ".git" / "aletheore-shield"
+    folder.mkdir()
+    old = folder / f"{_deps.PINS_CACHE_NAME}.111.tmp"
+    fresh = folder / f"{_deps.PINS_CACHE_NAME}.222.tmp"
+    old.write_text("x")
+    fresh.write_text("x")
+    past = old.stat().st_mtime - 2 * _deps.STALE_TEMPORARY_S
+    os.utime(old, (past, past))
+    _write(repo, "requirements.txt", "requests==2.0\nfastjsonx==1.0\n")
+    added_dependencies(repo)
+    assert not old.exists() and fresh.exists()
 
 
 def test_dependency_config_change_alone_parses_no_pins_but_still_marks_the_index_private(tmp_path, monkeypatch):
