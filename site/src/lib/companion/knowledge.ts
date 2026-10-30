@@ -1,5 +1,7 @@
 // Server-side allowlist. Wording comes from the same data rendered by public pages.
-import { flow, quickstart, mcpHead } from "@/data/developers";
+import { flow, languageSupport, mcpHead, mcpSetup, quickstart } from "@/data/developers";
+import { hallbook } from "@/data/hallbook";
+import { hallbookCopy } from "@/data/hallbook-copy";
 import { plans, credit } from "@/data/pricing";
 import legal from "@/data/legal.json";
 
@@ -31,6 +33,16 @@ export const FACTS: readonly Fact[] = [
   ...paragraphs(legal.refund.html, "How refunds work").map((text, index) => ({ id: `refund-${index}`, title: "Refunds", text, href: "/refund" })),
   ...paragraphs(legal.refund.html, "Cancelling").map((text, index) => ({ id: `cancel-${index}`, title: "Cancelling a subscription", text, href: "/refund" })),
   ...paragraphs(legal.privacy.html, "Contact").map((text, index) => ({ id: `contact-${index}`, title: "Contacting support", text, href: "/privacy" })),
+  { id: "mcp-setup", title: mcpSetup.title, text: mcpSetup.body, command: mcpSetup.code, href: "/developers#mcp" },
+  { id: "languages", title: languageSupport.title, text: languageSupport.body, href: "/developers#quickstart" },
+  ...paragraphs(legal.terms.html, "What Aletheore is").map((text, index) => ({ id: `terms-what-${index}`, title: "What Aletheore is, and its license", text, href: "/terms" })),
+  { id: "hallbook-what", title: "Hallbook", text: hallbookCopy.summary, href: "/hallbook" },
+  { id: "hallbook-setup", title: "Hallbook needs no setup per agent", text: hallbookCopy.noSetup, href: "/hallbook#no-setup" },
+  ...(hallbook.stats.total > 0 && hallbook.stats.shelves.length > 0 ? [{ id: "hallbook-catalog", title: "Hallbook catalogue", text: `${hallbook.stats.total.toLocaleString("en-US")} skills across ${hallbook.stats.shelves.length} shelves: ${hallbook.stats.shelves.map((shelf) => `${shelf.name} (${shelf.count})`).join(", ")}.`, href: "/hallbook#shelves" }] : []),
+  { id: "hallbook-custom", title: "Your own Hallbook skills", text: hallbookCopy.customBefore + hallbookCopy.customMarked, command: hallbookCopy.addCommand, href: "/hallbook#custom" },
+  ...hallbookCopy.vettingChecks.map(([title, text], index) => ({ id: `hallbook-vetting-${index}`, title: `How Hallbook skills are vetted: ${title}`, text, href: "/hallbook#vetting" })),
+  { id: "hallbook-results", title: hallbookCopy.benchmark.question, text: `${hallbookCopy.benchmark.question} ${hallbookCopy.benchmark.body} ${hallbookCopy.benchmark.marked}`, href: "/hallbook#receipts" },
+  { id: "hallbook-claim", title: "What Hallbook claims", text: hallbookCopy.access.before + hallbookCopy.access.marked + hallbookCopy.access.after, href: "/hallbook#receipts" },
   // Theo's own description and data handling, so questions about the assistant are answered from the policy, not from the CLI's.
   ...paragraphs(legal.privacy.html, "Theo, the website assistant").map((text, index) => ({ id: `theo-${index}`, title: "Theo, the website assistant", text, href: "/privacy" })),
 ];
@@ -52,6 +64,10 @@ const SYNONYMS: Record<string, string[]> = {
   setup: ["install"], installation: ["install"], installing: ["install"], download: ["install"], started: ["install"],
   who: ["theo"], name: ["theo"], bot: ["theo"], robot: ["theo"], chatbot: ["theo"], yourself: ["theo"], hi: ["theo"], hello: ["theo"], hey: ["theo"],
   ip: ["theo"], address: ["theo"], track: ["theo"], tracking: ["theo"], cookies: ["theo"],
+  license: ["license", "licence"], licence: ["license", "licence"], licensing: ["license", "licence"], licensed: ["license", "licence"],
+  agpl: ["license", "affero"], gpl: ["license", "affero"], copyleft: ["license", "affero"], opensource: ["open", "source", "license"],
+  proprietary: ["commercial", "license"], closed: ["commercial", "license"], commercially: ["commercial", "license"],
+  language: ["language"], languages: ["language"], lang: ["language"], supported: ["support"],
 };
 const ADDRESSES_ASSISTANT = new Set(["you", "your", "yourself", "theo"]);
 const wordsOf = (value: string) => value.toLowerCase().match(/[a-z0-9]+/g) ?? [];
@@ -88,6 +104,18 @@ function nearVocabulary(word: string): string | undefined {
     if (distance < bestDistance) { best = candidate; bestDistance = distance; }
   }
   return best;
+}
+// A near-miss of the product name ("aletheor", "alethore") is corrected before the model sees the question: models classify
+// a misspelled brand inconsistently, and only words within two edits of the name are touched.
+export function normalizeProductName(question: string): string {
+  return question.replace(/[A-Za-z]{7,10}/g, (word) => (word.toLowerCase() !== "aletheore" && editDistance(word.toLowerCase(), "aletheore") <= 2 ? "Aletheore" : word));
+}
+// The few chat shorthands that are unambiguous in this context. Whole words only, so nothing inside another word changes.
+// "dos", "hw" and "ur" are left alone on purpose: DOS, hardware and Ur are real words in this domain.
+const SHORTHAND: Record<string, string> = { wat: "what", wht: "what", pls: "please", plz: "please", abt: "about" };
+export function normalizeQuestion(question: string): string {
+  return normalizeProductName(// Not when part of a filename or path (".wat" is a WebAssembly text file).
+    question.replace(/(?<![\w./-])[A-Za-z]{2,3}(?![\w./-])/g, (word) => SHORTHAND[word.toLowerCase()] ?? word));
 }
 export function retrieve(question: string, history: readonly string[] = []): Fact[] {
   const raw = wordsOf(question);
