@@ -2,15 +2,29 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import legal from "@/data/legal.json";
 import { internalPaths } from "@/data/site-links";
+import scripts from "@/lib/companion/limit-scripts.json";
 
 const h2 = (html: string) => (html.match(/<h2>/g) ?? []).length;
 
 describe("ported policy pages", () => {
   it("keep every section of the published pages", () => {
-    expect(h2(legal.privacy.html)).toBe(5);
+    expect(h2(legal.privacy.html)).toBe(6);
     expect(h2(legal.terms.html)).toBe(6);
     expect(h2(legal.refund.html)).toBe(4);
     expect(h2(legal.security.html)).toBe(7);
+  });
+  it("state the website assistant's data handling, with retention matching the limiter's real TTLs", () => {
+    const html = legal.privacy.html;
+    expect(html).toContain("<h2>The website assistant</h2>");
+    // The policy must say what the Redis scripts actually do: the per-network hash key lives 48 hours and the
+    // per-question cost record 90 days. If a TTL changes, this fails until the copy is updated too.
+    const ttls = [...scripts.RESERVE_SCRIPT.matchAll(/'EXPIRE', KEYS\[(\d)\], (\d+)\)/g)].map((m) => Number(m[2]));
+    expect(ttls).toContain(48 * 60 * 60);
+    expect(ttls).toContain(90 * 24 * 60 * 60);
+    expect(html).toContain("up to 48 hours");
+    expect(html).toContain("for 90 days");
+    expect(html).toContain("do not store your questions");
+    expect(html).toContain("keyed hash");
   });
   it("keep the dated headers and the 14-day refund window", () => {
     expect(legal.privacy.updated).toBe("Last updated: October 2026");
