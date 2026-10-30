@@ -15,7 +15,8 @@ export const metadata: Metadata = {
   title: "Hallbook: curated agent skills, read locally",
   description: hallbookCopy.summary,
   alternates: { canonical: "/hallbook" },
-  // Not indexed until Hallbook ships (see data/launch.ts for the launch steps).
+  // Indexed: Hallbook has been launched since Aletheore 0.10.0. Switching it off (NEXT_PUBLIC_HALLBOOK_LAUNCHED=0, see
+  // data/launch.ts) is the way back, and only then does this page become noindex.
   ...(HALLBOOK_LAUNCHED ? {} : { robots: { index: false, follow: false } }),
 };
 
