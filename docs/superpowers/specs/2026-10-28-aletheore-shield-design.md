@@ -1,6 +1,8 @@
 # Aletheore Shield: a local safety net for AI-written changes (free tier)
 
-Status: draft for owner review, 2026-10-28. Not yet approved for an implementation plan.
+Status: implemented on branch `feat/shield-guard` (PR #1161). Written 2026-10-28 as a draft; updated
+2026-10-30 so the text matches what was built. Where the build differs from the first draft, the text
+below says what was built, and "As built" near the end lists those differences in one place.
 
 Labels: **[Owner]** is something the owner said or approved in conversation. **[My call]** is a choice
 the author made that the owner has not seen. **[Open]** needs an owner decision (last section).
@@ -24,7 +26,8 @@ Install stays `pip install aletheore` (or `pipx`); the only extra step is one co
 
 Principle **[My call]**, consistent with `2026-10-28-paid-tier-differentiators-design.md`: free stays
 local, deterministic and stateless. Shield makes no model call, needs no account, and keeps state
-only in the user's own repo. It does not touch the paid features (review rules and memory,
+in the user's own repository (its working tree and its Git directory). The one exception is a bounded
+cache of registry answers outside the repository (see "Where state lives"). It does not touch the paid features (review rules and memory,
 apply-fix, cross-repo blast radius).
 
 ## Goals, non-goals, anti-goals
@@ -63,8 +66,9 @@ Anti-goals (a failure even if it technically works)
 
 - **[Verified]** `aletheore hook evidence` and `hook evidence-snippet` already exist
   (`src/aletheore/cli.py`, `evidence_hook.py`). The snippet prints a Claude Code `settings.json`
-  hooks block; it builds the command from `sys.executable` and quotes it for the platform because
-  pipx paths can contain spaces. Shield's setup should reuse this approach, not reinvent it.
+  hooks block built with `hook_config.python_hook`: the exec form, where `command` is
+  `sys.executable` and `args` is `-X utf8 -m <module> ...`, so no shell parses it and paths with spaces
+  need no quoting. Shield's setup uses the same helper.
 - **[Verified]** `evidence_hook.py` documents the hook rules to follow: fast, per-session state,
   stdlib only, always exit 0, silent when nothing to say, and it flags a scan older than the file.
 - **[Verified]** `signature_diff.py` detects exported function signature changes between two
@@ -92,9 +96,15 @@ Anti-goals (a failure even if it technically works)
   scan if there is none, write the hook entries, write the git pre-commit hook, create the shield
   state directory. On no: change nothing.
 - **Set up:** show status: what is on, the latest receipt, the checkpoint count.
+- `aletheore shield setup` and `aletheore shield status` are the explicit forms of the two cases
+  above (the interactive menu reaches them). `setup` on a repo where Shield is on shows only what
+  needs updating (for example hook entries in the old string form), or says there is nothing to
+  change.
 - `aletheore shield undo`: list checkpoints and restore one (see Checkpoint).
 - `aletheore shield off`: remove exactly what setup added, and say what it removed. Checkpoints
-  are kept unless `--purge` is passed.
+  are kept unless `--purge` is passed. One exception: while scan evidence remains in `.aletheore/`,
+  `off` keeps a one-line `/.aletheore/` block in `.git/info/exclude`, so the evidence does not show up
+  in `git status`; delete `.aletheore/` and run `off` again to drop it.
 - `aletheore shield check`: run guard on the current diff on demand, the same code the hooks call.
 
 Decisions
@@ -110,8 +120,9 @@ Decisions
 
 ## Capability 1: Guard
 
-Runs (a) when the agent finishes a turn and (b) at git pre-commit, on the diff between the base
-(HEAD) and the working tree. Also on demand via `shield check`.
+Runs (a) after each agent edit (without registry lookups), (b) when the agent finishes a turn and
+(c) at git pre-commit, on the diff between the base (HEAD) and the working tree. Also on demand via
+`shield check`.
 
 ### Checks
 
@@ -148,8 +159,8 @@ Runs (a) when the agent finishes a turn and (b) at git pre-commit, on the diff b
 
 - One screen, at most about a dozen lines, grouped by check, with the evidence for each line.
   Silent when everything passes and nothing was skipped. If something was skipped, one line says so.
-- **Non-blocking in v1.** The agent hook adds the text to the agent's context so it can correct
-  itself, and shows it to the user. The pre-commit hook prints and exits 0. A `--strict` option
+- **Non-blocking in v1.** The post-edit hook adds the text to the agent's context so it can correct
+  itself; the turn-end hook shows it to the user. The pre-commit hook prints and exits 0. A `--strict` option
   that fails the commit on selected checks is a follow-up, not v1.
 - Wording states facts with counts and names, not advice, matching `evidence_hook.py`.
 
@@ -244,7 +255,7 @@ A cold reader asked these. None need the owner. All are **[My call]** unless mar
   be cheap, the builder may add it; it is not required.
 - **Sensitive files in checkpoints.** Snapshots include tracked files and untracked, non-ignored
   files, minus a deny-list kept in code (not config): `.env*`, `*.pem`, `*.key`, `*.p12`,
-  `id_rsa*`, `credentials*`, and names matching the secret scanner's file patterns. The status screen
+  `id_rsa*`, `credentials*` and more (the full list is under "As built"). The status screen
   lists skipped files by name. Same pattern as the apply-fix deny-list in the paid-tier spec.
 - **Check 1 scope for v1.** Manifest diffs (newly added dependency entries) are fully checked. A new
   import with no manifest change is checked only when the import name maps to a distribution name
@@ -252,19 +263,84 @@ A cold reader asked these. None need the owner. All are **[My call]** unless mar
   <import> to a package". No guessing. Workspace and local packages are identified from the
   manifests `manifests.py` already discovers plus workspace declarations (npm and pnpm
   workspaces, Poetry and uv path dependencies); anything uncertain is treated as local and skipped.
-- **Budgets (starting guesses).** Agent hooks: aim under 500 ms, hard stop at 2 s then exit 0 with no
-  output. Registry lookups run only in guard at turn-end and pre-commit, never per edit, with a 3 s
-  timeout. Checkpoint: skip files over 5 MB, stop at 100 MB total. Python 3.11 to 3.14, as the
-  package supports today. **Platforms: macOS, Linux and Windows in v1 [Owner]** (owner asked for
-  Windows on 2026-10-28). The existing hook snippet already has Windows quoting; the builder must
-  handle Windows paths, line endings, the git hook (a shell script run by Git for Windows' bundled
-  shell), file locking during checkpoint restore, and test the hooks on a Windows CI runner.
+- **Budgets (as built).** Every hook has a hard stop, after which it prints nothing and exits 0, and
+  the guard inside it has a smaller time budget it checks before each step:
+  - per edit (`pre-edit` checkpoint, `post-edit` guard): hard stop 2 s; the post-edit guard budget is
+    1.5 s;
+  - turn end, session end and pre-commit: hard stop 8 s, guard budget 6 s.
+  A step that would start with no time left is reported as "time budget reached; ... skipped", never as
+  a pass. Registry lookups run only at turn end, at pre-commit and in `shield check`, never per edit
+  and not at session end, with a 3 s timeout each, after the local checks. Checkpoint: skip files over
+  5 MB, stop at 100 MB total. Python 3.11 to 3.14, as the package supports today. **Platforms: macOS,
+  Linux and Windows in v1 [Owner]** (owner asked for Windows on 2026-10-28). Agent hooks use the exec
+  form, so no shell quoting is involved on any platform; only the Git pre-commit block (a `sh` script,
+  run by Git for Windows' bundled `sh`) quotes the interpreter path, with forward slashes on Windows.
+  CI runs the unit tests and a CLI smoke test (setup, the four hook entries spawned without a shell,
+  `off`) on macOS, Linux and Windows runners.
 - **`shield off --purge` and retention.** Both delete the `refs/aletheore/checkpoints/*` refs only.
   Neither runs `git gc` or prunes, because that would also delete the user's own unreachable
   objects. The objects go away at the user's next normal garbage collection; the command says so
   instead of promising immediate deletion.
 - **Open decision 1.** Planned with registry lookups on by default and a one-line off switch, per
   the proposal below. It is a config default, so flipping it is cheap.
+
+## As built (2026-10-30)
+
+Differences from the first draft, and the decisions the builder made, in one place.
+
+- **Hooks.** Four Claude Code events: `pre-edit` (PreToolUse, Edit|MultiEdit|Write: checkpoint),
+  `post-edit` (PostToolUse, same tools: guard without registry lookups, findings to the agent through
+  `additionalContext`, only when they changed), `turn-end` (Stop: guard with lookups, text to the user
+  through `systemMessage`, never `decision: block`) and `session-end` (SessionEnd: receipt, without
+  lookups). Plus the Git `pre-commit` block. Budgets are under "Budgets" above.
+- **Hook entries.** Exec form from `hook_config.python_hook`: `command` is the interpreter and `args`
+  is `["-X", "utf8", "-m", "aletheore.shield.hooks", <event>]`. A hook counts as Shield's only in that
+  exact shape, or in the old four-word string `<python> -m aletheore.shield.hooks <event>` that earlier
+  builds wrote; a user's hook that runs the module any other way is left alone. `setup` replaces an old
+  string entry in place and keeps any other fields the user added to it. There is no separate
+  hook-command module any more.
+- **Commands.** `aletheore shield` (setup when off, status when on), `shield setup`, `shield status`,
+  `shield undo`, `shield off [--purge]`, `shield check [--no-lookups]`. Errors and refusals go to stderr
+  as `error: ...`. `aletheore --help` and every other command do not import Shield's modules; each
+  shield command imports what it uses when it runs (a test pins this).
+- **Removal.** `off` restores a settings file byte for byte when nobody changed it since Shield wrote it
+  (from a saved copy). Otherwise it removes only Shield's entries, and deletes a settings file Shield
+  created only when nothing else is left in it. The `/.aletheore/` exclude line stays while scan
+  evidence remains.
+- **Where state lives.**
+  - In the working tree, under `.aletheore/shield/` (kept out of `git status` by the exclude block):
+    `config.json`, `receipts/`, per-session base evidence copies in `sessions/` and the background
+    refresh marker and completion record.
+  - In the Git directory: checkpoint refs under `refs/aletheore/checkpoints/<main|wt>/...`, and
+    `<git dir>/aletheore-shield/` with per-session hook state (`hook-*.json`, removed after 7 days if a
+    session never ended), the dependency pins cache and the setup record plus the saved original
+    settings.
+  - Outside the repository: `~/.cache/aletheore/shield-registry-cache.json` (under the user profile on
+    Windows), registry answers for 24 hours, at most 2,000 names and 4 MB. `off --purge` leaves it.
+- **Pins cache.** The base side's dependency pins are cached per manifest folder in
+  `<git dir>/aletheore-shield/pins-cache.json`, keyed by the folder's file names and Git blob ids and the
+  Aletheore version that parsed them, so a cached entry is never stale. It is bounded (4,000 folders,
+  16 MB), and a corrupt or oversized file is ignored. Only folders holding a changed manifest are parsed
+  on the working side.
+- **Deny-list.** Never read, hashed or stored in a checkpoint, matched on the lower-cased base name
+  (`\` and `/` both separate folders): `.env*`, `*.env`, `<name>.env.<environment or backup name>`
+  (local, production, staging, dev, test, qa, ci, preview, secret(s), backup, bak, old and similar;
+  `app.env.example`, `values.env.yaml` and similar templates or configuration are kept; `.env.example` is still covered by `.env*`), `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.ppk`,
+  `*.keystore`, `*.jks`, `*.tfvars`, `*.tfvars.json`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`,
+  `id_ed25519*`, `credentials*`, `.git-credentials`, `secrets.json/.yml/.yaml`, `.npmrc`, `.pypirc`,
+  `.netrc`. `undo` lists every file the checkpoint did not capture as "not captured, cannot be
+  restored".
+- **Receipts.** `build_receipt` returns None only when there is nothing worth a receipt. Any other
+  failure raises `ReceiptError(reason)`; the session-end hook then prints one line to stderr
+  (`aletheore shield: receipt could not be built: ...`), keeps stdout empty and exits 0.
+- **Debugging.** With `ALETHEORE_HOOK_DEBUG=1`, every failure a hook or helper swallows (a state write,
+  a corrupt cache, a prune, a failed setup rollback) is explained on stderr; stdout stays the hook's
+  JSON or nothing.
+- **Known limits.** `pre-edit` snapshots the whole working tree, so it grows with the repository
+  (about 0.6 s warm on a 9,400-file repository). Restored files follow the repository's Git line-ending
+  and filter settings, as `git checkout` would, so with `autocrlf` or `eol` attributes a file can come back
+  with different line endings than it had. Shield has not been run against a real Claude Code session on
+  Windows; Windows coverage is the CI unit tests and CLI smoke test.
 
 ## Left to the builder
 
