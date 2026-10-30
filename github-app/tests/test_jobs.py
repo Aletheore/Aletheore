@@ -11579,7 +11579,7 @@ def test_run_live_docs_full_build_job_skips_llm_call_when_spend_cap_reached(monk
 
 def test_run_live_docs_full_build_job_makes_no_llm_call_when_the_plan_is_no_longer_air(monkeypatch):
     # A build queued while an installation was on AIR can sit behind other jobs for a long time. If the plan is
-    # downgraded in between (2026-10-30: the Aletheore org went air -> flash to stop a spend flood), the job must
+    # downgraded in between (2026-10-30: queued builds kept running after a downgrade), the job must
     # not keep spending: the sweeps that enqueue builds are AIR-only, and the job itself must agree.
     from scan_worker.jobs import run_live_docs_full_build_job
 

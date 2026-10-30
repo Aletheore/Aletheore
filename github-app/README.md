@@ -61,6 +61,34 @@ install `requirements.txt` alone, so test tooling never ships to prod.
 Before every deploy, tag the commit you're deploying so a rollback target is
 always one command away: `git tag deploy-$(date -u +%Y%m%dT%H%M%SZ) && git push --tags`.
 
+## Scan workers
+
+There are two scan-worker replicas plus a health worker. Settings that matter when running them
+(all set in `docker-compose.yml`):
+
+- **Queues.** Long AIRview and Docs builds run on a `builds` queue, apart from `scans` (PR scans and
+  reviews), so a pair of 30-minute builds can never occupy every worker. `SCAN_WORKER_QUEUES` lists the
+  queues a worker serves, in priority order. `scan-worker` serves `scans,builds`; `scan-worker-2` serves
+  `scans` only. The scheduler skips a housekeeping job that is already queued or running.
+- **Scratch space.** Per-job checkouts live under `ALETHEORE_JOBS_ROOT` on a disk volume, one directory
+  per replica, because large repos overflow a 1 GB tmpfs. Before the first deploy that includes it:
+  `mkdir -p job-scratch/scan-worker job-scratch/scan-worker-2 && chown -R <uid>:<gid> job-scratch`, where
+  `<uid>:<gid>` is the `aletheore` user inside the image (`docker compose run --rm scan-worker id aletheore`).
+  If the directory is not writable the worker logs a warning and falls back to `/tmp`. A worker empties its
+  own directory when it starts.
+- **Parallel scans.** `ALETHEORE_HOSTED_PARALLEL_SCAN=1` turns on parallel parsing and overlapped scan
+  stages. It is off by default and meant to go together with more CPU and memory (the compose file gives
+  each scan worker 2 CPUs and 3 GB). The CLI sizes its process pool from the container's CPU quota. More
+  than 2 CPUs gained nothing in testing.
+- **Base evidence reuse.** `ALETHEORE_HOSTED_REUSE_BASE_EVIDENCE` is `off`, `shadow` or `on`. A PR scan
+  scans the base commit and the head; the push scan has usually already stored evidence for the base. In
+  `shadow` the base is still scanned and the comment is unchanged, and each PR logs a
+  `base evidence reuse shadow comparison` line saying whether the diff from the stored evidence would
+  have been identical. Switch to `on` only once those lines show a good hit rate and no differences.
+  Stored evidence is reused only if it is for exactly the base commit and under 12 hours old.
+- **Job time limit.** Scan jobs get `SCAN_JOB_TIMEOUT_SECONDS` (`app_server/job_timeouts.py`), shared by
+  the PR, push and initial-scan paths. Each scan logs per-phase timings (`scan phase finished`).
+
 ## Migrations
 
 `docker-compose.yml` still mounts `./migrations` as

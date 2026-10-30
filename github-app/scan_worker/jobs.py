@@ -212,7 +212,8 @@ from scan_worker.slack import (
 )
 
 _JOBS_ROOT_ENV = "ALETHEORE_JOBS_ROOT"
-JOBS_ROOT = Path(os.environ.get(_JOBS_ROOT_ENV, "/tmp/aletheore-jobs"))
+_DEFAULT_JOBS_ROOT = "/tmp/aletheore-jobs"
+JOBS_ROOT = Path(os.environ.get(_JOBS_ROOT_ENV, _DEFAULT_JOBS_ROOT))
 # The longest job that uses a checkout times out at 900s. This used to be 6 hours, which was fine while the
 # directory was memory-backed scratch space that vanished on restart; on a disk-backed volume (large repos
 # overflow a 1 GB tmpfs) a leftover checkout, which may still hold a token in .git/config, must not linger.
@@ -392,7 +393,7 @@ WIKI_INCREMENTAL_LLM_RESERVE_USD = 0.10
 DOCS_INCREMENTAL_LLM_RESERVE_USD = 0.10
 
 
-_FALLBACK_JOBS_ROOT = Path("/tmp/aletheore-jobs")
+_FALLBACK_JOBS_ROOT = Path(_DEFAULT_JOBS_ROOT)
 
 
 def _job_temp_dir() -> Path:
@@ -6837,8 +6838,8 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
     if installation is None or installation["plan"] != "air":
         # AIRview is AIR-only and the sweeps that enqueue builds already filter on it, but a build queued
         # while the installation was on AIR can wait a long time behind other jobs. If the plan changed
-        # meanwhile it must not keep spending credit (2026-10-30: queued builds kept running after the
-        # Aletheore org was moved air -> flash to stop a spend flood).
+        # meanwhile it must not keep spending credit (2026-10-30: queued builds kept running after a
+        # downgrade).
         logging.getLogger("scan_worker.jobs").info(
             "live wiki full build skipped for installation=%s repo=%s - plan is not AIR",
             installation_id, repo_full_name,
