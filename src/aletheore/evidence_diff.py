@@ -31,25 +31,40 @@ def vulnerability_check_skipped_in(old: dict, new: dict) -> list[str]:
 
 
 def new_cycles(old: dict, new: dict) -> list[dict]:
-    """Import-cycle groups in `new` that share no module with any cycle group in `old`. A cycle that merely grew,
-    shrank or was found from a different start module is the same cycle, not a new one.
+    """Import-cycle groups in `new` that are not an old cycle group. A group is the same cycle as an old one when it
+    meets exactly one old group and holds all of it or only modules of it: a cycle that merely grew, shrank or was
+    found from a different start module is not new. A group that meets no old group, joins several old groups into
+    one loop, or shares only some modules with an old group (a module left an old cycle and closed a different one)
+    is new.
 
     Works on the full strongly-connected components computed from each snapshot's module graph (evidence stores the
     graph, not a cycle list), so the listing caps of `find_import_cycles` cannot hide an old cycle."""
     old_groups, old_self, _ = import_cycle_components(old)
-    seen = {m for group in old_groups for m in group} | set(old_self)
+    group_of: dict[str, int] = {}
+    for index, group in enumerate(old_groups):
+        for module in group:
+            group_of[module] = index
+    old_sizes = [len(group) for group in old_groups]
     new_groups, new_self, graph = import_cycle_components(new)
     found = []
     for component in sorted(new_groups, key=lambda c: (-len(c), c[0])):
-        if not seen.intersection(component):
-            found.append(
-                {
-                    "size": len(component),
-                    "example_cycle": _shortest_cycle(component, graph),
-                    "members": component,
-                    "members_truncated": False,
-                }
-            )
+        met: dict[int, int] = {}  # old group -> how many of this component's modules are in it
+        for module in component:
+            if module in group_of:
+                met[group_of[module]] = met.get(group_of[module], 0) + 1
+        if len(met) == 1:
+            (index, shared), = met.items()
+            if shared == old_sizes[index] or shared == len(component):  # holds the old cycle, or lies inside it
+                continue
+        found.append(
+            {
+                "size": len(component),
+                "example_cycle": _shortest_cycle(component, graph),
+                "members": component,
+                "members_truncated": False,
+            }
+        )
+    seen = set(group_of) | set(old_self)
     for path in new_self:
         if path not in seen:
             found.append({"size": 1, "example_cycle": [path, path], "members": [path], "members_truncated": False})

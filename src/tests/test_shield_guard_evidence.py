@@ -746,3 +746,32 @@ def test_hostile_completion_record_falls_back_without_raising(repo, content):
     (state.shield_dir(repo, create=True) / guard_evidence._DONE_NAME).write_text(content, encoding="utf-8")
     assert guard_evidence._finished_refresh_start(repo) is None
     assert guard_evidence._covered_until(repo, 1000.0) == 1000.0 - guard_evidence.STALENESS_MARGIN_S
+
+
+def test_a_new_cycle_sharing_a_module_with_an_old_one_is_still_new():
+    # c left the old a-b-c ring and closed a new ring with d and e: the old ring's files overlap, the cycle is new.
+    old = _evidence(_ring(["a.py", "b.py", "c.py"]) + [_mod("d.py"), _mod("e.py")])
+    new = _evidence([_mod("a.py", imports=["b.py"]), _mod("b.py", imports=["a.py"])] + _ring(["c.py", "d.py", "e.py"]))
+    cycles = new_risks(old, new)["cycles"]
+    assert [set(c["members"]) for c in cycles] == [{"c.py", "d.py", "e.py"}]
+
+
+def test_two_old_cycles_joined_into_one_is_a_new_cycle():
+    old = _evidence(_ring(["a.py", "b.py"]) + _ring(["c.py", "d.py"]))
+    joined = [
+        _mod("a.py", imports=["b.py"]), _mod("b.py", imports=["a.py", "c.py"]),
+        _mod("c.py", imports=["d.py"]), _mod("d.py", imports=["c.py", "a.py"]),
+    ]
+    cycles = new_risks(old, _evidence(joined))["cycles"]
+    assert [set(c["members"]) for c in cycles] == [{"a.py", "b.py", "c.py", "d.py"}]
+
+
+def test_a_cycle_that_grew_or_shrank_around_one_old_cycle_is_not_new():
+    old = _evidence(_ring(["a.py", "b.py", "c.py"]) + [_mod("x.py")])
+    grew = _evidence(
+        [_mod("a.py", imports=["b.py", "x.py"]), _mod("b.py", imports=["c.py"]), _mod("c.py", imports=["a.py"]),
+         _mod("x.py", imports=["a.py"])]
+    )
+    shrank = _evidence([_mod("a.py", imports=["b.py"]), _mod("b.py", imports=["a.py"]), _mod("c.py"), _mod("x.py")])
+    assert new_risks(old, grew)["cycles"] == []
+    assert new_risks(old, shrank)["cycles"] == []
