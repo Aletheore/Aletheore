@@ -29,6 +29,20 @@ describe("retrieval reaches the right passages for how people really type", () =
     ["wat is aletheor", ["flow-scan"]],
     ["does it work with claude code or cursor?", ["mcp"]],
     ["How much is Flash, how do I install the CLI, and does it send crash reports?", ["price-flash", "quickstart-0", "privacy-cli-2"]],
+    ["is aletheore open source?", ["terms-what-0"]],
+    ["what license is it under?", ["terms-what-0"]],
+    ["can I use it in a closed-source product?", ["terms-what-0"]],
+    ["which languages does it support?", ["languages"]],
+    ["does it support rust?", ["languages"]],
+    ["does it work with Cursor specifically?", ["mcp-setup"]],
+    ["which coding agents are supported?", ["mcp-setup"]],
+    ["how do I connect claude code?", ["mcp-setup"]],
+    ["what is hallbook?", ["hallbook-what"]],
+    ["how do I add my own skill?", ["hallbook-custom"]],
+    ["does hallbook make my agent better?", ["hallbook-results"]],
+    ["how many skills are in hallbook?", ["hallbook-catalog"]],
+    ["are hallbook skills permissively licensed?", ["hallbook-vetting-1"]],
+    ["how are hallbook skills vetted?", ["hallbook-vetting-0", "hallbook-vetting-2"]],
   ])("%s", (question, expected) => {
     expect(ids(question)).toEqual(expect.arrayContaining(expected));
   });

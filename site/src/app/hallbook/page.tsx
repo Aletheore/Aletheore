@@ -9,10 +9,11 @@ import { Transcript } from "@/components/hallbook/transcript";
 import { BarList, type BarRow } from "@/components/site/bar-list";
 import { Section } from "@/components/site/section";
 import { hallbook, receipts as r } from "@/data/hallbook";
+import { hallbookCopy } from "@/data/hallbook-copy";
 
 export const metadata: Metadata = {
   title: "Hallbook: curated agent skills, read locally",
-  description: "A library of curated agent skills bundled with Aletheore's MCP server. Your agent asks once and gets the right skill, or an honest answer that nothing fits. Searching the catalogue needs no download, no sign-in and no network call.",
+  description: hallbookCopy.summary,
   alternates: { canonical: "/hallbook" },
   // Not indexed until Hallbook ships (see data/launch.ts for the launch steps).
   ...(HALLBOOK_LAUNCHED ? {} : { robots: { index: false, follow: false } }),
@@ -31,8 +32,6 @@ const useRows: BarRow[] = [
   { label: "One line in AGENTS.md", value: r.useAgentsMd.value, display: r.useAgentsMd.display },
   { label: "Nothing said", value: r.useNothing.value, display: r.useNothing.display },
 ];
-const [deltaLo, deltaHi] = r.agentBenchmark.passRateDeltaPoints;
-const [, tokHi] = r.agentBenchmark.tokenMultiple;
 
 export default function HallbookPage() {
   return (
@@ -40,7 +39,7 @@ export default function HallbookPage() {
       <Hero />
 
       <Section id="no-setup" eyebrow="1" title="Nothing to install per skill, per agent"
-        intro="Skills usually travel as folders: find one, copy it into each agent's skills directory, restart the agent, and do it again for the next skill, the next agent and the next machine. Hallbook replaces all of that with one connection.">
+        intro={hallbookCopy.noSetup}>
         <ConnectDiagram />
         <p className="mt-6 max-w-[70ch] text-[15px] leading-[1.7]">
           Connect Aletheore once, as you would any MCP server, then ask your agent to use the skills. <Mark>Nothing to copy, no plugin to install, no restart, no setup per agent.</Mark>
@@ -57,11 +56,11 @@ export default function HallbookPage() {
       </Section>
 
       <Section id="custom" eyebrow="3" title="Your own skills live here too"
-        intro={<>Write a skill once, or ask your agent to save what you just worked out, and it sits next to the catalogue. Every agent connected to Aletheore finds it the same way, so <Mark>there are no folders to keep in step between tools.</Mark></>}>
+        intro={<>{hallbookCopy.customBefore}<Mark>{hallbookCopy.customMarked}</Mark></>}>
         <ol className="relative grid gap-10 md:grid-cols-3 md:gap-8">
           <span aria-hidden="true" className="absolute left-0 right-0 top-[22px] hidden border-t border-dashed border-line-strong md:block" />
           {[
-            ["Add one from a file", "aletheore hallbook add my-skill ./my-skill.md", "Name it plainly. Custom skills are found by name, and the original is kept as a .bak if you add it again."],
+            ["Add one from a file", hallbookCopy.addCommand, "Name it plainly. Custom skills are found by name, and the original is kept as a .bak if you add it again."],
             ["Let your agent save it", "Save what we just figured out as a skill called deploy-checklist.", "The agent calls aletheore_add_custom_skill. Next session, any agent can find it."],
             ["Take it with you", "aletheore login", "Sign in once and your custom skills follow your account to your other machines."],
           ].map(([t, cmd, note], i) => (
@@ -81,16 +80,11 @@ export default function HallbookPage() {
       </Section>
 
       <Section id="vetting" eyebrow="5" title="What we check before a skill ships"
-        intro="A skill is instructions your agent will follow, so a bad one is a real risk. This is a real skill file from the catalogue. The list is what our checks cover, and where they stop.">
+        intro={hallbookCopy.vettingIntro}>
         <div className="grid gap-9 lg:grid-cols-[1.25fr_1fr]">
           <AnnotatedSkill />
           <ol className="grid content-start gap-5 text-[14px] leading-[1.6] text-muted">
-            {[
-              ["Pinned source", "The exact repository and commit it came from, and the author is credited. Nothing is fetched from the network at read time."],
-              ["Its own licence", "Each skill carries its licence. Only permissive ones (MIT, Apache-2.0, BSD, ISC and similar) are accepted."],
-              ["Instruction pattern lint", "Instruction text is matched against two known-bad shapes: a download piped straight into a shell (curl or wget into sh, bash and similar), and phrasing that asks to send a secret or credential to a URL. It is a lint, not a general prompt-injection detector, and a clean result is not a security review."],
-              ["Curation record and bundled scripts", "Shelf, quality score and the vetting result sit next to the skill. A bundled scripts/ folder is run through our secrets scanner, and only that: the pattern lint above reads the instruction text, not the scripts. A skill that fails any check is held back, and a person reviews each finding before it is cleared."],
-            ].map(([t, b], i) => (
+            {hallbookCopy.vettingChecks.map(([t, b], i) => (
               <li key={t} className="relative pl-10">
                 <span className="absolute left-0 top-0 grid size-[26px] place-items-center rounded-full bg-stamp font-display text-[12px] font-bold text-paper">{i + 1}</span>
                 <b className="font-display text-[15px] text-ink">{t}</b><p className="mt-0.5">{b}</p>
@@ -131,8 +125,8 @@ export default function HallbookPage() {
             </div></div>
           <aside className="relative border border-ink bg-raised p-6">
             <span className="absolute -top-2.5 left-5 bg-paper px-2 font-display text-[11px] font-bold tracking-[0.16em] text-stamp">READ THIS</span>
-            <p className="max-w-[72ch] text-[14.5px] leading-[1.7]"><b>Do skills make an agent score higher?</b> We tested five ways of delivering skills on {r.agentBenchmark.tasks} engineering tasks with hidden tests. Pass rates moved between minus {Math.abs(deltaLo)} and plus {deltaHi} points, all within noise, and skills used up to {tokHi} times the tokens. <Mark>We do not claim a score gain on tasks a strong model already knows.</Mark></p>
-            <p className="mt-3 max-w-[72ch] text-[14.5px] leading-[1.7] text-muted">What we do claim is access: <Mark>curated skills, offline, one call, and an honest answer when nothing fits.</Mark> Published research finds the big gains come from skills that carry knowledge a model lacks, such as a specific product or procedure. That is what we test next.</p>
+            <p className="max-w-[72ch] text-[14.5px] leading-[1.7]"><b>{hallbookCopy.benchmark.question}</b> {hallbookCopy.benchmark.body} <Mark>{hallbookCopy.benchmark.marked}</Mark></p>
+            <p className="mt-3 max-w-[72ch] text-[14.5px] leading-[1.7] text-muted">{hallbookCopy.access.before}<Mark>{hallbookCopy.access.marked}</Mark>{hallbookCopy.access.after}</p>
           </aside>
         </div>
       </Section>
