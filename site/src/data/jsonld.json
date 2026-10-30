@@ -5,6 +5,7 @@
   "url": "https://www.aletheore.com/",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS, Linux, Windows",
+  "license": "https://github.com/Aletheore/Aletheore/blob/master/LICENSE",
   "description": "Evidence-grounded repository audits: a free deterministic CLI scanner plus a hosted GitHub App with automated PR reviews, dead code detection, live endpoint health monitoring, AIRview (an AI-generated architecture map), and Slack/Teams alerts.",
   "offers": [
     {
