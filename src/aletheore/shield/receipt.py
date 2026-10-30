@@ -26,6 +26,10 @@ _NAME_CAP = 300
 _FUTURE_TOLERANCE = timedelta(minutes=5)
 
 
+class ReceiptError(Exception):
+    """The receipt could not be built. Distinct from None ("nothing worth a receipt"); str() is the reason."""
+
+
 @dataclass(frozen=True)
 class Receipt:
     session: str
@@ -114,7 +118,11 @@ def build_receipt(
     budget_s: float = 6.0,
     opener: Callable | None = None,
 ) -> Receipt | None:
-    """The session's receipt, or None when the session did nothing worth a receipt. Never raises."""
+    """The session's receipt, or None when the session did nothing worth a receipt.
+
+    The files touched and the guard report degrade on their own (a "not checked" line says what failed). Anything
+    else that fails raises ReceiptError with the reason, so a caller can say the receipt could not be built rather
+    than stay silent as if there were nothing to report."""
     repo = Path(repo)
     try:
         known = state.session_state_path(repo, session_id) is not None
@@ -144,8 +152,9 @@ def build_receipt(
             report = GuardReport(report.findings, tuple(extra) + tuple(report.not_checked))
         session = session_id if known else "unknown"
         return Receipt(session, created, files, report, first.ref, known, previous)
-    except Exception:  # noqa: BLE001
-        return None
+    except Exception as exc:  # noqa: BLE001 - every cause becomes the one error type callers handle
+        detail = clean_text(str(exc), _NAME_CAP)
+        raise ReceiptError(f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__) from exc
 
 
 def _code(text: str) -> str:

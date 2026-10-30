@@ -12,7 +12,8 @@ Events, and what each one does:
   from the last turn-end text to the user as `systemMessage`. Never `decision: block`; silent when
   `stop_hook_active` is true.
 - `session-end` (SessionEnd): write the session receipt (no registry lookups), delete the session's base
-  evidence copy, prune old checkpoints, drop the hook state. Prints nothing.
+  evidence copy, prune old checkpoints, drop the hook state. Prints nothing, except one stderr line when the receipt
+  could not be built.
 - `pre-commit` (git pre-commit hook; no stdin; repo is the cwd or `--repo <path>`): print the guard text to
   stderr, one `aletheore shield: ` prefixed line each. Never blocks the commit.
 
@@ -398,10 +399,16 @@ def _session_end(payload: dict | None) -> Output | None:
     from aletheore.shield import checkpoint, guard_evidence, receipt
 
     session_id = _session_id(payload)
+    failure = ""
     try:
         # lookups=False: session end never waits on the network; registry lookups belong to turn end, commit and
         # `aletheore shield check`.
-        built = receipt.build_receipt(repo.top, session_id, budget_s=SESSION_END_BUDGET_S, lookups=False)
+        try:
+            built = receipt.build_receipt(repo.top, session_id, budget_s=SESSION_END_BUDGET_S, lookups=False)
+        except receipt.ReceiptError as error:
+            built = None
+            # SessionEnd has no stdout channel; stderr reaches the user's hook log (and stays out of the protocol).
+            failure = f"{PRE_COMMIT_PREFIX}receipt could not be built: {error}\n"
         if built is not None:
             receipt.write_receipt(repo.top, built)
     finally:
@@ -415,7 +422,7 @@ def _session_end(payload: dict | None) -> Output | None:
             _state_path(repo, session_id).unlink()
         except OSError:
             pass
-    return None
+    return Output("", failure) if failure else None
 
 
 def _pre_commit(args: list[str]) -> Output | None:

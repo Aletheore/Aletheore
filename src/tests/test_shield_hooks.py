@@ -921,3 +921,15 @@ def test_hooks_look_for_the_setup_record_where_setup_writes_it(tmp_path):
     assert setup._setup_dir_for(git_dir) / setup.RECORD_NAME == (
         git_dir / hooks.STATE_DIRNAME / hooks.SETUP_DIRNAME / hooks.SETUP_RECORD_NAME
     )
+
+
+def test_session_end_reports_a_receipt_that_could_not_be_built_on_stderr_and_exits_0(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", aletheore=True)
+
+    def broken(*a, **k):
+        raise receipt.ReceiptError("OSError: refs unreadable")
+
+    monkeypatch.setattr(receipt, "build_receipt", broken)
+    code, out, err = _run("session-end", _payload(repo, event="SessionEnd"))
+    assert code == 0 and out == ""
+    assert err == "aletheore shield: receipt could not be built: OSError: refs unreadable\n"

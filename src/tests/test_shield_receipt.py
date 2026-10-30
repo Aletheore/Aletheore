@@ -211,7 +211,8 @@ def test_git_failure_yields_could_not_compute_note(tmp_path, monkeypatch):
     assert built is not None and built.files == ()
     assert any("could not compute" in n for n in built.report.not_checked)
     monkeypatch.setattr(receipt, "list_checkpoints", boom)
-    assert receipt.build_receipt(repo, "s1", now=T0, lookups=False) is None
+    with pytest.raises(receipt.ReceiptError, match="git exploded"):  # a failure, not "nothing to report"
+        receipt.build_receipt(repo, "s1", now=T0, lookups=False)
 
 
 def test_works_when_repo_has_no_commits(tmp_path, monkeypatch):
@@ -376,3 +377,19 @@ def test_same_second_same_session_does_not_overwrite(tmp_path):
     assert second.name == "20261028T120000Z-s1-2.md"
     assert third.name == "20261028T120000Z-s1-3.md"
     assert receipt.latest_receipt(repo, now=T0) == third
+
+
+def test_a_receipt_that_fails_to_build_says_why_instead_of_looking_like_nothing_to_report(tmp_path, monkeypatch):
+    _fake_guard(monkeypatch)
+    repo = _init(tmp_path / "r")
+
+    def broken(*a, **k):
+        raise OSError("refs unreadable")
+
+    monkeypatch.setattr(receipt, "list_checkpoints", broken)
+    with pytest.raises(receipt.ReceiptError) as raised:
+        receipt.build_receipt(repo, "s1", now=T0, lookups=False)
+    assert "refs unreadable" in str(raised.value)
+    # Nothing to report is still None, not an error.
+    monkeypatch.setattr(receipt, "list_checkpoints", lambda *a, **k: [])
+    assert receipt.build_receipt(repo, "s1", now=T0, lookups=False) is None
