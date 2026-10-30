@@ -529,8 +529,9 @@ aletheore shield [--path DIR] [--yes]
 - `undo [REF]` lists the newest checkpoints and restores the one you pick. `REF` is a full ref, its
   short name (the part after `refs/aletheore/checkpoints/`) or a unique ending. With `--yes` and no
   `REF`, the newest checkpoint is used. Before writing, it shows the files it will write, files it
-  leaves in place (not in the checkpoint; never deleted) and files it will not touch because
-  restoring them is not safe. It takes a safety checkpoint first and prints the command that undoes the undo.
+  leaves in place (not in the checkpoint; never deleted), files it will not touch because
+  restoring them is not safe, and files the checkpoint never captured (secret-looking names, size
+  caps), which it cannot restore. It takes a safety checkpoint first and prints the command that undoes the undo.
 - `off [--purge]` removes the hooks Shield registered, its block in the Git hook, its block in
   `.git/info/exclude` and its config, and puts back any settings file it edited. Checkpoints and
   receipts are kept; `--purge` also deletes the checkpoint refs, `.aletheore/shield/` and the hook
@@ -594,8 +595,9 @@ if `aletheore shield` was set up in that repository; otherwise nothing is writte
 Session state is one small JSON file per session in `<git dir>/aletheore-shield/hook-<session>.json`,
 outside the working tree; files of sessions that never ended are removed after 7 days. Checkpoints are commits under `refs/aletheore/checkpoints/<worktree>/`,
 built with Git plumbing so your index, branches, stash and working tree are not touched. They hold
-tracked and untracked files minus ignored files, secret-looking files (such as `.env`, `prod.env`,
-`*.pem`, `*.key`, `id_rsa*`, `credentials*`, matched by file name on any platform), Shield's own
+tracked and untracked files minus ignored files, secret-looking files (such as `.env`, `.env.local`, `prod.env`,
+`app.env.production`, `*.pem`, `*.key`, `id_rsa*`, `credentials*`, `*.tfvars`, matched by file name on any
+platform; `values.env.yaml` or `app.env.example` are kept), Shield's own
 folder and files over the size caps. Receipts are Markdown files in `.aletheore/shield/receipts/`.
 
 **What the guard checks.** New dependencies from manifest additions and new imports (PyPI and npm
