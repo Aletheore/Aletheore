@@ -2,21 +2,35 @@
 
 Precision beats coverage: anything uncertain is treated as local (skipped) or reported
 as NotChecked with a plain-words reason. This module never contacts a registry.
+
+Cost scales with the change, not the repository:
+
+- The file lists come from one shared `changes.ChangeSet` (three git calls per guard run).
+- Manifest pins are parsed per manifest DIRECTORY (a "unit": the manifest files of one folder, which the
+  vulnerability check's parsers read together). Only units holding a changed manifest are parsed from the working
+  tree. The base side needs every unit (a name declared in any manifest at the base is not new), but each unit is
+  keyed by its files' names and blob ids, so its pins are parsed once and kept in a small content-addressed cache in
+  the git dir; a unit's blobs come from one `git cat-file --batch`. There is no cap on the number of manifests: when
+  the time budget runs out before every unit is known, manifest additions are reported as not checked, never as new.
+- The base text of changed source files comes from one `git cat-file --batch`, not one `git show` per file.
 """
 
-import importlib.metadata
+import hashlib
 import json
+import os
 import re
+import shutil
 import tempfile
 import tomllib
 from dataclasses import dataclass
 from functools import lru_cache
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from aletheore.manifests import EXTRA_SKIPPED_DIRS, MANIFEST_FILENAMES, MANIFEST_SUFFIXES
 from aletheore.scanner.detect import IGNORED_DIRS
+from aletheore.shield import changes as _changes
 from aletheore.shield import imports
-from aletheore.shield.gitutil import run_git
+from aletheore.shield.gitutil import UNLIMITED, Budget, cat_file_batch, run_git
 
 _CHECKED = {"PyPI": "Python", "npm": "JavaScript"}
 _ECOSYSTEM_LABEL = {
@@ -24,8 +38,20 @@ _ECOSYSTEM_LABEL = {
     "NuGet": ".NET", "SwiftURL": "Swift",
 }
 _PUBLIC_NPM_HOSTS = ("registry.npmjs.org", "registry.yarnpkg.com")
-_MAX_BASE_MANIFESTS = 300
 _MAX_SOURCE_BYTES = 2_000_000
+_SKIPPED_DIRS = frozenset(IGNORED_DIRS) | frozenset(EXTRA_SKIPPED_DIRS)
+_SOURCE_SUFFIXES = (".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
+_GIT_TIMEOUT_S = 30.0
+MIN_STAGE_S = 0.05  # with less time than this left, a stage is not started
+
+PINS_CACHE_NAME = "pins-cache.json"  # in <git dir>/aletheore-shield/
+PINS_CACHE_MAX_UNITS = 4000
+PINS_CACHE_MAX_BYTES = 16 * 1024 * 1024
+_PINS_CACHE_VERSION = 1
+_STATE_DIRNAME = "aletheore-shield"
+
+TIME_BUDGET_MANIFESTS = "time budget reached; new manifest dependencies were not compared with the base"
+TIME_BUDGET_IMPORTS = "time budget reached; new imports were not checked"
 
 
 @dataclass(frozen=True)
@@ -38,7 +64,7 @@ class DepRef:
 
 @dataclass(frozen=True)
 class NotChecked:
-    name: str
+    name: str  # "" when the reason is about the whole check, not about named dependencies
     reason: str
 
 
@@ -50,16 +76,16 @@ def _norm(ecosystem: str, name: str) -> str:
     return _norm_py(name) if ecosystem == "PyPI" else name.lower()
 
 
-def _paths(out: bytes) -> list[str]:
-    return [p.decode("utf-8", "replace") for p in out.split(b"\0") if p]
-
-
 def _skipped_dir(rel: str) -> bool:
-    return any(part in IGNORED_DIRS or part in EXTRA_SKIPPED_DIRS for part in PurePosixPath(rel).parts[:-1])
+    return any(part in _SKIPPED_DIRS for part in rel.split("/")[:-1])
+
+
+def _name(rel: str) -> str:
+    return rel.rpartition("/")[2]
 
 
 def _is_manifest(rel: str) -> bool:
-    name = PurePosixPath(rel).name
+    name = _name(rel)
     return name in MANIFEST_FILENAMES or name.endswith(MANIFEST_SUFFIXES)
 
 
@@ -73,75 +99,198 @@ def _read(repo: Path, rel: str) -> str | None:
         return None
 
 
-def _base_text(repo: Path, base: str, rel: str) -> str:
-    result = run_git(repo, "show", f"{base}:{rel}")
-    return result.stdout.decode("utf-8", "replace") if result.returncode == 0 else ""
+def pins_in_directory(directory: Path) -> list[tuple[str, str, str]]:
+    """The pins of one manifest directory, through aletheore.vulnerabilities' parsers, imported on first use (the
+    module costs about 100 ms to import and is only needed when a change touches a dependency manifest)."""
+    from aletheore.vulnerabilities import directory_pins
+
+    return list(dict.fromkeys(directory_pins(directory)))
 
 
-def _has_ref(repo: Path, base: str) -> bool:
-    return run_git(repo, "rev-parse", "--verify", "-q", f"{base}^{{commit}}").returncode == 0
+def _ignored_patterns(repo: Path) -> list[str]:
+    from aletheore.repo_config import load_repo_config
 
-
-def _working_files(repo: Path) -> list[str]:
-    out = run_git(repo, "ls-files", "-z", "--cached", "--others", "--exclude-standard", timeout=30.0).stdout
-    return [p for p in dict.fromkeys(_paths(out)) if (repo / p).exists()]
-
-
-def _changed_files(repo: Path, base: str, has_base: bool, working: list[str]) -> list[str]:
-    if not has_base:
-        return working
-    tracked = run_git(repo, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=AM", base, "--", timeout=30.0)
-    others = run_git(repo, "ls-files", "-z", "--others", "--exclude-standard", timeout=30.0)
-    return [p for p in dict.fromkeys(_paths(tracked.stdout) + _paths(others.stdout)) if (repo / p).exists()]
-
-
-def collect_pins(directory: Path):
-    """aletheore.vulnerabilities.collect_pins, imported on first use (it costs about 100 ms to import and is only
-    needed when a change touches a dependency manifest)."""
-    from aletheore.vulnerabilities import collect_pins as _collect
-
-    return _collect(directory)
-
-
-# Files whose change can add or re-route a dependency. Only when one of these changed are the manifests on both
-# sides of the diff read and compared; otherwise the manifest pins cannot differ and that work is skipped.
-_DEPENDENCY_CONFIG_NAMES = frozenset(
-    {"pip.conf", "pip.ini", ".npmrc", ".yarnrc.yml", ".yarnrc.yaml", "Pipfile", "Pipfile.lock", "setup.cfg", "setup.py"}
-)
-
-
-def _touches_dependencies(rel: str) -> bool:
-    name = PurePosixPath(rel).name
-    return (
-        _is_manifest(rel)
-        or name in _DEPENDENCY_CONFIG_NAMES
-        or (name.startswith("requirements") and name.endswith(".txt"))
-        or (PurePosixPath(rel).parent.name == "requirements" and name.endswith(".txt"))
-    )
-
-
-def _safe_pins(directory: Path) -> list[tuple[str, str, str]] | None:
     try:
-        return collect_pins(directory)[0]
-    except Exception:  # an unreadable manifest must not break the guard
-        return None
-
-
-def _base_pins(repo: Path, base: str, has_base: bool) -> list[tuple[str, str, str]]:
-    if not has_base:
+        return list(load_repo_config(repo).get("ignored_paths") or [])
+    except Exception:  # noqa: BLE001 - a broken config means "no extra ignores", as in the scanner
         return []
-    listing = run_git(repo, "ls-tree", "-r", "-z", "--name-only", base, timeout=30.0)
-    wanted = [p for p in _paths(listing.stdout) if _is_manifest(p) and not _skipped_dir(p)][:_MAX_BASE_MANIFESTS]
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        for rel in wanted:
-            target = root / rel
+
+
+def _counted_manifest(rel: str, patterns: list[str]) -> bool:
+    """A manifest the vulnerability check would read: not vendored or generated, not in .aletheore.json's
+    ignored_paths (the same rules as manifests.discover_manifests; git itself already left out ignored files and
+    nested repositories)."""
+    if not _is_manifest(rel) or _skipped_dir(rel):
+        return False
+    if not patterns:
+        return True
+    from aletheore.repo_config import is_ignored
+
+    return not is_ignored(rel, patterns)
+
+
+def _unit_of(rel: str) -> tuple[str, str]:
+    folder, _, name = rel.rpartition("/")
+    return folder or ".", name
+
+
+# ---- the pins cache (base side) ----------------------------------------------------------
+
+
+def _unit_key(files: dict[str, str]) -> str:
+    """Content address of a unit: its file names and blob ids (the parsers' only inputs)."""
+    text = "\n".join(f"{name}\0{blob}" for name, blob in sorted(files.items()))
+    return hashlib.sha256(text.encode("utf-8", "surrogateescape")).hexdigest()
+
+
+class _PinCache:
+    """{unit key: pins} in <git dir>/aletheore-shield/pins-cache.json. Entries never go stale (the key is the content),
+    so the only rules are: a corrupt or oversized file is ignored, writes are atomic, and the file is bounded (units
+    used by this run are kept first, then the most recent others, up to PINS_CACHE_MAX_UNITS)."""
+
+    def __init__(self, git_dir: Path | None) -> None:
+        self.path = git_dir / _STATE_DIRNAME / PINS_CACHE_NAME if git_dir is not None else None
+        self.units: dict[str, list[tuple[str, str, str]]] = {}
+        self.used: list[str] = []
+        self.dirty = False
+        if self.path is None:
+            return
+        try:
+            if self.path.stat().st_size > PINS_CACHE_MAX_BYTES:
+                return
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or data.get("v") != _PINS_CACHE_VERSION or not isinstance(data.get("units"), dict):
+                return
+            for key, pins in data["units"].items():
+                if isinstance(key, str) and isinstance(pins, list) and all(
+                        isinstance(p, list) and len(p) == 3 and all(isinstance(x, str) for x in p) for p in pins):
+                    self.units[key] = [tuple(p) for p in pins]
+        except Exception:  # noqa: BLE001 - missing, unreadable, corrupt or hostile: start empty
+            self.units = {}
+
+    def get(self, key: str) -> list[tuple[str, str, str]] | None:
+        pins = self.units.get(key)
+        if pins is not None:
+            self.used.append(key)
+        return pins
+
+    def put(self, key: str, pins: list[tuple[str, str, str]]) -> None:
+        self.units[key] = pins
+        self.used.append(key)
+        self.dirty = True
+
+    def save(self) -> None:
+        if self.path is None or not self.dirty:
+            return
+        keep = list(dict.fromkeys(self.used))
+        for key in reversed(list(self.units)):
+            if len(keep) >= PINS_CACHE_MAX_UNITS:
+                break
+            if key not in keep:
+                keep.append(key)
+        units = {key: [list(p) for p in self.units[key]] for key in keep[:PINS_CACHE_MAX_UNITS]}
+        text = json.dumps({"v": _PINS_CACHE_VERSION, "units": units}, separators=(",", ":"))
+        if len(text) > PINS_CACHE_MAX_BYTES:
+            return
+        temporary = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
+        try:
+            self.path.parent.mkdir(exist_ok=True)  # inside the git dir, which exists
+            temporary.write_text(text, encoding="utf-8")
+            os.replace(temporary, self.path)
+        except OSError:
             try:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(_base_text(repo, base, rel), encoding="utf-8")
+                temporary.unlink()
             except OSError:
-                continue
-        return _safe_pins(root) or []
+                pass
+
+
+# ---- manifest pins, base and working side --------------------------------------------------
+
+
+def _base_units(repo: Path, base_commit: str, patterns: list[str], budget: Budget) -> dict[str, dict[str, str]] | None:
+    """{unit dir: {file name: blob id}} for every counted manifest at the base commit; None when git did not answer."""
+    listing = run_git(repo, "ls-tree", "-r", "-z", "--full-tree", base_commit,
+                      timeout=budget.timeout(_GIT_TIMEOUT_S))
+    if listing.returncode != 0:
+        return None
+    units: dict[str, dict[str, str]] = {}
+    for entry in listing.stdout.split(b"\0"):
+        meta, tab, raw = entry.partition(b"\t")
+        fields = meta.split(b" ")
+        if not tab or len(fields) != 3 or fields[1] != b"blob":
+            continue
+        rel = raw.decode("utf-8", "replace")
+        if _counted_manifest(rel, patterns):
+            folder, name = _unit_of(rel)
+            units.setdefault(folder, {})[name] = fields[2].decode("ascii", "replace")
+    return units
+
+
+def _parse_into(root: Path, label: str, files: dict[str, bytes]) -> list[tuple[str, str, str]]:
+    unit = root / label
+    unit.mkdir()
+    for name, data in files.items():
+        (unit / name).write_bytes(data)
+    return pins_in_directory(unit)
+
+
+def _base_unit_pins(
+    repo: Path, units: dict[str, dict[str, str]], cache: _PinCache, budget: Budget
+) -> tuple[dict[str, list[tuple[str, str, str]]], bool]:
+    """Pins of every base unit (cached, or parsed from one cat-file batch) and whether every unit is known. A unit
+    whose manifests cannot be parsed counts as declaring nothing, as the vulnerability check treats it."""
+    found: dict[str, list[tuple[str, str, str]]] = {}
+    missing: dict[str, dict[str, str]] = {}
+    for folder, files in units.items():
+        pins = cache.get(_unit_key(files))
+        if pins is None:
+            missing[folder] = files
+        else:
+            found[folder] = pins
+    if not missing:
+        return found, True
+    if budget.spent(MIN_STAGE_S):
+        return found, False
+    blobs = cat_file_batch(repo, [b for files in missing.values() for b in files.values()],
+                           timeout=budget.timeout(_GIT_TIMEOUT_S))
+    if blobs is None:
+        return found, False
+    complete = True
+    with tempfile.TemporaryDirectory(prefix="aletheore-shield-pins-") as tmp:
+        for index, (folder, files) in enumerate(missing.items()):
+            if budget.spent(MIN_STAGE_S):
+                complete = False
+                break
+            try:
+                pins = _parse_into(Path(tmp), str(index), {n: blobs.get(b, b"") for n, b in files.items()})
+            except Exception:  # noqa: BLE001 - an unreadable manifest declares nothing
+                pins = []
+            cache.put(_unit_key(files), pins)
+            found[folder] = pins
+    return found, complete
+
+
+def _working_unit_pins(
+    repo: Path, folders: list[str], names_by_folder: dict[str, set[str]], budget: Budget
+) -> tuple[dict[str, list[tuple[str, str, str]]], list[str], bool]:
+    """Pins of the changed units as they are in the working tree, the units that could not be read, and whether every
+    unit was parsed in time."""
+    found: dict[str, list[tuple[str, str, str]]] = {}
+    unreadable: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="aletheore-shield-pins-") as tmp:
+        for index, folder in enumerate(folders):
+            if budget.spent(MIN_STAGE_S):
+                return found, unreadable, False
+            unit = Path(tmp) / str(index)
+            unit.mkdir()
+            try:
+                for name in names_by_folder.get(folder, ()):
+                    rel = name if folder == "." else f"{folder}/{name}"
+                    shutil.copyfile(repo / rel, unit / name)
+                found[folder] = pins_in_directory(unit)
+            except Exception:  # noqa: BLE001
+                unreadable.append(folder)
+    return found, unreadable, True
 
 
 # ---- local / declared names -------------------------------------------------------------
@@ -175,16 +324,21 @@ def _gather(repo: Path, working: list[str]) -> _Facts:
     facts = _Facts(set(), set(), set(), set(), set(), {})
     pip_hits: list[str] = []
     npm_hits: list[str] = []
+    folders_seen: set[str] = set()
     for rel in working:
-        pure = PurePosixPath(rel)
-        name = pure.name
-        if not _skipped_dir(rel):
-            # Deliberately broad (favours precision): any directory name or module stem anywhere in the repo
-            # counts as local, which may hide a real import of a package whose name matches a local folder.
-            facts.local_dirs.update(pure.parts[:-1])
-            if name.endswith((".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")):
-                facts.local_dirs.add(pure.stem)
-        if name == "package.json" and not _skipped_dir(rel):
+        folder, _, name = rel.rpartition("/")
+        skipped = False
+        if folder:
+            parts = folder.split("/")
+            skipped = any(part in _SKIPPED_DIRS for part in parts)
+            if not skipped and folder not in folders_seen:
+                folders_seen.add(folder)
+                # Deliberately broad (favours precision): any directory name or module stem anywhere in the repo
+                # counts as local, which may hide a real import of a package whose name matches a local folder.
+                facts.local_dirs.update(parts)
+        if not skipped and name.endswith(_SOURCE_SUFFIXES):
+            facts.local_dirs.add(name.rpartition(".")[0])
+        if name == "package.json" and not skipped:
             data = _json(_read(repo, rel))
             if isinstance(data.get("name"), str):
                 facts.local_npm.add(data["name"].lower())
@@ -192,7 +346,7 @@ def _gather(repo: Path, working: list[str]) -> _Facts:
                 section = data.get(key)
                 if isinstance(section, dict):
                     facts.declared_npm.update(n.lower() for n in section)
-        elif name == "pyproject.toml" and not _skipped_dir(rel):
+        elif name == "pyproject.toml" and not skipped:
             _collect_pyproject(_toml(_read(repo, rel)), facts, rel, pip_hits)
         elif name in ("pip.conf", "pip.ini"):
             if re.search(r"(?mi)^\s*(extra-)?index[-_]url\s*[=:]", _read(repo, rel) or ""):
@@ -206,7 +360,7 @@ def _gather(repo: Path, working: list[str]) -> _Facts:
         elif name in (".yarnrc.yml", ".yarnrc.yaml"):
             if re.search(r"(?m)^\s*(npmRegistryServer|npmScopes)\s*:", _read(repo, rel) or ""):
                 npm_hits.append(rel)
-        elif name in ("tsconfig.json", "jsconfig.json") and not _skipped_dir(rel):
+        elif name in ("tsconfig.json", "jsconfig.json") and not skipped:
             paths = (_json(re.sub(r"(?m)^\s*//.*$", "", _read(repo, rel) or "")).get("compilerOptions") or {}).get("paths")
             if isinstance(paths, dict):
                 for key in paths:
@@ -268,6 +422,8 @@ def _import_map() -> dict[str, str]:
 
 
 def _installed_import_names() -> set[str]:
+    import importlib.metadata
+
     try:
         return set(importlib.metadata.packages_distributions())
     except Exception:
@@ -307,12 +463,13 @@ def _declared_python_names(repo: Path, working: list[str]) -> set[str]:
     """Distribution names declared anywhere in the tree, including files collect_pins does not read."""
     found: set[str] = set()
     for rel in working:
-        name = PurePosixPath(rel).name
-        if _skipped_dir(rel):
+        folder, _, name = rel.rpartition("/")
+        is_requirements = name.endswith(".txt") and (
+            name.startswith("requirements") or folder.rpartition("/")[2] == "requirements")
+        if not (is_requirements or name in ("pyproject.toml", "Pipfile", "setup.cfg")) or _skipped_dir(rel):
             continue
         try:
-            if name.startswith("requirements") and name.endswith(".txt") or (
-                    PurePosixPath(rel).parent.name == "requirements" and name.endswith(".txt")):
+            if is_requirements:
                 found |= _dist_names(l for l in (_read(repo, rel) or "").splitlines()
                                      if not l.strip().startswith(("#", "-")))
             elif name == "pyproject.toml":
@@ -351,23 +508,96 @@ def _declared_python_names(repo: Path, working: list[str]) -> set[str]:
 
 # ---- main entry point -------------------------------------------------------------------
 
-def added_dependencies(repo: Path, base: str = "HEAD") -> tuple[list[DepRef], list[NotChecked]]:
+def _manifest_pins(
+    repo: Path, change: "_changes.ChangeSet", working: list[str], budget: Budget, not_checked: list[NotChecked]
+) -> tuple[list, dict, list, bool]:
+    """(pins in the changed units now, owners of each such pin, pins of every unit at the base, complete).
+
+    Only called when a counted manifest changed. `complete` is False when the base could not be fully known (time
+    budget, git failure) or a changed unit was not parsed: the caller then reports no manifest addition at all,
+    since a name missing from an incomplete base would be a false "new dependency"."""
+    patterns = _ignored_patterns(repo)
+    names_by_folder: dict[str, set[str]] = {}
+    for rel in working:
+        if _counted_manifest(rel, patterns):
+            folder, name = _unit_of(rel)
+            names_by_folder.setdefault(folder, set()).add(name)
+    changed_folders = list(dict.fromkeys(
+        _unit_of(rel)[0] for rel in change.changed if _counted_manifest(rel, patterns)))
+    if not changed_folders:  # every changed manifest is in ignored_paths
+        return [], {}, [], True
+    cache = _PinCache(change.git_dir)
+    base_pins: list = []
+    complete = True
+    try:
+        if change.has_base:
+            units = _base_units(repo, change.base_commit, patterns, budget)
+            if units is None:
+                complete = False
+            else:
+                by_unit, complete = _base_unit_pins(repo, units, cache, budget)
+                base_pins = [pin for folder in sorted(by_unit, key=_shallow_first) for pin in by_unit[folder]]
+    finally:
+        cache.save()  # keep whatever was parsed, even when the budget ran out: the next run continues from there
+    if not complete:
+        not_checked.append(NotChecked("", TIME_BUDGET_MANIFESTS))
+        return [], {}, base_pins, False
+    now_by_unit, unreadable, parsed_all = _working_unit_pins(repo, changed_folders, names_by_folder, budget)
+    if not parsed_all:
+        not_checked.append(NotChecked("", TIME_BUDGET_MANIFESTS))
+        return [], {}, base_pins, False
+    if unreadable:
+        not_checked.append(NotChecked(
+            "dependency manifests", "a dependency manifest could not be read, so new dependencies were not checked"))
+    pins_now: list = []
+    owners: dict = {}
+    for folder in sorted(now_by_unit, key=_shallow_first):
+        for pin in now_by_unit[folder]:
+            holders = owners.setdefault(pin, [])
+            if not holders:
+                pins_now.append(pin)
+            holders.append(folder)
+    return pins_now, owners, base_pins, True
+
+
+def _shallow_first(folder: str) -> tuple[int, str]:
+    return (0, "") if folder == "." else (1 + folder.count("/"), folder)
+
+
+def _base_sources(repo: Path, change: "_changes.ChangeSet", rels: list[str], budget: Budget) -> dict[str, bytes] | None:
+    """Base content of changed source files from one cat-file batch: {rel: bytes}, a file absent at the base is
+    missing from the dict. None when git did not answer (in time)."""
+    if not change.has_base or not rels:
+        return {}
+    untracked = set(change.untracked)
+    asked = {f"{change.base_commit}:{rel}": rel for rel in rels if rel not in untracked}
+    found = cat_file_batch(repo, list(asked), timeout=budget.timeout(_GIT_TIMEOUT_S))
+    if found is None:
+        return None
+    return {asked[name]: data for name, data in found.items()}
+
+
+def added_dependencies(
+    repo: Path, base: str = "HEAD", *, change: "_changes.ChangeSet | None" = None, budget: Budget = UNLIMITED
+) -> tuple[list[DepRef], list[NotChecked]]:
+    """New dependencies in the working tree compared with `base`. `change` is the guard run's shared file listing
+    (computed here when not given); `budget` bounds every git call and stage, and what it cuts short is reported as
+    a NotChecked with an empty name."""
     repo = Path(repo)
-    has_base = _has_ref(repo, base)
-    working = _working_files(repo)
+    if change is None:
+        change = _changes.compute(repo, base, budget=budget)
+    not_checked: list[NotChecked] = []
+    if not change.complete:
+        return [], [NotChecked("", "git did not list the changed files in time; new dependencies were not checked")]
+    working = change.working
     facts = _gather(repo, working)
-    changed = _changed_files(repo, base, has_base, working)
+    changed = change.present_changed
 
     pins_now: list = []
     owners_by_pin: dict = {}
-    not_checked: list[NotChecked] = []
     base_pins: list = []
-    if any(_touches_dependencies(rel) for rel in changed):
-        try:
-            pins_now, owners_by_pin, _ = collect_pins(repo)
-        except Exception:
-            not_checked.append(NotChecked("dependency manifests", "a dependency manifest could not be read, so new dependencies were not checked"))
-        base_pins = _base_pins(repo, base, has_base)
+    if any(_is_manifest(rel) and not _skipped_dir(rel) for rel in change.changed):
+        pins_now, owners_by_pin, base_pins, _complete = _manifest_pins(repo, change, working, budget, not_checked)
     # With no manifest in the change, import-only additions are judged against the names the manifests in the
     # working tree declare (read directly by _declared_python_names and _gather), not against parsed pins.
     known = {(eco, _norm(eco, name)) for name, _v, eco in base_pins}
@@ -400,18 +630,25 @@ def added_dependencies(repo: Path, base: str = "HEAD") -> tuple[list[DepRef], li
         shown = names[0] if len(names) == 1 else f"{names[0]} and {len(names) - 1} more"
         not_checked.append(NotChecked(shown, f"{label} ({eco}) packages are not checked yet"))
 
+    sources = [rel for rel in changed
+               if rel.lower().endswith(imports.PY_SUFFIXES + imports.JS_SUFFIXES) and not _skipped_dir(rel)]
+    if sources and budget.spent(MIN_STAGE_S):
+        not_checked.append(NotChecked("", TIME_BUDGET_IMPORTS))
+        sources = []
+    base_texts = _base_sources(repo, change, sources, budget) if sources else {}
+    if base_texts is None:
+        not_checked.append(NotChecked("", TIME_BUDGET_IMPORTS))
+        sources, base_texts = [], {}
     import_map = _import_map()
     installed = _LazyNames(_installed_import_names)
-    for rel in changed:
-        suffix = PurePosixPath(rel).suffix.lower()
-        is_py, is_js = suffix in imports.PY_SUFFIXES, suffix in imports.JS_SUFFIXES
-        if not (is_py or is_js) or _skipped_dir(rel):
-            continue
+    for rel in sources:
+        is_py = rel.lower().endswith(imports.PY_SUFFIXES)
         text = _read(repo, rel)
         if text is None:
             continue
         parse = imports.python_imports if is_py else imports.js_imports
-        new_names = parse(text) - (parse(_base_text(repo, base, rel)) if has_base else set())
+        before = base_texts.get(rel)
+        new_names = parse(text) - (parse(before.decode("utf-8", "replace")) if before is not None else set())
         for imp in sorted(new_names):
             ref = _import_ref(imp, rel, is_py, facts, import_map, installed, declared_py, declared_npm)
             if ref and (ref.ecosystem, _norm(ref.ecosystem, ref.name)) not in known:

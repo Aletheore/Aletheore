@@ -18,6 +18,13 @@ class RepoState:
     reason: str | None
     git_dir: Path | None
     has_head: bool
+    # Filled when ok, from the same probe, so a checkpoint needs no second one: the top of the working tree, the
+    # common git dir (differs from git_dir in a linked worktree), the index file path and the HEAD commit ("" when
+    # the branch has no commit yet).
+    top: Path | None = None
+    common_dir: Path | None = None
+    index: Path | None = None
+    head: str = ""
 
 
 def run_git(
@@ -41,24 +48,126 @@ def run_git(
         return subprocess.CompletedProcess(command, _SPAWN_FAILED, b"", b"")
 
 
+class Budget:
+    """A time budget that ends at `deadline` on `clock` (time.monotonic by default); no deadline means unlimited.
+
+    Every stage of the guard asks it before starting (`spent`), and every git call it makes gets `timeout(default)`:
+    the smaller of its usual timeout and the time left, so no call can run past the deadline by much."""
+
+    def __init__(self, deadline: float | None = None, clock=None) -> None:
+        import time
+
+        self.deadline = deadline
+        self.clock = clock or time.monotonic
+
+    @classmethod
+    def lasting(cls, seconds: float | None, clock=None) -> "Budget":
+        budget = cls(None, clock)
+        if seconds is not None:
+            budget.deadline = budget.clock() + seconds
+        return budget
+
+    def left(self) -> float:
+        return float("inf") if self.deadline is None else self.deadline - self.clock()
+
+    def spent(self, minimum: float = 0.05) -> bool:
+        """True when less than `minimum` seconds are left: a stage is not worth starting."""
+        return self.left() < minimum
+
+    def timeout(self, default: float) -> float:
+        """A git timeout ending by the deadline, never below 50 ms."""
+        return max(0.05, min(default, self.left()))
+
+
+UNLIMITED = Budget()
+
+
+def cat_file_batch(
+    repo: Path, objects: list[str], *, timeout: float = 10.0
+) -> dict[str, bytes] | None:
+    """Contents of many objects (`<rev>:<path>` or object ids) from ONE `git cat-file --batch`.
+
+    Returns {object name: bytes} for every object that exists; a missing one is simply absent. None when git failed
+    or timed out, so the caller can tell "not there" from "not answered". Names holding a newline cannot be asked
+    for on the batch protocol and are left out."""
+    wanted = [name for name in dict.fromkeys(objects) if "\n" not in name and "\r" not in name]
+    if not wanted:
+        return {}
+    payload = b"".join(name.encode("utf-8", "surrogateescape") + b"\n" for name in wanted)
+    result = run_git(repo, "cat-file", "--batch", input=payload, timeout=timeout)
+    if result.returncode != 0:
+        return None
+    data = result.stdout
+    found: dict[str, bytes] = {}
+    position = 0
+    for name in wanted:  # answers come back in the order asked
+        end = data.find(b"\n", position)
+        if end < 0:
+            return None
+        header = data[position:end].split(b" ")
+        position = end + 1
+        if len(header) != 3 or not header[2].isdigit():
+            continue  # "<name> missing" or "<name> ambiguous"
+        size = int(header[2])
+        if position + size > len(data):
+            return None
+        found[name] = data[position : position + size]
+        position += size + 1  # content is followed by a newline
+    return found
+
+
+def run_git_pair(
+    repo: Path, first: tuple[str, ...], second: tuple[str, ...], *, env: dict[str, str] | None = None,
+    timeout: float = 10.0, runner=None,
+) -> "tuple[subprocess.CompletedProcess[bytes], subprocess.CompletedProcess[bytes]]":
+    """Two independent read-only git calls at once (the second on a helper thread); results in argument order.
+    `runner` is the run_git to use (a caller's module-level name, so a test's patch of it applies)."""
+    import threading
+
+    run = runner or run_git
+    box: list = []
+
+    def second_call() -> None:
+        try:
+            box.append(run(repo, *second, env=env, timeout=timeout))
+        except Exception:  # noqa: BLE001 - reported as a failed call below
+            pass
+
+    helper = threading.Thread(target=second_call, daemon=True)
+    helper.start()
+    one = run(repo, *first, env=env, timeout=timeout)
+    helper.join(timeout + 5.0)
+    two = box[0] if box else subprocess.CompletedProcess([git_executable(), *second], _TIMED_OUT, b"", b"")
+    return one, two
+
+
 def _unsupported(reason: str, git_dir: Path | None = None) -> RepoState:
     return RepoState(ok=False, reason=reason, git_dir=git_dir, has_head=False)
 
 
 def repo_state(repo: Path) -> RepoState:
-    """Say whether Shield can work in repo, and if not, why in plain words."""
+    """Say whether Shield can work in repo, and if not, why in plain words. Three git calls."""
     try:
-        probe = run_git(repo, "rev-parse", "--absolute-git-dir", "--is-bare-repository")
+        probe = run_git(
+            repo, "rev-parse", "--absolute-git-dir", "--is-bare-repository", "--show-toplevel", "--git-common-dir",
+            "--git-path", "index",
+        )
     except FileNotFoundError:
         return _unsupported("git was not found on PATH")
     if probe.returncode == _TIMED_OUT:
         return _unsupported("git did not answer in time")
-    lines = probe.stdout.decode("utf-8", "replace").splitlines()
-    if probe.returncode != 0 or len(lines) < 2:
+    lines = probe.stdout.decode("utf-8", "surrogateescape").splitlines()
+    # rev-parse prints each answer in turn and stops at the first it cannot give: a bare repository has no top.
+    if len(lines) >= 2 and lines[1].strip() == "true":
+        return _unsupported("bare repositories have no working tree to guard", Path(lines[0]))
+    if probe.returncode != 0 or len(lines) != 5:
         return _unsupported("this folder is not a git repository")
     git_dir = Path(lines[0])
-    if lines[1].strip() == "true":
-        return _unsupported("bare repositories have no working tree to guard", git_dir)
+    top, common, index = Path(lines[2]), Path(lines[3]), Path(lines[4])
+    if not common.is_absolute():
+        common = Path(repo) / common
+    if not index.is_absolute():
+        index = Path(repo) / index
     for marker, what in (
         ("rebase-merge", "a rebase"),
         ("rebase-apply", "a rebase"),
@@ -68,5 +177,9 @@ def repo_state(repo: Path) -> RepoState:
             return _unsupported(f"{what} is in progress; finish or abort it first", git_dir)
     if run_git(repo, "symbolic-ref", "-q", "HEAD").returncode != 0:
         return _unsupported("HEAD is detached; check out a branch first", git_dir)
-    has_head = run_git(repo, "rev-parse", "--verify", "-q", "HEAD").returncode == 0
-    return RepoState(ok=True, reason=None, git_dir=git_dir, has_head=has_head)
+    head = run_git(repo, "rev-parse", "--verify", "-q", "HEAD^{commit}")
+    head_sha = head.stdout.decode("ascii", "replace").strip() if head.returncode == 0 else ""
+    return RepoState(
+        ok=True, reason=None, git_dir=git_dir, has_head=bool(head_sha), top=top, common_dir=common, index=index,
+        head=head_sha,
+    )

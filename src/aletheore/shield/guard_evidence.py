@@ -30,6 +30,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from aletheore.shield import state
+from aletheore.shield.gitutil import UNLIMITED, Budget
 
 # The evidence readers and diff helpers (aletheore.evidence, dependents, evidence_diff, signature_diff, tests_for)
 # cost about 400 ms to import. They are imported inside the functions that use them, so the per-edit hook can call
@@ -526,15 +527,25 @@ def _risk_findings(base: dict, head: dict) -> list[Finding]:
     return findings
 
 
+MIN_STAGE_S = 0.05  # with less time than this left, a check is not started
+
+
+def _out_of_time(stages: str) -> str:
+    return f"time budget reached; {stages} skipped"
+
+
 def evidence_checks(
-    repo: Path, changed: list[str], base_evidence: dict | None
+    repo: Path, changed: list[str], base_evidence: dict | None, *, budget: Budget = UNLIMITED
 ) -> tuple[list[Finding], list[str]]:
     """(findings, not_checked reasons) for `changed` (repo-relative posix paths) from the evidence on disk.
 
     Never re-scans inline. When the evidence predates a changed file the stale-sensitive checks are skipped, a
-    detached refresh is requested, and the reason says so.
+    detached refresh is requested, and the reason says so. `budget` is the guard run's: a check that would start with
+    no time left is skipped and named ("time budget reached; <checks> skipped") instead of overrunning the hook.
     """
     repo = Path(repo)
+    if budget.spent(MIN_STAGE_S):
+        return [], [_out_of_time("dependents, signature and new-risk checks")]
     try:
         if not (repo / _EVIDENCE_REL).exists():
             raise FileNotFoundError(str(repo / _EVIDENCE_REL))  # answered without importing the evidence reader
@@ -570,6 +581,8 @@ def evidence_checks(
     targets = sorted({c for c in changed if c in known})
     try:
         if targets:
+            if budget.spent(MIN_STAGE_S):
+                return findings, [_out_of_time("dependents, signature and new-risk checks")]
             affected = _affected_finding(repo, head, targets)
             if affected:
                 findings.append(affected)
@@ -577,9 +590,14 @@ def evidence_checks(
             not_checked.append(
                 "no base evidence was saved for this session, so signature and new-risk checks were skipped"
             )
+        elif budget.spent(MIN_STAGE_S):
+            not_checked.append(_out_of_time("signature and new-risk checks"))
         else:
             findings.extend(_signature_findings(base_evidence, head, set(changed)))
-            findings.extend(_risk_findings(base_evidence, head))
+            if budget.spent(MIN_STAGE_S):
+                not_checked.append(_out_of_time("new-risk check"))
+            else:
+                findings.extend(_risk_findings(base_evidence, head))
     except (KeyError, TypeError, ValueError) as exc:
         not_checked.append(f"evidence checks stopped on unexpected evidence shape ({type(exc).__name__})")
     return findings, not_checked

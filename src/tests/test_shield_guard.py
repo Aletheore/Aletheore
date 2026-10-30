@@ -249,11 +249,92 @@ def test_run_guard_never_raises(tmp_path):
     assert isinstance(report, GuardReport)
 
 
-def test_changed_files_include_untracked_and_modified(tmp_path):
-    repo = _init(tmp_path / "r", {"a.py": "x = 1\n"})
+def test_changed_files_include_untracked_modified_and_deleted(tmp_path):
+    from aletheore.shield import changes
+
+    repo = _init(tmp_path / "r", {"a.py": "x = 1\n", "gone.py": "z = 1\n"})
     _write(repo, "a.py", "x = 2\n")
     _write(repo, "new dir/b.py", "y = 1\n")
-    assert sorted(guard._changed_files(repo, "HEAD")) == ["a.py", "new dir/b.py"]
+    (repo / "gone.py").unlink()
+    listed = changes.compute(repo, "HEAD")
+    assert listed.complete and listed.has_base
+    assert sorted(listed.changed) == ["a.py", "gone.py", "new dir/b.py"]
+    assert listed.deleted == {"gone.py"} and sorted(listed.present_changed) == ["a.py", "new dir/b.py"]
+    assert listed.untracked == ("new dir/b.py",)
+    assert sorted(listed.working) == [".keep", "a.py", "new dir/b.py"]
+
+
+def test_without_a_base_every_file_counts_as_changed(tmp_path):
+    from aletheore.shield import changes
+
+    repo = _init(tmp_path / "r", {"a.py": "x = 1\n"}, commit=False)
+    listed = changes.compute(repo, "HEAD")
+    assert not listed.has_base and listed.complete and listed.changed == ("a.py",)
+
+
+@pytest.fixture
+def git_calls(monkeypatch):
+    from aletheore.shield import changes, gitutil
+
+    calls = []
+    real = gitutil.run_git
+
+    def counting(repo, *args, **kwargs):
+        calls.append((args, kwargs.get("timeout")))
+        return real(repo, *args, **kwargs)
+
+    for module in (gitutil, changes, _deps):
+        monkeypatch.setattr(module, "run_git", counting)
+    return calls
+
+
+def test_one_guard_run_lists_untracked_files_once(tmp_path, git_calls):
+    repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n", "a.py": "x = 1\n"})
+    _write(repo, "requirements.txt", "requests==2.0\nzzqa==1.0\n")
+    _write(repo, "a.py", "import zzqb\n")
+    _write(repo, "b.py", "import zzqc\n")
+    run_guard(repo, lookups=False)
+    walks = [args for args, _ in git_calls if "--others" in args]
+    assert len(walks) == 1
+    assert [args[0] for args, _ in git_calls].count("diff") == 1
+
+
+def test_every_git_call_ends_within_the_budget(tmp_path, git_calls):
+    repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n", "a.py": "x = 1\n"})
+    _write(repo, "requirements.txt", "requests==2.0\nzzqa==1.0\n")
+    _write(repo, "a.py", "import zzqb\n")
+    run_guard(repo, lookups=False, budget_s=1.0)
+    assert git_calls and all(timeout is not None and timeout <= 1.0 for _, timeout in git_calls)
+
+
+def test_evidence_checks_are_skipped_when_the_dependency_stage_used_the_budget(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", {"a.py": "x = 1\n"})
+    (repo / ".aletheore").mkdir()
+    (repo / ".aletheore" / "air.json").write_text("{}", encoding="utf-8")
+    _write(repo, "a.py", "x = 2\n")
+    clock = {"t": 0.0}
+    monkeypatch.setattr(guard, "_clock", lambda: clock["t"])
+    real = guard.added_dependencies
+
+    def slow(*args, **kwargs):
+        clock["t"] += 5.0
+        return real(*args, **kwargs)
+
+    loaded = []
+    monkeypatch.setattr(guard, "added_dependencies", slow)
+    monkeypatch.setattr(guard_evidence, "_files_newer_than", lambda *a: loaded.append(a) or [])
+    report = run_guard(repo, lookups=False, budget_s=2.0)
+    assert "time budget reached; dependents, signature and new-risk checks skipped" in report.not_checked
+    assert loaded == []  # the evidence was never read
+
+
+def test_a_spent_budget_skips_the_dependency_stages_instead_of_overrunning(tmp_path):
+    repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n", "a.py": "x = 1\n"})
+    _write(repo, "requirements.txt", "requests==2.0\nzzqa==1.0\n")
+    _write(repo, "a.py", "import zzqb\n")
+    report = run_guard(repo, lookups=False, budget_s=0.0)
+    assert report.findings == ()
+    assert any(line.startswith("time budget reached") for line in report.not_checked)
 
 
 def test_evidence_not_checked_lines_are_passed_through(tmp_path):

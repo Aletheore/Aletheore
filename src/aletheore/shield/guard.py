@@ -11,9 +11,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from aletheore.shield import state
+from aletheore.shield import changes, state
 from aletheore.shield.deps import DepRef, added_dependencies
-from aletheore.shield.gitutil import run_git
+from aletheore.shield.gitutil import Budget
 from aletheore.shield.guard_evidence import Finding, evidence_checks
 from aletheore.shield.nearmiss import near_miss
 from aletheore.shield.registry import lookup_package
@@ -47,26 +47,6 @@ clean_text = _clean  # public name for other Shield modules that write untrusted
 class GuardReport:
     findings: tuple[Finding, ...]
     not_checked: tuple[str, ...]
-
-
-def _paths(out: bytes) -> list[str]:
-    return [p.decode("utf-8", "replace") for p in out.split(b"\0") if p]
-
-
-def _changed_files(repo: Path, base: str) -> list[str]:
-    """Files differing from `base` plus untracked ones; with no usable base every file counts as changed."""
-    has_base = run_git(repo, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}").returncode == 0
-    if has_base:
-        tracked = run_git(repo, "diff", "--name-only", "-z", base)
-    else:
-        tracked = run_git(repo, "ls-files", "-z", "--cached")
-    untracked = run_git(repo, "ls-files", "--others", "--exclude-standard", "-z")
-    seen: dict[str, None] = {}
-    for result in (tracked, untracked):
-        if result.returncode == 0:
-            for path in _paths(result.stdout):
-                seen.setdefault(path)
-    return list(seen)
 
 
 def _plain(name: str) -> str:
@@ -186,28 +166,47 @@ def run_guard(
     base_evidence: dict | None = None,
     opener: Callable | None = None,
 ) -> GuardReport:
+    """The guard over the working tree's change against `base`, within `budget_s` seconds.
+
+    The budget bounds the whole run, not only registry lookups: the changed files are listed once (three git calls)
+    and shared by every stage, every git call gets a timeout that ends by the deadline, and a stage that would start
+    with no time left is skipped and named in `not_checked` ("time budget reached; ... skipped")."""
     repo = Path(repo)
-    deadline = _clock() + budget_s
+    budget = Budget.lasting(budget_s, _clock)
     findings: list[Finding] = []
     not_checked: list[str] = []
+    change = None
     try:
-        enabled = state.registry_lookups_enabled(repo) if lookups is None else bool(lookups)
-        refs, unchecked = added_dependencies(repo, base)
-        by_reason: dict[str, int] = {}
-        for item in unchecked:
-            by_reason[item.reason] = by_reason.get(item.reason, 0) + 1
-        for reason, count in by_reason.items():
-            not_checked.append(f"{_count(count, 'dependency', 'dependencies')} not checked: {reason}")
-        findings.extend(_dependency_findings(refs, enabled, deadline, opener, not_checked))
+        change = changes.compute(repo, base, budget=budget)
     except Exception as exc:  # noqa: BLE001 - the guard must never break a hook
-        not_checked.append(f"dependency check failed ({type(exc).__name__})")
-    try:
-        changed = _changed_files(repo, base)
-        evidence_findings, evidence_skipped = evidence_checks(repo, changed, base_evidence)
-        findings.extend(evidence_findings)
-        not_checked.extend(evidence_skipped)
-    except Exception as exc:  # noqa: BLE001
-        not_checked.append(f"evidence check failed ({type(exc).__name__})")
+        not_checked.append(f"changed files could not be listed ({type(exc).__name__})")
+    if change is not None and not change.complete:
+        reason = "time budget reached" if budget.spent() else "git did not answer"
+        not_checked.append(f"{reason}; changed files could not be listed, so every check was skipped")
+        change = None
+    if change is not None:
+        try:
+            enabled = state.registry_lookups_enabled(repo) if lookups is None else bool(lookups)
+            refs, unchecked = added_dependencies(repo, base, change=change, budget=budget)
+            by_reason: dict[str, int] = {}
+            for item in unchecked:
+                if not item.name:  # about the whole check (time budget), not about named dependencies
+                    not_checked.append(item.reason)
+                    continue
+                by_reason[item.reason] = by_reason.get(item.reason, 0) + 1
+            for reason, count in by_reason.items():
+                not_checked.append(f"{_count(count, 'dependency', 'dependencies')} not checked: {reason}")
+            findings.extend(_dependency_findings(refs, enabled, budget.deadline, opener, not_checked))
+        except Exception as exc:  # noqa: BLE001 - the guard must never break a hook
+            not_checked.append(f"dependency check failed ({type(exc).__name__})")
+        try:
+            evidence_findings, evidence_skipped = evidence_checks(
+                repo, list(change.changed), base_evidence, budget=budget
+            )
+            findings.extend(evidence_findings)
+            not_checked.extend(evidence_skipped)
+        except Exception as exc:  # noqa: BLE001
+            not_checked.append(f"evidence check failed ({type(exc).__name__})")
     findings = [
         Finding(f.check, f.severity, _clean(f.message), _clean(f.evidence)) for f in findings
     ]
