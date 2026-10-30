@@ -2602,6 +2602,7 @@ def run_flash_review_job(
             rank_findings=not is_free_tier,
             cross_file_check_runs=_cross_file_check_runs_for(installation["plan"], is_free_tier),
             share_pr_context_per_file=_share_pr_context_for(is_free_tier),
+            merge_repeats=_merge_repeats_for(is_free_tier),
             reservation_state=reservation_state,
         )
     except Exception as exc:  # noqa: BLE001
@@ -2669,6 +2670,17 @@ def _cross_file_check_runs_for(plan: str, is_free_tier: bool) -> int:
     if is_free_tier or os.environ.get("FLASH_REVIEW_CROSS_FILE_CHECK") != "on":
         return 0
     return 2 if plan == "air" else 1
+
+
+def _merge_repeats_for(is_free_tier: bool) -> bool:
+    """Whether a review also merges findings that are the same defect repeated across files (see
+    flash_review._merge_findings_with_same_root_cause).
+
+    OFF unless FLASH_REVIEW_MERGE_REPEATS=on: it removes findings from what a PR shows, so it is enabled
+    deliberately, measured and watched, not by merging. Never for free tier: per-file generation, which is what
+    produces the repeats, is paid-tier only. The extra call is one cheap pass over already-written findings.
+    """
+    return not is_free_tier and os.environ.get("FLASH_REVIEW_MERGE_REPEATS", "").strip().lower() == "on"
 
 
 _OFF_VALUES = frozenset({"off", "0", "false", "no"})
@@ -3154,6 +3166,7 @@ def _run_flash_review(
     rank_findings: bool = False,
     cross_file_check_runs: int = 0,
     share_pr_context_per_file: bool = False,
+    merge_repeats: bool = False,
     reservation_state: dict | None = None,
 ) -> bool:
     """Returns True if a real review actually ran and its spend/count
@@ -3503,6 +3516,8 @@ def _run_flash_review(
             cross_file_check_runs=cross_file_check_runs,
             on_cross_file_check_usage=_on_cross_file_check_usage,
             share_pr_context_per_file=share_pr_context_per_file,
+            # Reuses _on_usage like ranking: it runs on the same model generation used.
+            merge_repeats=merge_repeats,
         )
     # Every free-tier provider failed mid-review (see
     # _on_free_tier_exhausted above) - this review never actually ran, the
