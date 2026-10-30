@@ -1054,3 +1054,26 @@ def test_debug_notes_go_to_stderr_and_stdout_stays_the_hook_json(tmp_path):
     assert done.returncode == 0
     assert "hookSpecificOutput" in json.loads(done.stdout)
     assert b"aletheore shield: ignoring an unreadable pins cache" in done.stderr
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX modes")
+def test_hook_state_is_private_and_config_is_not(tmp_path):
+    import stat
+
+    from aletheore.shield import state as shield_state
+
+    repo = _init(tmp_path / "r")
+    _run("pre-edit", _payload(repo))
+    assert stat.S_IMODE(_state_file(repo).stat().st_mode) == 0o600
+    shield_state.save_config(repo, shield_state.ShieldConfig(registry_lookups=False))
+    config = shield_state.shield_dir(repo) / "config.json"
+    assert stat.S_IMODE(config.stat().st_mode) == 0o644 & ~_umask()
+    os.chmod(config, 0o664)
+    shield_state.save_config(repo, shield_state.ShieldConfig(registry_lookups=True))
+    assert stat.S_IMODE(config.stat().st_mode) == 0o664
+
+
+def _umask():
+    current = os.umask(0)
+    os.umask(current)
+    return current

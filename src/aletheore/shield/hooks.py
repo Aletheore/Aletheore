@@ -286,7 +286,8 @@ def _merge_into(path: Path, updates: dict) -> None:
         path.parent.mkdir(exist_ok=True)  # inside the git dir, which exists; never creates anything else
         data = _load_state(path)
         data.update(updates)
-        atomic_write_text(path, json.dumps(data, sort_keys=True))
+        # Private (0600) like the rest of the git dir's state; its own leftovers go with the week-old prune.
+        atomic_write_text(path, json.dumps(data, sort_keys=True), mode=0o600, cleanup=False)
     except OSError as error:
         debug_note(f"could not write the hook state {path}", error)
 
