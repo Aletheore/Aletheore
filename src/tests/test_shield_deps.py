@@ -612,3 +612,57 @@ def test_namespace_package_imports_resolve_through_the_map_and_unknown_ones_stay
                            "from google import oauth2\nimport google.cloud.storage\nx = 1\n")
     refs, _ = added_dependencies(repo)
     assert refs == [DepRef("PyPI", "protobuf", "import", "app.py")]
+
+
+# ---- declared names from setup.cfg and requirements files ----------------------------------------
+
+
+def test_setup_cfg_declarations_on_one_line_or_many_with_markers_and_extras_count(tmp_path):
+    cfg = (
+        "[metadata]\nname = app\n\n[options]\ninstall_requires = requests>=2; idna\n"
+        "setup_requires =\n    setuptools-scm[toml]>=6 ; python_version >= '3.8'\n"
+        "tests_require =\n    # a comment\n    hypothesis\n\n"
+        "[options.extras_require]\ndev =\n    pytest-cov\n    black==24.*\nyaml = PyYAML\n"
+    )
+    repo = _init(tmp_path / "r", {"setup.cfg": cfg, "app.py": "x = 1\n"})
+    _write(repo, "app.py", "import requests\nimport idna\nimport setuptools_scm\nimport hypothesis\n"
+                           "import pytest_cov\nimport black\nimport yaml\n")
+    assert added_dependencies(repo)[0] == []
+
+
+def test_setup_cfg_keys_that_are_not_requirements_declare_nothing(tmp_path):
+    cfg = (
+        "[options]\npackages = find:\n\n[options.entry_points]\nconsole_scripts =\n    zzqtool = pkg.cli:main\n"
+        "[flake8]\nexclude =\n    zzqbuild\n"
+    )
+    repo = _init(tmp_path / "r", {"setup.cfg": cfg, "app.py": "x = 1\n"})
+    _write(repo, "app.py", "import zzqtool\nimport zzqbuild\n")
+    refs = added_dependencies(repo)[0]
+    assert {r.name for r in refs} == {"zzqtool", "zzqbuild"}
+
+
+def test_requirements_vcs_and_url_lines_declare_their_egg_name_not_the_scheme(tmp_path):
+    reqs = (
+        "git+https://github.com/acme/eggpkg.git@v1#egg=eggpkg\n"
+        "https://files.example/wheelpkg-1.0-py3-none-any.whl\n"
+        "atpkg @ https://files.example/atpkg-1.0.tar.gz\n"
+        "-e ./localthing\n"
+    )
+    repo = _init(tmp_path / "r", {"requirements-dev.txt": reqs, "app.py": "x = 1\n"})
+    _write(repo, "app.py", "import eggpkg\nimport atpkg\nimport zzqgit\n")
+    assert [r.name for r in added_dependencies(repo)[0]] == ["zzqgit"]
+    assert "git" not in _deps._declared_python_names(repo, ["requirements-dev.txt"])
+    assert "https" not in _deps._declared_python_names(repo, ["requirements-dev.txt"])
+
+
+def test_npm_dependencies_from_paths_or_git_and_aliases_are_not_registry_names(tmp_path):
+    repo = _init(tmp_path / "r", {"package.json": json.dumps({"name": "p"})})
+    deps = {"locallib": "file:../locallib", "gitlib": "github:acme/gitlib", "wslib": "workspace:*",
+            "linked": "link:../linked", "tarlib": "https://example.com/tarlib.tgz", "short": "npm:@acme/real-name@^1"}
+    _write(repo, "package.json", json.dumps({"name": "p", "dependencies": deps}))
+    lock = {"name": "p", "lockfileVersion": 3, "packages": {"": {"name": "p"}}}
+    for name in deps:
+        lock["packages"][f"node_modules/{name}"] = {"version": "1.0.0"}
+    _write(repo, "package-lock.json", json.dumps(lock))
+    refs, _ = added_dependencies(repo)
+    assert refs == [DepRef("npm", "@acme/real-name", "manifest", "package.json")]

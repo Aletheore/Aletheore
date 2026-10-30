@@ -22,7 +22,7 @@ import re
 import shutil
 import tempfile
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
@@ -358,6 +358,7 @@ class _Facts:
     local_dirs: set[str]  # directory names and module stems anywhere in the repo
     aliases: set[str]
     private: dict[str, str]  # ecosystem -> reason
+    npm_alias: dict[str, str] = field(default_factory=dict)  # "short": "npm:@acme/real@^1" -> short: @acme/real
 
 
 def _gather(repo: Path, working: list[str]) -> _Facts:
@@ -386,6 +387,7 @@ def _gather(repo: Path, working: list[str]) -> _Facts:
                 section = data.get(key)
                 if isinstance(section, dict):
                     facts.declared_npm.update(n.lower() for n in section)
+                    _npm_specs(section, facts)
         elif name == "pyproject.toml" and not skipped:
             _collect_pyproject(_toml(_read(repo, rel)), facts, rel, pip_hits)
         elif name in ("pip.conf", "pip.ini"):
@@ -410,6 +412,28 @@ def _gather(repo: Path, working: list[str]) -> _Facts:
     if npm_hits:
         facts.private["npm"] = f"a private npm registry is configured ({npm_hits[0]}), so new JavaScript packages cannot be checked against the public registry"
     return facts
+
+
+# Version specs that do not name a registry package: a path, a link, a workspace, a git host or a tarball URL.
+_NPM_NOT_REGISTRY = re.compile(r"^(?:file:|link:|workspace:|portal:|patch:|git[+:]|github:|gitlab:|bitbucket:|gist:"
+                               r"|https?:|[\w.-]+/[\w.-]+(?:#.*)?$|[./~])")
+
+
+def _npm_specs(section: dict, facts: _Facts) -> None:
+    """package.json entries that are not the registry package of that name: an `npm:` alias names the real package
+    (`"short": "npm:@acme/real@^1"`); a path, link, workspace, git or URL spec is local and never looked up."""
+    for name, spec in section.items():
+        if not isinstance(name, str) or not isinstance(spec, str):
+            continue
+        spec = spec.strip()
+        if spec.startswith("npm:"):
+            target = spec[4:]
+            at = target.find("@", 1)  # the version separator; a scoped name starts with its own "@"
+            target = target[:at] if at > 0 else target
+            if target:
+                facts.npm_alias[name.lower()] = target
+        elif _NPM_NOT_REGISTRY.match(spec):
+            facts.local_npm.add(name.lower())
 
 
 def _npmrc_private(text: str) -> bool:
@@ -495,15 +519,55 @@ def _manifest_where(repo: Path, owners: list[str], ecosystem: str, name: str) ->
 
 
 _DIST_START = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*")
+_EGG = re.compile(r"[#&]egg=([A-Za-z0-9][A-Za-z0-9._-]*)")
+# A requirement line that is a location rather than a name: a VCS or archive URL, or a local path.
+_LOCATION = re.compile(r"^(?:[A-Za-z][A-Za-z0-9+.-]*://|(?:git|hg|svn|bzr)\+|[./~]|[A-Za-z]:[\\/])")
 
 
 def _dist_names(lines) -> set[str]:
+    """The distribution names requirement lines declare. A URL or path line declares only its `#egg=` name (never the
+    scheme, so `git+https://...` does not declare "git"); a name followed by `@ url` declares the name."""
     found = set()
     for line in lines:
         if isinstance(line, str):
-            match = _DIST_START.match(line.strip())
+            line = line.strip()
+            if _LOCATION.match(line):
+                egg = _EGG.search(line)
+                if egg:
+                    found.add(_norm_py(egg.group(1)))
+                continue
+            match = _DIST_START.match(line)
             if match:
                 found.add(_norm_py(match.group(0)))
+    return found
+
+
+_SETUP_CFG_KEYS = ("install_requires", "setup_requires", "tests_require")
+
+
+def _setup_cfg_names(text: str) -> set[str]:
+    """Names setup.cfg declares in [options] install_requires / setup_requires / tests_require and in every
+    [options.extras_require] entry, as setuptools reads them: a value on several lines has one requirement per line
+    (markers after ";"), a value on one line is ";"-separated. Other keys (entry points, tool settings) declare
+    nothing."""
+    import configparser
+
+    parser = configparser.ConfigParser(interpolation=None, strict=False, delimiters=("=",))
+    parser.optionxform = str  # keys keep their case; extras names are not requirements anyway
+    try:
+        parser.read_string(text)
+    except configparser.Error:
+        return set()
+    values = []
+    if parser.has_section("options"):
+        values += [parser.get("options", key) for key in _SETUP_CFG_KEYS if parser.has_option("options", key)]
+    if parser.has_section("options.extras_require"):
+        values += [value for _, value in parser.items("options.extras_require")]
+    found: set[str] = set()
+    for value in values:
+        value = value.strip()
+        lines = value.splitlines() if "\n" in value else value.split(";")
+        found |= _dist_names(line.split(";", 1)[0] for line in lines if not line.strip().startswith("#"))
     return found
 
 
@@ -545,10 +609,7 @@ def _declared_python_names(repo: Path, working: list[str]) -> set[str]:
                     if isinstance(data.get(key), dict):
                         found |= _dist_names(data[key])
             elif name == "setup.cfg":
-                text = _read(repo, rel) or ""
-                found |= _dist_names(
-                    l for m in re.finditer(r"(?ms)^(?:install_requires|[\w-]+)\s*=\s*\n((?:[ \t]+.*\n?)+)", text)
-                    for l in m.group(1).splitlines() if l.strip())
+                found |= _setup_cfg_names(_read(repo, rel) or "")
         except Exception:  # unparseable files are skipped silently
             continue
     return found
@@ -674,6 +735,11 @@ def added_dependencies(
             # Lock files list transitive packages; only names a package.json declares count.
             if key[1] not in facts.declared_npm or key[1] in facts.local_npm:
                 continue
+            if key[1] in facts.npm_alias:  # installed under another name: the registry package is the real one
+                name = facts.npm_alias[key[1]]
+                key = (eco, name.lower())
+                if key in known:
+                    continue
         else:
             unsupported.setdefault(eco, []).append(name)
             continue
