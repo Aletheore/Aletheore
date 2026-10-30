@@ -27,8 +27,10 @@ async def queue_stats(request: Request):
     # scan_worker/scheduler.py) so a slow AI job never delays the endpoint
     # health sweep - reported separately here too, since a stat that only
     # covered "scans" would be blind to the health queue backing up or its
-    # worker going down.
-    queues = {name: Queue(name, connection=redis_conn) for name in ("scans", "health")}
+    # worker going down. "builds" is the third: the long AIRview/Docs LLM builds
+    # (see scan_worker/scheduler.py's BUILDS_QUEUE_NAME), which must not share a
+    # queue with PR reviews.
+    queues = {name: Queue(name, connection=redis_conn) for name in ("scans", "health", "builds")}
     return {
         "queues": {
             name: {

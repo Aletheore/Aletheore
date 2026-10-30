@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from app_server.db import get_installation, hide_repo, is_repo_hidden, upsert_installation
+from app_server.job_timeouts import SCAN_JOB_TIMEOUT_SECONDS
 from app_server.webhooks.installation import _fetch_installation_repos_sync, handle_installation_event
 
 
@@ -70,6 +71,7 @@ async def test_installation_created_enqueues_initial_scan_for_every_repo(pool, m
     for call in fake_queue.enqueue.call_args_list:
         assert call.args[0] == "scan_worker.jobs.run_initial_scan_job"
         assert call.kwargs["installation_id"] == 557
+        assert call.kwargs["job_timeout"] == SCAN_JOB_TIMEOUT_SECONDS
 
 
 def test_fetch_installation_repos_uses_pooled_github_client(monkeypatch):

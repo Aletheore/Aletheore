@@ -11,6 +11,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -46,6 +47,7 @@ from app_server.error_alerts import send_error_alert
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.github_pagination import fetch_paginated_github_collection
 from app_server.http_client import get_github_api_client
+from app_server.job_timeouts import SCAN_JOB_TIMEOUT_SECONDS
 from app_server.llm_cost import (
     base_cap_for_plan,
     base_credit_for_plan,
@@ -210,8 +212,27 @@ from scan_worker.slack import (
 )
 
 _JOBS_ROOT_ENV = "ALETHEORE_JOBS_ROOT"
-JOBS_ROOT = Path(os.environ.get(_JOBS_ROOT_ENV, "/tmp/aletheore-jobs"))
-JOB_TEMP_DIR_MAX_AGE_SECONDS = 6 * 3600
+
+
+def _default_jobs_root() -> Path:
+    # Built from tempfile, not a "/tmp/..." literal: bandit flags a hardcoded temp path (B108), and the PR scan
+    # treats a finding as new when the lines around a flagged line change, so editing near the old literal made
+    # its long-standing finding read as a new one. Inside the worker container this resolves to /tmp.
+    import tempfile
+
+    return Path(tempfile.gettempdir()) / "aletheore-jobs"
+
+
+# Where job directories go when ALETHEORE_JOBS_ROOT is unset, and where they fall back to when it cannot be used.
+_FALLBACK_JOBS_ROOT = _default_jobs_root()
+JOBS_ROOT = Path(os.environ.get(_JOBS_ROOT_ENV) or _FALLBACK_JOBS_ROOT)
+# The longest jobs that use a checkout are the scans (SCAN_JOB_TIMEOUT_SECONDS, 1200s) and the reviews (900s).
+# This must stay well above both, or the sweeper could delete a live job's checkout out from under it
+# (tests/test_job_scratch.py checks for a 2x margin against the timeouts themselves). It used to be 6 hours,
+# which was fine while the directory was memory-backed scratch space that vanished on restart; on a
+# disk-backed volume (large repos overflow a 1 GB tmpfs) a leftover checkout, which may still hold a token
+# in .git/config, must not linger.
+JOB_TEMP_DIR_MAX_AGE_SECONDS = 3600
 AUDIT_COMMENT_MARKER = "<!-- aletheore-audit -->"
 FLASH_REVIEW_MARKER = "<!-- aletheore-flash-review -->"
 # Generous: the one-time full build calls a strong model once per
@@ -220,7 +241,8 @@ FLASH_REVIEW_MARKER = "<!-- aletheore-flash-review -->"
 LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS = 1800
 # Real production incidents (Aug 2026) showed the incremental update - real
 # LLM calls, with retries, riding along inside run_pr_scan_job/
-# run_push_scan_job's own 300s job_timeout - getting killed mid-flight on a
+# run_push_scan_job's own job_timeout (300s when this was written, now
+# SCAN_JOB_TIMEOUT_SECONDS) - getting killed mid-flight on a
 # large repo, losing the whole update with no partial result. This constant
 # existed but was never actually wired to its own job/enqueue call until
 # that was fixed - twice the old shared budget, dedicated solely to this
@@ -386,10 +408,40 @@ WIKI_INCREMENTAL_LLM_RESERVE_USD = 0.10
 DOCS_INCREMENTAL_LLM_RESERVE_USD = 0.10
 
 
+
 def _job_temp_dir() -> Path:
-    path = JOBS_ROOT / str(uuid.uuid4())
-    path.mkdir(parents=True, exist_ok=False)
-    return path
+    # Owner-only: a checkout under here briefly holds a live installation token in .git/config.
+    try:
+        JOBS_ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = JOBS_ROOT / str(uuid.uuid4())
+        path.mkdir(exist_ok=False, mode=0o700)
+        return path
+    except OSError:
+        if JOBS_ROOT == _FALLBACK_JOBS_ROOT:
+            raise
+        # A mounted scratch volume the unprivileged container user cannot write to (or a missing mount) must
+        # degrade to the old in-memory /tmp behaviour, not fail every scan job. Small repos keep working.
+        logging.getLogger("scan_worker.jobs").warning(
+            "job scratch root %s is unusable; falling back to %s", JOBS_ROOT, _FALLBACK_JOBS_ROOT, exc_info=True
+        )
+        _FALLBACK_JOBS_ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = _FALLBACK_JOBS_ROOT / str(uuid.uuid4())
+        path.mkdir(exist_ok=False, mode=0o700)
+        return path
+
+
+def purge_job_scratch_dir() -> None:
+    """Empties this worker's own job scratch directory. Run once at worker start: a worker that has just
+    started owns no jobs, so anything left under its root belongs to a job that died with the previous
+    process (a hard kill skips the scrub that removes the token from .git/config). Each replica needs its
+    own scratch root for this to be safe - see docker-compose.yml."""
+    if not JOBS_ROOT.is_dir():
+        return
+    for entry in JOBS_ROOT.iterdir():
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry, ignore_errors=True)
+        else:
+            entry.unlink(missing_ok=True)
 
 
 def _clone_url(repo_full_name: str, token: str) -> str:
@@ -593,6 +645,61 @@ def _fetch_and_checkout(dest: Path, sha: str, pr_number: int | None) -> None:
     _run_git(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest)
 
 
+@contextmanager
+def _timed_phase(scan_job: str, phase: str):
+    """Logs how long one phase of a scan job (checkout, scan, ...) took, success or failure. A job killed by
+    its time limit only logs that it timed out; without these lines nothing says whether the checkout or the
+    scan used the time."""
+    started = time.monotonic()
+    ok = False
+    try:
+        yield
+        ok = True
+    finally:
+        logging.getLogger("scan_worker.jobs").info(
+            "scan phase finished",
+            extra={
+                "scan_job": scan_job,
+                "phase": phase,
+                "phase_duration_s": round(time.monotonic() - started, 2),
+                "phase_ok": ok,
+            },
+        )
+
+
+@contextmanager
+def _scrub_remote_url_after(checkout_dir: Path, credential_free_url: str):
+    """Wraps work done against a checkout whose origin URL carries a live token, then puts the
+    credential-free URL back (see _clone_ref for why the token must not stay on disk).
+
+    After work that SUCCEEDED the reset stays strict, exactly as the inline `finally` blocks this
+    replaced were: a failure raises, since the scan would otherwise run with a live token on disk.
+
+    After work that already FAILED the reset is best effort. Its own failure used to replace the real
+    error: on 2026-10-30 a full 1 GB tmpfs surfaced only as "git remote set-url ... returned exit
+    status 128" because the reset could not write .git/config.lock either, and the real "unable to
+    write file" error was lost. If the reset cannot be done, the checkout is deleted instead, which
+    keeps the token off disk just as well, and the original error propagates.
+    """
+    try:
+        yield
+    except BaseException:
+        if (checkout_dir / ".git").exists():
+            try:
+                _run_git(["git", "remote", "set-url", "origin", credential_free_url], cwd=checkout_dir)
+            except Exception as reset_exc:  # noqa: BLE001
+                logging.getLogger("scan_worker.jobs").warning(
+                    "could not reset the remote URL after a failed checkout (%s); discarding the checkout "
+                    "so the token is not left on disk",
+                    type(reset_exc).__name__,
+                )
+                shutil.rmtree(checkout_dir, ignore_errors=True)
+        raise
+    else:
+        if (checkout_dir / ".git").exists():
+            _run_git(["git", "remote", "set-url", "origin", credential_free_url], cwd=checkout_dir)
+
+
 def _clone_ref(url: str, ref: str, dest: Path, pr_number: int | None = None) -> None:
     # Scrubs the credentialed URL from dest/.git/config in a finally block
     # covering the clone itself, the same reasoning and shape as
@@ -628,13 +735,10 @@ def _clone_ref(url: str, ref: str, dest: Path, pr_number: int | None = None) -> 
     # still a real transfer saving over a full clone even though (see
     # _fetch_and_checkout's docstring) it can't go shallow: `_run_scan`
     # always walks this checkout's real git history.
-    try:
+    with _scrub_remote_url_after(dest, _url_without_credentials(url)):
         _run_git(["git", "init", "-q", str(dest)])
         _run_git(["git", "remote", "add", "origin", url], cwd=dest)
         _fetch_and_checkout(dest, ref, pr_number)
-    finally:
-        if (dest / ".git").exists():
-            _run_git(["git", "remote", "set-url", "origin", _url_without_credentials(url)], cwd=dest)
 
 
 # Root for persistent, reused-across-scans checkouts (see
@@ -762,21 +866,26 @@ def _ensure_persistent_checkout(
     """
     credential_free_url = _url_without_credentials(url)
     if (checkout_dir / ".git").exists():
-        _run_git(["git", "remote", "set-url", "origin", url], cwd=checkout_dir)
         try:
+            _run_git(["git", "remote", "set-url", "origin", url], cwd=checkout_dir)
+        except subprocess.CalledProcessError:
+            # A checkout a killed job left half-written (empty .git, stale config.lock) makes this very first
+            # call exit 128 on every later job for the repo, forever. Nothing in it is worth keeping: discard
+            # it and fall through to a fresh clone. No token was written, since this is the call that writes it.
+            logging.getLogger("scan_worker.jobs").warning(
+                "persistent checkout at %s is unusable; discarding it and cloning fresh", checkout_dir
+            )
+            shutil.rmtree(checkout_dir, ignore_errors=True)
+    if (checkout_dir / ".git").exists():
+        with _scrub_remote_url_after(checkout_dir, credential_free_url):
             _run_git(["git", "fetch", "-q", "origin"], cwd=checkout_dir)
             _checkout_sha(checkout_dir, checkout_sha, pr_number, force=True)
             _run_git(["git", "clean", "-q", "-fdx"], cwd=checkout_dir)
-        finally:
-            _run_git(["git", "remote", "set-url", "origin", credential_free_url], cwd=checkout_dir)
     else:
         checkout_dir.mkdir(parents=True, exist_ok=True)
-        try:
+        with _scrub_remote_url_after(checkout_dir, credential_free_url):
             _run_git(["git", "clone", "-q", "--no-checkout", url, str(checkout_dir)])
             _checkout_sha(checkout_dir, checkout_sha, pr_number)
-        finally:
-            if (checkout_dir / ".git").exists():
-                _run_git(["git", "remote", "set-url", "origin", credential_free_url], cwd=checkout_dir)
 
 
 def _prepare_head_checkout(
@@ -808,6 +917,152 @@ def _prepare_head_checkout(
         )
         _clone_ref(clone_url, head_sha, fallback_dir, pr_number=pr_number)
         return fallback_dir
+
+
+def _checkout_from_local_objects(source_repo: Path, sha: str, dest: Path) -> bool:
+    """Checks `sha` out into `dest` by borrowing `source_repo`'s object store (git alternates) instead of
+    fetching it again. Returns False, leaving nothing behind, when `source_repo` does not have the commit
+    or anything goes wrong, so the caller can fall back to a normal fetch.
+
+    Borrows objects, not refs: `dest` is a fresh repo detached at `sha`, so history walks over it (ownership,
+    secrets in history) see exactly that commit's ancestry, as the single-ref fetch this replaces did. A
+    `git clone --shared` would also carry every branch and newer commit of the source and silently change
+    the base evidence. There is no remote either, so there is no URL a token could be written into.
+
+    Safe only while nothing prunes `source_repo`'s objects underneath `dest`: callers hold the per-repo
+    checkout lock for the whole scan, and that checkout is only ever fetched, checked out and cleaned.
+    """
+    probe = subprocess.run(  # nosec B603 - absolute git from _git_path(), fixed argv, no shell
+        [_git_path(), "cat-file", "-e", f"{sha}^{{commit}}"], cwd=source_repo, capture_output=True
+    )
+    if probe.returncode != 0:
+        return False
+    try:
+        _run_git(["git", "init", "-q", str(dest)])
+        alternates = dest / ".git" / "objects" / "info" / "alternates"
+        alternates.parent.mkdir(parents=True, exist_ok=True)
+        alternates.write_text(f"{source_repo / '.git' / 'objects'}\n")
+        _run_git(["git", "checkout", "-q", sha], cwd=dest)
+    except Exception:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "could not check out %s from local objects; falling back to a fetch", sha[:12], exc_info=True
+        )
+        shutil.rmtree(dest, ignore_errors=True)
+        return False
+    return True
+
+
+def _prepare_base_checkout(clone_url: str, base_sha: str, base_dir: Path, persistent_dir: Path | None) -> None:
+    """The base-commit checkout of a PR scan. Every PR scan used to fetch the base commit's full history over
+    the network into an empty directory (the scan walks all of it, so it cannot go shallow), then check it
+    out - on a large monorepo that is most of what the checkout costs. The head side already keeps a
+    persistent checkout that has fetched the repo's branches, so reuse its objects when it has the commit,
+    and fall back to the fetch when there is no persistent checkout or it lacks the commit (for example the
+    base branch was force-pushed since the PR was opened)."""
+    if persistent_dir is not None and _checkout_from_local_objects(persistent_dir, base_sha, base_dir):
+        return
+    _clone_ref(clone_url, base_sha, base_dir)
+
+
+_REUSE_BASE_EVIDENCE_ENV = "ALETHEORE_HOSTED_REUSE_BASE_EVIDENCE"
+# Dependency advisories are looked up when a scan runs. A base scanned days ago has not seen advisories
+# published since, so diffed against a head scanned now it would make every one of them read as introduced by
+# the PR. Half a day keeps the reuse for the common case (the push scan of the branch tip, minutes to hours
+# old) and sends anything staler back to a fresh scan.
+BASE_EVIDENCE_MAX_AGE_SECONDS = 12 * 3600
+
+
+def _base_evidence_reuse_mode() -> str:
+    """"off" (default), "shadow" or "on" - see _reusable_base_evidence. An operator opt-in like the semgrep and
+    parallel-scan switches: a typo warns and stays off."""
+    raw = os.environ.get(_REUSE_BASE_EVIDENCE_ENV, "").strip().lower()
+    if raw == "shadow":
+        return "shadow"
+    if raw in _TRUE_VALUES:
+        return "on"
+    if raw not in _FALSE_VALUES:
+        logging.getLogger("scan_worker.jobs").warning(
+            "%s=%r is not a recognised value (use on, shadow or off); the base commit is scanned fresh",
+            _REUSE_BASE_EVIDENCE_ENV, os.environ.get(_REUSE_BASE_EVIDENCE_ENV),
+        )
+    return "off"
+
+
+def _evidence_age_seconds(evidence: dict) -> float | None:
+    raw = evidence.get("scanned_at")
+    if not isinstance(raw, str):
+        return None
+    try:
+        scanned_at = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if scanned_at.tzinfo is None:
+        scanned_at = scanned_at.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - scanned_at).total_seconds()
+
+
+def _reusable_base_evidence_with_reason(
+    installation_id: int, repo_full_name: str, base_sha: str
+) -> tuple[dict | None, str]:
+    """The stored evidence of a PR's base commit when it is safe to diff against instead of scanning the base
+    again, plus why not when it is not. The base is usually the default branch's tip, which the push scan
+    already scanned.
+
+    Safe means: recorded for exactly this commit (the lookup is version-gated, so evidence from another
+    scanner version is already excluded), recent enough that dependency advisories have not moved since
+    (BASE_EVIDENCE_MAX_AGE_SECONDS), and the lookup itself worked. Anything else is a fresh scan, so reuse can
+    only ever save work, never fail a job."""
+    try:
+        evidence = _evidence_by_head_sha_or_none(
+            get_settings().database_url, installation_id, repo_full_name, base_sha
+        )
+    except Exception:  # noqa: BLE001
+        return None, "lookup_failed"
+    if not isinstance(evidence, dict):
+        return None, "not_stored"
+    if evidence.get("_scan_head_sha") != base_sha:
+        return None, "other_commit"
+    stored_config = evidence.get("_scan_config")
+    if stored_config is None:
+        return None, "scan_config_unknown"
+    if stored_config != _scan_config_fingerprint():
+        return None, "scan_config_changed"
+    age = _evidence_age_seconds(evidence)
+    if age is None:
+        return None, "no_scan_time"
+    if age > BASE_EVIDENCE_MAX_AGE_SECONDS:
+        return None, "too_old"
+    return evidence, "reusable"
+
+
+def _reusable_base_evidence(installation_id: int, repo_full_name: str, base_sha: str) -> dict | None:
+    return _reusable_base_evidence_with_reason(installation_id, repo_full_name, base_sha)[0]
+
+
+def _diff_sections_that_differ(a: dict, b: dict) -> list[str]:
+    return sorted(key for key in set(a) | set(b) if a.get(key) != b.get(key))
+
+
+def _log_base_evidence_shadow_comparison(
+    fresh_diff: dict, stored_base: dict, new: dict, renamed_paths: dict | None
+) -> None:
+    """Shadow mode: the comment is built from a fresh base scan as always, and this logs whether the diff
+    would have come out the same from the stored base evidence, naming the sections that differ if not. A
+    week of these lines is the hit rate and the accuracy of reuse, measured on real PRs before it is relied on.
+    Never able to fail the scan."""
+    try:
+        stored_diff = compute_diff(stored_base, new, full=False, renamed_paths=renamed_paths)
+        differing = _diff_sections_that_differ(fresh_diff, stored_diff)
+        logging.getLogger("scan_worker.jobs").info(
+            "base evidence reuse shadow comparison",
+            extra={
+                "reuse_identical": not differing,
+                "reuse_differing_sections": differing,
+                "reuse_evidence_age_s": round(max(0.0, _evidence_age_seconds(stored_base) or 0.0)),
+            },
+        )
+    except Exception:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning("base evidence reuse shadow comparison failed", exc_info=True)
 
 
 def _build_unchanged_scan_cache(
@@ -892,22 +1147,44 @@ _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"", "0", "false", "no", "off"}
 
 
-def _hosted_semgrep_enabled() -> bool:
-    """Operator opt-in for semgrep in hosted scans (off by default, see _run_scan).
+_HOSTED_PARALLEL_SCAN_ENV = "ALETHEORE_HOSTED_PARALLEL_SCAN"
+
+
+def _operator_opt_in(env_name: str, stays_off: str) -> bool:
+    """True when an operator has switched a deliberately-off hosted-scan feature on.
 
     Accepts the usual truthy spellings, and warns on a value it does not recognise: this is a
     switch for a feature that was deliberately left off, so a typo must not silently keep it off
     with the operator believing it is on.
     """
-    raw = os.environ.get(_HOSTED_SEMGREP_ENV, "").strip().lower()
+    raw = os.environ.get(env_name, "").strip().lower()
     if raw in _TRUE_VALUES:
         return True
     if raw not in _FALSE_VALUES:
         logging.getLogger("scan_worker.jobs").warning(
-            "%s=%r is not a recognised value (use 1/true/yes/on); semgrep stays disabled for hosted scans",
-            _HOSTED_SEMGREP_ENV, os.environ.get(_HOSTED_SEMGREP_ENV),
+            "%s=%r is not a recognised value (use 1/true/yes/on); %s",
+            env_name, os.environ.get(env_name), stays_off,
         )
     return False
+
+
+def _hosted_semgrep_enabled() -> bool:
+    """Operator opt-in for semgrep in hosted scans (off by default, see _run_scan)."""
+    return _operator_opt_in(_HOSTED_SEMGREP_ENV, "semgrep stays disabled for hosted scans")
+
+
+def _scan_config_fingerprint() -> dict:
+    """The operator settings that change WHAT a hosted scan reports (not just how fast it runs). Recorded with
+    every stored scan and compared before stored evidence stands in for a base scan: switching one of these on
+    after the base was stored would make every finding it adds read as introduced by the PR. Parallel scanning
+    is deliberately not part of it, since it must not change the result (shadow mode would show if it did)."""
+    return {"semgrep": _hosted_semgrep_enabled()}
+
+
+def _hosted_parallel_scan_enabled() -> bool:
+    """Operator opt-in for parallel parsing and overlapped scan stages in hosted scans (off by default,
+    see _run_scan). Meant to be switched on together with more CPU and memory for the worker."""
+    return _operator_opt_in(_HOSTED_PARALLEL_SCAN_ENV, "scans stay sequential for hosted scans")
 
 
 def _run_scan(repo_dir: Path, unchanged_scan_cache_path: Path | None = None) -> Path:
@@ -948,7 +1225,15 @@ def _run_scan(repo_dir: Path, unchanged_scan_cache_path: Path | None = None) -> 
     # which could make memory pressure worse here even though it's a clear
     # win on a developer's own machine. Left unset for a developer running
     # `aletheore scan` directly, same as the depth caps above.
-    env["ALETHEORE_DISABLE_PARALLEL_PARSE"] = "1"
+    #
+    # Stays the default. An operator who gives the worker more CPU and memory than that 1 CPU / 1 GB
+    # (docker-compose.yml does) opts in with ALETHEORE_HOSTED_PARALLEL_SCAN, which also lets the git,
+    # secrets-history and vulnerability stages overlap the parse. The CLI sizes its process pool from the
+    # container's own CPU quota (see _available_parallelism in aletheore/scanner/graph.py), not the host's
+    # core count, so a worker capped at 2 CPUs starts 2 parse processes, and a worker that loses one to
+    # the OOM killer retries the rest with half as many. Measured on a 9,269-file repo: 50.7s -> 19.7s.
+    if not _hosted_parallel_scan_enabled():
+        env["ALETHEORE_DISABLE_PARALLEL_PARSE"] = "1"
     # Bandit B607: resolve the CLI's own installed path rather than a bare
     # "aletheore" name, same class as _git_path() above.
     aletheore_path = shutil.which("aletheore") or "aletheore"
@@ -1051,7 +1336,9 @@ def _insert_history(
         installation_id,
         repo_full_name,
         datetime.now(timezone.utc),
-        evidence,
+        # Recorded so stored evidence can later be reused as a base only if it was scanned the same way (see
+        # _reusable_base_evidence_with_reason).
+        {**evidence, "_scan_config": _scan_config_fingerprint()},
         head_sha=head_sha,
     )
 
@@ -1545,7 +1832,23 @@ def run_pr_scan_job(
 
         clone_url = _clone_url(repo_full_name, token)
         base_dir = job_dir / "base"
-        _clone_ref(clone_url, base_sha, base_dir)
+
+        # Whether the base commit's stored evidence can stand in for a fresh base scan (see
+        # _reusable_base_evidence). Looked up before the lock: it is one short database read, and a miss
+        # costs nothing. "shadow" still scans the base and builds the comment from that, and only logs how
+        # the stored evidence would have compared.
+        reuse_mode = _base_evidence_reuse_mode()
+        stored_base, reuse_reason = (
+            _reusable_base_evidence_with_reason(installation_id, repo_full_name, base_sha)
+            if reuse_mode != "off"
+            else (None, "off")
+        )
+        if reuse_mode != "off":
+            logging.getLogger("scan_worker.jobs").info(
+                "base evidence reuse lookup",
+                extra={"reuse_mode": reuse_mode, "reuse_hit": stored_base is not None, "reuse_reason": reuse_reason},
+            )
+        use_stored_base = reuse_mode == "on" and stored_base is not None
 
         # Locked for the whole checkout-through-scan span, not just the
         # checkout call: _ensure_persistent_checkout has no filesystem
@@ -1569,9 +1872,18 @@ def run_pr_scan_job(
         # and _sync_code_graph's docstrings) - correct for describing this
         # one scan, just not persisted or incremental.
         with repo_checkout_lock(settings.database_url, installation_id, repo_full_name):
-            head_dir = _prepare_head_checkout(
-                clone_url, head_sha, installation_id, repo_full_name, job_dir / "head", pr_number=pr_number
-            )
+            with _timed_phase("run_pr_scan_job", "head_checkout"):
+                head_dir = _prepare_head_checkout(
+                    clone_url, head_sha, installation_id, repo_full_name, job_dir / "head", pr_number=pr_number
+                )
+            # Made here, inside the lock and after the head checkout, so it can borrow the persistent checkout's
+            # objects (see _prepare_base_checkout). head_dir is the ephemeral fallback when persistent storage
+            # was unavailable, and that has nothing worth borrowing.
+            if not use_stored_base:
+                with _timed_phase("run_pr_scan_job", "base_checkout"):
+                    _prepare_base_checkout(
+                        clone_url, base_sha, base_dir, persistent_dir=None if head_dir == job_dir / "head" else head_dir
+                    )
 
             try:
                 previous_sha = CodeGraphStore(
@@ -1584,9 +1896,14 @@ def run_pr_scan_job(
                 job_dir / "unchanged-scan-cache.json",
             )
 
-            base_evidence_path = _run_scan(base_dir)
-            head_evidence_path = _run_scan(head_dir, unchanged_scan_cache_path=unchanged_scan_cache_path)
-            old = json.loads(base_evidence_path.read_text(encoding="utf-8"))
+            if use_stored_base:
+                old = stored_base
+            else:
+                with _timed_phase("run_pr_scan_job", "base_scan"):
+                    base_evidence_path = _run_scan(base_dir)
+                old = json.loads(base_evidence_path.read_text(encoding="utf-8"))
+            with _timed_phase("run_pr_scan_job", "head_scan"):
+                head_evidence_path = _run_scan(head_dir, unchanged_scan_cache_path=unchanged_scan_cache_path)
             new = json.loads(head_evidence_path.read_text(encoding="utf-8"))
             # Fetched here, ahead of compute_diff, so a pure rename's
             # carried-over findings can be remapped through renamed_paths
@@ -1612,6 +1929,9 @@ def run_pr_scan_job(
                 if f.get("previous_filename")
             } or None
             diff = compute_diff(old, new, full=False, renamed_paths=renamed_paths)
+            if reuse_mode == "shadow" and stored_base is not None:
+                # Before the dismissal filters below mutate `diff`.
+                _log_base_evidence_shadow_comparison(diff, stored_base, new, renamed_paths)
             dismissed = get_dismissed_identity_keys(settings.database_url, installation_id, repo_full_name)
             # history_secrets shares the same (path, pattern, match_preview) identity
             # space as secrets - accepted_secrets (.aletheore.json) already treats them
@@ -1737,7 +2057,8 @@ def run_pr_scan_job(
             # Enqueued as their own jobs rather than called inline - see
             # run_live_wiki_incremental_update_job's docstring for why: real
             # LLM calls here could push total time past this scan job's own
-            # 300s job_timeout on a large repo, and RQ would kill this whole
+            # job_timeout (300s then, SCAN_JOB_TIMEOUT_SECONDS now) on a
+            # large repo, and RQ would kill this whole
             # job mid-flight when that happened, losing the update with no
             # partial result. The PR diff comment above (this job's primary
             # deliverable) is already posted by this point regardless.
@@ -1883,11 +2204,11 @@ def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
         # a long series of LLM calls and get LIVE_WIKI_FULL_BUILD_JOB_
         # TIMEOUT_SECONDS everywhere else they run (the Paddle trigger's
         # per-repo fan-out, the catch-up sweeps), but this job's own
-        # enqueue timeout is 300s - an inline build on a larger repo hit
+        # enqueue timeout was 300s then (SCAN_JOB_TIMEOUT_SECONDS now) - an inline build on a larger repo hit
         # that limit mid LLM call and failed the whole initial scan job
         # (Sentry ALETHEORE-5), which the ops monitor then escalated.
         if installation is not None and installation["plan"] == "air":
-            queue = _scans_queue(settings.redis_url)
+            queue = _builds_queue(settings.redis_url)
             for build_job in (
                 "scan_worker.jobs.run_live_wiki_full_build_job",
                 "scan_worker.jobs.run_live_docs_full_build_job",
@@ -1958,7 +2279,7 @@ def run_installation_repo_enumeration_retry_job(installation_id: int) -> None:
     for repo in repositories:
         queue.enqueue(
             "scan_worker.jobs.run_initial_scan_job",
-            job_timeout=300,
+            job_timeout=SCAN_JOB_TIMEOUT_SECONDS,
             installation_id=installation_id,
             repo_full_name=repo["full_name"],
         )
@@ -2004,14 +2325,18 @@ def run_push_scan_job(
         # of it (a push landing while run_initial_scan_job is still mid-sync
         # for the same repo, or two pushes racing each other).
         with repo_checkout_lock(settings.database_url, installation_id, repo_full_name):
-            repo_dir = _prepare_head_checkout(
-                clone_url, head_sha, installation_id, repo_full_name, job_dir / "repo"
-            )
+            with _timed_phase("run_push_scan_job", "head_checkout"):
+                repo_dir = _prepare_head_checkout(
+                    clone_url, head_sha, installation_id, repo_full_name, job_dir / "repo"
+                )
 
-            evidence_path = _run_scan(repo_dir)
+            with _timed_phase("run_push_scan_job", "scan"):
+                evidence_path = _run_scan(repo_dir)
             evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-            evidence = _sync_persistent_git_graph(installation_id, repo_full_name, repo_dir, evidence)
-            _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
+            with _timed_phase("run_push_scan_job", "git_graph_sync"):
+                evidence = _sync_persistent_git_graph(installation_id, repo_full_name, repo_dir, evidence)
+            with _timed_phase("run_push_scan_job", "code_graph_sync"):
+                _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
         history_id = _insert_history(installation_id, repo_full_name, evidence, head_sha=head_sha)
 
         # AIR-exclusive - see the identical note on run_initial_scan_job's
@@ -2077,14 +2402,11 @@ def _clone_pr_head(url: str, pr_number: int, dest: Path) -> None:
     # via `git clone --no-checkout` (every branch and tag) and THEN
     # fetched the PR ref on top of that - fetching just the one ref is
     # still a real, smaller transfer than that, just not shallow.
-    try:
+    with _scrub_remote_url_after(dest, _url_without_credentials(url)):
         _run_git(["git", "init", "-q", str(dest)])
         _run_git(["git", "remote", "add", "origin", url], cwd=dest)
         _run_git(["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"], cwd=dest)
         _run_git(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest)
-    finally:
-        if (dest / ".git").exists():
-            _run_git(["git", "remote", "set-url", "origin", _url_without_credentials(url)], cwd=dest)
 
 
 def _git_rev_parse_head(repo_dir: Path) -> str | None:
@@ -5007,7 +5329,7 @@ OPS_THRESHOLD_DURATION_SECONDS = 600
 # stale) by any operationally meaningful amount.
 OPS_BACKUP_STALE_SECONDS = 86400 + 600
 OPS_APP_HEALTH_CONSECUTIVE_FAILURES = 2
-OPS_MONITORED_QUEUES = ("scans", "health")
+OPS_MONITORED_QUEUES = ("scans", "health", "builds")
 
 
 class OpsMonitorError(RuntimeError):
@@ -6541,6 +6863,16 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
         return
 
     installation = get_installation_row(dsn, installation_id)
+    if installation is None or installation["plan"] != "air":
+        # AIRview is AIR-only and the sweeps that enqueue builds already filter on it, but a build queued
+        # while the installation was on AIR can wait a long time behind other jobs. If the plan changed
+        # meanwhile it must not keep spending credit (2026-10-30: queued builds kept running after a
+        # downgrade).
+        logging.getLogger("scan_worker.jobs").info(
+            "live wiki full build skipped for installation=%s repo=%s - plan is not AIR",
+            installation_id, repo_full_name,
+        )
+        return
     model_used = airview_model_used(live_wiki.FLASH_MODEL)
 
     # Fast-fail hint only, no lock - see _IncrementalSpendBudget's docstring;
@@ -6671,13 +7003,24 @@ def _scans_queue(redis_url: str):
     return Queue("scans", connection=get_redis_client())
 
 
+def _builds_queue(redis_url: str):
+    """The queue for the long AIRview/Docs LLM builds (up to 1800s each), kept apart from "scans" so a
+    handful of them can never occupy every worker and starve PR reviews - see
+    scan_worker.scheduler.BUILDS_QUEUE_NAME."""
+    from rq import Queue
+
+    from app_server.redis_client import get_redis_client
+
+    return Queue("builds", connection=get_redis_client())
+
+
 def run_live_wiki_full_build_for_installation_job(installation_id: int) -> None:
     """Fans out one full-build job per repo, rather than looping in
     process, so one slow or failing repo can't consume the whole
     installation's build budget or block the others.
     """
     settings = get_settings()
-    queue = _scans_queue(settings.redis_url)
+    queue = _builds_queue(settings.redis_url)
     for repo_full_name in list_repos_for_installation(settings.database_url, installation_id):
         queue.enqueue(
             "scan_worker.jobs.run_live_wiki_full_build_job",
@@ -7173,6 +7516,15 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
         _maybe_sync_docs_to_repo(dsn, installation_id, repo_full_name)
         return
 
+    if plan != "air":
+        # Same reasoning as run_live_wiki_full_build_job: a build queued under AIR must stop spending once
+        # the installation has been downgraded. Everything below this point makes real LLM calls.
+        logging.getLogger("scan_worker.jobs").info(
+            "live docs full build skipped for installation=%s repo=%s - plan is not AIR",
+            installation_id, repo_full_name,
+        )
+        return
+
     client_and_token = _github_client_and_token(installation_id)
     if client_and_token is None:
         set_docs_build_status(dsn, installation_id, repo_full_name, "failed", "could not authenticate with GitHub")
@@ -7254,7 +7606,7 @@ def run_live_docs_full_build_for_installation_job(installation_id: int) -> None:
     block the others.
     """
     settings = get_settings()
-    queue = _scans_queue(settings.redis_url)
+    queue = _builds_queue(settings.redis_url)
     for repo_full_name in list_repos_for_installation(settings.database_url, installation_id):
         queue.enqueue(
             "scan_worker.jobs.run_live_docs_full_build_job",
@@ -7406,8 +7758,8 @@ def run_live_wiki_incremental_update_job(
 
     Real production incidents traced a class of "Work-horse terminated
     unexpectedly" scan-job failures to this exact call: AIRview's real LLM
-    calls (with retries) riding along inside the scan job's own 300s
-    job_timeout could push total time past that budget on a large repo,
+    calls (with retries) riding along inside the scan job's own
+    job_timeout (300s then, SCAN_JOB_TIMEOUT_SECONDS now) could push total time past that budget on a large repo,
     and RQ kills the whole scan job mid-flight when that happens - losing
     the wiki update entirely, with no partial result and no signal to the
     customer about why. The scan job's own primary deliverable (the PR diff

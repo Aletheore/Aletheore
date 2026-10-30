@@ -98,8 +98,27 @@ services:
       - ALETHEORE_REPO_CHECKOUT_ROOT=/data/aletheore-repo-checkouts
       - ALETHEORE_APP_HEALTH_URL=http://app-server:8000/healthz
       - ALETHEORE_BACKUP_DIR=/app/backups
+      # Per-job scratch checkouts live on disk, not in the 1 GB tmpfs below: a large repo (cal.com, Sentry,
+      # Grafana) overflows it and the PR scan dies with "unable to write file" (2026-10-30). Each replica
+      # has its OWN directory, because scan_worker.jobs.purge_job_scratch_dir empties it at worker start
+      # and a shared one would delete the other replica's live jobs.
+      - ALETHEORE_JOBS_ROOT=/data/aletheore-jobs
+      # This replica serves reviews first and the long AIRview/Docs builds when idle. scan-worker-2 serves
+      # reviews only, so a pair of 30-minute builds can never occupy every worker.
+      - SCAN_WORKER_QUEUES=scans,builds
+      # Parallel parsing and overlapped scan stages, which need the CPU/memory below (see _run_scan).
+      - ALETHEORE_HOSTED_PARALLEL_SCAN=1
+      # Shadow mode only logs: the PR scan still scans the base commit and builds the comment from that, and
+      # also logs whether the diff would have been identical from the evidence the push scan already stored
+      # ("base evidence reuse shadow comparison", with reuse_identical and reuse_differing_sections). Switch to
+      # "on" to skip the base checkout and scan once those lines show a good hit rate and no differences.
+      - ALETHEORE_HOSTED_REUSE_BASE_EVIDENCE=shadow
     volumes:
       - ./app-private-key.pem:/run/secrets/github-app-key.pem:ro
+      # Host directory must exist and be writable by the container's unprivileged "aletheore" user, e.g.
+      # `mkdir -p job-scratch/scan-worker job-scratch/scan-worker-2 && chown -R <uid>:<gid> job-scratch`.
+      # If it is not writable the worker logs a warning and falls back to /tmp (see _job_temp_dir).
+      - ./job-scratch/scan-worker:/data/aletheore-jobs
       # Persistent, reused-across-scans per-repo checkouts (see
       # scan_worker/jobs.py's _ensure_persistent_checkout) - without a real
       # mounted volume here, this would live inside the container's
@@ -121,8 +140,16 @@ services:
         condition: service_started
       jina-embed:
         condition: service_healthy
-    cpus: "1.0"
-    mem_limit: 1g
+    # 2 CPUs and 3 GB, up from 1 CPU / 1 GB, with parallel scanning opted in (ALETHEORE_HOSTED_PARALLEL_SCAN
+    # above). The host has 4 CPUs and 16 GB and sat at a load average of 0.1-0.3, while scans ran fully
+    # sequentially on a single core; measured on a 9,269-file repo, 50.7s sequential vs 19.7s parallel. The
+    # CLI sizes its process pool from this container's CPU quota, not the host's core count. These are
+    # ceilings, not reservations: cpu_shares makes the scan workers yield to the app server and Postgres when
+    # every core is busy (a slow webhook response is a failed delivery), and 3 GB leaves room for the parse
+    # processes the 1 GB cap used to rule out.
+    cpus: "2.0"
+    mem_limit: 3g
+    cpu_shares: 512
     # See app-server's identical block above for the reasoning. Higher
     # pids_limit than the other services here specifically: a scan
     # legitimately spawns many concurrent subprocesses (git, tree-sitter
@@ -170,8 +197,14 @@ services:
       - ALETHEORE_REPO_CHECKOUT_ROOT=/data/aletheore-repo-checkouts
       - ALETHEORE_APP_HEALTH_URL=http://app-server:8000/healthz
       - ALETHEORE_BACKUP_DIR=/app/backups
+      - ALETHEORE_JOBS_ROOT=/data/aletheore-jobs
+      # Reviews only - see scan-worker's SCAN_WORKER_QUEUES comment above.
+      - SCAN_WORKER_QUEUES=scans
+      - ALETHEORE_HOSTED_PARALLEL_SCAN=1
+      - ALETHEORE_HOSTED_REUSE_BASE_EVIDENCE=shadow
     volumes:
       - ./app-private-key.pem:/run/secrets/github-app-key.pem:ro
+      - ./job-scratch/scan-worker-2:/data/aletheore-jobs
       - ./repo-checkouts:/data/aletheore-repo-checkouts
       - ./backups:/app/backups:ro
     tmpfs:
@@ -183,8 +216,10 @@ services:
         condition: service_started
       jina-embed:
         condition: service_healthy
-    cpus: "1.0"
-    mem_limit: 1g
+    # Same limits as scan-worker, see the comment there.
+    cpus: "2.0"
+    mem_limit: 3g
+    cpu_shares: 512
     security_opt:
       - "no-new-privileges:true"
     cap_drop:

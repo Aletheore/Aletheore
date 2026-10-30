@@ -5,6 +5,7 @@ from app_server.config import get_settings
 from app_server.db import is_repo_hidden
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.http_client import get_github_api_client
+from app_server.job_timeouts import SCAN_JOB_TIMEOUT_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +148,7 @@ async def handle_push_event(payload: dict, pool, redis_url: str, queue=None) -> 
 
     queue.enqueue(
         "scan_worker.jobs.run_push_scan_job",
-        job_timeout=300,
+        job_timeout=SCAN_JOB_TIMEOUT_SECONDS,
         installation_id=installation_id,
         repo_full_name=repo_full_name,
         head_sha=payload["after"],

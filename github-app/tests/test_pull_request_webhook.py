@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from app_server.db import hide_repo, upsert_installation
+from app_server.job_timeouts import SCAN_JOB_TIMEOUT_SECONDS
 from app_server.webhooks.pull_request import handle_pull_request_event
 
 
@@ -36,6 +37,8 @@ async def test_opened_enqueues_both_jobs(pool):
         assert kwargs["base_sha"] == "aaa111"
         assert kwargs["head_sha"] == "bbb222"
         assert kwargs["job_timeout"] > 0
+    scan_call = next(c for c in fake_queue.enqueue.call_args_list if c.args[0] == "scan_worker.jobs.run_pr_scan_job")
+    assert scan_call.kwargs["job_timeout"] == SCAN_JOB_TIMEOUT_SECONDS
 
 
 @pytest.mark.asyncio
@@ -110,7 +113,7 @@ async def test_closed_without_merge_corrects_the_wiki_against_the_real_default_b
     assert kwargs["repo_full_name"] == "octocat/hello-world"
     assert kwargs["head_sha"] == "real-main-head"
     assert kwargs["changed_files"] == ["app.py", "lib.py"]
-    assert kwargs["job_timeout"] > 0
+    assert kwargs["job_timeout"] == SCAN_JOB_TIMEOUT_SECONDS
 
 
 @pytest.mark.asyncio
