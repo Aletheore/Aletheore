@@ -98,7 +98,7 @@ def test_checkpoint_leaves_git_state_untouched(tmp_path):
     _git(repo, "stash", "push", "-q", "-m", "keep me")
     (repo / "b.txt").write_text("staged\n")
     _git(repo, "add", "b.txt")
-    (repo / "a.txt").write_text("unstaged change\n")
+    (repo / "a.txt").write_bytes(b"unstaged change\n")
     (repo / "untracked.txt").write_text("u\n")
     working = {p.name: p.read_bytes() for p in repo.iterdir() if p.is_file()}
     before = _git_state(repo)
@@ -464,7 +464,7 @@ def test_seeded_index_leaves_user_index_bytes_and_mtime_unchanged(
         (repo / f"f{i}.txt").write_text(f"{i}\n")
     _git(repo, "add", ".")
     _git(repo, "commit", "-q", "-m", "more")
-    (repo / "f2.txt").write_text("edited on disk\n")
+    (repo / "f2.txt").write_bytes(b"edited on disk\n")
     real_index = repo / ".git" / "index"
     before = (real_index.read_bytes(), real_index.stat().st_mtime_ns)
     seeds = []
@@ -493,7 +493,7 @@ def test_flagged_index_entries_are_captured_from_disk(tmp_path):
     _git(repo, "commit", "-q", "-m", "b")
     _git(repo, "update-index", "--assume-unchanged", "a.txt")
     _git(repo, "update-index", "--skip-worktree", "b.txt")
-    (repo / "a.txt").write_text("a on disk\n")
+    (repo / "a.txt").write_bytes(b"a on disk\n")
     (repo / "b.txt").write_text("b on disk\n")
 
     result = cp.take_checkpoint(repo, "s", now=T0)
