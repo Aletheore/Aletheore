@@ -338,6 +338,37 @@ def test_evidence_checks_are_skipped_when_the_dependency_stage_used_the_budget(t
     assert loaded == []  # the evidence was never read
 
 
+def test_slow_registry_lookups_do_not_cost_the_local_evidence_checks(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n", "a.py": "x = 1\n"})
+    (repo / ".aletheore").mkdir()
+    (repo / ".aletheore" / "air.json").write_text("{}", encoding="utf-8")
+    _write(repo, "requirements.txt", "requests==2.0\nzzqa==1.0\nzzqb==1.0\n")
+    _write(repo, "a.py", "x = 2\n")
+    clock = {"t": 0.0}
+    monkeypatch.setattr(guard, "_clock", lambda: clock["t"])
+    order = []
+    opener = _Opener(default=None)
+
+    def slow(request, timeout=None, **kwargs):
+        order.append("lookup")
+        clock["t"] += 10.0  # a registry that answers only after the whole budget
+        return opener(request, timeout=timeout)
+
+    def fresh(*args):
+        order.append("evidence")
+        return []
+
+    import aletheore.evidence as evidence_io
+
+    monkeypatch.setattr(evidence_io, "load_evidence", lambda r: {"scanned_at": "2999-01-01T00:00:00+00:00",
+                                                               "repository": {"modules": [{"path": "a.py"}]}})
+    monkeypatch.setattr(guard_evidence, "_files_newer_than", fresh)
+    report = run_guard(repo, budget_s=6.0, opener=slow)
+    assert order[0] == "evidence" and "lookup" in order
+    assert not any("dependents" in line and "time budget" in line for line in report.not_checked)
+    assert any("time budget reached" in line and "not looked up" in line for line in report.not_checked)
+
+
 def test_a_spent_budget_skips_the_dependency_stages_instead_of_overrunning(tmp_path):
     repo = _init(tmp_path / "r", {"requirements.txt": "requests==2.0\n", "a.py": "x = 1\n"})
     _write(repo, "requirements.txt", "requests==2.0\nzzqa==1.0\n")

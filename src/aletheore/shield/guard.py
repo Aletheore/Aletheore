@@ -187,28 +187,41 @@ def run_guard(
         not_checked.append(f"{reason}; changed files could not be listed, so every check was skipped")
         change = None
     if change is not None:
+        # Order of work: the local steps first (new dependency names, then the evidence checks), the registry
+        # lookups last, so slow or unreachable registries use up only what is left of the budget and never cost
+        # the dependents, signature and new-risk checks. The report keeps dependency lines first.
+        refs: list[DepRef] | None = None
+        enabled = False
+        dependency_findings: list[Finding] = []
+        dependency_skipped: list[str] = []
         try:
             enabled = state.registry_lookups_enabled(repo) if lookups is None else bool(lookups)
             refs, unchecked = added_dependencies(repo, base, change=change, budget=budget)
             by_reason: dict[str, int] = {}
             for item in unchecked:
                 if not item.name:  # about the whole check (time budget), not about named dependencies
-                    not_checked.append(item.reason)
+                    dependency_skipped.append(item.reason)
                     continue
                 by_reason[item.reason] = by_reason.get(item.reason, 0) + 1
             for reason, count in by_reason.items():
-                not_checked.append(f"{_count(count, 'dependency', 'dependencies')} not checked: {reason}")
-            findings.extend(_dependency_findings(refs, enabled, budget.deadline, opener, not_checked))
+                dependency_skipped.append(f"{_count(count, 'dependency', 'dependencies')} not checked: {reason}")
         except Exception as exc:  # noqa: BLE001 - the guard must never break a hook
-            not_checked.append(f"dependency check failed ({type(exc).__name__})")
+            dependency_skipped.append(f"dependency check failed ({type(exc).__name__})")
+        evidence_findings: list[Finding] = []
+        evidence_skipped: list[str] = []
         try:
             evidence_findings, evidence_skipped = evidence_checks(
                 repo, list(change.changed), base_evidence, budget=budget
             )
-            findings.extend(evidence_findings)
-            not_checked.extend(evidence_skipped)
         except Exception as exc:  # noqa: BLE001
-            not_checked.append(f"evidence check failed ({type(exc).__name__})")
+            evidence_skipped = [f"evidence check failed ({type(exc).__name__})"]
+        if refs is not None:
+            try:
+                dependency_findings = _dependency_findings(refs, enabled, budget.deadline, opener, dependency_skipped)
+            except Exception as exc:  # noqa: BLE001
+                dependency_skipped.append(f"dependency check failed ({type(exc).__name__})")
+        findings.extend(dependency_findings + list(evidence_findings))
+        not_checked.extend(dependency_skipped + list(evidence_skipped))
     findings = [
         Finding(f.check, f.severity, _clean(f.message), _clean(f.evidence)) for f in findings
     ]
