@@ -571,6 +571,17 @@ for Windows' `sh` runs it).
 | `session-end` | `SessionEnd` | Writes the receipt (without registry lookups), deletes the session's base evidence copy, prunes old checkpoints, drops the session state | 8 s |
 | `pre-commit` | Git `pre-commit` | Prints the guard text to stderr, each line prefixed with `aletheore shield:` | 8 s |
 
+**Speed.** The guard lists the change once per run (three Git calls) and parses only the dependency
+manifests in folders where a manifest changed; the base side of each manifest folder is parsed once and
+cached by its files' Git blob ids in `<git dir>/aletheore-shield/pins-cache.json`. Its time budget
+(1.5 s after an edit, 6 s at turn end, session end and commit) covers every step, not only registry
+lookups: a step that would start with no time left is listed as `time budget reached; ... skipped`, and
+manifest additions that could not be compared with the base in time are listed as not checked, never as
+new. Measured on a 9,400-file copy of this repository (macOS, median of 5 runs, registry lookups off):
+`pre-edit` 0.6 s (the checkpoint walks and stats the whole working tree, so this one grows with the
+repository), `post-edit` 0.55-0.6 s with or without a manifest change, `turn-end` and `pre-commit`
+0.6 s, `session-end` 1.3 s.
+
 The hooks act on the session's own repository (the one Claude Code runs in). An edit in another
 repository, such as a nested repository, submodule or sibling folder, is checkpointed and guarded only
 if `aletheore shield` was set up in that repository; otherwise nothing is written to it.
@@ -612,10 +623,13 @@ The setup screen prints the active network plan.
   background refresh is started instead of a re-scan inside the hook (at most once a minute, but
   right away once the previous refresh has finished if a file changed after it started). The
   refresh never edits `.gitignore`.
+- A deleted file that the scan still lists also counts as newer than the evidence (a refresh is
+  requested, at most once a minute).
 - Registry lookups do not run per edit, only at turn end and commit; at most a fixed number of
   names are looked up per run, and the rest are listed as not checked.
 - A near match to a popular package is an `info` line by itself; it is a `warn` only when the registry
-  also shows the name does not exist or is recent.
+  also shows the name does not exist or is recent. The line says whether the registry was not asked or
+  the lookup failed.
 - Only PyPI and npm are checked; other ecosystems are reported as not checked.
 - Dependency and signature findings are import-level (which files import a module), not call-level.
   Candidate tests are suggestions and are not run.

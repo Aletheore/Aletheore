@@ -208,6 +208,9 @@ What it does not do:
 - Only PyPI and npm are checked. Any other dependency is reported as "not checked".
 - It does not refresh stale scan evidence inline; checks that need fresh evidence say they were
   skipped.
+- Each hook has a time limit. Anything the guard could not finish in time is listed as not checked,
+  never reported as a finding. On a 9,400-file repository the hooks take about 0.6 s each (1.3 s at
+  session end).
 
 Registry lookups send only the package name to `pypi.org` or `registry.npmjs.org`, never versions,
 paths or source. They run only at turn end, at commit and in `aletheore shield check`. Turn them off
