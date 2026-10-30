@@ -592,9 +592,10 @@ repository, such as a nested repository, submodule or sibling folder, is checkpo
 if `aletheore shield` was set up in that repository; otherwise nothing is written to it.
 
 Session state is one small JSON file per session in `<git dir>/aletheore-shield/hook-<session>.json`,
-outside the working tree. Checkpoints are commits under `refs/aletheore/checkpoints/<worktree>/`,
+outside the working tree; files of sessions that never ended are removed after 7 days. Checkpoints are commits under `refs/aletheore/checkpoints/<worktree>/`,
 built with Git plumbing so your index, branches, stash and working tree are not touched. They hold
-tracked and untracked files minus ignored files, secret-looking files (such as `.env`), Shield's own
+tracked and untracked files minus ignored files, secret-looking files (such as `.env`, `prod.env`,
+`*.pem`, `*.key`, `id_rsa*`, `credentials*`, matched by file name on any platform), Shield's own
 folder and files over the size caps. Receipts are Markdown files in `.aletheore/shield/receipts/`.
 
 **What the guard checks.** New dependencies from manifest additions and new imports (PyPI and npm
@@ -613,7 +614,7 @@ are printed to stderr as `error: ...`; plans, status and reports go to stdout.
 
 **Network.** Only with registry lookups on, and only at turn end, commit and `check` (never after an
 edit or at session end): the package name goes to `pypi.org` or `registry.npmjs.org`. Versions, paths
-and source are not sent. Answers are cached for 24 hours in
+and source are not sent. Answers are cached for 24 hours (at most 2,000 names) in
 `~/.cache/aletheore/shield-registry-cache.json` (under your user profile on Windows), outside the
 repository; `off --purge` does not delete it. Set
 `ALETHEORE_SHIELD_OFFLINE=1` (also `true` or `yes`) or `"registry_lookups": false` in
@@ -622,7 +623,9 @@ The setup screen prints the active network plan.
 
 **Limits and known gaps.**
 
-- A hook never blocks a commit or an agent turn, and the guard never stops the agent.
+- A hook never blocks a commit or an agent turn, and the guard never stops the agent. Errors a hook
+  swallows are explained on stderr (never stdout) when `ALETHEORE_HOOK_DEBUG=1` is set; a receipt that
+  could not be built is always reported there.
 - Evidence is read from `.aletheore/air.json` as it is on disk. If it is older than a changed
   file, the dependents, signature and new-risk checks are skipped and reported as not checked; a
   background refresh is started instead of a re-scan inside the hook (at most once a minute, but
