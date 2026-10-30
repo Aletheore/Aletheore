@@ -508,3 +508,55 @@ def test_installed_names_are_listed_only_when_an_import_needs_them(tmp_path, mon
     monkeypatch.setattr(_deps, "_installed_import_names", lambda: (_ for _ in ()).throw(AssertionError("listed")))
     _write(repo, "a.py", "x = 2\n")
     assert added_dependencies(repo) == ([], [])
+
+
+# ---- import extraction: strings and comments -------------------------------------------------
+
+from aletheore.shield import imports as _imports
+
+
+@pytest.mark.parametrize(
+    "source,expected",
+    [
+        # Comment markers inside strings must not hide the code after them.
+        ("const s = ' // '; import a from 'pkga';\n", {"pkga"}),
+        ("const t = '/* ';\nimport b from 'pkgb';\nconst u = ' */';\n", {"pkgb"}),
+        ("fetch('https://x.example/api'); const c = require('pkgc');\n", {"pkgc"}),
+        # Import-shaped text inside strings, template literals and comments is not an import.
+        ("const doc = \"import fake from 'notreal'\";\n", set()),
+        ("const tpl = `require('notreal2') ${x}`;\n", set()),
+        ("const tpl = `${y}\nimport z from 'notreal3'\n`;\n", set()),
+        ("// import x from 'commented'\n/* require('blocked') */\n", set()),
+        # Code inside a template substitution still counts.
+        ("const v = `${require('pkgsub')}`;\n", {"pkgsub"}),
+        # A quote inside a regular expression literal is not a string; division is not a regex.
+        ("const re = /'/g;\nimport d from 'pkgd';\n", {"pkgd"}),
+        ("const half = a / 2; const q = b / c;\nimport e from 'pkge';\n", {"pkge"}),
+        # An apostrophe in JSX text ends at the line end, not later in the file.
+        ("const X = () => <p>Don't stop</p>;\nconst y = require('pkgf');\n", {"pkgf"}),
+        # The usual forms still work.
+        ("import type { T } from 'typespkg';\nexport * from 'reexp';\nexport { a, default as b } from 'named';\n"
+         "import 'side-effect';\nconst m = await import('dyn');\nimport def, * as ns from '@scope/pkg/sub';\n",
+         {"typespkg", "reexp", "named", "side-effect", "dyn", "@scope/pkg"}),
+        ("import x from './local';\nimport fs from 'fs';\nimport y from 'node:path';\n", set()),
+    ],
+)
+def test_js_imports_respect_strings_comments_and_regexes(source, expected):
+    assert _imports.js_imports(source) == expected
+
+
+@pytest.mark.parametrize(
+    "source,expected",
+    [
+        ('s = "#"\nimport realpy\n', {"realpy"}),
+        ('x = "import notreal"\ny = \'from fake import thing\'\n', set()),
+        ('"""Docs.\n\nimport alsonotreal\n"""\nimport yes1\n', {"yes1"}),
+        ("# import commented\nfrom pkg2.sub import a  # import trailing\n", {"pkg2"}),
+        # A file mid-edit that does not parse still yields the imports that are there, never ones in its strings.
+        ("import requests\nimport os\ns = 'import nope'\ndef broken(:\n", {"requests"}),
+        ("from . import local\nimport aa.bb as cc, dd\nfrom ee import (f,\n  g)\nclass X(\n", {"aa", "dd", "ee"}),
+        ('import first\nx = """never closed\nimport hidden\n', {"first"}),
+    ],
+)
+def test_python_imports_respect_strings_and_survive_syntax_errors(source, expected):
+    assert _imports.python_imports(source) == expected
