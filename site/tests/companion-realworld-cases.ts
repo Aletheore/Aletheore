@@ -42,6 +42,7 @@ export const REALWORLD_CASES: readonly EvalCase[] = [
   { id: "rw-mcp-clients", question: "which coding agents and editors can I connect?", status: "answer", contains: "Kiro" },
   { id: "rw-mcp-setup-cmd", question: "how do I set up the MCP server for claude code?", status: "answer", command: "mcp-install" },
   { id: "rw-open-source", question: "is aletheore open source?", status: "answer", contains: "GNU Affero" },
+  { id: "rw-starter-open-source", question: "Is it open source?", status: "answer", contains: "GNU Affero" },
   { id: "rw-license-name", question: "what license is aletheore under?", status: "answer", contains: "GNU Affero" },
   { id: "rw-commercial", question: "can I embed it in a closed-source product?", status: "answer", contains: "commercial license" },
   { id: "rw-languages", question: "which programming languages does it support?", status: "answer", contains: "Kotlin" },

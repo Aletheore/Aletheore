@@ -30,6 +30,7 @@ describe("retrieval reaches the right passages for how people really type", () =
     ["does it work with claude code or cursor?", ["mcp"]],
     ["How much is Flash, how do I install the CLI, and does it send crash reports?", ["price-flash", "quickstart-0", "privacy-cli-2"]],
     ["is aletheore open source?", ["terms-what-0"]],
+    ["Is it open source?", ["terms-what-0"]],
     ["what license is it under?", ["terms-what-0"]],
     ["can I use it in a closed-source product?", ["terms-what-0"]],
     ["which languages does it support?", ["languages"]],
