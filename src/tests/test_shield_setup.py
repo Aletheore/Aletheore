@@ -125,6 +125,10 @@ def test_agent_hook_entries_use_the_exec_form_of_python_hook(monkeypatch):
         ({"type": "command", "command": '"C:/Program Files/Python 3.12/python.exe" -m aletheore.shield.hooks turn-end'},
          "turn-end"),
         ({"type": "command", "command": f"{WIN_PY} -m aletheore.shield.hooks turn-end"}, "turn-end"),
+        (_exec_hook("turn-end", "/usr/bin/python3.12"), "turn-end"),
+        (_exec_hook("turn-end", "C:\\Users\\me\\.venv\\Scripts\\pythonw.exe"), "turn-end"),
+        (_exec_hook("turn-end", "/opt/pypy/bin/pypy3"), "turn-end"),
+        (_exec_hook("turn-end", "/Library/Frameworks/Python.framework/Versions/3.12/bin/Python"), "turn-end"),
     ],
 )
 def test_our_event_recognises_the_exec_form_and_every_legacy_string_form(hook, event):
@@ -147,6 +151,16 @@ def test_our_event_recognises_the_exec_form_and_every_legacy_string_form(hook, e
         {"type": "command", "command": "py -m aletheore.shield.hooks turn-end", "args": ["--version"]},
         READ_GUARD_HOOK,
         "not a dict",
+        # only the exact shapes Shield wrote count: a user's own hook that runs the module differently is theirs
+        {"type": "command", "command": FAKE_PY, "args": ["-m", "aletheore.shield.hooks", "turn-end"]},
+        {"type": "command", "command": FAKE_PY, "args": ["-X", "utf8", "-m", "aletheore.shield.hooks", "turn-end", "-v"]},
+        {"type": "command", "command": FAKE_PY, "args": ["-u", "-X", "utf8", "-m", "aletheore.shield.hooks", "turn-end"]},
+        {"type": "command", "command": "/usr/bin/env", "args": ["-X", "utf8", "-m", "aletheore.shield.hooks", "turn-end"]},
+        {"type": "command", "command": "", "args": ["-X", "utf8", "-m", "aletheore.shield.hooks", "turn-end"]},
+        {"type": "command", "command": "python -m aletheore.shield.hooks turn-end && notify-send done"},
+        {"type": "command", "command": "nice python -m aletheore.shield.hooks turn-end"},
+        {"type": "command", "command": "python -u -m aletheore.shield.hooks turn-end"},
+        {"type": "command", "command": "my-runner -m aletheore.shield.hooks turn-end"},
     ],
 )
 def test_our_event_ignores_hooks_that_are_not_shields(hook):
@@ -165,7 +179,7 @@ def test_agent_hooks_merge_idempotently_and_replace_another_interpreter_in_place
     assert merged["hooks"]["Stop"] == [{"hooks": [mine, _exec_hook("turn-end")]}, {"hooks": [mine]}]
     # copies left by older setups are dropped, and an entry left with no hooks goes with them
     doubled = {"hooks": {"Stop": [{"hooks": [_legacy_hook("turn-end")]}, {"hooks": [_exec_hook("turn-end")]},
-                                  {"hooks": [_legacy_hook("turn-end", "/x"), mine]}]}}
+                                  {"hooks": [_legacy_hook("turn-end", "/x/python3"), mine]}]}}
     merged, _created, changed = setup._merge(doubled)
     assert changed and merged["hooks"]["Stop"] == [{"hooks": [_exec_hook("turn-end")]}, {"hooks": [mine]}]
 

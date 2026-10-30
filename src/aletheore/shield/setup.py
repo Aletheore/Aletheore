@@ -321,32 +321,47 @@ def _settings_snippet() -> str:
     )
 
 
-def _module_event(words: list) -> str | None:
-    for position in range(len(words) - 2):
-        if words[position] == "-m" and words[position + 1] == MODULE and words[position + 2] in SHIELD_EVENTS:
-            return words[position + 2]
-    return None
+# The file name of a Python interpreter as sys.executable gives it: python, python3, python3.12, python3.13t,
+# pythonw.exe, Python (macOS framework builds), pypy3.
+_PYTHON_NAME = re.compile(r"(?:python|pypy)(?:\d+(?:\.\d+)*t?)?w?(?:\.exe)?", re.IGNORECASE)
+
+
+def _is_python(path: str) -> bool:
+    name = re.split(r"[\\/]", path.strip().strip("'\""))[-1]
+    return bool(_PYTHON_NAME.fullmatch(name))
 
 
 def _our_event(hook: object) -> str | None:
     """The Shield event a hook runs, or None when it is not Shield's.
 
-    Exec form (what setup writes): `command` is a string and `args` a list of strings holding
-    `-m aletheore.shield.hooks <event>`. Legacy form (earlier Shield versions, no `args`): the shell words of the
-    `command` string hold the same three words, whether quoted for POSIX sh or as a double-quoted forward-slash
-    Windows path. A user's wrapper that merely mentions the module is not mistaken for Shield's own entry."""
+    Only the exact shapes Shield wrote count, so a user's own hook that merely runs or mentions the module stays
+    theirs. Exec form (what setup writes): `command` is a Python interpreter and `args` is exactly
+    `["-X", "utf8", "-m", "aletheore.shield.hooks", <event>]`. Legacy form (earlier Shield versions, no `args`): the
+    `command` string is exactly four shell words, `<python> -m aletheore.shield.hooks <event>`, whether the path was
+    quoted for POSIX sh, double-quoted with forward slashes, or a bare Windows backslash path."""
     if not isinstance(hook, dict) or not isinstance(hook.get("command"), str):
         return None
+    command = hook["command"]
     if "args" in hook:
         args = hook["args"]
-        if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
-            return None
-        return _module_event(args)
+        if (
+            isinstance(args, list)
+            and len(args) == 5
+            and args[:4] == ["-X", "utf8", "-m", MODULE]
+            and args[4] in SHIELD_EVENTS
+            and _is_python(command)
+        ):
+            return args[4]
+        return None
     try:
-        words = shlex.split(hook["command"])
+        words = shlex.split(command)
     except ValueError:
-        words = hook["command"].split()
-    return _module_event(words)
+        return None
+    if len(words) != 4 or words[1:3] != ["-m", MODULE] or words[3] not in SHIELD_EVENTS:
+        return None
+    # The interpreter as written (shlex drops the backslashes of a bare Windows path, so judge the raw text).
+    interpreter = command.rstrip()[: -len(words[3])].rstrip()[: -len(MODULE)].rstrip()[: -len("-m")]
+    return words[3] if _is_python(interpreter) else None
 
 
 def _is_ours(hook: object) -> bool:
