@@ -1,7 +1,7 @@
 """Git helpers for Shield: one subprocess wrapper and a plain-words repository state check."""
 
 import os
-import subprocess
+import subprocess  # nosec B404 - runs git only, with fixed argument lists and never a shell
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -56,7 +56,7 @@ def run_git(
     full_env = {k: v for k, v in os.environ.items() if k not in _INHERITED_GIT_VARS}
     full_env.update(env or {})
     try:
-        done = subprocess.run(
+        done = subprocess.run(  # noqa: S603  # nosec B603 - absolute git from git_executable, argv list, no shell
             command, cwd=str(repo), env=full_env, input=input, capture_output=True, timeout=timeout, check=False
         )
     except subprocess.TimeoutExpired:

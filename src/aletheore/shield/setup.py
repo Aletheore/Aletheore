@@ -55,6 +55,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from aletheore.hook_config import python_hook
 from aletheore.shield import checkpoint, receipt, state
+from aletheore.shield.fsutil import debug_note
 from aletheore.shield.gitutil import repo_state, run_git
 
 MODULE = "aletheore.shield.hooks"
@@ -999,8 +1000,8 @@ def apply_setup(repo: Path, approved: list[SetupChange] | None = None) -> None:
         if not record_existed:
             try:
                 _remove(plan.where, purge=False, rollback=True)
-            except Exception:  # noqa: BLE001 - the original failure is the one to report
-                pass
+            except Exception as error:  # noqa: BLE001 - the original failure is the one to report
+                debug_note("could not roll back a failed setup", error)
         raise
 
 

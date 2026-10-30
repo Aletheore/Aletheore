@@ -148,7 +148,8 @@ def _write_cache(path: Path, key: str, info: RegistryInfo, now: datetime) -> Non
 
 
 def _default_opener(request, timeout=None):
-    return urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT)
+    # B310: _url only builds https://pypi.org or https://registry.npmjs.org URLs, never file: or custom schemes
+    return urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT)  # nosec B310
 
 
 def lookup_package(

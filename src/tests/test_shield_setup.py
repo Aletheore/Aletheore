@@ -815,6 +815,27 @@ def test_failed_apply_puts_the_original_settings_bytes_back(tmp_path):
         os.chmod(hooks_dir, 0o755)
 
 
+def test_a_failed_rollback_is_explained_on_stderr_only_when_debugging(tmp_path, monkeypatch, capsys):
+    repo = _init(tmp_path / "repo")
+
+    def failing_write(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    def failing_remove(*_args, **_kwargs):
+        raise RuntimeError("rollback broke")
+
+    monkeypatch.setattr(setup, "_write_atomic", failing_write)
+    monkeypatch.setattr(setup, "_remove", failing_remove)
+    monkeypatch.delenv("ALETHEORE_HOOK_DEBUG", raising=False)
+    with pytest.raises(OSError, match="disk full"):
+        setup.apply_setup(repo)
+    assert capsys.readouterr().err == ""
+    monkeypatch.setenv("ALETHEORE_HOOK_DEBUG", "1")
+    with pytest.raises(OSError, match="disk full"):
+        setup.apply_setup(repo)
+    assert "could not roll back a failed setup: RuntimeError: rollback broke" in capsys.readouterr().err
+
+
 def test_apply_with_the_approved_plan_writes_it(tmp_path):
     repo = _init(tmp_path / "repo")
     approved = setup.plan_setup(repo)

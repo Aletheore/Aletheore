@@ -71,7 +71,7 @@ MAX_PAYLOAD_CHARS = 64 * 1024 * 1024
 HEADER = "Aletheore Shield guard (working tree vs HEAD):"
 PRE_COMMIT_PREFIX = "aletheore shield: "
 STATE_DIRNAME = "aletheore-shield"
-NO_SESSION_TOKEN = "nosession"
+NO_SESSION_TOKEN = "nosession"  # nosec B105 - a state file name for payloads without a session id, not a secret
 SETUP_DIRNAME = "setup"  # setup._SETUP_DIRNAME; not imported so the hooks stay light
 SETUP_RECORD_NAME = "setup-record.json"  # setup.RECORD_NAME
 # A post-edit guard runs without registry lookups by design, so saying so to the agent on every edit is noise.
@@ -112,7 +112,7 @@ def _debug(stderr, message: str | None = None) -> None:
             traceback.print_exc(file=target)
         else:
             target.write(message + "\n")
-    except Exception:  # noqa: BLE001 - a broken stderr must not break the hook either
+    except Exception:  # noqa: BLE001 - a broken stderr must not break the hook either  # nosec B110
         pass
 
 
@@ -615,7 +615,7 @@ def run_and_exit(argv: list[str] | None = None) -> NoReturn:
             try:
                 if stream is not None:
                     stream.flush()
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001  # nosec B110 - a closed stream at exit has nowhere to report to
                 pass
         os._exit(code)
 
