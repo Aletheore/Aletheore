@@ -1017,3 +1017,22 @@ def test_concurrent_post_edits_with_the_same_findings_say_them_once(tmp_path, mo
     for t in threads:
         t.join(60)
     assert sum(1 for out in outputs if out) == 1
+
+
+def test_a_new_session_state_file_prunes_week_old_ones_left_by_sessions_that_never_ended(tmp_path):
+    repo = _init(tmp_path / "r")
+    folder = _state_file(repo).parent
+    folder.mkdir()
+    week_ago = time.time() - 8 * 24 * 3600
+    old = [folder / "hook-gone.json", folder / "hook-gone.json.lock", folder / ".hook-gone.json.abc.tmp"]
+    kept = [folder / "hook-recent.json", folder / "pins-cache.json", folder / "notes.json"]
+    for path in old + kept:
+        path.write_text("{}", encoding="utf-8")
+    for path in old + kept[1:]:
+        os.utime(path, (week_ago, week_ago))
+    (folder / "hook-dir.json").mkdir()
+    os.utime(folder / "hook-dir.json", (week_ago, week_ago))
+    _run("pre-edit", _payload(repo))
+    assert not any(p.exists() for p in old)
+    assert all(p.exists() for p in kept) and (folder / "hook-dir.json").is_dir()
+    assert _state(repo)["edited"] is True

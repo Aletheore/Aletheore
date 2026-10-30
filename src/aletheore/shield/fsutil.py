@@ -118,8 +118,8 @@ def exclusive(lock: Path, *, wait_s: float = LOCK_WAIT_S, stale_s: float = LOCK_
                 debug_note(f"could not release the lock {lock}", error)
 
 
-def remove_older_than(folder: Path, prefix: str, suffixes: tuple[str, ...], max_age_s: float) -> int:
-    """Delete regular files directly in `folder` named `<prefix>...<one of suffixes>` and older than `max_age_s`;
+def remove_older_than(folder: Path, prefixes: tuple[str, ...], suffixes: tuple[str, ...], max_age_s: float) -> int:
+    """Delete regular files directly in `folder` named `<a prefix>...<a suffix>` and older than `max_age_s`;
     returns how many. Symbolic links and folders are left alone; errors skip the file."""
     cutoff = time.time() - max_age_s
     removed = 0
@@ -128,7 +128,7 @@ def remove_older_than(folder: Path, prefix: str, suffixes: tuple[str, ...], max_
     except OSError:
         return 0
     for entry in entries:
-        if not entry.name.startswith(prefix) or not entry.name.endswith(suffixes):
+        if not entry.name.startswith(prefixes) or not entry.name.endswith(suffixes):
             continue
         try:
             if not entry.is_file(follow_symlinks=False) or entry.stat(follow_symlinks=False).st_mtime >= cutoff:

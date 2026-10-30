@@ -39,7 +39,8 @@ Hook state is a small JSON dict per session in `<git dir>/aletheore-shield/hook-
 working tree, so it works in repositories that were never scanned and never creates `.aletheore/`. A corrupt
 file reads as empty; writes take the file's lock (`<file>.lock`, an exclusive create), re-read the file, merge only the
 keys the writer owns and replace it atomically, so concurrent hooks never lose each other's keys. The hourly prune is
-claimed in one locked read-and-write, so concurrent hooks prune once.
+claimed in one locked read-and-write, so concurrent hooks prune once. A session's first write removes other sessions'
+state files a week old (sessions that never reached session end).
 """
 
 from __future__ import annotations
@@ -64,6 +65,7 @@ SESSION_END_BUDGET_S = 6.0
 PRE_COMMIT_BUDGET_S = 6.0
 
 PRUNE_INTERVAL_S = 3600.0
+STATE_MAX_AGE_S = 7 * 24 * 3600.0  # hook state files of sessions that never ended are removed after this
 GUARD_MAX_LINES = 12
 MAX_PAYLOAD_CHARS = 64 * 1024 * 1024
 HEADER = "Aletheore Shield guard (working tree vs HEAD):"
@@ -308,10 +310,21 @@ def _update_state(path: Path, updates: dict) -> None:
 
     if not _state_dir_ready(path):
         return
+    if not path.exists():
+        _prune_old_state(path.parent)
     with exclusive(_state_lock(path)) as held:
         if not held:
             debug_note(f"writing {path.name} without its lock")
         _merge_into(path, updates)
+
+
+def _prune_old_state(folder: Path) -> None:
+    """Remove hook state (and its lock and temporary files) a week old: sessions that never reached session end
+    leave theirs behind. Runs only when a session writes its first state file, so it costs one folder listing per
+    session."""
+    from aletheore.shield.fsutil import remove_older_than
+
+    remove_older_than(folder, ("hook-", ".hook-"), (".json", ".json.lock", ".tmp"), STATE_MAX_AGE_S)
 
 
 def _claim_prune(path: Path) -> bool:
