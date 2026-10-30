@@ -1,0 +1,892 @@
+import io
+import json
+import os
+import subprocess
+import sys
+import threading
+import time
+import urllib.request
+from pathlib import Path
+
+import pytest
+
+from aletheore.shield import checkpoint as cp
+from aletheore.shield import deps as _deps
+from aletheore.shield import guard, guard_evidence, hooks, receipt, registry
+from aletheore.shield.guard import GuardReport
+from aletheore.shield.guard_evidence import Finding
+
+EVENTS = ("pre-edit", "post-edit", "turn-end", "session-end", "pre-commit")
+STOP_NAMES = ("PRE_EDIT_STOP_S", "POST_EDIT_STOP_S", "TURN_END_STOP_S", "SESSION_END_STOP_S", "PRE_COMMIT_STOP_S")
+CONTRACT_STOPS = {name: getattr(hooks, name) for name in STOP_NAMES}
+SRC = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _hermetic(monkeypatch, tmp_path):
+    def boom(*args, **kwargs):
+        raise AssertionError("test tried to reach the network")
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    monkeypatch.setattr(registry, "DEFAULT_REGISTRY_CACHE_PATH", tmp_path / "reg-cache.json")
+    monkeypatch.setattr(_deps, "_installed_import_names", lambda: set())
+    monkeypatch.setattr(guard_evidence, "start_background_refresh", lambda *a, **k: False)
+    monkeypatch.setenv("ALETHEORE_SHIELD_OFFLINE", "1")
+    monkeypatch.delenv("ALETHEORE_HOOK_DEBUG", raising=False)
+    # Real git on a slow CI runner (Windows) can pass the 2 s contract stop; the budget test shrinks them itself.
+    for name in STOP_NAMES:
+        monkeypatch.setattr(hooks, name, 60.0)
+
+
+def _git(repo, *args):
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+
+def _init(path, *, aletheore=False):
+    path.mkdir(parents=True, exist_ok=True)
+    _git(path, "init", "-q")
+    _git(path, "config", "user.name", "T")
+    _git(path, "config", "user.email", "t@example.com")
+    _git(path, "config", "commit.gpgsign", "false")
+    (path / "base.txt").write_text("base\n", encoding="utf-8")
+    _git(path, "add", "-A")
+    _git(path, "commit", "-q", "-m", "init")
+    if aletheore:
+        (path / ".aletheore").mkdir()
+    return path
+
+
+def _payload(repo, *, event="PreToolUse", session="s1", path="a.py", tool="Write", **extra):
+    data = {
+        "session_id": session,
+        "cwd": str(repo),
+        "hook_event_name": event,
+        "tool_name": tool,
+        "tool_input": {"file_path": str(Path(repo) / path) if not os.path.isabs(path) else path},
+    }
+    data.update(extra)
+    return data
+
+
+def _run(event, payload=None, *, raw=None, argv_extra=()):
+    stdin = io.StringIO(raw if raw is not None else ("" if payload is None else json.dumps(payload)))
+    out, err = io.StringIO(), io.StringIO()
+    code = hooks.main([event, *argv_extra], stdin=stdin, stdout=out, stderr=err)
+    return code, out.getvalue(), err.getvalue()
+
+
+def _report(*messages):
+    return GuardReport(tuple(Finding("dependencies", "warn", m, "pyproject.toml") for m in messages), ())
+
+
+def _fake_guard(monkeypatch, *reports):
+    """run_guard returns the given reports in turn (the last one repeats); records each call's kwargs."""
+    calls = []
+
+    def fake(repo, **kwargs):
+        calls.append(kwargs)
+        return reports[min(len(calls) - 1, len(reports) - 1)] if reports else GuardReport((), ())
+
+    monkeypatch.setattr(guard, "run_guard", fake)
+    monkeypatch.setattr(receipt, "run_guard", fake)
+    return calls
+
+
+def _checkpoints(repo):
+    return cp.list_checkpoints(repo, limit=100)
+
+
+def _state_file(repo, session="s1"):
+    return Path(repo) / ".git" / "aletheore-shield" / f"hook-{session}.json"
+
+
+def _state(repo, session="s1"):
+    return json.loads(_state_file(repo, session).read_text(encoding="utf-8"))
+
+
+def _edited(repo, session="s1"):
+    """Mark the session as one that edited, as pre-edit does."""
+    path = _state_file(repo, session)
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps({"edited": True}), encoding="utf-8")
+
+
+def _only_skipped(*reasons):
+    return GuardReport((), tuple(reasons))
+
+
+# ------------------------------------------------------------------------------------------- robustness
+
+
+@pytest.mark.parametrize("event", EVENTS)
+@pytest.mark.parametrize(
+    "raw", ["", "not json", "[1, 2, 3]", "null", "42", json.dumps({"x": ["y" * 1000] * 5000})]
+)
+def test_every_subcommand_exits_zero_on_garbage_stdin(event, raw, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _fake_guard(monkeypatch)
+    code, out, err = _run(event, raw=raw)
+    assert code == 0
+    assert out == ""
+    assert err == ""
+
+
+def test_unknown_or_missing_event_exits_zero_silently():
+    assert _run("nonsense", raw="{}")[:2] == (0, "")
+    out = io.StringIO()
+    assert hooks.main([], stdin=io.StringIO("{}"), stdout=out, stderr=io.StringIO()) == 0
+    assert out.getvalue() == ""
+
+
+def test_hook_internal_error_prints_nothing_and_exits_zero(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(cp, "take_checkpoint", explode)
+    code, out, err = _run("pre-edit", _payload(repo))
+    assert (code, out, err) == (0, "", "")
+
+
+def test_internal_error_traceback_goes_to_stderr_only_when_debugging(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    monkeypatch.setattr(cp, "take_checkpoint", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setenv("ALETHEORE_HOOK_DEBUG", "1")
+    code, out, err = _run("pre-edit", _payload(repo))
+    assert code == 0 and out == ""
+    assert "RuntimeError: boom" in err
+
+
+def test_even_base_exception_is_swallowed(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+
+    def stop(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cp, "take_checkpoint", stop)
+    assert _run("pre-edit", _payload(repo)) == (0, "", "")
+
+
+# ------------------------------------------------------------------------------------------- pre-edit
+
+
+def test_pre_edit_takes_a_checkpoint_and_prints_nothing(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+    assert _run("pre-edit", _payload(repo)) == (0, "", "")
+    made = _checkpoints(repo)
+    assert len(made) == 1
+    assert made[0].session == "s1"
+
+
+def test_pre_edit_accepts_a_path_relative_to_cwd(tmp_path):
+    repo = _init(tmp_path / "r")
+    payload = _payload(repo)
+    payload["tool_input"]["file_path"] = "a.py"
+    assert _run("pre-edit", payload) == (0, "", "")
+    assert len(_checkpoints(repo)) == 1
+
+
+def test_pre_edit_from_a_subfolder_uses_the_repo_root(tmp_path):
+    repo = _init(tmp_path / "r")
+    (repo / "pkg").mkdir()
+    payload = _payload(repo, path="pkg/m.py")
+    payload["cwd"] = str(repo / "pkg")
+    assert _run("pre-edit", payload) == (0, "", "")
+    assert len(_checkpoints(repo)) == 1
+
+
+def test_pre_edit_saves_base_evidence_once(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", aletheore=True)
+    calls = []
+    real = guard_evidence.save_base_evidence
+
+    def counting(repo_arg, session_id):
+        calls.append(session_id)
+        return real(repo_arg, session_id)
+
+    monkeypatch.setattr(guard_evidence, "save_base_evidence", counting)
+    (repo / ".aletheore" / "air.json").write_text('{"first": true}', encoding="utf-8")
+    _run("pre-edit", _payload(repo))
+    (repo / ".aletheore" / "air.json").write_text('{"second": true}', encoding="utf-8")
+    (repo / "a.py").write_text("changed\n", encoding="utf-8")
+    _run("pre-edit", _payload(repo))
+    assert calls and set(calls) == {"s1"}
+    saved = repo / ".aletheore" / "shield" / "sessions" / "s1.base-air.json"
+    assert json.loads(saved.read_text(encoding="utf-8")) == {"first": True}
+
+
+def test_pre_edit_ignores_a_file_outside_the_repo(tmp_path):
+    repo = _init(tmp_path / "r")
+    outside = tmp_path / "elsewhere" / "x.py"
+    assert _run("pre-edit", _payload(repo, path=str(outside))) == (0, "", "")
+    assert _checkpoints(repo) == []
+
+
+def test_pre_edit_ignores_payload_without_a_file_path(tmp_path):
+    repo = _init(tmp_path / "r")
+    payload = _payload(repo)
+    payload["tool_input"] = {}
+    assert _run("pre-edit", payload) == (0, "", "")
+    assert _checkpoints(repo) == []
+
+
+def test_pre_edit_in_a_non_git_folder_does_nothing(tmp_path):
+    folder = tmp_path / "plain"
+    folder.mkdir()
+    assert _run("pre-edit", _payload(folder)) == (0, "", "")
+    assert not (folder / ".aletheore").exists()
+
+
+def test_pre_edit_does_not_create_aletheore_folder(tmp_path):
+    repo = _init(tmp_path / "r", aletheore=False)
+    assert _run("pre-edit", _payload(repo)) == (0, "", "")
+    assert len(_checkpoints(repo)) == 1  # checkpoints live in git refs
+    assert not (repo / ".aletheore").exists()
+
+
+def test_pre_edit_with_invalid_session_id_checkpoints_and_keeps_nosession_state(tmp_path):
+    repo = _init(tmp_path / "r")
+    assert _run("pre-edit", _payload(repo, session="../evil")) == (0, "", "")
+    made = _checkpoints(repo)
+    assert len(made) == 1 and made[0].session == ""
+    assert _state(repo, "nosession")["edited"] is True
+    assert not (repo / ".aletheore").exists()
+    assert not list((repo / ".git" / "aletheore-shield").glob("*evil*"))
+
+
+def test_hook_state_lives_in_the_git_dir_and_never_creates_aletheore(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _fake_guard(monkeypatch, _report("a"))
+    _run("pre-edit", _payload(repo))
+    _run("post-edit", _payload(repo, event="PostToolUse"))
+    _run("turn-end", _payload(repo, event="Stop"))
+    assert set(_state(repo)) >= {"edited", "last_prune", "last_edit_sha"}
+    assert not (repo / ".aletheore").exists()
+
+
+def _opt_in(repo):
+    """Turn Shield on for `repo` the way `aletheore shield` records it: its setup record in the git dir."""
+    from aletheore.shield import setup
+
+    folder = Path(repo) / ".git" / hooks.STATE_DIRNAME / "setup"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / setup.RECORD_NAME).write_bytes(setup._record_bytes(setup._Record()))
+    return repo
+
+
+def _refs(repo):
+    out = subprocess.run(["git", "for-each-ref", "refs/aletheore/"], cwd=repo, capture_output=True, text=True)
+    return out.stdout.strip()
+
+
+def test_pre_edit_in_a_nested_repo_checkpoints_the_nested_repo(tmp_path):
+    outer = _init(tmp_path / "outer")
+    inner = _opt_in(_init(outer / "nested" / "inner"))
+    payload = _payload(outer, path="nested/inner/sub/x.py")  # cwd is the outer repo; sub/ does not exist yet
+    assert _run("pre-edit", payload) == (0, "", "")
+    assert len(_checkpoints(inner)) == 1
+    assert _checkpoints(outer) == []
+    assert _state_file(inner).exists() and not _state_file(outer).exists()
+
+
+def test_post_edit_in_a_nested_repo_guards_the_nested_repo(tmp_path, monkeypatch):
+    outer = _init(tmp_path / "outer")
+    inner = _opt_in(_init(outer / "inner"))
+    seen = []
+    monkeypatch.setattr(guard, "run_guard", lambda r, **k: seen.append(Path(r)) or GuardReport((), ()))
+    _run("post-edit", _payload(outer, event="PostToolUse", path="inner/x.py"))
+    assert [p.resolve() for p in seen] == [inner.resolve()]
+
+
+def test_edit_in_an_unrelated_repo_leaves_it_untouched(tmp_path, monkeypatch):
+    a = _init(tmp_path / "a", aletheore=True)
+    b = _init(tmp_path / "b", aletheore=True)
+    (b / ".aletheore" / "air.json").write_text("{}", encoding="utf-8")
+    (b / "x.py").write_text("x = 1\n", encoding="utf-8")
+    seen = []
+    monkeypatch.setattr(guard, "run_guard", lambda r, **k: seen.append(Path(r)) or _report("b finding"))
+    payload = _payload(a, path=str(b / "x.py"))
+    assert _run("pre-edit", payload) == (0, "", "")
+    assert _run("post-edit", dict(payload, hook_event_name="PostToolUse")) == (0, "", "")
+    assert _refs(b) == "" and _checkpoints(b) == []
+    assert not (b / ".git" / "aletheore-shield").exists()
+    assert not (b / ".aletheore" / "shield").exists()
+    assert seen == []
+    assert _checkpoints(a) == [] and not _state_file(a).exists()  # the file is not in the session's repo either
+
+
+def test_edit_in_a_nested_repo_that_never_turned_shield_on_is_left_alone(tmp_path, monkeypatch):
+    outer = _init(tmp_path / "outer")
+    inner = _init(outer / "inner")
+    (inner / "untracked.txt").write_text("private\n", encoding="utf-8")
+    seen = []
+    monkeypatch.setattr(guard, "run_guard", lambda r, **k: seen.append(Path(r)) or _report("x"))
+    assert _run("pre-edit", _payload(outer, path="inner/x.py")) == (0, "", "")
+    assert _run("post-edit", _payload(outer, event="PostToolUse", path="inner/x.py")) == (0, "", "")
+    assert _refs(inner) == "" and not (inner / ".git" / "aletheore-shield").exists()
+    assert _checkpoints(outer) == [] and seen == []
+
+
+def test_edit_in_the_session_repo_needs_no_setup_record(tmp_path):
+    repo = _init(tmp_path / "r")
+    (repo / "pkg").mkdir()
+    assert _run("pre-edit", _payload(repo, path="pkg/x.py")) == (0, "", "")
+    assert len(_checkpoints(repo)) == 1 and _state(repo)["edited"] is True
+
+
+def test_cwd_in_a_subfolder_still_counts_as_the_session_repo(tmp_path):
+    repo = _init(tmp_path / "r")
+    (repo / "pkg").mkdir()
+    payload = _payload(repo / "pkg", path=str(repo / "x.py"))
+    assert _run("pre-edit", payload) == (0, "", "")
+    assert len(_checkpoints(repo)) == 1
+
+
+def test_prune_runs_at_most_once_per_hour_per_session(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    pruned = []
+    monkeypatch.setattr(cp, "prune_checkpoints", lambda r, **k: pruned.append(Path(r)) or 0)
+    clock = [1_000_000.0]
+    monkeypatch.setattr(hooks, "_now", lambda: clock[0])
+    _run("pre-edit", _payload(repo))
+    _run("pre-edit", _payload(repo))
+    clock[0] += 3599
+    _run("pre-edit", _payload(repo))
+    assert len(pruned) == 1
+    _run("pre-edit", _payload(repo, session="s2"))  # another session keeps its own clock
+    assert len(pruned) == 2
+    clock[0] += 2
+    _run("pre-edit", _payload(repo))
+    assert len(pruned) == 3
+
+
+def test_corrupt_session_state_file_is_ignored(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    state_file = _state_file(repo)
+    state_file.parent.mkdir()
+    state_file.write_text("{not json", encoding="utf-8")
+    pruned = []
+    monkeypatch.setattr(cp, "prune_checkpoints", lambda r, **k: pruned.append(r) or 0)
+    assert _run("pre-edit", _payload(repo)) == (0, "", "")
+    assert len(pruned) == 1
+    assert isinstance(json.loads(state_file.read_text(encoding="utf-8")), dict)
+    state_file.write_text("[1, 2]", encoding="utf-8")
+    _fake_guard(monkeypatch, _report("x does not exist on PyPI."))
+    code, out, _ = _run("post-edit", _payload(repo, event="PostToolUse"))
+    assert code == 0 and "x does not exist" in out
+
+
+def test_concurrent_pre_edit_hooks_do_not_collide(tmp_path):
+    repo = _init(tmp_path / "r")
+    (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+    results = {}
+
+    def go(session):
+        results[session] = _run("pre-edit", _payload(repo, session=session))
+
+    threads = [threading.Thread(target=go, args=(s,)) for s in ("s1", "s2")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert results == {"s1": (0, "", ""), "s2": (0, "", "")}
+    made = _checkpoints(repo)
+    assert sorted(c.session for c in made) == ["s1", "s2"]  # identical trees, but each session gets its own
+    assert len({c.ref for c in made}) == len(made)
+    for session in ("s1", "s2"):
+        assert _state(repo, session)["edited"] is True
+
+
+# ------------------------------------------------------------------------------------------- post-edit
+
+
+def test_post_edit_prints_additional_context_only_when_findings_are_new(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    calls = _fake_guard(
+        monkeypatch, _report("x does not exist on PyPI."), _report("x does not exist on PyPI."), GuardReport((), ())
+    )
+    payload = _payload(repo, event="PostToolUse")
+    code, out, err = _run("post-edit", payload)
+    assert code == 0 and err == ""
+    data = json.loads(out)
+    assert list(data) == ["hookSpecificOutput"]
+    assert data["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
+    assert "x does not exist on PyPI." in data["hookSpecificOutput"]["additionalContext"]
+    assert _run("post-edit", payload) == (0, "", "")  # identical findings: said already
+    assert _run("post-edit", payload) == (0, "", "")  # nothing to say
+    assert calls[0]["budget_s"] == hooks.POST_EDIT_BUDGET_S
+    assert calls[0]["lookups"] is False  # registry lookups never run per edit
+
+
+def test_post_edit_is_silent_when_only_checks_were_skipped(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _fake_guard(monkeypatch, _only_skipped("no scan evidence (.aletheore/air.json); run aletheore scan"))
+    assert _run("post-edit", _payload(repo, event="PostToolUse")) == (0, "", "")
+
+
+def test_post_edit_dedupes_on_findings_not_on_skipped_reasons(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    finding = Finding("dependencies", "warn", "a", "pyproject.toml")
+    _fake_guard(
+        monkeypatch,
+        GuardReport((finding,), ("evidence is older than 1 changed file(s)",)),
+        GuardReport((finding,), ("evidence is older than 2 changed file(s)",)),
+    )
+    payload = _payload(repo, event="PostToolUse")
+    first = json.loads(_run("post-edit", payload)[1])["hookSpecificOutput"]["additionalContext"]
+    assert "not checked: evidence is older than 1" in first  # the reason still travels with findings
+    assert _run("post-edit", payload) == (0, "", "")
+
+
+def test_post_edit_drops_the_lookups_off_reason(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    finding = Finding("dependencies", "info", "b is one edit from requests.", "a.py")
+    _fake_guard(monkeypatch, GuardReport(
+        (finding,), ("registry lookups are off, so 1 new dependency name was not checked for existence or age",)
+    ))
+    out = _run("post-edit", _payload(repo, event="PostToolUse"))[1]
+    text = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "one edit from requests" in text
+    assert "registry lookups are off" not in text and "not checked" not in text
+
+
+def test_post_edit_repeats_findings_that_come_back_after_clearing(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _fake_guard(monkeypatch, _report("a"), GuardReport((), ()), _report("a"))
+    payload = _payload(repo, event="PostToolUse")
+    assert _run("post-edit", payload)[1]
+    assert _run("post-edit", payload)[1] == ""
+    assert _run("post-edit", payload)[1]
+
+
+def test_post_edit_passes_the_session_base_evidence(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    calls = _fake_guard(monkeypatch)
+    sentinel = {"base": True}
+    monkeypatch.setattr(guard_evidence, "load_base_evidence", lambda r, s: sentinel if s == "s1" else None)
+    _run("post-edit", _payload(repo, event="PostToolUse"))
+    assert calls[0]["base_evidence"] is sentinel
+
+
+def test_post_edit_ignores_a_file_outside_the_repo(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    calls = _fake_guard(monkeypatch, _report("a"))
+    payload = _payload(repo, event="PostToolUse", path=str(tmp_path / "x.py"))
+    assert _run("post-edit", payload) == (0, "", "")
+    assert calls == []
+
+
+# ------------------------------------------------------------------------------------------- turn-end
+
+
+def test_turn_end_prints_guard_text_only_when_there_is_something(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _edited(repo)
+    calls = _fake_guard(monkeypatch, GuardReport((), ()), _report("y is one edit from requests."))
+    payload = _payload(repo, event="Stop", stop_hook_active=False)
+    assert _run("turn-end", payload) == (0, "", "")
+    code, out, err = _run("turn-end", payload)
+    data = json.loads(out)
+    assert list(data) == ["systemMessage"]
+    assert "y is one edit from requests." in data["systemMessage"]
+    assert "decision" not in out
+    assert calls[0]["budget_s"] == hooks.TURN_END_BUDGET_S
+    assert _run("turn-end", payload) == (0, "", "")  # same text as the last turn end
+
+
+def test_turn_end_shows_skipped_checks_to_the_user(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _edited(repo)
+    _fake_guard(monkeypatch, _only_skipped("no scan evidence"))
+    out = _run("turn-end", _payload(repo, event="Stop"))[1]
+    assert "not checked: no scan evidence" in json.loads(out)["systemMessage"]
+
+
+def test_turn_end_is_silent_in_a_session_that_did_not_edit(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    calls = _fake_guard(monkeypatch, _report("a"))
+    assert _run("turn-end", _payload(repo, event="Stop")) == (0, "", "")
+    _edited(repo, "other-session")
+    assert _run("turn-end", _payload(repo, event="Stop")) == (0, "", "")
+    assert calls == []
+
+
+def test_turn_end_is_silent_when_stop_hook_active(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _edited(repo)
+    calls = _fake_guard(monkeypatch, _report("a"))
+    assert _run("turn-end", _payload(repo, event="Stop", stop_hook_active=True)) == (0, "", "")
+    assert calls == []
+
+
+def test_turn_end_and_post_edit_dedupe_separately(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _fake_guard(monkeypatch, _report("a"))
+    _run("pre-edit", _payload(repo))
+    assert _run("post-edit", _payload(repo, event="PostToolUse"))[1]
+    out = _run("turn-end", _payload(repo, event="Stop", stop_hook_active=False))[1]
+    assert "warn: a" in json.loads(out)["systemMessage"]  # the user has not seen it yet
+    state = _state(repo)
+    assert state["last_edit_sha"] and state["last_turn_sha"]
+
+
+# ------------------------------------------------------------------------------------------- session-end
+
+
+def test_session_end_writes_a_receipt(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", aletheore=True)
+    _fake_guard(monkeypatch)
+    (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+    _run("pre-edit", _payload(repo))
+    (repo / "a.py").write_text("x = 2\n", encoding="utf-8")
+    assert _run("session-end", _payload(repo, event="SessionEnd", reason="other")) == (0, "", "")
+    written = list((repo / ".aletheore" / "shield" / "receipts").glob("*-s1.md"))
+    assert len(written) == 1
+    assert "a.py" in written[0].read_text(encoding="utf-8")
+    assert not _state_file(repo).exists()  # the hook state ends with the session
+
+
+def test_session_end_without_a_checkpoint_writes_nothing(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _fake_guard(monkeypatch)
+    assert _run("session-end", _payload(repo, event="SessionEnd")) == (0, "", "")
+    assert not (repo / ".aletheore" / "shield" / "receipts").exists()
+
+
+def _base_copy(repo, session="s1"):
+    return Path(repo) / ".aletheore" / "shield" / "sessions" / f"{session}.base-air.json"
+
+
+def test_session_end_deletes_the_sessions_base_evidence_copy(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", aletheore=True)
+    _fake_guard(monkeypatch)
+    (repo / ".aletheore" / "air.json").write_text("{}", encoding="utf-8")
+    other = _base_copy(repo, "s2")
+    other.parent.mkdir(parents=True, exist_ok=True)
+    other.write_text("{}", encoding="utf-8")
+    (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+    _run("pre-edit", _payload(repo))
+    assert _base_copy(repo).is_file()
+    (repo / "a.py").write_text("x = 2\n", encoding="utf-8")
+    _run("session-end", _payload(repo, event="SessionEnd"))
+    assert list((repo / ".aletheore" / "shield" / "receipts").glob("*-s1.md"))
+    assert not _base_copy(repo).exists()
+    assert other.is_file()  # another session's copy is its own
+
+
+def test_session_end_deletes_the_base_copy_even_when_the_receipt_fails(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", aletheore=True)
+    base = _base_copy(repo)
+    base.parent.mkdir(parents=True, exist_ok=True)
+    base.write_text("{}", encoding="utf-8")
+
+    def broken(*a, **k):
+        raise RuntimeError("receipt failed")
+
+    monkeypatch.setattr(receipt, "build_receipt", broken)
+    assert _run("session-end", _payload(repo, event="SessionEnd")) == (0, "", "")
+    assert not base.exists()
+
+
+def test_session_end_never_waits_on_registry_lookups(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    seen = []
+    monkeypatch.setattr(receipt, "build_receipt", lambda *a, **k: seen.append(k) or None)
+    _run("session-end", _payload(repo, event="SessionEnd"))
+    assert seen and seen[0]["lookups"] is False
+
+
+def test_session_end_receipt_guard_runs_without_lookups(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", aletheore=True)
+    calls = _fake_guard(monkeypatch)
+    (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+    _run("pre-edit", _payload(repo))
+    (repo / "a.py").write_text("x = 2\n", encoding="utf-8")
+    _run("session-end", _payload(repo, event="SessionEnd"))
+    assert calls and all(c["lookups"] is False for c in calls)
+
+
+def test_hourly_prune_removes_week_old_base_copies_only(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", aletheore=True)
+    sessions = repo / ".aletheore" / "shield" / "sessions"
+    sessions.mkdir(parents=True)
+    week = 7 * 24 * 3600
+    old = time.time() - week - 3600
+    names = {
+        "old.base-air.json": True,  # removed: a session's copy older than 7 days
+        "fresh.base-air.json": False,
+        "old.json": False,  # hook/session state, not a base copy
+        "notes.txt": False,
+        "bad..base-air.json": False,  # not a session token Shield would write
+        ".base-air.json": False,
+    }
+    for name in names:
+        (sessions / name).write_text("{}", encoding="utf-8")
+        if name != "fresh.base-air.json":
+            os.utime(sessions / name, (old, old))
+    folder = sessions / "dir.base-air.json"
+    folder.mkdir()
+    os.utime(folder, (old, old))
+    outside = repo / ".aletheore" / "shield" / "stray.base-air.json"
+    outside.write_text("{}", encoding="utf-8")
+    os.utime(outside, (old, old))
+    _run("pre-edit", _payload(repo, session="s9"))
+    for name, removed in names.items():
+        assert (sessions / name).exists() is not removed, name
+    assert folder.is_dir() and outside.is_file()
+
+
+def test_base_copy_prune_follows_the_hourly_clock(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r", aletheore=True)
+    pruned = []
+    monkeypatch.setattr(guard_evidence, "prune_base_evidence", lambda r, **k: pruned.append(Path(r)) or 0)
+    clock = [1_000_000.0]
+    monkeypatch.setattr(hooks, "_now", lambda: clock[0])
+    _run("pre-edit", _payload(repo))
+    _run("pre-edit", _payload(repo))
+    assert len(pruned) == 1
+
+
+# ------------------------------------------------------------------------------------------- pre-commit
+
+
+def test_pre_commit_prints_to_stderr_and_exits_zero(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    calls = _fake_guard(monkeypatch, GuardReport(
+        (Finding("dependencies", "warn", "zz does not exist on PyPI.", "pyproject.toml"),),
+        ("registry lookup failed for 1 name: offline",),
+    ))
+    code, out, err = _run("pre-commit", argv_extra=("--repo", str(repo)), raw="")
+    assert code == 0 and out == ""
+    lines = err.splitlines()
+    assert len(lines) == 2
+    assert all(line.startswith("aletheore shield: ") for line in lines)
+    assert "zz does not exist on PyPI." in err
+    assert calls[0]["budget_s"] == hooks.PRE_COMMIT_BUDGET_S
+
+
+def test_pre_commit_uses_cwd_and_ignores_stdin(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _fake_guard(monkeypatch, _report("a"))
+    monkeypatch.chdir(repo)
+
+    class Unreadable(io.StringIO):
+        def read(self, *args):
+            raise AssertionError("pre-commit must not read stdin")
+
+    err = io.StringIO()
+    assert hooks.main(["pre-commit"], stdin=Unreadable(), stdout=io.StringIO(), stderr=err) == 0
+    assert err.getvalue().startswith("aletheore shield: ")
+
+
+def test_pre_commit_is_silent_when_clean(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _fake_guard(monkeypatch)
+    assert _run("pre-commit", argv_extra=("--repo", str(repo))) == (0, "", "")
+
+
+def test_pre_commit_in_a_non_git_dir_never_raises(tmp_path, monkeypatch):
+    folder = tmp_path / "plain"
+    folder.mkdir()
+    calls = _fake_guard(monkeypatch, _report("a"))
+    monkeypatch.chdir(folder)
+    assert _run("pre-commit") == (0, "", "")
+    assert _run("pre-commit", argv_extra=("--repo", str(folder / "missing"))) == (0, "", "")
+    assert calls == []
+
+
+# ------------------------------------------------------------------------------------------- budget
+
+
+def test_hook_stops_at_budget(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _edited(repo)
+    release = threading.Event()
+
+    def slow(repo_arg, **kwargs):
+        release.wait(10)
+        return _report("too late")
+
+    monkeypatch.setattr(guard, "run_guard", slow)
+    monkeypatch.setattr(hooks, "POST_EDIT_STOP_S", 0.3)
+    monkeypatch.setattr(hooks, "TURN_END_STOP_S", 0.3)
+    try:
+        start = time.monotonic()
+        assert _run("post-edit", _payload(repo, event="PostToolUse")) == (0, "", "")
+        assert _run("turn-end", _payload(repo, event="Stop")) == (0, "", "")
+        assert time.monotonic() - start < 2.5
+    finally:
+        release.set()
+    time.sleep(0.2)  # the abandoned workers finish now; they must still not record anything as said
+    state = _state(repo)
+    assert "last_edit_sha" not in state and "last_turn_sha" not in state
+
+
+def test_stop_constants_match_the_contract():
+    assert CONTRACT_STOPS == {
+        "PRE_EDIT_STOP_S": 2.0,
+        "POST_EDIT_STOP_S": 2.0,
+        "TURN_END_STOP_S": 8.0,
+        "SESSION_END_STOP_S": 8.0,
+        "PRE_COMMIT_STOP_S": 8.0,
+    }
+
+
+# ------------------------------------------------------------------------------------------- agent_output
+
+
+def test_agent_output_shapes():
+    assert hooks.agent_output("post-edit", "warn: a") == {
+        "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": hooks.HEADER + "\nwarn: a"}
+    }
+    assert hooks.agent_output("turn-end", "warn: a") == {"systemMessage": hooks.HEADER + "\nwarn: a"}
+    for event in ("pre-edit", "session-end", "pre-commit", "other"):
+        assert hooks.agent_output(event, "warn: a") is None
+    assert hooks.agent_output("post-edit", "") is None
+    assert hooks.agent_output("turn-end", "") is None
+
+
+# ------------------------------------------------------------------------------------------- real process
+
+
+def _subprocess_env():
+    paths = [str(SRC)] + [p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p]
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(paths), "ALETHEORE_SHIELD_OFFLINE": "1"}
+    env["ALETHEORE_HOOK_DEBUG"] = "1"  # so a run cut off by its hard stop says so on stderr
+    return env
+
+
+def test_module_runs_as_a_real_subprocess(tmp_path):
+    repo = _init(tmp_path / "r")
+    (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+    start = time.monotonic()
+    done = subprocess.run(
+        [sys.executable, "-m", "aletheore.shield.hooks", "pre-edit"],
+        input=json.dumps(_payload(repo)).encode("utf-8"),
+        capture_output=True,
+        cwd=str(repo),
+        env=_subprocess_env(),
+        timeout=30,
+        check=False,
+    )
+    assert done.returncode == 0
+    assert done.stdout == b""
+    assert time.monotonic() - start < 10
+    if b"stopped at its" not in done.stderr:  # a slow runner may legitimately hit the 2 s stop
+        assert done.stderr == b""
+        assert len(_checkpoints(repo)) == 1
+
+
+@pytest.mark.parametrize("state", ["detached", "merge"])
+def test_turn_end_runs_after_an_edit_in_an_unsupported_repo_state(state, tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    if state == "detached":
+        _git(repo, "checkout", "-q", "--detach")
+    else:
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, check=True).stdout
+        (repo / ".git" / "MERGE_HEAD").write_bytes(head)
+    calls = _fake_guard(monkeypatch, _report("zz does not exist on PyPI."))
+    assert _run("pre-edit", _payload(repo)) == (0, "", "")
+    assert _checkpoints(repo) == []  # no checkpoint in this state
+    assert _state(repo)["edited"] is True
+    out = _run("turn-end", _payload(repo, event="Stop", stop_hook_active=False))[1]
+    assert "zz does not exist on PyPI." in json.loads(out)["systemMessage"]
+    assert calls
+
+
+def test_guard_evidence_imports_without_the_evidence_reader():
+    code = (
+        "import sys, aletheore.shield.guard_evidence, aletheore.shield.hooks; "
+        "heavy = [m for m in ('aletheore.evidence', 'aletheore.dependents', 'aletheore.evidence_diff', "
+        "'aletheore.signature_diff', 'aletheore.tests_for', 'aletheore.vulnerabilities') if m in sys.modules]; "
+        "print(','.join(heavy))"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, env=_subprocess_env(), timeout=30, check=False
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == b""
+
+
+@pytest.mark.parametrize("broken", ["write", "flush"])
+def test_write_guard_swallows_a_broken_stdout(broken, tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _fake_guard(monkeypatch, _report("a"))
+    monkeypatch.setenv("ALETHEORE_HOOK_DEBUG", "1")  # an exception escaping _write would print a traceback
+
+    class Broken(io.StringIO):
+        def write(self, text):
+            if broken == "write":
+                raise BrokenPipeError
+            return super().write(text)
+
+        def flush(self):
+            if broken == "flush":
+                raise BrokenPipeError
+
+    err = io.StringIO()
+    payload = json.dumps(_payload(repo, event="PostToolUse"))
+    assert hooks.main(["post-edit"], stdin=io.StringIO(payload), stdout=Broken(), stderr=err) == 0
+    assert err.getvalue() == ""
+
+
+def test_closed_stdout_does_not_change_the_exit_code(tmp_path):
+    repo = _init(tmp_path / "r")
+    (repo / "a.py").write_text("import reqests\n", encoding="utf-8")  # a near-miss finding to print
+    read_end, write_end = os.pipe()
+    os.close(read_end)
+    try:
+        done = subprocess.run(
+            [sys.executable, "-m", "aletheore.shield.hooks", "post-edit"],
+            input=json.dumps(_payload(repo, event="PostToolUse")).encode("utf-8"),
+            stdout=write_end,
+            stderr=subprocess.PIPE,
+            cwd=str(repo),
+            env=_subprocess_env(),
+            timeout=30,
+            check=False,
+        )
+    finally:
+        os.close(write_end)
+    assert done.returncode == 0
+
+
+def test_broken_stdout_object_is_tolerated(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    _fake_guard(monkeypatch, _report("a"))
+
+    class Broken(io.StringIO):
+        def write(self, text):
+            raise BrokenPipeError
+
+    payload = json.dumps(_payload(repo, event="PostToolUse"))
+    assert hooks.main(["post-edit"], stdin=io.StringIO(payload), stdout=Broken(), stderr=io.StringIO()) == 0
+
+
+def test_stop_note_goes_to_stderr_only_when_debugging(tmp_path, monkeypatch):
+    repo = _init(tmp_path / "r")
+    release = threading.Event()
+    monkeypatch.setattr(guard, "run_guard", lambda r, **k: release.wait(10) and _report("late"))
+    monkeypatch.setattr(hooks, "POST_EDIT_STOP_S", 0.2)
+    monkeypatch.setenv("ALETHEORE_HOOK_DEBUG", "1")
+    try:
+        code, out, err = _run("post-edit", _payload(repo, event="PostToolUse"))
+    finally:
+        release.set()
+    assert (code, out) == (0, "")
+    assert "post-edit stopped at its 0.2 s limit" in err
+
+
+def test_run_and_exit_is_exposed():
+    assert callable(hooks.run_and_exit)
+
+
+def test_hooks_look_for_the_setup_record_where_setup_writes_it(tmp_path):
+    from aletheore.shield import setup
+
+    git_dir = tmp_path / ".git"
+    assert setup._setup_dir_for(git_dir) / setup.RECORD_NAME == (
+        git_dir / hooks.STATE_DIRNAME / hooks.SETUP_DIRNAME / hooks.SETUP_RECORD_NAME
+    )

@@ -26,6 +26,7 @@
     "qdrant",
     "certifi",
     "hallbook",
+    "npmjs",
     "hardlinked",
     "monkeypatch",
     "setattr",

@@ -15,6 +15,9 @@ def _isolate_license_and_vulnerability_caches(tmp_path, monkeypatch):
         "aletheore.vulnerabilities.DEFAULT_VULNERABILITY_CACHE_PATH",
         tmp_path / "vulnerability-cache.json",
     )
+    monkeypatch.setattr(
+        "aletheore.shield.registry.DEFAULT_REGISTRY_CACHE_PATH", tmp_path / "shield-registry-cache.json"
+    )
 
 
 @pytest.fixture(autouse=True)

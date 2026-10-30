@@ -69,6 +69,7 @@ from aletheore.evidence import (
 )
 from aletheore.git_intel.analyzer import GIT_ANALYSIS_RESOURCE_EXIT_CODE, GitAnalysisError
 from aletheore.healthcheck import is_healthy_status, run_healthcheck, save_healthcheck
+from aletheore.evidence_diff import real_new_secrets, vulnerability_check_skipped_in
 from aletheore.history import compute_diff, list_snapshots, save_snapshot, to_sarif
 from aletheore.managed_audit_client import ManagedAuditError, run_managed_audit_request
 from aletheore.query import (
@@ -447,6 +448,7 @@ _COMMAND_SUMMARIES = [
     ("init", "scaffold a repository-local .aletheore.json config file"),
     ("hook", "commands for coding-agent hooks (read guard)"),
     ("tokens", "measure and reduce the tokens a coding agent re-reads every turn"),
+    ("shield", "set up the local safety net for AI-written changes: guard, undo, receipts"),
     ("login", "authenticate and save a managed-audit API token"),
     ("logout", "clear the locally saved managed-audit and Hallbook tokens"),
     ("status", "installed version, update availability, and login state"),
@@ -467,7 +469,7 @@ _COMMAND_GROUPS = [
         "Scan and explore",
         ["scan", "demo", "index", "query", "locate", "usages", "dependents", "tests-for", "cycles", "diff", "verify", "healthcheck"],
     ),
-    ("Agents and skills", ["mcp", "mcp-install", "audit", "hallbook", "skill-hub", "hook", "tokens"]),
+    ("Agents and skills", ["mcp", "mcp-install", "audit", "hallbook", "skill-hub", "hook", "tokens", "shield"]),
     ("Dashboard and watch", ["dashboard", "watch", "init"]),
     ("Account", ["login", "logout", "status", "config"]),
 ]
@@ -671,6 +673,8 @@ def _scan(
     check_static_analysis: bool | None = None,
     check_bearer: bool | None = None,
     check_joern: bool | None = None,
+    edit_gitignore: bool = True,
+    progress: Callable[[str], None] | None = None,
 ) -> tuple[int, dict, Path]:
     repo = Path(repo_path).resolve()
     (
@@ -699,7 +703,8 @@ def _scan(
             _stderr_console.print(_markup('[bold red]error:[/bold red] {}', exc))
             return 1, {}, repo
 
-    _stderr_console.print(_markup('Scanning {}...', repo))
+    if progress is None:  # a caller with its own progress (Shield's first scan) keeps the terminal quiet
+        _stderr_console.print(_markup('Scanning {}...', repo))
     try:
         evidence = scan_repository(
             repo,
@@ -711,13 +716,14 @@ def _scan(
             check_static_analysis=resolved_static_analysis,
             run_bearer=resolved_bearer,
             run_joern=resolved_joern,
-            progress=_make_progress_printer(),
+            progress=progress or _make_progress_printer(),
+            edit_gitignore=edit_gitignore,
         )
     except GitAnalysisError as exc:
         console.print(_markup('[bold red]error:[/bold red] {}', exc))
         return GIT_ANALYSIS_RESOURCE_EXIT_CODE, {}, repo
     try:
-        evidence_path = write_evidence(evidence, repo)
+        evidence_path = write_evidence(evidence, repo, edit_gitignore=edit_gitignore)
     except EvidenceWriteError as exc:
         _stderr_console.print(_markup('[bold red]error:[/bold red] {}', exc))
         return 1, {}, repo
@@ -1305,27 +1311,13 @@ def _diff(
         should_fail = False
 
         if fail_on_new_secrets:
-            new_real_secrets = [
-                f
-                for f in curated["secrets"]["new"]
-                if not f.get("likely_placeholder", False) and not f.get("accepted", False)
-            ]
-            new_real_history_secrets = [
-                f
-                for f in curated["history_secrets"]["new"]
-                if not f.get("likely_placeholder", False) and not f.get("accepted", False)
-            ]
-            should_fail = should_fail or bool(new_real_secrets or new_real_history_secrets)
+            should_fail = should_fail or bool(real_new_secrets(curated))
 
         if fail_on_new_vulnerabilities:
-            checked_old = old["security"]["dependency_vulnerabilities"].get("checked", True)
-            checked_new = new["security"]["dependency_vulnerabilities"].get("checked", True)
-            if not (checked_old and checked_new):
+            skipped_in = " and ".join(vulnerability_check_skipped_in(old, new))
+            if skipped_in:
                 # The vulnerability check was off in at least one snapshot, so
                 # "new" findings only reflect it being toggled, not a real change.
-                skipped_in = " and ".join(
-                    name for name, checked in (("the old", checked_old), ("the new", checked_new)) if not checked
-                )
                 print(
                     f"note: --fail-on-new-vulnerabilities not enforced: the vulnerability check was skipped in "
                     f"{skipped_in} snapshot. Diff two scans that both ran it (no --no-check-vulnerabilities).",
@@ -3497,6 +3489,10 @@ def hook_evidence_snippet(
 from aletheore.tokens_cli import tokens_app  # noqa: E402
 
 app.add_typer(tokens_app, name="tokens")
+
+from aletheore.shield_cli import shield_app  # noqa: E402
+
+app.add_typer(shield_app, name="shield")
 
 
 @config_app.command(

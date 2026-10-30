@@ -30,6 +30,7 @@ def _git_repo(tmp_path: Path) -> Path:
     subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
     subprocess.run(["git", "config", "user.email", "t@t.t"], cwd=tmp_path, check=True)
     subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=tmp_path, check=True)
     (tmp_path / "app.py").write_text("def f():\n    return 1\n")
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-qm", "init"], cwd=tmp_path, check=True)
@@ -219,6 +220,7 @@ def test_rebuild_refreshes_evidence_and_skips_the_slow_checks(tmp_path):
         "analyze_architecture": False,
         "check_hotspots": False,
         "check_static_analysis": False,
+        "edit_gitignore": True,
     }
 
 
@@ -936,3 +938,50 @@ def test_reconcile_watches_retries_a_previously_failed_dir_on_the_next_call(tmp_
     _reconcile_watches({a}, watched, scheduled.append)
     assert scheduled == [a]
     assert watched == {a}
+
+
+def test_rebuild_keeps_editing_gitignore_by_default_and_passes_the_switch_through(tmp_path):
+    repo = _git_repo(tmp_path)
+    with patch("aletheore.evidence.scan_repository") as scan, patch("aletheore.evidence.write_evidence") as write:
+        scan.return_value = {"repository": {"modules": []}}
+        rebuild(repo, lambda _message: None)
+        assert scan.call_args.kwargs.get("edit_gitignore", True) is True
+        assert write.call_args.kwargs.get("edit_gitignore", True) is True
+        rebuild(repo, lambda _message: None, edit_gitignore=False)
+        assert scan.call_args.kwargs["edit_gitignore"] is False
+        assert write.call_args.kwargs["edit_gitignore"] is False
+
+
+def test_rebuild_without_gitignore_edit_leaves_gitignore_alone(tmp_path):
+    repo = _git_repo(tmp_path)
+    rebuild(repo, lambda _message: None, edit_gitignore=False)
+    assert (repo / ".aletheore" / "air.json").is_file()
+    assert not (repo / ".gitignore").exists()
+    rebuild(repo, lambda _message: None)  # the default (watch command, MCP server) still hides .aletheore/
+    assert ".aletheore" in (repo / ".gitignore").read_text()
+
+
+# Shield's detached refresh (python -m aletheore.shield.refresh) re-scans with watch.rebuild, but Shield promises
+# never to touch the user's .gitignore (it hides .aletheore/ through .git/info/exclude instead).
+
+
+def test_shield_refresh_never_creates_a_gitignore(tmp_path):
+    from aletheore.shield import refresh
+
+    repo = _git_repo(tmp_path)
+    assert refresh.main([str(repo)]) == 0
+    assert (repo / ".aletheore" / "air.json").is_file()
+    assert not (repo / ".gitignore").exists()
+
+
+def test_shield_refresh_leaves_a_tracked_gitignore_unchanged(tmp_path):
+    from aletheore.shield import refresh
+
+    repo = _git_repo(tmp_path)
+    (repo / ".gitignore").write_text("*.log\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "ignore"], cwd=repo, check=True)
+    assert refresh.main([str(repo)]) == 0
+    assert (repo / ".gitignore").read_text() == "*.log\n"
+    status = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True).stdout
+    assert ".gitignore" not in status

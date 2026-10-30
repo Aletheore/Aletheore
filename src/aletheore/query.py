@@ -825,15 +825,11 @@ _CYCLES_LISTED = 5
 _CYCLE_MEMBERS_LISTED = 25
 
 
-def find_import_cycles(evidence: dict, scope: str | None = None, ignore_test_files: bool = False) -> dict:
-    """Circular imports: groups of modules that import each other, directly or through a chain.
-
-    Each group is a strongly connected component of the import graph with at least two modules (or a module that
-    imports itself). For every group an ordered `example_cycle` is given (each module imports the next, the last
-    imports the first), the shortest one found. Test files are included unless `ignore_test_files` (a "non-test"
-    question) removes them from the graph. `scope` limits the graph to a directory.
-    """
-    prefix = (scope or "").strip("/")
+def import_cycle_components(
+    evidence: dict, prefix: str = "", ignore_test_files: bool = False
+) -> tuple[list[list[str]], list[str], dict[str, list[str]]]:
+    """Uncapped cycle data behind `find_import_cycles`: (groups of 2+ mutually importing modules, self-importing
+    modules, the import graph followed). Nothing here is truncated for listing."""
     modules = evidence["repository"]["modules"]
     keep: set[str] = set()
     for module in modules:
@@ -855,6 +851,19 @@ def find_import_cycles(evidence: dict, scope: str | None = None, ignore_test_fil
     }
     groups = [c for c in _strongly_connected(keep, graph) if len(c) >= 2]
     self_importers = sorted(p for p, targets in graph.items() if p in targets)
+    return groups, self_importers, graph
+
+
+def find_import_cycles(evidence: dict, scope: str | None = None, ignore_test_files: bool = False) -> dict:
+    """Circular imports: groups of modules that import each other, directly or through a chain.
+
+    Each group is a strongly connected component of the import graph with at least two modules (or a module that
+    imports itself). For every group an ordered `example_cycle` is given (each module imports the next, the last
+    imports the first), the shortest one found. Test files are included unless `ignore_test_files` (a "non-test"
+    question) removes them from the graph. `scope` limits the graph to a directory.
+    """
+    prefix = (scope or "").strip("/")
+    groups, self_importers, graph = import_cycle_components(evidence, prefix, ignore_test_files)
     groups.sort(key=lambda c: (-len(c), c[0]))
     listed = []
     for component in groups[:_CYCLES_LISTED]:
