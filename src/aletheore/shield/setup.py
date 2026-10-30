@@ -1067,9 +1067,8 @@ def _remove_settings(where: _Where, record: _Record) -> tuple[Path, str] | None:
         if record.settings_backup and backup.is_file():
             _write_atomic(path, backup.read_bytes(), mode)
             return path, "restored"
-        if created:
-            path.unlink()
-            return path, "removed"
+    # Otherwise only Shield's own entries come out. A file Shield created is deleted only when nothing else is left
+    # in it, so an edit made since (another tool's hooks, a setting) is never lost with it.
     try:
         data, layout = _parse_settings(raw)
     except ValueError:

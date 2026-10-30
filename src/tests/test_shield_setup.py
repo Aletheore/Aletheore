@@ -1,5 +1,6 @@
 """Shield setup and removal: consent-free planning, merge-safe edits of user files, exact reversal."""
 
+import hashlib
 import json
 import os
 import shlex
@@ -247,6 +248,22 @@ def test_legacy_entry_is_replaced_at_its_position_between_user_hooks(tmp_path):
     assert json.loads(_settings(repo).read_text(encoding="utf-8"))["hooks"]["Stop"] == [
         {"hooks": [first]}, {"hooks": [first, _exec_hook("turn-end"), last]}, {"hooks": [last]}
     ]
+
+
+def test_off_never_deletes_a_created_settings_file_that_holds_more_than_shields_entries(tmp_path):
+    repo = _init(tmp_path / "repo")
+    setup.apply_setup(repo)
+    data = json.loads(_settings(repo).read_text(encoding="utf-8"))
+    data["model"] = "mine"
+    edited = (json.dumps(data, indent=2) + "\n").encode("utf-8")
+    _settings(repo).write_bytes(edited)
+    # A record whose hash matches the edited bytes (as one written by an older setup run after the edit would)
+    record_path = setup._setup_dir_for(repo / ".git") / setup.RECORD_NAME
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["settings_sha256"] = hashlib.sha256(edited).hexdigest()
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    setup.remove_setup(repo)
+    assert json.loads(_settings(repo).read_text(encoding="utf-8")) == {"model": "mine"}
 
 
 def test_migrating_a_file_the_user_edited_keeps_their_edit_on_off(tmp_path, monkeypatch):
